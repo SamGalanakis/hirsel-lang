@@ -71,7 +71,7 @@ impl Proofs {
         instances: &crate::instance::Instances,
         id: crate::instance::InstanceId,
     ) -> Self {
-        let store = &instances.views[id.index()].substitution.store;
+        let store = &*instances.types;
         let Some(hirsel_types::TypeKind::Function(f)) =
             store.get(instances.callables[id.index()]).map(|t| &t.kind)
         else {

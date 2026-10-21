@@ -1,13 +1,13 @@
 //! `DefId`: the process-global session identity of a `DefPath`. The path stays
 //! the persisted, hashed, printed and mangled form; the id is only a cheap key.
 use crate::{ContentHash, DefPath};
-use hirsel_intern::{AppendTable, IdHasher, Scramble};
+use hirsel_intern::{AppendTable, IdHasher, Scramble, persist};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, BuildHasherDefault};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering as Atomic};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// An interned definition path. Eq and Hash compare ids; Ord compares paths,
 /// so ordered maps iterate in DefPath order whatever order ids were assigned in.
@@ -117,6 +117,11 @@ impl From<&DefPath> for DefId {
         DefId::intern(path)
     }
 }
+impl From<DefPath> for DefId {
+    fn from(path: DefPath) -> Self {
+        DefId::intern(&path)
+    }
+}
 
 impl Ord for DefId {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -147,3 +152,44 @@ impl std::fmt::Debug for DefId {
 
 #[cfg(test)]
 mod tests;
+
+thread_local! {
+    static PERSIST: persist::Scopes<DefId> = const { std::cell::RefCell::new(vec![]) };
+}
+
+/// Run `f` with every `DefId` serializing as its number in `numbering`: a
+/// persisted form that writes its definition table beside it (the std image).
+pub fn with_def_numbering<R>(
+    numbering: &mut persist::Numbering<DefId>,
+    f: impl FnOnce() -> R,
+) -> R {
+    persist::with_numbering(&PERSIST, numbering, f)
+}
+
+/// Run `f` with every `DefId` deserializing from a number through `source`.
+pub fn with_def_source<R>(source: Arc<dyn persist::Source<DefId>>, f: impl FnOnce() -> R) -> R {
+    persist::with_source(&PERSIST, source, f)
+}
+
+/// Persisted as its DefPath, or as its number in a persisted definition table
+/// (`with_def_numbering`); never as a session id.
+impl serde::Serialize for DefId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match persist::encoded(&PERSIST, *self) {
+            Some(number) => s.serialize_u32(number),
+            None => serde::Serialize::serialize(self.path(), s),
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for DefId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if let Some(source) = persist::decoding(&PERSIST) {
+            let number = <u32 as serde::Deserialize>::deserialize(d)?;
+            return source
+                .id(number)
+                .ok_or_else(|| serde::de::Error::custom("definition number out of range"));
+        }
+        let path: DefPath = serde::Deserialize::deserialize(d)?;
+        Ok(DefId::intern(&path))
+    }
+}

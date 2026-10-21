@@ -2,7 +2,7 @@ use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A fixture parser for one empty function; all production lexing/formatting is real.
 struct EmptyFunction;
@@ -96,7 +96,7 @@ fn real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser() {
 }
 fn real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser_on_compiler_thread() {
     let mut adapters = compiler_adapters();
-    adapters.parser = Some(Rc::new(EmptyFunction));
+    adapters.parser = Some(Arc::new(EmptyFunction));
     let mut engine = QueryEngine::new(default_environment(), adapters);
     let first = engine
         .sources

@@ -24,6 +24,15 @@ pub fn ready<S: Stage>(
     table: &LayoutTable,
     finalizers: &Finalizers,
 ) -> Result<LirUnit<Ready>, PassError> {
-    let unit = cleanup::lower(unit, table, finalizers)?;
-    legalize::legalize(unit, table)
+    ready_indexed(unit, finalizers, &hirsel_lir::LayoutIndex::new(table))
+}
+
+/// Ready lowering using the build's immutable common-layout index.
+pub fn ready_indexed<S: Stage>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Ready>, PassError> {
+    let unit = cleanup::lower_indexed(unit, finalizers, index)?;
+    legalize::legalize_indexed(unit, index)
 }

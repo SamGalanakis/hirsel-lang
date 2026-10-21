@@ -8,7 +8,7 @@ rust-version.workspace = true
 [[bin]]
 name = "hirsel"
 path = "src/main.rs"
-test = false
+test = true
 
 [dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
@@ -19,7 +19,9 @@ hirsel-engine = { path = "../hirsel-engine" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-run-schema = { path = "../hirsel-run-schema" }
 
+libc = { version = "0.2", default-features = false }
 mimalloc = { version = "=0.1.52", default-features = false }
+sha2 = "0.10"
 serde_json = "1"
 
 [dev-dependencies]

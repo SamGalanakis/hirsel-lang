@@ -28,11 +28,11 @@ impl Aliasing {
     /// callback states none: C holds a callback context's address for the whole extern
     /// call and may hand it to a callback nested in an activation that still has it
     /// (PROG-4), so the context place is reached by two addresses at once.
-    pub(super) fn of(inputs: &EmitInputs<'_>) -> Self {
-        if inputs.callbacks.is_empty() {
-            Self::ExclusiveMut
-        } else {
+    pub(super) fn of(callbacks: bool) -> Self {
+        if callbacks {
             Self::Unstated
+        } else {
+            Self::ExclusiveMut
         }
     }
 }

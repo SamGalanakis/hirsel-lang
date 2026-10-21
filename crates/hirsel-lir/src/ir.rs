@@ -11,7 +11,7 @@
 use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
-use crate::stage::{InputIdentity, Stage, StageKind};
+use crate::stage::{Stage, StageKind};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::OperationId;
 use hirsel_core_contract::Passing;
@@ -1387,7 +1387,7 @@ pub struct ConstantData {
     pub value: ConstantValue,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum SymbolKind {
     Function,
     Constant,
@@ -1397,7 +1397,7 @@ pub enum SymbolKind {
 }
 
 /// A link-level symbol: definition plus instance digest for specialized code.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Symbol {
     pub kind: SymbolKind,
     pub definition: DefPath,
@@ -1410,11 +1410,22 @@ pub struct LoanInfo {
     pub mutable: bool,
 }
 
-/// Byte range of a source site within its definition's source revision.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+/// Byte range relative to one existing source anchor of the original TIR
+/// definition. `source` is its canonical first-encounter selector, never a
+/// process Anchor id. `u32::MAX` is an unmapped site.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct SiteRange {
+    pub source: u32,
     pub start: u32,
     pub end: u32,
+}
+
+impl SiteRange {
+    pub const UNMAPPED: Self = Self {
+        source: u32::MAX,
+        start: 0,
+        end: 0,
+    };
 }
 
 /// `(BodyId, block, statement)` in the TIR body, plus a stable site. The
@@ -1554,18 +1565,19 @@ pub enum UnitOrigin {
 /// Identity and versions of one unit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnitHeader {
+    /// Number of existing source anchors in the original definition's canonical walk.
+    pub source_count: u32,
     pub track_caller: bool,
     pub stage: StageKind,
     pub lir_version: u32,
     pub origin: UnitOrigin,
-    pub input: InputIdentity,
+    /// The planned content key; independently checked input evidence lives in the receipt.
+    pub key: crate::objects::UnitKey,
     pub definition: DefPath,
     pub implementation_revision: ContentHash,
     /// Digest of the unit's `InstanceKey`.
     pub instance: ContentHash,
     pub target: ContentHash,
-    /// Digest of the `LayoutTable` that `LayoutId`/`FnAbiId` index.
-    pub layouts: ContentHash,
     pub abi: FnAbiId,
 }
 
@@ -2553,19 +2565,10 @@ pub enum SchemaError {
 }
 
 impl<S: Stage> LirUnit<S> {
-    /// Check stage, versions, layout-table identity and that every index and
+    /// Check stage, versions, target identity and that every index and
     /// pool range lies inside the arena it names. This is referential integrity
     /// only; it never substitutes for a stage validator.
     pub fn check_identity(&self, layouts: &crate::LayoutTable) -> Result<(), SchemaError> {
-        self.check_identity_digested(layouts, layouts.digest())
-    }
-    /// `check_identity` given the layout table's digest, `layouts.digest()`, which a
-    /// caller checking many units against one table computes once.
-    pub fn check_identity_digested(
-        &self,
-        layouts: &crate::LayoutTable,
-        digest: ContentHash,
-    ) -> Result<(), SchemaError> {
         if self.header.stage != S::KIND {
             return Err(SchemaError::StageMismatch {
                 expected: S::KIND,
@@ -2575,16 +2578,13 @@ impl<S: Stage> LirUnit<S> {
         if self.header.lir_version != crate::LIR_VERSION {
             return Err(SchemaError::Stale("LIR version"));
         }
-        if self.header.input.interface_version != crate::INTERFACE_VERSION {
-            return Err(SchemaError::Stale("front-end interface version"));
-        }
         if layouts.layout_version != crate::LAYOUT_VERSION
             || layouts.abi_version != crate::ABI_VERSION
         {
             return Err(SchemaError::Stale("layout table version"));
         }
-        if self.header.layouts != digest || self.header.target != layouts.target {
-            return Err(SchemaError::Stale("layout table digest"));
+        if self.header.target != layouts.target {
+            return Err(SchemaError::Stale("layout table target"));
         }
         if self.blocks.len() != self.terminators.len() {
             return Err(SchemaError::Malformed(
@@ -2592,6 +2592,23 @@ impl<S: Stage> LirUnit<S> {
             ));
         }
         let t = &self.tables;
+        for site in t
+            .source_anchors
+            .iter()
+            .map(|a| a.site)
+            .chain(t.cleanup_anchors.iter().map(|a| a.site))
+        {
+            if site.start > site.end {
+                return Err(SchemaError::Malformed("reversed source range"));
+            }
+            if site.source != u32::MAX && site.source >= self.header.source_count {
+                return Err(SchemaError::ForeignId {
+                    kind: "source selector",
+                    index: site.source,
+                    bound: self.header.source_count as usize,
+                });
+            }
+        }
         let p = &self.pools;
         let id = |kind, index: u32, bound: usize| {
             if (index as usize) < bound {
@@ -3176,7 +3193,7 @@ snapshot_struct!(Symbol {
     instance
 });
 snapshot_struct!(LoanInfo { address, mutable });
-snapshot_struct!(SiteRange { start, end });
+snapshot_struct!(SiteRange { source, start, end });
 snapshot_struct!(SourceAnchor {
     body,
     block,
@@ -3230,16 +3247,16 @@ snapshot_struct!(Pools {
 });
 snapshot_enum!(UnitOrigin { Source, Library });
 snapshot_struct!(UnitHeader {
+    source_count,
     track_caller,
     stage,
     lir_version,
     origin,
-    input,
+    key,
     definition,
     implementation_revision,
     instance,
     target,
-    layouts,
     abi
 });
 

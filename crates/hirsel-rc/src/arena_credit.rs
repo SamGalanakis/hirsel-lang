@@ -301,6 +301,10 @@ impl<'a, S> Discovery<'a, S> {
 /// Derive every function's claim by assume-then-verify. Removing an invalid
 /// claim revisits its callers, including recursive strongly connected groups.
 pub fn summarize(units: &mut [LirUnit<Value>], table: &mut LayoutTable) {
+    hirsel_intern::timings::count_by(
+        hirsel_intern::timings::Count::ArenaBodyScans,
+        units.len() as u64,
+    );
     let targets: BTreeMap<_, _> = units
         .iter()
         .enumerate()
@@ -434,10 +438,6 @@ pub fn summarize(units: &mut [LirUnit<Value>], table: &mut LayoutTable) {
                 }
             }
         }
-    }
-    let digest = table.digest();
-    for u in units {
-        u.header.layouts = digest;
     }
 }
 

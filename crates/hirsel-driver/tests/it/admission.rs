@@ -17,9 +17,16 @@ impl HostAuthority for Host {
         })
     }
 }
+/// One interner for every fixture, so forged signatures share its rows.
+fn types() -> &'static std::sync::Arc<hirsel_types::TypeInterner> {
+    static TYPES: std::sync::OnceLock<std::sync::Arc<hirsel_types::TypeInterner>> =
+        std::sync::OnceLock::new();
+    TYPES.get_or_init(hirsel_engine::registry::session_types)
+}
 fn fixture(parameters: &str) -> (hirsel_types::SignatureRef, ProgramRevision) {
     let source = format!("pub fn main({parameters}) -> Result[(), ()] {{ Ok(()) }}");
-    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+    let mut engine =
+        QueryEngine::new(default_environment(), compiler_adapters()).with_types(types().clone());
     let file = engine.sources.add("admission.hir", source.clone()).unwrap();
     let context = default_context();
     check_snapshot(&mut engine, file, &context).unwrap();
@@ -44,6 +51,7 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
             let mut host = Host::default();
             assert!(matches!(
                 admit_run(
+                    types(),
                     &signature,
                     &revision,
                     LaunchKind::Main,
@@ -63,6 +71,7 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
             let record = record.validated().unwrap();
             assert!(
                 admit_run(
+                    types(),
                     &signature,
                     &revision,
                     LaunchKind::Main,
@@ -78,6 +87,7 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
         let (signature, revision) = fixture("");
         assert!(
             admit_run(
+                types(),
                 &signature,
                 &revision,
                 LaunchKind::Main,
@@ -113,6 +123,7 @@ fn wrong_program_entry_kind_and_expired_admission_have_no_host_effects() {
             let mut host = Host::default();
             assert!(
                 admit_run(
+                    types(),
                     &signature,
                     &revision,
                     LaunchKind::Main,
@@ -130,6 +141,7 @@ fn wrong_program_entry_kind_and_expired_admission_have_no_host_effects() {
             .unwrap();
         assert!(
             admit_run(
+                types(),
                 &signature,
                 &revision,
                 LaunchKind::Main,
@@ -148,7 +160,7 @@ fn nominal_root_and_result_checks_refuse_lookalikes() {
     with_compiler_stack(|| {
         let (signature, _) = fixture("rt: Io");
         assert_eq!(
-            entry_roots(&signature, LaunchKind::Main).unwrap(),
+            entry_roots(types(), &signature, LaunchKind::Main).unwrap(),
             [Root::Io]
         );
         for name in ["Io", "Result"] {
@@ -161,12 +173,14 @@ fn nominal_root_and_result_checks_refuse_lookalikes() {
             } else {
                 function.result
             };
-            let mut row = forged.types.get(ty).unwrap().clone();
+            let mut row = types().get(ty).unwrap().clone();
             let hirsel_types::TypeKind::Named { definition, .. } = &mut row.kind else {
                 unreachable!()
             };
-            definition.0.package.name = "user".into();
-            let replacement = forged.types.push(row);
+            let mut lookalike = definition.path().clone();
+            lookalike.0.package.name = "user".into();
+            *definition = hirsel_syntax::DefId::intern(&lookalike);
+            let replacement = types().intern(row);
             let hirsel_types::SignatureKind::Function(function) = &mut forged.kind else {
                 unreachable!()
             };
@@ -175,7 +189,7 @@ fn nominal_root_and_result_checks_refuse_lookalikes() {
             } else {
                 function.result = replacement;
             }
-            assert!(entry_roots(&forged, LaunchKind::Main).is_err());
+            assert!(entry_roots(types(), &forged, LaunchKind::Main).is_err());
         }
     });
 }
@@ -192,14 +206,17 @@ fn unrelated_signature_refuses_before_authorizing_the_selected_program() {
     with_compiler_stack(|| {
         let (signature, revision) = fixture("");
         let mut wrong = (*signature).clone();
-        wrong.definition.0.name = "other".into();
+        let mut other = wrong.definition.path().clone();
+        other.0.name = "other".into();
+        wrong.definition = hirsel_syntax::DefId::intern(&other);
         let mut host = Host::default();
         assert!(
-            matches!(admit_run(&wrong, &revision, LaunchKind::Main, None, CodeReach::Safe, &mut host, 0), Err(RunRefusal::Binding { field }) if field == "entry.signature")
+            matches!(admit_run(types(), &wrong, &revision, LaunchKind::Main, None, CodeReach::Safe, &mut host, 0), Err(RunRefusal::Binding { field }) if field == "entry.signature")
         );
         assert_eq!(host.0, 0);
         assert!(
             admit_run(
+                types(),
                 &signature,
                 &revision,
                 LaunchKind::Main,

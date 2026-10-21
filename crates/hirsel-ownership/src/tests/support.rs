@@ -1,4 +1,5 @@
 use super::super::*;
+pub use hirsel_authority::test_support::{session, session_memo};
 use hirsel_intern::Symbol;
 use hirsel_syntax::{self as s, *};
 use std::{collections::BTreeMap, sync::Arc};
@@ -18,7 +19,8 @@ impl Default for Provider {
     }
 }
 impl SignatureProvider for Provider {
-    fn signature(&mut self, path: &DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError> {
+        let path = definition.path();
         self.reads.push(path.clone());
         if let Some(error) = &self.error {
             return Err(error.clone());
@@ -81,14 +83,13 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new() -> Self {
-        let mut types = TypeStore::default();
-        let bytes = types.push(ty(TypeKind::Primitive(Primitive::Bytes)));
-        let scalar = types.push(ty(TypeKind::Primitive(Primitive::U64)));
-        let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
+        let types = session();
+        let bytes = types.intern(ty(TypeKind::Primitive(Primitive::Bytes)));
+        let scalar = types.intern(ty(TypeKind::Primitive(Primitive::U64)));
+        let unit = types.intern(ty(TypeKind::Tuple(vec![].into())));
         let signature = Signature {
             metadata: SignatureMetadata::default(),
-            definition: path("example"),
-            types: types.clone(),
+            definition: DefId::intern(&path("example")),
             kind: SignatureKind::Function(function(vec![], unit)),
             fingerprint: Default::default(),
         };
@@ -121,7 +122,6 @@ impl Fixture {
                 calls: vec![],
                 bindings: vec![],
                 patterns: vec![],
-                types,
                 resolution: Resolution::default(),
                 expressions: vec![],
                 instantiations: vec![],
@@ -142,17 +142,16 @@ impl Fixture {
     pub fn new_type(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
         let mut t = ty(kind);
         t.modes = modes;
-        self.body.types.push(t)
+        session().intern(t)
     }
     pub fn parameter(&mut self, ty: TypeId, passing: PassingMode) -> usize {
         let p = if let SignatureKind::Function(f) = &mut self.signature.kind {
             let id = f.parameters.len();
-            let imported = import_type(&self.body.types, ty, &mut self.signature.types).unwrap();
             f.parameters.push(hirsel_types::Parameter {
                 name: Some(format!("p{id}")),
                 label: None,
                 passing,
-                ty: imported,
+                ty,
             });
             id
         } else {
@@ -188,11 +187,8 @@ impl Fixture {
         if let ExprKind::Call { callee, arguments } =
             &self.syntax.tree.expressions[id.0 as usize].kind
         {
-            if let TypeKind::Function(f) = &self
-                .body
-                .types
-                .get(expression_type(&self.body, *callee).unwrap())
-                .unwrap()
+            if let TypeKind::Function(f) = &session()
+                .row(expression_type(&self.body, *callee).unwrap())
                 .kind
             {
                 self.body.calls.push(CheckedCall {
@@ -298,20 +294,14 @@ impl Fixture {
         modes: Vec<Modes>,
         result_modes: Modes,
     ) -> ExprId {
-        let mut types = TypeStore::default();
+        let types = session();
         let params = args
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                let id = import_type(
-                    &self.body.types,
-                    expression_type(&self.body, *e).unwrap(),
-                    &mut types,
-                )
-                .unwrap();
-                let mut t = types.get(id).unwrap().clone();
+                let mut t = types.row(expression_type(&self.body, *e).unwrap()).clone();
                 t.modes = modes[i].clone();
-                let id = types.push(t);
+                let id = types.intern(t);
                 hirsel_types::Parameter {
                     name: None,
                     label: None,
@@ -322,11 +312,10 @@ impl Fixture {
             .collect();
         let mut result = ty(TypeKind::Tuple(vec![].into()));
         result.modes = result_modes;
-        let result = types.push(result);
+        let result = types.intern(result);
         let signature = Signature {
             metadata: Default::default(),
-            definition: path(name),
-            types,
+            definition: DefId::intern(&path(name)),
             kind: SignatureKind::Function(function(params, result)),
             fingerprint: ContentHash::of_bytes(name.as_bytes()),
         };
@@ -359,16 +348,8 @@ impl Fixture {
         let SignatureKind::Function(f) = &signature.kind else {
             unreachable!()
         };
-        let parameters = f
-            .parameters
-            .iter()
-            .map(|p| {
-                let mut p = p.clone();
-                p.ty = import_type(&signature.types, p.ty, &mut self.body.types).unwrap();
-                p
-            })
-            .collect::<Vec<_>>();
-        let result = import_type(&signature.types, f.result, &mut self.body.types).unwrap();
+        let parameters = f.parameters.to_vec();
+        let result = f.result;
         let ExprKind::Call { arguments, .. } = &self.syntax.tree.expressions[call.0 as usize].kind
         else {
             unreachable!()
@@ -404,8 +385,14 @@ impl Fixture {
         if let ItemKind::Function { body, .. } = &mut self.syntax.item.kind {
             *body = Some(root);
         }
-        hirsel_authority::test_support::publish_places(&self.syntax.tree, &mut self.body);
+        hirsel_authority::test_support::publish_places(
+            session(),
+            &self.syntax.tree,
+            &mut self.body,
+        );
         check_ownership_with_clauses(
+            session(),
+            session_memo(),
             &self.syntax,
             &self.signature,
             &mut self.body,
@@ -427,11 +414,8 @@ impl Fixture {
             .usage
     }
     pub fn modes(&self, id: ExprId) -> &Modes {
-        &self
-            .body
-            .types
-            .get(expression_type(&self.body, id).unwrap())
-            .unwrap()
+        &session()
+            .row(expression_type(&self.body, id).unwrap())
             .modes
     }
 }

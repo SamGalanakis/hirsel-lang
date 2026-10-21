@@ -9,10 +9,11 @@
 //! deeper; a pair deeper than `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure. Scalar leaves
 //! are compared inline, after their own depth check.
 //!
-//! A comparator `hirsel.compare.<layout>(left, right, depth, context) -> i8` reads two values of its
+//! A comparator `hirsel.compare.<layout key>(left, right, depth, context) -> i8` reads two values of its
 //! layout at the given addresses and returns one of the `ORDER_*` codes. Loads are unaligned
 //! (a `@packed` field may hold a comparable value at any offset).
 
+use hirsel_lir::LayoutKeys;
 use hirsel_lir::ir::COMPARE_MAX_DEPTH;
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
@@ -24,7 +25,7 @@ use crate::context::{
     MemoryEffects, Module, Value,
 };
 use crate::emit::load_tag;
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 
 /// The pair is equal.
 pub(crate) const ORDER_EQUAL: u8 = 0;
@@ -47,23 +48,29 @@ pub(crate) enum CompareError {
 
 type Compared<T> = Result<T, CompareError>;
 
-fn name(layout: LayoutId) -> String {
-    format!("hirsel.compare.{}", layout.0)
+/// A comparator's symbol: by the layout's content key, so a unit's object names no
+/// number the program assigns.
+fn name(keys: &LayoutKeys, layout: LayoutId) -> String {
+    format!("hirsel.compare.{}", keys.key(layout).hex())
 }
 
 /// The comparator of `layout` in `module`, generating it and every comparator it calls.
 pub(crate) fn comparator<'m>(
     module: &'m Module<'m>,
     layouts: &LayoutTable,
+    keys: &LayoutKeys,
+    index: Option<&hirsel_lir::LayoutIndex<'_>>,
     layout: LayoutId,
     equality: bool,
 ) -> Compared<Function<'m>> {
     let mut pending = Vec::new();
-    let root = declare(module, layout, equality, &mut pending);
+    let root = declare(module, keys, layout, equality, &mut pending);
     while let Some((layout, function, entry, equality)) = pending.pop() {
         Generator {
             module,
             layouts,
+            keys,
+            index,
             function,
             builder: Builder::new(module),
             pending: &mut pending,
@@ -81,13 +88,18 @@ type Pending<'m> = (LayoutId, Function<'m>, BasicBlock<'m>, bool);
 /// comparator already has its entry block, so the module counts it as defined.
 fn declare<'m>(
     module: &'m Module<'m>,
+    keys: &LayoutKeys,
     layout: LayoutId,
     equality: bool,
     pending: &mut Vec<Pending<'m>>,
 ) -> Function<'m> {
     let ptr = module.ptr_type();
     let ty = module.function_type(module.int_type(8), &[ptr, ptr, module.int_type(64), ptr]);
-    let name = format!("{}{}", name(layout), if equality { ".eq" } else { "" });
+    let name = format!(
+        "{}{}",
+        name(keys, layout),
+        if equality { ".eq" } else { "" }
+    );
     let fresh = !module.defines(&name);
     let function = module
         .function(&name, ty)
@@ -102,6 +114,8 @@ fn declare<'m>(
 struct Generator<'m, 'g> {
     module: &'m Module<'m>,
     layouts: &'g LayoutTable,
+    index: Option<&'g hirsel_lir::LayoutIndex<'g>>,
+    keys: &'g LayoutKeys,
     function: Function<'m>,
     builder: Builder<'m>,
     pending: &'g mut Vec<Pending<'m>>,
@@ -631,7 +645,7 @@ impl<'m> Generator<'m, '_> {
         };
         let (owner, start, length) = (field(0)?, field(1)?, field(2)?);
         // The owner word names the counted sequence block of the slice's element.
-        let Some(payload) = slice_storage(self.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(self.layouts, self.index, element) else {
             return Err(CompareError::Invalid(
                 "a slice without its element's sequence layout".into(),
             ));
@@ -814,7 +828,13 @@ impl<'m> Generator<'m, '_> {
     fn callee(&mut self, layout: LayoutId) -> Compared<Option<Function<'m>>> {
         Ok(match self.record(layout)?.kind {
             LayoutKind::Scalar(_) => None,
-            _ => Some(declare(self.module, layout, self.equality, self.pending)),
+            _ => Some(declare(
+                self.module,
+                self.keys,
+                layout,
+                self.equality,
+                self.pending,
+            )),
         })
     }
 
@@ -928,15 +948,19 @@ type HashPending<'m> = (LayoutId, Function<'m>, BasicBlock<'m>);
 pub(crate) fn hasher<'m>(
     module: &'m Module<'m>,
     layouts: &LayoutTable,
+    keys: &LayoutKeys,
+    index: Option<&hirsel_lir::LayoutIndex<'_>>,
     layout: LayoutId,
     hash_bytes: Function<'m>,
 ) -> Compared<Function<'m>> {
     let mut pending = Vec::new();
-    let root = declare_hash(module, layout, &mut pending);
+    let root = declare_hash(module, keys, layout, &mut pending);
     while let Some((layout, function, entry)) = pending.pop() {
         HashGenerator {
             module,
             layouts,
+            keys,
+            index,
             function,
             builder: Builder::new(module),
             pending: &mut pending,
@@ -950,12 +974,13 @@ pub(crate) fn hasher<'m>(
 
 fn declare_hash<'m>(
     module: &'m Module<'m>,
+    keys: &LayoutKeys,
     layout: LayoutId,
     pending: &mut Vec<HashPending<'m>>,
 ) -> Function<'m> {
     let (ptr, i64_ty) = (module.ptr_type(), module.int_type(64));
     let ty = module.function_type(i64_ty, &[ptr, i64_ty, i64_ty, ptr, ptr]);
-    let name = format!("hirsel.hash.{}", layout.0);
+    let name = format!("hirsel.hash.{}", keys.key(layout).hex());
     let fresh = !module.defines(&name);
     let function = module
         .function(&name, ty)
@@ -970,6 +995,8 @@ fn declare_hash<'m>(
 struct HashGenerator<'m, 'g> {
     module: &'m Module<'m>,
     layouts: &'g LayoutTable,
+    index: Option<&'g hirsel_lir::LayoutIndex<'g>>,
+    keys: &'g LayoutKeys,
     function: Function<'m>,
     builder: Builder<'m>,
     pending: &'g mut Vec<HashPending<'m>>,
@@ -1224,7 +1251,14 @@ impl<'m> HashGenerator<'m, '_> {
         self.builder.position(check);
         let entry = map_next(&self.builder, self.function, &tag, stride, scan);
         let candidate = self.at(entry, key_offset);
-        let comparator = comparator(self.module, self.layouts, element, false)?;
+        let comparator = comparator(
+            self.module,
+            self.layouts,
+            self.keys,
+            self.index,
+            element,
+            false,
+        )?;
         let context = self.module.parameter(self.function, 4);
         let after = self
             .builder
@@ -1456,7 +1490,7 @@ impl<'m> HashGenerator<'m, '_> {
         depth: Value<'m>,
         deep: Value<'m>,
     ) -> Compared<Value<'m>> {
-        let callee = declare_hash(self.module, layout, self.pending);
+        let callee = declare_hash(self.module, self.keys, layout, self.pending);
         Ok(self.builder.call(
             callee,
             &[
@@ -1480,7 +1514,7 @@ impl<'m> HashGenerator<'m, '_> {
         depth: Value<'m>,
         deep: Value<'m>,
     ) -> Compared<Value<'m>> {
-        let callee = declare_hash(self.module, element, self.pending);
+        let callee = declare_hash(self.module, self.keys, element, self.pending);
         let i64_ty = self.module.int_type(64);
         let before = self.builder.current();
         let head = self.module.append_block(self.function);
@@ -1535,7 +1569,7 @@ impl<'m> HashGenerator<'m, '_> {
                 .ok_or_else(|| CompareError::Invalid("a slice without its fields".into()))
         };
         let (owner, start, length) = (field(0)?, field(1)?, field(2)?);
-        let Some(payload) = slice_storage(self.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(self.layouts, self.index, element) else {
             return Err(CompareError::Invalid(
                 "a slice without its element's sequence layout".into(),
             ));

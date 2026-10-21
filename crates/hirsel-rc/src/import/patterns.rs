@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// `Match from k`: arms k.. tested in order, each arm's failure continuing
     /// with the next; the remaining arms are exhaustive (TIR match coverage),
     /// so the last is entered without a test.
@@ -310,7 +310,7 @@ impl Importer<'_, '_> {
 
     /// The LIR type of `bool`, for comparison results.
     pub(super) fn bool_type(&mut self) -> R<LirTypeId> {
-        let ty = self.store.push(hirsel_types::Type::boolean());
+        let ty = self.types.intern(hirsel_types::Type::boolean());
         let layout = self.layout(ty)?;
         Ok(self.intern(layout))
     }

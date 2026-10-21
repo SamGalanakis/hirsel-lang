@@ -14,12 +14,9 @@ only its owner's sites. Explicit build-input changes still require a new manifes
 revision. `work::read(Counter::ModuleDeclarationRows)` counts source fact composition for scaling
 tests. The core registry shares its immutable signature map across adapters.
 
-Query caches retain shared immutable nodes and outputs. A rooted signature query
-or cache-validity walk visits each retained dependency node once, replaying its
-lookup results, execution reads and signature fingerprints. Visitation ends with
-the query and supplies no validity evidence across edits. Provider reads share
-the output; public query calls return owned output snapshots. `work::read(Counter::CacheValidationRows)`
-counts actual node inspections for the shared-dependency regression.
+Query results are memos with typed reads (see "Memos and invalidation"). Provider
+reads share the output; public query calls return owned output snapshots.
+`work::read(Counter::CacheValidationRows)` counts deep verifications of marked memos.
 
 Syntax and positions are item-local (design rule 6). `parse_file` retains each
 item's `Arc<ItemSyntax>` when its DefPath, text hash and occurrence match an
@@ -29,17 +26,28 @@ holds a file offset, so no cached signature, resolution, body, mode result,
 TIR or diagnostic is rewritten after an edit: inserting or removing other items,
 or moving an item to another file, leaves every memo of the item in place.
 Items removed from one file wait in a detached pool until the next parse, so a
-cross-file move keeps the same syntax. Package images, prechecked records and
+cross-file move keeps the same syntax. Package images, imaged records and
 artifacts carry anchors as (source ordinal, base) and are placed on load, never
 rebased.
 
-Publication consumes one immutable `ValidatedSignatures` input per owning package,
-indexed source revision and explicit environment/manifest input. V independently checks every
-signature once, including unrelated malformed rows. The complete signature-set
-fingerprint and exact snapshot equality permit proof reuse after body-only edits;
-changed sets are checked together, preserving violation order. Failed header reads
-are retried. Compile-time owners use a borrowed replacement view instead of copying
-the map. This replaces the per-publication signature assembly and graph scan.
+Each revision computes one frozen `SignatureSnapshot` (`snapshot/`): every
+signature by `DefId`, each opaque type's private view (seen only by its own
+package's bodies) and V's verdict on every view. V validates a package's bodies
+against `snapshot.validation(package)`, the public `ViewTable` with that
+package's private views in place; compile-time evaluation validates a
+materialized owner against `validation_with`. Only the replaced views and the
+verdicts that read them are checked again, and a new snapshot reuses the
+previous one's digests and the verdicts whose reads still hold. Failed headers
+are retried: a snapshot is kept only when every signature normalized.
+The snapshot's stamp follows declaration rows, explicit module inputs and S1
+signature publication/retirement, including the environment and comptime limits.
+An ordinary function-body edit retains the snapshot and runtime type tables;
+candidate, header and private-shape changes rebuild the affected views.
+`SnapshotSeed` stores public/private signatures and successful per-view V
+receipts in canonical type/anchor scopes. Import independently computes each
+view digest and checks every contextual read before reusing a success; failed
+verdicts are recomputed. `seed_signature_verdicts` primes only receipt candidates:
+actual source/image views remain authoritative.
 
 Compose phases through per-definition queries; record dependency fingerprints for later caching.
 
@@ -63,7 +71,7 @@ report the same diagnostics; the conformance harness checks each corpus file
 under both and requires them equal. `Verify` is the session's one V switch:
 `Compiler::with_verify` sets it, and `QueryEngine::run_v` is the only place V
 runs or is skipped. Sessions without V use their own shared package cache, and
-`precheck_package` refuses them.
+`image_package` refuses them.
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
@@ -87,7 +95,7 @@ executes must be in the program its identity names.
 its LANG-6 definition hash, and each definition with TIR its call sites with
 their callees' hashes (`definition_hash`, `package_definition_hashes` and
 `hirsel hash` read it). A definition with TIR hashes its signature and TIR, a
-source or prechecked type its owner view, and a registry operation, extern,
+source or imaged type its owner view, and a registry operation, extern,
 signature fragment or generic generated declaration its path, signature,
 semantic tokens and reads. It is a query over existing TIR; nothing is cached
 across calls. `definition_groups(roots)` returns the same closure's recursive
@@ -198,16 +206,16 @@ available, and fake adapters need implement only that method. Production formatt
 uses the fallible wrapper after rejecting parser errors, so unsupported syntax
 cannot produce a false successful `fmt --check` result.
 
-`CompilerState` retains shared Resolution outputs (reads, primitive/generic
-bindings, contextual names, qualifier paths, local functions, reference scopes and
-deferred names), together with the owning AST/item snapshots. Signature normalization
-uses explicit Item/Header resolver views over the original syntax. Header traversal
-excludes implementation/destructor/constant execution expressions while retaining
-contracts, distinct facts and finalizer binders. Adapters pass the same Arc syntax
-owner to both resolver snapshots. Sibling
-header reads go through SignatureProvider, avoiding stale same-file shortcuts.
-Duplicate items keep one DefPath plus addressable candidate ordinals; Metadata
-receives every declaration; Item supplies exact name-token spans for LANG-7 diagnostics.
+Phase invocations publish `PhaseProducts` with their owning memo, including
+resolver snapshots, the private owner representation and diagnostic stages on
+rejection. Immutable `Arc` phase adapters implement `Send + Sync`; the engine
+owns mutable evaluation values, and no adapter owns a session side cache.
+Signature normalization takes explicit declaration/header views over the
+original syntax. Header traversal excludes implementation/destructor/constant
+execution expressions while retaining contracts, facts and finalizer binders.
+Sibling header reads go through SignatureProvider. Duplicate items keep one
+DefPath plus addressable candidate ordinals; metadata includes every declaration,
+and item views retain exact name spans for LANG-7 diagnostics.
 Recursive type groups (`queries/type_groups.rs`) come from the written type paths
 of a package's type declarations and manifest lookups, never from a signature, with
 Tarjan components and `hirsel_graph::scc_keys` over the members' paths and texts. A
@@ -262,6 +270,15 @@ single driver `select_diagnostics` policy. Operand prerequisites and specialized
 owners precede independent source ordering. The frozen Diagnostic lacks obligation
 kinds, so known producer messages distinguish generic copying from other bounds
 and repeat invocation from required multiplicity.
+
+Compiler-created program fronts use `Retention::Batch`: each worker captures
+independent checked/final summaries, diagnostic stages, complete reads and the
+compact lowering/lint inputs, then releases its intermediate bodies before
+accepting another task. Explicit body demands still take the ordinary memo miss
+path. `Compiler::with_retention(Resident)` retains front bodies for resident
+hosts; the driver's `Session` selects it. Low-level `QueryEngine::new` keeps
+Resident behavior unless `set_retention` selects Batch. Image proof construction
+retains its source products while records are captured.
 
 `mode_definition` exposes the enriched body without requiring executable code for
 a type or bodyless declaration. File checking obtains source diagnostics from all
@@ -414,6 +431,10 @@ query engine. The snapshot carries the native GEN-5 `InstanceGraph` and one
 `SourceAudit` per executable definition (noalloc, cleanup and invocation promises);
 import recollects both. Forged flags, graphs, audit records, materializations or
 stale bodies fail closed, and a growing native instance graph is unavailable.
+Import compares current query products directly, without exporting another
+snapshot or comparing syntax trees deeply. Source owners must retain the current
+item's Arc; TIR verdicts are reused only for the exact accepted Arc and current
+validator reads. An equal detached TIR copy is independently validated.
 The snapshot also carries the CT-5 `InstanceBodies` table, recomputed on import
 and checked by `hirsel_validate::validate_instance_bodies`.
 
@@ -426,25 +447,26 @@ padded to the declaration's lines; the semantic program and lowering repeat the
 walk until no instance is new. At most `MAX_GENERATED_INSTANCES` (256) per
 declaration, then CT-1. Re-indexing a declaration's source retires its instances.
 
-A *precheck* (`queries/precheck.rs`) is a dependency package checked once, at
-toolchain build time, instead of by every program: `LoadedProgram::precheck`
-writes it after a complete check with no diagnostics, refusing a package whose
-queries read outside its closure. It holds, per definition, the semantic-revision
-node and the lowered, validated TIR (spans by manifest ordinal, TypeIds given
-fresh provenance on decode), completed native source audit, compile-time
-substitutions and evaluated constant with its execution reads, decoded on first
-use. Native export reads these audit products instead of repeating H and modes;
-constant queries retain their original execution dependencies. Lowering replays
-the execution reads it adds to enclosing frames. Its key is the compiler
-identity, the package's checked-input revision and the compile-time limits. Only `PackageCache::shared`
-(the toolchain's `$HIRSEL_PRECHECK` or `hirsel-std.precheck` beside the
-executable) and `PackageCache::prechecked` caches adopt prechecks; disabled and
-other explicit caches check fresh. With a precheck adopted, `check` skips the
-package's files, GEN-5's program graph covers only the other bodies (a
-prechecked package reaches nothing outside its closure, so it closes no cycle
-through them), `lower_to_tir`, `semantic_program`, source audits and constant
-evaluation take its products, and other queries still compute from source, so
-diagnostics, revisions and replay identity are unchanged. Re-indexing one of its files drops the precheck.
+The std image (`image.rs`, `queries/image.rs`) is a dependency package checked
+once at toolchain build time. `LoadedProgram::image` refuses diagnostics and
+queries that read outside the package's closure. The mapped file holds declaration
+rows, normalized signatures and private views, canonical type rows, and lazy
+per-definition semantic nodes, validated TIR, audits, constants, execution reads,
+and published final-mode summaries with growth edges. Successful signature-view
+receipts are imported as candidates: V independently computes current digests
+and checks every contextual read before reuse; source/image signatures remain
+authoritative. Summary seeds check their complete body key and reads and restore
+reverse subscriptions without reconstructing checked or mode bodies.
+`StdImage::open` eagerly decodes the declaration index and type base; `OnceLock`
+slots share each decoded record across sessions without a decode-map mutex.
+`StdImages::toolchain()` selects `$HIRSEL_IMAGE` or the executable's sibling
+`hirsel-std.image`; `StdImages::at` selects a replaceable file, `StdImages::of`
+supplies explicit immutable images, and `StdImages::none()` checks from source.
+The compiler identity, sources, closure manifests, registry revision and compile-time
+limits key the image. Stale selected files are rebuilt atomically. Syntax is
+materialized only when needed; editing an imaged source releases the image and
+resumes normal invalidation. The choice changes compilation work, preserving
+diagnostics, TIR and semantic revisions.
 
 The single-threaded engine lives on a compiler thread. Use
 `with_compiler_stack(|| { ... })` to construct the engine and keep its complete
@@ -628,17 +650,15 @@ owner-credit changes to H.
 
 PROG-1 package loading is in `package.rs`. `load_program` indexes the selected
 JSON graph before checks, retaining all source FileContexts and a declared entry.
-`LoadedProgram.check` checks every selected body once per dependency package revision,
-with per-package dependency heads composed by `CompilerState.index`. Checking
-includes compile-time evaluation for every selected body; lowering and V do not.
-The entry's own package lowers every executable body. A dependency lowers at check
-time only the bodies whose lowering evaluates at compile time (constants, `comptime`
-expressions and source-constant reads), because only that evaluation reports source
-diagnostics from lowering; every other dependency body lowers when the program
-package reaches it. Reachability is `semantic_program`'s read closure, so the check
-lowers exactly what a launch's semantic program revision can encode
-(`queries/lowering.rs`, `tests/it/lazy_lowering.rs`). `.hir.json` is an exact sidecar; there
-is no ancestor manifest search or source discovery. A manifestless source is
+`LoadedProgram.check` checks each package through per-definition queries unless a
+std image already covers it. The configured lowering policy selects the root
+package's bodies: `Comptime` lowers compile-time evaluation, while `Reachable`
+also lowers its executable bodies and the dependency bodies they reach.
+Dependencies otherwise use `Comptime`; their cached checked results live in the
+selected result store. Both policies check every selected source body and report
+the same diagnostics. Reachability is `semantic_program`'s read closure
+(`queries/lowering.rs`, `tests/it/lazy_lowering.rs`). `.hir.json` is an exact
+sidecar; there is no ancestor manifest search or source discovery. A manifestless source is
 `standalone@0` with the toolchain std@1 as its sole dependency; the ordinary graph
 loader supplies its module heads, dependency cache, precheck and program identity.
 An explicit sidecar selects exactly its declared dependencies, including none.
@@ -650,117 +670,45 @@ promises. Core Unicode views use their nominal declarations rather than collecti
 selector labels. Implementations requiring preservation or creation-envelope proofs
 currently reject explicitly as not yet provable.
 
-Checked dependency packages are immutable process-local artifacts shared across
-compiler threads. Their length-framed content key includes the exact selected
-package manifests, every source in the dependency closure, compiler/interface,
-spec and core revisions, and compile-time limits. Loading reads those inputs
-again; paths never establish validity. Engines reach artifacts only through
-shared package images (below): an image adopts an artifact once per placement,
-rebasing changed FileIds and diagnostic obligations with copy-on-write in a
-private transport engine, leaving the artifact unchanged. Mutable adapters and
-execution state stay engine-local. No cross-process encoding is implied.
-CT-5 syntax also retains its generated token sources and generation sites.
-Transport places those sources relative to the current manifest source, rebases
-their spans independently of the written header's FileId, and keeps the text
-in the package image for later engines.
+## Memos and invalidation
 
-An image validates every adopted receipt once, including negative lookups. An
-engine installs a package proof for a proven package at check time, and walks
-the receipts itself only for an open package. The proof holds only for the
-unchanged indexed source, environment, manifest and limit snapshot; any edit
-ends it. GEN-5 remains a program
-check; its verdict is retained only for unchanged indexed sources, environment,
-manifest and limits, so checking another file does not rebuild the same graph.
-Deterministic package rejections retain exact source diagnostics;
-operational failures and incomplete checks never publish artifacts. A versioned
-read of a selected package outside the declared closure uses ordinary checking.
-The default cache retains at most 32 revisions; `PackageCache` supplies explicit
-session storage and a disabled fresh-check oracle through
-`load_program_source_with_cache`.
-`HIRSEL_PACKAGE_CACHE=off` disables the default cache for tool reproductions and
-same-corpus performance comparisons.
+Every per-definition query result (signature, resolution, check, modes,
+lowering) is a memo (`queries/memos.rs`, `memo/`): its value, the adapter's
+reported detail, and typed `Reads`, a sorted set of `(ReadKey, observed value)`
+over signatures, failed signatures, lookups (provider, manifest index and
+module heads, negative ones included), private representations, executed
+bodies and signatures, cited text, the definition's own declaration candidates
+and the environment (design §1b). A memo's own content is its text: the item's
+text hash (headers' hashes for a signature) with its package's closure
+manifest.
 
-Clean dependency checks also publish when a client rejection withholds lowering.
-Such artifacts retain checked bodies and modes but still follow ordinary file
-checks until every body its role lowers at check time (all bodies for the program
-package, compile-time evaluating bodies for a dependency) has lowered without local
-errors. Reachable dependency bodies travel with the artifact their first client publishes. Cached
-rejections follow ordinary phase order so a client's prerequisite failure can
-still withhold a dependency's lowering diagnostic. A later accepted client
-performs the missing lowering and independent TIR validation before the cache
-can skip that dependency's file checks.
+The `MemoGraph` keeps each memo's record and the reverse index `ReadKey →
+subscribers`. Indexing a file diffs each affected definition's inputs (body,
+headers, candidates, anchors, name kind and visibility) and marks exactly the
+subscribers of every read that can have changed, plus the memos keyed on a
+definition whose text or anchors changed; a name appearing, disappearing or
+changing kind marks every lookup. Nothing else is touched. A memo with no mark
+is valid as it stands and stamped when read; a memo marked by a read is
+deep-verified by observing each read again, and recomputed only if one differs;
+a memo whose own text changed is recomputed. Counters record each mark by read
+kind (`--timings`, `invalidated by <read>`), and `memo_stats` the memos touched.
 
-`tests/it/package_cache.rs` proves cross-thread reuse with zero phase recomputations,
-byte-identical human/JSON diagnostics after FileId changes, relocation, immutable
-retained output, source/dependency/manifest edits, missing-source retry and budget
-invalidation. Its ignored measurements compare the whole corpus cold and warm
-and report fresh/reused empty-main timings with std@1.
-The std-check profile records phase costs, representative
-cold/warm timings, cache boundaries and the reproducible profiling example.
-The shared source-test fixture checks its `LoadedProgram` before returning an
-engine, allowing its callers in driver, RC and runtime tests to reuse std.
-Each selected dependency also gives its engine a publication handle for validated
-lowerings. A later `lower_to_tir` publishes that definition under the same closure
-and receipt checks, even after the `LoadedProgram` is discarded. The bounded cache
-accumulates immutable per-definition snapshots from concurrent engines; an image
-adopts new ones incrementally. Indexed source, environment, manifest or limit edits end
-the engine's publication authority. Compilation and snapshot transport never hold
-the shared publication lock.
-`tests/it/source_std_cache.rs` retains the full-gate real-std recomputation control.
+Executing or materializing anything merges its complete reads into every open
+evaluation frame, on hits too: a lowered body's memo reads, a constant's or
+staged value's execution reads, a generator's check. A constant whose recorded
+execution closure still observes the same values is reused.
 
-## Shared package images
+Compile-time dependency depth is logical height (`memo/depth.rs`): each
+constant, staged value and generator result keeps `DepthEvidence`, its height
+and the overflow table `first[m]`, composed from its requests in request order.
+A request at stack length n fails at its own site when n ≥ L =
+`min(call_depth, 32)`, else at `first[n + 1]` if any, whether the result was
+computed or reused, so the verdict and site equal a cache-free serial
+evaluation. Limit failures are operational and never cached.
 
-A program's dependency packages (std and any other selected package) are read,
-parsed, adopted and validated once per process into an immutable
-`PackageImage`; every fresh engine starts from it instead of re-parsing,
-deep-cloning and rebasing them.
-
-- **Package-scoped keys.** A dependency definition's query key (and its file's
-  parse entry) carries the manifest hash of that package's own dependency
-  closure, not the whole graph's. std's keys are therefore the same in every
-  program that selects the same std, and no environment rewrite happens on
-  adoption. The program package keys on the whole-graph environment as before.
-- **Image identity.** Compiler, interface, spec, core and limit inputs; each
-  dependency file's placement (FileId, path, context) and content digest; and,
-  per dependency package, its checked artifact's generation and the published
-  lowerings adopted. Program text never enters. Loading still reads and hashes
-  every file, so an edited std file selects a different image; paths never
-  establish validity.
-- **Build, once per identity.** A builder engine parses the dependency files
-  (from a parse-only image when one exists for the same placement and
-  contents), adopts the artifact and lowerings (rebasing FileIds once, for this
-  placement), validates each package once and freezes every cache map into
-  `Arc`'d maps. A package is *proven* when validation passed and its reads are
-  closed: no lookup, signature, execution or representation read leaves its
-  dependency closure except into core. A proven package installs its proof at
-  check time without a walk; an open package is still revalidated per engine.
-  New lowerings extend an image incrementally.
-- **Install and isolation.** Engine caches are `Layered` maps: a local overlay
-  over the image's immutable `Arc` base. Installing is O(1) per map, and only program-package files
-  are lexed and parsed. All engine writes, including retiring a dependency entry
-  after an in-engine edit, go to its overlay (tombstones), so no engine
-  observes another's mutations and an image never changes. Dropping an engine
-  releases only its overlay.
-- **Incremental indexing.** Indexing a file retires and rehashes only the
-  definitions it owned or now owns, so adding the program's files over an image
-  costs O(program), not O(program × dependency definitions).
-- **Keys.** With shared bases, dependency entries and their `DefPath` keys are
-  no longer cloned per engine; the remaining clones are proportional to the
-  program package, so no `DefPath` interner is introduced. Cache hits on
-  resolution, checking and modes share their outputs instead of copying them.
-- **TIR validation results.** Each distinct signature input is created (and
-  its signatures checked) once per process, by exact signature-map equality,
-  and records the lowered definitions V passed against it. A definition equal
-  to a passed one (`Arc::ptr_eq` or full `Definition` equality; no digest, since
-  `TypeId`'s Debug omits provenance) is not validated again at lowering or
-  native-input import. Any other input runs V in full. The validator is fixed
-  within a process, so its version needs no key.
-- **Measured** (agree shard 2/96, one thread, this host): a package-program
-  classification costs 51.6 ms on average against 39.0 ms standalone (before:
-  182.7 against 103.4 ms); shard 1/96 gives 57.5 against 44.2 (before: 170.4
-  against 108.3). The residual is the program's own checking, lowering and V,
-  GEN-5 over the dependency bodies the program selects, and execution of the
-  dependency code it calls.
+Dependency packages are checked in each engine unless a std image covers them;
+cross-program reuse of checked results goes through the result store
+(`store.rs`: `none@1`, `mem@1`, `dir@1`, `sim@1`).
 
 Runtime archives have independent `RuntimeBuild` choices: `system_allocator`,
 `measurement` and `diagnostic`. `Toolchain::in_tree` selects the production
@@ -858,7 +806,7 @@ policy; test discovery selects ordinary functions after checking the package.
 `Compiler::load_package_declarations` loads the validated manifest graph for
 signature tools, including libraries without an entry. It parses/indexes source
 and resolves header paths through the selected dependency aliases and PROG-2
-access rules, without checking, lowering or evaluating bodies or loading prechecks.
+access rules, without checking, lowering or evaluating bodies or loading std images.
 
 Size-dependent inline comptime expressions publish hidden size-generic constant
 signatures. Generic TIR reads those constants with lexical size actuals; each
@@ -878,3 +826,159 @@ generic instantiations. A wrapper's abstract key parameter defers its schema
 proof to the wrapper's callers, including through another wrapper. The verdict
 shares the existing program-verdict invalidation and adds no signature or TIR
 metadata. Programs without table calls build no schema for this check.
+
+`mode_definitions` runs a source frontier through `jobs::map` at every worker
+count. Workers share immutable declarations, type tables, phase handles and the
+signature snapshot; each owns its dependency collector and phase products.
+Publication records resolve/check/modes memos in DefPath order, while returned
+`ModeResult`s retain input order and each input's stopping phase. Repeated paths
+share one task. Current-source citation inputs are borrowed separately from the
+body-stable signature snapshot. A generator drains the preceding source frontier
+and uses the existing exclusive S1 path before a new frontier is frozen.
+This front API does not yet provide parallel S1 execution or budgeted body holds.
+Program checking retains body-free outcomes and lowering diagnostics, refreshing
+changed owners and actual reverse subscribers through the same P implementation.
+Generator drains and per-file operational gates remain in source order. GEN-5
+retains keyed checked inputs separately from final-mode selection summaries.
+
+Published summaries keep GEN-5's pre-mode checked summary and growth separately
+from the final mode-refined selection input. Batch publication retains both
+before releasing bodies; reading the checked input then needs no TypedBody.
+The optional checked member uses the existing canonical type/anchor encoding.
+Restored diagnostic phases belong to the restored mode memo's phase products,
+so editing or retiring that memo retires its diagnostic provenance too.
+A result provider's `enabled` capability disables record capture and encoding
+for `none@1` and any other off provider; its name is only a label.
+
+Published records carry their queried definition separately from the symbolic
+summary's lexical owner: an instantiated generated body can retain its source
+declaration's lexical identity. `checked_definition_summaries` exposes keyed
+pre-mode inputs for consumers that need query identity. Independent checked
+summary memos retain those inputs before mode publication and body release.
+Fully cached frontiers return before building worker snapshot inputs.
+
+Frozen P signature inputs defer construction of V's signature universe until a
+validation consumer requests it. The public `signature_snapshot` API still
+returns a validated snapshot. Independent representation digests are computed
+per demanded view; validation checks the actual frozen views and all contextual
+receipts. Unconsumed receipt candidates survive deferred snapshot extensions,
+and initialization releases the preceding universe after reusing its receipts.
+
+`frontier_changes` starts change tracking for a retained program aggregate. Its
+first call returns indexed definitions outside prechecked images; subsequent
+calls retain direct changes, removals and actual reverse subscribers until
+`acknowledge_frontier` accepts their observed per-definition generations.
+A query that recomputes a memo early cannot erase the aggregate notification,
+and an older acknowledgment cannot erase a newer S1 publication. Tracking is
+inactive in scalar-only sessions. The driver still owns compact aggregation.
+
+Successful P workers, resident/store hits and serial generator boundaries publish
+final summaries directly from completed mode entries. `publish_definitions`
+returns compact results and per-diagnostic phase provenance without retaining
+body products. `Retention::Batch` releases body values after capturing the
+outcomes. Body-free failure memos keep complete receipts and reverse
+subscriptions; a released body is recomputed by its ordinary query. The caller still bounds the in-flight frontier and decides
+when S1 work has settled. This API does not yet enforce a production hold budget.
+
+Each `ModeResult` captures its summary, shared complete reads and diagnostic
+provenance at completion, before subsequent serial generators can change the
+signature context. Compact publication consumes those captured products without
+asking the body query again. Error entries carry no body and retain their
+subscriptions; transient failures remain retryable.
+
+The frozen signature universe retains weak references to its producing memos.
+When extending a universe, unchanged rows are copied from the prior immutable
+snapshot only while their exact producer remains current, coherent and unmarked.
+Replaced or invalidated producers take ordinary signature demand; private views
+are always selected again from the current owner representation. Snapshot reuse
+never changes the memo touch counter. Compact program products have a separate
+heap-accounting row and are retired by pending generation-stamped changes.
+
+`SignatureSnapshot::validation_input_digest(package)` identifies the originating
+package's complete base V universe, including valid views, its first heap and
+its errors. View identities use V's independent digests, with canonical DefPath
+ordering; each immutable universe computes this aggregate once. An unchanged
+error digest alone cannot prove a private evaluation overlay valid.
+`FrozenProvider::validation_universe` records a package-qualified
+`ReadKey::ValidationUniverse` so execution-read unions preserve private context.
+The appended durable read tag encodes the package spelling, never its session ID.
+Signature changes mark its live subscribers through a separate small graph index;
+body-only changes do not mark this broad input. This global input has Low
+durability and cannot establish a dependency image's closure-local receipt.
+
+CT-5 root and call traversal consume retained final summaries, merging their
+complete execution reads on hits too. The dead-error-arm lint retains only
+per-owner construction and error-type facts; coherent checked-summary receipts
+keep those facts subscribed after body release. A pending frontier generation
+retires old compact products once, while its acknowledgment remains available
+for P/S1 work that has not refreshed yet. Overlapping changed inputs combine
+their memo mark requests before applying them, retaining first-read provenance
+and text-mark priority without changing memo-touch accounting.
+
+Program checking lowers compile-time roots and selected generated instances through
+ordered compact S1 prefixes after GEN-5, using the same worker path at every jobs
+count. Static and dynamic source-publication boundaries settle in source order.
+Workers drop root TIR before queuing diagnostics, ordered dependencies, complete
+reads, depth and stopping-phase evidence. Current successful facts retain body-free
+Lower receipts; failed or limited products take the ordinary retry path. Ordinary
+P2 artifact demands retain scalar store and precise validation-read handling.
+
+S1 body publication refreshes the complete compact P outcome before dropping its
+body. A pending notification revalidates earlier P products against their own text
+and complete reads, preserving unchanged summary/lint inputs while Lower products
+retire according to their separate execution and validation dependencies.
+`recompute_count` counts admitted logical misses. `lower_adapter_calls` counts actual
+scalar and worker Lower adapter calls, including discarded speculative work;
+`lower_evaluation` is a separate operation.
+
+Image construction withholds production worker admission while producing
+portable receipts; the prior admission purpose is restored on success or error.
+This preserves imported constants without body recomputation while whole-universe
+worker receipts remain unsuitable as portable image evidence.
+
+Retained TIR hold weights use structural allocation accounting: Vec capacities,
+owned strings and literals, Arc headers/alignment and deduplicated shared path or
+slice allocations within each artifact. Session interner rows and interned DefId
+storage are session costs; no serialization runs to estimate a hold's bytes.
+
+The hold cache returns within its byte budget even at zero or for one oversized
+artifact. Active callers retain in-flight Arcs independently. `Holds::clear`
+retires root-local entries and eviction markers while preserving cumulative
+counters. `peak_bytes` includes transient insertion-before-eviction occupancy.
+Worker lowering weights also include receipt/depth backing and staged signature
+payloads; the inline wrapper's Arc layout is accounted separately.
+
+`CompileConfig` selects jobs, verification, retention, lowering, ResultStore,
+VerifyStore and a total `hold_bytes` budget. `Compiler::with_config` owns this
+policy for fresh sessions; cloning the compiler shares its store provider.
+`Compiler::new` and the existing const scalar builders remain available.
+`QueryEngine::with_config` configures a directly constructed engine, and
+`LoadedProgram::check_configured` uses its selected lowering policy. Explicit
+stores override CLI environment selection, including an off provider.
+The default hold budget is min(256 MiB, 10% of HIRSEL_MEMORY_LIMIT); an explicit
+zero budget is preserved. Native object-store selection remains in the driver
+and LIR provider API, outside this front-end config's dependencies.
+
+Serial compile-time constant, staged-value and lowering requests also publish
+compact front facts and release successful checked/analyzed bodies on completion
+under Batch retention. The request's active Arc remains valid through evaluation;
+Resident sessions keep the ordinary body memos. Later explicit body demands use
+the usual miss/recompute path.
+
+Compact P workers drain encoded result-store payloads through the same immutable
+writer as scalar queries before accepting another task. Only the write verdict
+joins canonical memo publication. Completed payload buffers therefore do not
+accumulate across the frontier; provider-owned caches remain the selected store's
+policy. VerifyStore still compares exact canonical payload bytes and reads.
+
+Batch scalar lowering also keeps TIR under the configured hold allowance. Its
+LRU weight includes artifact, memo/output wrappers, dependency/depth buffers and
+validator reads. Eviction releases both TIR cache owners, retaining compact
+Lower receipts and reverse subscriptions. Explicit TIR demands use the ordinary
+miss path; semantic traversal can consume valid receipts without bodies, after
+checking their exact validator reads. Generated declarations still use analyzed
+syntax for semantic content. `lower_hold_stats` reports occupancy, evictions and
+recomputes; `available_hold_bytes` exposes the remaining worker allowance.
+Changing retention or the configured allowance updates existing scalar holds.
+Compact read/diagnostic/depth receipts and table/interner storage remain session
+metadata outside the body allowance; caller-owned output Arcs remain in flight.

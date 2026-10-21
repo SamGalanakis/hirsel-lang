@@ -135,10 +135,10 @@ pub(super) fn body_plan(
 ) -> R<CodecPlan> {
     let signatures = &cx.program.signatures;
     let schema = hirsel_types::serialization::serializable_schema(
-        &cx.store,
+        cx.types,
         ty,
         &hirsel_types::GenericDeclarations::default(),
-        &mut |path| Ok(signatures.get(path).cloned()),
+        &mut |path| Ok(signatures.get(path.path()).cloned()),
     )
     .map_err(|e| PassError::Unsupported(format!("codec schema: {e:?}")))?
     .ok_or_else(|| PassError::Malformed("a runner call over a type with no codec schema".into()))?;

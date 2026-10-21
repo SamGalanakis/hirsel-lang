@@ -17,7 +17,10 @@ pub(super) fn join(
 
 /// Each selected incoming callback's mutable slot paired with every other
 /// selected incoming state: relaying the exact pair keeps the caller's receipt.
-fn relays(types: &TypeStore, function: &hirsel_types::FunctionType) -> Vec<(usize, usize, usize)> {
+fn relays(
+    types: &TypeInterner,
+    function: &hirsel_types::FunctionType,
+) -> Vec<(usize, usize, usize)> {
     let Some(ErasedCaptures::FromArguments(selectors)) =
         &types.get(function.result).unwrap().erased_captures
     else {
@@ -62,7 +65,7 @@ fn relays(types: &TypeStore, function: &hirsel_types::FunctionType) -> Vec<(usiz
 /// parameter, or an equal type. A written `sendable` on either is a receiving
 /// requirement, not part of the value: a move carries the caller's receipt as
 /// evidence (MODE-4), so the root requirements are set aside.
-fn relayed(types: &mut TypeStore, relayed: TypeId, incoming: TypeId) -> bool {
+fn relayed(types: &TypeInterner, relayed: TypeId, incoming: TypeId) -> bool {
     let (mut a, mut b) = (
         types.get(relayed).unwrap().clone(),
         types.get(incoming).unwrap().clone(),
@@ -72,26 +75,28 @@ fn relayed(types: &mut TypeStore, relayed: TypeId, incoming: TypeId) -> bool {
     }
     a.sendability_requirement = SendabilityRequirement::None;
     b.sendability_requirement = SendabilityRequirement::None;
-    let (a, b) = (types.push(a), types.push(b));
-    hirsel_types::semantic_equal(types, a, types, b).unwrap_or(false)
+    let (a, b) = (types.intern(a), types.intern(b));
+    types.semantic_eq(a, b)
 }
 
 impl Checker<'_> {
     /// The callable type the validated body implements, with its row store:
     /// the published header for the entry, the creating row for a closure.
-    pub(super) fn body_callable(&self) -> Option<(&TypeStore, &hirsel_types::FunctionType)> {
+    pub(super) fn body_callable(&self) -> Option<(&TypeInterner, &hirsel_types::FunctionType)> {
         if self.site.body == self.definition.entry {
-            let signature = self.signatures.get(&self.definition.path)?;
+            let signature = self.signatures.get(self.definition.path)?;
             match &signature.kind {
-                SignatureKind::Function(f) => Some((&signature.types, f)),
+                SignatureKind::Function(f) => Some((self.t, f)),
                 _ => None,
             }
         } else {
-            let ty = self.scratch.definition_inputs(self.definition).producers
-                [self.site.body.0 as usize]
+            let ty = self
+                .scratch
+                .definition_inputs(self.t, self.definition)
+                .producers[self.site.body.0 as usize]
                 .first_function?;
-            match &self.definition.types.get(ty)?.kind {
-                TypeKind::Function(f) => Some((&self.definition.types, f)),
+            match &self.t.get(ty)?.kind {
+                TypeKind::Function(f) => Some((self.t, &f)),
                 _ => None,
             }
         }
@@ -99,7 +104,7 @@ impl Checker<'_> {
     fn creation_callback_contracts(
         &self,
         state: &State,
-        types: &TypeStore,
+        types: &TypeInterner,
         callee: &hirsel_types::FunctionType,
         arguments: &[CallArgument],
     ) -> bool {
@@ -119,7 +124,7 @@ impl Checker<'_> {
             };
             let selected_ty = self.place_type(selected.place);
             let receipt = hirsel_types::mutable_capture_state_sendability(
-                &self.definition.types,
+                self.t,
                 self.place_type(callback.place),
                 slot,
                 self.generic_declarations(),
@@ -131,12 +136,8 @@ impl Checker<'_> {
             }
             // Every invocation of a callback promising its whole state keeps
             // the snapshot; a closed slot fixes what any callback hands back.
-            let TypeKind::Function(header) = &self
-                .definition
-                .types
-                .get(self.place_type(callback.place))
-                .unwrap()
-                .kind
+            let TypeKind::Function(header) =
+                &self.t.get(self.place_type(callback.place)).unwrap().kind
             else {
                 return false;
             };
@@ -150,7 +151,7 @@ impl Checker<'_> {
                     && header
                         .parameters
                         .get(slot)
-                        .is_some_and(|p| self.closed(&self.definition.types, p.ty, true))
+                        .is_some_and(|p| self.closed(self.t, p.ty, true))
             {
                 continue;
             }
@@ -165,13 +166,9 @@ impl Checker<'_> {
                     ) else {
                         return false;
                     };
-                    let mut store = self.working_store();
+                    let store = self.t;
                     incoming_slot == slot
-                        && relayed(
-                            &mut store,
-                            selected_ty,
-                            self.body.locals[selected.0 as usize].ty,
-                        )
+                        && relayed(store, selected_ty, self.body.locals[selected.0 as usize].ty)
                         && selected_inputs
                             .as_ref()
                             .is_some_and(|inputs| inputs.contains(&(selected.0 as usize)))
@@ -179,7 +176,7 @@ impl Checker<'_> {
                             .as_ref()
                             .is_some_and(|inputs| inputs.contains(&(incoming_callback.0 as usize)))
                         && relayed(
-                            &mut store,
+                            store,
                             self.place_type(callback.place),
                             self.body.locals[incoming_callback.0 as usize].ty,
                         )
@@ -209,17 +206,18 @@ impl Checker<'_> {
     }
 
     fn inert_creation(&self, ty: TypeId) -> bool {
-        let types = &self.definition.types;
+        let types = self.t;
         let row = types.get(ty).unwrap();
         if row.drop_allocation != DropAllocation::NoAlloc
             || row.modes.multiplicity != Multiplicity::Many
-            || hirsel_types::content_sendability(
-                types,
-                ty,
-                self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
+            || self
+                .proof(
+                    types,
+                    ty,
+                    super::proofs::Proof::Content,
+                    self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                 != Sendability::Sendable
             || self.authority_with_generics(types, ty, self.generic_declarations())
                 != AuthoritySummary::inert()
@@ -227,7 +225,7 @@ impl Checker<'_> {
             return false;
         }
         let mut pending = vec![ty];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -264,16 +262,17 @@ impl Checker<'_> {
 
     pub(super) fn copy_creation(&self, place: PlaceId) -> bool {
         self.inert_creation(self.place_type(place))
-            && hirsel_types::sendability_after_sharing(
-                &self.definition.types,
-                self.place_type(place),
-                &self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
+            && self
+                .proof(
+                    self.t,
+                    self.place_type(place),
+                    super::proofs::Proof::AfterSharing,
+                    &self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                 == Sendability::Sendable
             || self.bound(
-                &self.definition.types,
+                self.t,
                 self.place_type(place),
                 hirsel_syntax::Bound::Plain,
                 &self.generic_declarations(),
@@ -390,18 +389,18 @@ impl Checker<'_> {
         let declaration = match callee {
             Callee::Definition { path, .. } => {
                 self.signatures.get(path).and_then(|s| match &s.kind {
-                    SignatureKind::Function(f) => Some((&s.types, f)),
+                    SignatureKind::Function(f) => Some((self.t, f)),
                     _ => None,
                 })
             }
-            Callee::Indirect { value, .. } => self
-                .definition
-                .types
-                .get(self.place_type(value.place))
-                .and_then(|row| match &row.kind {
-                    TypeKind::Function(f) => Some((&self.definition.types, f)),
-                    _ => None,
-                }),
+            Callee::Indirect { value, .. } => {
+                self.t
+                    .get(self.place_type(value.place))
+                    .and_then(|row| match &row.kind {
+                        TypeKind::Function(f) => Some((self.t, f)),
+                        _ => None,
+                    })
+            }
         };
         let inputs = declaration.and_then(|(types, function)| {
             if !self.creation_callback_contracts(state, types, function, arguments) {

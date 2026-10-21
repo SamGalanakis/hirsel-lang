@@ -24,9 +24,7 @@ impl Builder<'_, '_> {
         };
         let end = self.transport(end, Storage::Temporary, span);
         let ty = self.ty(counter.place);
-        if !hirsel_types::semantic_equal(&self.types, ty, &self.types, self.ty(end.place))
-            .unwrap_or(false)
-        {
+        if !self.types.semantic_eq(ty, self.ty(end.place)) {
             return self.error(span, "range endpoints have inconsistent checked types");
         }
         let header = self.block(span);

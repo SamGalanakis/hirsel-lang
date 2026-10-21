@@ -49,16 +49,13 @@ pub(super) struct Builder<'a, 'b> {
     pub owner: NameSite,
     pub body: Body,
     projection_paths: hirsel_types::PathInterner<Projection>,
-    pub types: &'b mut hirsel_types::TypeStore,
+    pub types: &'a hirsel_types::TypeInterner,
     pub current: Option<BlockId>,
     pub scope: ScopeId,
     pub state: State,
     pub bindings: super::bindings::Bindings,
     pub owned: Vec<bool>,
     plain_locals: Vec<bool>,
-    /// Each declared-unique content row's aliased twin, pushed once: a push
-    /// copies a type store shared with a snapshot.
-    displaced_rows: BTreeMap<TypeId, TypeId>,
     /// Scope nesting depth of each local; cleanup releases nest by it (DROP-2).
     local_depth: Vec<u32>,
     /// The greatest depth in `local_depth`.
@@ -83,7 +80,7 @@ pub(super) struct Builder<'a, 'b> {
     pub destroyed_holders: BTreeMap<u32, BTreeSet<u32>>,
     /// Borrowed protocol cursors have no observable destruction despite being
     /// noncopyable. Their source loans follow uses, rather than cursor cleanup.
-    pub borrowed_cursor_types: BTreeSet<TypeId>,
+    pub borrowed_cursor_types: std::collections::HashSet<TypeId>,
     /// Lowering a value that a binding receives: a borrowed argument temporary
     /// the result keeps is released like a named local declared just before
     /// that binding, on every exit (DROP-2).
@@ -109,8 +106,8 @@ impl<'a, 'b> Builder<'a, 'b> {
         decisions: &'b decisions::Decisions<'a>,
         owner: NameSite,
         result: TypeId,
-        types: &'b mut hirsel_types::TypeStore,
     ) -> Result<Self> {
+        let types = input.types;
         for ty in [result, input.unit, input.boolean] {
             if types.get(ty).is_none() {
                 return Err(LowerError {
@@ -149,7 +146,6 @@ impl<'a, 'b> Builder<'a, 'b> {
             bindings: Default::default(),
             owned: vec![],
             plain_locals: vec![],
-            displaced_rows: BTreeMap::new(),
             local_depth: vec![],
             max_depth: 0,
             cleanup_epoch: 0,
@@ -161,7 +157,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             call_retention: BTreeMap::new(),
             call_field_loans: BTreeMap::new(),
             destroyed_holders: BTreeMap::new(),
-            borrowed_cursor_types: BTreeSet::new(),
+            borrowed_cursor_types: std::collections::HashSet::new(),
             keeping: false,
             keep_span: Span::default(),
             keep_result: false,
@@ -246,7 +242,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         // A semantic origin id is not a body parameter ordinal. Resolve only
         // roots whose storage is needed, retaining all checked type rows intact.
         let mut captured_origins = BTreeSet::new();
-        let mut visited = BTreeSet::new();
+        let mut visited = std::collections::HashSet::new();
         let mut pending: Vec<_> = self
             .body
             .locals
@@ -350,7 +346,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             .and_then(|l| self.body.locals.get(l.0 as usize))
             .and_then(|l| self.types.get(l.ty))
             .is_some_and(|t| {
-                matches!(&t.kind, hirsel_types::TypeKind::Named { definition, .. } if definition == arena)
+                matches!(&t.kind, hirsel_types::TypeKind::Named { definition, .. } if definition.path() == arena)
             })
     }
     /// A row's lifetime sources: every reach except arena places.
@@ -597,7 +593,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             .modes
             .relation
             .union(&self.types.get(owner).unwrap().modes.relation);
-        self.types.push(row)
+        self.types.intern(row)
     }
     pub(super) fn plain(&self, ty: TypeId) -> bool {
         self.input.ownership.plain_types.contains(&ty)
@@ -1190,16 +1186,9 @@ impl<'a, 'b> Builder<'a, 'b> {
         let content = if self.types.get(content).unwrap().modes.uniqueness
             == hirsel_types::Uniqueness::Unique
         {
-            match self.displaced_rows.get(&content) {
-                Some(aliased) => *aliased,
-                None => {
-                    let mut row = self.types.get(content).unwrap().clone();
-                    row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-                    let aliased = self.types.push(row);
-                    self.displaced_rows.insert(content, aliased);
-                    aliased
-                }
-            }
+            let mut row = self.types.get(content).unwrap().clone();
+            row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+            self.types.intern(row)
         } else {
             content
         };

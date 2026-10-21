@@ -18,12 +18,12 @@ fn opaque_private_edits_invalidate_owner_record_without_changing_public_signatur
     let public = engine.item_signature(&path).unwrap().value;
     assert!(matches!(&public.kind, SignatureKind::Type(t) if t.representation.is_none()));
     assert!(
-        public.types.is_empty(),
+        hirsel_types::encoding::signature_types(engine.types(), &public).is_empty(),
         "public signatures retain no hidden rows"
     );
     let private = engine.owner_representation(&path, &path).unwrap();
     assert!(matches!(
-        private.types.get(private.private_shape).unwrap().kind,
+        engine.types().get(private.private_shape).unwrap().kind,
         TypeKind::Record(_)
     ));
     assert!(
@@ -169,7 +169,7 @@ fn owner_constant_materialization_tracks_private_shape_edits() {
                 panic!("record")
             };
             assert_eq!(
-                value.types.get(fields[0].ty).unwrap().kind,
+                engine.types().get(fields[0].ty).unwrap().kind,
                 TypeKind::Primitive(primitive)
             );
             assert_eq!(
@@ -243,7 +243,12 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
                 let snapshot = loaded.engine.export_native_input().unwrap();
                 for public in snapshot.signatures.values() {
                     if public.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
-                        assert!(public.types.is_empty(), "{:?}", public.definition);
+                        assert!(
+                            hirsel_types::encoding::signature_types(&snapshot.types, public)
+                                .is_empty(),
+                            "{:?}",
+                            public.definition
+                        );
                     }
                 }
                 loaded.engine.import_native_input(snapshot).unwrap();
@@ -321,5 +326,58 @@ fn adding_a_private_shape_retries_a_cached_owner_rejection() {
             engine.item_signature(&hidden).unwrap().value.fingerprint
         );
         engine.lower_to_tir(&build).unwrap();
+    });
+}
+
+/// A constant in another file reflects the opaque type through a helper: no
+/// text it executed and no public fingerprint changes when the private field
+/// does. Its evaluation records `Representation(Hidden)` with the digest of
+/// the private view it reflected, which the edit changes and reverting it
+/// restores.
+#[test]
+fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edits() {
+    with_compiler_stack(|| {
+        let hidden = "pub opaque type Hidden: data uses {} { value: u64 }\n";
+        let reflect = "fn first(take info: ShapeInfo) -> String {\n\
+                       match info.body { Record(fields) => copy fields[0].ty, Choice(_) => \"\" }\n\
+                       }\n\
+                       fn first_field[T](s: TypeShape[T]) -> String { first(type_shape.info(s)) }\n\
+                       const field: String = first_field(shape(Hidden))\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("reflect.hir", reflect.into()).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let mut field = entry_path(&default_context());
+        field.0.name = "field".into();
+        let mut hidden_path = field.clone();
+        hidden_path.0.name = "Hidden".into();
+        let mut digests = vec![];
+        for (source, spelling) in [
+            (hidden.to_owned(), "u64"),
+            (hidden.replace("value: u64", "value: u32"), "u32"),
+            (hidden.to_owned(), "u64"),
+        ] {
+            let file = engine.sources.add("hidden.hir", source).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let public = engine
+                .item_signature(&hidden_path)
+                .unwrap()
+                .value
+                .fingerprint;
+            assert_eq!(
+                engine.materialize_constant(&field).unwrap(),
+                hirsel_tir::Constant::String(spelling.into())
+            );
+            let reads = engine.representation_reads(&field).unwrap();
+            let [(read, digest)] = &reads[..] else {
+                panic!("{spelling}: {reads:?}")
+            };
+            assert_eq!(read, &hidden_path);
+            assert_ne!(*digest, hirsel_syntax::ContentHash::default());
+            digests.push((public, *digest));
+        }
+        // The public fingerprint never moves; the reflected view's digest does.
+        assert_eq!(digests[0].0, digests[1].0);
+        assert_ne!(digests[0].1, digests[1].1);
+        assert_eq!(digests[0].1, digests[2].1);
     });
 }

@@ -3,19 +3,20 @@ impl Checker<'_, '_> {
     pub(super) fn name(&self, symbol: hirsel_intern::Symbol) -> String {
         symbol.as_str().to_owned()
     }
-    pub(super) fn snapshot(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
-        if let Some(s) = self.snapshots.get(path) {
+    pub(super) fn snapshot(&mut self, path: impl AsDef) -> Result<SignatureRef, QueryError> {
+        let definition = path.def();
+        if let Some(s) = self.snapshots.get(&definition) {
             return Ok(s.clone());
         }
-        let result = self.provider.signature(path);
+        let result = self.provider.signature(definition);
         self.body.resolution.reads.push(DependencyRead::Signature {
-            definition: path.clone(),
+            definition,
             fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
         });
         match result {
             Ok(s) => {
-                self.dependencies.insert(path.clone(), s.fingerprint);
-                self.snapshots.insert(path.clone(), s.clone());
+                self.dependencies.insert(definition, s.fingerprint);
+                self.snapshots.insert(definition, s.clone());
                 Ok(s)
             }
             Err(QueryError::Diagnostics(ds)) => {
@@ -25,36 +26,29 @@ impl Checker<'_, '_> {
             Err(e) => Err(e),
         }
     }
-    pub(super) fn import(
-        &mut self,
-        root: TypeId,
-        source: &TypeStore,
-    ) -> Result<TypeId, QueryError> {
-        let start = self.body.types.len();
-        let ty = import_type(source, root, &mut self.body.types);
-        self.imported(start, ty)
+    /// A declared row read from a signature. Rows are session rows, so this
+    /// only records the signature reads its nominals need.
+    pub(super) fn import(&mut self, root: TypeId) -> Result<TypeId, QueryError> {
+        self.imported(root)
     }
-    fn imported(
-        &mut self,
-        start: usize,
-        ty: Result<TypeId, GraphError>,
-    ) -> Result<TypeId, QueryError> {
-        let ty = ty.map_err(|_| {
-            QueryError::Operational(OperationalFailure {
+    fn imported(&mut self, ty: TypeId) -> Result<TypeId, QueryError> {
+        if !self.types.valid(ty)
+            && self
+                .types
+                .validate(ty)
+                .is_err_and(|e| !matches!(e, GraphError::RecoveryType(_)))
+        {
+            return Err(QueryError::Operational(OperationalFailure {
                 operation: "body type import".into(),
                 message: "malformed declared type graph".into(),
-            })
-        })?;
-        let paths: BTreeSet<_> = self
-            .body
-            .types
+            }));
+        }
+        let own = self.input.signature.definition;
+        let paths: BTreeSet<_> = closure(self.types, [ty])
             .iter()
-            .skip(start)
-            .filter_map(|(_, t)| match &t.kind {
-                TypeKind::Named { definition, .. }
-                    if *definition != self.input.signature.definition =>
-                {
-                    Some(definition.clone())
+            .filter_map(|t| match &self.types.row(*t).kind {
+                TypeKind::Named { definition, .. } if *definition != own => {
+                    Some(definition.path().clone())
                 }
                 _ => None,
             })
@@ -67,18 +61,12 @@ impl Checker<'_, '_> {
         }
         Ok(ty)
     }
-    pub(super) fn import_function(
-        &mut self,
-        f: &FunctionType,
-        store: &TypeStore,
-    ) -> Result<FunctionType, QueryError> {
-        let row = Type {
+    pub(super) fn import_function(&mut self, f: &FunctionType) -> Result<FunctionType, QueryError> {
+        let root = self.types.intern(Type {
             drop_allocation: DropAllocation::MayAllocate,
             ..Type::with_kind(TypeKind::Function(f.clone()))
-        };
-        let start = self.body.types.len();
-        let root = import_type_row(store, &row, &mut self.body.types);
-        let root = self.imported(start, root)?;
+        });
+        let root = self.imported(root)?;
         let TypeKind::Function(f) = self.kind(root) else {
             unreachable!()
         };
@@ -102,10 +90,11 @@ impl Checker<'_, '_> {
             .iter()
             .map(|_| AuthoritySummary::Unknown)
             .collect();
-        match substitute_type_in_place(
-            &mut self.body.types,
+        match substitute(
+            self.types,
+            self.memo,
             root,
-            Substitution {
+            &Substitution {
                 binder: Some(binder),
                 roles: &self.input.signature.metadata.roles,
                 arguments,
@@ -129,6 +118,7 @@ impl Checker<'_, '_> {
             arguments,
         } = self.kind(ty)
         {
+            let definition = definition.path().clone();
             let s = match self.snapshot(&definition) {
                 Ok(s) => s,
                 Err(QueryError::Diagnostics(_)) => return Ok((Some(definition), self.error())),
@@ -143,7 +133,7 @@ impl Checker<'_, '_> {
                     {
                         return Ok((Some(definition), *known));
                     }
-                    let r = self.import(r, &s.types)?;
+                    let r = self.import(r)?;
                     let r = if arguments.is_empty() {
                         r
                     } else {
@@ -188,7 +178,7 @@ impl Checker<'_, '_> {
     }
     /// A Result context from `?` fixes only its success type. Its fresh error
     /// is resolved by the operand, independently of the enclosing error channel.
-    pub(super) fn partial_result(&self, ty: TypeId) -> Option<(ast::DefPath, TypeId)> {
+    pub(super) fn partial_result(&self, ty: TypeId) -> Option<(DefId, TypeId)> {
         let TypeKind::Named {
             definition,
             arguments,
@@ -254,9 +244,8 @@ impl Checker<'_, '_> {
         }
         // H compares the type shape. I/J separately judge modes, origin and effects.
         shape_equal_with_holes(
-            &self.body.types,
+            self.types,
             a,
-            &self.body.types,
             b,
             |kind| matches!(kind, TypeKind::Parameter(p) if self.inference_variables.contains(p)),
         )
@@ -340,7 +329,7 @@ impl Checker<'_, '_> {
                 .unwrap_or_default();
             if let Some(index) = vs
                 .iter()
-                .position(|v| v.name == name && (callee || v.fields.is_empty()))
+                .position(|v| v.name.as_str() == name && (callee || v.fields.is_empty()))
             {
                 let variant = VariantId(index as u32);
                 let site = NameSite::Expression(id);
@@ -393,7 +382,7 @@ impl Checker<'_, '_> {
             TypeKind::Named {
                 definition,
                 arguments,
-            } if definition == ast::DefPath::core("Entry") => match arguments[..] {
+            } if *definition.path() == ast::DefPath::core("Entry") => match arguments[..] {
                 [GenericArgument::Type(signature)] => Some(signature),
                 _ => None,
             },
@@ -437,9 +426,9 @@ impl Checker<'_, '_> {
             .collect();
         expected.result = actual.result;
         expected.error = actual.error;
-        let mut row = self.body.types.get(signature).unwrap().clone();
+        let mut row = self.types.get(signature).unwrap().clone();
         row.kind = TypeKind::Function(expected);
-        Some(self.body.types.push(row))
+        Some(self.types.intern(row))
     }
     pub(super) fn named_function(&mut self, mut f: FunctionType) -> TypeId {
         // Spec #58: a known definition carries signature-derived
@@ -451,9 +440,9 @@ impl Checker<'_, '_> {
         let ty = self.ty(TypeKind::Function(f));
         // Named references have no environment; parameter types
         // are invocation inputs rather than captured values.
-        let mut row = self.body.types.get(ty).unwrap().clone();
+        let mut row = self.types.get(ty).unwrap().clone();
         row.modes.sendability = Sendability::Sendable;
-        self.body.types.push(row)
+        self.types.intern(row)
     }
     pub(super) fn path_type(
         &mut self,
@@ -527,15 +516,16 @@ impl Checker<'_, '_> {
                         TypeKind::Record(fs) => fs
                             .into_iter()
                             .enumerate()
-                            .find(|(_, f)| f.name == name)
+                            .find(|(_, f)| f.name.as_str() == name)
                             .map(|(i, f)| (SourceProjectionKind::Field(FieldId(i as u32)), f.ty)),
                         TypeKind::Variant(vs) => {
-                            let selected = vs.iter().enumerate().find(|(_, v)| v.name == name);
+                            let selected =
+                                vs.iter().enumerate().find(|(_, v)| v.name.as_str() == name);
                             selected.and_then(|(variant, v)| {
                                 let field_name = self.name(*segments.next()?);
                                 let (field, (_, ty)) =
                                     v.fields.iter().enumerate().find(|(_, (label, _))| {
-                                        label.as_deref() == Some(&field_name)
+                                        label.map(|l| l.as_str()) == Some(field_name.as_str())
                                     })?;
                                 payload_path = true;
                                 if let Some(owner) = owner {
@@ -599,7 +589,7 @@ impl Checker<'_, '_> {
                 };
                 match &s.kind {
                     SignatureKind::Function(f) => {
-                        let f = self.import_function(f, &s.types)?;
+                        let f = self.import_function(f)?;
                         let callable = f.generics.is_empty() && f.foreign.is_none();
                         let complete = !f.incomplete;
                         let named = self.named_function(f.clone());
@@ -611,7 +601,7 @@ impl Checker<'_, '_> {
                             && let Some(fitted) = self.entry_fits(&f, named, signature)
                         {
                             return Ok(self.ty(TypeKind::Named {
-                                definition: ast::DefPath::core("Entry"),
+                                definition: DefId::intern(&ast::DefPath::core("Entry")),
                                 arguments: vec![GenericArgument::Type(fitted)].into(),
                             }));
                         }
@@ -630,7 +620,7 @@ impl Checker<'_, '_> {
                         Ok(named)
                     }
                     SignatureKind::Const { ty: t, .. } => {
-                        let root = self.import(*t, &s.types)?;
+                        let root = self.import(*t)?;
                         // A counted named constant read shares program-lifetime
                         // storage, just as Copy does; it cannot acquire exclusivity.
                         if self.bound(root, ast::Bound::Plain)?
@@ -645,18 +635,18 @@ impl Checker<'_, '_> {
                         {
                             Ok(root)
                         } else {
-                            let mut row = self.body.types.get(root).unwrap().clone();
+                            let mut row = self.types.get(root).unwrap().clone();
                             row.modes.uniqueness = Uniqueness::Aliased;
-                            let root = self.body.types.push(row);
+                            let root = self.types.intern(row);
                             let generics = self.body.resolution.generic_declarations.clone();
-                            let store = self.body.types.clone();
+                            let store = self.types;
                             let sendability =
                                 sendability_after_sharing(&store, root, &generics, &mut |path| {
                                     self.snapshot(path).map(Some)
                                 })?;
-                            let mut row = self.body.types.get(root).unwrap().clone();
+                            let mut row = self.types.get(root).unwrap().clone();
                             row.modes.sendability = sendability;
-                            Ok(self.body.types.push(row))
+                            Ok(self.types.intern(row))
                         }
                     }
                     SignatureKind::Type(t) => {
@@ -666,13 +656,13 @@ impl Checker<'_, '_> {
                                 TypeKind::Named {
                                     definition,
                                     arguments,
-                                } if definition == p => Some(arguments),
+                                } if *definition.path() == p => Some(arguments),
                                 _ => None,
                             })
                             .unwrap_or_default();
                         let missing_arguments = args.is_empty();
                         let nominal = self.ty(TypeKind::Named {
-                            definition: p,
+                            definition: DefId::intern(&p),
                             arguments: args,
                         });
                         if !callee && record_place {
@@ -743,12 +733,12 @@ impl Checker<'_, '_> {
                             TypeKind::Named {
                                 definition,
                                 arguments,
-                            } if definition == p => Some(arguments),
+                            } if *definition.path() == p => Some(arguments),
                             _ => None,
                         })
                         .unwrap_or_default();
                     let t = self.ty(TypeKind::Named {
-                        definition: p,
+                        definition: DefId::intern(&p),
                         arguments: args,
                     });
                     if !callee {
@@ -759,7 +749,10 @@ impl Checker<'_, '_> {
                                 .last()
                                 .map(|s| self.name(*s))
                                 .unwrap_or_default();
-                            if !vs.iter().any(|v| v.name == name && v.fields.is_empty()) {
+                            if !vs
+                                .iter()
+                                .any(|v| v.name.as_str() == name && v.fields.is_empty())
+                            {
                                 self.report(
                                     const { RuleId::of("LANG-7") },
                                     self.span(id),
@@ -792,7 +785,7 @@ impl Checker<'_, '_> {
                             .last()
                             .map(|s| self.name(*s))
                             .unwrap_or_default();
-                        if !variants.iter().any(|variant| variant.name == name) {
+                        if !variants.iter().any(|variant| variant.name.as_str() == name) {
                             let type_name = owner
                                 .as_ref()
                                 .map_or("expected type", |p| p.0.name.as_str());
@@ -815,7 +808,7 @@ impl Checker<'_, '_> {
                                 hirsel_diag::suggest_names(
                                     self.diagnostics.last_mut().unwrap(),
                                     &name,
-                                    variants.into_iter().map(|v| v.name),
+                                    variants.into_iter().map(|v| v.name.to_string()),
                                     "",
                                     name_span,
                                 );
@@ -897,9 +890,10 @@ impl Checker<'_, '_> {
                 Projection::Field(name) => {
                     let (_, repr) = self.representation(t)?;
                     match self.kind(repr) {
-                        TypeKind::Record(fields) => {
-                            fields.into_iter().find(|f| f.name == name).map(|f| f.ty)
-                        }
+                        TypeKind::Record(fields) => fields
+                            .into_iter()
+                            .find(|f| f.name.as_str() == name)
+                            .map(|f| f.ty),
                         _ => None,
                     }
                 }
@@ -1023,7 +1017,7 @@ impl Checker<'_, '_> {
                                 let Some((ordinal, field)) = parts
                                     .iter()
                                     .enumerate()
-                                    .find(|(_, field)| field.name == self.name(*name))
+                                    .find(|(_, field)| field.name == *name)
                                 else {
                                     return Ok(ty);
                                 };
@@ -1043,9 +1037,9 @@ impl Checker<'_, '_> {
                     }) {
                         declared = declared.union(&Relation::environment());
                     }
-                    let mut row = self.body.types.get(ty).unwrap().clone();
+                    let mut row = self.types.get(ty).unwrap().clone();
                     row.modes.relation = declared;
-                    let ty = self.body.types.push(row);
+                    let ty = self.types.intern(row);
                     return Ok(self.normalize_properties(ty));
                 }
             }
@@ -1081,9 +1075,9 @@ impl Checker<'_, '_> {
             // call-bounded view, and a written relation adds to that root
             // (S2). Plain values remain global (MODE-1).
             if p.passing != ast::PassingMode::Take && !self.bound(ty, ast::Bound::Plain)? {
-                let mut row = self.body.types.get(ty).unwrap().clone();
+                let mut row = self.types.get(ty).unwrap().clone();
                 row.modes.relation = Relation::environment().union(&row.modes.relation);
-                ty = self.body.types.push(row);
+                ty = self.types.intern(row);
             }
             parameters.push(Parameter {
                 name: p.name.map(|s| self.name(s)),
@@ -1122,8 +1116,7 @@ impl Checker<'_, '_> {
         if let (NameSite::Statement(_), Some(t)) = (owner, s.result)
             && hirsel_check_protocol::declaration::written_local(&self.input.syntax.tree, t)
                 .unwrap_or(
-                    self.body
-                        .types
+                    self.types
                         .get(result)
                         .unwrap()
                         .modes
@@ -1165,7 +1158,7 @@ impl Checker<'_, '_> {
         let error = self.result_parts(result)?.map(|(_, _, e)| e);
         let scope = self.site(owner);
         let mut abstract_type = |root| {
-            map_generic_binders(&mut self.body.types, root, |b, nested| {
+            map_generic_binders(self.types, root, |b, nested| {
                 Ok(if b == GenericBinder::Body(scope) {
                     GenericBinder::Bound(nested)
                 } else {
@@ -1184,12 +1177,12 @@ impl Checker<'_, '_> {
             Some(heap) => parameters
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| hirsel_types::is_arena_type(&self.body.types, p.ty, &heap.arena))
+                .filter(|(_, p)| hirsel_types::is_arena_type(self.types, p.ty, &heap.arena))
                 .map(|(i, _)| ParamId(i as u32))
                 .collect(),
             None => BTreeSet::new(),
         };
-        let result = local_result_destination(&mut self.body.types, result, &parameters, |o| {
+        let result = local_result_destination(self.types, result, &parameters, |o| {
             matches!(o.root, OriginRoot::Parameter(ParameterRef::Bound {
                 depth: 0,
                 parameter,
@@ -1288,7 +1281,7 @@ impl Checker<'_, '_> {
                     let (index, part) = parts
                         .iter()
                         .enumerate()
-                        .find(|(_, f)| f.name == name)
+                        .find(|(_, f)| f.name.as_str() == name)
                         .ok_or_else(unknown)?;
                     fields.push(FieldId(index as u32));
                     ty = part.ty;
@@ -1335,7 +1328,7 @@ impl Checker<'_, '_> {
         if !captures.is_empty() {
             captures.sort();
             captures.dedup();
-            let mut row = self.body.types.get(result).unwrap().clone();
+            let mut row = self.types.get(result).unwrap().clone();
             let carrier = match &row.kind {
                 TypeKind::Named { definition, .. } => matches!(
                     self.snapshot(&definition.clone()).map(|s| s.kind.clone()),
@@ -1360,10 +1353,10 @@ impl Checker<'_, '_> {
                 ));
             }
             row.erased_captures = Some(ErasedCaptures::FromArguments(captures.into()));
-            result = self.body.types.push(row);
+            result = self.types.intern(row);
         }
         let promises: SharedSlice<_> = promises.into_values().collect();
-        apply_state_promises(&mut self.body.types, parameters, &promises);
+        apply_state_promises(self.types, parameters, &promises);
         Ok((promises, result))
     }
     /// Whether a written relation bounds a lifetime: it names `env` or a
@@ -1407,7 +1400,7 @@ impl Checker<'_, '_> {
                         self.body.bindings.iter().rev().any(|b| {
                             &b.binding == name
                                 && heap.is_some_and(|h| {
-                                    hirsel_types::is_arena_type(&self.body.types, b.ty, &h.arena)
+                                    hirsel_types::is_arena_type(self.types, b.ty, &h.arena)
                                 })
                         })
                     })
@@ -1495,7 +1488,6 @@ impl Checker<'_, '_> {
             };
             for part in parts {
                 if !self
-                    .body
                     .types
                     .get(done[&part])
                     .unwrap()
@@ -1525,7 +1517,7 @@ impl Checker<'_, '_> {
                     relation,
                     ..
                 } => {
-                    let mut row = self.body.types.get(done[base]).unwrap().clone();
+                    let mut row = self.types.get(done[base]).unwrap().clone();
                     if let Some(relation) = relation {
                         if self.lending_relation(id, relation) {
                             row.modes.relation = Relation::environment();
@@ -1557,13 +1549,13 @@ impl Checker<'_, '_> {
                             }
                         }
                     }
-                    let id = self.body.types.push(row.clone());
+                    let id = self.types.intern(row.clone());
                     // Mode and placement qualifiers say nothing about plain
                     // bits, as in signatures (MODE-1, MODE-2, PROV-4).
                     let written = row.clone();
                     row.canonicalize_plain();
                     if row != written && self.bound(id, ast::Bound::Plain)? {
-                        self.body.types.push(row)
+                        self.types.intern(row)
                     } else {
                         id
                     }
@@ -1635,7 +1627,7 @@ impl Checker<'_, '_> {
                                 } else if s.metadata.alias {
                                     if let SignatureKind::Type(td) = &s.kind {
                                         if let Some(t) = td.representation {
-                                            let t = self.import(t, &s.types)?;
+                                            let t = self.import(t)?;
                                             if args.is_empty() {
                                                 t
                                             } else {
@@ -1660,7 +1652,7 @@ impl Checker<'_, '_> {
                                     ) {
                                         (Some(bound), Some(GenericArgument::Type(t)))
                                             if !matches!(
-                                                self.body.types.get(*t).unwrap().kind,
+                                                self.types.get(*t).unwrap().kind,
                                                 TypeKind::Error
                                             ) =>
                                         {
@@ -1683,7 +1675,7 @@ impl Checker<'_, '_> {
                                     }
                                 } else {
                                     self.ty(TypeKind::Named {
-                                        definition: p,
+                                        definition: DefId::intern(&p),
                                         arguments: args.into(),
                                     })
                                 }
@@ -1724,7 +1716,7 @@ impl Checker<'_, '_> {
     }
     fn type_authority(&mut self, root: TypeId) -> Result<AuthoritySummary, QueryError> {
         let declarations = self.body.resolution.generic_declarations.clone();
-        let store = self.body.types.clone();
+        let store = self.types;
         let roles = self.input.signature.metadata.roles.clone();
         structural_authority(
             &store,
@@ -1779,7 +1771,7 @@ impl Checker<'_, '_> {
         let declarations = self.body.resolution.generic_declarations.clone();
         if bound == ast::Bound::Serializable {
             return structural_serializable(
-                &self.body.types.clone(),
+                self.types,
                 root,
                 &declarations,
                 &mut |path| match self.snapshot(path) {
@@ -1796,16 +1788,13 @@ impl Checker<'_, '_> {
         }
         if bound == ast::Bound::Flat {
             let generics = declarations.clone();
-            return structural_flat(
-                &self.body.types.clone(),
-                root,
-                &generics,
-                &mut |path| match self.snapshot(path) {
-                    Ok(s) => Ok(Some(s)),
-                    Err(QueryError::Diagnostics(_)) => Ok(None),
-                    Err(e) => Err(e),
-                },
-            );
+            return structural_flat(self.types, root, &generics, &mut |path| match self
+                .snapshot(path)
+            {
+                Ok(s) => Ok(Some(s)),
+                Err(QueryError::Diagnostics(_)) => Ok(None),
+                Err(e) => Err(e),
+            });
         }
         let property = match bound {
             ast::Bound::Plain => Some(StructuralProperty::Plain),
@@ -1816,7 +1805,7 @@ impl Checker<'_, '_> {
         if let Some(property) = property {
             let generics = declarations.clone();
             return structural_property(
-                &self.body.types.clone(),
+                self.types,
                 root,
                 property,
                 &generics,
@@ -1828,7 +1817,7 @@ impl Checker<'_, '_> {
             );
         }
         if bound == ast::Bound::NoallocDrop {
-            match &self.body.types.get(root).unwrap().drop_allocation {
+            match &self.types.get(root).unwrap().drop_allocation {
                 DropAllocation::NoAlloc => return Ok(true),
                 DropAllocation::DependsOn(parameters) => {
                     // Dependencies refer to lexical generic bounds. Rebuilding a
@@ -1845,7 +1834,7 @@ impl Checker<'_, '_> {
             }
         }
         structural_equality(
-            &self.body.types.clone(),
+            self.types,
             root,
             bound,
             &declarations,
@@ -1936,12 +1925,12 @@ impl Checker<'_, '_> {
                 } else {
                     // PROV-2: computation produces an unmarked value, not an
                     // alias of its operand, even under a branded expectation.
-                    let mut result = self.body.types.get(a).unwrap().clone();
+                    let mut result = self.types.get(a).unwrap().clone();
                     if result.brand.alternatives.is_empty() {
                         Ok(a)
                     } else {
                         result.brand = Brand::default();
-                        Ok(self.body.types.push(result))
+                        Ok(self.types.intern(result))
                     }
                 }
             }

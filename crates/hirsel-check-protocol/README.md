@@ -11,7 +11,7 @@ driver, interpreter or validator dependency, including in tests.
   calls and execution, function results, shape arguments, contract clauses,
   literal patterns, resource patterns and distinct facts. H constructs them;
   I/J enrich the checked tables; K transports those decisions without inferring
-  types or modes. Every TypeId belongs to the accompanying CheckedBody.types.
+  types or modes. Every TypeId is a row of the session `TypeInterner`.
 - `declaration` owns the five pure rules reused by header normalization and
   body annotations: part relations, named-result relations, environment-only
   result candidates and builtin argument bounds. They inspect written syntax

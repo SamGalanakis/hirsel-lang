@@ -3,7 +3,7 @@
 //! goes through its runtime entry.
 
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
     SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
@@ -874,7 +874,11 @@ impl FnEmitter<'_, '_, '_> {
                 LayoutKind::Slice { element } => {
                     // A whole fresh byte sequence: its count, its capacity (the count) and
                     // the bytes.
-                    let Some(payload) = slice_storage(self.em.layouts(), element) else {
+                    let Some(payload) = slice_storage_with_index(
+                        self.em.layouts(),
+                        self.em.inputs.unit.and_then(|i| i.index),
+                        element,
+                    ) else {
                         return self.invalid("a flat copy slice without sequence storage");
                     };
                     let (first, whole) = match (
@@ -1021,9 +1025,10 @@ impl FnEmitter<'_, '_, '_> {
             let status = self.rt1(RuntimeEntry::Detach, &[context, block, site, out])?;
             // A tracked arena block is copied within its arena, charged (MEM-6): over its
             // budget, the arena it names records its own OutOfSpace.
-            match self.bounded_code() {
-                Some(code) => self.tracked_exhaustion(status, code, block, anchor, failure)?,
-                None => self.status_guard(status, failure)?,
+            if self.tracking() {
+                self.tracked_exhaustion(status, block, anchor, failure)?;
+            } else {
+                self.status_guard(status, failure)?;
             }
         }
         let copy = self.load_ptr(out);
@@ -1039,21 +1044,11 @@ impl FnEmitter<'_, '_, '_> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted {
-        let Some(code) = self.bounded_code() else {
+        if !self.tracking() {
             return self.status_guard(status, failure);
-        };
-        let exhausted = self.exhausted_block(code, destination, anchor, failure)?;
+        }
+        let exhausted = self.exhausted_block(destination, anchor, failure)?;
         self.branch_to(status, exhausted)
-    }
-
-    /// MEM-6's failure code, present when the program opens a bounded arena.
-    pub(crate) fn bounded_code(&self) -> Option<hirsel_lir::emission::FailureCode> {
-        self.em
-            .inputs
-            .failures
-            .codes
-            .get(hirsel_lir::emission::BOUNDED_RULE)
-            .copied()
     }
 
     /// A pointer-sized scalar loaded from `place`.

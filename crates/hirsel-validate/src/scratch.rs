@@ -1,18 +1,16 @@
-//! Reusable proof storage; no temporary row is published back into immutable IR.
-use hirsel_types::{TypeStore, TypeStoreMark};
+//! Per-definition proof caches. Temporary rows are interned into the session
+//! interner; none is published back into immutable IR.
 use std::cell::RefCell;
-use std::ops::{Deref, DerefMut};
 
 pub(super) type Acquisitions =
     std::collections::BTreeMap<(u32, Option<u32>), Vec<(hirsel_tir::PlaceId, &'static str)>>;
 
-pub(super) struct Scratch<'a> {
-    source: &'a TypeStore,
+pub(super) struct Scratch {
     pub(super) origin_types: Vec<super::origin_types::Types>,
     pub(super) frame_authorities: Vec<std::cell::OnceCell<Option<hirsel_types::AuthoritySummary>>>,
     definition_inputs: std::cell::OnceCell<DefinitionInputs>,
     pub(super) fixed_constructions:
-        Vec<RefCell<std::collections::BTreeMap<hirsel_types::TypeId, bool>>>,
+        Vec<RefCell<crate::hashed::HashMap<hirsel_types::TypeId, bool>>>,
     pub(super) escaping_roots: Vec<std::cell::OnceCell<std::collections::BTreeSet<u32>>>,
     pub(super) content_inputs: Vec<std::cell::OnceCell<super::flow::lifetimes::ContentInputs>>,
     /// Per body: operands typing received only as deep Global content, by
@@ -30,67 +28,46 @@ pub(super) struct Scratch<'a> {
         >,
     >,
     pub(super) variant_inputs: Vec<std::cell::OnceCell<super::variant_brands::Inputs>>,
-    available: RefCell<Vec<(TypeStore, TypeStoreMark)>>,
+    /// Per body: its structural property proofs (`proofs`).
+    pub(super) proofs: Vec<RefCell<super::proofs::Proofs>>,
+    /// Canonical Plain rows (`Checker::canonical_plain`), for every body.
+    pub(super) canonical:
+        RefCell<crate::hashed::HashMap<hirsel_types::TypeId, hirsel_types::TypeId>>,
+    /// Per body: the type relations `Checker::related` proved.
+    pub(super) relations: Vec<RefCell<super::typing::Relations>>,
+    /// Per body: the layouts `Checker::layout` found.
+    pub(super) layouts:
+        Vec<RefCell<crate::hashed::HashMap<hirsel_types::TypeId, hirsel_types::TypeKind>>>,
 }
-impl<'a> Scratch<'a> {
-    pub(super) fn new(source: &'a TypeStore, bodies: usize) -> Self {
+impl Scratch {
+    pub(super) fn new(bodies: usize) -> Self {
         Self {
-            source,
             origin_types: (0..bodies)
                 .map(|_| super::origin_types::Types::default())
                 .collect(),
             frame_authorities: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             definition_inputs: std::cell::OnceCell::new(),
             fixed_constructions: (0..bodies)
-                .map(|_| RefCell::new(std::collections::BTreeMap::new()))
+                .map(|_| RefCell::new(crate::hashed::HashMap::default()))
                 .collect(),
             escaping_roots: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             content_inputs: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             acquisitions: (0..bodies).map(|_| RefCell::default()).collect(),
             parameter_authorities: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             variant_inputs: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
-            available: RefCell::new(vec![]),
+            proofs: (0..bodies).map(|_| RefCell::default()).collect(),
+            layouts: (0..bodies).map(|_| RefCell::default()).collect(),
+            relations: (0..bodies).map(|_| RefCell::default()).collect(),
+            canonical: RefCell::default(),
         }
     }
     pub(super) fn definition_inputs(
         &self,
+        t: &hirsel_types::TypeInterner,
         definition: &hirsel_tir::Definition,
     ) -> &DefinitionInputs {
         self.definition_inputs
-            .get_or_init(|| DefinitionInputs::new(definition))
-    }
-    pub(super) fn store(&self) -> Region<'_> {
-        let (store, mark) = self.available.borrow_mut().pop().unwrap_or_else(|| {
-            let store = self.source.clone();
-            let mark = store.mark();
-            (store, mark)
-        });
-        Region {
-            pool: self,
-            owned: Some((store, mark)),
-        }
-    }
-}
-pub(super) struct Region<'a> {
-    pool: &'a Scratch<'a>,
-    owned: Option<(TypeStore, TypeStoreMark)>,
-}
-impl Deref for Region<'_> {
-    type Target = TypeStore;
-    fn deref(&self) -> &TypeStore {
-        &self.owned.as_ref().unwrap().0
-    }
-}
-impl DerefMut for Region<'_> {
-    fn deref_mut(&mut self) -> &mut TypeStore {
-        &mut self.owned.as_mut().unwrap().0
-    }
-}
-impl Drop for Region<'_> {
-    fn drop(&mut self) {
-        let (mut store, mark) = self.owned.take().unwrap();
-        store.truncate_to(mark);
-        self.pool.available.borrow_mut().push((store, mark));
+            .get_or_init(|| DefinitionInputs::new(t, definition))
     }
 }
 
@@ -108,7 +85,7 @@ pub(super) struct DefinitionInputs {
     pub(super) origin_selectors: std::collections::BTreeSet<Vec<hirsel_types::FieldId>>,
 }
 impl DefinitionInputs {
-    fn new(definition: &hirsel_tir::Definition) -> Self {
+    fn new(t: &hirsel_types::TypeInterner, definition: &hirsel_tir::Definition) -> Self {
         use super::flow_origins::EnvironmentField;
         use crate::{Constructor, InstructionKind, Rvalue};
         use hirsel_intern::work::{self, Counter};
@@ -124,7 +101,7 @@ impl DefinitionInputs {
                         let producer = &mut producers[nested.0 as usize];
                         let ty = body.places[destination.0 as usize].ty;
                         if producer.first_function.is_none()
-                            && definition.types.get(ty).is_some_and(|row| {
+                            && t.get(ty).is_some_and(|row| {
                                 matches!(row.kind, hirsel_types::TypeKind::Function(_))
                             })
                         {
@@ -170,7 +147,7 @@ impl DefinitionInputs {
             }
         }
         let mut origin_selectors = std::collections::BTreeSet::new();
-        for (_, row) in definition.types.iter() {
+        for row in definition.types.iter().map(|&id| t.row(id)) {
             work::count(Counter::ValidateDefinitionInputRows);
             for origin in &row.brand.alternatives {
                 if !origin.fields.is_empty() {

@@ -60,20 +60,20 @@ impl std::hash::Hash for InstanceKey {
 
 impl InstanceKey {
     /// Canonicalize an instance. `actuals` pairs each binder with its actual,
-    /// whose TypeIds belong to `store`. `environment` is the digest of the
+    /// whose TypeIds are rows of `types`. `environment` is the digest of the
     /// closure environment layout for a concrete closure specialization.
     pub fn new(
         definition: &DefPath,
         body: u32,
         actuals: &[(ActualBinder, hirsel_types::GenericArgument)],
-        store: &hirsel_types::TypeStore,
+        types: &hirsel_types::TypeInterner,
         convention: Option<&CallableConvention>,
         environment: Option<ContentHash>,
     ) -> Result<Self, InstanceKeyError> {
         use hirsel_types::{GenericArgument, Size};
         let mut e = KeyEncoder {
             bytes: Vec::new(),
-            store,
+            types,
             active: Vec::new(),
         };
         e.tag("hirsel.instance-key.v3");
@@ -166,7 +166,7 @@ impl Ordinal for hirsel_types::ParamId {
 /// four erased mode axes never written.
 struct KeyEncoder<'a> {
     bytes: Vec<u8>,
-    store: &'a hirsel_types::TypeStore,
+    types: &'a hirsel_types::TypeInterner,
     active: Vec<hirsel_types::TypeId>,
 }
 
@@ -310,12 +310,7 @@ impl KeyEncoder<'_> {
             AllocationTarget, DropAllocation, ErasedCaptures, GenericParameter, Multiplicity,
             TypeKind,
         };
-        // Compare row identity without `TypeStore::get`, which asserts on foreign IDs.
-        if self.store.id(id.index()) != Some(id) {
-            return Err(InstanceKeyError::MissingType);
-        }
-        let store = self.store;
-        let t = store.get(id).ok_or(InstanceKeyError::MissingType)?;
+        let t = self.types.get(id).ok_or(InstanceKeyError::MissingType)?;
         if self.active.contains(&id) {
             return Err(InstanceKeyError::StructuralCycle);
         }
@@ -360,14 +355,14 @@ impl KeyEncoder<'_> {
                 arguments,
             } => {
                 self.tag("named");
-                self.path(definition);
+                self.path(definition.path());
                 self.arguments(arguments)?;
             }
             TypeKind::Record(fields) => {
                 self.tag("record");
                 self.number(fields.len() as u64);
                 for field in fields.iter() {
-                    self.tag(&field.name);
+                    self.tag(field.name.as_str());
                     self.boolean(field.growable);
                     self.ty(field.ty)?;
                 }
@@ -376,12 +371,12 @@ impl KeyEncoder<'_> {
                 self.tag("variant");
                 self.number(variants.len() as u64);
                 for variant in variants.iter() {
-                    self.tag(&variant.name);
+                    self.tag(variant.name.as_str());
                     self.number(variant.fields.len() as u64);
                     for (name, ty) in variant.fields.iter() {
                         self.boolean(name.is_some());
                         if let Some(name) = name {
-                            self.tag(name);
+                            self.tag(name.as_str());
                         }
                         self.ty(*ty)?;
                     }
@@ -550,10 +545,9 @@ pub struct CaptureView {
     pub usage: CaptureUse,
 }
 
-/// Owned substitution of one instance; TypeIds belong to `store` only.
+/// Owned substitution of one instance; TypeIds are session interner rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Substitution {
-    pub store: hirsel_types::TypeStore,
     pub types: Vec<(hirsel_types::TypeParameterRef, hirsel_types::TypeId)>,
     pub sizes: Vec<(hirsel_types::SizeParameterRef, u64)>,
 }
@@ -575,9 +569,9 @@ pub struct InstanceView {
 }
 
 impl InstanceView {
-    /// Referential integrity: the body exists, every substituted TypeId belongs
-    /// to the view's own store, and parameter remapping is a bijection.
-    pub fn check_identity(&self) -> Result<(), SchemaError> {
+    /// Referential integrity: the body exists, every substituted TypeId is a
+    /// row of `types`, and parameter remapping is a bijection.
+    pub fn check_identity(&self, types: &hirsel_types::TypeInterner) -> Result<(), SchemaError> {
         let bodies = self.definition.bodies.len();
         if self.body.0 as usize >= bodies {
             return Err(SchemaError::ForeignId {
@@ -586,16 +580,15 @@ impl InstanceView {
                 bound: bodies,
             });
         }
-        if &self.definition.path != self.key.definition() || self.key.body() != self.body.0 {
+        if self.definition.path.path() != self.key.definition() || self.key.body() != self.body.0 {
             return Err(SchemaError::Stale("instance key names another body"));
         }
-        let store = &self.substitution.store;
-        for (_, ty) in &self.substitution.types {
-            if store.id(ty.index()) != Some(*ty) {
+        for (ordinal, (_, ty)) in self.substitution.types.iter().enumerate() {
+            if !types.contains(*ty) {
                 return Err(SchemaError::ForeignId {
                     kind: "TypeId",
-                    index: ty.index() as u32,
-                    bound: store.len(),
+                    index: ordinal as u32,
+                    bound: types.len(),
                 });
             }
         }

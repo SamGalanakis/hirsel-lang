@@ -61,9 +61,7 @@ fn field_call(early: u32, projected: bool) -> (Fixture, u32) {
     // p holds borrowed content, as a pair of a parameter's views would: it
     // is local storage, and so is the result reading within it (MODE-1).
     let localize = |f: &mut Fixture, place: u32| {
-        let mut row = f
-            .definition
-            .types
+        let mut row = interner()
             .get(f.definition.bodies[0].places[place as usize].ty)
             .unwrap()
             .clone();
@@ -83,9 +81,7 @@ fn field_call(early: u32, projected: bool) -> (Fixture, u32) {
     };
     let argument = if projected {
         let root = f.body().places[p as usize].root;
-        let mut row = f
-            .definition
-            .types
+        let mut row = interner()
             .get(f.definition.bodies[0].places[pair as usize].ty)
             .unwrap()
             .clone();
@@ -104,7 +100,7 @@ fn field_call(early: u32, projected: bool) -> (Fixture, u32) {
         p
     };
     let local = {
-        let mut row = f.definition.types.get(s).unwrap().clone();
+        let mut row = interner().get(s).unwrap().clone();
         row.modes.relation = Relation::environment();
         f.definition.types.push(row)
     };
@@ -215,21 +211,19 @@ fn field_call(early: u32, projected: bool) -> (Fixture, u32) {
         vec![(PassingMode::Borrow, TypeKind::Tuple(vec![].into()))],
         TypeKind::Primitive(Primitive::String),
     );
-    let field_ty = signature.types.push(ty(string));
-    let pair = signature
-        .types
-        .push(ty(TypeKind::Tuple(vec![field_ty, field_ty].into())));
+    let field_ty = interner().intern(ty(string));
+    let pair = interner().intern(ty(TypeKind::Tuple(vec![field_ty, field_ty].into())));
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
     fun.parameters[0].ty = pair;
-    let mut result = signature.types.get(fun.result).unwrap().clone();
+    let mut result = interner().get(fun.result).unwrap().clone();
     result.modes.relation = Relation::place(Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
         fields: vec![FieldId(0)].into(),
     });
-    fun.result = signature.types.push(result);
-    f.signatures.insert(path("get"), signature);
+    fun.result = interner().intern(result);
+    f.signatures.insert(id("get"), signature);
     (f, r)
 }
 

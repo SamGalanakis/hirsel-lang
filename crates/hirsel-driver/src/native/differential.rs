@@ -135,6 +135,7 @@ impl Configuration {
 
 fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Options {
     Options {
+        validation: super::Validation::EveryStage,
         launch: Default::default(),
         target: target.clone(),
         regions,
@@ -142,6 +143,7 @@ fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Opti
         reuse,
         flat_walk: true,
         discharge: Default::default(),
+        objects: None,
     }
 }
 

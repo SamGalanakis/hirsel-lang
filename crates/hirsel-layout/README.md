@@ -1,13 +1,13 @@
 # hirsel-layout
 
 The front-end bridge into native physical schemas. `layout::LayoutBuilder`
-reads TypeStore and owner representation records and produces LIR layout tables;
+reads rows of the session TypeInterner and owner representation records and produces LIR layout tables;
 `abi` derives declared callable ABIs; `instance` owns specialized TIR instance
 keys and views. `operation::OperationRegistry` derives declaration ABIs through
 LIR's `OperationDeclarations` interface, independently of candidate calls.
 
-Allowed dependencies: hirsel-lir, hirsel-types, hirsel-tir, hirsel-syntax and
-hirsel-core-contract and hirsel-codec. No implementation crate or external dependency. RC uses
+Allowed dependencies: hirsel-lir, hirsel-types, hirsel-tir, hirsel-syntax,
+hirsel-intern, hirsel-core-contract and hirsel-codec. No implementation crate or external dependency. RC uses
 this bridge in production; LIR, LLVM and runtime fixtures use a dev-dependency.
 Backends and validators consume physical schemas without front-end types.
 
@@ -32,3 +32,7 @@ prefix, just as variable-element Lists do. Their elements remain fixed-size.
 `with_caller_site` derives and memoizes ABI v2's optional inert source-code pair,
 without changing a FunctionType. All closure/iterator callable ABIs carry it;
 marked source bodies and compiled library bodies select it for their direct ABI.
+
+`LayoutBuilder::prepare_native_controls` reserves the synthetic Bool, U64 and
+header rows before native instance expansion. Later passes' first-match lookups
+then keep their content keys when an unrelated source Bool is added.

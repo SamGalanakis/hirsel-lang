@@ -31,7 +31,7 @@ impl Checker<'_, '_> {
             let target = match &s.kind {
                 SignatureKind::Type(t) if s.metadata.alias => t
                     .representation
-                    .and_then(|r| s.types.get(r))
+                    .and_then(|r| self.types.get(r))
                     .map(|r| r.kind.clone()),
                 _ => return Ok(true),
             };
@@ -88,7 +88,7 @@ impl Checker<'_, '_> {
             }
             let arm = Arm {
                 index,
-                name: variant.name.clone(),
+                name: variant.name.as_str().to_owned(),
                 payload,
             };
             if !self.nominal_error(payload)? {
@@ -100,10 +100,10 @@ impl Checker<'_, '_> {
             injectable.push(arm);
         }
         let [source, target] = hirsel_type_analysis::spelling::type_spellings_apart(
-            &self.body.types,
+            self.types,
             [error, expected],
             &self.body.resolution.generic_declarations,
-            &self.input.signature.definition.0.package,
+            &self.input.signature.definition.path().0.package,
             false,
         );
         let site = self.question_mark(id);
@@ -182,10 +182,10 @@ impl Checker<'_, '_> {
         let name = arm_name(&source);
         let free = name
             .as_ref()
-            .filter(|n| variants.iter().all(|v| v.name != **n));
+            .filter(|n| variants.iter().all(|v| v.name.as_str() != n.as_str()));
         let declaration = self.snapshot(&owner)?;
         let serializable = matches!(&declaration.kind, SignatureKind::Type(t) if t.serializable);
-        let local = owner.0.package == self.input.signature.definition.0.package;
+        let local = owner.0.package == self.input.signature.definition.path().0.package;
         let arm = free.map(|n| format!("{n}({source})"));
         match &arm {
             Some(arm) => d.notes.push(format!(
@@ -213,7 +213,7 @@ impl Checker<'_, '_> {
         // places it, and only when the declaration is in this file.
         if let Some(arm) = arm
             && local
-            && !hirsel_types::mentions_parameter(&self.body.types, error)
+            && !hirsel_types::mentions_parameter(self.types, error)
         {
             self.plans.arm_fixes.push(ArmFix {
                 site,

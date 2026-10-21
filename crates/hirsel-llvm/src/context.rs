@@ -514,7 +514,17 @@ impl<'context> Module<'context> {
             // SAFETY: `existing` is a live function of this module.
             let existing_ty = unsafe { LLVMGlobalGetValueType(existing) };
             if existing_ty != fn_ty.raw {
-                return Err(format!("`{name}` is declared with two different types"));
+                // SAFETY: both types belong to this live context; LLVM allocates
+                // each printed message, which take_message disposes.
+                let (existing, requested) = unsafe {
+                    (
+                        take_message(LLVMPrintTypeToString(existing_ty)),
+                        take_message(LLVMPrintTypeToString(fn_ty.raw)),
+                    )
+                };
+                return Err(format!(
+                    "`{name}` is declared with two different types: {existing}; requested {requested}"
+                ));
             }
             return Ok(Function {
                 value: value(existing),
@@ -604,6 +614,107 @@ impl<'context> Module<'context> {
             LLVMSetUnnamedAddress(global.raw, llvm_sys::LLVMUnnamedAddr::LLVMNoUnnamedAddr);
         }
         global
+    }
+
+    /// An exported constant global of `ty` aligned to `align`, without an initializer yet:
+    /// a glue cell or block other objects read by name.
+    pub(crate) fn exported_constant<'m>(
+        &'m self,
+        name: &str,
+        of: Type<'m>,
+        align: u32,
+    ) -> Value<'m> {
+        let global = self.private_constant(name, of, align);
+        // SAFETY: the constant belongs to this live module.
+        unsafe {
+            LLVMSetLinkage(global.raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetUnnamedAddress(global.raw, llvm_sys::LLVMUnnamedAddr::LLVMNoUnnamedAddr);
+        }
+        global
+    }
+
+    /// Keeps `functions` in the object though nothing in it refers to them
+    /// (`llvm.compiler.used`).
+    pub(crate) fn keep(&self, functions: &[Value<'_>]) {
+        if functions.is_empty() {
+            return;
+        }
+        let ptr = self.ptr_type();
+        let ty = self.array_type(ptr, functions.len() as u64);
+        let c_name = c_string("llvm.compiler.used");
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, ty.raw, c_name.as_ptr()) };
+        let section = c_string("llvm.metadata");
+        // SAFETY: `raw` is a live global of this module and the initializer a constant of
+        // its type.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMAppendingLinkage);
+            LLVMSetSection(raw, section.as_ptr());
+            LLVMSetInitializer(raw, self.const_array(ptr, functions).raw);
+        }
+    }
+
+    /// Defines the hidden absolute symbol `name` of value `value`: an alias of a constant
+    /// address, which the object writer emits as `name = value`.
+    pub(crate) fn absolute_symbol(&self, name: &str, value: u64) {
+        let c_name = c_string(name);
+        let address = self.const_int(self.int_type(64), u128::from(value));
+        // SAFETY: the module is live, the name NUL-terminated, the aliasee a constant of
+        // this context.
+        unsafe {
+            let aliasee = LLVMConstIntToPtr(address.raw, self.ptr_type().raw);
+            let raw = LLVMAddAlias2(self.raw, self.int_type(8).raw, 0, aliasee, c_name.as_ptr());
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetVisibility(raw, llvm_sys::LLVMVisibility::LLVMHiddenVisibility);
+        }
+    }
+
+    /// The constant `address` as an integer of `of`, truncated.
+    pub(crate) fn const_ptr_to_int<'m>(&'m self, address: Value<'m>, of: Type<'m>) -> Value<'m> {
+        // SAFETY: `address` is a constant pointer of this context, `of` an integer type.
+        value(unsafe { LLVMConstPtrToInt(address.raw, of.raw) })
+    }
+
+    /// The constant `name` another object defines, with its `initializer` so the optimizer
+    /// folds reads of it; this object emits no definition (`available_externally`).
+    pub(crate) fn available_constant<'m>(
+        &'m self,
+        name: &str,
+        of: Type<'m>,
+        align: u32,
+        initializer: Value<'m>,
+    ) -> Value<'m> {
+        if let Some(global) = self.named_global(name) {
+            return global;
+        }
+        let c_name = c_string(name);
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, of.raw, c_name.as_ptr()) };
+        // SAFETY: `raw` is a live global of this module, the initializer a constant of `of`.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMAvailableExternallyLinkage);
+            LLVMSetGlobalConstant(raw, 1);
+            LLVMSetAlignment(raw, align);
+            LLVMSetInitializer(raw, initializer.raw);
+        }
+        value(raw)
+    }
+
+    /// The constant global `name` another object defines (a glue cell or block), declared
+    /// once as `ty`.
+    pub(crate) fn external_constant<'m>(&'m self, name: &str, of: Type<'m>) -> Value<'m> {
+        if let Some(global) = self.named_global(name) {
+            return global;
+        }
+        let c_name = c_string(name);
+        // SAFETY: the module is live, the name NUL-terminated, the type of this context.
+        let raw = unsafe { LLVMAddGlobal(self.raw, of.raw, c_name.as_ptr()) };
+        // SAFETY: `raw` is a live global of this module.
+        unsafe {
+            LLVMSetLinkage(raw, llvm_sys::LLVMLinkage::LLVMExternalLinkage);
+            LLVMSetGlobalConstant(raw, 1);
+        }
+        value(raw)
     }
 
     /// A program registry survives until the separately compiled launcher refers to it.
@@ -1625,11 +1736,13 @@ mod optimization_tests {
     }
 }
 
-/// DIBuilder owns deferred metadata until finalized before optimization.
+/// DIBuilder owns deferred metadata until finalized before optimization. Locations are
+/// content-only (`crate::debug`): one fixed file and compile unit per module.
 pub(crate) struct DebugInfo<'m> {
     raw: LLVMDIBuilderRef,
     module: &'m Module<'m>,
     optimized: bool,
+    file: LLVMMetadataRef,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct DebugScope(LLVMMetadataRef);
@@ -1646,47 +1759,22 @@ impl<'m> DebugInfo<'m> {
                     LLVMValueAsMetadata(module.const_int(module.int_type(32), version).raw),
                 );
             }
-            Self {
-                raw: LLVMCreateDIBuilder(module.raw),
-                module,
-                optimized,
-            }
-        }
-    }
-    pub(crate) fn function(
-        &self,
-        function: Function<'m>,
-        path: &str,
-        name: &str,
-        line: u32,
-    ) -> DebugScope {
-        // Keep the entire package-qualified name below a synthetic root. Using
-        // a host directory here would change both DWARF and the linked build ID.
-        let file = path;
-        let directory = hirsel_lir::profile::ProfileSource::COMPILATION_DIRECTORY;
-        let mut length = 0;
-        // SAFETY: LLVM returns the name bytes for the lifetime of the live function.
-        let link = unsafe {
-            let name = LLVMGetValueName2(function.value.raw, &mut length);
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name.cast(), length))
-        };
-        // SAFETY: all handles share a live context, and byte slices have the stated lengths.
-        unsafe {
+            let raw = LLVMCreateDIBuilder(module.raw);
+            let (name, directory, producer) = ("hirsel.sites", "/", "hirsel");
             let file = LLVMDIBuilderCreateFile(
-                self.raw,
-                file.as_ptr().cast(),
-                file.len(),
+                raw,
+                name.as_ptr().cast(),
+                name.len(),
                 directory.as_ptr().cast(),
                 directory.len(),
             );
-            let producer = "hirsel";
             LLVMDIBuilderCreateCompileUnit(
-                self.raw,
+                raw,
                 LLVMDWARFSourceLanguage::LLVMDWARFSourceLanguageC,
                 file,
                 producer.as_ptr().cast(),
                 producer.len(),
-                self.optimized as i32,
+                optimized as i32,
                 "".as_ptr().cast(),
                 0,
                 0,
@@ -1701,21 +1789,39 @@ impl<'m> DebugInfo<'m> {
                 "".as_ptr().cast(),
                 0,
             );
+            Self {
+                raw,
+                module,
+                optimized,
+                file,
+            }
+        }
+    }
+    /// The scope of `function`, the definition `name`, declared at content line `line`.
+    pub(crate) fn function(&self, function: Function<'m>, name: &str, line: u32) -> DebugScope {
+        let mut length = 0;
+        // SAFETY: LLVM returns the name bytes for the lifetime of the live function.
+        let link = unsafe {
+            let name = LLVMGetValueName2(function.value.raw, &mut length);
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name.cast(), length))
+        };
+        // SAFETY: all handles share a live context, and byte slices have the stated lengths.
+        unsafe {
             let ty = LLVMDIBuilderCreateSubroutineType(
                 self.raw,
-                file,
+                self.file,
                 ptr::null_mut(),
                 0,
                 LLVMDIFlagZero,
             );
             let scope = LLVMDIBuilderCreateFunction(
                 self.raw,
-                file,
+                self.file,
                 name.as_ptr().cast(),
                 name.len(),
                 link.as_ptr().cast(),
                 link.len(),
-                file,
+                self.file,
                 line,
                 ty,
                 0,
@@ -1745,6 +1851,35 @@ impl<'m> DebugInfo<'m> {
                 ptr::null_mut(),
             );
             LLVMSetCurrentDebugLocation2(builder.raw, location);
+        }
+    }
+    /// Places every instruction `function` has at `line` and `column` of `scope`: for a
+    /// function built without locations, whose calls must have one once it has a scope.
+    pub(crate) fn locate_all(
+        &self,
+        function: Function<'m>,
+        scope: DebugScope,
+        line: u32,
+        column: u32,
+    ) {
+        // SAFETY: the function, its blocks and instructions and the scope share this context.
+        unsafe {
+            let location = LLVMDIBuilderCreateDebugLocation(
+                self.module.context.raw,
+                line,
+                column,
+                scope.0,
+                ptr::null_mut(),
+            );
+            let mut block = llvm_sys::core::LLVMGetFirstBasicBlock(function.value.raw);
+            while !block.is_null() {
+                let mut instruction = llvm_sys::core::LLVMGetFirstInstruction(block);
+                while !instruction.is_null() {
+                    llvm_sys::debuginfo::LLVMInstructionSetDebugLoc(instruction, location);
+                    instruction = llvm_sys::core::LLVMGetNextInstruction(instruction);
+                }
+                block = llvm_sys::core::LLVMGetNextBasicBlock(block);
+            }
         }
     }
     pub(crate) fn finalize(&self) {

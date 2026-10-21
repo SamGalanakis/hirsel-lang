@@ -20,6 +20,7 @@ mod data;
 mod dispatcher;
 mod drop;
 mod dwarf;
+pub use dwarf::{Resolved, debug_object, debug_object_sources};
 mod flat;
 mod foreign;
 mod function;
@@ -27,12 +28,13 @@ mod instructions;
 mod module;
 mod object;
 mod places;
+mod program;
 mod scalar;
 mod soa;
 
 use std::fmt;
 
-use hirsel_lir::emission::EmitInputs;
+use hirsel_lir::emission::{EmitInputs, GlueInputs};
 use hirsel_lir::stage::{ObjectArtifact, Ready, ValidatedUnit};
 use hirsel_syntax::DefPath;
 
@@ -56,8 +58,6 @@ pub enum CodegenError {
     Invalid { definition: DefPath, what: String },
     /// A Ready operation this emitter does not lower.
     Unsupported { definition: DefPath, what: String },
-    /// A failure edge starts a rule with no runtime failure code.
-    UnknownRule { definition: DefPath, rule: String },
     /// Two units have one link name.
     DuplicateSymbol { name: String },
     /// Cranelift refused a function or a declaration.
@@ -76,8 +76,7 @@ impl CodegenError {
         match self {
             CodegenError::Receipt { definition, .. }
             | CodegenError::Invalid { definition, .. }
-            | CodegenError::Unsupported { definition, .. }
-            | CodegenError::UnknownRule { definition, .. } => Some(definition),
+            | CodegenError::Unsupported { definition, .. } => Some(definition),
             _ => None,
         }
     }
@@ -102,9 +101,6 @@ impl fmt::Display for CodegenError {
                     "{definition}: the Cranelift backend does not support {what}"
                 )
             }
-            CodegenError::UnknownRule { definition, rule } => {
-                write!(f, "{definition}: no runtime failure code for {rule}")
-            }
             CodegenError::DuplicateSymbol { name } => write!(f, "two units are named `{name}`"),
             CodegenError::Cranelift { name, message } => {
                 write!(f, "Cranelift refused `{name}`: {message}")
@@ -120,21 +116,30 @@ impl fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
+/// Emits the program's glue object (`hirsel_lir::glue`): the descriptor registry, the
+/// index and failure-code cells, codec records, statics, literals and C callback thunks
+/// the program's unit objects import.
+pub fn emit_glue(inputs: &GlueInputs<'_>) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| program::emit_glue(inputs))
+}
+
 /// Emits validated Ready units as one relocatable object for `inputs.target`.
 pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, None)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, Default::default())).map(|(artifact, _)| artifact)
 }
 
-/// Emits source line tables and subprogram entries when immutable source files are supplied.
+/// Emits `units` as `emit_object` does, recording what `profile` asks for beside the code:
+/// each function's debug intervals (`ObjectArtifact::debug`), for the link's
+/// `debug_object`. Cranelift embeds no measurement instrumentation.
 pub fn emit_object_profile(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&hirsel_lir::profile::ProfileSources>,
+    profile: hirsel_lir::debug::Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, sources)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, profile)).map(|(artifact, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -143,7 +148,8 @@ pub fn emit_clif(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true, None)).map(|(_, clif)| clif.unwrap_or_default())
+    caught(|| module::emit(units, inputs, true, Default::default()))
+        .map(|(_, clif)| clif.unwrap_or_default())
 }
 
 /// A panic in Cranelift or in this crate is a refused compilation, never a crash of the

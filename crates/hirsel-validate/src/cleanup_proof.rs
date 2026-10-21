@@ -1,14 +1,34 @@
 //! Canonical sets of live release obligations. IDs are collision-free structural
-//! identities, not hashes. Fixed-width radix paths retain 32 nodes per update;
-//! equal states reached by different branches have the same root ID.
-use std::collections::HashMap;
+//! identities, not hashes. Fixed-width radix paths retain one node per key bit
+//! per update; equal states reached by different branches have the same root ID.
+//!
+//! The width is fixed per instance, by the largest key it can be given: a
+//! body's locals and loans, so a trie is as deep as their bit length rather
+//! than 32 levels. Every set of one instance has the same width, which is all
+//! canonicity needs (a hash-consed fixed-depth trie: equal member sets build
+//! equal node paths).
+use crate::hashed::HashMap;
 
-#[derive(Default)]
 pub(super) struct Sets {
     nodes: Vec<(usize, usize)>,
     interned: HashMap<(usize, usize), usize>,
+    /// Key bits, most significant first; every key is below `1 << width`.
+    width: u32,
+}
+impl Default for Sets {
+    fn default() -> Self {
+        Self::new(u32::MAX)
+    }
 }
 impl Sets {
+    /// Sets whose keys are at most `largest`.
+    pub fn new(largest: u32) -> Self {
+        Self {
+            nodes: Vec::new(),
+            interned: HashMap::default(),
+            width: (u32::BITS - largest.leading_zeros()).max(1),
+        }
+    }
     fn children(&self, root: usize) -> (usize, usize) {
         if root == 0 {
             (0, 0)
@@ -26,6 +46,10 @@ impl Sets {
             id
         })
     }
+    /// Whether `key`'s bit at `level` (from the most significant) is set.
+    fn bit(&self, key: u32, level: u32) -> bool {
+        key & (1 << (self.width - 1 - level)) != 0
+    }
     /// The primary set's actual members in ascending numeric order.
     pub fn members(&self, root: usize) -> Vec<u32> {
         let mut result = Vec::new();
@@ -34,11 +58,11 @@ impl Sets {
             if node == 0 {
                 continue;
             }
-            if depth == 32 {
+            if depth == self.width {
                 result.push(prefix);
             } else {
                 let (left, right) = self.children(node);
-                pending.push((right, prefix | (1 << (31 - depth)), depth + 1));
+                pending.push((right, prefix | (1 << (self.width - 1 - depth)), depth + 1));
                 pending.push((left, prefix, depth + 1));
             }
         }
@@ -46,21 +70,24 @@ impl Sets {
     }
     /// Empty is zero, the present leaf is one. Internal nodes start at two.
     pub fn set(&mut self, mut root: usize, key: u32, present: bool) -> usize {
+        assert!(
+            self.width == u32::BITS || key >> self.width == 0,
+            "cleanup set key {key} beyond its declared width {}",
+            self.width
+        );
         let mut path = [(0, 0); 32];
-        for (level, slot) in path.iter_mut().enumerate() {
-            *slot = self.children(root);
-            root = if key & (1 << (31 - level)) == 0 {
-                slot.0
-            } else {
-                slot.1
-            };
+        for level in 0..self.width {
+            let slot = self.children(root);
+            path[level as usize] = slot;
+            root = if self.bit(key, level) { slot.1 } else { slot.0 };
         }
         root = usize::from(present);
-        for (level, mut children) in path.into_iter().enumerate().rev() {
-            if key & (1 << (31 - level)) == 0 {
-                children.0 = root;
-            } else {
+        for level in (0..self.width).rev() {
+            let mut children = path[level as usize];
+            if self.bit(key, level) {
                 children.1 = root;
+            } else {
+                children.0 = root;
             }
             root = self.node(children);
         }
@@ -108,6 +135,13 @@ mod tests {
             }
             let first_nodes = sets.nodes.len();
             assert!(first_nodes <= 32 * n as usize);
+            let mut narrow = Sets::new(n - 1);
+            let mut c = 0;
+            for key in (0..n).rev() {
+                c = narrow.set(c, key, true);
+            }
+            assert_eq!(narrow.members(c), (0..n).collect::<Vec<_>>());
+            assert!(narrow.nodes.len() < first_nodes);
             let mut b = 0;
             for key in (0..n).rev() {
                 b = sets.set(b, key, true);

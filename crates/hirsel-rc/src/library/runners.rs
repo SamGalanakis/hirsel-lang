@@ -30,7 +30,7 @@ use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::DefPath;
-use hirsel_types::{GenericArgument, Primitive, Type, TypeId, TypeKind, TypeStore};
+use hirsel_types::{GenericArgument, Primitive, Type, TypeId, TypeInterner, TypeKind};
 
 type R<T> = Result<T, PassError>;
 
@@ -89,15 +89,15 @@ const REPLY_ERROR: u64 = 1;
 const REPLY_FAILED: u64 = 2;
 
 /// The core nominal `name` over `arguments`, a row of `store`.
-fn named(store: &mut TypeStore, name: &str, arguments: Vec<GenericArgument>) -> TypeId {
-    store.push(Type::with_kind(TypeKind::Named {
-        definition: DefPath::core(name),
+fn named(store: &TypeInterner, name: &str, arguments: Vec<GenericArgument>) -> TypeId {
+    store.intern(Type::with_kind(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&DefPath::core(name)),
         arguments: arguments.into(),
     }))
 }
 
 /// The callable `F` of an `Entry[F]` row.
-fn entry_callable(store: &TypeStore, entry: TypeId) -> R<TypeId> {
+fn entry_callable(store: &TypeInterner, entry: TypeId) -> R<TypeId> {
     match store.get(entry).map(|t| &t.kind) {
         Some(TypeKind::Named { arguments, .. }) => match arguments.first() {
             Some(GenericArgument::Type(f)) => Ok(*f),
@@ -159,9 +159,9 @@ fn encode(b: &mut Body<'_, '_>, ty: TypeId, address: AddressId) -> R<ValueId> {
 /// encoding of that type made in this execution, so an error is an invariant fault.
 fn decode(b: &mut Body<'_, '_>, ty: TypeId, bytes: AddressId) -> R<ValueId> {
     let root = b.cx.layout(ty)?;
-    let error = named(&mut b.cx.store, "DecodeError", Vec::new());
+    let error = named(b.cx.types, "DecodeError", Vec::new());
     let result = named(
-        &mut b.cx.store,
+        b.cx.types,
         "Result",
         vec![GenericArgument::Type(ty), GenericArgument::Type(error)],
     );
@@ -402,11 +402,10 @@ fn outcome(
 /// `fn() -> ()`, RunnerSend's parameter 3.
 fn main_request(cx: &mut Cx<'_>, send: &Intrinsic, f: TypeId) -> R<(Direct, LayoutId)> {
     let path = native_path("runner_main");
-    let main_ty = parameter(&send.store, send.callable, 3)?;
+    let main_ty = parameter(cx.types, send.callable, 3)?;
     let request = Request::native(
         super::body_index(&path).expect("registered runner main"),
         &path,
-        send.store.clone(),
         vec![GenericArgument::Type(f)],
         main_ty,
     );
@@ -470,12 +469,12 @@ fn call_form(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 /// `runner.compute(r, f, a)` and `runner.call(r, f, a)`: send, then wait for the outcome.
 fn sent(cx: &mut Cx<'_>, form: u64) -> R<LirUnit<Value>> {
     let (a_ty, r_ty, e_ty) = (cx.type_actual(0)?, cx.type_actual(1)?, cx.type_actual(2)?);
-    let entry_ty = parameter(&cx.store, cx.callable, 1)?;
-    let f_ty = entry_callable(&cx.store, entry_ty)?;
+    let entry_ty = parameter(cx.types, cx.callable, 1)?;
+    let f_ty = entry_callable(cx.types, entry_ty)?;
     let entry = intrinsic(cx, "RunnerSend", vec![GenericArgument::Type(f_ty)])?;
     let main = main_request(cx, &entry, f_ty)?;
     let waiting = Waiting::new(cx)?;
-    let failure = named(&mut cx.store, "Failure", Vec::new());
+    let failure = named(cx.types, "Failure", Vec::new());
     let returned_layout = cx
         .fn_abi()
         .result
@@ -502,16 +501,16 @@ fn sent(cx: &mut Cx<'_>, form: u64) -> R<LirUnit<Value>> {
 /// closure of the ticket.
 fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let (a_ty, r_ty, e_ty) = (cx.type_actual(0)?, cx.type_actual(1)?, cx.type_actual(2)?);
-    let entry_ty = parameter(&cx.store, cx.callable, 2)?;
-    let f_ty = entry_callable(&cx.store, entry_ty)?;
+    let entry_ty = parameter(cx.types, cx.callable, 2)?;
+    let f_ty = entry_callable(cx.types, entry_ty)?;
     let entry = intrinsic(cx, "RunnerSend", vec![GenericArgument::Type(f_ty)])?;
     let main = main_request(cx, &entry, f_ty)?;
     let ticket_ty = cx
-        .store
-        .push(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
-    let run_error = named(&mut cx.store, "RunError", vec![GenericArgument::Type(e_ty)]);
+        .types
+        .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let run_error = named(cx.types, "RunError", vec![GenericArgument::Type(e_ty)]);
     let result_ty = named(
-        &mut cx.store,
+        cx.types,
         "Result",
         vec![
             GenericArgument::Type(r_ty),
@@ -523,27 +522,26 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         cx.program,
         super::body_index(&spawn_path).expect("registered task.async"),
         &spawn_path,
-        cx.store.clone(),
         vec![GenericArgument::Type(result_ty)],
     )?;
-    let child_ty = parameter(&spawn_request.actuals.store, spawn_request.callable, 1)?;
-    let store = spawn_request.actuals.store.clone();
+    let child_ty = parameter(cx.types, spawn_request.callable, 1)?;
     let path = native_path("runner_await");
     let environment = cx
         .layouts
-        .environment(&EnvironmentShape {
-            definition: &path,
-            body: 0,
-            store: &store,
-            captures: &[(ticket_ty, Passing::Take)],
-            sizes: &[],
-            movable: &[],
-        })
+        .environment(
+            cx.types,
+            &EnvironmentShape {
+                definition: hirsel_syntax::DefId::intern(&path),
+                body: 0,
+                captures: &[(ticket_ty, Passing::Take)],
+                sizes: &[],
+                movable: &[],
+            },
+        )
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut request = Request::native(
         super::body_index(&path).expect("registered runner await"),
         &path,
-        store,
         vec![GenericArgument::Type(r_ty), GenericArgument::Type(e_ty)],
         child_ty,
     );
@@ -610,7 +608,7 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 fn awaited(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let (r_ty, e_ty) = (cx.type_actual(0)?, cx.type_actual(1)?);
     let waiting = Waiting::new(cx)?;
-    let failure = named(&mut cx.store, "Failure", Vec::new());
+    let failure = named(cx.types, "Failure", Vec::new());
     let returned_layout = cx
         .fn_abi()
         .result
@@ -667,7 +665,7 @@ fn reply(
 /// entry inside a catch and replies with the outcome's bytes.
 fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let f = cx.type_actual(0)?;
-    let Some(TypeKind::Function(function)) = cx.store.get(f).map(|t| t.kind.clone()) else {
+    let Some(TypeKind::Function(function)) = cx.types.get(f).map(|t| t.kind.clone()) else {
         return Err(PassError::Malformed(
             "a runner main's entry is not callable".into(),
         ));
@@ -678,7 +676,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .last()
         .map(|p| p.ty)
         .ok_or_else(|| PassError::Malformed("a runner entry takes an argument".into()))?;
-    let (r_ty, e_ty) = match cx.store.get(function.result).map(|t| &t.kind) {
+    let (r_ty, e_ty) = match cx.types.get(function.result).map(|t| &t.kind) {
         Some(TypeKind::Named { arguments, .. }) => match arguments.as_ref() {
             [GenericArgument::Type(r), GenericArgument::Type(e)] => (*r, *e),
             _ => {
@@ -695,7 +693,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     };
     let f_abi = cx
         .layouts
-        .fn_abi(&cx.store, f, CallableShape::Closure)
+        .fn_abi(cx.types, f, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let shape = cx.layouts.table().fn_abis[f_abi.0 as usize].clone();
     if shape
@@ -713,7 +711,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let tasks_entry = intrinsic(cx, "RunnerTasks", Vec::new())?;
     let reply_entry = intrinsic(cx, "RunnerReply", Vec::new())?;
     let isolation = super::isolate::entries(cx)?;
-    let failure_ty = named(&mut cx.store, "Failure", Vec::new());
+    let failure_ty = named(cx.types, "Failure", Vec::new());
     let failure_layout = cx.layout(failure_ty)?;
     let result_layout = cx.layout(function.result)?;
     let mut b = Body::new(cx)?;

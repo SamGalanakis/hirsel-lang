@@ -161,6 +161,7 @@ mod tests {
             operation: operation.into(),
             source: SourceSite {
                 definition: hirsel_syntax::DefPath::core("example"),
+                file: "example.hir".into(),
                 line: task + 1,
                 column: 1,
             },

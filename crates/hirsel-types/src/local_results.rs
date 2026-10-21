@@ -10,7 +10,10 @@ use std::collections::BTreeSet;
 /// result local to a `mut` or `take` parameter may be a value moved out of it,
 /// which the body must own by its own means.
 /// Nested generic callable binders introduce independent parameter ordinals.
-pub fn local_result_generics(types: &TypeStore, function: &FunctionType) -> Vec<GenericParameter> {
+pub fn local_result_generics(
+    types: &TypeInterner,
+    function: &FunctionType,
+) -> Vec<GenericParameter> {
     let mut generics = function.generics.to_vec();
     let Some(result) = types.get(function.result) else {
         return generics;
@@ -27,7 +30,7 @@ pub fn local_result_generics(types: &TypeStore, function: &FunctionType) -> Vec<
         return generics;
     }
     let mut pending = vec![(function.result, 0)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some((id, nested)) = pending.pop() {
         if !seen.insert((id, nested)) {
             continue;
@@ -69,7 +72,7 @@ pub fn local_result_generics(types: &TypeStore, function: &FunctionType) -> Vec<
 
 /// Body-local implicit return-read permissions derived solely from its signature.
 pub fn local_result_permissions(
-    types: &TypeStore,
+    types: &TypeInterner,
     function: &FunctionType,
     scope: SiteRef,
 ) -> BTreeSet<TypeParameterRef> {
@@ -120,17 +123,17 @@ mod tests {
     }
     #[test]
     fn nested_generic_result_does_not_bind_an_outer_ordinal() {
-        let mut types = TypeStore::default();
-        let t = types.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let types = TypeInterner::new(None);
+        let t = types.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
         let mut nested = row(TypeKind::Function(function(t)));
         nested.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        let nested = types.push(nested);
+        let nested = types.intern(nested);
         let f = function(nested);
         assert_eq!(local_result_generics(&types, &f), f.generics);
         // A reference crossing the nongeneric callable identifies the outer binder.
-        let t = types.push(row(TypeKind::Parameter(TypeParameterRef::Bound {
+        let t = types.intern(row(TypeKind::Parameter(TypeParameterRef::Bound {
             depth: 1,
             parameter: TypeParamId(0),
         })));
@@ -138,7 +141,7 @@ mod tests {
         callable.generics.clear();
         let mut result = row(TypeKind::Function(callable));
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        let result = types.push(result);
+        let result = types.intern(result);
         let f = function(result);
         assert!(matches!(&local_result_generics(&types, &f)[0],
             GenericParameter::Type { bounds, .. } if bounds.contains(&Bound::Copyable)));
@@ -152,7 +155,7 @@ mod tests {
 /// no bound; distinct arenas or sources without an arena leave the
 /// destination to MEM-10. The join is read from the signature alone.
 pub fn local_result_destination(
-    types: &mut TypeStore,
+    types: &TypeInterner,
     result: TypeId,
     parameters: &[Parameter],
     arena: impl Fn(&Origin) -> bool,
@@ -207,7 +210,7 @@ pub fn local_result_destination(
     match joined {
         Some(Some(origin)) => {
             row.modes.relation = row.modes.relation.union(&Relation::place(origin));
-            types.push(row)
+            types.intern(row)
         }
         _ => result,
     }

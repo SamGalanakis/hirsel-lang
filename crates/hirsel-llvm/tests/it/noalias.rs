@@ -6,8 +6,9 @@ use crate::support;
 
 use std::collections::BTreeSet;
 
-use hirsel_lir::descriptor_registry::DescriptorRegistry;
-use hirsel_lir::emission::{EmitInputs, NO_CALLBACKS, OptLevel};
+use hirsel_lir::emission::{EmitInputs, OptLevel};
+
+const NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
 use hirsel_lir::ir::{SlotKind, UnitOrigin};
 use hirsel_lir::layout_types::TargetSpec;
 use hirsel_llvm::emit_optimized_ir;
@@ -18,23 +19,22 @@ use support::ready::*;
 use support::*;
 
 fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String {
-    let codes = failure_codes();
     let input = input();
     let none = BTreeSet::new();
     let inputs = EmitInputs {
+        index: None,
         verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &none,
         available_externally: &none,
-        callbacks,
+        callbacks: !callbacks.is_empty(),
+        tracking: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
         opt,
         measurement: false,
         fuel: false,
@@ -172,17 +172,16 @@ fn packed_program(target: &TargetSpec, scalar: hirsel_lir::layout_types::ScalarK
     let mut schema = Schema::new();
     let primitive = support::programs::primitive(scalar);
     let definition = path("Wire");
-    let mut t = Types::default();
+    let mut t = crate::support::session_types();
     let byte = t.p(Primitive::U8);
     let field = t.p(primitive);
     let shape = t.record(&[byte, field, byte]);
     schema.owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("packed mut wire"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout {
                 packed: true,
@@ -352,7 +351,15 @@ int main(void) {{
                 std::fs::write(&c, &source).unwrap();
                 let text = ir(&program, opt, &NO_CALLBACKS);
                 let object = hirsel_llvm::compile_ir(&text, &target, OptLevel::None).unwrap();
-                let executable = link(&target, &dir, &[("packed.o", &object.bytes)], &[c]);
+                let executable = link(
+                    &target,
+                    &dir,
+                    &[
+                        ("packed.o", &object.bytes),
+                        ("program-glue.o", &program.glue()),
+                    ],
+                    &[c],
+                );
                 assert_eq!(run(&target, &executable), "packed mut write-back ok\n");
             }
         }

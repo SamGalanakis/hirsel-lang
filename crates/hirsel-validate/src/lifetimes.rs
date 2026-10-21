@@ -40,8 +40,7 @@ impl Checker<'_> {
                         if !self
                             .lifetime(
                                 &self
-                                    .definition
-                                    .types
+                                    .t
                                     .get(self.place_type(value.place))
                                     .unwrap()
                                     .modes
@@ -73,8 +72,8 @@ impl Checker<'_> {
                 if place.projection.is_empty() {
                     return None;
                 }
-                let mut store = self.working_store();
-                self.global_root_projection(&mut store, place)
+                let store = self.t;
+                self.global_root_projection(store, place)
                     .is_some_and(|part| {
                         self.lifetime(&store.get(part).unwrap().modes.relation)
                             .is_global()
@@ -96,7 +95,7 @@ impl Checker<'_> {
 
     pub(crate) fn global_root_projection(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         place: &Place,
     ) -> Option<hirsel_types::TypeId> {
         let root = self.body.locals[place.root.0 as usize].ty;
@@ -105,7 +104,7 @@ impl Checker<'_> {
         }
         let mut row = store.get(root).unwrap().clone();
         row.modes.relation = self.placement(&row.modes.relation);
-        let root = store.push(row);
+        let root = store.intern(row);
         let root = self.derive_sendability(store, root);
         self.projection_type_at(store, place, root, |_, _| None)
     }
@@ -120,8 +119,7 @@ impl Checker<'_> {
                 || self
                     .lifetime(
                         &self
-                            .definition
-                            .types
+                            .t
                             .get(self.body.locals[root].ty)
                             .unwrap()
                             .modes
@@ -132,10 +130,7 @@ impl Checker<'_> {
             deep: state.is_some_and(|state| {
                 (state.must[root].has(MustFacts::GLOBAL)
                     || !access.projection.is_empty()
-                        && matches!(
-                            self.definition.types.get(access.ty).unwrap().kind,
-                            TypeKind::Function(_)
-                        )
+                        && matches!(self.t.get(access.ty).unwrap().kind, TypeKind::Function(_))
                         && state.crossing_parts[root]
                             .get(&super::flow::crossing::path(&access.projection))
                             == Some(true))
@@ -148,8 +143,7 @@ impl Checker<'_> {
     pub(super) fn current_content_global(&self, state: &State, value: &Operand) -> bool {
         let access = &self.body.places[value.place.0 as usize];
         let receiving = &self
-            .definition
-            .types
+            .t
             .get(self.body.locals[access.root.0 as usize].ty)
             .unwrap()
             .modes
@@ -158,7 +152,7 @@ impl Checker<'_> {
         proof.acquirable
             && (proof.deep
                 || self
-                    .lifetime(&self.definition.types.get(access.ty).unwrap().modes.relation)
+                    .lifetime(&self.t.get(access.ty).unwrap().modes.relation)
                     .is_global()
                     && !self.lifetime(receiving).has_environment())
     }
@@ -166,8 +160,7 @@ impl Checker<'_> {
     pub(super) fn global_operand(&self, state: &State, value: &Operand) -> bool {
         let access = &self.body.places[value.place.0 as usize];
         let receiving = &self
-            .definition
-            .types
+            .t
             .get(self.body.locals[access.root.0 as usize].ty)
             .unwrap()
             .modes
@@ -175,7 +168,7 @@ impl Checker<'_> {
         let proof = self.content_proof(Some(state), value.place);
         proof.acquirable
             && (self
-                .lifetime(&self.definition.types.get(access.ty).unwrap().modes.relation)
+                .lifetime(&self.t.get(access.ty).unwrap().modes.relation)
                 .is_global()
             && (!self.lifetime(receiving).has_environment() || proof.deep)
             // A Local part (a Local receiver's, or an inferred Local join's)
@@ -197,8 +190,7 @@ impl Checker<'_> {
             Rvalue::Construct { fields, .. } => {
                 self.lifetime(
                     &self
-                        .definition
-                        .types
+                        .t
                         .get(self.place_type(destination))
                         .unwrap()
                         .modes
@@ -212,8 +204,7 @@ impl Checker<'_> {
             _ => self
                 .lifetime(
                     &self
-                        .definition
-                        .types
+                        .t
                         .get(self.place_type(destination))
                         .unwrap()
                         .modes
@@ -227,10 +218,10 @@ impl Checker<'_> {
         let access = &self.body.places[destination.0 as usize];
         let root = access.root.0 as usize;
         if access.projection.is_empty() {
-            state.must[root].set(MustFacts::GLOBAL, global);
-        } else if needs_release(self, access.ty, &self.definition.types) {
+            state.must.set_fact(root, MustFacts::GLOBAL, global);
+        } else if needs_release(self, access.ty, self.t) {
             if !global {
-                state.must[root].set(MustFacts::GLOBAL, false);
+                state.must.set_fact(root, MustFacts::GLOBAL, false);
             }
         }
     }

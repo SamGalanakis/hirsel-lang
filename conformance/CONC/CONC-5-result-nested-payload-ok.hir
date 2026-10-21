@@ -1,0 +1,19 @@
+// rule: CONC-5
+// expect: accept
+type Todo {
+  title: String,
+}
+
+type Store {
+  todos: List[Todo],
+}
+
+fn load() -> Result[unique Store, String] {
+  Ok(Store(todos: []))
+}
+
+fn a(tasks: Tasks) -> Result[(), String] {
+  let store = load()?
+  let m = mutex.create(tasks, take store)
+  Ok(())
+}

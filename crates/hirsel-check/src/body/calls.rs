@@ -70,7 +70,7 @@ impl Checker<'_, '_> {
         }
         // As for direct calls, a borrowed local result may require Copyable
         // even when the declaration did not spell that bound explicitly.
-        for (parameter, actual) in local_result_generics(&self.body.types, &function)
+        for (parameter, actual) in local_result_generics(self.types, &function)
             .iter()
             .zip(&arguments)
         {
@@ -100,7 +100,7 @@ impl Checker<'_, '_> {
         }
         function.result = self.substitute(function.result, &arguments)?;
         function.error = result_error(
-            &self.body.types,
+            self.types,
             function.result,
             &self.input.signature.metadata.roles,
         );
@@ -114,23 +114,23 @@ impl Checker<'_, '_> {
             Ok(self.named_function(function))
         } else {
             self.function_value_arguments.insert(id, arguments);
-            let mut row = self.body.types.get(source).unwrap().clone();
+            let mut row = self.types.get(source).unwrap().clone();
             row.kind = TypeKind::Function(function);
-            Ok(self.body.types.push(row))
+            Ok(self.types.intern(row))
         }
     }
     /// A borrowed callable parameter's Environment is its access view,
     /// not part of the concrete type argument shared with another occurrence.
     /// Keep the occurrence's receiving refinements and explicit placements.
     fn contract_type_argument(&mut self, actual: TypeId) -> TypeId {
-        let mut row = self.body.types.get(actual).unwrap().clone();
+        let mut row = self.types.get(actual).unwrap().clone();
         if !matches!(row.kind, TypeKind::Parameter(_)) {
             row.modes.relation = row
                 .modes
                 .relation
                 .retain(|r| !matches!(r, Reach::Environment));
         }
-        self.body.types.push(row)
+        self.types.intern(row)
     }
     pub(super) fn labels(
         &mut self,
@@ -217,7 +217,7 @@ impl Checker<'_, '_> {
                     return self.recover_call(id, expected, frame, arguments);
                 };
                 let repr = if let Some(r) = td.representation {
-                    let r = self.import(r, &s.types)?;
+                    let r = self.import(r)?;
                     if args.is_empty() {
                         r
                     } else {
@@ -247,7 +247,7 @@ impl Checker<'_, '_> {
                 };
                 let (ctx, fields) = match self.kind(repr) {
                     TypeKind::Record(fs) => (
-                        ContextualName::Constructor(definition.clone()),
+                        ContextualName::Constructor(definition.path().clone()),
                         fs.into_iter()
                             .map(|f| (if td.distinct { None } else { Some(f.name) }, f.ty))
                             .collect(),
@@ -257,12 +257,12 @@ impl Checker<'_, '_> {
                             Some(ContextualName::Variant { variant, .. }) => {
                                 Some(variant.0 as usize)
                             }
-                            _ => vs.iter().position(|v| v.name == name),
+                            _ => vs.iter().position(|v| v.name.as_str() == name),
                         };
                         if let Some(i) = selected.filter(|i| *i < vs.len()) {
                             (
                                 ContextualName::Variant {
-                                    owner: definition.clone(),
+                                    owner: definition.path().clone(),
                                     variant: VariantId(i as u32),
                                 },
                                 vs[i].fields.clone(),
@@ -334,7 +334,7 @@ impl Checker<'_, '_> {
                         .into_iter()
                         .map(|(label, ty)| Parameter {
                             name: None,
-                            label,
+                            label: label.map(|l: hirsel_intern::Symbol| l.as_str().to_owned()),
                             passing: ast::PassingMode::Take,
                             ty: self.placed_part_type(result, ty),
                         })
@@ -522,15 +522,13 @@ impl Checker<'_, '_> {
             if let Some(GenericArgument::Type(actual)) = argument {
                 if !type_contracts.contains(&i) {
                     let arenas = self.arena_places(*actual);
-                    *actual = generic_type_argument(&mut self.body.types, *actual, |o| {
-                        arenas.contains(o)
-                    })
-                    .map_err(|e| {
-                        QueryError::Operational(OperationalFailure {
-                            operation: "generic type argument".into(),
-                            message: format!("{e:?}"),
-                        })
-                    })?;
+                    *actual = generic_type_argument(self.types, *actual, |o| arenas.contains(o))
+                        .map_err(|e| {
+                            QueryError::Operational(OperationalFailure {
+                                operation: "generic type argument".into(),
+                                message: format!("{e:?}"),
+                            })
+                        })?;
                 } else {
                     *actual = self.contract_type_argument(*actual);
                 }
@@ -596,7 +594,7 @@ impl Checker<'_, '_> {
         let c = &self.calls[call];
         let creation = self.frames[c.frame]
             .result
-            .and_then(|t| self.body.types.get(t))
+            .and_then(|t| self.types.get(t))
             .is_some_and(|row| {
                 matches!(row.erased_captures, Some(ErasedCaptures::FromArguments(_)))
             });
@@ -609,13 +607,13 @@ impl Checker<'_, '_> {
             return None;
         }
         let ordinal = c.ordinals[index]?;
-        hirsel_types::mutable_capture_states(&self.body.types, &c.function)
+        hirsel_types::mutable_capture_states(self.types, &c.function)
             .into_iter()
             .find(|(_, callback, _)| *callback == ordinal)
             .map(|(_, _, slot)| slot)
     }
     fn preserving_callback(&mut self, ty: TypeId, slot: usize) -> TypeId {
-        let mut row = self.body.types.get(ty).unwrap().clone();
+        let mut row = self.types.get(ty).unwrap().clone();
         let TypeKind::Function(f) = &mut row.kind else {
             return ty;
         };
@@ -633,7 +631,7 @@ impl Checker<'_, '_> {
         });
         promises.sort_by(|a, b| a.selector.cmp(&b.selector));
         f.state_promises = promises.into();
-        self.body.types.push(row)
+        self.types.intern(row)
     }
     pub(super) fn call_argument(&mut self, call: usize, index: usize) -> Result<(), QueryError> {
         let c = &self.calls[call];
@@ -645,7 +643,7 @@ impl Checker<'_, '_> {
             .map(|p| p.ty);
         let id = c.id;
         // Spec #43: a borrowed local result shares its generic parts.
-        let bounds = local_result_generics(&self.body.types, &c.function);
+        let bounds = local_result_generics(self.types, &c.function);
         let mut inferred = c.inferred.clone();
         let mut bad = self.invalid(actual);
         if !bad {
@@ -786,7 +784,7 @@ impl Checker<'_, '_> {
         actual: TypeId,
         readonly: bool,
     ) -> Result<TypeId, QueryError> {
-        let sharing = sharing_type_parameters(&self.body.types, function);
+        let sharing = sharing_type_parameters(self.types, function);
         let declarations = self.body.resolution.generic_declarations.clone();
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum Contract {
@@ -804,13 +802,13 @@ impl Checker<'_, '_> {
             sharing: &BTreeSet<TypeParamId>,
             declarations: &GenericDeclarations,
         ) -> Result<TypeId, QueryError> {
-            let expected = builder.body.types.get(formal).unwrap().clone();
-            let mut row = builder.body.types.get(actual).unwrap().clone();
+            let expected = builder.types.row(formal).clone();
+            let mut row = builder.types.row(actual).clone();
             if let TypeKind::Parameter(parameter) = expected.kind {
                 if parameter.binder() == GenericBinder::Bound(depth) {
                     if contract == Contract::Value {
                         let arenas = builder.arena_places(actual);
-                        return generic_type_argument(&mut builder.body.types, actual, |o| {
+                        return generic_type_argument(builder.types, actual, |o| {
                             arenas.contains(o)
                         })
                         .map_err(|error| {
@@ -827,7 +825,7 @@ impl Checker<'_, '_> {
                             .modes
                             .relation
                             .retain(|r| !matches!(r, Reach::Environment));
-                        builder.body.types.push(row.clone())
+                        builder.types.intern(row.clone())
                     } else {
                         actual
                     };
@@ -843,19 +841,17 @@ impl Checker<'_, '_> {
                         ) {
                             row.modes.sendability = Sendability::NotSendable;
                         }
-                        let actual = builder.body.types.push(row);
+                        let actual = builder.types.intern(row);
                         return Ok(actual);
                     }
                     if sharing.contains(&parameter.parameter()) && variance == Variance::Covariant {
-                        let mut store = std::mem::take(&mut builder.body.types);
-                        let result = forget_read_crossing_requirements(
-                            &mut store,
+                        let store = builder.types;
+                        return forget_read_crossing_requirements(
+                            store,
                             actual,
                             declarations,
                             &mut |path| builder.snapshot(path).map(Some),
                         );
-                        builder.body.types = store;
-                        return result;
                     }
                     return Ok(actual);
                 }
@@ -895,7 +891,7 @@ impl Checker<'_, '_> {
             let mut replacements = replacement.into_iter();
             match &mut row.kind {
                 TypeKind::Tuple(parts) => {
-                    for part in parts {
+                    for part in parts.iter_mut() {
                         if let Some(new) = replacements.next() {
                             *part = new;
                         }
@@ -907,7 +903,7 @@ impl Checker<'_, '_> {
                     }
                 }
                 TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                    for argument in arguments {
+                    for argument in arguments.iter_mut() {
                         if let GenericArgument::Type(part) = argument {
                             if let Some(new) = replacements.next() {
                                 *part = new;
@@ -916,7 +912,7 @@ impl Checker<'_, '_> {
                     }
                 }
                 TypeKind::Function(f) => {
-                    for parameter in &mut f.parameters {
+                    for parameter in f.parameters.iter_mut() {
                         if let Some(new) = replacements.next() {
                             parameter.ty = new;
                         }
@@ -932,7 +928,7 @@ impl Checker<'_, '_> {
                 }
                 _ => (),
             }
-            Ok(builder.body.types.push(row))
+            Ok(builder.types.intern(row))
         }
         walk(
             self,
@@ -1000,7 +996,7 @@ impl Checker<'_, '_> {
             .map(|(i, argument)| match argument {
                 GenericArgument::Type(actual) if !type_contracts.contains(&i) => {
                     let arenas = self.arena_places(actual);
-                    generic_type_argument(&mut self.body.types, actual, |o| arenas.contains(o))
+                    generic_type_argument(self.types, actual, |o| arenas.contains(o))
                         .map(GenericArgument::Type)
                         .map_err(|e| {
                             QueryError::Operational(OperationalFailure {
@@ -1047,21 +1043,22 @@ impl Checker<'_, '_> {
             if let CallTarget::Constructor(ContextualName::Constructor(owner)) = &target {
                 let declaration = self.snapshot(owner)?;
                 if matches!(&declaration.kind, SignatureKind::Type(td) if td.fact.is_some()) {
-                    let helper = hirsel_check_protocol::fact::fact_signature(&declaration)?;
+                    let helper =
+                        hirsel_check_protocol::fact::fact_signature(self.types, &declaration)?;
                     let SignatureKind::Function(f) = &helper.kind else {
                         unreachable!()
                     };
-                    let result = self.import(f.result, &helper.types)?;
+                    let result = self.import(f.result)?;
                     self.plans.facts.push(FactPlan {
                         expression: id,
-                        predicate: helper.definition.clone(),
+                        predicate: helper.definition.path().clone(),
                         arguments: args.clone(),
                         result,
                         usage: UseKind::Borrow,
                     });
                     self.body.instantiations.push(Instantiation {
                         expression: id,
-                        callee: helper.definition,
+                        callee: helper.definition.path().clone(),
                         arguments: args.clone(),
                     });
                 }
@@ -1189,7 +1186,7 @@ impl Checker<'_, '_> {
         args: &mut [Option<GenericArgument>],
     ) -> Result<bool, QueryError> {
         let mut todo = vec![(template, actual, 0)];
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::HashSet::new();
         while let Some((a, b, depth)) = todo.pop() {
             if !seen.insert((a, b, depth))
                 || self.invalid(a)
@@ -1293,11 +1290,11 @@ impl Checker<'_, '_> {
             return Ok(None);
         };
         let s = self.snapshot(&definition)?;
-        if s.metadata.roles.result_type.as_ref() != Some(&definition) {
+        if s.metadata.roles.result_type.as_ref() != Some(definition.path()) {
             return Ok(None);
         }
         if let [GenericArgument::Type(ok), GenericArgument::Type(error)] = arguments.as_slice() {
-            Ok(Some((definition, *ok, *error)))
+            Ok(Some((definition.path().clone(), *ok, *error)))
         } else {
             Ok(None)
         }
@@ -1307,10 +1304,10 @@ impl Checker<'_, '_> {
         if let TypeKind::Variant(vs) = self.kind(repr) {
             let success = vs
                 .iter()
-                .position(|v| v.name == "Ok" && v.fields.len() == 1);
+                .position(|v| v.name.as_str() == "Ok" && v.fields.len() == 1);
             let error = vs
                 .iter()
-                .position(|v| v.name == "Error" && v.fields.len() == 1);
+                .position(|v| v.name.as_str() == "Error" && v.fields.len() == 1);
             if let (Some(ok), Some(error)) = (success, error) {
                 return Ok((VariantId(ok as u32), VariantId(error as u32)));
             }
@@ -1380,7 +1377,7 @@ impl Checker<'_, '_> {
                     );
                     return Ok(self.error());
                 };
-                let f = self.import_function(f, &s.types)?;
+                let f = self.import_function(f)?;
                 let mut args = vec![None; f.generics.len()];
                 // The propagated error is a temporary, never a `mut` place (OWN-3).
                 let matches = f.parameters.len() == 1
@@ -1440,7 +1437,7 @@ impl Checker<'_, '_> {
                     vs.iter()
                         .enumerate()
                         .find(|(_, v)| {
-                            v.name == name
+                            v.name.as_str() == name
                                 && v.fields.len() == 1
                                 && self.compatible(v.fields[0].1, error)
                         })

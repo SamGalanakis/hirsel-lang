@@ -2,12 +2,16 @@
 //! names `unchanged` recompute nothing, and those it names `recomputed` do (so
 //! the scenario exercises what it claims).
 //!
-//! Today the counts are the engine's per-definition, per-query recompute counts
-//! (resolve, signature, check, modes, lower) over one resident single-file
-//! engine. V's recomputes, the invalidation reasons by `ReadKey` kind and
-//! `SessionStats.touched` are TODO until arch-engine provides them.
-use super::{Report, Switch, Verdict, edits::Scenario};
-use hirsel_engine::{QueryEngine, QueryKind};
+//! Counts include physical Lower/body V work and exact memo identities touched.
+//! Raw memo operations are reported independently. An independent cold check
+//! supplies current read values; missing/conflicting observations fail closed.
+use super::{Report, Verdict, edits::Scenario};
+use hirsel_driver::session::{FileChange, Session};
+use hirsel_engine::{DefinitionQueries, QueryEngine, QueryKind};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 const KINDS: [QueryKind; 5] = [
     QueryKind::Resolve,
@@ -38,18 +42,28 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
         return Err("O3 scenarios edit source only".into());
     }
     let context = hirsel_engine::default_context();
-    let mut engine = QueryEngine::new(
-        hirsel_engine::default_environment(),
-        hirsel_driver::compiler_adapters(),
-    );
-    let check = |engine: &mut QueryEngine, text: String| {
-        let file = engine
-            .sources
-            .add(&scenario.entry, text)
-            .ok_or("source too large")?;
-        hirsel_engine::check_progress(engine, file, &context).map_err(|e| format!("check: {e:?}"))
+    let base = std::env::temp_dir().join(format!(
+        "hirsel-o3-{}-{}",
+        std::process::id(),
+        scenario.name
+    ));
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let entry = base.join(&scenario.entry);
+    std::fs::write(&entry, &before).map_err(|e| e.to_string())?;
+    let config = || {
+        let mut config = scenario
+            .config_before
+            .compile(Arc::new(hirsel_engine::store::NoneStore));
+        // A check lowers only compile-time evaluation.
+        config.lowering = hirsel_engine::LoweringPolicy::Comptime;
+        config
     };
-    check(&mut engine, before)?;
+    let mut session = Session::open_configured(&entry, config());
+    session.check().map_err(|e| e.to_string())?;
+    let changed = changed_items(&before, &after)?;
+    let engine = &session.program_applied().map_err(|e| e.to_string())?.engine;
+    let snapshot = engine.memo_snapshot();
+    let stats = engine.memo_stats().clone();
     let names: Vec<&String> = scenario
         .unchanged
         .iter()
@@ -65,16 +79,52 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
             })
             .collect()
     };
-    let first = counts(&engine);
-    check(&mut engine, after)?;
-    let second = counts(&engine);
-    for ((name, first), second) in names.iter().zip(first).zip(second) {
-        let grew: Vec<String> = KINDS
+    let first = counts(engine);
+    let validations = |engine: &QueryEngine| {
+        names
+            .iter()
+            .map(|name| {
+                let mut path = hirsel_engine::entry_path(&context);
+                path.0.name = name.as_str().into();
+                (
+                    engine.body_validation_runs(&path),
+                    engine.lower_adapter_calls(&path),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_work = validations(engine);
+    std::fs::write(&entry, &after).map_err(|e| e.to_string())?;
+    session.apply(vec![FileChange {
+        path: entry.clone(),
+        bytes: Some(after.into_bytes()),
+    }]);
+    session.check_applied().map_err(|e| e.to_string())?;
+    let touched = session.stats().touched;
+    let operations = session.stats().memo_operations;
+    let touched_memos = session.touched_memos().to_vec();
+    let engine = &session.program_applied().map_err(|e| e.to_string())?.engine;
+    let second = counts(engine);
+    let second_work = validations(engine);
+    for ((((name, first), second), first_work), second_work) in names
+        .iter()
+        .zip(first)
+        .zip(second)
+        .zip(first_work)
+        .zip(second_work)
+    {
+        let mut grew: Vec<String> = KINDS
             .iter()
             .zip(first.iter().zip(second))
             .filter(|(_, (a, b))| b > *a)
             .map(|(kind, (a, b))| format!("{} +{}", kind.phase_name(), b - a))
             .collect();
+        if second_work.0 > first_work.0 {
+            grew.push(format!("body V +{}", second_work.0 - first_work.0));
+        }
+        if second_work.1 > first_work.1 {
+            grew.push(format!("physical lower +{}", second_work.1 - first_work.1));
+        }
         let unchanged = scenario.unchanged.contains(name);
         let verdict = match (unchanged, grew.is_empty()) {
             (true, true) | (false, false) => Verdict::Pass,
@@ -84,15 +134,147 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
         let claim = if unchanged { "unchanged" } else { "recomputed" };
         report.add(format!("{} [{name} {claim}]", scenario.name), verdict);
     }
-    // V's recomputes and the reasons by ReadKey kind, then the touch bound
-    // (at most changed + subscribers memos).
+    let now = engine.memo_stats();
+    let invalidations: u64 = now
+        .invalidated
+        .iter()
+        .zip(stats.invalidated)
+        .map(|(a, b)| a - b)
+        .sum::<u64>()
+        + now.invalidated_text
+        - stats.invalidated_text;
     report.add(
-        format!("{} [validation and read kinds]", scenario.name),
-        Verdict::Todo(Switch::SlowPathCounters),
+        format!("{} [slow-path invalidations]", scenario.name),
+        if invalidations > 0 {
+            Verdict::Pass
+        } else {
+            Verdict::Fail("edit invalidated no memo".into())
+        },
+    );
+    let current = engine.memo_snapshot();
+    // Retained dirty memos may still record the previous revision's values.
+    // A fresh check supplies independent current observations, after the
+    // resident's physical work and counters have been captured above.
+    let mut cold = Session::open_configured(&entry, config());
+    cold.check().map_err(|e| format!("reference check: {e}"))?;
+    let reference = cold
+        .program_applied()
+        .map_err(|e| e.to_string())?
+        .engine
+        .memo_snapshot();
+    let mut observed = BTreeMap::new();
+    for (owner, reads) in &reference {
+        for (key, value) in reads.iter() {
+            // V's contextual reads are interpreted in their owner's package.
+            let scoped = (owner.def.path().0.package.clone(), *key);
+            if let Some(previous) = observed.insert(scoped, *value)
+                && previous != *value
+            {
+                return Err(format!(
+                    "reference check observed conflicting values for {key:?} in {}",
+                    owner.def.path()
+                ));
+            }
+        }
+    }
+    let mut changed_values = BTreeSet::new();
+    let mut missing = BTreeMap::<_, BTreeSet<_>>::new();
+    let mut affected = BTreeSet::new();
+    for (memo, reads) in &snapshot {
+        if changed.contains(&memo.def) {
+            affected.insert(*memo);
+            continue;
+        }
+        for (read, previous) in reads.iter() {
+            let scoped = (memo.def.path().0.package.clone(), *read);
+            match observed.get(&scoped) {
+                Some(current) if current != previous => {
+                    changed_values.insert(scoped);
+                    affected.insert(*memo);
+                }
+                Some(_) => {}
+                None => {
+                    missing.entry(scoped).or_default().insert(*memo);
+                }
+            }
+        }
+    }
+    let newly_created: BTreeSet<_> = current
+        .iter()
+        .filter(|(key, _)| !snapshot.iter().any(|(old, _)| old == key))
+        .map(|(key, _)| *key)
+        .collect();
+    affected.extend(&newly_created);
+    report.add(
+        format!("{} [reference observations]", scenario.name),
+        if missing.is_empty() {
+            Verdict::Pass
+        } else {
+            Verdict::Fail(format!(
+                "{} missing read keys; {} verified changed values, {} new memo identities; missing inventory is not a changed input: {missing:?}",
+                missing.len(), changed_values.len(), newly_created.len()
+            ))
+        },
     );
     report.add(
         format!("{} [touched]", scenario.name),
-        Verdict::Todo(Switch::Touched),
+        if touched <= affected.len() as u64
+            && touched_memos.iter().all(|memo| affected.contains(memo))
+        {
+            Verdict::Pass
+        } else {
+            Verdict::Fail(format!(
+                "{touched} distinct memo identities ({operations} raw operations) exceed {} changed/subscriber memos; unrelated: {:?}",
+                affected.len(), touched_memos.iter().filter(|memo| !affected.contains(memo)).collect::<Vec<_>>()
+            ))
+        },
     );
+    eprintln!(
+        "O3 {}: {touched}/{} distinct memos, {operations} raw operations, typed invalidations {:?}, text {}",
+        scenario.name,
+        affected.len(),
+        now.invalidated
+            .iter()
+            .zip(stats.invalidated)
+            .map(|(a, b)| a - b)
+            .collect::<Vec<_>>(),
+        now.invalidated_text - stats.invalidated_text
+    );
+    let _ = std::fs::remove_dir_all(&base);
     Ok(())
+}
+
+fn changed_items(before: &str, after: &str) -> Result<BTreeSet<hirsel_engine::DefId>, String> {
+    let parse = |text: &str| -> Result<BTreeMap<_, _>, String> {
+        let mut engine = QueryEngine::new(
+            hirsel_engine::default_environment(),
+            hirsel_driver::compiler_adapters(),
+        );
+        let file = engine
+            .sources
+            .add("o3.hir", text.into())
+            .ok_or("source too large")?;
+        let parsed = engine
+            .parse_file(file, &hirsel_engine::default_context())
+            .map_err(|e| format!("parse: {e:?}"))?;
+        Ok(parsed
+            .value
+            .items
+            .iter()
+            .map(|item| {
+                (
+                    hirsel_engine::DefId::intern(&item.item.definition),
+                    item.text_hash,
+                )
+            })
+            .collect())
+    };
+    let before = parse(before)?;
+    let after = parse(after)?;
+    Ok(before
+        .keys()
+        .chain(after.keys())
+        .filter(|id| before.get(id) != after.get(id))
+        .copied()
+        .collect())
 }

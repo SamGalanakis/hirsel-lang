@@ -73,7 +73,7 @@ fn borrowed_tails_and_joins_lend_storage_that_outlives_them() {
         "fn one(mut a: u64) { a = 9 }\nfn main() -> u64 { let mut xs: Array[u64] = [1, 2]\n one(mut { xs }[1])\n xs[0] * 10 + xs[1] }",
     );
     assert_eq!(bits(run), 12);
-    let d = source_definition(
+    let (types, d) = source_definition(
         "fn one(s: String) -> u64 { 1 }\nfn main(s: String, n: u64) -> u64 { one(if n == 0 { s } else { \"other\" }) }",
     );
     let body = &d.bodies[d.entry.0 as usize];
@@ -85,7 +85,7 @@ fn borrowed_tails_and_joins_lend_storage_that_outlives_them() {
             InstructionKind::Assign { destination, value }
                 if matches!(body.rvalues[value.0 as usize], Rvalue::Constant(_))
                     && matches!(
-                        d.types
+                        types
                             .get(body.places[destination.0 as usize].ty)
                             .unwrap()
                             .kind,
@@ -130,7 +130,7 @@ fn scalar_and_nominal_plain_values_have_no_cleanup_actions() {
         "type Pair { a:u8, b:u8 }\nfn main()->u8 { let p=Pair(a:3u8,b:4u8)\np.a }",
         "fn f[T:plain](a:T)->T { let b=a\nb }\nfn main()->u8 { f(3u8) }",
     ] {
-        let d = source_definition(source);
+        let (_types, d) = source_definition(source);
         assert!(d.bodies.iter().all(|body| body.cleanup_nodes.is_empty()));
         assert_eq!(bits(execute_source(source)), 3);
     }
@@ -138,12 +138,12 @@ fn scalar_and_nominal_plain_values_have_no_cleanup_actions() {
 
 #[test]
 fn generic_plain_bounds_omit_cleanup_without_losing_lexical_evidence() {
-    let d = source_definition("fn main[T:plain](a:T)->T { let b=a\nb }");
+    let (_types, d) = source_definition("fn main[T:plain](a:T)->T { let b=a\nb }");
     assert!(d.bodies.iter().all(|body| body.cleanup_nodes.is_empty()));
 }
 
 fn indirect_callee_storage(source: &str) -> Vec<Storage> {
-    let definition = source_definition(source);
+    let (_types, definition) = source_definition(source);
     definition
         .bodies
         .iter()
@@ -216,11 +216,11 @@ fn an_owned_related_yield_can_return_without_copying_it() {
 
 #[test]
 fn propagation_reads_borrowed_result_payloads_through_their_carrier() {
-    let d = source_definition(
+    let (types, d) = source_definition(
         "fn part(s: String) -> Result[String, String] in s { Ok(s) }\nfn main(s: String) -> Result[u64, String] in s { let _ = part(s)?\nOk(1) }",
     );
     let body = &d.bodies[d.entry.0 as usize];
-    let relation = |ty: hirsel_types::TypeId| d.types.get(ty).unwrap().modes.relation.clone();
+    let relation = |ty: hirsel_types::TypeId| types.get(ty).unwrap().modes.relation.clone();
     // OWN-8: both payload places of the `in s` carrier keep its bound.
     let payloads: Vec<_> = (0..body.places.len())
         .filter(|&i| {

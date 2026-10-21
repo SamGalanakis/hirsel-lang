@@ -89,7 +89,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v6\" 7"));
+        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v7\" 7"));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -165,17 +165,19 @@ fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
         let other = text.replacen(
-            "(Header \"hirsel.tir.export.v6\" 7",
-            "(Header \"hirsel.tir.export.v6\" 8",
+            "(Header \"hirsel.tir.export.v7\" 7",
+            "(Header \"hirsel.tir.export.v7\" 8",
             1,
         );
         assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v6", "hirsel.tir.export.v0", 1);
+        let other = text.replacen("hirsel.tir.export.v7", "hirsel.tir.export.v0", 1);
         assert_eq!(import(&other).unwrap_err().at, "header.format");
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
         expected.compiler_version.push_str("-other");
-        let error = hirsel_proof_export::import(&text, &expected).unwrap_err();
+        let error =
+            hirsel_proof_export::import(&text, &expected, &hirsel_types::TypeInterner::new(None))
+                .unwrap_err();
         assert_eq!(error.at, "header.environment", "{error}");
     });
 }
@@ -210,7 +212,7 @@ fn a_fingerprint_forged_at_every_use_is_refused_by_re_derivation() {
                 signature.public.fingerprint = forged_hash;
             }
             for dependency in &mut signature.dependencies {
-                if dependency.definition == add {
+                if dependency.definition.path() == &add {
                     dependency.fingerprint = forged_hash;
                 }
             }
@@ -247,7 +249,7 @@ fn a_fact_helper_and_an_owner_view_re_derive() {
         assert_eq!(
             helper.dependencies,
             [hirsel_types::SignatureDependency {
-                definition: owner.path.clone(),
+                definition: hirsel_syntax::DefId::intern(&owner.path),
                 fingerprint: owner.public.fingerprint,
             }]
         );
@@ -746,7 +748,7 @@ fn a_recursive_type_group_round_trips_with_its_group_keys() {
             let section = export
                 .signatures
                 .iter()
-                .find(|s| s.public.definition == named(name))
+                .find(|s| s.public.definition == hirsel_syntax::DefId::intern(&named(name)))
                 .unwrap_or_else(|| panic!("no signature for {name}"));
             assert!(section.public.metadata.recursive_group.is_some(), "{name}");
         }

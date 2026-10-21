@@ -79,7 +79,6 @@ impl Builder<'_, '_> {
             self.decisions,
             hirsel_types::NameSite::Expression(clause.expression),
             result,
-            self.types,
         )?;
         for (ordinal, parameter) in clause.parameters.iter().enumerate() {
             let place = child.roots[child.body.parameters[ordinal].0 as usize];
@@ -555,7 +554,7 @@ impl Builder<'_, '_> {
                 if rows.next().is_some() {
                     return self.error(span, "duplicate owned replacement content type");
                 }
-                if self.input.checked.types.get(content).is_none() {
+                if self.types.get(content).is_none() {
                     return self.error(span, "invalid owned replacement content type");
                 }
                 match live {
@@ -1347,7 +1346,7 @@ impl Builder<'_, '_> {
                 let propagated = if propagated.modes.relation.is_global() {
                     self.body.result
                 } else {
-                    self.types.push(propagated)
+                    self.types.intern(propagated)
                 };
                 let failure = self.cleanup();
                 let operand = self.consume(error);

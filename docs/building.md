@@ -75,6 +75,60 @@ versioned directories keeps those links intact. `-o` also accepts JSON output.
 Std's manifest publishes core registry entries and std declarations together
 through this same renderer.
 
+## The resident compiler
+
+`check`, `build` and `run` start a compiler server for the workspace on demand.
+It keeps the loaded program and query results between commands. A body edit
+reuses callers checked against the same declared signatures; a signature edit
+invalidates the definitions that read it. Diagnostics use the current source
+positions, including when an item moves.
+
+```sh
+hirsel serve --workspace . --idle 900  # foreground server, seconds until idle exit
+hirsel check app/hirsel.json          # use the workspace server
+hirsel check --watch app/hirsel.json  # check after edits until interrupted
+HIRSEL_DAEMON=off hirsel check app/hirsel.json  # a fresh compiler process
+```
+
+A workspace is the nearest ancestor of the entry with a `.git` file or
+directory, or the entry's directory outside a checkout. Its socket lives in a
+user-private directory under `$XDG_RUNTIME_DIR` (or the system temporary
+directory). `HIRSEL_SERVE_IDLE` sets the default idle timeout, in seconds;
+`--idle` overrides it. A busy server lets the client compile in its own
+process. Commands with `--timings` or `--mem-usage` run in their own process,
+as do programs reading a terminal. A client with different compiler code,
+environment or file creation permissions uses a fresh process.
+
+Definition results also persist under `$XDG_CACHE_HOME/hirsel/results-v2`
+(or `$HOME/.cache/hirsel/results-v2`). A new process verifies the recorded
+signature, lookup, representation and execution reads before using a result.
+Lowered TIR carries the validator's own recorded reads; missing or stale
+validation evidence runs V before use. A corrupt entry is a cache miss.
+
+One-shot compiler fronts release checked and analyzed bodies on publication.
+Their summaries, diagnostics and dependency receipts remain cached. Library
+hosts can select `Compiler::with_retention(Retention::Resident)` to retain front
+bodies; resident `Session` instances do so. This choice changes retention and
+recomputation, not program output.
+
+Library hosts can supply `CompileConfig` through `Compiler::with_config`,
+`QueryEngine::with_config` or `Session::open_configured`. It selects jobs,
+verification, retention, lowering, the result-store provider and verification,
+and total `hold_bytes`. The default budget is min(256 MiB, 10% of
+`HIRSEL_MEMORY_LIMIT`); explicit zero disables retained holds. Active evaluation
+artifacts remain in-flight memory. A configured Compiler is Clone, sharing its
+provider across fresh sessions. Use `LoadedProgram::check_configured` to select
+its configured lowering policy, or `check(policy)` for an explicit override.
+Native object storage uses the driver's existing separate provider.
+
+`HIRSEL_RESULTS` selects `dir@1` (the default), `mem@1`, `none@1` or `sim@1`;
+`HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
+recomputes disk hits and compares their canonical bytes. `--verify-cache` on
+check, build and run selects the same policy and bypasses resident dispatch.
+Use `none@1` with
+`HIRSEL_DAEMON=off` for a cache-free reference check. Source snapshots are
+renewed from disk results after 64 edited revisions to bound retained history.
+
 ## Build and launch a program
 
 ```sh
@@ -92,7 +146,8 @@ LLVM O2. `--lto` explicitly requests whole-module LLVM O2;
 it cannot be combined with `--debug` or `--backend cranelift`. Combining
 `--release` with `--backend cranelift` is refused. The backends' own
 IR verifiers (LLVM's module verifier, Cranelift's `enable_verifier`) run only with
-every-stage validation (`HIRSEL_VALIDATE_STAGES=1`) and in
+the explicit `--validate-stages` policy (or the harness default
+`HIRSEL_VALIDATE_STAGES=1`) and in
 compilers built with debug assertions, as every test build is.
 
 ### What a native build needs
@@ -577,11 +632,11 @@ each). On a drive without power-loss protection a barrier commonly takes millise
 expect seconds for the same program. Requests that park (network, process, stdin and timer
 waits) share barriers through group commit.
 
-## The std precheck
+## The std image
 
 std is part of the toolchain, so it is checked once, when the toolchain is built,
-rather than by every program that uses it. `hirsel precheck` checks a package
-completely, as the only dependency of an empty program, and writes its *precheck*:
+rather than by every program that uses it. `hirsel image` checks a package
+completely, as the only dependency of an empty program, and writes its *std image*:
 each definition's lowered, validated TIR, semantic-revision node and completed
 native source audit, with compile-time substitutions and constant values. Native
 builds reuse these products without repeating H and modes for std.
@@ -593,32 +648,35 @@ bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
   //:hirsel-toolchain --show-full-simple-output)"
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
-install -m 644 "$bundle/hirsel-std.precheck" "$HOME/.local/bin/hirsel-std.precheck"
+install -m 644 "$bundle/hirsel-std.image" "$HOME/.local/bin/hirsel-std.image"
+cp -R "$bundle/hirsel-std.objects" "$HOME/.local/bin/"
 install -d "$HOME/.local/bin/stdlib"
 cp -R "$bundle/stdlib/std@1" "$HOME/.local/bin/stdlib/"
 ```
 
-`//:hirsel-toolchain` produces a directory containing the executable, its precheck
-and the matching `stdlib/std@1` source tree. Keep them together when installing. Its executable
-finds its sibling precheck immediately, including after installation. Plain
+`//:hirsel-toolchain` produces a directory containing the executable, image,
+object seed and matching `stdlib/std@1` source tree. Keep them together when installing.
+Its executable finds its sibling std image immediately, including after installation. Plain
 `cargo build` users create that sibling with one command from the repository root
 (use `target/release/hirsel` after `cargo build --release`):
 
 ```sh
-tools/capped target/debug/hirsel precheck stdlib/std@1/hirsel.json -o target/debug/hirsel-std.precheck
+tools/capped target/debug/hirsel image stdlib/std@1/hirsel.json -o target/debug/hirsel-std.image
 ```
 
-`hirsel` loads `$HIRSEL_PRECHECK`, or else `hirsel-std.precheck` beside its own
-executable. A program whose std matches the precheck skips checking std: with a
-release CLI, a hello world that uses std reaches `main` in about 0.5 s instead of
-4 s. A precheck is keyed by the compiler's identity (a digest of the sources of
-every crate the compiler is built from, `crates/hirsel-driver/build.rs`), std's
-sources and manifest, and the compile-time limits. Any difference means it is
-not used and std is checked from source as before, so a stale precheck only costs
-time; rebuild it after rebuilding `hirsel` or editing std. `--verbose` (any
-command) says on stderr why a dependency was checked from source. `hirsel
-precheck` refuses a package with any diagnostic. Diagnostics, semantic program
-revisions and replay identity are the same with and without a precheck.
+`hirsel` maps `$HIRSEL_IMAGE`, or else `hirsel-std.image` beside its own
+executable. A matching image supplies std's declaration index, normalized
+signatures and private views without parsing std. Its canonical type rows are
+shared by sessions; per-definition TIR, semantic nodes, audits and constants
+are decoded only when requested. A diagnostic or compile-time operation that
+needs syntax parses the corresponding source on demand.
+
+The image key binds the compiler identity, std's source contents and closure
+manifests, the core registry revision and compile-time limits. A stale host-selected
+image is rebuilt from source and replaced atomically. If rebuilding fails or the
+image is absent, the normal source check supplies the result; `--verbose` explains
+fallbacks. `hirsel image` refuses any diagnostic. Diagnostics, semantic program
+revisions and replay identity agree with checking from source.
 
 ## Compile timings
 
@@ -640,31 +698,45 @@ The report keeps three measures apart (`hirsel_intern::timings`):
   time they cover; `(untimed)` is the rest of the command's wall time (CLI
   startup, and the program's own execution under `run` and `test`). Only
   intervals add up. Today's driver maps onto them as follows:
-  - `image open`: reading and decoding the std precheck;
+  - `image open`: reading and decoding the std image;
   - `S0`: loading the package graph and sources, parsing, publishing std's
     declarations into the session, and the program check's own steps;
   - `parallel`: checking each source file's definitions and lowering the
     program's reachable closure, which drive each definition's resolve,
     check, modes, lowering and V;
-  - `merge`: GEN-5, publishing checked packages and dropping the session;
+  - `front prepare`: serial preparation of immutable P and S1 worker inputs,
+    including signature snapshot normalization; this pauses its enclosing interval;
+  - `GEN-5`: the whole-program generic-instance growth verdict;
+  - `merge`: publishing checked packages and dropping the session;
   - `plan`: exporting, importing and adapting the native input;
   - `units`: each unit's LIR import, placement, RC, reuse, cleanup lowering,
     LIR validation and code generation;
   - `link`: the toolchain, the link and the output copy;
-  - `S1` and `parallel2` stay 0 until their driver steps exist.
+  - `S1`: dynamic compile-time Lower frontiers and canonical registration rounds;
+  - `parallel2`: remaining ordinary lowering and staged-instance completion.
 - **Phases** are work time (wall) and CPU time inside each phase, excluding
   the phases nested in it, summed over every thread, with their entry counts.
   Engine bookkeeping for a query (cache validation, read recording) counts as
   that query's phase. `verify in comptime` is the part of `verify` run inside
   compile-time evaluation. Phases overlap the intervals and are not added up.
+  `lex` times tokenization alone. `parse` excludes nested lexer work;
+  `declarations` times declaration indexing, excluding nested signature phases.
+  `signature normalize` times header normalization alone, excluding header
+  resolution and nested queries. `signatures` is the remaining query work.
+  Broad source/declaration startup is the `S0` interval, not lexer work.
 - **Wait** is time threads spend waiting for each other; 0 while compiling is
   single-threaded.
 
 Counts: `definitions` (bodies checked), `units` (native units built), `V runs`
 (full V runs; a definition V already passed is skipped), `lowered` (bodies
 lowered; under `check`, the bodies lowered at check time), `recomputes`
-(per-definition queries computed rather than reused) and store and object
-hits and misses (0 until those caches exist).
+(per-definition queries computed rather than reused), `invalidated by <read>`
+(memos the engine marked dirty because one input of that read kind changed:
+signature, lookup, name set, representation, executed body, cited text,
+declaration candidates and the rest of the engine's typed reads), `mode memo
+queries` and `mode memo hits` (the proofs and comparisons the mode passes ask
+their query's `ContextMemo`, and the entries it reused, interior sub-proofs
+included) and store and object hits and misses (0 until those caches exist).
 
 `runner` reports the native runs made as program images in a runner (`image
 runs`), how many of those images were already cached (`cached images`), and each
@@ -683,11 +755,18 @@ which compiler-bench reads:
  "runner":{"image_runs":1,"cached_images":0,"fallbacks":[]}}
 ```
 
+S1 root task counts include registration retries and speculative suffixes.
+`S1 discarded roots` counts outcomes withheld by prefix barriers, not their
+CPU cost; `S1 registration rounds` counts restarted rounds. `S1 scalar roots`
+exposes compatibility evaluation, including cached constant revalidation.
+Physical Lower attempt/adapter counters include helpers and discarded work.
+These timing names are additive schema-1 fields; artifact identities are unchanged.
+
 Every interval, phase and count appears, in that order, including those still
 0. `crates/hirsel-cli/tests/cli/timings.rs` checks the schema.
 
 `--mem-usage` prints the process's peak RSS and the heap bytes held at the end
-of the command, largest first: the decoded std precheck (`precheck`), each
+of the command, largest first: the decoded std image (`std image`), each
 table of the session's query engine as it is dropped (`engine: ...`), then the
 shared package cache (std's image) and V's retained signature inputs. A table
 still shared with the package cache frees nothing when the engine drops, so
@@ -703,3 +782,36 @@ an atomic update to every allocation, so time a run without `--mem-usage`.
 reports computed authority, weight, public API exposure, replay constraints and
 health. See [Dependency cards for agents](dependency-cards.md) for field semantics,
 cache reuse and optional verified code-store provenance.
+
+## Native unit objects
+
+Native builds lower and emit units on `HIRSEL_JOBS` workers (the host's available
+parallelism by default). `HIRSEL_OBJECTS=dir@1` is the default writable store;
+it retains checksummed fragments under
+`$XDG_CACHE_HOME/hirsel/objects-v1/<target>-<backend>-<opt>` (or `$HOME/.cache`),
+and `sim@1` keeps them in memory. `HIRSEL_OBJECTS=none@1` disables writable
+objects; also set `HIRSEL_STD_OBJECTS=none` for a completely uncached native
+control. Each partition has a 4 GiB cap with least-recently-used eviction. The
+first publication of each store handle collects old entries; later publications
+collect every 64 MiB (or the configured cap, if smaller), bounding slack per
+active writer. Result records use `HIRSEL_RESULTS=dir@1` by default, with a
+2 GiB cap and the same collection policy; `HIRSEL_RESULTS=none@1` disables them.
+Fresh user caches contain no other program's results. Only the installed
+read-only std products can serve another program's first build.
+
+Object and import keys describe the unit's
+content and dependencies. Warm imports replay layout, ABI and library requests;
+warm object hits skip placement, RC, reuse, Ready validation and emission.
+`--validate-stages` always imports and recomputes object hits, comparing the
+fragments with fresh emission.
+
+The toolchain bundle also carries `hirsel-std.objects`, a read-only seed of std's
+non-generic runtime closure for the host. The same keys check it on a program's
+first build. `HIRSEL_STD_OBJECTS=<directory>` selects another seed;
+`HIRSEL_STD_OBJECTS=none` disables it. Misses use the selected writable store.
+`hirsel seed-objects <package manifest.json> -o <directory>` creates a seed without
+linking or executing the package, and reports the generic instances its roots
+reach. Install the `hirsel-std.objects` directory beside `hirsel` with its precheck.
+
+The timing counts `native imports`, `import hits` and `import misses` distinguish
+fresh SSA import from replay; `units` counts the placement-to-Ready pipelines run.

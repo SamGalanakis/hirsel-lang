@@ -16,12 +16,25 @@ pub struct ProfileSource {
     /// text, not into this file, so every one of them is reported there, as a
     /// macro's expansion is reported at its call.
     pub generated: Option<u32>,
+    /// The original definition's canonical sources, including generated text.
+    pub anchors: Vec<(hirsel_span::SourceFile, u32)>,
 }
 impl ProfileSource {
     pub const COMPILATION_DIRECTORY: &str = hirsel_span::SourceFile::COMPILATION_DIRECTORY;
     /// The package-qualified name artifacts carry (`SourceFile::logical_path`).
     pub fn logical_path(&self) -> &std::path::Path {
         self.file.logical_path()
+    }
+    pub fn source(&self, source: u32) -> Option<(&hirsel_span::SourceFile, u32)> {
+        self.anchors
+            .get(source as usize)
+            .map(|(file, base)| (file, *base))
+    }
+    pub fn site_location(&self, site: SiteRange) -> Option<hirsel_span::LineColumn> {
+        let (file, base) = self.source(site.source)?;
+        file.text()
+            .get(base.checked_add(site.start)? as usize..base.checked_add(site.end)? as usize)?;
+        file.location(base.checked_add(site.start)?)
     }
     /// The line and column of an item-relative site offset.
     pub fn location(&self, site: u32) -> Option<hirsel_span::LineColumn> {
@@ -57,4 +70,22 @@ pub fn terminator_site(unit: &LirUnit<Ready>, block: BlockId) -> SiteRange {
         _ => unit.blocks[block.index()].anchor,
     };
     unit.tables.source_anchors[anchor.index()].site
+}
+
+/// Resolved source dependencies for instrumentation that embeds paths and lines.
+/// Ordinary debug objects bind these only at link, never in cached unit code.
+pub fn dependency_digest(sources: &ProfileSources) -> hirsel_syntax::ContentHash {
+    let mut parts = Vec::new();
+    for (definition, source) in sources {
+        parts.push(definition.fingerprint().0.to_vec());
+        for (file, base) in &source.anchors {
+            parts.push(file.logical_path().to_string_lossy().as_bytes().to_vec());
+            parts.push(file.text().as_bytes().to_vec());
+            parts.push(base.to_le_bytes().to_vec());
+        }
+    }
+    hirsel_syntax::ContentHash::of_parts(
+        "hirsel.resolved-profile-sources.v1",
+        parts.iter().map(Vec::as_slice),
+    )
 }

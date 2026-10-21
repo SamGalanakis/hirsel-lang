@@ -20,11 +20,11 @@ impl Recorder<'_> {
     /// `definition`'s recursive type group, or None outside one: a type that
     /// names only itself is checked as its own recursion, and a cycle through
     /// an alias stays the alias error.
-    pub(super) fn type_group(&mut self, definition: &DefPath) -> Option<Rc<TypeGroup>> {
+    pub(super) fn type_group(&mut self, definition: &DefPath) -> Option<Arc<TypeGroup>> {
         if let Some(group) = self.groups.get(definition) {
             return group.clone();
         }
-        let group = self.find_type_group(definition).map(Rc::new);
+        let group = self.find_type_group(definition).map(Arc::new);
         for member in group.iter().flat_map(|g| g.members.iter()) {
             self.groups.insert(member.clone(), group.clone());
         }
@@ -188,7 +188,7 @@ impl Recorder<'_> {
         };
         for member in &group.members {
             if let Some(text) = self.engine.implementation_hash(member) {
-                self.representations.insert(member.clone(), text);
+                self.observed.representations.insert(member.clone(), text);
             }
         }
         let adapter = self
@@ -200,7 +200,18 @@ impl Recorder<'_> {
         let mut members = vec![];
         for member in group.members.iter().filter(|m| *m != definition) {
             let candidates = self.engine.definition_items(member)?;
-            let signature = adapter.staged_signature(&candidates, self, stage)?;
+            let (types, memo) = (self.engine.types.clone(), self.engine.memo.clone());
+            let declarations = self.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let signature = adapter.staged_signature(
+                &types,
+                &memo,
+                &candidates,
+                &declarations,
+                &mut products,
+                self,
+                stage,
+            )?;
             members.push(Arc::new(signature));
         }
         Ok(RecursiveGroup {

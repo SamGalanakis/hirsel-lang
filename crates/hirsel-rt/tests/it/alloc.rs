@@ -1141,7 +1141,7 @@ fn sequence_elements_start_where_the_layout_places_them() {
     use hirsel_lir::layout_types::TargetSpec;
     use hirsel_types::Primitive;
     let target = TargetSpec::x86_64_unknown_linux_gnu();
-    let mut ty = support::schema::Ty::default();
+    let mut ty = support::schema::ty();
     let byte = ty.p(Primitive::U8);
     let owners = Owners::default();
     let mut builder = LayoutBuilder::new(&target, &owners);

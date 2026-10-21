@@ -104,11 +104,11 @@ fn annotated_nested_receivers_keep_their_declared_payload_contract() {
         .find(|row| row.expression == argument)
         .unwrap()
         .ty;
-    let TypeKind::Box(payload) = checked.types.get(actual).unwrap().kind else {
+    let TypeKind::Box(payload) = engine.types().get(actual).unwrap().kind else {
         panic!()
     };
     assert_eq!(
-        checked.types.get(payload).unwrap().modes.uniqueness,
+        engine.types().get(payload).unwrap().modes.uniqueness,
         Uniqueness::Aliased
     );
 }

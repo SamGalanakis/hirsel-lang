@@ -24,7 +24,7 @@ SELF = 'tools/arch_deletions.py'
 ENGINE = 'crates/hirsel-engine/src'
 
 # (lane, item, kind, spec). Kinds: path; word (whole word, crates/ and tools/);
-# text (literal, optionally under a path); field (struct, field); method (type,
+# text (literal, optionally under a path); field (struct, field, optional path); method (type,
 # method); manual (a note).
 ENTRIES = [
     ('item-syntax', 'queries/positions.rs', 'path', f'{ENGINE}/queries/positions.rs'),
@@ -36,7 +36,8 @@ ENTRIES = [
     ('arch-engine', 'ValidationWalk', 'word', 'ValidationWalk'),
     ('arch-engine', 'with_validation_walk', 'word', 'with_validation_walk'),
     ('arch-engine', 'the visited set in valid_node', 'manual', ''),
-    ('arch-engine', 'source_revision', 'word', 'source_revision'),
+    # The removed production counter; frozen-revision tests also use this local name.
+    ('arch-engine', 'source_revision', 'text', ('source_revision', ENGINE)),
     ('arch-engine', 'PackageProof', 'word', 'PackageProof'),
     ('arch-engine', 'QueryEngine.reads', 'field', ('QueryEngine', 'reads')),
     ('arch-engine', 'Cached', 'text', ('struct Cached', ENGINE)),
@@ -84,7 +85,8 @@ ENTRIES = [
     ('arch-types', 'fresh_id', 'word', 'fresh_id'),
     ('arch-types', 'provenance and the encode/decode sessions (store.rs)', 'path',
      'crates/hirsel-types/src/store.rs'),
-    ('arch-types', 'Importer', 'word', 'Importer'),
+    # The type transport importer, not RC's separate TIR-to-LIR importer.
+    ('arch-types', 'Importer', 'text', ('Importer', 'crates/hirsel-types')),
     ('arch-types', 'import_type', 'word', 'import_type'),
     ('arch-types', 'substitute_type', 'word', 'substitute_type'),
     ('arch-types', 'substitute_type_in_place', 'word', 'substitute_type_in_place'),
@@ -95,7 +97,8 @@ ENTRIES = [
     ('arch-types', 'nominal height', 'text', ('fn height(store: &TypeStore', 'crates/hirsel-types')),
     ('arch-types', 'nominal embedding', 'text', ('fn embedding(older: &TypeStore', 'crates/hirsel-types')),
     ("arch-types", "checker-fixes' Shape memo", 'manual', ''),
-    ('arch-types', 'Signature.types', 'field', ('Signature', 'types')),
+    # The shared semantic Signature; LLVM has its own physical ABI Signature.
+    ('arch-types', 'Signature.types', 'field', ('Signature', 'types', 'crates/hirsel-types/src')),
     ('arch-types', 'the store in InstanceEdge', 'field', ('InstanceEdge', 'types')),
     ('arch-types', 'the TypeStore inside InstanceBodies entries', 'manual', ''),
     ('arch-types', 'the types.clone() sites', 'text', ('types.clone()', 'crates')),
@@ -116,7 +119,8 @@ ENTRIES = [
     ('arch-native', 'per-unit DWARF and source paths in unit code', 'manual', ''),
     ('arch-native', 'the RC barrier around Finalizers::new (stages.rs:336)', 'manual', ''),
     ('arch-native', "import_native_input's second export, SyntaxFile compares and V rerun", 'manual', ''),
-    ('rc-state', 'the three BTreeMap<Vec<Step>, Tri>', 'text', ('BTreeMap<Vec<Step>, Tri>', 'crates/hirsel-rc')),
+    # Design section 2 names the three insertion-state maps, not import SlotState.
+    ('rc-state', 'the three BTreeMap<Vec<Step>, Tri>', 'text', ('BTreeMap<Vec<Step>, Tri>', 'crates/hirsel-rc/src/insert.rs')),
     ('rc-state', 'the double validate_rc', 'manual', ''),
     ('arch-image', 'Precheck::read', 'text', ('Precheck::read', 'crates')),
     ('arch-image', 'HIRPCHK2', 'word', 'HIRPCHK2'),
@@ -131,10 +135,10 @@ def grep(args, paths):
     return out.stdout.splitlines()
 
 
-def struct_blocks(name):
-    """(file, body) of every `struct <name> {` in crates/."""
+def struct_blocks(name, path="crates"):
+    """(file, body) of every `struct <name> {` under path."""
     pattern = re.compile(r'\bstruct ' + re.escape(name) + r'\b[^{;]*\{')
-    for hit in grep(['-l', '-P', r'\bstruct ' + re.escape(name) + r'\b'], ['crates']):
+    for hit in grep(['-l', '-P', r'\bstruct ' + re.escape(name) + r'\b'], [path]):
         text = (ROOT / hit).read_text()
         for match in pattern.finditer(text):
             depth, i = 1, match.end()
@@ -166,9 +170,10 @@ def survivors(kind, spec):
         text, path = spec
         return [h.split(':', 2)[0] + ':' + h.split(':', 2)[1] for h in grep(['-F', text], [path])]
     if kind == 'field':
-        struct, field = spec
+        struct, field, *scope = spec
+        path = scope[0] if scope else 'crates'
         field_re = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?' + re.escape(field) + r'\s*:', re.M)
-        return [f'{file}: {struct}.{field}' for file, body in struct_blocks(struct) if field_re.search(body)]
+        return [f'{file}: {struct}.{field}' for file, body in struct_blocks(struct, path) if field_re.search(body)]
     if kind == 'method':
         type_, method = spec
         method_re = re.compile(r'\bfn ' + re.escape(method) + r'\b')

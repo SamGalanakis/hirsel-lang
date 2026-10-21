@@ -11,7 +11,7 @@ use hirsel_lir::layout_types::*;
 use hirsel_lir::operation::{NativeType, OperationArgument as A, OperationDeclarations};
 use hirsel_lir::stage::{Stage, Value};
 use hirsel_lir::validate::{Inputs, ViolationKind as K};
-use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
+use hirsel_syntax::{ContentHash, DefId, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::RepresentationRecord;
 use hirsel_types::*;
 use std::sync::Arc;
@@ -28,8 +28,8 @@ fn path(name: &str) -> DefPath {
     })
 }
 
-fn ty(store: &mut TypeStore, kind: TypeKind) -> TypeId {
-    store.push(Type {
+fn ty(store: &TypeInterner, kind: TypeKind) -> TypeId {
+    store.intern(Type {
         kind,
         ..Type::unit()
     })
@@ -55,21 +55,20 @@ fn function(
     }
 }
 
-pub(super) fn signature(name: &str, types: TypeStore, f: FunctionType) -> SignatureRef {
+pub(super) fn signature(name: &str, types: &TypeInterner, f: FunctionType) -> SignatureRef {
     let mut s = Signature {
         metadata: Default::default(),
-        definition: path(name),
-        types,
+        definition: DefId::intern(&path(name)),
         kind: SignatureKind::Function(f),
         fingerprint: Default::default(),
     };
-    s.fingerprint = encoding::fingerprint(&s, &[]).unwrap();
+    s.fingerprint = encoding::fingerprint(types, &s, &[]).unwrap();
     Arc::new(s)
 }
 
 pub(super) fn id(s: &Signature) -> OperationId {
     OperationId {
-        definition: s.definition.clone(),
+        definition: s.definition.path().clone(),
         declaration_digest: s.fingerprint,
     }
 }
@@ -88,35 +87,28 @@ pub(super) fn scalar_signature(
     params: &[(PassingMode, Primitive)],
     result: Option<Primitive>,
 ) -> SignatureRef {
-    let mut store = TypeStore::default();
+    let store = support::session();
     let parameters = params
         .iter()
         .map(|(passing, p)| {
-            let t = ty(&mut store, TypeKind::Primitive(*p));
+            let t = ty(&store, TypeKind::Primitive(*p));
             parameter(t, *passing)
         })
         .collect();
     let result = match result {
-        Some(p) => ty(&mut store, TypeKind::Primitive(p)),
-        None => store.push(Type::unit()),
+        Some(p) => ty(&store, TypeKind::Primitive(p)),
+        None => store.intern(Type::unit()),
     };
-    signature(name, store, function(parameters, result, vec![]))
+    signature(name, &store, function(parameters, result, vec![]))
 }
 
-fn nominal(
-    owners: &mut Owners,
-    name: &str,
-    generics: Vec<GenericParameter>,
-    store: TypeStore,
-    shape: TypeId,
-) {
+fn nominal(owners: &mut Owners, name: &str, generics: Vec<GenericParameter>, shape: TypeId) {
     owners.nominals.insert(
-        path(name),
+        DefId::intern(&path(name)),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: path(name),
             representation_revision: ContentHash::of_bytes(name.as_bytes()),
             generics,
-            types: store,
             private_shape: shape,
             layout_promises: Layout::default(),
             resource: false,
@@ -131,19 +123,19 @@ pub(super) fn ready_signature(result: bool) -> (SignatureRef, Owners) {
         return (scalar_signature("fixture", &[], None), Owners::default());
     }
     let mut owners = Owners::default();
-    let mut store = TypeStore::default();
-    let shape = ty(&mut store, TypeKind::Primitive(Primitive::I64));
-    nominal(&mut owners, "ResultCell", vec![], store, shape);
-    let mut store = TypeStore::default();
+    let store = support::session();
+    let shape = ty(&store, TypeKind::Primitive(Primitive::I64));
+    nominal(&mut owners, "ResultCell", vec![], shape);
+    let store = support::session();
     let result = ty(
-        &mut store,
+        &store,
         TypeKind::Named {
-            definition: path("ResultCell"),
+            definition: DefId::intern(&path("ResultCell")),
             arguments: Default::default(),
         },
     );
     (
-        signature("fixture", store, function(vec![], result, vec![])),
+        signature("fixture", &store, function(vec![], result, vec![])),
         owners,
     )
 }
@@ -152,17 +144,17 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
     let mut owners = Owners::default();
     for (name, resource) in [("Net", false), ("Stream", true)] {
         owners.nominals.insert(
-            path(name),
+            DefId::intern(&path(name)),
             OwnerRepresentation::Handle {
                 revision: ContentHash::of_bytes(name.as_bytes()),
                 resource,
             },
         );
     }
-    let mut store = TypeStore::default();
-    let word = ty(&mut store, TypeKind::Primitive(Primitive::U32));
+    let store = support::session();
+    let word = ty(&store, TypeKind::Primitive(Primitive::U32));
     let error = ty(
-        &mut store,
+        &store,
         TypeKind::Variant(
             vec![Variant {
                 name: "Io".into(),
@@ -171,18 +163,18 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
             .into(),
         ),
     );
-    nominal(&mut owners, "NetError", vec![], store, error);
-    let mut store = TypeStore::default();
+    nominal(&mut owners, "NetError", vec![], error);
+    let store = support::session();
     let t = ty(
-        &mut store,
+        &store,
         TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
     );
     let e = ty(
-        &mut store,
+        &store,
         TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(1))),
     );
     let result = ty(
-        &mut store,
+        &store,
         TypeKind::Variant(
             vec![
                 Variant {
@@ -205,31 +197,30 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
         &mut owners,
         "Result",
         vec![generic("T"), generic("E")],
-        store,
         result,
     );
     let mut registry = OperationRegistry {
         owners,
-        ..Default::default()
+        ..support::registry()
     };
     let mut ids = Vec::new();
     for intrinsic in [false, true] {
-        let mut store = TypeStore::default();
+        let store = support::session();
         let net = ty(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: path("Net"),
+                definition: DefId::intern(&path("Net")),
                 arguments: Default::default(),
             },
         );
         let stream = ty(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: path("Stream"),
+                definition: DefId::intern(&path("Stream")),
                 arguments: Default::default(),
             },
         );
-        let byte = ty(&mut store, TypeKind::Primitive(Primitive::U8));
+        let byte = ty(&store, TypeKind::Primitive(Primitive::U8));
         let mut arguments = vec![GenericArgument::Type(byte)];
         if intrinsic {
             arguments.push(GenericArgument::Size(Size::Parameter(
@@ -237,7 +228,7 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
             )));
         }
         let buffer = ty(
-            &mut store,
+            &store,
             TypeKind::Builtin {
                 kind: if intrinsic {
                     BuiltinType::Inline
@@ -247,18 +238,18 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
                 arguments: arguments.into(),
             },
         );
-        let n = ty(&mut store, TypeKind::Primitive(Primitive::U64));
+        let n = ty(&store, TypeKind::Primitive(Primitive::U64));
         let error = ty(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: path("NetError"),
+                definition: DefId::intern(&path("NetError")),
                 arguments: Default::default(),
             },
         );
         let result = ty(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: path("Result"),
+                definition: DefId::intern(&path("Result")),
                 arguments: vec![GenericArgument::Type(n), GenericArgument::Type(error)].into(),
             },
         );
@@ -273,7 +264,7 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
             } else {
                 "net.read"
             },
-            store,
+            &store,
             function(
                 vec![
                     parameter(net, PassingMode::Borrow),
@@ -437,7 +428,6 @@ fn copying_the_declared_key_does_not_hide_wrong_parameter_layouts() {
         .derive(&read, &[], &TargetSpec::x86_64_unknown_linux_gnu())
         .unwrap();
     table.fn_abis[0].key = expected.key;
-    unit.header.layouts = table.digest();
     unit.tables.operations[0] = read;
     unit.tables.calls[0].operation_arguments.clear();
     assert_eq!(
@@ -460,14 +450,14 @@ fn a_size_generic_operation_cannot_use_another_instances_abi() {
 
 #[test]
 fn a_type_generic_operation_cannot_use_another_instances_abi() {
-    let mut store = TypeStore::default();
+    let store = support::session();
     let t = ty(
-        &mut store,
+        &store,
         TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
     );
     let s = signature(
         "identity",
-        store,
+        &store,
         function(
             vec![parameter(t, PassingMode::Borrow)],
             t,
@@ -480,7 +470,7 @@ fn a_type_generic_operation_cannot_use_another_instances_abi() {
     let operation = id(&s);
     let registry = OperationRegistry {
         signatures: [(operation.clone(), s)].into(),
-        ..Default::default()
+        ..support::registry()
     };
     let (mut unit, table) = fixture(
         &registry,
@@ -557,6 +547,5 @@ fn canonical_and_typed_scalar_children_share_the_declared_operation_abi() {
             record.key.instance = Some(ContentHash::of_bytes(b"typed scalar key"));
         }
     }
-    unit.header.layouts = table.digest();
     assert_eq!(check(&unit, &table, &registry), []);
 }

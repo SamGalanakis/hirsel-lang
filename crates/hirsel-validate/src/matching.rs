@@ -89,7 +89,7 @@ impl Checker<'_> {
     pub(super) fn match_tables(&mut self) {
         for table in &self.body.matches {
             let errors_before = self.errors.len();
-            let mut store = self.working_store();
+            let store = self.t;
             let mut guarded = BTreeSet::new();
             let mut pending: Vec<_> = table
                 .arms
@@ -116,7 +116,7 @@ impl Checker<'_> {
                 ) {
                     None
                 } else {
-                    self.layout(&mut store, ty)
+                    self.layout(store, ty)
                 };
                 let valid = match (&pattern.kind, &kind) {
                     (MatchPatternKind::Wildcard, _) => true,
@@ -142,7 +142,7 @@ impl Checker<'_> {
                         MatchPatternKind::Record { definition, fields },
                         Some(TypeKind::Record(fs)),
                     ) => {
-                        self.pattern_owner_matches(&mut store, ty, definition)
+                        self.pattern_owner_matches(store, ty, definition)
                             && fields.iter().all(|(f, _)| (*f as usize) < fs.len())
                     }
                     (
@@ -153,7 +153,7 @@ impl Checker<'_> {
                         },
                         Some(TypeKind::Variant(vs)),
                     ) => {
-                        self.pattern_owner_matches(&mut store, ty, definition)
+                        self.pattern_owner_matches(store, ty, definition)
                             && vs.get(*variant as usize).is_some_and(|v| {
                                 fields.iter().all(|(f, _)| (*f as usize) < v.fields.len())
                             })
@@ -183,14 +183,14 @@ impl Checker<'_> {
                         projection: expected_path.clone(),
                         ..parent.clone()
                     };
-                    let mut ty = self.projection_type(&mut store, &probe, |_, _| None);
+                    let mut ty = self.projection_type(store, &probe, |_, _| None);
                     let inspect = !matches!(
                         child_pattern.kind,
                         MatchPatternKind::Wildcard | MatchPatternKind::Binding { .. }
                     );
                     if inspect {
                         while let Some(TypeKind::Box(payload)) =
-                            ty.and_then(|ty| self.layout(&mut store, ty))
+                            ty.and_then(|ty| self.layout(store, ty))
                         {
                             expected_path.push(Projection::Field(0));
                             ty = Some(payload);
@@ -229,7 +229,7 @@ impl Checker<'_> {
                     node.kind,
                     MatchPatternKind::Wildcard | MatchPatternKind::Binding { .. }
                 ) {
-                    while let Some(TypeKind::Box(payload)) = self.layout(&mut store, ty) {
+                    while let Some(TypeKind::Box(payload)) = self.layout(store, ty) {
                         expected_path.push(Projection::Field(0));
                         ty = payload;
                     }
@@ -246,7 +246,7 @@ impl Checker<'_> {
             if self.errors.len() != errors_before {
                 continue;
             }
-            match self.coverage(table, &mut store) {
+            match self.coverage(table, store) {
                 Ok(true) => (),
                 Ok(false) => self.error(ViolationKind::MatchCoverage),
                 Err(()) => self.error(ViolationKind::MatchToolingLimit {
@@ -299,7 +299,7 @@ impl Checker<'_> {
         }
         false
     }
-    fn pattern_owner_matches(&self, store: &mut TypeStore, ty: TypeId, owner: &DefPath) -> bool {
+    fn pattern_owner_matches(&self, store: &TypeInterner, ty: TypeId, owner: &DefPath) -> bool {
         if let Some(found) = self.pattern_owner(store, ty) {
             return &found == owner;
         }
@@ -323,13 +323,13 @@ impl Checker<'_> {
         };
         !td.resource
             && td.drop.is_none()
-            && td.representation.is_some_and(|repr| {
-                hirsel_types::shape_equal(store, ty, &signature.types, repr).unwrap_or(false)
-            })
+            && td
+                .representation
+                .is_some_and(|repr| store.shape_eq(ty, repr).unwrap_or(false))
     }
-    fn pattern_owner(&self, store: &mut TypeStore, ty: TypeId) -> Option<DefPath> {
+    fn pattern_owner(&self, store: &TypeInterner, ty: TypeId) -> Option<DefPath> {
         match &store.get(ty)?.kind {
-            TypeKind::Named { definition, .. } => Some(definition.clone()),
+            TypeKind::Named { definition, .. } => Some(definition.path().clone()),
             TypeKind::Builtin {
                 kind: BuiltinType::Packed,
                 arguments,
@@ -342,7 +342,7 @@ impl Checker<'_> {
     }
     fn plain_or_copyable(&self, ty: TypeId) -> bool {
         hirsel_types::structural_property(
-            &self.definition.types,
+            self.t,
             ty,
             hirsel_types::StructuralProperty::Copyable,
             &self.generic_declarations(),
@@ -545,7 +545,7 @@ impl Checker<'_> {
         }
         block == target
     }
-    fn coverage(&mut self, table: &MatchTable, store: &mut TypeStore) -> Result<bool, ()> {
+    fn coverage(&mut self, table: &MatchTable, store: &TypeInterner) -> Result<bool, ()> {
         let rows: Vec<Vec<Option<MatchPatternId>>> = table
             .arms
             .iter()

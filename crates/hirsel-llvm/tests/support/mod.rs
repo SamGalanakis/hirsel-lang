@@ -59,7 +59,8 @@ pub fn input() -> InputIdentity {
     }
 }
 
-/// The rules fixtures fail with and their runtime codes.
+/// The rules fixtures fail with and their runtime codes, which glue binds; every rule's
+/// kind is `KIND_BUG`, which units state themselves.
 pub fn failure_codes() -> FailureCodes {
     let mut codes = BTreeMap::new();
     for (rule, kind, code) in [
@@ -67,7 +68,7 @@ pub fn failure_codes() -> FailureCodes {
         ("MEM-3", 1, 103),
         ("MEM-13", 1, 113),
         ("MEM-14", 1, 114),
-        ("LANG-9", 2, 9),
+        ("LANG-9", 1, 9),
     ] {
         codes.insert(rule.to_owned(), FailureCode { kind, rule: code });
     }
@@ -76,19 +77,32 @@ pub fn failure_codes() -> FailureCodes {
 
 pub use hirsel_types::testing::Types;
 
+thread_local! {
+    /// A test's session interner: every row a test builds, owner shapes
+    /// included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<hirsel_types::TypeInterner> =
+        hirsel_types::TypeInterner::new(None);
+}
+
+/// A type builder over this test thread's session interner.
+pub fn session_types() -> Types {
+    Types {
+        store: SESSION.with(|s| s.clone()),
+    }
+}
+
 /// A `@packed` nominal record `Wire { u8, u64, u16 }`.
 pub fn wire_owner(owners: &mut Owners) -> DefPath {
-    let mut t = Types::default();
+    let mut t = session_types();
     let (a, b, c) = (t.p(Primitive::U8), t.p(Primitive::U64), t.p(Primitive::U16));
     let shape = t.record(&[a, b, c]);
     let definition = path("Wire");
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Wire revision"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: Layout {
                 packed: true,
@@ -106,6 +120,8 @@ pub fn wire_owner(owners: &mut Owners) -> DefPath {
 pub struct Table {
     pub target: TargetSpec,
     pub table: LayoutTable,
+    /// `table`'s content keys, which name the glue symbols units import.
+    pub keys: hirsel_lir::LayoutKeys,
     pub layouts: BTreeMap<&'static str, LayoutId>,
     pub abis: BTreeMap<&'static str, FnAbiId>,
     /// The block header layout: a reuse token's.
@@ -149,15 +165,40 @@ impl Default for Schema {
     }
 }
 
+thread_local! {
+    static DECOYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Builds the fixtures `f` makes with unrelated layouts requested before theirs, so
+/// every layout the program names has another `LayoutId` than without.
+pub fn with_decoys<T>(f: impl FnOnce() -> T) -> T {
+    DECOYS.with(|d| d.set(true));
+    let result = f();
+    DECOYS.with(|d| d.set(false));
+    result
+}
+
 impl Schema {
     pub fn new() -> Self {
-        Self {
-            types: Types::default(),
+        let mut schema = Self {
+            types: session_types(),
             owners: Owners::default(),
             named: Vec::new(),
             signatures: Vec::new(),
             environments: Vec::new(),
+        };
+        if DECOYS.with(|d| d.get()) {
+            let t = &mut schema.types;
+            let (u16_, f32_, u8_) = (t.p(Primitive::U16), t.p(Primitive::F32), t.p(Primitive::U8));
+            // Records of scalar types only: a sequence or box brings its own count and
+            // header layouts, which fixtures that find a scalar by kind would pick up.
+            let record = t.record(&[u16_, f32_]);
+            let other = t.record(&[u8_, u16_, u8_]);
+            schema
+                .named
+                .extend([("decoy record", record), ("decoy other", other)]);
         }
+        schema
     }
     /// Declares the environment of closure body `definition` capturing `captures`.
     pub fn environment(
@@ -216,16 +257,19 @@ impl Schema {
             );
         }
         for (name, definition, captures, movable) in &self.environments {
-            let definition = path(definition);
             let shape = EnvironmentShape {
-                definition: &definition,
+                definition: hirsel_syntax::DefId::intern(&path(definition)),
                 body: 0,
-                store: &self.types.store,
                 captures,
                 sizes: &[],
                 movable,
             };
-            layouts.insert(*name, builder.environment(&shape).expect("an environment"));
+            layouts.insert(
+                *name,
+                builder
+                    .environment(&self.types.store, &shape)
+                    .expect("an environment"),
+            );
         }
         let mut abis = BTreeMap::new();
         for &(name, ty, shape) in &self.signatures {
@@ -243,6 +287,7 @@ impl Schema {
         }
         Table {
             target: target.clone(),
+            keys: hirsel_lir::LayoutKeys::new(&table),
             table,
             layouts,
             abis,
@@ -305,16 +350,16 @@ impl<'t> Unit<'t> {
     /// A unit named `name` with the signature `abi`, and its entry block.
     pub fn new(table: &'t Table, name: &str, abi: &str) -> Self {
         let mut lir = LirUnit::<Ready>::new(UnitHeader {
+            source_count: 1,
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: StageKind::Ready,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: hirsel_lir::ir::UnitOrigin::Source,
-            input: input(),
             definition: path(name),
             implementation_revision: revision(name),
             instance: instance(name),
             target: table.table.target,
-            layouts: table.table.digest(),
             abi: table.abi(abi),
         });
         lir.tables.task_domains = 1;
@@ -323,7 +368,11 @@ impl<'t> Unit<'t> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start: 10, end: 20 },
+            site: SiteRange {
+                source: 0,
+                start: 10,
+                end: 20,
+            },
         });
         let mut unit = Self {
             table,
@@ -339,7 +388,11 @@ impl<'t> Unit<'t> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start, end },
+            site: SiteRange {
+                source: 0,
+                start,
+                end,
+            },
         });
         SourceAnchorId(self.builder.unit.tables.source_anchors.len() as u32 - 1)
     }
@@ -655,7 +708,7 @@ impl<'t> Unit<'t> {
         result
     }
 
-    /// A cleanup anchor at a byte range.
+    /// An explicit instruction-drop anchor for this hand-built unit.
     pub fn cleanup_anchor(&mut self, start: u32, end: u32) -> CleanupAnchorId {
         self.builder
             .unit
@@ -663,9 +716,13 @@ impl<'t> Unit<'t> {
             .cleanup_anchors
             .push(CleanupAnchor {
                 body: 0,
-                cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
+                cleanup: INSTRUCTION_DROP,
                 action: 0,
-                site: SiteRange { start, end },
+                site: SiteRange {
+                    source: 0,
+                    start,
+                    end,
+                },
             });
         CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }

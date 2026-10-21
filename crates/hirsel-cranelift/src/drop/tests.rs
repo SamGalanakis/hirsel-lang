@@ -32,7 +32,7 @@ fn path(name: &str) -> DefPath {
 
 fn record(target: &TargetSpec, kind: LayoutKind, size: SizeSpec) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: target.digest(),
@@ -204,25 +204,48 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     let finalizers = BTreeMap::from([(LayoutId(2), instance)]);
     let empty = BTreeSet::new();
     let registry = DescriptorRegistry::new(&table, &finalizers);
+    let keys = hirsel_lir::LayoutKeys::new(&table);
+    let glue = hirsel_lir::glue::UnitGlue::default();
+    let glue_inputs = hirsel_lir::emission::GlueInputs {
+        target,
+        layouts: &table,
+        keys: &keys,
+        registry: registry.clone(),
+        finalizers: &finalizers,
+        glue: &glue,
+        failures: &failures,
+        statics: &[],
+        callbacks: &[],
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
+        aliasing_unstated: false,
+    };
     let inputs = EmitInputs {
+        index: None,
         verify_backend: true,
         input: &input,
         target,
         layouts: &table,
+        keys: &keys,
         manifest: &manifest,
-        failures: &failures,
         statics: &[],
-        finalizers: &finalizers,
         inline_instances: &empty,
         available_externally: &empty,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: registry.clone(),
+        tracking: false,
         opt: OptLevel::None,
         measurement: false,
         fuel: false,
     };
-    let mut em = Emitter::new(&inputs, false).unwrap();
+    // The probes and the descriptors they name share one object: unit and glue inputs.
+    let mut em = Emitter::new(
+        crate::module::Inputs {
+            glue: Some(&glue_inputs),
+            ..crate::module::Inputs::units(&inputs)
+        },
+        false,
+    )
+    .unwrap();
     let abi = FnAbi {
         key: FnAbiKey {
             callable: input.digest,
@@ -241,23 +264,27 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         version: hirsel_lir::ABI_VERSION,
     };
     let mut unit = LirUnit::<Ready>::new(UnitHeader {
+        source_count: 1,
+        key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Ready,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
-        input: input.clone(),
         definition: path("probe"),
         implementation_revision: instance,
         instance,
         target: table.target,
-        layouts: table.digest(),
         abi: FnAbiId(0),
     });
     unit.tables.cleanup_anchors.push(CleanupAnchor {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 1 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 1,
+        },
     });
     unit.types.push(LirType {
         repr: ValueRepr::InitMask { fields: 2 },
@@ -331,6 +358,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         em.define(name, id, &mut ctx).unwrap();
     }
     em.registry_table(&path("probe")).unwrap();
+    em.cells().unwrap();
     em.drain_helpers(&path("probe")).unwrap();
     let source = HARNESS
         .replace("REGISTRY_NAME", &registry.symbol())

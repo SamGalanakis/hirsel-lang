@@ -37,6 +37,24 @@ impl Builder<'_, '_> {
         }
         place
     }
+    /// Pattern annotations describe the binding after transfer. A tuple's
+    /// staging storage may retain stronger field modes from its initializer.
+    fn pattern_project(
+        &mut self,
+        base: PlaceId,
+        projection: Projection,
+        binding: TypeId,
+    ) -> PlaceId {
+        let owner = self.body.places[base.0 as usize].ty;
+        let physical = match (&self.types.get(owner).unwrap().kind, &projection) {
+            (hirsel_types::TypeKind::Tuple(parts), Projection::Field(field)) => {
+                parts.get(*field as usize).copied().unwrap_or(binding)
+            }
+            _ => binding,
+        };
+        let physical = self.part_type(owner, physical);
+        self.project(base, projection, physical)
+    }
     /// Bind the names `choice` reaches in pattern `id` from `place`.
     pub fn bind_pattern(
         &mut self,
@@ -108,13 +126,7 @@ impl Builder<'_, '_> {
                     return self.error(span, "missing pattern binding row");
                 };
                 if binding.usage != row.usage
-                    || !hirsel_types::shape_equal(
-                        &self.input.checked.types,
-                        binding.ty,
-                        &self.input.checked.types,
-                        row.ty,
-                    )
-                    .unwrap_or(false)
+                    || !self.types.shape_eq(binding.ty, row.ty).unwrap_or(false)
                 {
                     return self.error(span, "binding and pattern decisions disagree");
                 }
@@ -275,7 +287,7 @@ impl Builder<'_, '_> {
                         },
                         _ => Projection::Field(field.0),
                     };
-                    let projected = self.project(place, projection, child_row.ty);
+                    let projected = self.pattern_project(place, projection, child_row.ty);
                     if staging {
                         if let PatternDecisionKind::Binding(local) = child_row.kind {
                             let origin = Self::binding_origin(
@@ -417,7 +429,7 @@ impl Builder<'_, '_> {
                 _ => Projection::Field(field.0),
             };
             let child_row = self.pattern(*child)?;
-            let child_place = self.project(place, projection, child_row.ty);
+            let child_place = self.pattern_project(place, projection, child_row.ty);
             let node = self.table_pattern(*child, child_place, choice, patterns, guarded)?;
             fields.push((field.0, node));
         }

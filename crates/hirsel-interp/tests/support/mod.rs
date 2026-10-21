@@ -1,6 +1,6 @@
 use hirsel_interp::{Execution, Limits, Value, run};
 use hirsel_span::{Anchor, SourceMap, Span};
-use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PackageId};
+use hirsel_syntax::{BinaryOp, ContentHash, DefId, DefPath, ItemPath, PackageId};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
 use hirsel_types::*;
@@ -41,6 +41,19 @@ pub fn sources_of(path: &str, text: String) -> SourceMap {
     sources.move_anchor(fixture(), file, 0);
     sources
 }
+thread_local! {
+    /// The test's session interner: every row a test builds, its fixture
+    /// signatures' included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<TypeInterner> = TypeInterner::new(None);
+}
+/// This test thread's session interner.
+pub fn session() -> std::sync::Arc<TypeInterner> {
+    SESSION.with(|s| s.clone())
+}
+/// Runtime facts over the session interner with no nominals.
+pub fn runtime() -> hirsel_interp::aggregate::RuntimeTypes {
+    hirsel_interp::aggregate::RuntimeTypes::new(session())
+}
 pub fn ty(kind: TypeKind) -> Type {
     Type {
         drop_allocation: DropAllocation::MayAllocate,
@@ -48,15 +61,15 @@ pub fn ty(kind: TypeKind) -> Type {
     }
 }
 pub struct Builder {
-    pub types: TypeStore,
+    pub types: std::sync::Arc<TypeInterner>,
     pub body: Body,
     pub instructions: Vec<Instruction>,
     caller_owned: Vec<LocalId>,
 }
 impl Builder {
     pub fn new() -> Self {
-        let mut types = TypeStore::default();
-        let result = types.push(ty(TypeKind::Tuple(vec![].into())));
+        let types = session();
+        let result = types.intern(ty(TypeKind::Tuple(vec![].into())));
         Self {
             types,
             body: Body {
@@ -82,7 +95,7 @@ impl Builder {
         }
     }
     pub fn type_id(&mut self, kind: TypeKind) -> TypeId {
-        self.types.push(ty(kind))
+        self.types.intern(ty(kind))
     }
     pub fn local(&mut self, kind: TypeKind, storage: Storage) -> PlaceId {
         let ty = self.type_id(kind);
@@ -279,16 +292,18 @@ impl Builder {
                     .collect(),
             );
         }
-        Definition {
+        let mut definition = Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            types: self.types,
-            path: path(name),
+            types: std::sync::Arc::from([]),
+            path: DefId::intern(&path(name)),
             signature_hash: ContentHash::default(),
             bodies: vec![self.body],
             entry: BodyId(0),
             contracts: vec![],
-        }
+        };
+        definition.types = hirsel_tir::definition_types(&self.types, &definition);
+        definition
     }
 }
 pub fn copy(place: PlaceId) -> Operand {
@@ -331,7 +346,7 @@ impl TirProvider for Provider {
             self.queries.push(p.clone());
             self.definitions
                 .iter()
-                .find(|d| d.path == *p)
+                .find(|d| d.path.path() == p)
                 .cloned()
                 .ok_or(QueryError::NotImplemented)
         })()
@@ -339,10 +354,7 @@ impl TirProvider for Provider {
     }
 }
 pub fn execute(definitions: Vec<Definition>, arguments: Vec<Value>, limits: Limits) -> Execution {
-    assert_fixtures(
-        &definitions,
-        &hirsel_interp::aggregate::RuntimeTypes::default(),
-    );
+    assert_fixtures(&definitions, &runtime());
     execute_unvalidated(definitions, arguments, limits)
 }
 pub fn execute_unvalidated(
@@ -351,7 +363,7 @@ pub fn execute_unvalidated(
     limits: Limits,
 ) -> Execution {
     let configuration = RunConfiguration {
-        entry: definitions[0].path.clone(),
+        entry: definitions[0].path.path().clone(),
         hash_seed: 42,
         inputs: vec![],
     };
@@ -360,6 +372,7 @@ pub fn execute_unvalidated(
             definitions,
             queries: vec![],
         },
+        &session(),
         &sources(),
         &configuration,
         arguments,
@@ -393,7 +406,7 @@ pub fn function_type(result: TypeId, parameters: Vec<TypeId>) -> TypeKind {
     })
 }
 
-fn fixture_needs_release(store: &TypeStore, id: TypeId) -> bool {
+fn fixture_needs_release(store: &TypeInterner, id: TypeId) -> bool {
     match &store.get(id).unwrap().kind {
         TypeKind::Primitive(Primitive::String | Primitive::Bytes) => true,
         TypeKind::Primitive(_) => false,
@@ -413,44 +426,20 @@ pub fn assert_fixtures(
     definitions: &[Definition],
     runtime: &hirsel_interp::aggregate::RuntimeTypes,
 ) {
-    let signatures = fixture_signatures(definitions, runtime);
+    let mut signatures = hirsel_validate::SignatureMap::new(session());
+    signatures.extend(
+        fixture_signatures(definitions, runtime)
+            .into_iter()
+            .map(|(path, s)| (hirsel_syntax::DefId::intern(&path), s)),
+    );
     for definition in definitions {
-        hirsel_validate::assert_valid(definition, &signatures);
+        hirsel_validate::assert_valid(definition, &session(), &signatures);
     }
 }
 
-/// Import an independently constructed fixture body into its definition graph.
+/// Add an independently constructed fixture body to its definition graph.
 pub fn append_body(target: &mut Definition, source: &Definition) {
     assert_eq!(source.bodies.len(), 1);
-    let mut body = source.bodies[0].clone();
-    let mut mapped = std::collections::BTreeMap::new();
-    let mut import = |id: &mut TypeId| {
-        *id = *mapped.entry(*id).or_insert_with(|| {
-            hirsel_types::import_type(&source.types, *id, &mut target.types).unwrap()
-        });
-    };
-    for local in &mut body.locals {
-        import(&mut local.ty);
-    }
-    for place in &mut body.places {
-        import(&mut place.ty);
-    }
-    import(&mut body.result);
-    for value in &mut body.rvalues {
-        if let Rvalue::Shape(ty) = value {
-            import(ty);
-        }
-    }
-    for block in &mut body.blocks {
-        if let Terminator::Call { callee, .. } = &mut block.terminator {
-            let (Callee::Definition { arguments, .. } | Callee::Indirect { arguments, .. }) =
-                callee;
-            for argument in arguments {
-                if let GenericArgument::Type(ty) = argument {
-                    import(ty);
-                }
-            }
-        }
-    }
-    target.bodies.push(body);
+    target.bodies.push(source.bodies[0].clone());
+    target.types = hirsel_tir::definition_types(&session(), target);
 }

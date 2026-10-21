@@ -219,12 +219,12 @@ fn unit(b: &mut Body<'_, '_>) {
             .map(|r| b.constant(r.layout, ConstantValue::Unit));
     b.ret(result);
 }
-fn add_type(store: &mut hirsel_types::TypeStore, kind: TypeKind) -> TypeId {
-    store.push(Type::with_kind(kind))
+fn add_type(types: &hirsel_types::TypeInterner, kind: TypeKind) -> TypeId {
+    types.intern(Type::with_kind(kind))
 }
 fn builtin(b: &mut Body<'_, '_>, kind: BuiltinType, types: &[TypeId]) -> TypeId {
     add_type(
-        &mut b.cx.store,
+        b.cx.types,
         TypeKind::Builtin {
             kind,
             arguments: types
@@ -245,7 +245,7 @@ fn helper(
     actuals: Vec<GenericArgument>,
 ) -> R<Direct> {
     let callable = add_type(
-        &mut b.cx.store,
+        b.cx.types,
         TypeKind::Function(FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
@@ -275,7 +275,7 @@ fn helper(
         native_path(name)
     };
     let body = super::body_index(&path).expect("registered helper");
-    let request = Request::native(body, &path, b.cx.store.clone(), actuals, callable);
+    let request = Request::native(body, &path, actuals, callable);
     b.cx.require(request)
 }
 fn call(b: &mut Body<'_, '_>, direct: Direct, arguments: &[CallArgument]) -> R<Option<ValueId>> {
@@ -415,8 +415,8 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
         },
         &types,
     );
-    let u64_ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
-    let result_ty = add_type(&mut b.cx.store, TypeKind::Tuple(vec![u64_ty; 3].into()));
+    let u64_ty = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
+    let result_ty = add_type(b.cx.types, TypeKind::Tuple(vec![u64_ty; 3].into()));
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
@@ -671,7 +671,11 @@ fn cleanup_anchor(b: &mut Body<'_, '_>) -> CleanupAnchorId {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     id
 }
@@ -1045,7 +1049,11 @@ fn map_drop(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     for (head, tail, failing) in [(normal, tail, false), (failed, failure_tail, true)] {
         b.at(head);
@@ -1206,12 +1214,12 @@ pub(super) fn remove_entry(
     let k = b.cx.type_actual(0)?;
     let element_ty = if is_map {
         let v = b.cx.type_actual(1)?;
-        add_type(&mut b.cx.store, TypeKind::Tuple(vec![k, v].into()))
+        add_type(b.cx.types, TypeKind::Tuple(vec![k, v].into()))
     } else {
         k
     };
     let list_ty = builtin(b, BuiltinType::List, &[element_ty]);
-    let index_ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let index_ty = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
     let direct = helper(
         b,
         "list.remove",

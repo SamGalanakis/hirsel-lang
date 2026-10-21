@@ -88,7 +88,7 @@ fn run_with(
         engine,
         replaced: edits
             .iter()
-            .map(|d| (d.path.clone(), DefinitionRef::new(d.clone())))
+            .map(|d| (d.path.path().clone(), DefinitionRef::new(d.clone())))
             .collect(),
     };
     let config = RunConfiguration {
@@ -139,24 +139,22 @@ fn printed(outcome: Option<(Outcome, String)>) -> String {
 /// The IR checker's verdict on an edited definition.
 fn validator_rejects(engine: &mut QueryEngine, definition: &Definition) -> bool {
     let input = engine.export_native_input().unwrap();
-    let signatures: BTreeMap<_, _> = input
-        .signatures
-        .iter()
-        .map(|(p, s)| (p.clone(), (**s).clone()))
-        .collect();
-    !hirsel_validate::validate(definition, &signatures)
+    let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+    signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
+    let mut definition = definition.clone();
+    definition.types = hirsel_tir::definition_types(engine.types(), &definition);
+    !hirsel_validate::validate(&definition, engine.types(), &signatures, &mut vec![])
         .violations
         .is_empty()
 }
 /// Declare every `unique` local of `definition` aliased, so an edit that
 /// turns a fresh value into a share no longer also claims it unique.
-fn without_unique_locals(definition: &mut Definition) {
-    let types = &mut definition.types;
+fn without_unique_locals(types: &hirsel_types::TypeInterner, definition: &mut Definition) {
     let mut aliased = |ty: &mut hirsel_types::TypeId| {
-        let mut row = types.get(*ty).unwrap().clone();
+        let mut row = types.row(*ty).clone();
         if row.modes.uniqueness == hirsel_types::Uniqueness::Unique {
             row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-            *ty = types.push(row);
+            *ty = types.intern(row);
         }
     };
     for body in &mut definition.bodies {
@@ -168,6 +166,7 @@ fn without_unique_locals(definition: &mut Definition) {
             .filter(|place| place.projection.is_empty())
             .for_each(|place| aliased(&mut place.ty));
     }
+    definition.types = hirsel_tir::definition_types(types, definition);
 }
 fn named_locals(body: &hirsel_tir::Body) -> Vec<usize> {
     body.locals
@@ -214,9 +213,9 @@ fn a_result_declared_global_cannot_carry_a_borrowed_parameter() {
         // of the borrowed `x`, which ends with the call.
         let mut wrap = lowered(&mut engine, "wrap");
         let result = wrap.bodies[0].result;
-        let mut row = wrap.types.get(result).unwrap().clone();
+        let mut row = engine.types().get(result).unwrap().clone();
         row.modes.relation = hirsel_types::Relation::global();
-        wrap.bodies[0].result = wrap.types.push(row);
+        wrap.bodies[0].result = engine.types().intern(row);
         assert_eq!(printed(run(&mut engine, &[wrap.clone()], false)), "one\n");
         assert_eq!(
             trapped(run(&mut engine, &[wrap], true)),
@@ -239,7 +238,7 @@ fn a_returned_closure_over_arena_content_traps_after_the_arena_ends() {
         let mut mk = lowered(&mut engine, "mk");
         let body = &mut mk.bodies[mk.entry.0 as usize];
         let x = named_locals(body)[0];
-        let mut row = mk.types.get(body.locals[x].ty).unwrap().clone();
+        let mut row = engine.types().get(body.locals[x].ty).unwrap().clone();
         row.modes.relation =
             row.modes
                 .relation
@@ -250,7 +249,7 @@ fn a_returned_closure_over_arena_content_traps_after_the_arena_ends() {
                     }),
                     fields: Default::default(),
                 }));
-        let placed = mk.types.push(row);
+        let placed = engine.types().intern(row);
         body.locals[x].ty = placed;
         for place in body.places.iter_mut() {
             if place.root.0 as usize == x && place.projection.is_empty() {
@@ -345,9 +344,9 @@ fn resources_finalised_in_declaration_order_trap() {
             .into_iter()
             .filter(|l| {
                 matches!(
-                    main.types.get(body.locals[*l].ty).map(|t| &t.kind),
+                    engine.types().get(body.locals[*l].ty).map(|t| &t.kind),
                     Some(hirsel_types::TypeKind::Named { definition, .. })
-                        if definition.0.name == "Trace"
+                        if definition.path().0.name == "Trace"
                 )
             })
             .collect();
@@ -485,7 +484,7 @@ fn callbacks_cannot_return_their_ended_parameter_storage() {
                 b.parameters.len() == 1
                     && b.locals.iter().any(|l| {
                         matches!(
-                            main.types.get(l.ty).map(|t| &t.kind),
+                            engine.types().get(l.ty).map(|t| &t.kind),
                             Some(hirsel_types::TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::List,
                                 ..
@@ -520,7 +519,7 @@ fn callbacks_cannot_return_their_ended_parameter_storage() {
             trapped(run(&mut engine, &[main.clone()], true)),
             TrapRule::UniqueShared
         );
-        without_unique_locals(&mut main);
+        without_unique_locals(engine.types(), &mut main);
         assert_eq!(
             trapped(run(&mut engine, &[main], true)),
             TrapRule::RegionUseAfterScopeExit
@@ -539,7 +538,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] { promise([1u64]); Ok(()) }",
         assert_eq!(printed(run(&mut engine, &[], true)), "");
         // Keep the declared noalloc contract and replace only its TIR body.
         let mut forged = lowered(&mut engine, "clone_it");
-        forged.path = path("promise");
+        forged.path = hirsel_syntax::DefId::intern(&path("promise"));
         assert_eq!(printed(run(&mut engine, &[forged.clone()], false)), "");
         assert_eq!(
             trapped(run(&mut engine, &[forged], true)),
@@ -556,7 +555,7 @@ fn a_shared_counted_write_under_noalloc_traps() {
         );
         assert_eq!(printed(run(&mut engine, &[], true)), "nine\n");
         let mut forged = lowered(&mut engine, "change");
-        forged.path = path("promise");
+        forged.path = hirsel_syntax::DefId::intern(&path("promise"));
         assert_eq!(
             printed(run(&mut engine, &[forged.clone()], false)),
             "nine\n"
@@ -579,7 +578,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] { promise(); Ok(()) }",
         );
         assert_eq!(printed(run(&mut engine, &[], true)), "");
         let mut forged = lowered(&mut engine, "dispose");
-        forged.path = path("promise");
+        forged.path = hirsel_syntax::DefId::intern(&path("promise"));
         assert_eq!(printed(run(&mut engine, &[forged.clone()], false)), "");
         assert_eq!(
             trapped(run(&mut engine, &[forged], true)),
@@ -595,7 +594,7 @@ fn declaration_order_is_independent_of_storage_live_order() {
         let mut main = lowered(&mut engine, "main");
         let body = &mut main.bodies[0];
         let owners: Vec<_> = named_locals(body).into_iter().filter(|i| {
-            matches!(main.types.get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.0.name == "Trace")
+            matches!(engine.types().get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.path().0.name == "Trace")
         }).collect();
         let [a, b] = owners[..] else {
             panic!("two resources")
@@ -652,7 +651,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
         let mut main = lowered(&mut engine, "main");
         let body = &main.bodies[0];
         let owners: Vec<_> = named_locals(body).into_iter().filter(|i| {
-            matches!(main.types.get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.0.name == "R")
+            matches!(engine.types().get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.path().0.name == "R")
         }).collect();
         let [a, b] = drops_of(&main, &owners)[..] else {
             panic!("two resources")
@@ -925,7 +924,7 @@ fn a_borrowed_string_copied_into_a_constructor_still_cannot_escape() {
             TrapRule::UniqueShared
         );
         assert!(validator_rejects(&mut engine, &wrap));
-        without_unique_locals(&mut wrap);
+        without_unique_locals(engine.types(), &mut wrap);
         assert_eq!(
             trapped(run(&mut engine, &[wrap.clone()], true)),
             TrapRule::RegionUseAfterScopeExit
@@ -977,10 +976,10 @@ fn freezing_a_value_another_live_holder_shares_traps() {
         };
         let local = site(&mut engine, &[main.clone()]);
         assert!(local.starts_with("local "), "{local}");
-        without_unique_locals(&mut main);
+        without_unique_locals(engine.types(), &mut main);
         assert_eq!(site(&mut engine, &[main.clone()]), "parameter 0");
         let mut freeze = lowered(&mut engine, "freeze");
-        without_unique_locals(&mut freeze);
+        without_unique_locals(engine.types(), &mut freeze);
         assert_eq!(site(&mut engine, &[main, freeze]), "freeze parameter 0");
     });
 }
@@ -1019,7 +1018,7 @@ fn two_tasks_counting_one_block_trap() {
             TrapRule::UniqueShared
         );
         assert!(validator_rejects(&mut engine, &main));
-        without_unique_locals(&mut main);
+        without_unique_locals(engine.types(), &mut main);
         assert_eq!(
             trapped(run(&mut engine, &[main], true)),
             TrapRule::TaskShared
@@ -1055,10 +1054,10 @@ fn a_displaced_value_claims_no_uniqueness() {
             .collect();
         assert_eq!(displaced.len(), 1);
         let local = displaced[0].0 as usize;
-        let mut row = grow.types.get(body.locals[local].ty).unwrap().clone();
+        let mut row = engine.types().get(body.locals[local].ty).unwrap().clone();
         assert_eq!(row.modes.uniqueness, hirsel_types::Uniqueness::Aliased);
         row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-        let unique = grow.types.push(row);
+        let unique = engine.types().intern(row);
         let entry = grow.entry.0 as usize;
         grow.bodies[entry].locals[local].ty = unique;
         for place in &mut grow.bodies[entry].places {

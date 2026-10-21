@@ -482,7 +482,7 @@ fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
     );
     b.block(Terminator::Goto(BlockId(1)), 7);
     let definitions = vec![b.definition("main")];
-    assert_fixtures(&definitions, &Default::default());
+    assert_fixtures(&definitions, &crate::support::runtime());
     let run = RunConfiguration {
         entry: path("main"),
         hash_seed: 0,
@@ -505,7 +505,7 @@ fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
             &mut hirsel_interp::NoOperations,
             &hirsel_interp::aggregate::RuntimeTypes {
                 trace_mode,
-                ..Default::default()
+                ..crate::support::runtime()
             },
         )
         .unwrap()
@@ -563,7 +563,7 @@ fn effect_only_tracing_preserves_anchored_operations_and_failure_observations() 
         }
     }
     let definitions = loop_program();
-    assert_fixtures(&definitions, &Default::default());
+    assert_fixtures(&definitions, &crate::support::runtime());
     let run = RunConfiguration {
         entry: path("main"),
         hash_seed: 0,
@@ -583,7 +583,7 @@ fn effect_only_tracing_preserves_anchored_operations_and_failure_observations() 
                 &mut Add { fail },
                 &hirsel_interp::aggregate::RuntimeTypes {
                     trace_mode,
-                    ..Default::default()
+                    ..crate::support::runtime()
                 },
             )
             .unwrap()

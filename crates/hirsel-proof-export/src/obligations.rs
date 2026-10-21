@@ -8,7 +8,7 @@ use hirsel_tir::{
     BlockId, Body, BodyId, Callee, Constructor, Definition, Instruction, InstructionKind, LocalId,
     Operand, PlaceId, Projection, Rvalue, Terminator,
 };
-use hirsel_types::{Contract, Primitive, Signature, SignatureKind, TypeKind};
+use hirsel_types::{Contract, Primitive, Signature, SignatureKind, TypeInterner, TypeKind};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
@@ -220,15 +220,16 @@ impl Builder<'_> {
 /// PS-2/PS-3 over one definition. `signature` returns a referenced
 /// definition's public signature.
 pub(crate) fn table<'a>(
+    types: &TypeInterner,
     definition: &Definition,
     signature: impl Fn(&DefPath) -> Option<&'a Signature>,
 ) -> Table {
     let fact = const { RuleId::of("FACT-1") };
-    let owner = function(signature(&definition.path));
+    let owner = function(signature(definition.path.path()));
     let owner_contracts: &[Contract] = owner.map_or(&[], |f| &f.contracts);
     let contract_checks = contract_checks(definition, owner_contracts);
     let mut builder = Builder {
-        definition: &definition.path,
+        definition: definition.path.path(),
         counters: BTreeMap::new(),
         obligations: vec![],
         places: HashMap::new(),
@@ -260,7 +261,7 @@ pub(crate) fn table<'a>(
                         if body
                             .rvalues
                             .get(value.0 as usize)
-                            .is_some_and(|rvalue| checked_arithmetic(definition, body, rvalue)) =>
+                            .is_some_and(|rvalue| checked_arithmetic(types, body, rvalue)) =>
                     {
                         builder.push(
                             const { RuleId::of("SEM-1") },
@@ -301,10 +302,7 @@ pub(crate) fn table<'a>(
                         }
                         Callee::Indirect { value, .. } => {
                             let ty = body.places.get(value.place.0 as usize).map(|p| p.ty);
-                            match ty
-                                .and_then(|ty| definition.types.get(ty))
-                                .map(|row| &row.kind)
-                            {
+                            match ty.and_then(|ty| types.get(ty)).map(|row| &row.kind) {
                                 Some(TypeKind::Function(f)) => (None, &f.contracts),
                                 _ => (None, &[]),
                             }
@@ -336,7 +334,7 @@ pub(crate) fn table<'a>(
             .map(|(ordinal, clause)| {
                 (
                     ObligationId {
-                        definition: definition.path.clone(),
+                        definition: definition.path.path().clone(),
                         rule: fact.clone(),
                         kind: obligation,
                         ordinal: ordinal as u32,
@@ -446,12 +444,12 @@ fn contract_checks(
     checks
 }
 
-fn integer(definition: &Definition, body: &Body, operand: &Operand) -> bool {
+fn integer(types: &TypeInterner, body: &Body, operand: &Operand) -> bool {
     let Some(place) = body.places.get(operand.place.0 as usize) else {
         return false;
     };
     matches!(
-        definition.types.get(place.ty).map(|row| &row.kind),
+        types.get(place.ty).map(|row| &row.kind),
         Some(TypeKind::Primitive(
             Primitive::U8
                 | Primitive::U16
@@ -469,7 +467,7 @@ fn integer(definition: &Definition, body: &Body, operand: &Operand) -> bool {
 
 /// SEM-1 checked integer operations; comparisons, bitwise operations and
 /// floats cannot fail.
-fn checked_arithmetic(definition: &Definition, body: &Body, rvalue: &Rvalue) -> bool {
+fn checked_arithmetic(types: &TypeInterner, body: &Body, rvalue: &Rvalue) -> bool {
     match rvalue {
         Rvalue::Binary { op, left, .. } => {
             matches!(
@@ -481,12 +479,12 @@ fn checked_arithmetic(definition: &Definition, body: &Body, rvalue: &Rvalue) -> 
                     | BinaryOp::Rem
                     | BinaryOp::Shl
                     | BinaryOp::Shr
-            ) && integer(definition, body, left)
+            ) && integer(types, body, left)
         }
         Rvalue::Unary {
             op: UnaryOp::Neg,
             value,
-        } => integer(definition, body, value),
+        } => integer(types, body, value),
         _ => false,
     }
 }
@@ -570,6 +568,9 @@ fn terminator_places(terminator: &Terminator) -> Vec<PlaceId> {
 /// The canonical place of a MEM-13/14 obligation: the first PlaceId with
 /// its (body, root, projection), ignoring bindings and loans, as PS-2 does.
 /// This reuses the obligation traversal; no export or identity changes.
-pub fn projected_places(definition: &Definition) -> BTreeMap<ObligationId, (BodyId, PlaceId)> {
-    table(definition, |_| None).projected
+pub fn projected_places(
+    types: &TypeInterner,
+    definition: &Definition,
+) -> BTreeMap<ObligationId, (BodyId, PlaceId)> {
+    table(types, definition, |_| None).projected
 }

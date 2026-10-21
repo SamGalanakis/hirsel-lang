@@ -1,11 +1,12 @@
 //! First-match source identities; checked arena values remain authoritative.
 use super::*;
+use hirsel_modes::rows::ExprRows;
 use std::collections::BTreeMap;
 pub(super) struct SourceRows {
-    pub expressions: BTreeMap<ExprId, usize>,
-    pub places: BTreeMap<ExprId, usize>,
-    pub calls: BTreeMap<ExprId, usize>,
-    pub closures: BTreeMap<ExprId, usize>,
+    pub expressions: ExprRows<usize>,
+    pub places: ExprRows<usize>,
+    pub calls: ExprRows<usize>,
+    pub closures: ExprRows<usize>,
     pub unscoped: BTreeMap<(u8, u32), usize>,
     pub sites: BTreeMap<NameSite, Vec<usize>>,
     pub bindings: BTreeMap<(NameSite, u8, u32), usize>,
@@ -14,10 +15,10 @@ pub(super) struct SourceRows {
 impl SourceRows {
     pub fn new(body: &CheckedBody) -> Self {
         let mut out = Self {
-            expressions: BTreeMap::new(),
-            places: BTreeMap::new(),
-            calls: BTreeMap::new(),
-            closures: BTreeMap::new(),
+            expressions: ExprRows::default(),
+            places: ExprRows::default(),
+            calls: ExprRows::default(),
+            closures: ExprRows::default(),
             unscoped: BTreeMap::new(),
             sites: BTreeMap::new(),
             bindings: BTreeMap::new(),
@@ -25,19 +26,19 @@ impl SourceRows {
         };
         for (i, row) in body.expressions.iter().enumerate() {
             work::count(Counter::OwnershipSourceRows);
-            out.expressions.entry(row.expression).or_insert(i);
+            out.expressions.entry(row.expression).get_or_insert(i);
         }
         for (i, row) in body.places.iter().enumerate() {
             work::count(Counter::OwnershipSourceRows);
-            out.places.entry(row.expression).or_insert(i);
+            out.places.entry(row.expression).get_or_insert(i);
         }
         for (i, row) in body.calls.iter().enumerate() {
             work::count(Counter::OwnershipSourceRows);
-            out.calls.entry(row.expression).or_insert(i);
+            out.calls.entry(row.expression).get_or_insert(i);
         }
         for (i, row) in body.closures.iter().enumerate() {
             work::count(Counter::OwnershipSourceRows);
-            out.closures.entry(row.expression).or_insert(i);
+            out.closures.entry(row.expression).get_or_insert(i);
         }
         for (i, row) in body.bindings.iter().enumerate() {
             work::count(Counter::OwnershipSourceRows);

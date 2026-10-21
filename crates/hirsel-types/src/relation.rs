@@ -7,7 +7,7 @@
 //! Joins are unions at every depth of a value.
 use crate::{
     FieldId, GenericArgument, Origin, OriginRoot, ParameterRef, RegionId, Sendability, SharedSlice,
-    Type, TypeId, TypeKind, TypeStore, Uniqueness,
+    Type, TypeId, TypeInterner, TypeKind, Uniqueness,
 };
 
 /// One place that bounds a value (MODE-1). Field paths are meaningful (#77).
@@ -189,7 +189,22 @@ impl Relation {
     }
     /// The reaches for which `keep` holds.
     pub fn retain(&self, keep: impl Fn(&Reach) -> bool) -> Self {
-        Self(self.0.iter().filter(|r| keep(r)).cloned().collect())
+        // Rust ea137335 vec/mod.rs:2452-2480,2590-2650: retain visits
+        // once in order; the prefix before the first hole is already kept.
+        let Some(first_removed) = self.0.iter().position(|reach| !keep(reach)) else {
+            return self.clone();
+        };
+        Self(
+            self.0[..first_removed]
+                .iter()
+                .chain(
+                    self.0[first_removed + 1..]
+                        .iter()
+                        .filter(|reach| keep(reach)),
+                )
+                .cloned()
+                .collect(),
+        )
     }
     /// Rewrite every reach; the result is canonicalised again.
     pub fn map(&self, f: impl FnMut(&Reach) -> Vec<Reach>) -> Self {
@@ -204,16 +219,16 @@ impl FromIterator<Reach> for Relation {
 }
 
 /// Whether `ty` is the registry's Arena (PROV-4); `arena` is its DefPath.
-pub fn is_arena_type(store: &TypeStore, ty: TypeId, arena: &hirsel_syntax::DefPath) -> bool {
+pub fn is_arena_type(store: &TypeInterner, ty: TypeId, arena: &hirsel_syntax::DefPath) -> bool {
     store.get(ty).is_some_and(
-        |t| matches!(&t.kind, TypeKind::Named { definition, .. } if definition == arena),
+        |t| matches!(&t.kind, TypeKind::Named { definition, .. } if definition.path() == arena),
     )
 }
 
 /// Whether `origin` is a whole Arena parameter of `function`, written as a
 /// bound reference `depth` callable binders out from the function's own.
 pub fn arena_parameter(
-    store: &TypeStore,
+    store: &TypeInterner,
     function: &crate::FunctionType,
     origin: &Origin,
     depth: u32,
@@ -288,7 +303,7 @@ impl Destination {
 /// its argument; a nominal type's declared fields are not inspected.
 /// `arena` says which places name arenas: placement is not a lifetime bound.
 pub fn structurally_global(
-    store: &TypeStore,
+    store: &TypeInterner,
     ty: TypeId,
     arena: &impl Fn(&Origin) -> bool,
 ) -> bool {
@@ -312,7 +327,7 @@ pub fn structurally_global(
 /// contains the value's (a join's union of placements, PROV-4) holds it too. It
 /// takes the value's relation and any stronger uniqueness and sendability, so
 /// the remaining structure compares exactly.
-pub fn adopt_local(store: &mut TypeStore, holder: TypeId, value: TypeId) -> TypeId {
+pub fn adopt_local(store: &TypeInterner, holder: TypeId, value: TypeId) -> TypeId {
     let (Some(h), Some(v)) = (store.get(holder), store.get(value)) else {
         return holder;
     };
@@ -371,7 +386,7 @@ pub fn adopt_local(store: &mut TypeStore, holder: TypeId, value: TypeId) -> Type
             _ => (),
         }
     }
-    if changed { store.push(h) } else { holder }
+    if changed { store.intern(h) } else { holder }
 }
 
 impl crate::Modes {
@@ -426,6 +441,69 @@ mod tests {
     }
 
     #[test]
+    fn relation_filter_visits_once_in_order_and_reuses_unchanged_storage() {
+        use std::cell::Cell;
+        let source = Relation::new([
+            param(0, &[1]),
+            param(0, &[2]),
+            param(1, &[]),
+            Reach::Environment,
+        ]);
+        let snapshot = source.clone();
+        let original = source.0.storage_identity();
+        let mut unchanged_storage = 0;
+        for mask in 0u32..(1 << source.reaches().len()) {
+            let index = Cell::new(0);
+            let filtered = source.retain(|reach| {
+                let i = index.get();
+                assert_eq!(reach, &source.reaches()[i]);
+                index.set(i + 1);
+                mask & (1 << i) != 0
+            });
+            let expected: Vec<_> = source
+                .reaches()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, reach)| reach.clone())
+                .collect();
+            assert_eq!(filtered.reaches(), expected);
+            assert_eq!(index.get(), source.reaches().len());
+            assert_eq!(source, snapshot);
+            assert_eq!(source.0.storage_identity(), original);
+            if mask == (1 << source.reaches().len()) - 1 {
+                unchanged_storage = filtered.0.storage_identity();
+            }
+        }
+        let empty_calls = Cell::new(0);
+        assert_eq!(
+            Relation::global().retain(|_| {
+                empty_calls.set(empty_calls.get() + 1);
+                true
+            }),
+            Relation::global()
+        );
+        assert_eq!(empty_calls.get(), 0);
+        let calls = Cell::new(0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            source.retain(|_| {
+                let call = calls.get();
+                calls.set(call + 1);
+                assert_ne!(call, 2, "intentional predicate failure");
+                call == 0
+            })
+        }));
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 3);
+        assert_eq!(source, snapshot);
+        assert_eq!(source.0.storage_identity(), original);
+        assert_eq!(
+            unchanged_storage, original,
+            "a filter retaining every reach must reuse the retained slice"
+        );
+    }
+
+    #[test]
     fn containment_follows_field_paths() {
         let p = Relation::new([param(0, &[])]);
         let pa = Relation::new([param(0, &[1])]);
@@ -461,7 +539,7 @@ mod tests {
 
     #[test]
     fn an_owned_whole_adopts_parts_its_holder_contains_and_only_those() {
-        use crate::{Primitive, Type, TypeKind, TypeStore};
+        use crate::{Primitive, Type, TypeInterner, TypeKind};
         let row = |kind, relation| Type {
             modes: Modes {
                 relation,
@@ -469,27 +547,27 @@ mod tests {
             },
             ..Type::with_kind(kind)
         };
-        let pair = |store: &mut TypeStore, part: Relation| {
-            let part = store.push(row(TypeKind::Primitive(Primitive::String), part));
-            let tag = store.push(row(TypeKind::Primitive(Primitive::U8), Relation::global()));
-            store.push(row(
+        let pair = |store: &TypeInterner, part: Relation| {
+            let part = store.intern(row(TypeKind::Primitive(Primitive::String), part));
+            let tag = store.intern(row(TypeKind::Primitive(Primitive::U8), Relation::global()));
+            store.intern(row(
                 TypeKind::Tuple(vec![part, tag].into()),
                 Relation::global(),
             ))
         };
-        let part = |store: &TypeStore, t: TypeId| match &store.get(t).unwrap().kind {
+        let part = |store: &TypeInterner, t: TypeId| match &store.get(t).unwrap().kind {
             TypeKind::Tuple(ts) => store.get(ts[0]).unwrap().modes.relation.clone(),
             _ => unreachable!(),
         };
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         // A join's part `in a` holds global content (PROV-4 union join).
-        let holder = pair(&mut store, Relation::new([param(0, &[])]));
-        let global = pair(&mut store, Relation::global());
-        let adopted = adopt_local(&mut store, holder, global);
+        let holder = pair(&store, Relation::new([param(0, &[])]));
+        let global = pair(&store, Relation::global());
+        let adopted = adopt_local(&store, holder, global);
         assert_eq!(part(&store, adopted), Relation::global());
         // Content in another place is not within the holder's part.
-        let other = pair(&mut store, Relation::new([param(1, &[])]));
-        assert_eq!(adopt_local(&mut store, holder, other), holder);
+        let other = pair(&store, Relation::new([param(1, &[])]));
+        assert_eq!(adopt_local(&store, holder, other), holder);
         assert_eq!(part(&store, holder), Relation::new([param(0, &[])]));
     }
 }

@@ -168,9 +168,10 @@ impl Proofs {
                 Err(keep) => Err(keep.to_string()),
                 Ok(_) => {
                     let places = projections.entry(path.clone()).or_insert_with(|| {
-                        hirsel_proof_export::projected_places(&assessed.section.tir)
+                        hirsel_proof_export::projected_places(&export.types, &assessed.section.tir)
                     });
                     forms(
+                        &export.types,
                         assessed.section,
                         assessed.obligation,
                         places.get(&assessed.obligation.id).copied(),
@@ -252,6 +253,7 @@ impl Proofs {
 /// an assumption whose entry check every caller's evidence would have to
 /// cover, and the remaining kinds and operations have no removal form yet.
 fn forms(
+    types: &hirsel_types::TypeInterner,
     section: &DefinitionSection,
     obligation: &Obligation,
     projection: Option<(hirsel_tir::BodyId, hirsel_tir::PlaceId)>,
@@ -321,7 +323,7 @@ fn forms(
                         } => {
                             let ty = body.places[value.place.0 as usize].ty;
                             if matches!(
-                                section.tir.types.get(ty).map(|t| &t.kind),
+                                types.get(ty).map(|t| &t.kind),
                                 Some(hirsel_types::TypeKind::Primitive(
                                     hirsel_types::Primitive::I8
                                         | hirsel_types::Primitive::I16

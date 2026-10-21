@@ -2,7 +2,7 @@
 //! run on the way, as `hirsel-llvm`'s `places` computes them.
 
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset};
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, ScanStep, SizeSpec};
@@ -434,7 +434,11 @@ impl FnEmitter<'_, '_, '_> {
                         let owner = self.load_ty(PTR, place.ptr, owner_at);
                         let start = self.load_ty(types::I64, place.ptr, start_at);
                         let count = self.load_ty(types::I64, place.ptr, length_at);
-                        let Some(storage) = slice_storage(self.em.layouts(), element) else {
+                        let Some(storage) = slice_storage_with_index(
+                            self.em.layouts(),
+                            self.em.inputs.unit.and_then(|i| i.index),
+                            element,
+                        ) else {
                             return self.invalid("a slice without its byte sequence layout");
                         };
                         let payload = self.payload_of(owner, storage)?;

@@ -2,6 +2,18 @@ use super::*;
 use proptest::prelude::*;
 use std::sync::atomic::AtomicU64;
 
+#[test]
+fn worker_count_respects_stack_reservations_and_empty_frontiers() {
+    for requested in [1, 2, 8, 32] {
+        let jobs = Jobs::new(requested);
+        assert_eq!(jobs.worker_count_with_cap(0, 0), 0);
+        assert_eq!(jobs.worker_count_with_cap(64, 0), 1);
+        assert_eq!(jobs.worker_count_with_cap(64, 512 << 20), requested.min(2));
+        assert_eq!(jobs.worker_count_with_cap(64, 4 << 30), requested.min(16));
+        assert_eq!(jobs.worker_count_with_cap(1, 4 << 30), 1);
+    }
+}
+
 /// A task that records the order it started in and does work proportional to its cost.
 fn run(jobs: Jobs, costs: &[u64]) -> (Vec<(usize, u64)>, Vec<usize>) {
     let started = Mutex::new(Vec::new());
@@ -117,4 +129,63 @@ fn one_job_runs_on_the_callers_thread_and_more_use_compiler_stacks() {
             .iter()
             .all(|(name, _)| name.as_deref() == Some("hirsel-job"))
     );
+}
+
+#[test]
+fn state_is_initialized_once_per_worker_and_reused_only_on_that_thread() {
+    use std::cell::Cell;
+    // Rc/Cell deliberately make this state !Send and !Sync: construction
+    // happens on its worker, and state never crosses a thread boundary.
+    struct State {
+        owner: std::thread::ThreadId,
+        calls: std::rc::Rc<Cell<usize>>,
+    }
+    for jobs in [1, 2, 8] {
+        let initialized = AtomicUsize::new(0);
+        let ran = map_with_state(
+            Jobs::new(jobs),
+            (0..40).collect(),
+            |&i| i,
+            || {
+                initialized.fetch_add(1, Ordering::Relaxed);
+                State {
+                    owner: std::thread::current().id(),
+                    calls: std::rc::Rc::new(Cell::new(0)),
+                }
+            },
+            |state, task| {
+                assert_eq!(state.owner, std::thread::current().id());
+                state.calls.set(state.calls.get() + 1);
+                (task, state.owner, state.calls.get())
+            },
+        );
+        assert_eq!(
+            initialized.load(Ordering::Relaxed),
+            Jobs::new(jobs).worker_count(40)
+        );
+        let mut by_thread = std::collections::HashMap::new();
+        for (index, (task, owner, ordinal)) in ran.into_iter().enumerate() {
+            assert_eq!(index, task as usize);
+            by_thread
+                .entry(owner)
+                .or_insert_with(Vec::new)
+                .push(ordinal);
+        }
+        for ordinals in by_thread.values_mut() {
+            ordinals.sort_unstable();
+            assert_eq!(*ordinals, (1..=ordinals.len()).collect::<Vec<_>>());
+        }
+    }
+    let count = AtomicUsize::new(0);
+    let empty: Vec<()> = map_with_state(
+        Jobs::new(8),
+        Vec::<()>::new(),
+        |_| 0,
+        || {
+            count.fetch_add(1, Ordering::Relaxed);
+        },
+        |_, _| (),
+    );
+    assert!(empty.is_empty());
+    assert_eq!(count.load(Ordering::Relaxed), 0);
 }

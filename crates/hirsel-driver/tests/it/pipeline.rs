@@ -80,7 +80,6 @@ fn artifact_view(typed: &TypedBody) -> String {
         format!(
             "{:?}",
             (
-                &typed.checked.types,
                 &typed.checked.expressions,
                 &typed.checked.bindings,
                 &typed.checked.patterns,
@@ -102,15 +101,38 @@ fn equal_artifacts(engine: &mut QueryEngine, fresh: &mut QueryEngine, p: &DefPat
     let a = engine.mode_definition(p).unwrap().value;
     let b = fresh.mode_definition(p).unwrap().value;
     assert_eq!(artifact_view(&a.typed), artifact_view(&b.typed));
-    let facts = |v: &AnalyzedBody| format!("{:?}", (&v.ownership, &v.results, &v.call_allocations));
+    // The fact sets are hashed: compare them in a stable order.
+    let facts = |v: &AnalyzedBody| {
+        let sorted = |set: &std::collections::HashSet<hirsel_types::TypeId>| {
+            let mut ids: Vec<_> = set.iter().map(|id| format!("{id:?}")).collect();
+            ids.sort();
+            ids
+        };
+        let rest = hirsel_types::OwnershipFacts {
+            plain_types: Default::default(),
+            silent_drop_types: Default::default(),
+            ..v.ownership.clone()
+        };
+        format!(
+            "{:?}",
+            (
+                sorted(&v.ownership.plain_types),
+                sorted(&v.ownership.silent_drop_types),
+                rest,
+                &v.results,
+                &v.call_allocations
+            )
+        )
+    };
     assert_eq!(
         normalize_sites(&a.typed, facts(&a)),
         normalize_sites(&b.typed, facts(&b))
     );
-    assert!(a.materialized.is_empty() && b.materialized.is_empty());
 }
 fn equal_fresh(engine: &mut QueryEngine, source: &str) {
-    let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+    // One interner, so equal artifacts carry equal type ids.
+    let mut fresh = QueryEngine::new(default_environment(), compiler_adapters())
+        .with_types(engine.types().clone());
     edit(&mut fresh, source);
     for name in ["a", "b", "untouched"] {
         let p = path(name);
@@ -138,10 +160,8 @@ fn equal_fresh(engine: &mut QueryEngine, source: &str) {
         };
         assert_eq!(normalize(engine, &a.value), normalize(&mut fresh, &b.value));
         assert_eq!(a.value.types.len(), b.value.types.len());
-        for ((id, _), (other, _)) in a.value.types.iter().zip(b.value.types.iter()) {
-            assert!(
-                hirsel_types::semantic_equal(&a.value.types, id, &b.value.types, other).unwrap()
-            );
+        for (&id, &other) in a.value.types.iter().zip(b.value.types.iter()) {
+            assert!(engine.types().semantic_eq(id, other));
         }
     }
 }
@@ -211,7 +231,7 @@ fn registry_fallback_records_reads_and_respects_program_definitions_on_compiler_
             .unwrap()
             .signatures
             .iter()
-            .any(|d| d.definition == hirsel_syntax::DefPath::core("io.stdout"))
+            .any(|d| *d.definition.path() == hirsel_syntax::DefPath::core("io.stdout"))
     );
     edit(
         &mut engine,
@@ -222,7 +242,7 @@ fn registry_fallback_records_reads_and_respects_program_definitions_on_compiler_
         panic!()
     };
     assert!(
-        matches!(&signature.types.get(f.parameters[0].ty).unwrap().kind,hirsel_types::TypeKind::Named { definition, .. } if *definition==path("Io"))
+        matches!(&engine.types().get(f.parameters[0].ty).unwrap().kind,hirsel_types::TypeKind::Named { definition, .. } if *definition == hirsel_syntax::DefId::intern(&path("Io")))
     );
     let hidden = hirsel_syntax::Path {
         package: None,
@@ -692,16 +712,18 @@ fn assert_captured_alias_identity(body: &str, rejects_end_origin: bool) {
     let output = engine
         .lower_to_tir(&path("probe"))
         .unwrap_or_else(|e| panic!("{source}: {e:?}"));
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "use_pos", "Holder", "relay"] {
-        let signature = engine.signature(&path(name)).unwrap();
+        let signature = engine
+            .signature(hirsel_syntax::DefId::intern(&path(name)))
+            .unwrap();
         signatures.insert(path(name), signature.as_ref().clone());
     }
     assert!(
-        hirsel_validate::validate(&output.value, &signatures)
+        hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
             .violations
             .is_empty()
     );
@@ -740,7 +762,8 @@ fn assert_captured_alias_identity(body: &str, rejects_end_origin: bool) {
         span: Default::default(),
         on_failure: hirsel_tir::CleanupId(0),
     });
-    let report = hirsel_validate::validate(&ended, &signatures);
+    ended.types = hirsel_tir::definition_types(engine.types(), &ended);
+    let report = hirsel_validate::validate(&ended, engine.types(), &signatures, &mut vec![]);
     if rejects_end_origin {
         assert!(
             report
@@ -783,7 +806,8 @@ fn assert_captured_alias_identity(body: &str, rejects_end_origin: bool) {
             on_failure: hirsel_tir::CleanupId(0),
         },
     );
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -807,14 +831,18 @@ fn sibling_projection_cannot_claim_another_records_identity_on_compiler_thread()
         "type Log {dir:Dir,file:File of .dir}\nfn inspect(d:Dir,f:File of d) {}\nfn probe(log:Log,other:Log) {inspect(log.dir,log.file)}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "inspect", "Log"] {
         signatures.insert(
             path(name),
-            engine.signature(&path(name)).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
     }
     let mut changed = output.value.as_ref().clone();
@@ -825,7 +853,7 @@ fn sibling_projection_cannot_claim_another_records_identity_on_compiler_thread()
     for place in &mut body.places {
         if place.root == body.parameters[0] && !place.projection.is_empty() {
             place.binding.as_mut().unwrap().root = forged.clone();
-            place.ty = hirsel_types::map_type_origins(&mut changed.types, place.ty, |origin, _| {
+            place.ty = hirsel_types::map_type_origins(engine.types(), place.ty, |origin, _| {
                 let mut origin = origin.clone();
                 if origin.root == original {
                     origin.root = forged.clone();
@@ -837,7 +865,8 @@ fn sibling_projection_cannot_claim_another_records_identity_on_compiler_thread()
         }
     }
     assert!(count >= 2);
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -861,14 +890,18 @@ fn sibling_constructor_checks_the_supplied_owner_operand_on_compiler_thread() {
         "type Log {dir:Dir,file:File of .dir}\nfn probe(d:Dir,other:Dir,take value:File of d)->Log {Log(dir:d,file:take value)}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "Log"] {
         signatures.insert(
             path(name),
-            engine.signature(&path(name)).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
     }
     let mut changed = output.value.as_ref().clone();
@@ -895,7 +928,8 @@ fn sibling_constructor_checks_the_supplied_owner_operand_on_compiler_thread() {
         place: other,
         usage: hirsel_types::UseKind::Copy,
     };
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report.violations.iter().any(|v| v.kind
             == hirsel_validate::ViolationKind::TypeMismatch {
@@ -919,14 +953,18 @@ fn destructuring_derives_sibling_brands_instead_of_trusting_field_types_on_compi
         "type Log {dir:Dir,file:File of .dir}\nfn inspect(d:Dir,f:File of d) {}\nfn probe(take log:Log,other:Dir) {let Log(dir:d,file:value)=take log; inspect(d,value)}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "inspect", "Log"] {
         signatures.insert(
             path(name),
-            engine.signature(&path(name)).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
     }
     let mut changed = output.value.as_ref().clone();
@@ -955,7 +993,7 @@ fn destructuring_derives_sibling_brands_instead_of_trusting_field_types_on_compi
         .map(|l| &mut l.ty)
         .chain(body.places.iter_mut().map(|p| &mut p.ty))
     {
-        *ty = hirsel_types::map_type_origins(&mut changed.types, *ty, |origin, _| {
+        *ty = hirsel_types::map_type_origins(engine.types(), *ty, |origin, _| {
             let mut origin = origin.clone();
             if matches!(origin.root, OriginRoot::Local(..)) {
                 origin.root =
@@ -965,7 +1003,8 @@ fn destructuring_derives_sibling_brands_instead_of_trusting_field_types_on_compi
         })
         .unwrap();
     }
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1013,14 +1052,18 @@ fn named_function_identity_requires_named_definition_evidence_on_compiler_thread
         "fn target(x:u8,y:u8)->u8 {x}\nfn other(x:u8,y:u8)->u8 {y}\nfn inspect(f:fn(u8,u8)->u8,p:u8 of f) {}\nfn probe(p:u8 of target) {inspect(target,p)}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "inspect", "target", "other"] {
         signatures.insert(
             path(name),
-            engine.signature(&path(name)).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
     }
     assert_eq!(output.value.bodies.len(), 1);
@@ -1034,7 +1077,8 @@ fn named_function_identity_requires_named_definition_evidence_on_compiler_thread
         })
         .expect("named function reference");
     *reference = path("other");
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1065,14 +1109,18 @@ fn expiring_one_stored_capture_does_not_invalidate_another_field_on_compiler_thr
         "type Pair[A,B] {first:A,second:B}\nfn use_pos(s:Dir,p:u64 of s) {}\nfn probe(s:Dir,p:u64 of s) {let alias=s;let pair=Pair(first:fn(){use_pos(alias,p)},second:fn(){});pair.second()}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     for name in ["probe", "use_pos", "Pair"] {
         signatures.insert(
             path(name),
-            engine.signature(&path(name)).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
     }
     let mut changed = output.value.as_ref().clone();
@@ -1102,7 +1150,8 @@ fn expiring_one_stored_capture_does_not_invalidate_another_field_on_compiler_thr
         span: Default::default(),
         on_failure: hirsel_tir::CleanupId(0),
     });
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(report.violations.is_empty(), "{report:?}");
 }
 
@@ -1121,15 +1170,19 @@ fn mutable_iteration_alias_access_requires_its_live_loan_on_compiler_thread() {
         "fn probe(mut xs:Array[u8]) {for x in mut xs {let y=x; x+=1}}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     signatures.insert(
         path("probe"),
-        engine.signature(&path("probe")).unwrap().as_ref().clone(),
+        engine
+            .signature(hirsel_syntax::DefId::intern(&path("probe")))
+            .unwrap()
+            .as_ref()
+            .clone(),
     );
-    let report = hirsel_validate::validate(&output.value, &signatures);
+    let report = hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![]);
     assert!(report.violations.is_empty(), "{report:?}");
     let mut changed = output.value.as_ref().clone();
     let body = &mut changed.bodies[changed.entry.0 as usize];
@@ -1160,7 +1213,8 @@ fn mutable_iteration_alias_access_requires_its_live_loan_on_compiler_thread() {
         if_active: false,
     };
     body.blocks[block].instructions.insert(instruction, end);
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1169,7 +1223,8 @@ fn mutable_iteration_alias_access_requires_its_live_loan_on_compiler_thread() {
         "{report:?}"
     );
     changed.bodies[changed.entry.0 as usize].places[place.0 as usize].loan = None;
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1179,7 +1234,8 @@ fn mutable_iteration_alias_access_requires_its_live_loan_on_compiler_thread() {
     );
     let mut changed = output.value.as_ref().clone();
     changed.bodies[changed.entry.0 as usize].places[place.0 as usize].loan = None;
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1212,14 +1268,18 @@ fn borrowed_closure_and_holder_relay_retain_source_loans_on_compiler_thread() {
         let output = engine
             .lower_to_tir(&path("probe"))
             .unwrap_or_else(|e| panic!("{source}: {e:?}"));
-        let mut signatures = hirsel_validate::Signatures::new();
+        let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         for signature in registry::BuiltinRegistry::new().signatures() {
             signatures.insert(signature.definition.clone(), signature.as_ref().clone());
         }
         for name in names {
             signatures.insert(
                 path(name),
-                engine.signature(&path(name)).unwrap().as_ref().clone(),
+                engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap()
+                    .as_ref()
+                    .clone(),
             );
         }
         let mut changed = output.value.as_ref().clone();
@@ -1266,7 +1326,8 @@ fn borrowed_closure_and_holder_relay_retain_source_loans_on_compiler_thread() {
             span: Default::default(),
             on_failure: hirsel_tir::CleanupId(0),
         });
-        let report = hirsel_validate::validate(&changed, &signatures);
+        changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+        let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| v.kind
                 == hirsel_validate::ViolationKind::ExpiredLoan {
@@ -1362,13 +1423,17 @@ fn an_element_of_a_capture_has_its_own_name_but_cannot_take_the_captures() {
         "fn probe(xs:List[u8],i:u64)->u8 {(fn() {xs[i]})()}",
     );
     let output = engine.lower_to_tir(&path("probe")).unwrap();
-    let mut signatures = hirsel_validate::Signatures::new();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
     for signature in registry::BuiltinRegistry::new().signatures() {
         signatures.insert(signature.definition.clone(), signature.as_ref().clone());
     }
     signatures.insert(
         path("probe"),
-        engine.signature(&path("probe")).unwrap().as_ref().clone(),
+        engine
+            .signature(hirsel_syntax::DefId::intern(&path("probe")))
+            .unwrap()
+            .as_ref()
+            .clone(),
     );
     let mut changed = output.value.as_ref().clone();
     let nested = changed
@@ -1406,7 +1471,8 @@ fn an_element_of_a_capture_has_its_own_name_but_cannot_take_the_captures() {
     // Naming the element as the captured binding would mint a new incarnation
     // of an identity the environment owns.
     nested.places[element.0 as usize].binding = Some(environment);
-    let report = hirsel_validate::validate(&changed, &signatures);
+    changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+    let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -1431,29 +1497,34 @@ fn fresh_alias_join_identity_is_independently_checked() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, &source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for signature in registry::BuiltinRegistry::new().signatures() {
                 signatures.insert(signature.definition.clone(), signature.as_ref().clone());
             }
             for name in ["probe", "make", "inspect", "R"] {
-                let signature = engine.signature(&path(name)).unwrap();
+                let signature = engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap();
                 signatures.insert(path(name), signature.as_ref().clone());
             }
-            let report = hirsel_validate::validate(&output.value, &signatures);
+            let report =
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![]);
             assert!(report.violations.is_empty(), "{branch}: {report:?}");
             let mut changed = output.value.as_ref().clone();
             let body = &mut changed.bodies[changed.entry.0 as usize];
             let instruction = body.blocks.iter_mut().flat_map(|b| &mut b.instructions).find(|i| {
                 let hirsel_tir::InstructionKind::BindOrigin { place, kind: hirsel_tir::OriginBindingKind::Fresh, .. } = i.kind else { return false };
                 let access = &body.places[place.0 as usize];
-                matches!(changed.types.get(access.ty).unwrap().kind, hirsel_types::TypeKind::Named { ref definition, .. } if *definition == path("R"))
+                matches!(engine.types().get(access.ty).unwrap().kind, hirsel_types::TypeKind::Named { ref definition, .. } if *definition == hirsel_syntax::DefId::intern(&path("R")))
                     && engine.sources.slice(i.span).is_some_and(|text| text.trim_end_matches(';') == branch)
             }).unwrap_or_else(|| panic!("{branch}: published fresh R identity at the join"));
             let hirsel_tir::InstructionKind::BindOrigin { kind, .. } = &mut instruction.kind else {
                 unreachable!()
             };
             *kind = hirsel_tir::OriginBindingKind::Alias;
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -1486,7 +1557,7 @@ fn moved_aliases_have_no_join_identity_introduction() {
             let analyzed = engine.mode_definition(&path("probe")).unwrap();
             let checked = &analyzed.value.typed.checked;
             let root = checked.bindings.iter().find_map(|b| {
-                matches!(checked.types.get(b.ty).unwrap().kind, hirsel_types::TypeKind::Named { ref definition, .. } if *definition == path("R"))
+                matches!(engine.types().get(b.ty).unwrap().kind, hirsel_types::TypeKind::Named { ref definition, .. } if *definition == hirsel_syntax::DefId::intern(&path("R")))
                     .then(|| match b.binding { hirsel_types::ResolvedName::Local(l) => Some(hirsel_types::OriginRoot::Local(analyzed.value.typed.syntax.owner(), l)), _ => None }).flatten()
             }).expect("local r");
             assert!(
@@ -1522,7 +1593,7 @@ fn copied_field_join_partitions_are_independently_checked() {
             let output = engine
                 .lower_to_tir(&path("probe"))
                 .unwrap_or_else(|error| panic!("{source}: {error:?}"));
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for signature in registry::BuiltinRegistry::new().signatures() {
                 signatures.insert(signature.definition.clone(), signature.as_ref().clone());
             }
@@ -1534,10 +1605,13 @@ fn copied_field_join_partitions_are_independently_checked() {
                 "inspect_other",
                 "R",
             ] {
-                let signature = engine.signature(&path(name)).unwrap();
+                let signature = engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap();
                 signatures.insert(path(name), signature.as_ref().clone());
             }
-            let report = hirsel_validate::validate(&output.value, &signatures);
+            let report =
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![]);
             assert!(report.violations.is_empty(), "{source}: {report:?}");
             let mut changed = output.value.as_ref().clone();
             let body = &mut changed.bodies[changed.entry.0 as usize];
@@ -1563,7 +1637,9 @@ fn copied_field_join_partitions_are_independently_checked() {
                 });
             }
             assert_eq!(removed, 1, "{branch}");
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -1605,14 +1681,16 @@ fn whole_owned_replacement_requires_a_fresh_receiving_origin() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, &source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for signature in registry::BuiltinRegistry::new().signatures() {
                 signatures.insert(signature.definition.clone(), signature.as_ref().clone());
             }
-            let signature = engine.signature(&path("probe")).unwrap();
+            let signature = engine
+                .signature(hirsel_syntax::DefId::intern(&path("probe")))
+                .unwrap();
             signatures.insert(path("probe"), signature.as_ref().clone());
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -1636,7 +1714,9 @@ fn whole_owned_replacement_requires_a_fresh_receiving_origin() {
                 });
             }
             assert_eq!(removed, 1, "{replacement}");
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -1659,13 +1739,15 @@ fn record_constructors_independently_require_every_declared_field() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, &source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for name in ["R", "probe"] {
-                let signature = engine.signature(&path(name)).unwrap();
+                let signature = engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap();
                 signatures.insert(path(name), signature.as_ref().clone());
             }
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -1684,7 +1766,9 @@ fn record_constructors_independently_require_every_declared_field() {
                 }
             }
             assert_eq!(removed, 1);
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -1710,13 +1794,15 @@ fn call_argument_mapping_independently_rejects_missing_and_duplicate_ordinals() 
             "fn rename(from x:u8,to y:u8){}\nfn probe(){rename(to:2,from:1)}",
         );
         let output = engine.lower_to_tir(&path("probe")).unwrap();
-        let mut signatures = hirsel_validate::Signatures::new();
+        let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         for name in ["rename", "probe"] {
-            let signature = engine.signature(&path(name)).unwrap();
+            let signature = engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap();
             signatures.insert(path(name), signature.as_ref().clone());
         }
         assert!(
-            hirsel_validate::validate(&output.value, &signatures)
+            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -1740,7 +1826,9 @@ fn call_argument_mapping_independently_rejects_missing_and_duplicate_ordinals() 
             } else {
                 arguments.pop();
             }
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -1769,13 +1857,17 @@ fn branch_results_are_independently_checked_against_the_receiving_type() {
                 &format!("fn probe(b:bool){{ let x={branch} }}"),
             );
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             signatures.insert(
                 path("probe"),
-                engine.signature(&path("probe")).unwrap().as_ref().clone(),
+                engine
+                    .signature(hirsel_syntax::DefId::intern(&path("probe")))
+                    .unwrap()
+                    .as_ref()
+                    .clone(),
             );
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -1792,7 +1884,9 @@ fn branch_results_are_independently_checked_against_the_receiving_type() {
                 })
                 .unwrap();
             *value = hirsel_tir::Rvalue::Constant(hirsel_tir::Constant::Bool(false));
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| v.kind
                     == hirsel_validate::ViolationKind::TypeMismatch { entity: "constant" }),
@@ -1812,20 +1906,28 @@ fn match_payload_projections_keep_the_physical_type_and_validate_it_independentl
             "fn make()->Result[unique String,()]{Ok(\"x\")}\nfn probe(){match make(){Ok(text)=>(),Error(e)=>()}}",
         );
         let output = engine.lower_to_tir(&path("probe")).unwrap();
-        let mut signatures = hirsel_validate::Signatures::new();
+        let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         for name in ["make", "probe"] {
             signatures.insert(
                 path(name),
-                engine.signature(&path(name)).unwrap().as_ref().clone(),
+                engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap()
+                    .as_ref()
+                    .clone(),
             );
         }
         let result = hirsel_syntax::DefPath::core("Result");
         signatures.insert(
             result.clone(),
-            engine.signature(&result).unwrap().as_ref().clone(),
+            engine
+                .signature(hirsel_syntax::DefId::intern(&result))
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
         assert!(
-            hirsel_validate::validate(&output.value, &signatures)
+            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -1846,12 +1948,17 @@ fn match_payload_projections_keep_the_physical_type_and_validate_it_independentl
                 })
             })
             .unwrap();
-        let mut row = changed.types.get(body.places[physical].ty).unwrap().clone();
+        let mut row = engine
+            .types()
+            .get(body.places[physical].ty)
+            .unwrap()
+            .clone();
         assert_eq!(row.modes.uniqueness, hirsel_types::Uniqueness::Unique);
         row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
         row.modes.sendability = hirsel_types::Sendability::NotSendable;
-        body.places[physical].ty = changed.types.push(row);
-        let report = hirsel_validate::validate(&changed, &signatures);
+        body.places[physical].ty = engine.types().intern(row);
+        changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+        let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| v.kind
                 == hirsel_validate::ViolationKind::InvalidProjection(hirsel_tir::PlaceId(
@@ -1872,15 +1979,19 @@ fn projected_unique_receipts_require_current_deep_owner_uniqueness() {
             "type Rec {items:unique Bytes}\nfn need(take x:unique Bytes){}\nfn probe(take r:unique Rec){let Rec(items:items)=take r\n need(take items)}",
         );
         let output = engine.lower_to_tir(&path("probe")).unwrap();
-        let mut signatures = hirsel_validate::Signatures::new();
+        let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         for name in ["Rec", "need", "probe"] {
             signatures.insert(
                 path(name),
-                engine.signature(&path(name)).unwrap().as_ref().clone(),
+                engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap()
+                    .as_ref()
+                    .clone(),
             );
         }
         assert!(
-            hirsel_validate::validate(&output.value, &signatures)
+            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -1899,7 +2010,8 @@ fn projected_unique_receipts_require_current_deep_owner_uniqueness() {
             })
             .unwrap();
         first_take.usage = hirsel_types::UseKind::Copy;
-        let report = hirsel_validate::validate(&copied, &signatures);
+        copied.types = hirsel_tir::definition_types(engine.types(), &copied);
+        let report = hirsel_validate::validate(&copied, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| matches!(
                 v.kind,
@@ -1919,19 +2031,20 @@ fn projected_unique_receipts_require_current_deep_owner_uniqueness() {
             .unwrap();
         let root = entry.places[projected].root;
         let original = entry.locals[root.0 as usize].ty;
-        let mut row = boundary.types.get(original).unwrap().clone();
+        let mut row = engine.types().get(original).unwrap().clone();
         row.kind = hirsel_types::TypeKind::Builtin {
             kind: hirsel_types::BuiltinType::Shared,
             arguments: vec![hirsel_types::GenericArgument::Type(original)].into(),
         };
-        let shared = boundary.types.push(row);
+        let shared = engine.types().intern(row);
         entry.locals[root.0 as usize].ty = shared;
         for place in &mut entry.places {
             if place.root == root && place.projection.is_empty() {
                 place.ty = shared;
             }
         }
-        let report = hirsel_validate::validate(&boundary, &signatures);
+        boundary.types = hirsel_tir::definition_types(engine.types(), &boundary);
+        let report = hirsel_validate::validate(&boundary, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| v.kind
                 == hirsel_validate::ViolationKind::InvalidProjection(hirsel_tir::PlaceId(
@@ -1941,12 +2054,12 @@ fn projected_unique_receipts_require_current_deep_owner_uniqueness() {
         );
 
         let mut changed = output.value.as_ref().clone();
-        let roots:Vec<_>=changed.types.iter().filter_map(|(id,row)|matches!(&row.kind,hirsel_types::TypeKind::Named{definition,..} if definition==&path("Rec")).then_some(id)).collect();
-        let mut replacements = std::collections::BTreeMap::new();
+        let roots:Vec<_>=changed.types.iter().map(|&id| (id, engine.types().row(id))).filter_map(|(id, row)|matches!(&row.kind,hirsel_types::TypeKind::Named{definition,..} if definition.path() == &path("Rec")).then_some(id)).collect();
+        let mut replacements = std::collections::HashMap::new();
         for old in roots {
-            let mut row = changed.types.get(old).unwrap().clone();
+            let mut row = engine.types().get(old).unwrap().clone();
             row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-            replacements.insert(old, changed.types.push(row));
+            replacements.insert(old, engine.types().intern(row));
         }
         for body in &mut changed.bodies {
             for local in &mut body.locals {
@@ -1964,19 +2077,20 @@ fn projected_unique_receipts_require_current_deep_owner_uniqueness() {
         let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
             panic!()
         };
-        let mut row = signature
-            .types
+        let mut row = engine
+            .types()
             .get(function.parameters[0].ty)
             .unwrap()
             .clone();
         row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-        let ty = signature.types.push(row);
+        let ty = engine.types().intern(row);
         let hirsel_types::SignatureKind::Function(function) = &mut signature.kind else {
             panic!()
         };
         function.parameters[0].ty = ty;
         signatures.insert(path("probe"), signature);
-        let report = hirsel_validate::validate(&changed, &signatures);
+        changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+        let report = hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| matches!(
                 v.kind,
@@ -2005,7 +2119,7 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for name in if nominal {
                 vec!["R", "probe"]
             } else {
@@ -2013,11 +2127,15 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
             } {
                 signatures.insert(
                     path(name),
-                    engine.signature(&path(name)).unwrap().as_ref().clone(),
+                    engine
+                        .signature(hirsel_syntax::DefId::intern(&path(name)))
+                        .unwrap()
+                        .as_ref()
+                        .clone(),
                 );
             }
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -2026,20 +2144,21 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
                 let roots: Vec<_> = payload_contract
                     .types
                     .iter()
+                    .map(|&id| (id, engine.types().row(id)))
                     .filter_map(|(id, row)| {
                         matches!(row.kind, hirsel_types::TypeKind::Box(_)).then_some(id)
                     })
                     .collect();
-                let mut replacements = std::collections::BTreeMap::new();
+                let mut replacements = std::collections::HashMap::new();
                 for old in roots {
-                    let mut row = payload_contract.types.get(old).unwrap().clone();
+                    let mut row = engine.types().get(old).unwrap().clone();
                     let hirsel_types::TypeKind::Box(payload) = row.kind else {
                         unreachable!()
                     };
-                    let mut part = payload_contract.types.get(payload).unwrap().clone();
+                    let mut part = engine.types().get(payload).unwrap().clone();
                     part.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-                    row.kind = hirsel_types::TypeKind::Box(payload_contract.types.push(part));
-                    replacements.insert(old, payload_contract.types.push(row));
+                    row.kind = hirsel_types::TypeKind::Box(engine.types().intern(part));
+                    replacements.insert(old, engine.types().intern(row));
                 }
                 for body in &mut payload_contract.bodies {
                     for local in &mut body.locals {
@@ -2053,7 +2172,14 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
                         }
                     }
                 }
-                let report = hirsel_validate::validate(&payload_contract, &signatures);
+                payload_contract.types =
+                    hirsel_tir::definition_types(engine.types(), &payload_contract);
+                let report = hirsel_validate::validate(
+                    &payload_contract,
+                    engine.types(),
+                    &signatures,
+                    &mut vec![],
+                );
                 assert!(
                     report.violations.iter().any(|v| matches!(
                         v.kind,
@@ -2065,12 +2191,12 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
                 );
             }
             let mut forged = output.value.as_ref().clone();
-            let roots:Vec<_>=forged.types.iter().filter_map(|(id,row)|(if nominal { matches!(&row.kind,hirsel_types::TypeKind::Named{definition,..}if definition==&path("R")) } else { matches!(row.kind,hirsel_types::TypeKind::Box(_)) }).then_some(id)).collect();
-            let mut replacements = std::collections::BTreeMap::new();
+            let roots:Vec<_>=forged.types.iter().map(|&id| (id, engine.types().row(id))).filter_map(|(id, row)|(if nominal { matches!(&row.kind,hirsel_types::TypeKind::Named{definition,..}if definition.path() == &path("R")) } else { matches!(row.kind,hirsel_types::TypeKind::Box(_)) }).then_some(id)).collect();
+            let mut replacements = std::collections::HashMap::new();
             for old in roots {
-                let mut row = forged.types.get(old).unwrap().clone();
+                let mut row = engine.types().get(old).unwrap().clone();
                 row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-                replacements.insert(old, forged.types.push(row));
+                replacements.insert(old, engine.types().intern(row));
             }
             for body in &mut forged.bodies {
                 for local in &mut body.locals {
@@ -2084,7 +2210,9 @@ fn aggregate_uniqueness_requires_owned_unique_parts_independently() {
                     }
                 }
             }
-            let report = hirsel_validate::validate(&forged, &signatures);
+            forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+            let report =
+                hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -2121,27 +2249,29 @@ fn nonrecord_names_cannot_forge_nullary_record_constructions() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, &source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for name in ["Empty", "S", "probe"] {
-                let signature = engine.signature(&path(name)).unwrap();
+                let signature = engine
+                    .signature(hirsel_syntax::DefId::intern(&path(name)))
+                    .unwrap();
                 signatures.insert(path(name), signature.as_ref().clone());
             }
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
             let mut changed = output.value.as_ref().clone();
-            let replacements: Vec<_> = changed.types.iter().filter_map(|(id, row)| {
-                if matches!(&row.kind, hirsel_types::TypeKind::Named {definition,..} if *definition == path("Empty")) {
+            let replacements: Vec<_> = changed.types.iter().map(|&id| (id, engine.types().row(id))).filter_map(|(id, row)| {
+                if matches!(&row.kind, hirsel_types::TypeKind::Named {definition,..} if *definition == hirsel_syntax::DefId::intern(&path("Empty"))) {
                     let mut row = row.clone();
-                    row.kind = hirsel_types::TypeKind::Named {definition:path("S"), arguments:vec![].into()};
+                    row.kind = hirsel_types::TypeKind::Named {definition: hirsel_syntax::DefId::intern(&path("S")), arguments:vec![].into()};
                     Some((id,row))
                 } else { None }
             }).collect();
-            let replacements: std::collections::BTreeMap<_, _> = replacements
+            let replacements: std::collections::HashMap<_, _> = replacements
                 .into_iter()
-                .map(|(old, row)| (old, changed.types.push(row)))
+                .map(|(old, row)| (old, engine.types().intern(row)))
                 .collect();
             let body = &mut changed.bodies[changed.entry.0 as usize];
             for ty in body
@@ -2166,7 +2296,9 @@ fn nonrecord_names_cannot_forge_nullary_record_constructions() {
                 }
             }
             assert_eq!(constructed, 1);
-            let report = hirsel_validate::validate(&changed, &signatures);
+            changed.types = hirsel_tir::definition_types(engine.types(), &changed);
+            let report =
+                hirsel_validate::validate(&changed, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report
                     .violations
@@ -2197,15 +2329,19 @@ fn physical_projection_contracts_are_independently_checked() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for name in names {
                 signatures.insert(
                     path(name),
-                    engine.signature(&path(name)).unwrap().as_ref().clone(),
+                    engine
+                        .signature(hirsel_syntax::DefId::intern(&path(name)))
+                        .unwrap()
+                        .as_ref()
+                        .clone(),
                 );
             }
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -2217,27 +2353,33 @@ fn physical_projection_contracts_are_independently_checked() {
                 .position(|p| {
                     !p.projection.is_empty()
                         && if local {
-                            forged
-                                .types
+                            engine
+                                .types()
                                 .get(p.ty)
                                 .unwrap()
                                 .modes
                                 .relation
                                 .has_environment()
                         } else {
-                            forged.types.get(p.ty).unwrap().modes.uniqueness
+                            engine.types().get(p.ty).unwrap().modes.uniqueness
                                 == hirsel_types::Uniqueness::Unique
                         }
                 })
                 .unwrap();
-            let mut row = forged.types.get(body.places[projected].ty).unwrap().clone();
+            let mut row = engine
+                .types()
+                .get(body.places[projected].ty)
+                .unwrap()
+                .clone();
             if local {
                 row.modes.relation = hirsel_types::Relation::global();
             } else {
                 row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
             }
-            body.places[projected].ty = forged.types.push(row);
-            let report = hirsel_validate::validate(&forged, &signatures);
+            body.places[projected].ty = engine.types().intern(row);
+            forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+            let report =
+                hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| v.kind
                     == hirsel_validate::ViolationKind::InvalidProjection(hirsel_tir::PlaceId(
@@ -2258,15 +2400,19 @@ fn computed_part_shares_cannot_forge_unique_aggregate_receipts() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, &source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
             for name in ["R", "probe"] {
                 signatures.insert(
                     path(name),
-                    engine.signature(&path(name)).unwrap().as_ref().clone(),
+                    engine
+                        .signature(hirsel_syntax::DefId::intern(&path(name)))
+                        .unwrap()
+                        .as_ref()
+                        .clone(),
                 );
             }
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -2274,6 +2420,7 @@ fn computed_part_shares_cannot_forge_unique_aggregate_receipts() {
             let roots: Vec<_> = forged
                 .types
                 .iter()
+                .map(|&id| (id, engine.types().row(id)))
                 .filter_map(|(id, row)| match &row.kind {
                     hirsel_types::TypeKind::Box(_) => Some(id),
                     hirsel_types::TypeKind::Tuple(parts) if parts.len() == 2 => Some(id),
@@ -2281,12 +2428,12 @@ fn computed_part_shares_cannot_forge_unique_aggregate_receipts() {
                 })
                 .collect();
             assert!(!roots.is_empty());
-            let replacements: std::collections::BTreeMap<_, _> = roots
+            let replacements: std::collections::HashMap<_, _> = roots
                 .into_iter()
                 .map(|old| {
-                    let mut row = forged.types.get(old).unwrap().clone();
+                    let mut row = engine.types().get(old).unwrap().clone();
                     row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-                    (old, forged.types.push(row))
+                    (old, engine.types().intern(row))
                 })
                 .collect();
             for body in &mut forged.bodies {
@@ -2301,7 +2448,9 @@ fn computed_part_shares_cannot_forge_unique_aggregate_receipts() {
                     }
                 }
             }
-            let report = hirsel_validate::validate(&forged, &signatures);
+            forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+            let report =
+                hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -2323,13 +2472,15 @@ fn shared_handle_qualifiers_publish_canonical_copy_receipts() {
             &mut engine,
             "fn probe(take s:unique Shared[Bytes]){let copied=copy s}",
         );
-        let signature = engine.signature(&path("probe")).unwrap();
+        let signature = engine
+            .signature(hirsel_syntax::DefId::intern(&path("probe")))
+            .unwrap();
         let hirsel_types::SignatureKind::Function(header) = &signature.kind else {
             panic!()
         };
         assert_eq!(
-            signature
-                .types
+            engine
+                .types()
                 .get(header.parameters[0].ty)
                 .unwrap()
                 .modes
@@ -2337,10 +2488,10 @@ fn shared_handle_qualifiers_publish_canonical_copy_receipts() {
             hirsel_types::Uniqueness::Aliased
         );
         let output = engine.lower_to_tir(&path("probe")).unwrap();
-        let mut signatures = hirsel_validate::Signatures::new();
+        let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
         signatures.insert(path("probe"), signature.as_ref().clone());
         assert!(
-            hirsel_validate::validate(&output.value, &signatures)
+            hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -2367,17 +2518,18 @@ fn shared_handle_qualifiers_publish_canonical_copy_receipts() {
             .unwrap();
         let place = &body.places[destination.0 as usize];
         let root = place.root;
-        let mut row = forged.types.get(place.ty).unwrap().clone();
+        let mut row = engine.types().get(place.ty).unwrap().clone();
         assert_eq!(row.modes.uniqueness, hirsel_types::Uniqueness::Aliased);
         row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-        let changed = forged.types.push(row);
+        let changed = engine.types().intern(row);
         body.locals[root.0 as usize].ty = changed;
         for place in &mut body.places {
             if place.root == root && place.projection.is_empty() {
                 place.ty = changed;
             }
         }
-        let report = hirsel_validate::validate(&forged, &signatures);
+        forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+        let report = hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
         assert!(
             report.violations.iter().any(|v| matches!(
                 v.kind,
@@ -2402,15 +2554,23 @@ fn nested_view_calls_preserve_mut_handback_and_reject_forged_strengthening() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             edit(&mut engine, source);
             let output = engine.lower_to_tir(&path("probe")).unwrap();
-            let mut signatures = hirsel_validate::Signatures::new();
-            let mut inspect = engine.signature(&path("inspect")).unwrap().as_ref().clone();
+            let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
+            let mut inspect = engine
+                .signature(hirsel_syntax::DefId::intern(&path("inspect")))
+                .unwrap()
+                .as_ref()
+                .clone();
             signatures.insert(
                 path("probe"),
-                engine.signature(&path("probe")).unwrap().as_ref().clone(),
+                engine
+                    .signature(hirsel_syntax::DefId::intern(&path("probe")))
+                    .unwrap()
+                    .as_ref()
+                    .clone(),
             );
             signatures.insert(path("inspect"), inspect.clone());
             assert!(
-                hirsel_validate::validate(&output.value, &signatures)
+                hirsel_validate::validate(&output.value, engine.types(), &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -2431,16 +2591,16 @@ fn nested_view_calls_preserve_mut_handback_and_reject_forged_strengthening() {
                     .unwrap();
                 argument.value.usage = hirsel_types::UseKind::Mut;
             } else {
-                let mut boxed = inspect.types.get(header.parameters[0].ty).unwrap().clone();
+                let mut boxed = engine.types().get(header.parameters[0].ty).unwrap().clone();
                 let hirsel_types::TypeKind::Box(child) = boxed.kind else {
                     panic!()
                 };
-                let mut payload = inspect.types.get(child).unwrap().clone();
+                let mut payload = engine.types().get(child).unwrap().clone();
                 payload.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-                boxed.kind = hirsel_types::TypeKind::Box(inspect.types.push(payload));
-                let ty = inspect.types.push(boxed);
+                boxed.kind = hirsel_types::TypeKind::Box(engine.types().intern(payload));
+                let ty = engine.types().intern(boxed);
                 header.parameters[0].ty = hirsel_types::normalize_type_properties(
-                    &mut inspect.types,
+                    engine.types(),
                     ty,
                     &hirsel_types::GenericDeclarations::default(),
                     &mut |_| Ok::<_, QueryError>(None),
@@ -2448,7 +2608,9 @@ fn nested_view_calls_preserve_mut_handback_and_reject_forged_strengthening() {
                 .unwrap();
             }
             signatures.insert(path("inspect"), inspect);
-            let report = hirsel_validate::validate(&forged, &signatures);
+            forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+            let report =
+                hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
             assert!(
                 report.violations.iter().any(|v| matches!(
                     v.kind,
@@ -2478,13 +2640,10 @@ fn tir_rejects_source_replacement_when_the_iteration_loan_is_still_live() {
             .find(|(p, _)| p.0.name == "value")
             .unwrap()
             .1;
-        let signatures = input
-            .signatures
-            .iter()
-            .map(|(p, s)| (p.clone(), s.as_ref().clone()))
-            .collect();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         assert!(
-            hirsel_validate::validate(definition, &signatures)
+            hirsel_validate::validate(definition, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -2511,7 +2670,8 @@ fn tir_rejects_source_replacement_when_the_iteration_loan_is_still_live() {
                 });
             }
         }
-        let rejected = hirsel_validate::validate(&broken, &signatures);
+        broken.types = hirsel_tir::definition_types(engine.types(), &broken);
+        let rejected = hirsel_validate::validate(&broken, engine.types(), &signatures, &mut vec![]);
         assert!(
             rejected
                 .violations

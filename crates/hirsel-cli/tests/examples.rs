@@ -1164,12 +1164,16 @@ impl Example {
     fn build(&self, target: hirsel_driver::native::TargetSpec) -> PathBuf {
         let exe = self.dir.join(format!("program-{}", target.triple));
         hirsel_engine::with_compiler_stack(|| {
-            hirsel_driver::native::build_path_native(
+            hirsel_driver::native::build_path_native_backend_with_validation(
                 &self.dir.join("hirsel.json"),
                 &exe,
                 target,
                 Default::default(),
+                hirsel_driver::native::Backend::Llvm,
                 None,
+                false,
+                hirsel_engine::Verify::On,
+                hirsel_driver::native::Validation::EveryStage,
             )
         })
         .unwrap()

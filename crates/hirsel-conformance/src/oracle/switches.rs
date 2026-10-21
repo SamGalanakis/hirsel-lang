@@ -53,7 +53,7 @@ impl Switch {
             | Switch::VerifyCache
             | Switch::VerifyOff
             | Switch::SlowPathCounters
-            | Switch::Touched => false,
+            | Switch::Touched => true,
         }
     }
 

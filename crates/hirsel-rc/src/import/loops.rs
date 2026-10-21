@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// The loop prologue: every loop-carried parameter moves (a taken one) or
     /// is copied (a borrowed one: one count operation) into its loop slot.
     pub(super) fn enter_loop(&mut self, parameter_slots: &[Option<SlotId>]) -> R<()> {
@@ -135,23 +135,21 @@ impl Importer<'_, '_> {
         let revision = self
             .program
             .revisions
-            .get(&self.def.path)
+            .get(self.def.path.path())
             .copied()
-            .ok_or_else(|| InstanceError::MissingRevision(self.def.path.clone()))?;
+            .ok_or_else(|| InstanceError::MissingRevision(self.def.path.path().clone()))?;
         let table = self.layouts.table();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            source_count: self.source_anchors.len() as u32,
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: self.def.tracks_caller(view.body),
             stage: StageKind::Value,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
-            input: self.program.input.clone(),
-            definition: self.def.path.clone(),
+            definition: self.def.path.path().clone(),
             implementation_revision: revision,
             instance: view.key.digest(),
             target: table.target,
-            // Sealed with the finished table's digest once import adds no layout
-            // (`lower_discharging`); digesting the growing table here was discarded work.
-            layouts: hirsel_syntax::ContentHash::default(),
             abi: self.instances.abis[self.id.index()],
         });
         let out = std::mem::take(&mut self.out);

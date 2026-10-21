@@ -9,7 +9,8 @@ fn graph_error(error: GraphError) -> QueryError {
 }
 
 pub(super) fn result(
-    store: &mut TypeStore,
+    t: &TypeInterner,
+    m: &TypeMemo,
     roles: &NominalRoles,
     generics: &GenericDeclarations,
     path: &DefPath,
@@ -17,23 +18,23 @@ pub(super) fn result(
     authorities: &[AuthoritySummary],
     origins: &BTreeMap<ParameterRef, OriginArgument>,
     actuals: &BTreeMap<ParameterRef, TypeId>,
-    read: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    read: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
-    let signature = read(path)?.ok_or(QueryError::NotImplemented)?;
+    let signature = read(DefId::intern(path))?.ok_or(QueryError::NotImplemented)?;
     let SignatureKind::Function(function) = &signature.kind else {
         return Err(QueryError::Operational(OperationalFailure {
             operation: "cursor provenance".into(),
             message: "cursor operation is not a function".into(),
         }));
     };
-    let declared = import_type(&signature.types, function.result, store).map_err(graph_error)?;
     // Resolve the library parameter namespace before inserting caller generics.
     let declared =
-        instantiate_parameter_sources(store, declared, origins, actuals).map_err(graph_error)?;
-    let result = substitute_type_in_place(
-        store,
+        instantiate_parameter_sources(t, function.result, origins, actuals).map_err(graph_error)?;
+    let result = substitute(
+        t,
+        m,
         declared,
-        Substitution {
+        &Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles,
             arguments,
@@ -41,22 +42,22 @@ pub(super) fn result(
         },
     )
     .map_err(graph_error)?;
-    let result = canonical_plain_type(store, result, read)?;
-    normalize_type_properties(store, result, generics, read)
+    let result = canonical_plain_type(t, result, read)?;
+    normalize_type_properties(t, result, generics, read)
 }
 
 fn argument_authorities(
-    store: &TypeStore,
+    t: &TypeInterner,
     arguments: &[GenericArgument],
     roles: &NominalRoles,
     generics: &GenericDeclarations,
-    read: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    read: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Vec<AuthoritySummary>, QueryError> {
     arguments
         .iter()
         .map(|argument| match argument {
             GenericArgument::Type(ty) => {
-                structural_authority(store, *ty, roles, generics, &mut |_, path| match path {
+                structural_authority(t, *ty, roles, generics, &mut |_, path| match path {
                     Some(path) => read(path),
                     None => Ok(None),
                 })
@@ -68,6 +69,7 @@ fn argument_authorities(
 
 /// Phase-owned judgments used by the common implicit-call sequence.
 pub(super) trait CursorRefinement {
+    fn types(&self) -> &TypeInterner;
     fn body(&self) -> &CheckedBody;
     fn body_mut(&mut self) -> &mut CheckedBody;
     fn call_result(
@@ -86,7 +88,7 @@ pub(super) fn refine(
     source: TypeId,
     identity: &Origin,
 ) -> Result<(), QueryError> {
-    let actual = reader.body().types.get(source).unwrap();
+    let actual = reader.types().row(source).clone();
     let origins = BTreeMap::from([(
         ParameterRef::bound(ParamId(0)),
         OriginArgument {
@@ -104,14 +106,14 @@ pub(super) fn refine(
     )?;
     // Transport H's exact specialization along the refined cursor graph. The
     // next operation's generic order need not be the cursor's argument order.
-    let mut mapping = BTreeMap::new();
+    let mut mapping = std::collections::HashMap::new();
     let mut pending = vec![(previous_cursor, plan.cursor)];
     while let Some((old, new)) = pending.pop() {
         if mapping.insert(old, new).is_some() {
             continue;
         }
-        let old = reader.body().types.get(old).unwrap().kind.graph_edges();
-        let new = reader.body().types.get(new).unwrap().kind.graph_edges();
+        let old = reader.types().row(old).kind.graph_edges();
+        let new = reader.types().row(new).kind.graph_edges();
         if old.len() != new.len() {
             return Err(cursor_error("cursor refinement changed shape"));
         }
@@ -127,14 +129,7 @@ pub(super) fn refine(
         OriginArgument {
             identity: identity.clone(),
             brand: Brand::default(),
-            relation: reader
-                .body()
-                .types
-                .get(plan.cursor)
-                .unwrap()
-                .modes
-                .relation
-                .clone(),
+            relation: reader.types().row(plan.cursor).modes.relation.clone(),
         },
     )]);
     plan.step.result = reader.call_result(
@@ -143,8 +138,7 @@ pub(super) fn refine(
         &next_origins,
         &BTreeMap::from([(ParameterRef::bound(ParamId(0)), plan.cursor)]),
     )?;
-    let TypeKind::Named { arguments, .. } =
-        &reader.body().types.get(plan.step.result).unwrap().kind
+    let TypeKind::Named { arguments, .. } = reader.types().row(plan.step.result).kind.clone()
     else {
         return Err(cursor_error("next result has no item"));
     };
@@ -167,14 +161,19 @@ fn cursor_error(message: &str) -> QueryError {
 }
 
 struct CurrentContent<'a, R> {
+    t: &'a TypeInterner,
+    m: &'a TypeMemo,
     body: &'a mut CheckedBody,
     signature: &'a Signature,
     read: R,
 }
 impl<R> CursorRefinement for CurrentContent<'_, R>
 where
-    R: FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    R: FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 {
+    fn types(&self) -> &TypeInterner {
+        self.t
+    }
     fn body(&self) -> &CheckedBody {
         self.body
     }
@@ -190,14 +189,15 @@ where
     ) -> Result<TypeId, QueryError> {
         let generics = &self.body.resolution.generic_declarations;
         let authorities = argument_authorities(
-            &self.body.types,
+            self.t,
             arguments,
             &self.signature.metadata.roles,
             generics,
             &mut self.read,
         )?;
         result(
-            &mut self.body.types,
+            self.t,
+            self.m,
             &self.signature.metadata.roles,
             generics,
             path,
@@ -210,14 +210,28 @@ where
     }
     fn item(&mut self, owner: TypeId, item: TypeId) -> Result<TypeId, QueryError> {
         let generics = &self.body.resolution.generic_declarations;
-        let item = placed_part_type(&mut self.body.types, owner, item, generics, &mut self.read)?;
-        projected_type(&mut self.body.types, owner, item, generics, &mut self.read)
+        let item = placed_part_type(self.t, owner, item, generics, &mut self.read)?;
+        let (t, read) = (self.t, &mut self.read);
+        if t.contains(item)
+            && t.contains(owner)
+            && t.row(item)
+                .modes
+                .relation
+                .union(&t.row(owner).modes.relation)
+                != t.row(item).modes.relation
+        {
+            let plain = structural_property(t, item, StructuralProperty::Plain, generics, read)?;
+            return Ok(project(t, self.m, owner, item, plain));
+        }
+        Ok(item)
     }
 }
 
 /// J keeps source identity; I supplies the source's current complete value row.
 /// Reinstantiate both calls so nested owner-dependent item rows follow too.
 pub fn refine_cursor_plan(
+    t: &TypeInterner,
+    m: &TypeMemo,
     body: &mut CheckedBody,
     signature: &Signature,
     plan: &mut CursorPlan,
@@ -232,21 +246,23 @@ pub fn refine_cursor_plan(
         .ty;
     let mut dependencies = BTreeMap::new();
     let mut reads = vec![];
-    let read = |path: &DefPath| {
-        if let Some(signature) = dependencies.get(path) {
+    let read = |definition: DefId| {
+        if let Some(signature) = dependencies.get(&definition) {
             return Ok(Some(std::sync::Arc::clone(signature)));
         }
-        let value = provider.signature(path);
+        let value = provider.signature(definition);
         reads.push(DependencyRead::Signature {
-            definition: path.clone(),
+            definition,
             fingerprint: value.as_ref().ok().map(|s| s.fingerprint),
         });
         let signature = value?;
-        dependencies.insert(path.clone(), signature.clone());
+        dependencies.insert(definition, signature.clone());
         Ok(Some(signature))
     };
     let outcome = refine(
         &mut CurrentContent {
+            t,
+            m,
             body,
             signature,
             read,
@@ -260,7 +276,7 @@ pub fn refine_cursor_plan(
     Ok(dependencies
         .values()
         .map(|s| SignatureDependency {
-            definition: s.definition.clone(),
+            definition: s.definition,
             fingerprint: s.fingerprint,
         })
         .collect())

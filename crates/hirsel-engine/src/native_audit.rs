@@ -5,8 +5,8 @@
 use crate::*;
 use hirsel_syntax::ExprId;
 use hirsel_types::{
-    Allocation, DropAllocation, ParamId, PassingMode, Signature, SignatureKind, TypeId, TypeKind,
-    TypeStore,
+    Allocation, DropAllocation, ParamId, PassingMode, Signature, SignatureKind, TypeId,
+    TypeInterner, TypeKind,
 };
 
 /// Storage whose destruction the audited body relies on.
@@ -36,7 +36,7 @@ pub struct SourceAudit {
     /// callable value, in source order.
     pub invocations: Vec<(ExprId, Allocation)>,
 }
-fn drop_allocation(types: &TypeStore, ty: TypeId) -> DropAllocation {
+fn drop_allocation(types: &TypeInterner, ty: TypeId) -> DropAllocation {
     types
         .get(ty)
         .map(|row| row.drop_allocation.clone())
@@ -46,12 +46,12 @@ impl SourceAudit {
     /// Only an error-free analysis has a completed audit; diagnostics stay the
     /// caller's to report.
     pub(crate) fn completed(
+        types: &TypeInterner,
         signature: &Signature,
         implementation_revision: ContentHash,
         analyzed: &AnalyzedBody,
         representation: Option<&RepresentationRecord>,
     ) -> Self {
-        let types = &signature.types;
         let (noalloc, cleanup) = match &signature.kind {
             SignatureKind::Function(function) => (
                 function.allocation == Allocation::NoAlloc,
@@ -72,7 +72,7 @@ impl SourceAudit {
             SignatureKind::Type(declaration) => (
                 declaration.destructor_allocation == Allocation::NoAlloc,
                 representation
-                    .map(|record| drop_allocation(&record.types, record.private_shape))
+                    .map(|record| drop_allocation(types, record.private_shape))
                     .or_else(|| {
                         declaration
                             .representation
@@ -89,7 +89,7 @@ impl SourceAudit {
             .closures
             .iter()
             .map(|closure| {
-                let allocation = match checked.types.get(closure.ty).map(|row| &row.kind) {
+                let allocation = match types.get(closure.ty).map(|row| &row.kind) {
                     Some(TypeKind::Function(function)) => function.allocation.clone(),
                     _ => Allocation::MayAllocate,
                 };
@@ -97,7 +97,7 @@ impl SourceAudit {
             })
             .collect();
         Self {
-            definition: signature.definition.clone(),
+            definition: signature.definition.path().clone(),
             implementation_revision,
             signature: signature.fingerprint,
             noalloc,
@@ -125,7 +125,7 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Result<SourceAuditProducts, QueryError> {
-        if let Some(products) = self.prechecked_audit_products(path)? {
+        if let Some(products) = self.image_audit_products(path) {
             return Ok(products);
         }
         let signature = self.item_signature(path)?.value;
@@ -138,22 +138,23 @@ impl QueryEngine {
         } else {
             None
         };
-        let mut analyzed = self.mode_definition(path)?;
+        let analyzed = self.mode_definition(path)?;
         if crate::queries::has_errors(&analyzed.diagnostics) {
             return Err(QueryError::Diagnostics(analyzed.diagnostics));
         }
         let typed = &analyzed.value.typed;
         let revision = typed.syntax.text_hash;
         let audit = SourceAudit::completed(
+            &self.types,
             &signature,
             revision,
             &analyzed.value,
             representation.as_ref(),
         );
-        self.prepare_comptime(&mut analyzed.value, &signature)?;
+        let comptime = self.prepare_comptime(&analyzed.value, &signature)?;
         Ok(SourceAuditProducts {
             audit,
-            materialized: analyzed.value.materialized,
+            materialized: comptime.materialized,
         })
     }
 }

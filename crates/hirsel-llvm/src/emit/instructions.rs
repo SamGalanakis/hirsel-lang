@@ -614,7 +614,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         LayoutKind::Slice { element } => {
                             // A whole fresh byte sequence: its count, its capacity (the
                             // count) and the bytes (runtime ABI 5).
-                            let Some(payload) = slice_storage(self.inputs.layouts, element) else {
+                            let Some(payload) = slice_storage_with_index(
+                                self.inputs.layouts,
+                                self.inputs.index,
+                                element,
+                            ) else {
                                 return self.invalid("a flat copy slice without sequence storage");
                             };
                             let (first, whole) = match (
@@ -841,7 +845,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let status = self.builder.call(entry, &arguments);
                 if deep {
                     self.copy_status(status, destination, anchor, failure)?;
-                } else if let Some(code) = self.bounded_code() {
+                } else if self.tracking() {
                     // A tracked arena block is copied within its arena, charged (MEM-6):
                     // over its budget, the arena it names records its own OutOfSpace.
                     let zero = self.module.const_int(self.module.int_type(8), 0);
@@ -853,7 +857,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.cold_cond_br(failed, over, next);
                     self.builder.position(over);
                     let region = self.tracked_region(self.get(value)?);
-                    let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+                    let exhausted = self.exhausted_block(region, anchor, failure)?;
                     self.builder.br(exhausted);
                     self.builder.position(next);
                 } else {
@@ -929,6 +933,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let comparator = match compare::comparator(
                     self.module,
                     self.inputs.layouts,
+                    self.inputs.keys,
+                    self.inputs.index,
                     layout,
                     matches!(op, CompareOp::Eq | CompareOp::Ne),
                 ) {
@@ -1471,8 +1477,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     None
                 };
                 let update = self.runtime(RuntimeEntry::HashUpdate)?;
-                let hasher = match compare::hasher(self.module, self.inputs.layouts, layout, update)
-                {
+                let hasher = match compare::hasher(
+                    self.module,
+                    self.inputs.layouts,
+                    self.inputs.keys,
+                    self.inputs.index,
+                    layout,
+                    update,
+                ) {
                     Ok(hasher) => hasher,
                     Err(CompareError::Unsupported(what)) => return self.unsupported(what),
                     Err(CompareError::Invalid(what)) => return self.invalid(what),

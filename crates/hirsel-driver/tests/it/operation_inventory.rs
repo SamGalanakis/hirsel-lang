@@ -10,9 +10,9 @@ fn registry_and_dispatch_have_exact_bidirectional_callable_coverage() {
         .signatures()
         .filter_map(|s| {
             (matches!(s.kind, SignatureKind::Function(_))
-                && hirsel_types::core_roles::LoweredIntrinsic::for_definition(&s.definition)
+                && hirsel_types::core_roles::LoweredIntrinsic::for_definition(s.definition.path())
                     .is_none())
-            .then_some(s.definition.clone())
+            .then_some(s.definition.path().clone())
         })
         .collect();
     let dispatch = operation_dispatch();
@@ -73,18 +73,14 @@ fn operation_identity_retains_typed_modes_cleanup_and_the_declaration_digest() {
     assert_eq!(record.parameters[1].passing, PassingMode::Take);
     assert_eq!(
         record.parameters[1].cleanup,
-        record
-            .declaration
-            .types
+        hirsel_engine::registry::shared_types()
             .get(function.parameters[1].ty)
             .unwrap()
             .drop_allocation
     );
     assert_eq!(
         record.result_cleanup,
-        record
-            .declaration
-            .types
+        hirsel_engine::registry::shared_types()
             .get(function.result)
             .unwrap()
             .drop_allocation

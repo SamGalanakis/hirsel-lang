@@ -2,7 +2,7 @@
 //! comparator or hash function per layout, defined once per object, as `hirsel-llvm`'s
 //! `compare` generates them.
 //!
-//! A comparator `hirsel.compare.<layout>[.eq](left, right, depth, context) -> i8` reads two
+//! A comparator `hirsel.compare.<layout key>[.eq](left, right, depth, context) -> i8` reads two
 //! values of its layout at the given addresses and returns one of the `ORDER_*` codes: the
 //! interpreter's order, the first unequal pair deciding, variant ordinals before payloads,
 //! sequences element by element then by length, String and Bytes bytewise then by length,
@@ -22,7 +22,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Module};
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::{COMPARE_MAX_DEPTH, CompareOp, FailureId, ValueId};
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
@@ -79,7 +79,7 @@ impl Emitter<'_> {
     fn declare_comparator(&mut self, layout: LayoutId, equality: bool) -> Emitted<FuncId> {
         let name = format!(
             "hirsel.compare.{}{}",
-            layout.0,
+            self.inputs.keys.key(layout).hex(),
             if equality { ".eq" } else { "" }
         );
         let sig = self.comparator_signature();
@@ -87,7 +87,7 @@ impl Emitter<'_> {
     }
 
     fn declare_hasher(&mut self, layout: LayoutId) -> Emitted<FuncId> {
-        let name = format!("hirsel.hash.{}", layout.0);
+        let name = format!("hirsel.hash.{}", self.inputs.keys.key(layout).hex());
         let sig = self.hasher_signature();
         self.helper(&name, &sig, |_| Helper::Hash { layout })
     }
@@ -311,7 +311,11 @@ impl Gen<'_, '_> {
         let (Some(owner), Some(start), Some(length)) = (field(0), field(1), field(2)) else {
             return self.invalid("a slice without its fields");
         };
-        let Some(payload) = slice_storage(self.em.inputs.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(
+            self.em.inputs.layouts,
+            self.em.inputs.unit.and_then(|i| i.index),
+            element,
+        ) else {
             return self.invalid("a slice without its element's sequence layout");
         };
         let owner_at = self.at(at, owner.offset);

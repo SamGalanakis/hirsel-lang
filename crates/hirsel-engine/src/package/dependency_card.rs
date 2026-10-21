@@ -85,21 +85,22 @@ fn authority(
                         local.unknown.insert(signature.definition.to_string());
                         continue;
                     };
+                    let types = engine.types.clone();
                     let summary = hirsel_types::structural_authority(
-                        &signature.types,
+                        &types,
                         parameter.ty,
                         &signature.metadata.roles,
                         &GenericDeclarations::signature(&function.generics),
                         &mut |_, path| {
-                            path.map(|p| engine.item_signature(p).map(|s| Some(s.value)))
+                            path.map(|p| engine.item_signature(p.path()).map(|s| Some(s.value)))
                                 .unwrap_or(Ok(None))
                         },
                     )?;
-                    local.summary(&summary, &signature.definition);
+                    local.summary(&summary, signature.definition.path());
                 }
                 _ => local.summary(
                     &AuthoritySummary::Known(vec![term.clone()].into()),
-                    &signature.definition,
+                    signature.definition.path(),
                 ),
             }
         }
@@ -191,7 +192,7 @@ fn facts(
 
 /// Only type rows rooted in a public signature count as exposure. In particular,
 /// an opaque type's private representation and local body types are not API.
-fn exposed_types(signature: &Signature) -> BTreeSet<DefPath> {
+fn exposed_types(t: &hirsel_types::TypeInterner, signature: &Signature) -> BTreeSet<DefPath> {
     let mut pending: Vec<TypeId> = match &signature.kind {
         SignatureKind::Function(f) => f
             .parameters
@@ -206,13 +207,13 @@ fn exposed_types(signature: &Signature) -> BTreeSet<DefPath> {
         SignatureKind::Const { ty, .. } => vec![*ty],
         _ => vec![],
     };
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     let mut paths = BTreeSet::new();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;
         }
-        let Some(row) = signature.types.get(id) else {
+        let Some(row) = t.get(id) else {
             continue;
         };
         match &row.kind {
@@ -220,7 +221,7 @@ fn exposed_types(signature: &Signature) -> BTreeSet<DefPath> {
                 definition,
                 arguments,
             } => {
-                paths.insert(definition.clone());
+                paths.insert(definition.path().clone());
                 pending.extend(arguments.iter().filter_map(|a| match a {
                     hirsel_types::GenericArgument::Type(t) => Some(*t),
                     _ => None,
@@ -374,14 +375,11 @@ impl LoadedProgram {
                 },
                 modules: vec![],
             };
-            let state = program
+            let index = program
                 .engine
-                .adapters
-                .compiler_state
-                .as_ref()
-                .unwrap()
-                .borrow();
-            let index = state.index(context.package.clone());
+                .declarations
+                .frozen()
+                .index(context.package.clone());
             for syntax in &parsed.items {
                 // One item's spans share its anchor, so they compare directly.
                 let (item, tree) = (&syntax.item, &syntax.tree);
@@ -461,7 +459,7 @@ impl LoadedProgram {
                     .item_signature(path)
                     .map_err(|e| program.error(e))?
                     .value;
-                for ty in exposed_types(&signature) {
+                for ty in exposed_types(&program.engine.types, &signature) {
                     exposures.entry(ty).or_default().insert(path.to_string());
                 }
             }
@@ -505,7 +503,7 @@ impl LoadedProgram {
                     .len()
             };
             let token_count: usize = reached.iter().map(|p| declarations[p].tokens).sum();
-            let prechecked = program.engine.prechecked(&id);
+            let prechecked = program.engine.imaged(&id);
             let exposure: Vec<_> = exposures
                 .iter()
                 .filter(|(p, _)| belongs(p))

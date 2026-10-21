@@ -28,9 +28,10 @@ fn table_call(kind: Option<BuiltinType>, function_value: bool) -> Fixture {
         scalar
     };
     let mut signature = function_signature("get", vec![], TypeKind::Tuple(vec![].into()));
-    signature.definition.0.package.name = "std".into();
-    signature.definition.0.modules = vec!["table".into()];
-    let path = signature.definition.clone();
+    let mut path = signature.definition.path().clone();
+    path.0.package.name = "std".into();
+    path.0.modules = vec!["table".into()];
+    signature.definition = DefId::intern(&path);
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
@@ -39,15 +40,13 @@ fn table_call(kind: Option<BuiltinType>, function_value: bool) -> Fixture {
         bounds: vec![Bound::Serializable].into(),
     }]
     .into();
-    let mut function = fun.clone();
-    function.result =
-        import_type(&signature.types, function.result, &mut f.definition.types).unwrap();
-    f.signatures.insert(path.clone(), signature);
+    let function = fun.clone();
+    f.signatures.insert(signature.definition, signature);
     if function_value {
         let slot = f.slot(TypeKind::Function(function), Storage::Temporary);
         // A specialized function value has no remaining generic binder.
         let old = f.body().places[slot as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         if let TypeKind::Function(fun) = &mut row.kind {
             fun.generics = vec![].into();
         }

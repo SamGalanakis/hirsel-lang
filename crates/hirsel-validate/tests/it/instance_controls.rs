@@ -1,7 +1,7 @@
 //! CT-5 instance-body tables, hand-built: a generic generated declaration
 //! `id[T](x: T) -> T` with its instance at u64.
 use crate::support::*;
-use hirsel_syntax::{DefPath, PassingMode};
+use hirsel_syntax::{DefId, DefPath, PassingMode};
 use hirsel_tir::*;
 use hirsel_types::*;
 use hirsel_validate::{InstanceViolation, validate_instance_bodies};
@@ -30,7 +30,7 @@ fn declaration() -> Signature {
     s
 }
 
-struct Table {
+struct Instances {
     bodies: InstanceBodies,
     signatures: BTreeMap<DefPath, SignatureRef>,
     definitions: BTreeMap<DefPath, DefinitionRef>,
@@ -38,31 +38,30 @@ struct Table {
 
 /// The declaration, its instance `id$instance` at u64 whose header is
 /// `instance_result`, and a caller `main` that references `id[u64]`.
-fn table(instance_result: TypeKind) -> Table {
-    let mut types = TypeStore::default();
+fn table(instance_result: TypeKind) -> Instances {
+    let types = interner();
     let argument = vec![GenericArgument::Type(types.push(ty(U64)))];
-    let key = InstanceBodies::key(&types, &argument).unwrap();
+    let key = InstanceBodies::key(types, &argument).unwrap();
     let instance = path("id$instance");
     let mut bodies = InstanceBodies::default();
-    bodies.declarations.insert(path("id"));
-    bodies.instances.entry(path("id")).or_default().insert(
+    bodies.declarations.insert(id("id"));
+    bodies.instances.entry(id("id")).or_default().insert(
         key,
         InstanceBody {
-            types,
             arguments: argument,
-            definition: instance.clone(),
+            definition: DefId::intern(&instance),
         },
     );
     let mut instance_definition = Fixture::unit().definition;
-    instance_definition.path = instance.clone();
+    instance_definition.path = DefId::intern(&instance);
     let mut caller = Fixture::unit();
     let u64 = caller.definition.types.push(ty(U64));
     caller.body().rvalues.push(Rvalue::FunctionReference {
         definition: path("id"),
         arguments: vec![GenericArgument::Type(u64)],
     });
-    caller.definition.path = path("main");
-    Table {
+    caller.definition.path = id("main");
+    Instances {
         bodies,
         signatures: BTreeMap::from([
             (path("id"), Arc::new(declaration())),
@@ -90,8 +89,8 @@ fn table(instance_result: TypeKind) -> Table {
     }
 }
 
-fn violations(t: &Table) -> Vec<InstanceViolation> {
-    validate_instance_bodies(&t.bodies, &t.signatures, &t.definitions)
+fn violations(t: &Instances) -> Vec<InstanceViolation> {
+    validate_instance_bodies(interner(), &t.bodies, &t.signatures, &t.definitions)
 }
 
 #[test]
@@ -124,7 +123,7 @@ fn a_closed_reference_to_a_declaration_without_its_row_is_rejected() {
 fn a_declaration_with_a_definition_of_its_own_is_rejected() {
     let mut t = table(U64);
     let mut direct = Fixture::unit().definition;
-    direct.path = path("id");
+    direct.path = id("id");
     t.definitions.insert(path("id"), Arc::new(direct));
     let v = violations(&t);
     assert!(

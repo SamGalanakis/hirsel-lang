@@ -1,5 +1,5 @@
 //! Private executable identities for signature-owned fact code (ordinal zero).
-use hirsel_syntax::{ContentHash, DefPath, PassingMode, Visibility};
+use hirsel_syntax::{ContentHash, DefId, DefPath, PassingMode, Visibility};
 use hirsel_types::*;
 pub fn fact_path(owner: &DefPath) -> DefPath {
     let mut path = owner.clone();
@@ -16,14 +16,14 @@ pub fn fact_owner(path: &DefPath) -> Option<DefPath> {
 /// fingerprint covers the fact's code hash.
 pub fn fact_dependencies(owner: &Signature) -> Vec<SignatureDependency> {
     vec![SignatureDependency {
-        definition: owner.definition.clone(),
+        definition: owner.definition,
         fingerprint: owner.fingerprint,
     }]
 }
 /// The callable convention is determined entirely by the declaring signature,
 /// and the fingerprint is every signature's: its encoding over
 /// [`fact_dependencies`].
-pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
+pub fn fact_signature(t: &TypeInterner, owner: &Signature) -> Result<Signature, QueryError> {
     let SignatureKind::Type(td) = &owner.kind else {
         return Err(QueryError::NotImplemented);
     };
@@ -33,23 +33,21 @@ pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
     let Some(Type {
         kind: TypeKind::Record(fields),
         ..
-    }) = td.representation.and_then(|t| owner.types.get(t))
+    }) = td.representation.and_then(|ty| t.get(ty))
     else {
         return Err(QueryError::NotImplemented);
     };
     let [field] = fields.as_slice() else {
         return Err(QueryError::NotImplemented);
     };
-    let mut types = owner.types.clone();
     let mut modes = Modes::global();
     modes.sendability = Sendability::Sendable;
-    let boolean = types.push(Type {
+    let boolean = t.intern(Type {
         modes,
         ..Type::with_kind(TypeKind::Primitive(Primitive::Bool))
     });
     let mut helper = Signature {
-        definition: fact_path(&owner.definition),
-        types,
+        definition: DefId::intern(&fact_path(owner.definition.path())),
         fingerprint: ContentHash::default(),
         metadata: SignatureMetadata {
             track_caller: false,
@@ -60,7 +58,7 @@ pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
             state_promises: Default::default(),
             generics: td.generics.clone().into(),
             parameters: vec![Parameter {
-                name: Some(field.name.clone()),
+                name: Some(field.name.as_str().to_owned()),
                 label: None,
                 passing: PassingMode::Borrow,
                 ty: field.ty,
@@ -77,7 +75,7 @@ pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
         }),
     };
     helper.fingerprint =
-        encoding::fingerprint(&helper, &fact_dependencies(owner)).map_err(|e| {
+        encoding::fingerprint(t, &helper, &fact_dependencies(owner)).map_err(|e| {
             QueryError::Operational(OperationalFailure {
                 operation: "fact helper signature".into(),
                 message: format!("{e:?}"),

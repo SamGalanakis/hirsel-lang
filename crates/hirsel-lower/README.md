@@ -12,8 +12,9 @@ supply manufactured phase decisions and declaration signatures.
 
 `lower(Input)` consumes the retained `SyntaxTree`, a **mode-checked**
 `CheckedBody`, producer `Plans`, the definition/owning `NameSite`, signature
-hash, root expression, J formal frame result rows, and unit/bool TypeIds in
-`CheckedBody.types`.
+hash, root expression, J formal frame result rows, and unit/bool TypeIds, all
+rows of the session `TypeInterner` in `Input.types`. The returned Definition's
+`types` table is `hirsel_tir::definition_types` over its bodies.
 The driver must enforce successful H/I/J before calling it. It returns an owned
 TIR `Definition`, or a `LowerError` for missing/inconsistent compiler facts;
 these errors have source spans and are not language diagnostics.
@@ -375,16 +376,15 @@ exiting scope for ordered cleanup. This moves permissions on surviving source
 storage, without moving or extending the lifetime of temporary source storage.
 
 `Plans.materialized` transports evaluated aggregate data as a `Materialized`
-producer type store and typed `ValueNode` tree. Leaves are TIR constants or typed named function references; tuple,
+typed `ValueNode` tree of session rows. Leaves are TIR constants or typed named function references; tuple,
 record, distinct, variant, sequence and box nodes carry declaration-order fields
 and explicit constructors. Lowering checks the root against the existing checked
-expression row and imports the graph; it never chooses field types or modes.
-A worklist imports and lowers finite materialized trees without a nesting cutoff,
-preserving declaration-order fields and parent-before-child type imports.
+expression row and validates the graph; it never chooses field types or modes.
+A worklist lowers finite materialized trees without a nesting cutoff,
+preserving declaration-order fields.
 Owned synthetic data temporaries use Take and ordinary constructor cleanup.
 Named reference leaves use the same capture-free forwarding bodies as source
-function references, with the imported producer type store and declared passing
-modes.
+function references, with the producer's rows and declared passing modes.
 
 Loop pattern bindings name the yielded value, separately from the collection or
 cursor source. Each iteration introduces a fresh binding identity, including

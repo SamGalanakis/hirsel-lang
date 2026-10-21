@@ -46,13 +46,13 @@ impl<T> OrderedRows<T> {
 }
 pub(super) struct ClosureRows {
     rows: OrderedRows<ClosureInfo>,
-    types: BTreeMap<TypeId, BTreeSet<u64>>,
+    types: std::collections::HashMap<TypeId, BTreeSet<u64>, hirsel_intern::IdHasher>,
 }
 impl ClosureRows {
     pub fn new(values: Vec<ClosureInfo>) -> Self {
         let mut out = Self {
             rows: OrderedRows::new(),
-            types: BTreeMap::new(),
+            types: Default::default(),
         };
         for value in values {
             out.insert(value.expression, value);
@@ -132,9 +132,9 @@ mod tests {
     use super::*;
     #[test]
     fn replacement_order_and_current_type_index_follow_mutations() {
-        let mut store = TypeStore::default();
-        let a = store.push(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
-        let b = store.push(store.get(a).unwrap().clone());
+        let t = crate::test_support::session();
+        let a = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+        let b = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U16)));
         let row = |expression, ty| ClosureInfo {
             expression: ExprId(expression),
             ty,

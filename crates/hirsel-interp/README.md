@@ -25,7 +25,8 @@ canonical floats. Equality of executions includes float bits and the selected tr
 
 - Bodies, instructions, operands, constructor fields, call arguments, and cleanup
   actions execute in stored order. Field/parameter ordinals determine layout,
-  independently of evaluation order. Types remain in their owning definition store.
+  independently of evaluation order. Every TypeId is a row of the session TypeInterner; no
+  type graph is copied or imported at run time.
 - A slot contains `Option<Value>`. Take clears it; Copy/Borrow/Mut read it; Assign
   requires dead storage. Replace atomically installs a prepared value and puts old content in its declared displaced temporary; assignment follows it with explicit Drop; core replace returns the displaced owner. Borrow checking and loan validity are lowering's job;
   loan instructions have no scalar runtime effect. StorageLive requires a dead
@@ -86,8 +87,8 @@ canonical floats. Equality of executions includes float bits and the selected tr
   only ready requests. The host library watches its host waits, except those parked
   by a task already cancelled, and reports every wait after a cancellation.
 - `run_with_operations`/`Operations`: M implements registry-backed named calls in
-  a separate module. Calls receive values in parameter order, the caller's owning
-  TypeStore/result TypeId, generic arguments and source site. Context holds only
+  a separate module. Calls receive values in parameter order, the
+  session TypeInterner/result TypeId, generic arguments and source site. Context holds only
   explicit configuration/events/source snapshots plus stdout/trace sinks, the
   trace mode and a borrowed current operation anchor. The anchor is independent
   of tracing; it is never recovered by searching debug events. Return

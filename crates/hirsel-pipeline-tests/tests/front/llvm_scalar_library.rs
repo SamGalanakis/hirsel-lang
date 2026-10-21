@@ -947,7 +947,11 @@ fn failure_line(name: &str) -> String {
     let site = site_code(
         &path(name),
         &revision(name),
-        SiteRange { start: 10, end: 20 },
+        SiteRange {
+            source: 0,
+            start: 10,
+            end: 20,
+        },
     );
     format!("fail {} {} {site:016x}", code.kind, code.rule)
 }
@@ -1201,7 +1205,6 @@ fn harness(program: &Program) -> String {
 #[ignore = "native: run by tools/check-native.sh"]
 fn every_target_agrees_with_the_interpreter_on_every_scalar_library_operation() {
     let expected = expected();
-    let codes = failure_codes();
     let input = input();
     for target in TargetSpec::executed() {
         let program = program(&target);
@@ -1210,22 +1213,19 @@ fn every_target_agrees_with_the_interpreter_on_every_scalar_library_operation() 
             let dir = scratch(&format!("scalar-library-{}-{opt:?}", target.triple));
             let bytes = {
                 let inputs = EmitInputs {
+                    index: None,
                     verify_backend: true,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    callbacks: false,
                     foreign: &hirsel_lir::emission::NO_FOREIGN,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -1234,7 +1234,12 @@ fn every_target_agrees_with_the_interpreter_on_every_scalar_library_operation() 
             };
             let source = dir.join("harness.c");
             std::fs::write(&source, &harness).unwrap();
-            let executable = link(&target, &dir, &[("scalar.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("scalar.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             let actual = run(&target, &executable);
             assert!(
                 actual == expected,

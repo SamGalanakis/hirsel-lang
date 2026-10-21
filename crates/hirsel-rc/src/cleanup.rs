@@ -63,12 +63,91 @@ pub struct Finalizer {
 }
 
 /// Every resource layout's drop body, keyed by the resource's layout.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Finalizers(pub BTreeMap<LayoutId, Finalizer>);
 
 impl Finalizers {
-    /// The finalizer instances of a program: each takes its resource borrowed
-    /// as its one parameter, so the parameter's layout names the resource.
+    /// The finalizer instances of a program, from its plan alone (design §1e): each takes
+    /// its resource borrowed as its first parameter, whose `FnAbi` layout names the
+    /// resource. No unit is read, so a unit's cleanup needs no other unit's RC output.
+    pub fn planned(instances: &Instances, table: &LayoutTable) -> Self {
+        let mut out = BTreeMap::new();
+        for id in instances.ids() {
+            let role = &instances.roles[id.index()];
+            if !role.is_finalizer() {
+                continue;
+            }
+            let abi = instances.abis[id.index()];
+            let Some(parameter) = table.fn_abis[abi.0 as usize].parameters.first() else {
+                continue;
+            };
+            let view = instances.view(id);
+            out.insert(
+                parameter.layout,
+                Finalizer {
+                    origin: if role.is_library() {
+                        hirsel_lir::ir::UnitOrigin::Library
+                    } else {
+                        hirsel_lir::ir::UnitOrigin::Source
+                    },
+                    definition: view.key.definition().clone(),
+                    instance: view.key.digest(),
+                    abi,
+                },
+            );
+        }
+        Self(out)
+    }
+
+    /// The finalizers cleanup lowering of `unit` can call: those of the layouts it
+    /// reaches through the table, by layout.
+    pub fn reached<S: Clone>(
+        &self,
+        unit: &LirUnit<S>,
+        table: &LayoutTable,
+    ) -> Vec<(LayoutId, &Finalizer)> {
+        let (_, roots, _) = hirsel_lir::objects::erased(unit);
+        let mut seen = BTreeSet::new();
+        let mut pending = roots;
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(record) = table.layout(id) {
+                pending.extend(record.references());
+            }
+        }
+        seen.into_iter()
+            .filter_map(|id| self.0.get(&id).map(|f| (id, f)))
+            .collect()
+    }
+
+    /// The finalizer facts cleanup lowering of `unit` can read, by content, for the object
+    /// stage's key: per finalizer it `reached`, the layout's `LayoutKey`, the finalizer's
+    /// instance and its FnAbi key, in key order.
+    pub fn facts<S: Clone>(
+        &self,
+        unit: &LirUnit<S>,
+        table: &LayoutTable,
+        keys: &hirsel_lir::LayoutKeys,
+    ) -> Vec<u8> {
+        let mut facts: Vec<[u8; 96]> = self
+            .reached(unit, table)
+            .into_iter()
+            .filter_map(|(id, finalizer)| {
+                let abi = keys.fn_abi_of(table, finalizer.abi)?;
+                let mut fact = [0; 96];
+                fact[..32].copy_from_slice(&keys.key(id).0.0);
+                fact[32..64].copy_from_slice(&finalizer.instance.0);
+                fact[64..].copy_from_slice(&abi.0);
+                Some(fact)
+            })
+            .collect();
+        facts.sort_unstable();
+        facts.concat()
+    }
+
+    /// The finalizer instances of a program read from its units: `planned` must equal it.
     pub fn new<S: Stage>(instances: &Instances, units: &[LirUnit<S>]) -> Self {
         let mut out = BTreeMap::new();
         for id in instances.ids() {
@@ -101,24 +180,45 @@ pub fn lower<S: Stage>(
     table: &LayoutTable,
     finalizers: &Finalizers,
 ) -> Result<LirUnit<Ready>, PassError> {
+    lower_indexed(unit, finalizers, &hirsel_lir::LayoutIndex::new(table))
+}
+
+pub fn lower_indexed<S: Stage>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Ready>, PassError> {
     if !matches!(S::KIND, StageKind::Rc | StageKind::Reuse) {
         return Err(PassError::Malformed(format!(
             "cleanup lowering reads Rc or Reuse LIR, not {:?}",
             S::KIND
         )));
     }
+    let table = index.table();
     let lay = Lay(table);
     let unit = unit.into_stage::<Ready>();
     let mut facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
-    join_versions(&mut ed, &mut facts, lay, false)?;
-    let flags = join_flags(&mut ed, &facts, lay, table)?;
-    let drops: Vec<_> = drop_states(&ed, &facts, lay)
-        .into_iter()
-        .map(|(b, i, st)| (b, i, st, flags.get(&(b, i)).cloned().unwrap_or_default()))
-        .collect();
+    // Reuse the fixed point until flag insertion changes the unit, as rustc's
+    // ElaborateDrops retains ResultsCursors while constructing its MirPatch
+    // (compiler/rustc_mir_transform/src/elaborate_drops.rs:64-94,123-125).
+    // Hirsel also repairs SSA versions; each repair reruns its transfer before
+    // sharing the final result. Ready validation still re-derives its own facts.
+    let inputs = join_versions(&mut ed, &mut facts, lay, false)?;
+    let before_flags = instruction_states_from(&ed, &facts, lay, false, inputs);
+    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, index, &before_flags)? {
+        None => before_flags
+            .into_iter()
+            .map(|(b, i, st)| (b, i, st, Flags::new()))
+            .collect(),
+        Some(flags) => drop_states(&ed, &facts, lay)
+            .into_iter()
+            .map(|(b, i, st)| (b, i, st, flags.get(&(b, i)).cloned().unwrap_or_default()))
+            .collect(),
+    };
     lower_copies(&mut ed, lay)?;
     let mut lowering = Lowering {
+        index,
         ed: &mut ed,
         facts: &mut facts,
         lay,
@@ -338,7 +438,7 @@ fn join_versions(
     facts: &mut Facts,
     lay: Lay<'_>,
     reads: bool,
-) -> Result<(), PassError> {
+) -> Result<Vec<Option<State>>, PassError> {
     // Parameters and arguments change below, but the graph does not.
     let adjacent = Flow {
         unit: &ed.unit,
@@ -364,7 +464,7 @@ fn join_versions(
     for _ in 0..bound {
         let inputs = VersionInputs::new(ed, facts, lay, reads);
         if inputs.joins.is_empty() {
-            return Ok(());
+            return Ok(inputs.ins);
         }
         // A plain version phi changes only its slot's version transfer, not
         // any other slot's liveness, initialization or version. Distinct slots
@@ -389,7 +489,7 @@ fn join_versions(
             };
             if !inputs.ins[block.index()]
                 .as_ref()
-                .is_some_and(|slots| slots[slot.index()].versions == Versions::Many)
+                .is_some_and(|state| state.slots[slot.index()].versions == Versions::Many)
             {
                 return Err(PassError::Unsupported(
                     "versions that meet inside a block".into(),
@@ -492,7 +592,7 @@ struct VersionEdge {
 /// One solved input and one replay for every version consumer and edge.
 /// Snapshots share persistent state rows; no state is cloned at each drop/read.
 struct VersionInputs {
-    ins: Vec<Option<hirsel_lir::persistent::PVec<crate::insert::SlotState>>>,
+    ins: Vec<Option<State>>,
     edges: Vec<Option<VersionEdge>>,
     joins: Vec<(BlockId, SlotId)>,
 }
@@ -583,10 +683,6 @@ impl VersionInputs {
                 }
             }
         }
-        let ins = ins
-            .into_iter()
-            .map(|state| state.map(|state| state.slots))
-            .collect();
         Self { ins, edges, joins }
     }
 }
@@ -764,13 +860,14 @@ fn join_flags(
     ed: &mut Editor<Ready>,
     facts: &Facts,
     lay: Lay<'_>,
-    table: &LayoutTable,
-) -> Result<BTreeMap<(BlockId, usize), Flags>, PassError> {
+    index: &hirsel_lir::LayoutIndex<'_>,
+    drops: &[(BlockId, usize, State)],
+) -> Result<Option<BTreeMap<(BlockId, usize), Flags>>, PassError> {
     // Each flagged part with its layout. A flag is true exactly when its part
     // still owns content (LIR revision 13): a part whose remaining fields are
     // all absent or plain, an inactive variant's included, owns nothing.
     let mut wanted: BTreeMap<Part, LayoutId> = BTreeMap::new();
-    for (b, i, state) in drop_states(ed, facts, lay) {
+    for &(b, i, ref state) in drops {
         let Inst::Drop { address, .. } = ed.code[b.index()][i] else {
             unreachable!()
         };
@@ -793,17 +890,15 @@ fn join_flags(
         }
     }
     if wanted.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(None);
     }
-    let boolean = table
-        .layouts
-        .iter()
-        .position(|r| r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::Bool))
+    let boolean = index
+        .scalar(hirsel_lir::layout_types::ScalarKind::Bool)
         .ok_or_else(|| PassError::Malformed("drop flags require the bool layout".into()))?;
     let bool_ty = type_of(
         &mut ed.unit,
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
-        LayoutId(boolean as u32),
+        boolean,
     );
     let mut constant = |value: bool| {
         let id = hirsel_lir::ir::ConstantId(ed.unit.tables.constants.len() as u32);
@@ -967,7 +1062,7 @@ fn join_flags(
             Ok(extended(ed, e, &extra))
         })?;
     }
-    Ok(flags)
+    Ok(Some(flags))
 }
 
 fn flag_projection(
@@ -1120,6 +1215,22 @@ fn instruction_states(
         facts,
     };
     let ins = version_states(&flow);
+    instruction_states_from(ed, facts, lay, reads, ins)
+}
+
+fn instruction_states_from(
+    ed: &Editor<Ready>,
+    facts: &Facts,
+    lay: Lay<'_>,
+    reads: bool,
+    ins: Vec<Option<State>>,
+) -> Vec<(BlockId, usize, State)> {
+    let flow = Flow {
+        unit: &ed.unit,
+        code: &ed.code,
+        lay,
+        facts,
+    };
     let mut out = Vec::new();
     for (b, state) in ins.into_iter().enumerate() {
         let Some(state) = state else {
@@ -1147,8 +1258,8 @@ fn join_read_versions(
     facts: &mut Facts,
     lay: Lay<'_>,
 ) -> Result<(), PassError> {
-    join_versions(ed, facts, lay, true)?;
-    for (block, i, state) in instruction_states(ed, facts, lay, true) {
+    let inputs = join_versions(ed, facts, lay, true)?;
+    for (block, i, state) in instruction_states_from(ed, facts, lay, true, inputs) {
         let address = match ed.code[block.index()][i] {
             Inst::Read { address, .. } | Inst::Copy { address, .. } => address,
             _ => continue,
@@ -1251,6 +1362,7 @@ struct Lowering<'e, 'a> {
     facts: &'e mut Facts,
     lay: Lay<'a>,
     finalizers: &'a Finalizers,
+    index: &'a hirsel_lir::LayoutIndex<'a>,
     symbols: BTreeMap<LayoutId, SymbolId>,
     /// Instructions inserted outside the drop being lowered, as (block,
     /// index), for the positions of the drops still to lower.
@@ -1982,20 +2094,15 @@ impl Lowering<'_, '_> {
                 Step::Variant(variant, field) => ProjectionStep::VariantField { variant, field },
                 Step::Inline(index) => {
                     let layout = self
-                        .lay
-                        .0
-                        .layouts
-                        .iter()
-                        .position(|r| {
-                            r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::U64)
-                        })
+                        .index
+                        .scalar(hirsel_lir::layout_types::ScalarKind::U64)
                         .ok_or_else(|| {
                             PassError::Malformed("no u64 layout for an inline cleanup index".into())
                         })?;
                     let ty = type_of(
                         &mut self.ed.unit,
                         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::U64),
-                        LayoutId(layout as u32),
+                        layout,
                     );
                     let result = self.ed.value(ty, Holding::Plain);
                     let constant =
@@ -2596,7 +2703,9 @@ mod pending_tests {
         assert_eq!(slot_state.moved, before.moved);
         assert_eq!(slot_state.taken, before.taken);
         let finalizers = Finalizers::default();
+        let index = hirsel_lir::LayoutIndex::new(&table);
         let lowering = Lowering {
+            index: &index,
             ed: &mut ed,
             facts: &mut facts,
             lay,
@@ -2656,7 +2765,9 @@ mod pending_tests {
         let mut facts = Facts::new(&unit, &table);
         let mut ed = Editor::new(unit);
         let finalizers = Finalizers::default();
+        let index = hirsel_lir::LayoutIndex::new(&table);
         let lowering = Lowering {
+            index: &index,
             ed: &mut ed,
             facts: &mut facts,
             lay: Lay(&table),

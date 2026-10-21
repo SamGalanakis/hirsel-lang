@@ -5,6 +5,13 @@ use hirsel_syntax::*;
 use hirsel_types::{self as ty, QueryError, ResolvedName, SignatureProvider};
 use std::collections::BTreeMap;
 
+/// The session interner these tests' signatures and resolutions share.
+fn session() -> &'static ty::TypeInterner {
+    static SESSION: std::sync::OnceLock<std::sync::Arc<ty::TypeInterner>> =
+        std::sync::OnceLock::new();
+    SESSION.get_or_init(|| ty::TypeInterner::new(None))
+}
+
 fn package(name: &str, version: &str) -> PackageId {
     PackageId {
         name: name.into(),
@@ -66,8 +73,9 @@ impl SignatureProvider for Fake {
             })(),
         }
     }
-    fn signature(&mut self, definition: &DefPath) -> Result<ty::SignatureRef, QueryError> {
+    fn signature(&mut self, definition: DefId) -> Result<ty::SignatureRef, QueryError> {
         (|| {
+            let definition = definition.path();
             self.reads.push(definition.clone());
             self.signatures
                 .get(definition)
@@ -303,7 +311,13 @@ impl Tree {
     fn run(&self, item: ItemId) -> ResolveOutput {
         let index = self.index();
         let mut fake = Fake::new(&index);
-        resolve_item(&self.file, &self.file.items[item], &index, &mut fake)
+        resolve_item(
+            &self.file,
+            &self.file.items[item],
+            &index,
+            session(),
+            &mut fake,
+        )
     }
 }
 fn clean(output: &ResolveOutput) {
@@ -347,6 +361,7 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
             &t.file.items,
             view,
             &index,
+            session(),
             &mut fake,
             &ExpectedTypes::default(),
         );
@@ -383,13 +398,11 @@ fn semantic(kind: ty::TypeKind) -> ty::Type {
     }
 }
 fn constant(d: DefPath, kind: ty::TypeKind) -> ty::Signature {
-    let mut types = ty::TypeStore::default();
-    let id = types.push(semantic(kind));
+    let id = session().intern(semantic(kind));
     ty::Signature {
         metadata: Default::default(),
 
-        definition: d,
-        types,
+        definition: DefId::intern(&d),
         kind: ty::SignatureKind::Const {
             ty: id,
             generics: Default::default(),
@@ -519,7 +532,13 @@ fn unresolved_ambiguous_and_private_uses_have_rule_and_use_span() {
     }
     let (index, _) = ManifestIndex::new(fixture);
     let mut provider = Fake::new(&index);
-    let output = resolve_item(&t.file, &t.file.items[item], &index, &mut provider);
+    let output = resolve_item(
+        &t.file,
+        &t.file.items[item],
+        &index,
+        session(),
+        &mut provider,
+    );
     assert_eq!(output.query.diagnostics.len(), 3);
     for (d, (rule, line)) in
         output
@@ -577,11 +596,11 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
     let mut fake = Fake::new(&index);
     let signature = constant(own("good"), ty::TypeKind::Primitive(ty::Primitive::U32));
     fake.signatures.insert(own("good"), signature.clone());
-    let output = resolve_item(&t.file, &t.file.items[item], &index, &mut fake);
+    let output = resolve_item(&t.file, &t.file.items[item], &index, session(), &mut fake);
     assert_eq!(
         output.query.dependencies,
         vec![ty::SignatureDependency {
-            definition: own("good"),
+            definition: hirsel_syntax::DefId::intern(&own("good")),
             fingerprint: signature.fingerprint
         }]
     );
@@ -590,7 +609,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
         vec![own("good"), own("unavailable")]
     );
     assert!(output.reads.contains(&DependencyRead::Signature {
-        definition: own("unavailable"),
+        definition: hirsel_syntax::DefId::intern(&own("unavailable")),
         fingerprint: None
     }));
     assert!(output.reads.iter().any(|r| matches!(r,DependencyRead::Lookup { segments,result: Err(LookupError::Missing),manifest,.. } if segments == &["missing"] && *manifest == index.revision)));
@@ -700,7 +719,7 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
                 })(),
             }
         }
-        fn signature(&mut self, _: &DefPath) -> Result<ty::SignatureRef, QueryError> {
+        fn signature(&mut self, _: DefId) -> Result<ty::SignatureRef, QueryError> {
             (|| Err(QueryError::NotImplemented))().map(std::sync::Arc::new)
         }
     }
@@ -720,6 +739,7 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
         &t.file,
         &t.file.items[item],
         &t.index(),
+        session(),
         &mut ReportingProvider,
     );
     assert_eq!(output.query.diagnostics.len(), 1);

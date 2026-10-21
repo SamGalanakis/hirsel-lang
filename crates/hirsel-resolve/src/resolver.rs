@@ -100,9 +100,17 @@ pub fn resolve_item(
     file: &SyntaxFile,
     syntax: &ItemSyntax,
     index: &ManifestIndex,
+    types: &ty::TypeInterner,
     provider: &mut (impl SignatureProvider + ?Sized),
 ) -> ResolveOutput {
-    resolve_item_with_expected(file, syntax, index, provider, &ExpectedTypes::default())
+    resolve_item_with_expected(
+        file,
+        syntax,
+        index,
+        types,
+        provider,
+        &ExpectedTypes::default(),
+    )
 }
 
 /// Syntax read domain. File permits local header fixtures from the file's
@@ -119,6 +127,7 @@ pub fn resolve_item_with_expected(
     file: &SyntaxFile,
     syntax: &ItemSyntax,
     index: &ManifestIndex,
+    types: &ty::TypeInterner,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
 ) -> ResolveOutput {
@@ -127,6 +136,7 @@ pub fn resolve_item_with_expected(
         &file.items,
         ResolveView::File,
         index,
+        types,
         provider,
         expected,
     )
@@ -140,6 +150,7 @@ pub fn resolve_view(
     siblings: &[std::sync::Arc<ItemSyntax>],
     view: ResolveView,
     index: &ManifestIndex,
+    types: &ty::TypeInterner,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
 ) -> ResolveOutput {
@@ -150,6 +161,7 @@ pub fn resolve_view(
         lexical: syntax.owner(),
         view,
         index,
+        types,
         provider,
         expected,
         context: FileContext {
@@ -165,7 +177,7 @@ pub fn resolve_view(
             },
         },
         scopes: vec![Scope::default()],
-        signatures: BTreeMap::new(),
+        signatures: DefMap::default(),
         next_local: 0,
         alternative_locals: Vec::new(),
         generator_parameters: Vec::new(),
@@ -194,7 +206,7 @@ pub fn resolve_view(
         .output
         .query
         .dependencies
-        .sort_by(|a, b| a.definition.cmp(&b.definition));
+        .sort_by_key(|a| a.definition);
     resolver.output
 }
 
@@ -207,12 +219,14 @@ struct Resolver<'a, P: ?Sized> {
     lexical: LexicalOwner,
     view: ResolveView,
     index: &'a ManifestIndex,
+    /// The session interner every signature's rows live in.
+    types: &'a ty::TypeInterner,
     provider: &'a mut P,
     expected: &'a ExpectedTypes,
     context: FileContext,
     output: ResolveOutput,
     scopes: Vec<Scope>,
-    signatures: BTreeMap<DefPath, Option<ty::SignatureRef>>,
+    signatures: DefMap<Option<ty::SignatureRef>>,
     next_local: u32,
     callees: BTreeSet<ExprId>,
     local_function_depth: usize,
@@ -506,17 +520,18 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         }
     }
     fn signature(&mut self, definition: &DefPath) -> Option<ty::SignatureRef> {
-        if let Some(signature) = self.signatures.get(definition) {
+        let id = DefId::intern(definition);
+        if let Some(signature) = self.signatures.get(&id) {
             return signature.clone();
         }
-        let result = self.provider.signature(definition);
+        let result = self.provider.signature(id);
         let signature = match result {
             Ok(signature) => {
                 self.output
                     .query
                     .dependencies
                     .push(ty::SignatureDependency {
-                        definition: definition.clone(),
+                        definition: DefId::intern(definition),
                         fingerprint: signature.fingerprint,
                     });
                 Some(signature)
@@ -532,7 +547,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             }
         };
         self.output.reads.push(DependencyRead::Signature {
-            definition: definition.clone(),
+            definition: id,
             fingerprint: signature.as_ref().map(|s| s.fingerprint),
         });
         self.output
@@ -540,8 +555,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             .value
             .dependencies
             .push(definition.clone());
-        self.signatures
-            .insert(definition.clone(), signature.clone());
+        self.signatures.insert(id, signature.clone());
         signature
     }
     fn namespace(&mut self, definition: &DefPath) -> Option<Namespace> {
@@ -1136,7 +1150,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 let native = self.signature(&definition).is_some_and(|signature| {
                     matches!(&signature.kind, ty::SignatureKind::Type(declaration)
                         if declaration.representation.is_some_and(|root|
-                            matches!(signature.types.get(root).map(|row| &row.kind),
+                            matches!(self.types.get(root).map(|row| &row.kind),
                                 Some(ty::TypeKind::Builtin { kind: ty::BuiltinType::Packed, .. }))))
                 });
                 self.output
@@ -1418,15 +1432,15 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             && let Some(representation) = definition.representation
         {
             if let Some(ty::TypeKind::Named { .. }) =
-                signature.types.get(representation).map(|t| &t.kind)
+                self.types.get(representation).map(|t| &t.kind)
                 && let ExpectedType::Named {
                     definition,
                     arguments,
-                } = semantic_expected(&signature.types, representation, arguments, 0, 0)
+                } = semantic_expected(self.types, representation, arguments, 0, 0)
             {
                 return self.shape(&definition, &arguments);
             }
-            return shape_from_type(&signature.types, representation, arguments);
+            return shape_from_type(self.types, representation, arguments);
         }
         self.type_header(owner, arguments, |this, body| match body {
             TypeBody::Record(fields) => Shape {
@@ -1531,7 +1545,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 Some(signature) => match &signature.kind {
                     ty::SignatureKind::Type(declaration) if signature.metadata.alias => declaration
                         .representation
-                        .map(|r| semantic_expected(&signature.types, r, &current.1, 0, 0)),
+                        .map(|r| semantic_expected(self.types, r, &current.1, 0, 0)),
                     _ => None,
                 },
                 None => self
@@ -1652,9 +1666,9 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 && let Some(ty::Type {
                     kind: ty::TypeKind::Named { definition, .. },
                     ..
-                }) = signature.types.get(root)
+                }) = self.types.get(root)
             {
-                owner = definition.clone();
+                owner = definition.path().clone();
             } else {
                 return true;
             }
@@ -1714,10 +1728,15 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 .values()
                 .flatten()
                 .flat_map(|s| {
-                    s.types.iter().filter_map(|(_, t)| match &t.kind {
-                        ty::TypeKind::Named { definition, .. } => Some(definition.clone()),
-                        _ => None,
-                    })
+                    ty::closure(self.types, signature_roots(s))
+                        .iter()
+                        .filter_map(|t| match &self.types.row(*t).kind {
+                            ty::TypeKind::Named { definition, .. } => {
+                                Some(definition.path().clone())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .filter(|d| !visited.contains(d))
                 .collect();
@@ -1730,11 +1749,11 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             }
         }
         found |= self.signatures.values().flatten().any(|signature| {
-            if !core && signature.definition.package_is("core", "1") {
+            if !core && signature.definition.path().package_is("core", "1") {
                 false
             } else if let ty::SignatureKind::Type(definition) = &signature.kind {
                 definition.representation.is_some_and(|id| {
-                    shape_from_type(&signature.types, id, &[])
+                    shape_from_type(self.types, id, &[])
                         .variants
                         .iter()
                         .any(|(variant, _)| variant == &self.spelling(name))
@@ -2125,10 +2144,10 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                                 parameters: f
                                     .parameters
                                     .iter()
-                                    .map(|p| semantic_expected(&signature.types, p.ty, &[], 0, 0))
+                                    .map(|p| semantic_expected(self.types, p.ty, &[], 0, 0))
                                     .collect(),
                                 result: Box::new(semantic_expected(
-                                    &signature.types,
+                                    self.types,
                                     f.result,
                                     &[],
                                     0,
@@ -2137,7 +2156,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                             };
                         }
                         ty::SignatureKind::Const { ty: ty, .. } => {
-                            return semantic_expected(&signature.types, *ty, &[], 0, 0);
+                            return semantic_expected(self.types, *ty, &[], 0, 0);
                         }
                         _ => {}
                     }
@@ -2764,16 +2783,18 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
     }
 }
 
+const MAX_EXPECTED_DEPTH: usize = 4096;
 /// `arguments` instantiate the generic parameters bound `binders` function
 /// types outside `id`; any other parameter is unknown context.
 fn semantic_expected(
-    store: &ty::TypeStore,
+    store: &ty::TypeInterner,
     id: ty::TypeId,
     arguments: &[ExpectedType],
     binders: u32,
     depth: usize,
 ) -> ExpectedType {
-    if depth > store.len() {
+    // Valid graphs are acyclic; this bounds a malformed (cyclic) one.
+    if depth > MAX_EXPECTED_DEPTH {
         return ExpectedType::Unknown;
     }
     let nested =
@@ -2783,7 +2804,7 @@ fn semantic_expected(
             definition,
             arguments: written,
         }) => ExpectedType::Named {
-            definition: definition.clone(),
+            definition: definition.path().clone(),
             arguments: written
                 .iter()
                 .map(|argument| match argument {
@@ -2814,13 +2835,13 @@ fn semantic_expected(
         _ => ExpectedType::Unknown,
     }
 }
-fn shape_from_type(store: &ty::TypeStore, id: ty::TypeId, arguments: &[ExpectedType]) -> Shape {
+fn shape_from_type(store: &ty::TypeInterner, id: ty::TypeId, arguments: &[ExpectedType]) -> Shape {
     let expected = |t: ty::TypeId| semantic_expected(store, t, arguments, 0, 0);
     match store.get(id).map(|t| &t.kind) {
         Some(ty::TypeKind::Record(fields)) => Shape {
             fields: fields
                 .iter()
-                .map(|f| (f.name.clone(), expected(f.ty)))
+                .map(|f| (f.name.as_str().to_owned(), expected(f.ty)))
                 .collect(),
             variants: vec![],
         },
@@ -2830,16 +2851,31 @@ fn shape_from_type(store: &ty::TypeStore, id: ty::TypeId, arguments: &[ExpectedT
                 .iter()
                 .map(|v| {
                     (
-                        v.name.clone(),
+                        v.name.as_str().to_owned(),
                         v.fields
                             .iter()
-                            .map(|(n, t)| (n.clone(), expected(*t)))
+                            .map(|(n, t)| (n.map(|n| n.as_str().to_owned()), expected(*t)))
                             .collect(),
                     )
                 })
                 .collect(),
         },
         _ => Shape::default(),
+    }
+}
+/// The type rows a signature's declaration roots: its header or constant
+/// type, or a type's representation.
+fn signature_roots(signature: &ty::Signature) -> Vec<ty::TypeId> {
+    match &signature.kind {
+        ty::SignatureKind::Function(f) => f
+            .parameters
+            .iter()
+            .map(|p| p.ty)
+            .chain([f.result])
+            .chain(f.error)
+            .collect(),
+        ty::SignatureKind::Type(declaration) => declaration.representation.into_iter().collect(),
+        ty::SignatureKind::Const { ty, .. } => vec![*ty],
     }
 }
 fn primitive(name: &str) -> Option<ty::Primitive> {

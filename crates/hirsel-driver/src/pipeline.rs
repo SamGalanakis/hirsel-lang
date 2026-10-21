@@ -6,13 +6,13 @@ use hirsel_engine::*;
 use hirsel_lower as lower;
 use hirsel_syntax::ItemSyntax;
 use hirsel_types::{NameSite, Resolution, Signature, TypeId, TypeKind};
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 /// The compiler's front phases, installed by [`crate::COMPILER`].
 pub struct FrontPhases;
 impl FrontPhases {
-    pub fn shared() -> Rc<dyn Phases> {
-        Rc::new(FrontPhases)
+    pub fn shared() -> Arc<dyn Phases> {
+        Arc::new(FrontPhases)
     }
 }
 impl Phases for FrontPhases {
@@ -25,36 +25,42 @@ impl Phases for FrontPhases {
     }
     fn validate_loop_source(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: hirsel_span::Span,
         provider: &mut dyn SignatureProvider,
     ) -> Result<(), QueryError> {
-        hirsel_signature::protocol::validate_loop_source(signature, span, provider)
+        hirsel_signature::protocol::validate_loop_source(t, m, signature, span, provider)
     }
     fn validate_format(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: hirsel_span::Span,
         provider: &mut dyn SignatureProvider,
     ) -> Result<(), QueryError> {
-        hirsel_signature::protocol::validate_format(signature, span, provider)
+        hirsel_signature::protocol::validate_format(t, m, signature, span, provider)
     }
     fn validate_serializable_check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: hirsel_span::Span,
         provider: &mut dyn SignatureProvider,
     ) -> Result<(), QueryError> {
-        hirsel_signature::protocol::validate_serializable_check(signature, span, provider)
+        hirsel_signature::protocol::validate_serializable_check(t, signature, span, provider)
     }
-    fn checker(&self) -> Rc<dyn CheckerPhase> {
-        Rc::new(BodyAdapter)
+    fn checker(&self) -> Arc<dyn CheckerPhase> {
+        Arc::new(BodyAdapter)
     }
-    fn modes(&self, state: Rc<RefCell<CompilerState>>) -> Rc<dyn ModesPhase> {
-        Rc::new(ModeAdapter { state })
+    fn modes(&self) -> Arc<dyn ModesPhase> {
+        Arc::new(ModeAdapter)
     }
-    fn lowering(&self) -> Rc<dyn LoweringPhase> {
-        Rc::new(LowerAdapter)
+    fn lowering(&self) -> Arc<dyn LoweringPhase> {
+        Arc::new(LowerAdapter)
     }
 }
 
@@ -68,19 +74,24 @@ pub struct BodyAdapter;
 impl CheckerPhase for BodyAdapter {
     fn check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         resolution: Resolution,
         signature: &Signature,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
+        let definition = signature.definition.path();
         let context = FileContext {
-            package: signature.definition.0.package.clone(),
-            modules: signature.definition.0.modules.clone(),
+            package: definition.0.package.clone(),
+            modules: definition.0.modules.clone(),
         };
         let protocols = hirsel_types::core_roles::loop_protocols();
-        let mut output = body::check_with_loop_protocols(
+        let output = body::check_with_loop_protocols(
             body::LoopInput {
                 body: body::Input {
+                    types: t,
+                    memo: m,
                     syntax: &syntax,
                     context: &context,
                     resolution: &resolution,
@@ -90,22 +101,9 @@ impl CheckerPhase for BodyAdapter {
             },
             provider,
         )?;
-        // Retain H's first-native-row selection, including finalizer unit rows.
-        let unit = output.checked.value.types.iter().find_map(|(id, ty)| {
-            matches!(&ty.kind, TypeKind::Tuple(fs) if fs.is_empty()).then_some(id)
-        });
-        let unit =
-            unit.unwrap_or_else(|| output.checked.value.types.push(hirsel_types::Type::unit()));
-        let boolean = output.checked.value.types.iter().find_map(|(id, ty)| {
-            (ty.kind == TypeKind::Primitive(hirsel_types::Primitive::Bool)).then_some(id)
-        });
-        let boolean = boolean.unwrap_or_else(|| {
-            output
-                .checked
-                .value
-                .types
-                .push(hirsel_types::Type::boolean())
-        });
+        // Lowering's native control rows: the interned unit and Bool.
+        let unit = t.intern(hirsel_types::Type::unit());
+        let boolean = t.intern(hirsel_types::Type::boolean());
         Ok(QueryOutput {
             value: TypedBody {
                 syntax,
@@ -119,16 +117,18 @@ impl CheckerPhase for BodyAdapter {
         })
     }
 }
-pub struct ModeAdapter {
-    pub state: Rc<RefCell<CompilerState>>,
-}
+pub struct ModeAdapter;
 impl ModesPhase for ModeAdapter {
     fn check_modes(
         &self,
-        mut typed: TypedBody,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        typed: Arc<TypedBody>,
         signature: &Signature,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+        let mut typed = Arc::unwrap_or_clone(typed);
         let syntax = typed.syntax.clone();
         let intrinsics = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
@@ -146,6 +146,8 @@ impl ModesPhase for ModeAdapter {
             .map(|c| (c.expression, c.function))
             .collect();
         let mut output = hirsel_authority::check_file_with_clauses(
+            t,
+            m,
             &syntax,
             signature,
             typed.checked,
@@ -154,7 +156,7 @@ impl ModesPhase for ModeAdapter {
             &loops,
             &clauses,
         );
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             output
                 .diagnostics
                 .iter()
@@ -175,6 +177,8 @@ impl ModesPhase for ModeAdapter {
         }
         // Run I even when J reports source errors: availability can own the obligation.
         let owned = hirsel_ownership::check_ownership_with_clauses(
+            t,
+            m,
             &syntax,
             signature,
             &mut output.body,
@@ -191,8 +195,7 @@ impl ModesPhase for ModeAdapter {
         let owned = match owned {
             Ok(value) => value,
             Err(QueryError::Diagnostics(ds)) => {
-                self.state
-                    .borrow_mut()
+                products
                     .mode_diagnostics
                     .extend(ds.iter().cloned().map(|d| (d, "ownership".into())));
                 output.diagnostics.extend(ds);
@@ -203,7 +206,7 @@ impl ModesPhase for ModeAdapter {
             }
             Err(error) => return Err(error),
         };
-        let clause_types = hirsel_ownership::checked_clause_types(&mut output.body, &clauses)
+        let clause_types = hirsel_ownership::checked_clause_types(t, &mut output.body, &clauses)
             .map_err(|error| {
                 invariant(&format!("checked clause parameter transport: {error:?}"))
             })?;
@@ -230,6 +233,8 @@ impl ModesPhase for ModeAdapter {
                 output
                     .dependencies
                     .extend(hirsel_authority::refine_cursor_plan(
+                        t,
+                        m,
                         &mut output.body,
                         signature,
                         cursor,
@@ -238,7 +243,7 @@ impl ModesPhase for ModeAdapter {
                     )?);
             }
         }
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             owned
                 .diagnostics
                 .iter()
@@ -257,6 +262,8 @@ impl ModesPhase for ModeAdapter {
 
         let audited = hirsel_check::audit::check(
             hirsel_check::audit::Input {
+                types: t,
+                memo: m,
                 syntax: &syntax,
                 signature,
                 checked: &output.body,
@@ -267,7 +274,7 @@ impl ModesPhase for ModeAdapter {
             },
             provider,
         )?;
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             audited
                 .diagnostics
                 .iter()
@@ -279,12 +286,10 @@ impl ModesPhase for ModeAdapter {
         typed.checked = output.body;
         Ok(QueryOutput {
             value: AnalyzedBody {
-                typed,
+                typed: Arc::new(typed),
                 ownership: owned.value,
                 results: output.result_types,
                 call_allocations: output.call_allocations,
-                materialized: vec![],
-                staged: vec![],
             },
             diagnostics: select_diagnostics(output.diagnostics, None),
             dependencies: output.dependencies,
@@ -295,7 +300,10 @@ pub struct LowerAdapter;
 impl LoweringPhase for LowerAdapter {
     fn lower(
         &self,
-        analyzed: AnalyzedBody,
+        t: &hirsel_types::TypeInterner,
+        _: &hirsel_types::TypeMemo,
+        analyzed: &AnalyzedBody,
+        comptime: &Comptime,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
         let source = &analyzed.typed.syntax.item;
@@ -311,11 +319,13 @@ impl LoweringPhase for LowerAdapter {
             }
         };
         let value = lower_expression(
-            &analyzed,
+            t,
+            analyzed,
+            &comptime.staged,
             signature,
             expression,
             None,
-            &analyzed.materialized,
+            &comptime.materialized,
         )?;
         Ok(QueryOutput {
             value,
@@ -325,13 +335,24 @@ impl LoweringPhase for LowerAdapter {
     }
     fn lower_evaluation(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _: &hirsel_types::TypeMemo,
         analyzed: &AnalyzedBody,
+        staged: &[(hirsel_syntax::ExprId, TypeId)],
         signature: &Signature,
         expression: hirsel_syntax::ExprId,
         result: TypeId,
         constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
     ) -> Result<hirsel_tir::Definition, QueryError> {
-        lower_expression(analyzed, signature, expression, Some(result), constants)
+        lower_expression(
+            t,
+            analyzed,
+            staged,
+            signature,
+            expression,
+            Some(result),
+            constants,
+        )
     }
     fn entry_body(&self) -> hirsel_tir::BodyId {
         lower::entry_body()
@@ -339,7 +360,9 @@ impl LoweringPhase for LowerAdapter {
 }
 
 fn lower_expression(
+    t: &hirsel_types::TypeInterner,
     analyzed: &AnalyzedBody,
+    staged: &[(hirsel_syntax::ExprId, TypeId)],
     signature: &Signature,
     expression: hirsel_syntax::ExprId,
     evaluation_result: Option<TypeId>,
@@ -365,9 +388,9 @@ fn lower_expression(
             }
         }
     }
-    let mut plans = lower::Plans::from_body(&file.tree, &checked, &typed.plans, expression)
+    let mut plans = lower::Plans::from_body(t, &file.tree, checked, &typed.plans, expression)
         .map_err(|e| invariant(e.to_string()))?;
-    plans.staged = analyzed.staged.clone();
+    plans.staged = staged.to_vec();
     let owner_span = |owner| match owner {
         NameSite::Item => Some(file.item.origin.span),
         NameSite::Statement(id) => Some(file.tree.statements[id.0 as usize].origin.span),
@@ -417,6 +440,7 @@ fn lower_expression(
         }
     }
     lower::lower(lower::Input {
+        types: t,
         track_caller: evaluation_result.is_none() && signature.metadata.track_caller,
         syntax: file,
         checked: &checked,
@@ -425,7 +449,7 @@ fn lower_expression(
         result_types: &results,
         owner,
         expression,
-        path: signature.definition.clone(),
+        path: signature.definition.path().clone(),
         signature_hash: signature.fingerprint,
         unit: typed.unit,
         boolean: typed.boolean,

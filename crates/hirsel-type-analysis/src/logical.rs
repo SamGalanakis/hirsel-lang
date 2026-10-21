@@ -6,18 +6,18 @@
 //! arena token) is 8, a callable or `Iter` is 16, a tuple, record or resource is the sum
 //! of its fields, a variant is 4 plus its largest variant's fields, and `Inline[T, n]`
 //! and `Simd[T, n]` are `n` times `T`. Padding, headers and slabs are never charged.
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use hirsel_types::{
-    BinderRef, BuiltinType, GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeStore,
+    BinderRef, BuiltinType, GenericArgument, Primitive, Size, Type, TypeId, TypeInterner, TypeKind,
 };
 use std::rc::Rc;
 
-/// What a nominal type contributes: its representation's shape in that
-/// representation's own store, whose `Bound { depth: 0 }` parameters are the
-/// nominal's generic actuals, or an opaque word.
+/// What a nominal type contributes: its representation's shape, whose
+/// `Bound { depth: 0 }` parameters are the nominal's generic actuals, or an
+/// opaque word.
 #[derive(Clone, Copy, Debug)]
-pub enum LogicalNominal<'a> {
-    Representation { types: &'a TypeStore, shape: TypeId },
+pub enum LogicalNominal {
+    Representation { shape: TypeId },
     Opaque,
 }
 
@@ -47,20 +47,20 @@ const MAX_NESTING: usize = 256;
 pub struct Scope<'a>(Rc<Frame<'a>>);
 
 struct Frame<'a> {
-    store: &'a TypeStore,
+    store: &'a TypeInterner,
     actuals: &'a [GenericArgument],
     parent: Option<Scope<'a>>,
 }
 
 impl<'a> Scope<'a> {
-    pub fn root(store: &'a TypeStore) -> Self {
+    pub fn root(store: &'a TypeInterner) -> Self {
         Scope(Rc::new(Frame {
             store,
             actuals: &[],
             parent: None,
         }))
     }
-    pub fn store(&self) -> &'a TypeStore {
+    pub fn store(&self) -> &'a TypeInterner {
         self.0.store
     }
 }
@@ -74,12 +74,17 @@ pub enum Resolved<'a> {
 
 /// Logical sizes and resolved structure under one nominal resolver.
 pub struct Logical<'a, 'r> {
-    nominal: &'r dyn Fn(&DefPath) -> Option<LogicalNominal<'a>>,
+    nominal: &'r dyn Fn(DefId) -> Option<LogicalNominal>,
+    /// Rows read through scopes of this lifetime.
+    rows: std::marker::PhantomData<&'a TypeInterner>,
 }
 
 impl<'a, 'r> Logical<'a, 'r> {
-    pub fn new(nominal: &'r dyn Fn(&DefPath) -> Option<LogicalNominal<'a>>) -> Self {
-        Self { nominal }
+    pub fn new(nominal: &'r dyn Fn(DefId) -> Option<LogicalNominal>) -> Self {
+        Self {
+            nominal,
+            rows: std::marker::PhantomData,
+        }
     }
 
     /// Follow parameters to their actuals and nominals to their representations.
@@ -104,13 +109,13 @@ impl<'a, 'r> Logical<'a, 'r> {
                 TypeKind::Named {
                     definition,
                     arguments,
-                } => match (self.nominal)(definition)
-                    .ok_or_else(|| LogicalError::Unresolved(definition.clone()))?
+                } => match (self.nominal)(*definition)
+                    .ok_or_else(|| LogicalError::Unresolved(definition.path().clone()))?
                 {
                     LogicalNominal::Opaque => return Ok(Resolved::Opaque),
-                    LogicalNominal::Representation { types, shape } => {
+                    LogicalNominal::Representation { shape } => {
                         scope = Scope(Rc::new(Frame {
-                            store: types,
+                            store: scope.store(),
                             actuals: arguments,
                             parent: Some(scope),
                         }));
@@ -253,19 +258,19 @@ pub fn primitive(p: Primitive) -> u64 {
 }
 
 /// The logical size of `ty` in `store`.
-pub fn logical_size<'a>(
-    store: &'a TypeStore,
+pub fn logical_size(
+    store: &TypeInterner,
     ty: TypeId,
-    nominal: &dyn Fn(&DefPath) -> Option<LogicalNominal<'a>>,
+    nominal: &dyn Fn(DefId) -> Option<LogicalNominal>,
 ) -> Result<u64, LogicalError> {
     Logical::new(nominal).size(ty, &Scope::root(store))
 }
 
 /// The logical element size of a block type in `store` (see [`Logical::element`]).
-pub fn logical_element<'a>(
-    store: &'a TypeStore,
+pub fn logical_element(
+    store: &TypeInterner,
     ty: TypeId,
-    nominal: &dyn Fn(&DefPath) -> Option<LogicalNominal<'a>>,
+    nominal: &dyn Fn(DefId) -> Option<LogicalNominal>,
 ) -> Result<Option<u64>, LogicalError> {
     Logical::new(nominal).element(ty, &Scope::root(store))
 }
@@ -275,20 +280,20 @@ mod tests {
     use super::*;
     use hirsel_types::{Field, Type, TypeParamId, Variant};
 
-    fn push(store: &mut TypeStore, kind: TypeKind) -> TypeId {
-        store.push(Type::with_kind(kind))
+    fn push(store: &TypeInterner, kind: TypeKind) -> TypeId {
+        store.intern(Type::with_kind(kind))
     }
 
     #[test]
     fn sizes_follow_the_logical_table() {
-        let mut store = TypeStore::default();
-        let byte = push(&mut store, TypeKind::Primitive(Primitive::U8));
-        let word = push(&mut store, TypeKind::Primitive(Primitive::U64));
-        let text = push(&mut store, TypeKind::Primitive(Primitive::String));
-        let pair = push(&mut store, TypeKind::Tuple(vec![byte, word].into()));
-        let boxed = push(&mut store, TypeKind::Box(pair));
+        let store = TypeInterner::new(None);
+        let byte = push(&store, TypeKind::Primitive(Primitive::U8));
+        let word = push(&store, TypeKind::Primitive(Primitive::U64));
+        let text = push(&store, TypeKind::Primitive(Primitive::String));
+        let pair = push(&store, TypeKind::Tuple(vec![byte, word].into()));
+        let boxed = push(&store, TypeKind::Box(pair));
         let either = push(
-            &mut store,
+            &store,
             TypeKind::Variant(
                 vec![
                     Variant {
@@ -304,7 +309,7 @@ mod tests {
             ),
         );
         let inline = push(
-            &mut store,
+            &store,
             TypeKind::Builtin {
                 kind: BuiltinType::Inline,
                 arguments: vec![
@@ -315,13 +320,13 @@ mod tests {
             },
         );
         let list = push(
-            &mut store,
+            &store,
             TypeKind::Builtin {
                 kind: BuiltinType::List,
                 arguments: vec![GenericArgument::Type(pair)].into(),
             },
         );
-        let none = |_: &DefPath| None;
+        let none = |_: DefId| None;
         assert_eq!(logical_size(&store, pair, &none), Ok(9));
         assert_eq!(logical_size(&store, boxed, &none), Ok(8));
         assert_eq!(logical_size(&store, either, &none), Ok(4 + 9 + 8));
@@ -333,17 +338,17 @@ mod tests {
 
     #[test]
     fn a_nominal_charges_its_representation_with_its_actuals() {
-        let mut representation = TypeStore::default();
+        let representation = TypeInterner::new(None);
         let parameter = push(
-            &mut representation,
+            &representation,
             TypeKind::Parameter(BinderRef::Bound {
                 depth: 0,
                 parameter: TypeParamId(0),
             }),
         );
-        let word = push(&mut representation, TypeKind::Primitive(Primitive::U64));
+        let word = push(&representation, TypeKind::Primitive(Primitive::U64));
         let shape = push(
-            &mut representation,
+            &representation,
             TypeKind::Record(
                 vec![
                     Field {
@@ -360,36 +365,31 @@ mod tests {
                 .into(),
             ),
         );
-        let mut store = TypeStore::default();
-        let short = push(&mut store, TypeKind::Primitive(Primitive::U16));
-        let path = DefPath::core("Pair");
+        let store = std::sync::Arc::clone(&representation);
+        let short = push(&store, TypeKind::Primitive(Primitive::U16));
+        let path = DefId::intern(&DefPath::core("Pair"));
         let named = push(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: path.clone(),
+                definition: path,
                 arguments: vec![GenericArgument::Type(short)].into(),
             },
         );
         let generic = push(
-            &mut store,
+            &store,
             TypeKind::Parameter(BinderRef::Bound {
                 depth: 0,
                 parameter: TypeParamId(0),
             }),
         );
         let other = push(
-            &mut store,
+            &store,
             TypeKind::Named {
-                definition: DefPath::core("Other"),
+                definition: DefId::intern(&DefPath::core("Other")),
                 arguments: vec![].into(),
             },
         );
-        let resolve = |p: &DefPath| {
-            (*p == path).then_some(LogicalNominal::Representation {
-                types: &representation,
-                shape,
-            })
-        };
+        let resolve = |p: DefId| (p == path).then_some(LogicalNominal::Representation { shape });
         assert_eq!(logical_size(&store, named, &resolve), Ok(10));
         assert_eq!(
             logical_size(&store, generic, &resolve),

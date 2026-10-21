@@ -5,9 +5,12 @@ hirsel_guard::install!();
 
 use hirsel_diag::RuleId;
 use hirsel_span::Span;
+use hirsel_syntax::DefId;
 use hirsel_syntax::{BinaryOp, ContentHash, DefPath, UnaryOp};
 use hirsel_types::QueryError;
-use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
+use hirsel_types::{
+    Destination, GeneratedActualKey, GenericArgument, TypeId, TypeInterner, UseKind,
+};
 
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
 /// v3 adds diverging calls; v4 retains named-entry caller attribution;
@@ -520,9 +523,11 @@ pub struct Definition {
     /// Ordinary closures and their contracts remain separate invocation boundaries.
     pub caller_bodies: Vec<BodyId>,
     pub protocol_associations: Vec<ProtocolAssociationReceipt>,
-    /// The sole published type graph for all entry, closure and contract bodies.
-    pub types: TypeStore,
-    pub path: DefPath,
+    /// The canonical closure of every type its entry, closure and contract
+    /// bodies reach, in first-encounter order (`hirsel_types::closure`): what
+    /// V checks and the definition's persisted type table.
+    pub types: std::sync::Arc<[TypeId]>,
+    pub path: DefId,
     pub signature_hash: ContentHash,
     pub bodies: Vec<Body>,
     pub entry: BodyId,
@@ -535,6 +540,41 @@ impl Definition {
             .binary_search_by_key(&body.0, |id| id.0)
             .is_ok()
     }
+}
+/// `Definition.types` for these bodies: the closure (`hirsel_types::closure`)
+/// of every TypeId they name, rooted per body in a fixed order: the result,
+/// local, place and rvalue types, then call-site type actuals in block order.
+/// Lowering and every TIR rewrite compute `types` with this one walk.
+pub fn definition_types(t: &TypeInterner, definition: &Definition) -> std::sync::Arc<[TypeId]> {
+    fn actuals(arguments: &[GenericArgument], roots: &mut Vec<TypeId>) {
+        roots.extend(arguments.iter().filter_map(|a| match a {
+            GenericArgument::Type(t) => Some(*t),
+            GenericArgument::Size(_) => None,
+        }));
+    }
+    let mut roots = vec![];
+    for body in &definition.bodies {
+        roots.push(body.result);
+        roots.extend(body.locals.iter().map(|l| l.ty));
+        roots.extend(body.places.iter().map(|p| p.ty));
+        for rvalue in &body.rvalues {
+            match rvalue {
+                Rvalue::Shape(t) => roots.push(*t),
+                Rvalue::FunctionReference { arguments, .. } => actuals(arguments, &mut roots),
+                _ => (),
+            }
+        }
+        for block in &body.blocks {
+            if let Terminator::Call { callee, .. } = &block.terminator {
+                match callee {
+                    Callee::Definition { arguments, .. } | Callee::Indirect { arguments, .. } => {
+                        actuals(arguments, &mut roots)
+                    }
+                }
+            }
+        }
+    }
+    hirsel_types::closure(t, roots)
 }
 /// Observable fail-stop data uses an indexed cause chain (FAIL-2); no Rc trees.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -552,8 +592,8 @@ mod tests {
     use hirsel_types::{Type, TypeKind};
     #[test]
     fn hand_built_unit_body_has_explicit_return_and_cleanup() {
-        let mut types = TypeStore::default();
-        let unit = types.push(Type {
+        let types = TypeInterner::new(None);
+        let unit = types.intern(Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
             ..Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
@@ -609,16 +649,55 @@ mod tests {
             Terminator::Return { .. }
         ));
         assert!(body.cleanup_actions(CleanupId(0)).next().is_none());
+        // The table roots at the result, then locals, places and rvalues, and
+        // reaches each root's parts in first-encounter order.
+        let byte = types.intern(Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::U8,
+        )));
+        let pair = types.intern(Type::with_kind(TypeKind::Tuple(vec![byte, unit].into())));
+        let mut shaped = body.clone();
+        shaped.rvalues.push(Rvalue::Shape(pair));
+        let definition = Definition {
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: vec![].into(),
+            path: DefId::intern(&hirsel_syntax::DefPath::core("main")),
+            signature_hash: ContentHash::default(),
+            bodies: vec![body, shaped],
+            entry: BodyId(0),
+            contracts: vec![],
+        };
+        assert_eq!(&*definition_types(&types, &definition), &[unit, pair, byte]);
+        // Equal offsets from a declaration and generated text stay distinct,
+        // including sources that first occur in a nested body. Unmapped spans
+        // never acquire the declaration's identity.
+        let mut definition = definition;
+        let declaration = hirsel_span::Anchor::fresh();
+        let generated = hirsel_span::Anchor::fresh();
+        let nested = hirsel_span::Anchor::fresh();
+        definition.bodies[0].locals[0].span = Span::new(declaration, 0, 1).unwrap();
+        definition.bodies[0].blocks[0].span = Span::new(generated, 0, 1).unwrap();
+        definition.bodies[1].blocks[0].instructions[0].span = Span::new(nested, 0, 1).unwrap();
+        assert_eq!(
+            source_anchors(&definition),
+            [declaration, generated, nested]
+        );
+        // Anchor allocation and unrelated source registration do not alter the
+        // selector of any cited source.
+        let _unrelated = hirsel_span::Anchor::fresh();
+        assert_eq!(
+            source_anchors(&definition),
+            [declaration, generated, nested]
+        );
     }
 }
 
 /// Cheap immutable lowered definition snapshot.
 pub type DefinitionRef = std::sync::Arc<Definition>;
 
-/// Evaluated data and its producer-owned type graph. No evaluator is linked here.
+/// Evaluated data; its TypeIds are rows of the session interner. No evaluator is linked here.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Materialized {
-    pub types: TypeStore,
     pub root: ValueNode,
 }
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -644,43 +723,37 @@ pub type MaterializedRef = std::sync::Arc<Materialized>;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct InstanceBodies {
     /// Every generic generated declaration of the program, selected or not.
-    pub declarations: std::collections::BTreeSet<DefPath>,
-    /// Selected instances by declaration and `InstanceBodies::key`.
-    pub instances:
-        std::collections::BTreeMap<DefPath, std::collections::BTreeMap<Vec<String>, InstanceBody>>,
+    pub declarations: std::collections::BTreeSet<DefId>,
+    /// Selected instances by declaration and their actuals' CT-5 key.
+    #[serde(with = "sorted_instances")]
+    pub instances: std::collections::BTreeMap<
+        DefId,
+        std::collections::HashMap<GeneratedActualKey, InstanceBody>,
+    >,
 }
-/// One selected instance: its closed arguments, rows of `types`, and the
-/// monomorphic definition that is the declaration's body at them.
+/// One selected instance: its closed lossless actuals (the first selected in
+/// key order represents the key) and the monomorphic definition that is the
+/// declaration's body at them.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct InstanceBody {
-    pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
-    pub definition: DefPath,
+    pub definition: DefId,
 }
 impl InstanceBodies {
-    /// The canonical spelling of each closed argument (CT-3), sizes in decimal;
-    /// None when an argument still names a parameter.
-    pub fn key(types: &TypeStore, arguments: &[GenericArgument]) -> Option<Vec<String>> {
-        arguments
-            .iter()
-            .map(|argument| match argument {
-                GenericArgument::Type(ty) => (!hirsel_types::mentions_parameter(types, *ty))
-                    .then(|| hirsel_types::CanonicalSpelling::closed(types, *ty)),
-                GenericArgument::Size(hirsel_types::Size::Constant(n)) => Some(n.to_string()),
-                GenericArgument::Size(_) => None,
-            })
-            .collect()
+    /// The CT-5 key of closed `arguments`; None when one still names a parameter.
+    pub fn key(types: &TypeInterner, arguments: &[GenericArgument]) -> Option<GeneratedActualKey> {
+        hirsel_types::generated_actual_key(types, arguments)
     }
     /// The definition that runs a call of `path` at closed `arguments`: None
     /// when `path` is not a generic generated declaration, and an error when
     /// it is but that instance was never selected.
     pub fn resolve(
         &self,
-        path: &DefPath,
-        types: &TypeStore,
+        path: DefId,
+        types: &TypeInterner,
         arguments: &[GenericArgument],
-    ) -> Result<Option<&DefPath>, QueryError> {
-        if !self.declarations.contains(path) {
+    ) -> Result<Option<DefId>, QueryError> {
+        if !self.declarations.contains(&path) {
             return Ok(None);
         }
         let unselected = || {
@@ -691,10 +764,31 @@ impl InstanceBodies {
         };
         let key = Self::key(types, arguments).ok_or_else(unselected)?;
         self.instances
-            .get(path)
+            .get(&path)
             .and_then(|instances| instances.get(&key))
-            .map(|instance| Some(&instance.definition))
+            .map(|instance| Some(instance.definition))
             .ok_or_else(unselected)
+    }
+}
+/// Instances persist in key order, never hash order.
+mod sorted_instances {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+    type Instances = BTreeMap<DefId, HashMap<GeneratedActualKey, InstanceBody>>;
+    pub fn serialize<S: serde::Serializer>(map: &Instances, s: S) -> Result<S::Ok, S::Error> {
+        let sorted: BTreeMap<&DefId, BTreeMap<&GeneratedActualKey, &InstanceBody>> = map
+            .iter()
+            .map(|(d, instances)| (d, instances.iter().collect()))
+            .collect();
+        serde::Serialize::serialize(&sorted, s)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Instances, D::Error> {
+        let sorted: BTreeMap<DefId, BTreeMap<GeneratedActualKey, InstanceBody>> =
+            serde::Deserialize::deserialize(d)?;
+        Ok(sorted
+            .into_iter()
+            .map(|(d, instances)| (d, instances.into_iter().collect()))
+            .collect())
     }
 }
 /// Execution requests other definitions lazily, permitting any topology (PROG-5).
@@ -721,10 +815,9 @@ pub trait TirProvider {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &TypeStore,
         arguments: &[GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        let _ = (path, types, arguments);
+        let _ = (path, arguments);
         Ok(None)
     }
 }
@@ -774,4 +867,34 @@ pub fn constant_instance_path(definition: &DefPath, arguments: &[u64]) -> DefPat
         );
     }
     path
+}
+
+/// Existing source anchors in canonical first-encounter order, independent of
+/// process allocation, file placement and worker scheduling. Includes every
+/// nested body. The no-source anchor is never assigned a durable selector.
+///
+/// As in rustc's stable source-file index (`rustc_span/src/source_map.rs:171`),
+/// this indexes existing sources; it does not allocate a second source map.
+pub fn source_anchors(definition: &Definition) -> Vec<hirsel_span::Anchor> {
+    let mut anchors = Vec::new();
+    let mut add = |span: Span| {
+        if span.anchor != hirsel_span::Anchor(0) && !anchors.contains(&span.anchor) {
+            anchors.push(span.anchor);
+        }
+    };
+    for body in &definition.bodies {
+        for local in &body.locals {
+            add(local.span);
+        }
+        for scope in &body.scopes {
+            add(scope.span);
+        }
+        for block in &body.blocks {
+            add(block.span);
+            for instruction in &block.instructions {
+                add(instruction.span);
+            }
+        }
+    }
+    anchors
 }

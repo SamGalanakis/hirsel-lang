@@ -64,7 +64,7 @@ fn an_indirect_callee_is_a_function_value() {
         let unit = unit_ty(&mut f);
         let g = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
         let signature = function_signature("callee", vec![], TypeKind::Tuple(vec![].into()));
-        f.signatures.insert(path("callee"), signature);
+        f.signatures.insert(id("callee"), signature);
         f.assign(
             g,
             Rvalue::FunctionReference {
@@ -128,7 +128,7 @@ fn each_call_argument_names_a_distinct_parameter() {
             vec![byte(), byte()],
             TypeKind::Tuple(vec![].into()),
         );
-        f.signatures.insert(path("callee"), signature);
+        f.signatures.insert(id("callee"), signature);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
                 path: path("callee"),
@@ -230,7 +230,7 @@ fn a_noalloc_closure_cleanup_owns_only_noalloc_captures() {
         f.body().locals[g as usize].ty = held;
         f.body().places[g as usize].ty = held;
         let signature = function_signature("callee", vec![], TypeKind::Tuple(vec![].into()));
-        f.signatures.insert(path("callee"), signature);
+        f.signatures.insert(id("callee"), signature);
         f.assign(
             g,
             Rvalue::FunctionReference {
@@ -346,7 +346,7 @@ fn function_reference(arguments: fn(TypeId) -> Vec<GenericArgument>) -> Fixture 
         bounds: vec![].into(),
     }]
     .into();
-    f.signatures.insert(path("generic"), signature);
+    f.signatures.insert(id("generic"), signature);
     let g = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
     f.assign(
         g,
@@ -390,11 +390,11 @@ fn nominal(arguments: fn(TypeId) -> Vec<GenericArgument>) -> Fixture {
         name: "T".into(),
         bounds: vec![].into(),
     }];
-    f.signatures.insert(path("Cell"), s);
+    f.signatures.insert(id("Cell"), s);
     param(
         &mut f,
         TypeKind::Named {
-            definition: path("Cell"),
+            definition: id("Cell"),
             arguments: arguments.into(),
         },
     );
@@ -418,7 +418,7 @@ fn nominal_bounds_inside_a_generic_function_type_use_its_own_binder() {
         let mut f = Fixture::unit();
         let unit = unit_ty(&mut f);
         let mut s = capability_signature("Wrapper");
-        let rep = s.types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+        let rep = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
         let SignatureKind::Type(d) = &mut s.kind else {
@@ -431,7 +431,7 @@ fn nominal_bounds_inside_a_generic_function_type_use_its_own_binder() {
             name: "T".into(),
             bounds: vec![Bound::Plain].into(),
         }];
-        f.signatures.insert(path("Wrapper"), s);
+        f.signatures.insert(id("Wrapper"), s);
         let u = f
             .definition
             .types
@@ -439,7 +439,7 @@ fn nominal_bounds_inside_a_generic_function_type_use_its_own_binder() {
                 TypeParamId(0),
             ))));
         let wrapped = f.definition.types.push(ty(TypeKind::Named {
-            definition: path("Wrapper"),
+            definition: id("Wrapper"),
             arguments: vec![GenericArgument::Type(u)].into(),
         }));
         let bounds = |plain: bool| {
@@ -711,7 +711,7 @@ fn promised_closure(promise: bool) -> Fixture {
         arguments: vec![],
     };
     let signature = function_signature("callee", vec![], TypeKind::Tuple(vec![].into()));
-    f.signatures.insert(path("callee"), signature);
+    f.signatures.insert(id("callee"), signature);
     let parameter = add_capture(&mut clause, string);
     clause.locals[parameter as usize].storage = Storage::Parameter;
     clause.parameters.push(LocalId(parameter));
@@ -879,13 +879,13 @@ fn a_function_reference_derives_its_instantiated_error_channel() {
                 bounds: vec![].into(),
             })
             .collect();
-        f.signatures.insert(path("Result"), result_declaration);
+        f.signatures.insert(id("Result"), result_declaration);
         let byte = f
             .definition
             .types
             .push(ty(TypeKind::Primitive(Primitive::U8)));
         let result = f.definition.types.push(ty(TypeKind::Named {
-            definition: path("Result"),
+            definition: id("Result"),
             arguments: vec![GenericArgument::Type(byte), GenericArgument::Type(byte)].into(),
         }));
         let mut signature = function_signature(
@@ -902,7 +902,7 @@ fn a_function_reference_derives_its_instantiated_error_channel() {
             bounds: vec![].into(),
         }]
         .into();
-        f.signatures.insert(path("generic"), signature);
+        f.signatures.insert(id("generic"), signature);
         let mut function = fn_type(vec![], result);
         function.error = channel.then_some(byte);
         let g = f.slot(TypeKind::Function(function), Storage::Local);
@@ -1030,7 +1030,7 @@ fn entry_of(result: Primitive, edit: fn(&mut FunctionType)) -> Fixture {
         .push(ty(TypeKind::Function(fn_type(vec![], result))));
     let e = f.slot(
         TypeKind::Named {
-            definition: DefPath::core("Entry"),
+            definition: DefId::intern(&DefPath::core("Entry")),
             arguments: vec![GenericArgument::Type(signature)].into(),
         },
         Storage::Local,
@@ -1039,7 +1039,7 @@ fn entry_of(result: Primitive, edit: fn(&mut FunctionType)) -> Fixture {
     if let SignatureKind::Function(function) = &mut callee.kind {
         edit(function);
     }
-    f.signatures.insert(path("callee"), callee);
+    f.signatures.insert(id("callee"), callee);
     f.assign(
         e,
         Rvalue::FunctionReference {

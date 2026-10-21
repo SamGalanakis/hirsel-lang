@@ -590,10 +590,6 @@ fn three_way_inline_indices_use_independent_field_flags() {
                 construct.constructor = ConstructorKind::Sequence;
             }
         }
-        let digest = fixture.table.digest();
-        for unit in &mut fixture.units {
-            unit.header.layouts = digest;
-        }
         prove(fixture);
     }
 }

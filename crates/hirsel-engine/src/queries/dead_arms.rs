@@ -20,6 +20,7 @@ impl QueryEngine {
         let mut bodies = vec![];
         let mut declarations = BTreeMap::new();
         for definition in &definitions {
+            self.work.lint_definition_visits += 1;
             let Ok(snapshot) = self.snapshot(definition) else {
                 return vec![];
             };
@@ -39,46 +40,16 @@ impl QueryEngine {
         if declarations.is_empty() {
             return vec![];
         }
+        self.invalidate_front_products();
         let mut errors = BTreeSet::new();
         let mut constructed = BTreeSet::new();
         for definition in &bodies {
-            if let Ok(signature) = self.signature(definition)
-                && let SignatureKind::Function(f) = &signature.kind
-                && let Some(error) = f.error
-                && let Some(TypeKind::Named { definition, .. }) =
-                    signature.types.get(error).map(|t| &t.kind)
-            {
-                errors.insert(definition.clone());
-            }
-            let Ok(checked) = self.check_query(definition) else {
+            self.work.lint_body_visits += 1;
+            let Some(inputs) = self.dead_arm_use(definition) else {
                 return vec![];
             };
-            if has_errors(&checked.diagnostics) {
-                return vec![];
-            }
-            let body = &checked.value;
-            for plan in &body.plans.tries {
-                if let Some(TypeKind::Named { definition, .. }) =
-                    body.checked.types.get(plan.error_type).map(|t| &t.kind)
-                {
-                    errors.insert(definition.clone());
-                }
-            }
-            let mappers = body.plans.tries.iter().filter_map(|p| p.mapper.as_ref());
-            let calls = body.checked.calls.iter().map(|c| &c.target);
-            for target in mappers.chain(calls) {
-                if let CallTarget::Constructor(ContextualName::Variant { owner, variant }) = target
-                {
-                    constructed.insert((owner.clone(), variant.0));
-                }
-            }
-            for (site, name) in &body.checked.resolution.contextual {
-                if let (NameSite::Expression(_), ContextualName::Variant { owner, variant }) =
-                    (site, name)
-                {
-                    constructed.insert((owner.clone(), variant.0));
-                }
-            }
+            errors.extend(inputs.errors);
+            constructed.extend(inputs.constructed);
         }
         let mut warnings = vec![];
         for (owner, snapshot) in declarations {
@@ -118,6 +89,67 @@ impl QueryEngine {
         }
         warnings
     }
+    fn dead_arm_use(&mut self, definition: &DefPath) -> Option<crate::tools::DeadArmUse> {
+        let id = DefId::intern(definition);
+        if let Some(inputs) = self.front_products.dead_arms.get(&id) {
+            return Some(inputs.clone());
+        }
+        let signature = self.signature(id).ok();
+        let checked = self.check_query(definition).ok()?;
+        if has_errors(&checked.diagnostics) {
+            return None;
+        }
+        let inputs = body_use(&self.types, signature.as_deref(), &checked.value);
+        if self
+            .checked
+            .get(&id)
+            .is_some_and(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+            && self
+                .checked_summaries
+                .get(&id)
+                .is_some_and(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+        {
+            self.front_products.dead_arms.insert(id, inputs.clone());
+        }
+        Some(inputs)
+    }
+}
+
+/// The exact H facts used by the package lint, captured before H is released.
+pub(super) fn body_use(
+    types: &hirsel_types::TypeInterner,
+    signature: Option<&Signature>,
+    body: &TypedBody,
+) -> crate::tools::DeadArmUse {
+    let mut inputs = crate::tools::DeadArmUse::default();
+    if let Some(signature) = signature
+        && let SignatureKind::Function(f) = &signature.kind
+        && let Some(error) = f.error
+        && let Some(TypeKind::Named { definition, .. }) = types.get(error).map(|t| &t.kind)
+    {
+        inputs.errors.insert(definition.path().clone());
+    }
+    for plan in &body.plans.tries {
+        if let Some(TypeKind::Named { definition, .. }) =
+            types.get(plan.error_type).map(|t| &t.kind)
+        {
+            inputs.errors.insert(definition.path().clone());
+        }
+    }
+    let mappers = body.plans.tries.iter().filter_map(|p| p.mapper.as_ref());
+    let calls = body.checked.calls.iter().map(|c| &c.target);
+    for target in mappers.chain(calls) {
+        if let CallTarget::Constructor(ContextualName::Variant { owner, variant }) = target {
+            inputs.constructed.insert((owner.clone(), variant.0));
+        }
+    }
+    for (site, name) in &body.checked.resolution.contextual {
+        if let (NameSite::Expression(_), ContextualName::Variant { owner, variant }) = (site, name)
+        {
+            inputs.constructed.insert((owner.clone(), variant.0));
+        }
+    }
+    inputs
 }
 
 /// Each arm's name and site in a variant declaration: the identifiers that

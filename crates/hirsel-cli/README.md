@@ -52,9 +52,9 @@ Commands (arguments use the shared lexopt parser):
   public declarations without checking bodies. It retains full doc comments and
   signature contracts, stable definition-path anchors, and dependency links.
   std's manifest also publishes the core registry in `docs/api.md`.
-- `hirsel precheck <package manifest.json> -o <file>` checks the package as the only
-  dependency of an empty program and writes its precheck (docs/building.md, "The std
-  precheck"); a package with any diagnostic is refused.
+- `hirsel image <package manifest.json> -o <file>` checks the package as the only
+  dependency of an empty program and writes its std image (docs/building.md, "The std
+  image"); a package with any diagnostic is refused.
 - `hirsel tapes check <tape>...` joins a set of linked runner tapes (docs/spec/runners.md,
   RUN-11) without a program: it prints a `checked:` line per link whose ends are both in
   the set, an `unchecked:` line per link with one end missing, and a count (exit 0), or
@@ -71,7 +71,10 @@ Commands (arguments use the shared lexopt parser):
 - `--no-verify`, anywhere before `--`, skips V for `run`, `test` and `build`
   (docs/building.md); any other command refuses it with exit 2.
 - `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
-  dependency checked from source because no precheck matched. Nothing else changes.
+  dependency checked from source because no std image matched. Nothing else changes.
+- `--verify-cache`, anywhere before `--` on check, build and run, recomputes
+  result-store hits and compares their complete canonical records. It runs in
+  this process, bypassing resident dispatch, and leaves V enabled by default.
 - Invalid arguments exit 2. Non-executing source commands report IO failures as
   exit 1, without a RuleId; run and test setup failures use the shared exit policy. Invalid UTF-8
   is a SEM-3 language diagnostic at the first invalid byte boundary, before parsing.
@@ -120,7 +123,7 @@ and the `runtime failure[RULE] at PACKAGE@VERSION/module/definition (FILE:LINE:C
 stage cannot build yet prints `hirsel: native <stage>: ...` and exits 3; that is
 a tool outcome and says nothing about the source. `--backend cranelift` builds
 the same LIR with Cranelift, unoptimized, for a fast debug loop
-(`crates/hirsel-cranelift`); `--backend llvm` (the default) is LLVM O3.
+(`crates/hirsel-cranelift`); `--backend llvm` selects LLVM O2; the default is Cranelift.
 
 Check/run (including `--native` and `--simulation`) also accept an explicit
 launch manifest JSON path. A source path loads its exact `.hir.json` sidecar
@@ -142,10 +145,10 @@ and cannot combine with `--run` or `--native`.
 with empty grants. A launcher can explicitly fill its Io projections and Args/Env
 snapshots before supplying that record; selecting the source grants no authority.
 
-`hirsel build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux]
+`hirsel build [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux]
 <source|manifest.json> -o <exe>` writes a standalone executable linked with the
-production runtime. Default builds use LLVM O2, release O3, debug O0 with source
-line tables. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
+production runtime. Default and release builds use LLVM O2; debug defaults to Cranelift
+with source line tables. `--lto` selects whole-module LLVM O2. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
 is its unoptimized level with DWARF 5 source line tables, and the default profile
 uses its `speed` level. Release builds use LLVM; combining `--release` with
 `--backend cranelift` exits 2 with that diagnostic. Its parity gate covers x86-64
@@ -222,3 +225,7 @@ by their callers. Bench-lite exercises both 40-word and 200-word corpora.
 file, line and column. Program output retains its original streams.
 
 `hirsel test [--json] [--seed N] [--native [--backend llvm|cranelift]] manifest.json [filter...]` runs the package's explicitly marked tests in isolation, reports seeds and totals, and exits 1 on a failure. `--scheduler name@1:seed` runs each test under that scheduler; `--explore N [--scheduler random@1|pct@1]` runs each under N seeds of the policy (random@1 by default) and stops it at its first failure, printing the failing scheduler, the schedule count and a `replay:` command (docs/building.md, "Schedules"). Neither combines with `--bench`.
+
+`hirsel seed-objects <package manifest.json> -o <directory>` compiles the host's
+non-generic runtime closure into native object-store partitions without linking
+or executing it. Toolchain builds package the directory as `hirsel-std.objects`.

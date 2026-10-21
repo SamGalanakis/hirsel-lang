@@ -11,8 +11,8 @@ Source launch boundaries flush stdout before writing the interpreter's PROG-3 re
 
 `COMPILER` carries the compiler identity `build.rs` computes: a digest of the
 sources and manifests of this crate and of every workspace crate it depends on,
-with Cargo.lock and the toolchain pin. Prechecks are keyed by it, so any edit to
-the compiler retires every precheck written before it.
+with Cargo.lock and the toolchain pin. Std images are keyed by it, so any edit to
+the compiler retires every std image written before it.
 
 This crate exports only that wiring. Callers import queries, sessions and their
 data from hirsel-engine directly, so each caller's dependency on the backends
@@ -55,21 +55,17 @@ inputs, passed after the runtime archive (`-l<name>` or the file); the link acce
 `Unsafe` operation (CAP-6, from `ValidatedNativeInput::unsafe_reach`); each sets
 hirsel-rt's `ESCAPES` bit, so the executable refuses a record whose
 `admission.code` is `admit.safe@1`.
-`ReadyProgram.callbacks` names the definitions a unit references as C callbacks, whose
-objects define their callback thunks (linkonce for library and inlined units).
+`ReadyProgram.callbacks` names the definitions referenced as C callbacks; their
+thunks live in the always-regenerated glue object.
 
-Native callable-target specializations retain their original instance's signature
-and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
-known callable bodies and their transitive specializations in each calling
-partition; the backend emits them as linkonce entries. Singleton boundaries
-therefore do not erase a proven closure target or prevent its inlining. Ordinary
-source entries, failure anchors and dynamic callable dispatch keep their ABI.
-At O3, `native::partition_objects` also copies each small source unit
-(`SMALL_UNIT_INSTRUCTIONS` LIR instructions or fewer), transitively, into every
-object whose units call it, as an `available_externally` body. Its own object
-still exports it, so the copy only lets LLVM inline it there; whether a call
-inlines does not depend on the partition. An object's code therefore depends on
-the small callee bodies it copies.
+Every native unit, including each library template and known callable body, owns
+one retained object. Cranelift and LLVM O0 import their callees. Optimized LLVM
+callers may include reached templates and small source callees
+(`SMALL_UNIT_INSTRUCTIONS` or fewer) as `available_externally` optimizer bodies.
+Copied bodies enter the caller's content key, and retained owners keep entries,
+root adapters and callable thunks available independently of the caller set.
+Workers lower each unit completely, with plan-derived finalizers and results in
+plan order. `ReleaseLto` explicitly selects the whole-module path.
 
 Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract, the native backends, and `object` (reading runner, image and stub ELF files, writing the runner note). Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
 
@@ -256,3 +252,17 @@ output, status and observation record, and cross-replays their tapes.
 the real store and checksum implementations: CRUD/reopen, limit atomicity,
 version/reorder/rename history and shared representation renames. These exceed
 the corpus step bound and run as bounded driver integration tests.
+
+Native placement, RC insertion and elision, reuse and cleanup use one per-unit
+lowering function. Object workers, heap inspection and dumps all use it;
+production validates Ready once, and harnesses also check intermediate stages.
+Finalizer facts come from the plan, so no stage retains every unit's RC output.
+Native semantic binding checks every planned unit against the run identity's
+closure. Derived append forms retain explicit source owners; planned library
+bodies are covered by its shared runtime revision. Linking checks the sealed
+unit selection and every exported function's definition again.
+
+`Session::open_configured(entry, CompileConfig)` carries an explicit result-store
+provider, worker count, retention, lowering and total hold budget through reloads.
+`Session::open(entry, Verify)` keeps the ordinary Resident defaults. A configured
+Compiler is Clone: clones share the selected provider and create separate engines.

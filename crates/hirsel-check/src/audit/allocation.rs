@@ -188,7 +188,7 @@ impl<'a> Audit<'a, '_> {
                     vec![]
                 }
                 TypeKind::Named { definition, .. } => {
-                    if !active.insert(definition.clone()) {
+                    if !active.insert(definition.path().clone()) {
                         return Ok(true);
                     }
                     let (representation, _) = self.representation(ty)?;
@@ -198,10 +198,10 @@ impl<'a> Audit<'a, '_> {
                         {
                             return Ok(true);
                         }
-                        active.remove(&definition);
+                        active.remove(definition.path());
                         vec![]
                     } else {
-                        todo.push((ty, Some(definition)));
+                        todo.push((ty, Some(definition.path().clone())));
                         vec![representation]
                     }
                 }
@@ -230,7 +230,7 @@ impl<'a> Audit<'a, '_> {
                     }
                 }
                 if let Some(root) = body {
-                    let store = &self.input.signature.types;
+                    let store = self.types;
                     let arena = self
                         .input
                         .signature
@@ -267,14 +267,7 @@ impl<'a> Audit<'a, '_> {
             ) => {
                 if d.destructor_allocation == Allocation::NoAlloc {
                     if let Some(repr) = d.representation
-                        && self
-                            .input
-                            .signature
-                            .types
-                            .get(repr)
-                            .unwrap()
-                            .drop_allocation
-                            != DropAllocation::NoAlloc
+                        && self.types.get(repr).unwrap().drop_allocation != DropAllocation::NoAlloc
                     {
                         result.add(
                             self.input.syntax.tree.expressions[drop.body.0 as usize]
@@ -360,7 +353,7 @@ impl<'a> Audit<'a, '_> {
     fn destruction_notes(&mut self, root: TypeId) -> Result<Vec<String>, QueryError> {
         let mut notes = Vec::new();
         let mut todo = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::HashSet::new();
         let mut definitions = BTreeSet::new();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
@@ -368,13 +361,16 @@ impl<'a> Audit<'a, '_> {
             }
             match self.types.get(ty).unwrap().kind.clone() {
                 TypeKind::Named { definition, .. } => {
-                    if !definitions.insert(definition.clone()) {
+                    if !definitions.insert(definition.path().clone()) {
                         continue;
                     }
                     let signature = self.snapshot(&definition)?;
                     if matches!(&signature.kind, SignatureKind::Type(d) if d.resource && d.destructor_allocation != Allocation::NoAlloc)
                     {
-                        notes.push(format!("destructor {definition} permits allocation"));
+                        notes.push(format!(
+                            "destructor {} permits allocation",
+                            definition.path()
+                        ));
                     }
                     let (repr, _) = self.representation(ty)?;
                     if repr != ty {
@@ -702,7 +698,7 @@ impl<'a> Audit<'a, '_> {
     /// A constructor of a type that checks no fact and is not a resource.
     fn infallible_constructor(&mut self, callee: ExprId) -> bool {
         match self.source_name(callee).map(|(_, n)| n.clone()) {
-            Some(ResolvedName::Definition(path)) => self.snapshot(&path).is_ok_and(
+            Some(ResolvedName::Definition(path)) => self.snapshot(&hirsel_syntax::DefId::intern(&path)).is_ok_and(
                 |s| matches!(&s.kind, SignatureKind::Type(d) if !d.resource && d.fact.is_none()),
             ),
             _ => false,
@@ -966,7 +962,7 @@ impl<'a> Audit<'a, '_> {
                 let resolved = self.source_name(callee).map(|(_, n)| n.clone());
                 let allocation = match resolved {
                     Some(ResolvedName::Definition(d)) => {
-                        let signature = self.snapshot(&d)?;
+                        let signature = self.snapshot(&hirsel_syntax::DefId::intern(&d))?;
                         match &signature.kind {
                             SignatureKind::Function(f) => Some(f.allocation),
                             _ => None,
@@ -1087,7 +1083,7 @@ impl<'a> Audit<'a, '_> {
             },
         };
         for call in calls {
-            if matches!(&self.snapshot(&call)?.kind, SignatureKind::Function(f) if f.allocation == Allocation::MayAllocate)
+            if matches!(&self.snapshot(&hirsel_syntax::DefId::intern(&call))?.kind, SignatureKind::Function(f) if f.allocation == Allocation::MayAllocate)
             {
                 result.add(span, AllocationReasonKind::Call);
             }

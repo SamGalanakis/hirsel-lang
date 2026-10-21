@@ -9,6 +9,10 @@ rust-version.workspace = true
 # Seeded permutation of session id assignment, for the id-invariance oracle (O1).
 id-salt = []
 
-[dev-dependencies]
+[dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
+serde = "1"
+
+[dev-dependencies]
 proptest = "1"
+serde_json = "1"

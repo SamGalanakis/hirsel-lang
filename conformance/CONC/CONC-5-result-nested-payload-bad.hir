@@ -1,0 +1,21 @@
+// rule: CONC-5
+// expect: reject CONC-5 at line 19
+// twin: CONC/CONC-5-result-nested-payload-ok.hir
+type Todo {
+  title: String,
+}
+
+type Store {
+  todos: List[Todo],
+}
+
+fn load() -> Result[unique Store, String] {
+  Ok(Store(todos: []))
+}
+
+fn a(tasks: Tasks) -> Result[(), String] {
+  let store = load()?
+  let alias = copy store
+  let m = mutex.create(tasks, take store)
+  Ok(())
+}

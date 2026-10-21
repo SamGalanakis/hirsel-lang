@@ -478,7 +478,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                             length_at,
                             place.align.min(8),
                         );
-                        let Some(storage) = slice_storage(self.inputs.layouts, element) else {
+                        let Some(storage) = slice_storage_with_index(
+                            self.inputs.layouts,
+                            self.inputs.index,
+                            element,
+                        ) else {
                             return self.invalid("a slice without its byte sequence layout");
                         };
                         let payload = self.payload_of(owner, storage)?;

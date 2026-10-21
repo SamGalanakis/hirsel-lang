@@ -269,10 +269,6 @@ fn input_program(src: &str, enabled: bool, n: u64) -> hirsel_heapcheck::Program<
         ],
     );
     *sum = ed.finish();
-    let digest = p.layouts.digest();
-    for u in &mut p.units {
-        u.header.layouts = digest;
-    }
     p
 }
 fn run(p: &hirsel_heapcheck::Program<Rc>) -> hirsel_heapcheck::Run {
@@ -433,7 +429,11 @@ fn control(forged: u8) -> Vec<ViolationKind> {
         body: 0,
         block: 0,
         statement: 0,
-        site: SiteRange { start: 0, end: 1 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 1,
+        },
     });
     let zero = ValueId(2);
     let one = ValueId(3);
@@ -637,7 +637,11 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
         body: 0,
         block: 0,
         statement: 0,
-        site: SiteRange { start: 0, end: 1 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 1,
+        },
     });
     let zero = ValueId(3);
     let one = ValueId(4);

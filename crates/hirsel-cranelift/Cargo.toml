@@ -14,7 +14,7 @@ cranelift-codegen = { version = "=0.136.3", default-features = false, features =
 cranelift-frontend = { version = "=0.136.3", default-features = false, features = ["std"] }
 cranelift-module = { version = "=0.136.3", default-features = false, features = ["std"] }
 cranelift-object = { version = "=0.136.3", default-features = false }
-gimli = { version = "=0.33.0", default-features = false, features = ["write", "std"] }
+gimli = { version = "=0.33.0", default-features = false, features = ["read", "write", "std"] }
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }

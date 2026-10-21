@@ -6,6 +6,8 @@ use std::{
 };
 #[path = "cli/budgets.rs"]
 mod budgets;
+#[path = "cli/cache_defaults.rs"]
+mod cache_defaults;
 #[path = "cli/deadlines.rs"]
 mod deadlines;
 #[path = "cli/dependency_card.rs"]
@@ -34,6 +36,8 @@ mod ready_together;
 mod remote;
 #[path = "cli/replay.rs"]
 mod replay;
+#[path = "cli/resident.rs"]
+mod resident;
 #[path = "cli/runners.rs"]
 mod runners;
 #[path = "cli/schema.rs"]
@@ -56,7 +60,59 @@ mod testing;
 mod timings;
 #[path = "cli/unix_backlog.rs"]
 mod unix_backlog;
+#[path = "cli/validation.rs"]
+mod validation;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn verify_cache_recomputes_disk_hits_without_changing_diagnostics() {
+    let source = file(
+        "fn callee(x: u8) -> u8 { x + 1u8 }\npub fn main() -> Result[(), ()] { let _ = callee(1u8); Ok(()) }\n",
+    );
+    let store = source.with_extension("results");
+    let run = |verify: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .env("HIRSEL_DAEMON", "auto")
+            .env("HIRSEL_RESULTS", "dir@1")
+            .env("HIRSEL_RESULTS_DIR", &store)
+            .env_remove("HIRSEL_VERIFY_CACHE")
+            .args(["check", "--json", "--timings=json"]);
+        if verify {
+            command.arg("--verify-cache");
+        }
+        let output = command.arg(&source).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        (output.stdout, report)
+    };
+    let (cold, cold_counts) = run(false);
+    let (warm, warm_counts) = run(false);
+    let (verified, verified_counts) = run(true);
+    assert_eq!(cold, warm);
+    assert_eq!(cold, verified);
+    assert!(cold_counts["counts"]["definitions"].as_u64().unwrap() > 0);
+    assert!(
+        warm_counts["counts"]["store hits"].as_u64().unwrap() > 0,
+        "{warm_counts}"
+    );
+    assert_eq!(warm_counts["counts"]["definitions"], 0, "{warm_counts}");
+    assert!(
+        verified_counts["counts"]["definitions"].as_u64().unwrap() > 0,
+        "{verified_counts}"
+    );
+    let invalid = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["fmt", "--verify-cache"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("--verify-cache applies only"));
+    let _ = std::fs::remove_dir_all(store);
+    let _ = std::fs::remove_file(source);
+}
 #[test]
 fn help_spellings_print_usage_to_stdout_and_exit_zero() {
     for command in ["--help", "help"] {
@@ -67,17 +123,17 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>\n",
+            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
     }
 }
 
-/// A missing or mismatched precheck costs only time: the run's output is
+/// A missing or mismatched image costs only time: the run's output is
 /// unchanged, and only `--verbose` says why a dependency was checked from source.
 #[test]
-fn a_missing_precheck_is_reported_only_under_verbose() {
+fn a_missing_image_is_reported_only_under_verbose() {
     let lib = file("pub fn value() -> u64 {\n  1\n}\n");
     let lib_manifest = lib.with_extension("json");
     std::fs::write(&lib_manifest, serde_json::json!({"schema":1,"package":{"name":"lib","version":"1"},"sources":[{"path":lib.file_name().unwrap().to_str().unwrap(),"module":["lib"]}],"dependencies":[]}).to_string()).unwrap();
@@ -93,7 +149,7 @@ fn a_missing_precheck_is_reported_only_under_verbose() {
         let output = command
             .arg("run")
             .arg(&path)
-            .env("HIRSEL_PRECHECK", "/nonexistent/hirsel-std.precheck")
+            .env("HIRSEL_IMAGE", "/nonexistent/hirsel-std.image")
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -103,11 +159,36 @@ fn a_missing_precheck_is_reported_only_under_verbose() {
         assert!(
             stderr
                 .lines()
-                .all(|line| line.starts_with("hirsel: no precheck: ")
+                .all(|line| line.starts_with("hirsel: no image: ")
                     && line.ends_with("; checking lib@1")),
             "{stderr}"
         );
     }
+}
+
+/// The toolchain image supplies declarations and signatures as well as TIR.
+/// Counting parses catches accidentally routing an ordinary std call through
+/// source even when its final checked products still agree.
+#[test]
+fn checking_hello_parses_no_std_sources() {
+    let path = std_file(
+        "pub fn main(rt: Io) -> Result[(), GrantError] {\n  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(42u64))\n  Ok(())\n}\n",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["--timings=json", "--verbose", "check"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let lines: Vec<_> = stderr.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "a matching image emits no fallback note: {stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(report["counts"]["dependency parses"], 0, "{report}");
 }
 
 fn file(text: &str) -> std::path::PathBuf {
@@ -233,7 +314,7 @@ fn export_tir_writes_the_proof_seam_export_and_rejected_source_exits_one() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(
-        text.starts_with("(Export\n  (Header \"hirsel.tir.export.v6\""),
+        text.starts_with("(Export\n  (Header \"hirsel.tir.export.v7\""),
         "{text}"
     );
     assert!(text.contains("\"SEM-1\" \"failure-edge\" 0"), "{text}");

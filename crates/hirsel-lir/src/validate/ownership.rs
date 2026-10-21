@@ -1904,7 +1904,7 @@ impl<S: Stage> Walker<'_, '_, S> {
         }
     }
 
-    /// RC-ROOT (S-14): before Ready, content that reaches a `Shared` root
+    /// RC-ROOT (S-14): content that reaches a `Shared` root
     /// ends at its cleanup anchor. A TIR cleanup action runs in a `Cleanup`
     /// or `FailureCleanup` block, so a drop or release under a TIR anchor
     /// elsewhere ended its holder early (at a last use, say). An instruction's
@@ -1914,32 +1914,40 @@ impl<S: Stage> Walker<'_, '_, S> {
     /// chain: its drops sit where its operation's contract places them (a spawned task's
     /// callable after its body returns, say).
     fn root_anchor(&mut self, site: Site, b: BlockId, anchor: CleanupAnchorId, layout: LayoutId) {
-        if self.cx.stage >= StageKind::Ready
-            || self.cx.unit.header.origin == UnitOrigin::Library
+        if self.cx.unit.header.origin == UnitOrigin::Library
             || !self.cx.layouts.root_bearing(layout)
         {
             return;
         }
-        let Some(cleanup) = self.cx.unit.tables.cleanup_anchors.get(anchor.index()) else {
-            return;
-        };
-        let kind = self.cx.unit.blocks[b.index()].kind;
-        let at_anchor = match cleanup.cleanup {
-            INSTRUCTION_DROP | LOOP_RELEASE => true,
-            SCRATCH_DISPOSAL | STATE_RELEASE => kind == BlockKind::FailureCleanup,
-            _ => kind != BlockKind::Body,
-        };
-        if !at_anchor {
+        if !self.at_cleanup_anchor(b, anchor) {
             self.err(site, K::RootOutsideAnchor(anchor));
         }
     }
 
-    fn anchor_release(&mut self, site: Site, value: ValueId, anchor: CleanupAnchorId) {
+    /// Cleanup lowering preserves the block kind and anchor while splitting
+    /// drops, so the lifetime witness remains available at Ready too.
+    fn at_cleanup_anchor(&self, b: BlockId, anchor: CleanupAnchorId) -> bool {
+        let Some(cleanup) = self.cx.unit.tables.cleanup_anchors.get(anchor.index()) else {
+            return false;
+        };
+        let kind = self.cx.unit.blocks[b.index()].kind;
+        match cleanup.cleanup {
+            INSTRUCTION_DROP | LOOP_RELEASE => true,
+            SCRATCH_DISPOSAL | STATE_RELEASE => kind == BlockKind::FailureCleanup,
+            _ => kind != BlockKind::Body,
+        }
+    }
+
+    fn anchor_release(&mut self, site: Site, b: BlockId, value: ValueId, anchor: CleanupAnchorId) {
         self.discharged.insert(anchor);
         // A block destroys its payload; an inline value its own content.
         let own = self.cx.value_layout(value);
         let destroyed = self.cx.layouts.released(own).unwrap_or(own);
-        if self.cx.stage < StageKind::Ready && self.cx.layouts.destructible(destroyed) {
+        if self.cx.layouts.destructible(destroyed)
+            && (self.cx.stage < StageKind::Ready
+                || self.cx.unit.header.origin != UnitOrigin::Library
+                    && !self.at_cleanup_anchor(b, anchor))
+        {
             self.err(site, K::ResourceOutsideAnchor(value));
         }
     }
@@ -2137,8 +2145,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 // RC-ROOT (S-14): a semantic copy of root-bearing content is a
                 // Dup; one made by a move cancelled that Dup against its
                 // holder's release, ending the holder away from its anchor.
-                if self.cx.stage < StageKind::Ready
-                    && self.facts.moved[value.index()]
+                if self.facts.moved[value.index()]
                     && self.cx.layouts.root_bearing(self.cx.value_layout(value))
                 {
                     self.err(site, K::RootCopyCancelled(value));
@@ -2718,7 +2725,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 anchor,
                 ..
             } => {
-                self.anchor_release(site, value, anchor);
+                self.anchor_release(site, b, value, anchor);
                 self.root_anchor(site, b, anchor, self.cx.value_layout(value));
                 if let Some(slot) = self.facts.taken_from[value.index()] {
                     self.observe(site, b, st, slot);
@@ -2735,7 +2742,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 ..
             } => {
                 self.release_mask(site, st, value, layout, live);
-                self.anchor_release(site, value, anchor);
+                self.anchor_release(site, b, value, anchor);
                 self.root_anchor(site, b, anchor, self.cx.value_layout(value));
                 if let Some(slot) = self.facts.taken_from[value.index()] {
                     self.observe(site, b, st, slot);

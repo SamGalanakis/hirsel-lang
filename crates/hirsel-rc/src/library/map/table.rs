@@ -7,12 +7,12 @@ pub(super) fn entry_type(b: &mut Body<'_, '_>) -> R<TypeId> {
     let v = if b.cx.arguments.len() == 2 {
         b.cx.type_actual(1)?
     } else {
-        b.cx.store.push(Type::unit())
+        b.cx.types.intern(Type::unit())
     };
     Ok(add_type(
-        &mut b.cx.store,
+        b.cx.types,
         TypeKind::Named {
-            definition: native_path("MapEntry"),
+            definition: hirsel_syntax::DefId::intern(&native_path("MapEntry")),
             arguments: vec![GenericArgument::Type(k), GenericArgument::Type(v)].into(),
         },
     ))
@@ -23,7 +23,7 @@ fn map_type(b: &mut Body<'_, '_>) -> R<TypeId> {
     let v = if b.cx.arguments.len() == 2 {
         b.cx.type_actual(1)?
     } else {
-        b.cx.store.push(Type::unit())
+        b.cx.types.intern(Type::unit())
     };
     Ok(if b.cx.arguments.len() == 2 {
         builtin(b, BuiltinType::Map, &[k, v])
@@ -53,7 +53,7 @@ pub(super) fn entry_value(
 }
 fn append(b: &mut Body<'_, '_>, list: AddressId, ty: TypeId, value: ValueId) -> R<()> {
     let list_ty = builtin(b, BuiltinType::List, &[ty]);
-    let unit = b.cx.store.push(Type::unit());
+    let unit = b.cx.types.intern(Type::unit());
     let push = helper(
         b,
         "list.push",
@@ -68,7 +68,7 @@ fn append(b: &mut Body<'_, '_>, list: AddressId, ty: TypeId, value: ValueId) -> 
 }
 fn maintenance(b: &mut Body<'_, '_>, name: &str) -> R<()> {
     let map = map_type(b)?;
-    let unit = b.cx.store.push(Type::unit());
+    let unit = b.cx.types.intern(Type::unit());
     let actuals = b.cx.arguments.clone();
     let name = if b.cx.arguments.len() == 1 {
         match name {
@@ -96,9 +96,9 @@ fn maintenance(b: &mut Body<'_, '_>, name: &str) -> R<()> {
 fn update_index(b: &mut Body<'_, '_>) -> R<()> {
     let entry = entry_type(b)?;
     let entries_ty = builtin(b, BuiltinType::List, &[entry]);
-    let word = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let word = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
     let words_ty = builtin(b, BuiltinType::List, &[word]);
-    let unit = b.cx.store.push(Type::unit());
+    let unit = b.cx.types.intern(Type::unit());
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
@@ -163,7 +163,7 @@ pub(super) fn append_prepared(
     append_map_inner(b, hash, key, value, true)
 }
 pub(super) fn append_set(b: &mut Body<'_, '_>, hash: ValueId, key: AddressId) -> R<()> {
-    let unit_ty = b.cx.store.push(Type::unit());
+    let unit_ty = b.cx.types.intern(Type::unit());
     let layout = b.cx.layout(unit_ty)?;
     let (slot, value) = temporary(b, layout)?;
     let unit = construct(b, layout, ConstructorKind::Tuple, &[])?;
@@ -215,7 +215,7 @@ fn append_map_inner(
         append(b, entries, ty, value)?;
     }
     overwrite(b, live, count)?;
-    let word = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let word = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
     append(b, hashes, word, hash)?;
     update_index(b)
 }
@@ -468,7 +468,7 @@ pub(super) fn map_prepare(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.end_loan(loan);
     b.jump(append_hash, &[zero]);
     b.at(append_hash);
-    let ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let ty = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
     append(&mut b, hashes, ty, hash_value)?;
     let next = b.add(ArithMode::Wrapping, i, one);
     let after = b.reaching(container.slot)?;

@@ -10,22 +10,26 @@
 use super::{REVISION, native_path};
 use hirsel_layout::layout::{Container, OwnerRepresentation, Owners};
 
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_intern::Symbol;
+use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{
     BinderRef, BuiltinType, Field, GenericArgument, GenericParameter, Layout, Primitive,
-    SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeParamId, TypeStore, Variant,
+    SignatureKind, SignatureRef, Type, TypeId, TypeInterner, TypeKind, TypeParamId, Variant,
 };
 use std::collections::BTreeMap;
 
 /// What the library owns of a program's `Owners`.
 #[derive(Clone, Debug, Default)]
 pub struct LibraryOwners {
-    pub nominals: BTreeMap<DefPath, OwnerRepresentation>,
+    pub nominals: BTreeMap<DefId, OwnerRepresentation>,
     pub containers: BTreeMap<Container, RepresentationRecord>,
 }
 
 impl LibraryOwners {
+    fn insert(&mut self, path: DefPath, representation: OwnerRepresentation) {
+        self.nominals.insert(DefId::intern(&path), representation);
+    }
     /// The program's owners with the library's laid over them: a library
     /// type's native representation is the library's, whatever the registry
     /// declaration says about its public shape.
@@ -78,16 +82,14 @@ pub const INDEX: u32 = 1;
 /// A consuming cursor's position.
 pub const NEXT: u32 = 1;
 
-/// A hand-built shape: a store whose type parameters are the owner's own,
-/// by ordinal.
-#[derive(Default)]
-struct Shape {
-    store: TypeStore,
+/// A hand-built shape, whose type parameters are the owner's own, by ordinal.
+struct Shape<'t> {
+    types: &'t TypeInterner,
 }
 
-impl Shape {
+impl Shape<'_> {
     fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.store.push(Type::with_kind(kind))
+        self.types.intern(Type::with_kind(kind))
     }
     fn primitive(&mut self, p: Primitive) -> TypeId {
         self.add(TypeKind::Primitive(p))
@@ -111,7 +113,7 @@ impl Shape {
                 .iter()
                 .map(|&(name, ty)| Field {
                     growable: false,
-                    name: name.into(),
+                    name: Symbol::intern(name),
                     ty,
                 })
                 .collect(),
@@ -164,14 +166,12 @@ fn record(
     name: &str,
     signature: Option<&SignatureRef>,
     generics: Vec<GenericParameter>,
-    shape: Shape,
     private_shape: TypeId,
 ) -> RepresentationRecord {
     RepresentationRecord {
         definition,
         representation_revision: revision(name, signature),
         generics,
-        types: shape.store,
         private_shape,
         layout_promises: Layout::default(),
         resource: false,
@@ -183,7 +183,7 @@ fn record(
 /// The library's owner representations: the containers and SlotId, the cursor
 /// types and the string views. `signatures` are the program's
 /// registry declarations; a type the program does not declare gets no row.
-pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
+pub fn owners(types: &TypeInterner, signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     let mut out = LibraryOwners::default();
 
     for (name, resource) in [
@@ -203,7 +203,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ("TaskSet", true),
     ] {
         if let Some(signature) = signatures.get(&hirsel_syntax::DefPath::core(name)) {
-            out.nominals.insert(
+            out.insert(
                 hirsel_syntax::DefPath::core(name),
                 OwnerRepresentation::Handle {
                     resource,
@@ -215,42 +215,41 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
 
     // A private nominal keeps entry accounting distinct from an ordinary
     // user List with the same optional-pair shape.
-    let mut entry_shape = Shape::default();
+    let mut entry_shape = Shape { types };
     let k = entry_shape.parameter(0);
     let v = entry_shape.parameter(1);
     let pair = entry_shape.add(TypeKind::Tuple(vec![k, v].into()));
     let optional = entry_shape.add(TypeKind::Variant(
         vec![
             Variant {
-                name: "None".into(),
+                name: Symbol::intern("None"),
                 fields: vec![].into(),
             },
             Variant {
-                name: "Some".into(),
+                name: Symbol::intern("Some"),
                 fields: vec![(None, pair)].into(),
             },
         ]
         .into(),
     ));
-    out.nominals.insert(
+    out.insert(
         native_path("MapEntry"),
         OwnerRepresentation::Defined(record(
             native_path("MapEntry"),
             "MapEntry",
             None,
             type_parameters(&["K", "V"]),
-            entry_shape,
             optional,
         )),
     );
 
     // Maps retain optional entries in insertion order, cached hashes, and a
     // tagged index. Deletion clears the entry; insertion compacts lazily.
-    let mut s = Shape::default();
+    let mut s = Shape { types };
     let k = s.parameter(0);
     let v = s.parameter(1);
     let entry = s.add(TypeKind::Named {
-        definition: native_path("MapEntry"),
+        definition: DefId::intern(&native_path("MapEntry")),
         arguments: vec![GenericArgument::Type(k), GenericArgument::Type(v)].into(),
     });
     let entries = s.builtin(BuiltinType::List, &[entry]);
@@ -270,15 +269,14 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "Map",
             None,
             type_parameters(&["K", "V"]),
-            s,
             shape,
         ),
     );
-    let mut s = Shape::default();
+    let mut s = Shape { types };
     let element = s.parameter(0);
     let unit = s.add(TypeKind::Tuple(vec![].into()));
     let entry = s.add(TypeKind::Named {
-        definition: native_path("MapEntry"),
+        definition: hirsel_syntax::DefId::intern(&native_path("MapEntry")),
         arguments: vec![GenericArgument::Type(element), GenericArgument::Type(unit)].into(),
     });
     let entries = s.builtin(BuiltinType::List, &[entry]);
@@ -298,11 +296,10 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "Set",
             None,
             type_parameters(&["T"]),
-            s,
             shape,
         ),
     );
-    let mut s = Shape::default();
+    let mut s = Shape { types };
     let entries = s.pairs();
     let shape = s.record(&[("entries", entries)]);
     out.containers.insert(
@@ -312,18 +309,17 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "SortedMap",
             None,
             type_parameters(&["K", "V"]),
-            s,
             shape,
         ),
     );
 
     // A slot retains its generation even while vacant. Zero is reserved for
     // retirement after the maximum generation is removed.
-    let mut s = Shape::default();
+    let mut s = Shape { types };
     let element = s.parameter(0);
     let generation = s.primitive(Primitive::U64);
     let option = s.add(TypeKind::Named {
-        definition: DefPath::core("Option"),
+        definition: DefId::intern(&DefPath::core("Option")),
         arguments: vec![GenericArgument::Type(element)].into(),
     });
     let entry = s.add(TypeKind::Tuple(vec![generation, option].into()));
@@ -336,11 +332,10 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "Slots",
             None,
             type_parameters(&["T"]),
-            s,
             shape,
         ),
     );
-    let mut s = Shape::default();
+    let mut s = Shape { types };
     let word = s.primitive(Primitive::U64);
     let shape = s.add(TypeKind::Tuple(vec![word, word].into()));
     out.containers.insert(
@@ -350,7 +345,6 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "SlotId",
             None,
             type_parameters(&["T"]),
-            s,
             shape,
         ),
     );
@@ -359,7 +353,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     let path = DefPath::core("Entry");
     if let Some(signature) = signatures.get(&path) {
         out.nominals.insert(
-            path,
+            hirsel_syntax::DefId::intern(&path),
             OwnerRepresentation::Entry {
                 revision: revision("Entry", Some(signature)),
             },
@@ -369,7 +363,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     // The borrowed cursor: three words for every `T`.
     let path = cursor();
     if let Some(signature) = signatures.get(&path) {
-        out.nominals.insert(
+        out.insert(
             path,
             OwnerRepresentation::Cursor {
                 revision: revision("Cursor", Some(signature)),
@@ -379,7 +373,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
 
     let path = hirsel_syntax::DefPath::core("$intrinsic.ViewCursor");
     if let Some(signature) = signatures.get(&path) {
-        out.nominals.insert(
+        out.insert(
             path,
             OwnerRepresentation::ViewCursor {
                 revision: revision("ViewCursor", Some(signature)),
@@ -394,7 +388,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         let Some(signature) = signatures.get(&path) else {
             continue;
         };
-        let mut s = Shape::default();
+        let mut s = Shape { types };
         let held = match source {
             Source::Array => {
                 let element = s.parameter(0);
@@ -426,32 +420,31 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
                 &["K", "V"]
             },
         );
-        let mut r = record(path.clone(), name, Some(signature), generics, s, shape);
+        let mut r = record(path.clone(), name, Some(signature), generics, shape);
         r.resource = true;
         r.finalizer = Some((native_path(finalizer), BodyId(0)));
-        out.nominals.insert(path, OwnerRepresentation::Defined(r));
+        out.insert(path, OwnerRepresentation::Defined(r));
     }
 
     // The string views have the layout of `String`; `StrPos` is a byte
     // offset from the slice's start (its brand is static).
     for name in VIEWS {
-        out.nominals.insert(
+        out.insert(
             hirsel_syntax::DefPath::core(name),
             OwnerRepresentation::StringView,
         );
     }
     let path = hirsel_syntax::DefPath::core("StrPos");
     if let Some(signature) = signatures.get(&path) {
-        let mut s = Shape::default();
+        let mut s = Shape { types };
         let private_shape = s.primitive(Primitive::U64);
-        out.nominals.insert(
+        out.insert(
             path.clone(),
             OwnerRepresentation::Defined(record(
                 path,
                 "StrPos",
                 Some(signature),
                 declared(Some(signature), &[]),
-                s,
                 private_shape,
             )),
         );

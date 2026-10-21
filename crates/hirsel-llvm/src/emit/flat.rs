@@ -332,7 +332,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let owner = self.builder.load(self.module.ptr_type(), word(0)?, 8);
         let (start, length) = (self.load_u64(word(1)?), self.load_u64(word(2)?));
-        let Some(storage) = slice_storage(self.inputs.layouts, element) else {
+        let Some(storage) =
+            slice_storage_with_index(self.inputs.layouts, self.inputs.index, element)
+        else {
             return self.invalid("a slice without its element's sequence layout");
         };
         let payload = self.payload_of(owner, storage)?;
@@ -766,12 +768,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .load(self.module.ptr_type(), word(0)?, source.align);
                 let start = self.load_u64(word(1)?);
                 let length = self.load_u64(word(2)?);
-                let storage = slice_storage(self.inputs.layouts, element).ok_or_else(|| {
-                    CodegenError::Invalid {
-                        definition: self.definition().clone(),
-                        what: "a flat slice source without byte storage".into(),
-                    }
-                })?;
+                let storage =
+                    slice_storage_with_index(self.inputs.layouts, self.inputs.index, element)
+                        .ok_or_else(|| CodegenError::Invalid {
+                            definition: self.definition().clone(),
+                            what: "a flat slice source without byte storage".into(),
+                        })?;
                 let payload = self.payload_of(owner, storage)?;
                 let data = self.builder.offset(payload.ptr, self.const_u64(8));
                 (self.builder.offset(data, start), length)

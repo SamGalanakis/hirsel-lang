@@ -1,6 +1,6 @@
 //! SER-1 data schemas, deliberately independent of native storage and modes.
 use crate::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 pub const SERIALIZABLE_SCHEMA_VERSION: u32 = 1;
@@ -62,32 +62,32 @@ impl SerializableSchema {
 /// Local data views may be encoded while valid; modes do not promise reconstructed
 /// ownership. Nonregular expansion exhaustion remains an operational QueryError.
 pub fn serializable_schema(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<SerializableSchema>, QueryError> {
     schema_inner(source, root, declarations, lookup).map(|schema| schema.and_then(canonical))
 }
 
 fn schema_inner(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<SerializableSchema>, QueryError> {
-    let mut store = crate::graph::RootedScratch::new(source);
+    let store = source;
     let mut schema = SerializableSchema {
         version: SERIALIZABLE_SCHEMA_VERSION,
         root: SchemaId(0),
         nodes: vec![],
     };
-    let mut memo = BTreeMap::new();
+    let mut memo = std::collections::HashMap::new();
     let mut pending = vec![];
     fn child(
         id: TypeId,
         schema: &mut SerializableSchema,
-        memo: &mut BTreeMap<TypeId, SchemaId>,
+        memo: &mut std::collections::HashMap<TypeId, SchemaId>,
         pending: &mut Vec<(TypeId, bool)>,
     ) -> SchemaId {
         *memo.entry(id).or_insert_with(|| {
@@ -127,17 +127,19 @@ fn schema_inner(
                 SchemaNode::Parameter(p)
             }
             TypeKind::Tuple(ts) => SchemaNode::Tuple(ts.iter().map(|t| part(*t)).collect()),
-            TypeKind::Record(fs) => {
-                SchemaNode::Record(fs.iter().map(|f| (f.name.clone(), part(f.ty))).collect())
-            }
+            TypeKind::Record(fs) => SchemaNode::Record(
+                fs.iter()
+                    .map(|f| (f.name.as_str().to_owned(), part(f.ty)))
+                    .collect(),
+            ),
             TypeKind::Variant(vs) => SchemaNode::Variant(
                 vs.iter()
                     .map(|v| {
                         (
-                            v.name.clone(),
+                            v.name.as_str().to_owned(),
                             v.fields
                                 .iter()
-                                .map(|(name, t)| (name.clone(), part(*t)))
+                                .map(|(name, t)| (name.map(|n| n.as_str().to_owned()), part(*t)))
                                 .collect(),
                         )
                     })
@@ -177,7 +179,7 @@ fn schema_inner(
                 definition,
                 arguments,
             } => {
-                let Some(signature) = lookup(&definition)? else {
+                let Some(signature) = lookup(definition)? else {
                     return Ok(None);
                 };
                 let SignatureKind::Type(d) = &signature.kind else {
@@ -192,7 +194,7 @@ fn schema_inner(
                     let text = SchemaId(schema.nodes.len() as u32);
                     schema.nodes.push(SchemaNode::Scalar(Primitive::String));
                     schema.nodes[memo[&id].0 as usize] = SchemaNode::Nominal {
-                        definition,
+                        definition: definition.path().clone(),
                         representation: text,
                         check: None,
                     };
@@ -237,20 +239,17 @@ fn schema_inner(
                 if let Some(previous) = entered
                     .iter()
                     .copied()
-                    .find(|previous| store.equal(*previous, id))
+                    .find(|previous| store.semantic_eq(*previous, id))
                 {
                     SchemaNode::Reference(memo[&previous])
                 } else {
-                    let fresh = expansions.enter(id, 0, |id| store.store(id))?;
+                    let fresh = expansions.enter(id, 0, store)?;
                     debug_assert!(fresh, "an entered nominal is referenced above");
                     entered.push(id);
                     pending.push((id, true));
-                    let Ok(root) = store.expand(
-                        &signature.types,
-                        root,
-                        &arguments,
-                        &signature.metadata.roles,
-                    ) else {
+                    let Ok(root) =
+                        crate::graph::expand(store, root, &arguments, &signature.metadata.roles)
+                    else {
                         return Ok(None);
                     };
                     let root = child(root, &mut schema, &mut memo, &mut pending);
@@ -258,7 +257,7 @@ fn schema_inner(
                         SchemaNode::Reference(root)
                     } else {
                         SchemaNode::Nominal {
-                            definition,
+                            definition: definition.path().clone(),
                             representation: root,
                             check,
                         }
@@ -272,10 +271,10 @@ fn schema_inner(
 }
 
 pub fn structural_serializable(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     schema_inner(source, root, declarations, lookup).map(|schema| schema.is_some())
 }
@@ -455,13 +454,11 @@ mod tests {
             name: name.into(),
         })
     }
-    fn nominal(kind: TypeKind) -> Signature {
-        let mut types = TypeStore::default();
-        let root = types.push(row(kind));
+    fn nominal(types: &TypeInterner, kind: TypeKind) -> Signature {
+        let root = types.intern(row(kind));
         Signature {
-            definition: path("Row"),
+            definition: DefId::intern(&path("Row")),
             metadata: SignatureMetadata::default(),
-            types,
             fingerprint: Default::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
@@ -485,7 +482,7 @@ mod tests {
         }
     }
     fn schema(
-        store: &TypeStore,
+        store: &TypeInterner,
         root: TypeId,
         declaration: Option<Signature>,
     ) -> Option<SerializableSchema> {
@@ -496,27 +493,27 @@ mod tests {
     }
     #[test]
     fn a_nominal_reached_along_two_paths_is_admitted_once() {
-        let mut s = TypeStore::default();
+        let s = TypeInterner::new(None);
         let named = || {
             row(TypeKind::Named {
-                definition: path("Row"),
+                definition: DefId::intern(&path("Row")),
                 arguments: vec![].into(),
             })
         };
-        let (a, b) = (s.push(named()), s.push(named()));
-        let pair = s.push(row(TypeKind::Tuple(vec![a, b].into())));
-        let declaration = nominal(TypeKind::Primitive(Primitive::U64));
+        let (a, b) = (s.intern(named()), s.intern(named()));
+        let pair = s.intern(row(TypeKind::Tuple(vec![a, b].into())));
+        let declaration = nominal(&s, TypeKind::Primitive(Primitive::U64));
         let shared = schema(&s, pair, Some(declaration.clone())).expect("admitted");
-        let single = s.push(row(TypeKind::Tuple(vec![a, a].into())));
+        let single = s.intern(row(TypeKind::Tuple(vec![a, a].into())));
         assert_eq!(shared, schema(&s, single, Some(declaration)).unwrap());
     }
     #[test]
     fn descriptors_have_schema_ids_and_declaration_order_without_native_layout() {
-        let mut s = TypeStore::default();
-        s.push(row(TypeKind::Primitive(Primitive::Never))); // unreachable rows are irrelevant
-        let n = s.push(row(TypeKind::Primitive(Primitive::U64)));
-        let text = s.push(row(TypeKind::Primitive(Primitive::String)));
-        let r = s.push(row(TypeKind::Record(
+        let s = TypeInterner::new(None);
+        s.intern(row(TypeKind::Primitive(Primitive::Never))); // unreachable rows are irrelevant
+        let n = s.intern(row(TypeKind::Primitive(Primitive::U64)));
+        let text = s.intern(row(TypeKind::Primitive(Primitive::String)));
+        let r = s.intern(row(TypeKind::Record(
             vec![
                 Field {
                     name: "second".into(),
@@ -544,17 +541,17 @@ mod tests {
         let mut t = s.get(r).unwrap().clone();
         t.modes.relation = Relation::environment();
         t.modes.sendability = Sendability::NotSendable;
-        let local = s.push(t);
+        let local = s.intern(t);
         assert_eq!(schema(&s, local, None), Some(descriptor));
     }
     #[test]
     fn opt_in_never_overrides_opaque_resource_authority_or_missing_schema() {
-        let mut s = TypeStore::default();
-        let r = s.push(row(TypeKind::Named {
-            definition: path("Row"),
+        let s = TypeInterner::new(None);
+        let r = s.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Row")),
             arguments: vec![].into(),
         }));
-        let good = nominal(TypeKind::Primitive(Primitive::U64));
+        let good = nominal(&s, TypeKind::Primitive(Primitive::U64));
         assert!(schema(&s, r, Some(good.clone())).is_some());
         for change in 0..6 {
             let mut bad = good.clone();
@@ -575,10 +572,10 @@ mod tests {
     #[test]
     fn parameter_evidence_uses_the_exact_binder_and_never_implies_crossing() {
         let p = TypeParameterRef::bound(TypeParamId(0));
-        let mut s = TypeStore::default();
+        let s = TypeInterner::new(None);
         let mut parameter = row(TypeKind::Parameter(p));
         parameter.modes.sendability = Sendability::DependsOn(vec![p].into());
-        let root = s.push(parameter);
+        let root = s.intern(parameter);
         let g = GenericParameter::Type {
             name: "T".into(),
             bounds: vec![Bound::Serializable].into(),
@@ -607,8 +604,8 @@ mod tests {
     }
     #[test]
     fn every_unsupported_builtin_and_nested_brand_fails_closed() {
-        let mut s = TypeStore::default();
-        let n = s.push(row(TypeKind::Primitive(Primitive::U64)));
+        let s = TypeInterner::new(None);
+        let n = s.intern(row(TypeKind::Primitive(Primitive::U64)));
         for kind in [
             BuiltinType::Shared,
             BuiltinType::Slots,
@@ -625,7 +622,7 @@ mod tests {
             BuiltinType::Atomic,
             BuiltinType::Region,
         ] {
-            let r = s.push(row(TypeKind::Builtin {
+            let r = s.intern(row(TypeKind::Builtin {
                 kind,
                 arguments: vec![GenericArgument::Type(n)].into(),
             }));
@@ -637,10 +634,10 @@ mod tests {
             fields: Default::default(),
         }]
         .into();
-        let branded = s.push(branded);
-        let root = s.push(row(TypeKind::Box(branded)));
+        let branded = s.intern(branded);
+        let root = s.intern(row(TypeKind::Box(branded)));
         assert!(schema(&s, root, None).is_none());
-        let root = s.push(row(TypeKind::Box(n)));
+        let root = s.intern(row(TypeKind::Box(n)));
         assert!(schema(&s, root, None).is_some());
     }
 }
@@ -650,25 +647,25 @@ mod canonical_tests {
     use super::*;
     #[test]
     fn canonical_schemas_ignore_arena_sharing_and_qualifier_copies() {
-        let mut a = TypeStore::default();
-        let n = a.push(Type {
+        let a = TypeInterner::new(None);
+        let n = a.intern(Type {
             kind: TypeKind::Primitive(Primitive::U64),
             ..Type::unit()
         });
-        let pair = a.push(Type {
+        let pair = a.intern(Type {
             kind: TypeKind::Tuple(vec![n, n].into()),
             ..Type::unit()
         });
-        let mut b = TypeStore::default();
-        b.push(Type::boolean());
-        let first = b.push(Type {
+        let b = std::sync::Arc::clone(&a);
+        b.intern(Type::boolean());
+        let first = b.intern(Type {
             kind: TypeKind::Primitive(Primitive::U64),
             ..Type::unit()
         });
         let mut second = b.get(first).unwrap().clone();
         second.modes.sendability = Sendability::NotSendable;
-        let second = b.push(second);
-        let pair_b = b.push(Type {
+        let second = b.intern(second);
+        let pair_b = b.intern(Type {
             kind: TypeKind::Tuple(vec![first, second].into()),
             ..Type::unit()
         });

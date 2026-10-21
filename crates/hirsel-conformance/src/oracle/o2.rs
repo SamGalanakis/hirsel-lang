@@ -1,16 +1,18 @@
 //! O2, warm equals cold: after each scripted edit, every warm run's artifacts
 //! equal a cold run of the edited tree.
 //!
-//! - `cold`: a fresh run of the edited tree (`none@1`; today a fresh cache).
-//! - `mem`: one process-shared store across the edit (`mem@1`; today a
-//!   shared `PackageCache`).
-//! - `resident`: one `Session` across the edit (TODO until it exists).
-//! - `disk`: two processes sharing a `dir@1` store (TODO until it exists).
+//! - `cold`: a fresh run of the edited tree (`none@1`).
+//! - `mem`: one result store across fresh sessions on either side of the edit.
+//! - `resident`: one `Session` across the edit.
+//! - `disk`: two processes sharing a `dir@1` store.
 use super::{
-    Artifacts, Config, Report, Switch, Verdict, difference, edits::Scenario, fresh_cache,
-    o1::produce_in_child, produce, switches,
+    Artifacts, Config, Report, Verdict, difference, edits::Scenario, fresh_images,
+    o1::produce_in_child, produce, produce_with_store, program_artifacts, switches,
 };
+use hirsel_driver::session::{FileChange, Session};
+use hirsel_engine::store::MemStore;
 use std::path::Path;
+use std::sync::Arc;
 
 pub fn run(exe: &Path, root: &Path, scenarios: &[Scenario], work: &Path) -> Report {
     let mut report = Report::new("O2");
@@ -35,8 +37,11 @@ fn one(
     let (before, after) = (&scenario.config_before, &scenario.config_after);
     scenario.write(&tree, root, false)?;
     let entry = scenario.entry(&tree);
-    let mem = fresh_cache();
-    let warmed = produce(&entry, before, &mem);
+    let mem = fresh_images();
+    let store = Arc::new(MemStore::default());
+    let warmed = produce_with_store(&entry, before, &mem, store.clone());
+    let mut resident = Session::open_configured(&entry, before.compile(before.result_store()));
+    let _resident_before = resident_artifacts(&mut resident, before);
     let disk = base.join("store");
     let disk_before = Config {
         store: Some(disk.clone()),
@@ -49,7 +54,24 @@ fn one(
                 .map_err(Verdict::Fail)
         });
     scenario.write(&tree, root, true)?;
-    let cold = match produce(&entry, after, &fresh_cache()) {
+    resident.apply(
+        scenario
+            .before
+            .keys()
+            .chain(scenario.after.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|path| scenario.before.get(*path) != scenario.after.get(*path))
+            .map(|path| FileChange {
+                path: tree.join(path),
+                bytes: scenario
+                    .after
+                    .get(path)
+                    .map(|text| text.as_bytes().to_vec()),
+            })
+            .collect(),
+    );
+    let cold = match produce(&entry, after, &fresh_images()) {
         Ok(cold) => cold,
         Err(switch) => {
             for mode in ["mem", "resident", "disk"] {
@@ -71,14 +93,20 @@ fn one(
     report.add(
         name("mem"),
         compare(
-            warmed
-                .map_err(Verdict::Todo)
-                .and_then(|_| produce(&entry, after, &mem).map_err(Verdict::Todo)),
+            warmed.map_err(Verdict::Todo).and_then(|_| {
+                produce_with_store(&entry, after, &mem, store).map_err(Verdict::Todo)
+            }),
         ),
     );
-    // The resident run: `Session::open` on the before tree, `check`, `apply` the
-    // edit's file changes, `check` again, and compare that output.
-    report.add(name("resident"), Verdict::Todo(Switch::Session));
+    report.add(
+        name("resident"),
+        compare(Ok({
+            let artifacts = resident_artifacts(&mut resident, after);
+            super::write_artifacts(&base.join("resident"), &artifacts)
+                .map_err(|e| e.to_string())?;
+            artifacts
+        })),
+    );
     let disk_after = Config {
         store: Some(disk),
         ..after.clone()
@@ -91,4 +119,11 @@ fn one(
         })),
     );
     Ok(())
+}
+
+fn resident_artifacts(session: &mut Session, config: &Config) -> Artifacts {
+    hirsel_engine::with_compiler_stack(|| match session.program() {
+        Ok(program) => program_artifacts(program, config),
+        Err(error) => [("diagnostics".into(), super::tool_error(&error).into_bytes())].into(),
+    })
 }

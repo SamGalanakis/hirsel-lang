@@ -1,25 +1,20 @@
 use super::*;
 
 impl Checker<'_> {
-    pub(super) fn validate_header(
-        &mut self,
-        store: &TypeStore,
-        f: &FunctionType,
-        span: Span,
-    ) -> bool {
+    pub(super) fn validate_header(&mut self, f: &FunctionType, span: Span) -> bool {
         let mut valid = true;
         for id in f.parameters.iter().map(|p| p.ty).chain([f.result]) {
-            valid &= self.header_type(store, id, f, span, &mut BTreeSet::new());
+            valid &= self.header_type(self.t, id, f, span, &mut HashSet::default());
         }
         valid
     }
     fn header_type(
         &mut self,
-        store: &TypeStore,
+        store: &TypeInterner,
         id: TypeId,
         f: &FunctionType,
         span: Span,
-        seen: &mut BTreeSet<TypeId>,
+        seen: &mut HashSet<TypeId>,
     ) -> bool {
         if !seen.insert(id) {
             return true;
@@ -76,8 +71,8 @@ impl Checker<'_> {
     ) -> bool {
         let actual_id = actual;
         let expected_id = expected;
-        let a = self.out.body.types.get(actual).unwrap().clone();
-        let b = self.out.body.types.get(expected).unwrap().clone();
+        let a = self.t.get(actual).unwrap().clone();
+        let b = self.t.get(expected).unwrap().clone();
         if matches!(a.kind, TypeKind::Error) || matches!(b.kind, TypeKind::Error) {
             return false;
         }
@@ -101,7 +96,7 @@ impl Checker<'_> {
                     .unwrap_or_default();
                 Explanation {
                     root: Some(hirsel_modes::explain::root_key(
-                        &self.signature.definition,
+                        self.signature.definition.path(),
                         ("ended", invalidation.start, invalidation.end),
                     )),
                     ..Explanation::default()
@@ -412,7 +407,7 @@ impl Checker<'_> {
         if self.property(actual, Bound::Plain) {
             return true;
         }
-        let types = &self.out.body.types;
+        let types = self.t;
         let (Some(a), Some(b)) = (types.get(actual), types.get(expected)) else {
             return true;
         };
@@ -479,7 +474,7 @@ impl Checker<'_> {
                 }) else {
                     return true;
                 };
-                let row = &self.out.body.types.get(binding.ty).unwrap().modes.relation;
+                let row = &self.t.get(binding.ty).unwrap().modes.relation;
                 allowed = allowed.union(&self.placement(row));
             }
             if !self.placement(&a.modes.relation).contained_in(&allowed)
@@ -506,12 +501,12 @@ impl Checker<'_> {
     /// what it holds, so function types are not entered.
     pub(super) fn retains_scoped_placement(&mut self, ty: TypeId) -> bool {
         let mut pending = vec![ty];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let Some(row) = self.out.body.types.get(ty) else {
+            let Some(row) = self.t.get(ty) else {
                 continue;
             };
             if matches!(row.kind, TypeKind::Error | TypeKind::Function(_)) {
@@ -538,7 +533,7 @@ impl Checker<'_> {
         passing: PassingMode,
         argument: ExprId,
     ) -> bool {
-        let types = &self.out.body.types;
+        let types = self.t;
         let mut pending: Vec<_> = types
             .get(actual)
             .unwrap()
@@ -547,7 +542,7 @@ impl Checker<'_> {
             .into_iter()
             .zip(types.get(expected).unwrap().kind.value_parts())
             .collect();
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         let mut forgotten = false;
         while let Some((a, b)) = pending.pop() {
             if !seen.insert((a, b)) {
@@ -563,9 +558,9 @@ impl Checker<'_> {
             pending.extend(a.kind.value_parts().into_iter().zip(b.kind.value_parts()));
         }
         let data = forgotten && passing != PassingMode::Mut && {
-            let store = self.out.body.types.clone();
+            let store = self.t;
             let generics = self.declarations();
-            structural_equality(&store, actual, Bound::Data, &generics, &mut |path| {
+            structural_equality(store, actual, Bound::Data, &generics, &mut |path| {
                 Ok::<_, hirsel_types::QueryError>(self.read(path))
             })
             .unwrap_or_else(|error| self.proof_failure(error, false))
@@ -600,7 +595,7 @@ impl Checker<'_> {
         view: bool,
         span: Span,
     ) -> bool {
-        let store = &self.out.body.types;
+        let store = self.t;
         // Callable headers have their own exact check above. Inferred literal
         // body evidence is intentionally separate from the callable promise.
         let mut pending: Vec<_> = store
@@ -611,7 +606,7 @@ impl Checker<'_> {
             .into_iter()
             .zip(store.get(expected).unwrap().kind.value_parts())
             .collect();
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         let mut different = false;
         while let Some((a, b)) = pending.pop() {
             if !seen.insert((a, b)) {
@@ -630,17 +625,15 @@ impl Checker<'_> {
             return true;
         }
         let valid = view && {
-            let mut store = self.out.body.types.clone();
+            let store = self.t;
             // This check concerns nested contracts. Root judgments are made
             // independently by I and the existing authority/placement checks.
             let mut row = store.get(expected).unwrap().clone();
             row.kind = store.get(actual).unwrap().kind.clone();
-            let actual = store.push(row);
-            let generics = self.declarations();
-            compatible_view_type(&store, expected, actual, &generics, &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(self.read(path))
+            let actual = store.intern(row);
+            self.proof(false, |memo| {
+                memo.view(expected, actual, TypeRelation::Parameter)
             })
-            .unwrap_or_else(|error| self.proof_failure(error, false))
         };
         if !valid {
             let value = self.received_span(span);
@@ -667,10 +660,10 @@ impl Checker<'_> {
     ) -> Explanation {
         let spell = |root| {
             hirsel_type_analysis::spelling::type_spelling(
-                &self.out.body.types,
+                self.t,
                 root,
                 &self.out.body.resolution.generic_declarations,
-                &self.signature.definition.0.package,
+                &self.signature.definition.path().0.package,
                 true,
             )
         };
@@ -744,7 +737,7 @@ impl Checker<'_> {
         variance: Variance,
         header: bool,
     ) -> Option<(RuleId, &'static str)> {
-        let types = &self.out.body.types;
+        let types = self.t;
         let (a, b) = (types.get(actual)?.clone(), types.get(expected)?.clone());
         if matches!(a.kind, TypeKind::Error) || matches!(b.kind, TypeKind::Error) {
             return None;
@@ -838,12 +831,12 @@ impl Checker<'_> {
     ) -> bool {
         let root = (actual, expected);
         let mut pending = vec![(actual, expected)];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some((actual, expected)) = pending.pop() {
             if !seen.insert((actual, expected)) {
                 continue;
             }
-            let types = &self.out.body.types;
+            let types = self.t;
             let (Some(a), Some(b)) = (types.get(actual).cloned(), types.get(expected).cloned())
             else {
                 continue;
@@ -989,12 +982,12 @@ impl Checker<'_> {
     /// is silent here; this is the conservative reading (spec #92).
     fn keeps_exact_promises(&mut self, actual: TypeId, expected: TypeId, span: Span) -> bool {
         let mut pending = vec![(actual, expected)];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some((actual, expected)) = pending.pop() {
             if !seen.insert((actual, expected)) {
                 continue;
             }
-            let types = &self.out.body.types;
+            let types = self.t;
             let (Some(a), Some(b)) = (types.get(actual).cloned(), types.get(expected).cloned())
             else {
                 continue;
@@ -1105,7 +1098,7 @@ impl Checker<'_> {
     /// result's environment. A value promises it when its own selection keeps
     /// no input the required one leaves out; an unknown environment does not.
     fn captures_promised(&self, value: &FunctionType, place: &FunctionType) -> bool {
-        let selection = |result: TypeId| match &self.out.body.types.get(result)?.erased_captures {
+        let selection = |result: TypeId| match &self.t.get(result)?.erased_captures {
             Some(ErasedCaptures::FromArguments(selectors)) => Some(selectors.clone()),
             _ => None,
         };
@@ -1134,10 +1127,10 @@ impl Checker<'_> {
         let Some(result) = self.closures.by_type(ty).and_then(|c| c.result_evidence) else {
             return ty;
         };
-        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        let mut row = self.t.get(ty).unwrap().clone();
         if let TypeKind::Function(f) = &mut row.kind {
             f.result = result;
         }
-        self.out.body.types.push(row)
+        self.intern(row)
     }
 }

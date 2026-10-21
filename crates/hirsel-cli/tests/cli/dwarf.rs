@@ -394,10 +394,10 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
             // Hosts have independent compiler sessions; neither build may
             // adopt source products from the other root's package cache.
             // Lane pkgcache-comptime owns generated token sources on cache adoption.
-            let mut loaded = hirsel_driver::load_program_source_with_cache(
+            let mut loaded = hirsel_driver::load_program_source_with_images(
                 &tree.join("app/hirsel.json"),
                 None,
-                &hirsel_engine::PackageCache::new(),
+                &hirsel_engine::StdImages::none(),
             )
             .unwrap();
             loaded.check_for_execution().unwrap();
@@ -408,12 +408,9 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
                 .unwrap()
                 .1;
             let source = loaded.engine.sources.file(generated.file).unwrap();
-            assert!(
-                source
-                    .logical_path()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("helper@2/src/helper.hir#")
+            assert_eq!(
+                source.logical_path().to_str(),
+                Some("<generated:helper@2/generated>")
             );
             let input = loaded.engine.export_native_input().unwrap();
             let sources = native::profile_sources(&input);
@@ -451,4 +448,76 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
         );
         std::fs::remove_dir_all(root).unwrap();
     });
+}
+
+/// Cached code carries item-relative ranges. Each link must resolve those
+/// ranges in the current file after line insertion and a cross-file move.
+#[test]
+fn cached_debug_lines_after_insertion_and_a_file_move_match_fresh_emission() {
+    let root = super::file("");
+    std::fs::remove_file(&root).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    let manifest = root.join("hirsel.json");
+    let helper = root.join("helper.hir");
+    let moved = root.join("moved.hir");
+    // Trivia belongs to the following item. Keep helper's owned text unchanged
+    // by inserting a line before an unused constant that precedes it.
+    let body = "const spacer:u64 = 1u64\npub fn helper(x:u64)->u64 { x + 1u64 }\n";
+    std::fs::write(root.join("main.hir"), "pub fn main()->Result[(),()] { failure.check(helper(3u64)==4u64, Arithmetic()); Ok(()) }\n").unwrap();
+    std::fs::write(&manifest, serde_json::json!({
+        "schema":1, "package":{"name":"moving","version":"1"},
+        "entry":{"module":[],"name":"main"},
+        "sources":[{"path":"main.hir","module":[]},{"path":"helper.hir","module":[]},{"path":"moved.hir","module":[]}],
+        "dependencies":[]
+    }).to_string()).unwrap();
+    for backend in ["llvm", "cranelift"] {
+        std::fs::write(&helper, body).unwrap();
+        std::fs::write(&moved, "").unwrap();
+        let exe = root.join(format!("{backend}-program"));
+        let build = |store| {
+            let built = output(
+                Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                    .env("HIRSEL_DAEMON", "off")
+                    .env("HIRSEL_RESULTS", "none@1")
+                    .env("HIRSEL_STD_OBJECTS", "none")
+                    .env("HIRSEL_OBJECTS", store)
+                    .env("HIRSEL_JOBS", "1")
+                    .env("XDG_CACHE_HOME", root.join(backend))
+                    .args(["build", "--debug", "--timings=json", "--backend", backend])
+                    .arg(&manifest)
+                    .arg("-o")
+                    .arg(&exe),
+            );
+            assert!(built.status.success(), "{backend}: {built:?}");
+            let stderr = std::str::from_utf8(&built.stderr).unwrap();
+            serde_json::from_str::<serde_json::Value>(stderr.lines().last().unwrap()).unwrap()
+        };
+        let cold = build("dir@1");
+        assert!(cold["counts"]["object misses"].as_u64().unwrap() > 0);
+        for file_move in [false, true] {
+            let current = if file_move { &moved } else { &helper };
+            std::fs::write(&helper, "").unwrap();
+            std::fs::write(current, format!("\n{body}")).unwrap();
+            let warm = build("dir@1");
+            assert!(
+                warm["counts"]["object hits"].as_u64().unwrap() > 0,
+                "{warm}"
+            );
+            assert_eq!(warm["counts"]["object misses"], 0, "{warm}");
+            let cached_lines = function_lines(&exe, current);
+            assert!(
+                cached_lines["moving@1/helper"].contains(&3),
+                "{cached_lines:?}"
+            );
+            let cached = std::fs::read(debug_file(&exe)).unwrap();
+            build("none@1");
+            assert_eq!(
+                cached,
+                std::fs::read(debug_file(&exe)).unwrap(),
+                "{backend} file_move={file_move}"
+            );
+            assert_eq!(cached_lines, function_lines(&exe, current));
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

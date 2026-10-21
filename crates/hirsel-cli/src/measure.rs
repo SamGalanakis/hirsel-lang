@@ -241,6 +241,12 @@ fn json(
     if let Some(memory) = memory {
         value["memory"] = serde_json::json!({
             "peak_rss_bytes": memory.peak_rss,
+            "checkpoints": memory::checkpoints().iter().map(|point| serde_json::json!({
+                "name": point.name,
+                "heap_request_delta_bytes": point.heap_request_delta,
+                "rss_bytes": point.rss,
+                "peak_rss_bytes": point.peak_rss,
+            })).collect::<Vec<_>>(),
             "held": memory.held.iter().map(|(name, bytes)| serde_json::json!({
                 "name": name,
                 "bytes": bytes,

@@ -11,6 +11,7 @@ use hirsel_types::Destination;
 
 pub fn run(
     provider: &mut (impl TirProvider + ?Sized),
+    types: &std::sync::Arc<hirsel_types::TypeInterner>,
     sources: &SourceMap,
     configuration: &RunConfiguration,
     arguments: Vec<Value>,
@@ -18,6 +19,7 @@ pub fn run(
 ) -> Result<Execution, ExecutionError> {
     run_with_operations(
         provider,
+        types,
         sources,
         configuration,
         arguments,
@@ -27,6 +29,7 @@ pub fn run(
 }
 pub fn run_with_operations(
     provider: &mut (impl TirProvider + ?Sized),
+    types: &std::sync::Arc<hirsel_types::TypeInterner>,
     sources: &SourceMap,
     configuration: &RunConfiguration,
     arguments: Vec<Value>,
@@ -40,7 +43,7 @@ pub fn run_with_operations(
         arguments,
         limits,
         operations,
-        &crate::aggregate::RuntimeTypes::default(),
+        &crate::aggregate::RuntimeTypes::new(types.clone()),
     )
 }
 pub fn run_with_runtime(
@@ -192,13 +195,12 @@ impl<P: TirProvider + ?Sized> TirProvider for Resolved<'_, P> {
     fn instance_body(
         &mut self,
         path: &hirsel_syntax::DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<hirsel_syntax::DefPath>, hirsel_types::QueryError> {
         if self.own_bodies.contains(path) {
             return Ok(None);
         }
-        let instance = self.provider.instance_body(path, types, arguments)?;
+        let instance = self.provider.instance_body(path, arguments)?;
         if instance.is_none() {
             self.own_bodies.insert(path.clone());
         }
@@ -353,7 +355,6 @@ pub(crate) fn execute_frames(
                         &mut invocation_types,
                         definition.bodies[body.0 as usize].parameter_scope,
                         crate::type_arguments::Actuals {
-                            types: reference.types.clone(),
                             arguments: reference.arguments.clone(),
                         },
                     );
@@ -372,7 +373,14 @@ pub(crate) fn execute_frames(
                 }
                 _ => return Err(invalid("task body requires a callable")),
             };
-            let mut child = Frame::new_body(definition, body, vec![], captures, sizes)?;
+            let mut child = Frame::new_body(
+                runtime.types.clone(),
+                definition,
+                body,
+                vec![],
+                captures,
+                sizes,
+            )?;
             if child.definition.tracks_caller(body) {
                 child.caller = start
                     .site
@@ -830,6 +838,7 @@ pub(crate) fn execute_frames(
                                     callback_mut_arguments: mut_arguments,
                                     bounds: frame.check.as_ref().map(|check| {
                                         operation_bounds(
+                                            &runtime.types,
                                             &check.state.borrow(),
                                             &reference.definition,
                                             &callback_inputs,
@@ -860,7 +869,6 @@ pub(crate) fn execute_frames(
                                 &mut invocation_types,
                                 definition.bodies[body.0 as usize].parameter_scope,
                                 crate::type_arguments::Actuals {
-                                    types: reference.types.clone(),
                                     arguments: reference.arguments.clone(),
                                 },
                             );
@@ -868,9 +876,15 @@ pub(crate) fn execute_frames(
                         }
                         _ => return Err(invalid("operation callback requires function value")),
                     };
-                    let path = definition.path.clone();
-                    let mut callback =
-                        Frame::new_body(definition, body, arguments, captures, sizes)?;
+                    let path = definition.path.path().clone();
+                    let mut callback = Frame::new_body(
+                        runtime.types.clone(),
+                        definition,
+                        body,
+                        arguments,
+                        captures,
+                        sizes,
+                    )?;
                     if callback.definition.tracks_caller(body) {
                         callback.caller = Some(CallerSite::new(frame, state.anchor.site, sources)?);
                     }
@@ -1019,7 +1033,7 @@ pub(crate) fn execute_frames(
                                             frame
                                                 .place(destination)
                                                 .ok()
-                                                .and_then(|p| frame.definition.types.get(p.ty))
+                                                .and_then(|p| runtime.types.get(p.ty))
                                                 .is_some_and(|t| {
                                                     t.modes.uniqueness
                                                         == hirsel_types::Uniqueness::Unique
@@ -1159,7 +1173,7 @@ pub(crate) fn execute_frames(
                     if let Some(check) = &frame.check {
                         let mut state = check.state.borrow_mut();
                         state.site = anchor.site;
-                        state.definition = Some(frame.definition.path.clone());
+                        state.definition = Some(frame.definition.path.path().clone());
                     }
                     match action {
                         CleanupAction::Drop { place, if_live } => {
@@ -1340,8 +1354,14 @@ pub(crate) fn execute_frames(
                                 sizes.iter().copied(),
                             );
                             let sizes = bindings;
-                            let mut callee =
-                                Frame::new_body(definition, body, vec![value], vec![], sizes)?;
+                            let mut callee = Frame::new_body(
+                                runtime.types.clone(),
+                                definition,
+                                body,
+                                vec![value],
+                                vec![],
+                                sizes,
+                            )?;
                             if let Some(check) = &frame.check {
                                 callee.check =
                                     Some(enter_checked(&check.state, &callee, vec![], None)?);
@@ -1488,7 +1508,7 @@ pub(crate) fn execute_frames(
             let mut written = vec![];
             if let Some(check) = &mut finished.check {
                 let body = &finished.definition.bodies[finished.body_id.0 as usize];
-                returned = check.returned_to_caller(body, &finished.definition.types);
+                returned = check.returned_to_caller(body, &runtime.types);
                 for local in &finished.mut_parameters {
                     if let Some(ordinal) = body.parameters.iter().position(|p| p == local) {
                         written.push((*local, check.written_back(ordinal, *local)));
@@ -1498,7 +1518,7 @@ pub(crate) fn execute_frames(
             }
             if runtime.trace_mode == TraceMode::Full {
                 execution.trace.push(TraceEvent::Return {
-                    path: finished.definition.path.clone(),
+                    path: finished.definition.path.path().clone(),
                     depth,
                 });
             }
@@ -1520,7 +1540,7 @@ pub(crate) fn execute_frames(
                         caller.work.push_back(crate::resources::Work::Release(
                             value,
                             crate::observation::Anchor {
-                                definition: caller.definition.path.clone(),
+                                definition: caller.definition.path.path().clone(),
                                 body: caller.body_id,
                                 cleanup: None,
                                 site: site_of(caller)?,
@@ -1772,7 +1792,7 @@ pub(crate) fn execute_frames(
         let code = match frame.code {
             Some(code) => code,
             None => {
-                let code = codes.id(&frame.definition, frame.body_id);
+                let code = codes.id(&runtime.types, &frame.definition, frame.body_id);
                 frame.code = Some(code);
                 code
             }
@@ -1868,7 +1888,7 @@ pub(crate) fn execute_frames(
         if let Some(check) = &frame.check {
             let mut state = check.state.borrow_mut();
             state.site = site;
-            state.definition = Some(frame.definition.path.clone());
+            state.definition = Some(frame.definition.path.path().clone());
         }
         let result = if let Some(instruction) = instruction {
             if runtime.trace_mode == TraceMode::Full {
@@ -2068,13 +2088,9 @@ pub(crate) fn execute_frames(
                         );
                         (definition, body, captures, sizes)
                     }
-                    RuntimeCallee::Definition {
-                        path,
-                        generics,
-                        types,
-                    } => {
-                        let target = match (path, types) {
-                            (CalleePath::Site(call), None)
+                    RuntimeCallee::Definition { path, generics } => {
+                        let target = match path {
+                            CalleePath::Site(call)
                                 if call.closed
                                     && (generics.is_empty() || frame.type_arguments.is_empty()) =>
                             {
@@ -2087,20 +2103,18 @@ pub(crate) fn execute_frames(
                                             runtime,
                                             call.callee.clone(),
                                             generics,
-                                            None,
                                         )?);
                                         let _ = call.target.set(target.clone());
                                         target
                                     }
                                 }
                             }
-                            (path, types) => std::rc::Rc::new(target(
+                            path => std::rc::Rc::new(target(
                                 frame,
                                 provider,
                                 runtime,
                                 path.into_path(),
                                 generics,
-                                types,
                             )?),
                         };
                         if forward_caller && let Some(tail) = &target.tail {
@@ -2160,8 +2174,9 @@ pub(crate) fn execute_frames(
                             else {
                                 return Err(invalid("forget requires resource"));
                             };
-                            if definition.path().0.package != frame.definition.path.0.package
-                                || definition.path().0.modules != frame.definition.path.0.modules
+                            if definition.path().0.package != frame.definition.path.path().0.package
+                                || definition.path().0.modules
+                                    != frame.definition.path.path().0.modules
                             {
                                 return Err(invalid("cross-module forget"));
                             }
@@ -2184,31 +2199,23 @@ pub(crate) fn execute_frames(
                             frame.goto(next);
                             continue;
                         }
-                        let call_types = target.types.as_deref().unwrap_or(&frame.definition.types);
                         // A diverging operation is offered a Never result row.
-                        let mut never = None;
                         let result_type = match returns {
                             Some(r) => frame.place(r.destination)?.ty,
-                            None => never.insert(call_types.clone()).push(hirsel_types::Type {
+                            None => runtime.types.intern(hirsel_types::Type {
                                 kind: hirsel_types::TypeKind::Primitive(
                                     hirsel_types::Primitive::Never,
                                 ),
                                 ..hirsel_types::Type::unit()
                             }),
                         };
-                        let types = never.as_ref().unwrap_or(call_types);
+                        let types = &*runtime.types;
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
                         let exhausted = if !target.core {
                             None
                         } else if path.is_core("copy_to") {
-                            copy_to_arena(
-                                runtime,
-                                types,
-                                result_type,
-                                &mut arguments,
-                                &mut budgets,
-                            )?
+                            copy_to_arena(runtime, result_type, &mut arguments, &mut budgets)?
                         } else {
                             list_write(path, &mut arguments, &mut budgets)
                                 .or_else(|| keyed_write(path, &mut arguments, &mut budgets))
@@ -2252,6 +2259,7 @@ pub(crate) fn execute_frames(
                             // with a frame is checked at its entry instead.
                             if let Some(check) = &frame.check
                                 && let Some(ordinal) = shared_unique_input(
+                                    &runtime.types,
                                     &check.state.borrow().config,
                                     &path,
                                     &checks,
@@ -2267,6 +2275,7 @@ pub(crate) fn execute_frames(
                             }
                             let bounds = frame.check.as_ref().map(|check| {
                                 operation_bounds(
+                                    &runtime.types,
                                     &check.state.borrow(),
                                     path,
                                     &checks,
@@ -2322,7 +2331,7 @@ pub(crate) fn execute_frames(
                                     scope,
                                     target.actuals.clone(),
                                 );
-                                let code = codes.id(&definition, body);
+                                let code = codes.id(&runtime.types, &definition, body);
                                 target.entry.get_or_init(|| crate::code::Entry {
                                     definition,
                                     body,
@@ -2342,8 +2351,16 @@ pub(crate) fn execute_frames(
                         )
                     }
                 };
-                let path = (runtime.trace_mode == TraceMode::Full).then(|| definition.path.clone());
-                let mut callee = Frame::new_body(definition, body, arguments, captures, sizes)?;
+                let path =
+                    (runtime.trace_mode == TraceMode::Full).then(|| definition.path.path().clone());
+                let mut callee = Frame::new_body(
+                    runtime.types.clone(),
+                    definition,
+                    body,
+                    arguments,
+                    captures,
+                    sizes,
+                )?;
                 if callee.definition.tracks_caller(body) {
                     callee.caller =
                         if forward_caller && frame.definition.tracks_caller(frame.body_id) {
@@ -2656,7 +2673,7 @@ fn anchored_root(frames: &[Frame], id: u64) -> Result<(), Error> {
 
 fn anchor(frame: &Frame, site: Span) -> crate::observation::Anchor {
     crate::observation::Anchor {
-        definition: frame.definition.path.clone(),
+        definition: frame.definition.path.path().clone(),
         body: frame.body_id,
         cleanup: None,
         site,
@@ -2847,8 +2864,7 @@ fn rvalue(
     let value = match *value {
         Rvalue::Constant(ref c) => {
             let ty = frame.place(destination)?.ty;
-            let ty = &frame
-                .definition
+            let ty = &runtime
                 .types
                 .get(ty)
                 .ok_or_else(|| invalid("type out of range"))?
@@ -2864,7 +2880,7 @@ fn rvalue(
         Rvalue::Size(parameter) => {
             let ty = frame.place(destination)?.ty;
             if !matches!(
-                frame.definition.types.get(ty).map(|t| &t.kind),
+                runtime.types.get(ty).map(|t| &t.kind),
                 Some(hirsel_types::TypeKind::Primitive(
                     hirsel_types::Primitive::U64
                 ))
@@ -2891,15 +2907,12 @@ fn rvalue(
                     ref other => Ok(other.clone()),
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-            let concrete = crate::type_arguments::concrete(
-                &frame.definition.types,
-                &arguments,
-                &frame.type_arguments,
-            )?;
+            let concrete =
+                crate::type_arguments::concrete(runtime, &arguments, &frame.type_arguments)?;
             Value::FunctionReference(Box::new(crate::value::NamedFunction {
                 definition: definition.clone(),
                 arguments: concrete.arguments,
-                types: concrete.types,
+                types: runtime.types.clone(),
                 ty: frame.place(destination)?.ty,
             }))
         }
@@ -2995,13 +3008,7 @@ fn rvalue(
             // MEM-6: charge a bounded arena before any operand is consumed.
             if let Some(arena) = bounded_destination(frame, placement, budgets) {
                 let ty = frame.place(destination)?.ty;
-                let bytes = crate::bounded::construction(
-                    runtime,
-                    &frame.definition.types,
-                    ty,
-                    constructor,
-                    fields.len(),
-                )?;
+                let bytes = crate::bounded::construction(runtime, ty, constructor, fields.len())?;
                 budgets
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
@@ -3028,8 +3035,7 @@ fn rvalue(
             }
             if frame.check.is_some() {
                 let inline_sequence = matches!(
-                    frame
-                        .definition
+                    runtime
                         .types
                         .get(frame.place(destination)?.ty)
                         .map(|t| &t.kind),
@@ -3061,8 +3067,7 @@ fn rvalue(
                     shadow.add_all(region);
                 }
             }
-            let kind = &frame
-                .definition
+            let kind = &runtime
                 .types
                 .get(frame.place(destination)?.ty)
                 .ok_or_else(|| invalid("destination type"))?
@@ -3102,7 +3107,6 @@ fn rvalue(
                     let arena = u64::from(arena);
                     let storage = crate::bounded::storage(
                         runtime,
-                        &frame.definition.types,
                         frame.place(destination)?.ty,
                         kind,
                         arena,
@@ -3133,7 +3137,7 @@ fn rvalue(
                     .iter()
                     .map(|c| frame.place(c.place).map(|p| p.ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                let bytes = crate::bounded::environment(runtime, &frame.definition.types, &types)?;
+                let bytes = crate::bounded::environment(runtime, &types)?;
                 budgets
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
@@ -3183,13 +3187,12 @@ fn rvalue(
                 };
             }
             Value::Closure {
-                invoked: frame
-                    .definition
+                invoked: runtime
                     .types
                     .get(frame.place(destination)?.ty)
                     .is_some_and(|t| t.modes.multiplicity == hirsel_types::Multiplicity::Once)
                     .then(|| std::sync::Arc::new(std::sync::OnceLock::new())),
-                definition: (&frame.definition.path).into(),
+                definition: frame.definition.path,
                 body,
                 captures,
                 environment: Box::new(crate::value::Environment {
@@ -3213,7 +3216,6 @@ fn rvalue(
 /// `heap`). Returns the arena whose budget the copy exceeds.
 fn copy_to_arena(
     runtime: &crate::aggregate::RuntimeTypes,
-    types: &hirsel_types::TypeStore,
     ty: hirsel_types::TypeId,
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
@@ -3225,13 +3227,13 @@ fn copy_to_arena(
     if let Some(arena) = arena
         && budgets.bounded(arena)
     {
-        let bytes = crate::bounded::copy(runtime, types, ty, value)?;
+        let bytes = crate::bounded::copy(runtime, ty, value)?;
         if let Err(arena) = budgets.charge(arena, bytes) {
             return Ok(Some(arena));
         }
     }
     let arena = arena.map(|arena| (arena, budgets.bounded(arena)));
-    crate::bounded::retag(runtime, types, ty, value, arena)?;
+    crate::bounded::retag(runtime, ty, value, arena)?;
     Ok(None)
 }
 
@@ -3522,17 +3524,17 @@ pub(crate) fn enter_checked(
             .borrow()
             .config
             .noalloc
-            .contains(&frame.definition.path);
+            .contains(frame.definition.path.path());
     let entered = crate::checked::FrameCheck::enter(
         state.clone(),
         frame.body(),
-        &frame.definition.types,
+        &frame.types,
         &frame.slots,
         arguments,
         callee,
         noalloc,
     );
-    entered.unique_parameters(frame.body(), &frame.definition.types)?;
+    entered.unique_parameters(frame.body(), &frame.types)?;
     Ok(entered)
 }
 /// The home instance of a place's root slot, under checked execution.
@@ -3880,7 +3882,6 @@ fn execute_terminator(
                             None => CalleePath::Value(path.clone()),
                         },
                         generics,
-                        types: None,
                     }
                 }
                 Callee::Indirect {
@@ -3895,7 +3896,6 @@ fn execute_terminator(
                         Value::FunctionReference(reference) => RuntimeCallee::Definition {
                             path: CalleePath::Value(reference.definition),
                             generics: reference.arguments,
-                            types: Some(reference.types),
                         },
                         Value::Closure {
                             definition,
@@ -3931,7 +3931,7 @@ fn execute_terminator(
                                 sizes,
                                 generic_sizes,
                                 actuals: crate::type_arguments::concrete(
-                                    &frame.definition.types,
+                                    runtime,
                                     &arguments,
                                     &frame.type_arguments,
                                 )?,
@@ -3955,6 +3955,7 @@ fn execute_terminator(
                 .collect();
             let borrowed_protocol = runtime.checked.as_ref().is_some_and(|checked| {
                 crate::checked::protocol_call(
+                    &runtime.types,
                     &frame.definition,
                     frame.body_id,
                     frame.block,
@@ -4041,64 +4042,31 @@ impl CalleePath {
     }
 }
 /// Resolve a direct callee for a call from `frame`: close its generic arguments,
-/// select its CT-5 instance and classify the call. Arguments that name no binder
-/// of the frame close as written, in the caller's store.
+/// select its CT-5 instance and classify the call.
 fn target(
     frame: &Frame,
     provider: &mut (impl TirProvider + ?Sized),
     runtime: &crate::aggregate::RuntimeTypes,
     mut path: hirsel_syntax::DefPath,
-    mut generics: Vec<hirsel_types::GenericArgument>,
-    types: Option<std::sync::Arc<hirsel_types::TypeStore>>,
+    generics: Vec<hirsel_types::GenericArgument>,
 ) -> Result<crate::code::Target, Error> {
-    let (mut actuals, types) =
-        if types.is_none() && (generics.is_empty() || frame.type_arguments.is_empty()) {
-            let types = if generics.is_empty() {
-                Default::default()
-            } else {
-                std::sync::Arc::new(frame.definition.types.clone())
-            };
-            (
-                hirsel_types::Actuals {
-                    types,
-                    arguments: generics,
-                },
-                None,
-            )
-        } else {
-            let mut merged = None;
-            if let Some(types) = types {
-                let mut store = frame.definition.types.clone();
-                for argument in &mut generics {
-                    if let hirsel_types::GenericArgument::Type(ty) = argument {
-                        *ty = hirsel_types::import_type(&types, *ty, &mut store)
-                            .map_err(|_| invalid("function reference generic type"))?;
-                    }
-                }
-                merged = Some(store);
-            }
-            let concrete = crate::type_arguments::concrete(
-                merged.as_ref().unwrap_or(&frame.definition.types),
-                &generics,
-                &frame.type_arguments,
-            )?;
-            let types = concrete.types.clone();
-            (concrete, Some(types))
-        };
+    let mut actuals = if generics.is_empty() || frame.type_arguments.is_empty() {
+        hirsel_types::Actuals {
+            arguments: generics,
+        }
+    } else {
+        crate::type_arguments::concrete(runtime, &generics, &frame.type_arguments)?
+    };
     // CT-5: a generic generated declaration runs the monomorphic body of its
     // selected instance.
     if let Some(instance) = provider
-        .instance_body(
-            &path,
-            types.as_deref().unwrap_or(&frame.definition.types),
-            &actuals.arguments,
-        )
+        .instance_body(&path, &actuals.arguments)
         .map_err(Error::Query)?
     {
         path = instance;
         actuals.arguments.clear();
     }
-    let tail = (path == frame.definition.path)
+    let tail = (path == *frame.definition.path.path())
         .then(|| {
             frame
                 .body()
@@ -4117,7 +4085,6 @@ fn target(
         core: path.package_is("core", "1"),
         path,
         actuals,
-        types,
         tail,
         entry: Default::default(),
     })
@@ -4126,7 +4093,6 @@ enum RuntimeCallee {
     Definition {
         path: CalleePath,
         generics: Vec<hirsel_types::GenericArgument>,
-        types: Option<std::sync::Arc<hirsel_types::TypeStore>>,
     },
     Closure {
         definition: hirsel_syntax::DefId,
@@ -4319,6 +4285,7 @@ fn restore_operation(
 /// The first argument whose operation parameter is declared `unique` but
 /// whose value shares a block with another live holder.
 fn shared_unique_input(
+    types: &hirsel_types::TypeInterner,
     config: &crate::checked::CheckedRuntime,
     path: &hirsel_syntax::DefPath,
     checks: &[crate::checked::Argument],
@@ -4328,7 +4295,7 @@ fn shared_unique_input(
         return None;
     };
     function.parameters.iter().enumerate().find_map(|(i, p)| {
-        (signature.types.get(p.ty)?.modes.uniqueness == hirsel_types::Uniqueness::Unique
+        (types.get(p.ty)?.modes.uniqueness == hirsel_types::Uniqueness::Unique
             && !checks.get(i)?.shadow.sole_owner())
         .then_some(i)
     })
@@ -4337,6 +4304,7 @@ fn shared_unique_input(
 /// the values retained by native state. Declared local results include the home
 /// of a borrowed binding, while transferred cursor items retain value bounds.
 fn operation_bounds(
+    types: &hirsel_types::TypeInterner,
     state: &crate::checked::State,
     path: &hirsel_syntax::DefPath,
     checks: &[crate::checked::Argument],
@@ -4385,12 +4353,7 @@ fn operation_bounds(
                 }
             }
         }
-        crate::checked::operation_result(
-            &signature.types,
-            function.result,
-            &result_inputs,
-            &retained,
-        )
+        crate::checked::operation_result(types, function.result, &result_inputs, &retained)
     } else {
         Shadow::of(retained)
     };

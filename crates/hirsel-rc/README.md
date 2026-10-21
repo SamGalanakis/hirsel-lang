@@ -258,7 +258,7 @@ names every program of a group);
 - `import` lowers an empty sequence construction (`[]`, and the sequences of
   `map.empty`/`set.empty`) on the heap to a `ReadStatic` of the static empty
   sequence of its payload layout (`import::empty_sequence`, instance: the
-  layout record's digest), whose zero count `Lowered.statics` carries. It
+  payload's rooted SCC content key), whose zero count `Lowered.statics` carries. It
   allocates nothing; its first reserve or growth allocates.
 - `elide::elide`: Rc to Rc. A copy immediately followed by insertion's release
   of the same slot cancels into a move (a partial copy into a partial move

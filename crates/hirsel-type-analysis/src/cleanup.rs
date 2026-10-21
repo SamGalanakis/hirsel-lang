@@ -7,7 +7,7 @@ use hirsel_types::*;
 pub enum CleanupLeaf<'a> {
     Component(TypeId),
     Parameter(TypeParameterRef),
-    Nominal(&'a hirsel_syntax::DefPath, &'a [GenericArgument]),
+    Nominal(hirsel_syntax::DefId, &'a [GenericArgument]),
 }
 
 /// MEM-5 cleanup algebra, independent of invocation allocation and value modes.
@@ -36,7 +36,7 @@ pub fn cleanup_summary(
         TypeKind::Named {
             definition,
             arguments,
-        } => leaf(CleanupLeaf::Nominal(definition, arguments)),
+        } => leaf(CleanupLeaf::Nominal(*definition, arguments)),
         TypeKind::Function(_) | TypeKind::Error => DropAllocation::MayAllocate,
         TypeKind::Builtin { kind, arguments } => match kind {
             BuiltinType::Ptr
@@ -63,7 +63,7 @@ pub fn cleanup_summary(
 /// additionally needs its declared finalizer promise. Missing actuals prove nothing.
 pub fn declared_cleanup(
     declaration: &TypeDefinition,
-    types: &TypeStore,
+    types: &TypeInterner,
     arguments: &[GenericArgument],
     component: impl FnMut(TypeId) -> DropAllocation,
 ) -> DropAllocation {
@@ -137,8 +137,8 @@ mod seal_cleanup_tests {
 
     #[test]
     fn seal_cleanup_depends_on_public_promises_in_both_views() {
-        let mut types = TypeStore::default();
-        let root = types.push(Type::unit());
+        let types = TypeInterner::new(None);
+        let root = types.intern(Type::unit());
         let mut d = TypeDefinition {
             loop_source: None,
             format: None,

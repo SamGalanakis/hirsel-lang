@@ -4,7 +4,8 @@ use crate::{Error, Execution, Limits, Outcome, Value, invalid, run_with_runtime}
 use hirsel_span::SourceMap;
 use hirsel_syntax::{DefPath, Visibility};
 use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
-use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
+use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeInterner, TypeKind};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LaunchError {
@@ -33,7 +34,11 @@ impl LaunchedExecution {
     }
 }
 impl Library {
-    pub fn entry_arguments(&mut self, signature: &Signature) -> Result<Vec<Value>, LaunchError> {
+    pub fn entry_arguments(
+        &mut self,
+        types: &TypeInterner,
+        signature: &Signature,
+    ) -> Result<Vec<Value>, LaunchError> {
         if signature.metadata.visibility != Visibility::Public {
             return Err(LaunchError::InvalidEntry("entry must be pub fn".into()));
         }
@@ -45,8 +50,7 @@ impl Library {
                 "entry must be complete and monomorphic".into(),
             ));
         }
-        let result = signature
-            .types
+        let result = types
             .get(f.result)
             .ok_or_else(|| LaunchError::InvalidEntry("missing result type".into()))?;
         let TypeKind::Named {
@@ -58,7 +62,7 @@ impl Library {
                 "entry must return core Result[(),E]".into(),
             ));
         };
-        if !definition.is_core("Result") || arguments.len() != 2 {
+        if !definition.path().is_core("Result") || arguments.len() != 2 {
             return Err(LaunchError::InvalidEntry(
                 "entry must return core Result[(),E]".into(),
             ));
@@ -66,7 +70,7 @@ impl Library {
         let GenericArgument::Type(ok) = arguments[0] else {
             return Err(LaunchError::InvalidEntry("invalid Result argument".into()));
         };
-        if !matches!(signature.types.get(ok).map(|t|&t.kind),Some(TypeKind::Tuple(fields))if fields.is_empty())
+        if !matches!(types.get(ok).map(|t|&t.kind),Some(TypeKind::Tuple(fields))if fields.is_empty())
             || !matches!(arguments[1], GenericArgument::Type(_))
         {
             return Err(LaunchError::InvalidEntry(
@@ -78,8 +82,7 @@ impl Library {
             let TypeKind::Named {
                 definition,
                 arguments,
-            } = &signature
-                .types
+            } = &types
                 .get(p.ty)
                 .ok_or_else(|| LaunchError::InvalidEntry("missing parameter type".into()))?
                 .kind
@@ -88,6 +91,7 @@ impl Library {
                     "entry parameters must be root capabilities".into(),
                 ));
             };
+            let definition = definition.path();
             if !arguments.is_empty()
                 || !matches!(
                     definition.0.name.as_str(),
@@ -120,6 +124,7 @@ impl Library {
 }
 pub fn launch(
     provider: &mut dyn TirProvider,
+    types: &Arc<TypeInterner>,
     sources: &SourceMap,
     signature: &Signature,
     run: &RunConfiguration,
@@ -133,14 +138,12 @@ pub fn launch(
         run,
         config,
         limits,
-        &core_runtime_types(),
+        &core_runtime_types(types.clone()),
     )
 }
 /// Drivers append declared application type facts before launching.
-pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
+pub fn core_runtime_types(types: Arc<TypeInterner>) -> crate::aggregate::RuntimeTypes {
     crate::aggregate::RuntimeTypes {
-        trace_mode: Default::default(),
-        budgets: Default::default(),
         nominals: vec![crate::aggregate::Nominal {
             definition: hirsel_syntax::DefPath::core("Result"),
             resource: false,
@@ -149,9 +152,7 @@ pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
             fields: 1,
             representation: None,
         }],
-        forget: None,
-        checked: None,
-        serialization: Default::default(),
+        ..crate::aggregate::RuntimeTypes::new(types)
     }
 }
 pub fn launch_with_runtime(
@@ -163,13 +164,13 @@ pub fn launch_with_runtime(
     limits: Limits,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<LaunchedExecution, LaunchError> {
-    if signature.definition != run.entry {
+    if *signature.definition.path() != run.entry {
         return Err(LaunchError::InvalidEntry(
             "selected signature does not name entry".into(),
         ));
     }
     let mut library = Library::new(run, config).map_err(runtime_error)?;
-    let arguments = library.entry_arguments(signature)?;
+    let arguments = library.entry_arguments(&runtime.types, signature)?;
     let execution = run_with_runtime(
         provider,
         sources,

@@ -14,6 +14,10 @@
 # the first runs the whole selection.
 set -eu
 root="$(pwd)"
+# A test runs the CLI in its own process: never on, or by starting, the
+# workspace's resident compiler (crates/hirsel-cli/src/serve.rs).
+export HIRSEL_DAEMON=off
+export HIRSEL_RESULTS=none@1
 if [ -n "${HIRSEL_TEST_POOL:-}" ]; then
   # A bless rewrites the files the test reads. A pool action reads a copy of
   # the checkout that is discarded after the run, so a bless there would
@@ -75,9 +79,9 @@ if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
   HIRSEL_RUNTIME_ARCHIVES="$(cd "$HIRSEL_RUNTIME_ARCHIVES" && pwd)"
   export HIRSEL_RUNTIME_ARCHIVES
 fi
-if [ -n "${HIRSEL_PRECHECK:-}" ]; then
-  HIRSEL_PRECHECK="$(realpath "$HIRSEL_PRECHECK")"
-  export HIRSEL_PRECHECK
+if [ -n "${HIRSEL_IMAGE:-}" ]; then
+  HIRSEL_IMAGE="$(realpath "$HIRSEL_IMAGE")"
+  export HIRSEL_IMAGE
 fi
 if [ -n "${HIRSEL_NATIVE_SELECTION:-}" ]; then
   HIRSEL_NATIVE_SELECTION="$(realpath "$HIRSEL_NATIVE_SELECTION")"

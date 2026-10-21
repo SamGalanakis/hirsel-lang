@@ -3,7 +3,7 @@ mod source_support;
 mod support;
 use super::*;
 use hirsel_intern::Symbol;
-use hirsel_syntax::{ExprKind, PassingMode, UnaryOp};
+use hirsel_syntax::{DefId, ExprKind, PassingMode, UnaryOp};
 use support::*;
 
 fn local() -> Modes {
@@ -20,9 +20,8 @@ fn unique() -> Modes {
 }
 fn resource_signature() -> Signature {
     Signature {
-        definition: path("Token"),
+        definition: DefId::intern(&path("Token")),
         metadata: Default::default(),
-        types: TypeStore::default(),
         fingerprint: Default::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
@@ -349,12 +348,12 @@ proptest::proptest! {
         reverse in proptest::bool::ANY,
         orders in proptest::collection::vec(proptest::bool::ANY, 1..24),
     ) {
-        fn run(padding:usize,reverse:bool,orders:&[bool])->(OwnershipFacts,Vec<hirsel_diag::Diagnostic>,Vec<SignatureDependency>,Vec<(UseKind,Modes)>,Vec<(ExprId,hirsel_types::Type)>,Vec<(usize,hirsel_types::Type)>,Vec<usize>) {
+        fn run(padding:usize,reverse:bool,orders:&[bool])->(OwnershipFacts,Vec<hirsel_diag::Diagnostic>,Vec<SignatureDependency>,Vec<(UseKind,Modes)>,Vec<(ExprId,hirsel_types::Type)>,std::collections::HashSet<TypeId>,std::collections::HashSet<TypeId>) {
             let mut f=Fixture::new();for i in 0..padding {Symbol::intern(&format!("noise{i}"));}
             let record=f.new_type(TypeKind::Record(vec![Field {name:"a".into(),ty:f.bytes,growable:false},Field {name:"b".into(),ty:f.bytes,growable:false}].into()),unique());let x=f.parameter(record,PassingMode::Take);let read=f.read(x);let field=Symbol::intern("a");let projection=f.expr(ExprKind::Field {base:read,field},f.bytes);let owned=f.unary(UnaryOp::Unique,projection);let local=f.bind(owned,true);
             for (index,swap) in orders.iter().enumerate() {let read=f.read(local);let read=if *swap{f.unary(UnaryOp::Mut,read)}else{read};let call=f.call(&format!("callee{index}"),vec![read],vec![if *swap{PassingMode::Mut}else{PassingMode::Borrow}],vec![local_modes()],Modes::global());f.expr_stmt(call);}
             let mut rows:Vec<_>=std::mem::take(&mut f.provider.signatures).into_iter().collect();if reverse{rows.reverse();}for (path,signature) in rows{f.provider.signatures.insert(path,signature);}
-            let mut out=f.check();let physical=std::mem::take(&mut out.value.physical_projections).into_iter().map(|(e,ty)|(e,f.body.types.get(ty).unwrap().clone())).collect();let plain=std::mem::take(&mut out.value.plain_types).into_iter().map(|ty|(ty.index(),f.body.types.get(ty).unwrap().clone())).collect();let silent:Vec<usize>=std::mem::take(&mut out.value.silent_drop_types).into_iter().map(|ty|ty.index()).collect();let decisions=f.body.expressions.iter().map(|e|(e.usage,f.body.types.get(e.ty).unwrap().modes.clone())).collect();(out.value,out.diagnostics,out.dependencies,decisions,physical,plain,silent)
+            let mut out=f.check();let physical=std::mem::take(&mut out.value.physical_projections).into_iter().map(|(e,ty)|(e,session().get(ty).unwrap().clone())).collect();let plain=std::mem::take(&mut out.value.plain_types);let silent=std::mem::take(&mut out.value.silent_drop_types);let decisions=f.body.expressions.iter().map(|e|(e.usage,session().get(e.ty).unwrap().modes.clone())).collect();(out.value,out.diagnostics,out.dependencies,decisions,physical,plain,silent)
         }
         fn local_modes()->Modes { Modes {relation:Relation::environment(),..Modes::global()} }
         proptest::prop_assert_eq!(run(0,false,&orders),run(padding,reverse,&orders));
@@ -420,7 +419,7 @@ fn borrowed_access_precedes_mode_requirements_at_a_call() {
 fn generic_nominal_copyability_uses_actual_owned_fields() {
     for resource in [false, true] {
         let mut f = Fixture::new();
-        let parameter_store = TypeStore::from_graph(2, |ids| {
+        let ids = session().intern_graph(2, |ids| {
             vec![
                 ty(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0)))),
                 ty(TypeKind::Record(
@@ -433,10 +432,9 @@ fn generic_nominal_copyability_uses_actual_owned_fields() {
                 )),
             ]
         });
-        let repr = parameter_store.id(1).unwrap();
+        let repr = ids[1];
         let mut declaration = resource_signature();
-        declaration.definition = path("Wrapper");
-        declaration.types = parameter_store;
+        declaration.definition = DefId::intern(&path("Wrapper"));
         if let SignatureKind::Type(td) = &mut declaration.kind {
             td.resource = false;
             td.representation = Some(repr);
@@ -454,7 +452,7 @@ fn generic_nominal_copyability_uses_actual_owned_fields() {
                 .insert(path("Token"), std::sync::Arc::new(resource_signature()));
             f.new_type(
                 TypeKind::Named {
-                    definition: path("Token"),
+                    definition: DefId::intern(&path("Token")),
                     arguments: vec![].into(),
                 },
                 Modes::global(),
@@ -464,7 +462,7 @@ fn generic_nominal_copyability_uses_actual_owned_fields() {
         };
         let wrapper = f.new_type(
             TypeKind::Named {
-                definition: path("Wrapper"),
+                definition: DefId::intern(&path("Wrapper")),
                 arguments: vec![GenericArgument::Type(argument)].into(),
             },
             Modes::global(),
@@ -526,9 +524,9 @@ fn plain_pattern_payload_retains_its_declared_modes() {
     let out = f.check();
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
     let pattern = f.body.patterns.iter().find(|p| p.pattern == child).unwrap();
-    assert_eq!(f.body.types.get(pattern.ty).unwrap().modes, modes);
+    assert_eq!(session().get(pattern.ty).unwrap().modes, modes);
     assert_eq!(
-        f.body.types.get(f.body.bindings[index].ty).unwrap().modes,
+        session().get(f.body.bindings[index].ty).unwrap().modes,
         modes
     );
 }

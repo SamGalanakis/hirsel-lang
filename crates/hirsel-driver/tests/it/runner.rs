@@ -349,9 +349,23 @@ fn failures_before_the_program_runs_are_tooling_outcomes() {
         )
         .unwrap();
         assert_ne!(diagnostic.build_id, image.runner.build_id);
+        // Cut inside the last loadable segment: what follows it (symbols, strings) is not
+        // loaded, so a cut there would leave the image intact.
         let truncated = dir.join("truncated.so");
         let bytes = std::fs::read(&image.path).unwrap();
-        std::fs::write(&truncated, &bytes[..bytes.len() / 2]).unwrap();
+        let word = |at: usize, n: usize| {
+            let mut b = [0u8; 8];
+            b[..n].copy_from_slice(&bytes[at..at + n]);
+            u64::from_le_bytes(b) as usize
+        };
+        let (phoff, phentsize, phnum) = (word(32, 8), word(54, 2), word(56, 2));
+        let end = (0..phnum)
+            .map(|i| phoff + i * phentsize)
+            .filter(|&h| word(h, 4) == 1)
+            .map(|h| word(h + 8, 8) + word(h + 32, 8))
+            .max()
+            .unwrap();
+        std::fs::write(&truncated, &bytes[..end - 1]).unwrap();
         // Intact, but typed an executable, which the loader refuses to load.
         let executable = dir.join("executable.so");
         let mut typed = bytes.clone();

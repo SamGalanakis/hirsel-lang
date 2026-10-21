@@ -7,8 +7,8 @@
 hirsel_guard::install!();
 
 use hirsel_engine::{
-    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PackageCache,
-    PhaseAdapters, RunOutcome, SimulationConfig, ToolError,
+    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PhaseAdapters,
+    RunOutcome, SimulationConfig, StdImages, ToolError,
 };
 pub mod api_index;
 pub mod dependency_card;
@@ -17,6 +17,7 @@ mod network;
 pub mod observation_view;
 mod pipeline;
 pub mod serve;
+pub mod session;
 pub mod testing;
 mod trial;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
@@ -42,17 +43,18 @@ pub fn load_program_source(
 ) -> Result<LoadedProgram, ToolError> {
     COMPILER.load_program_source(path, replacement)
 }
-/// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
-pub fn load_program_source_with_cache(
+/// Load adopting exactly `images` (`StdImages::none()` checks every package from source).
+pub fn load_program_source_with_images(
     path: &Path,
     replacement: Option<&str>,
-    cache: &PackageCache,
+    images: &StdImages,
 ) -> Result<LoadedProgram, ToolError> {
-    COMPILER.load_program_source_with_cache(path, replacement, cache)
+    COMPILER.load_program_source_with_images(path, replacement, images)
 }
 /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {
-    COMPILER.check_path(path)
+    session::with_session(path, hirsel_engine::Verify::On, session::Session::check)
+        .unwrap_or_else(|| COMPILER.check_path(path))
 }
 /// `check_path`, then the escape from capability checking an accepted program's
 /// entry reaches (CAP-6).
@@ -65,7 +67,24 @@ pub fn check_safe_path(
     ),
     ToolError,
 > {
-    COMPILER.check_safe_path(path)
+    if !session::resident() {
+        return COMPILER.check_safe_path(path);
+    }
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Comptime)
+            .map_err(|error| program.error(error))?;
+        if output
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == hirsel_diag::Severity::Error)
+            || output.completion != hirsel_engine::CheckCompletion::Complete
+        {
+            return Ok((output, None));
+        }
+        let reach = program.unsafe_reach()?;
+        Ok((output, Some((program.entry.clone(), reach))))
+    })
 }
 pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
@@ -280,8 +299,10 @@ pub fn entry_grants_hint(path: &Path) -> Result<String, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
     let signature = launch_signature(&mut program)?;
-    let launch = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
-    let roots = hirsel_engine::entry_roots(&signature, launch).map_err(ToolError::Launch)?;
+    let launch = hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+        .map_err(ToolError::Launch)?;
+    let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, launch)
+        .map_err(ToolError::Launch)?;
     let mut grants = serde_json::Map::new();
     for root in roots {
         use hirsel_run_config::Root;
@@ -305,7 +326,8 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
     let signature = launch_signature(&mut program)?;
-    let launch = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
+    let launch = hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+        .map_err(ToolError::Launch)?;
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -483,7 +505,8 @@ pub(crate) fn bind_launch(
             hirsel_run_schema::LaunchKind::Call
         }
         (_, HostLaunch::Callee { .. }) => hirsel_run_schema::LaunchKind::Call,
-        _ => hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?,
+        _ => hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+            .map_err(ToolError::Launch)?,
     };
     let revision = program
         .engine
@@ -498,18 +521,32 @@ pub(crate) fn bind_launch(
             let requested = config
                 .read(&revision, kind)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let bound =
-                hirsel_engine::bind_run(&signature, &revision, kind, Some(&requested), code)
-                    .map_err(ToolError::Launch)?;
+            let bound = hirsel_engine::bind_run(
+                program.engine.types(),
+                &signature,
+                &revision,
+                kind,
+                Some(&requested),
+                code,
+            )
+            .map_err(ToolError::Launch)?;
             Ok(BoundHostRun::Live(bound))
         }
         (HostLaunch::Callee { run, .. }, _) => {
-            let bound = hirsel_engine::bind_run(&signature, &revision, kind, Some(run), code)
-                .map_err(ToolError::Launch)?;
+            let bound = hirsel_engine::bind_run(
+                program.engine.types(),
+                &signature,
+                &revision,
+                kind,
+                Some(run),
+                code,
+            )
+            .map_err(ToolError::Launch)?;
             Ok(BoundHostRun::Live(bound))
         }
         (HostLaunch::Replay(_), Some((io, run))) => {
-            let roots = hirsel_engine::entry_roots(&signature, kind).map_err(refused)?;
+            let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, kind)
+                .map_err(refused)?;
             let run = run
                 .bind(&hirsel_run_config::ProgramFacts::of(
                     &revision, kind, roots, code,
@@ -614,10 +651,9 @@ fn run_path_on_host_observed(
     verify: hirsel_engine::Verify,
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
 ) -> Result<RunOutcome, ToolError> {
-    let mut program = COMPILER.with_verify(verify).load_program(path)?;
-    program.check_for_execution()?;
-    program.refuse_foreign_interpretation()?;
-    run_loaded_on_host(&mut program, launch, max_steps, observed, None).map(|(outcome, _)| outcome)
+    session::with_program(path, verify, |program| {
+        run_loaded_on_host(program, launch, max_steps, observed, None).map(|(outcome, _)| outcome)
+    })
 }
 
 /// Execute a loaded, checked program on the host as [`run_path_on_host`] does. A callee
@@ -630,6 +666,8 @@ pub(crate) fn run_loaded_on_host(
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
+    program.check_for_execution()?;
+    program.refuse_foreign_interpretation()?;
     let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
     let tape = match launch {
         HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
@@ -728,7 +766,7 @@ pub(crate) fn run_loaded_on_host(
         }
         _ => operations
             .library
-            .entry_arguments(&signature)
+            .entry_arguments(&runtime.types, &signature)
             .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?,
     };
     let sources = program.engine.sources.clone();
@@ -835,17 +873,17 @@ pub(crate) fn call_schemas(
     };
     let schema = |ty| {
         hirsel_types::serialization::serializable_schema(
-            &signature.types,
+            &runtime.types,
             ty,
             &hirsel_types::GenericDeclarations::default(),
-            &mut |path| Ok(runtime.serialization.get(path).cloned()),
+            &mut |d: hirsel_syntax::DefId| Ok(runtime.serialization.get(d.path()).cloned()),
         )
         .ok()
         .flatten()
         .ok_or_else(invalid)
     };
     let Some(hirsel_types::TypeKind::Named { arguments, .. }) =
-        signature.types.get(function.result).map(|t| &t.kind)
+        runtime.types.get(function.result).map(|t| &t.kind)
     else {
         return Err(invalid());
     };

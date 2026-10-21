@@ -9,6 +9,9 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct NativeSource {
     pub syntax: Arc<ItemSyntax>,
     pub implementation_revision: ContentHash,
+    /// Existing generated text and its declaring span, retained for origin
+    /// diagnostics; source selectors refer to the exact TIR anchors below it.
+    pub generated: Option<crate::queries::GeneratedSource>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NativeStatus {
@@ -18,6 +21,9 @@ pub enum NativeStatus {
 /// Raw snapshots can be constructed by callers, but must be imported before use.
 #[derive(Clone, Debug)]
 pub struct NativeInput {
+    /// The session interner every definition, signature and value TypeId
+    /// names; an input is imported only by the session that holds it.
+    pub types: std::sync::Arc<hirsel_types::TypeInterner>,
     pub environment: QueryEnvironment,
     pub operations: BTreeMap<OperationKey, OperationRecord>,
     pub registry_revision: ContentHash,
@@ -48,10 +54,15 @@ pub struct NativeInput {
 /// Construction is private to successful revalidation, including current source stages.
 pub struct ValidatedNativeInput {
     input: NativeInput,
+    verify: Verify,
     semantic_program: crate::queries::SemanticProgram,
     escapes: BTreeMap<DefPath, crate::Escape>,
 }
 impl ValidatedNativeInput {
+    /// Policy under which this current snapshot was independently checked.
+    pub fn verification(&self) -> Verify {
+        self.verify
+    }
     /// The same semantic closure as source execution, retained independently of
     /// the importing engine and of native topology/artifact provenance.
     pub fn semantic_program_revision(
@@ -63,6 +74,10 @@ impl ValidatedNativeInput {
     /// The escape from capability checking `entry` reaches, if any (CAP-6).
     pub fn unsafe_reach(&self, entry: &DefPath) -> Option<crate::UnsafeReach> {
         self.semantic_program.reach(entry, &self.escapes)
+    }
+    /// Whether this frozen run identity covers the source definition.
+    pub fn semantic_contains(&self, definition: &DefPath) -> bool {
+        self.semantic_program.definitions.contains(definition)
     }
     pub fn snapshot(&self) -> &NativeInput {
         &self.input
@@ -113,8 +128,7 @@ impl QueryEngine {
     ) -> Result<ValidatedNativeInput, QueryError> {
         let paths = self.native_paths_from(roots.iter().cloned())?;
         let input = self.export_native_paths(paths.clone())?;
-        let current = self.export_native_paths(paths)?;
-        self.import_native_against(input, current)
+        self.import_native_against(input, paths)
     }
     fn export_native_paths(
         &mut self,
@@ -156,6 +170,7 @@ impl QueryEngine {
                 NativeSource {
                     syntax: syntax.clone(),
                     implementation_revision: syntax.text_hash,
+                    generated: None,
                 },
             );
             if executable {
@@ -167,7 +182,7 @@ impl QueryEngine {
                 let products = self.source_audit_products(&path)?;
                 audits.insert(path.clone(), products.audit);
                 materialized.insert(path.clone(), products.materialized);
-            } else if !self.prechecked(&path.0.package) {
+            } else if !self.imaged(&path.0.package) {
                 let analyzed = self.mode_definition(&path)?;
                 if crate::queries::has_errors(&analyzed.diagnostics) {
                     return Err(QueryError::Diagnostics(analyzed.diagnostics));
@@ -208,10 +223,15 @@ impl QueryEngine {
                 );
             }
         }
+        for (path, source) in &mut source_owners {
+            source.generated = self.generated_source(path).cloned();
+        }
+        let registry = registry::BuiltinRegistry::shared();
         let mut input = NativeInput {
+            types: self.types.clone(),
             environment: self.environment.clone(),
-            operations: registry::BuiltinRegistry::new().operation_inventory(),
-            registry_revision: registry::BuiltinRegistry::new().revision(),
+            operations: registry.operation_inventory(),
+            registry_revision: registry.revision(),
             definitions,
             signatures,
             signature_dependencies,
@@ -232,165 +252,250 @@ impl QueryEngine {
         input.instances = InstanceGraph::native(&input)?;
         Ok(input)
     }
-    /// Recheck publication invariants and compare selection against current fully
-    /// checked source. A claimed completion bit or an old receipt is insufficient.
-    /// This is a session artifact; serialized graph transport is M1b-owned.
+    /// Recheck selection and current query products without exporting a second snapshot.
+    /// Exact immutable TIR and current V reads are the only reusable validation evidence.
     pub fn import_native_input(
         &mut self,
         input: NativeInput,
     ) -> Result<ValidatedNativeInput, QueryError> {
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Plan);
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Plan);
-        let current = self.export_native_input()?;
-        self.import_native_against(input, current)
+        let paths = self.native_paths()?;
+        self.import_native_against(input, paths)
     }
     fn import_native_against(
         &mut self,
         input: NativeInput,
-        current: NativeInput,
+        paths: std::collections::BTreeSet<DefPath>,
     ) -> Result<ValidatedNativeInput, QueryError> {
+        if !Arc::ptr_eq(&input.types, &self.types) {
+            return Err(invalid("native input from another session's interner"));
+        }
+        let registry = registry::BuiltinRegistry::shared();
         if input.environment != self.environment
-            || input.registry_revision != registry::BuiltinRegistry::new().revision()
+            || input.registry_revision != registry.revision()
             || input.completed_source_stages != NativeStatus::Complete
         {
             return Err(invalid(
                 "stale environment/registry or incomplete source stage",
             ));
         }
-        if input.constant_definitions != current.constant_definitions {
-            return Err(invalid("forged constant initialization order"));
-        }
-        if input.operations != current.operations {
+        if input.operations != registry.operation_inventory() {
             return Err(invalid("forged operation inventory"));
         }
-        if input.definitions.keys().ne(current.definitions.keys())
-            || input.signatures.keys().ne(current.signatures.keys())
-            || input.source_owners.keys().ne(current.source_owners.keys())
-            || input.constants.keys().ne(current.constants.keys())
-            || input.materialized.keys().ne(current.materialized.keys())
-            || input
-                .representations
-                .keys()
-                .ne(current.representations.keys())
+        if input.foreign_links != self.foreign_links
+            || input.foreign_unreplayable != self.foreign_unreplayable
         {
+            return Err(invalid("forged foreign link selection"));
+        }
+        if input.source_owners.keys().ne(paths.iter()) {
             return Err(invalid("incomplete or mixed program selection"));
         }
-        for (path, owner) in &input.source_owners {
-            let expected = &current.source_owners[path];
-            let item = &owner.syntax.item;
-            if &item.definition != path
-                || owner.implementation_revision != expected.implementation_revision
+        self.prepare_staged_instances()?;
+        let mut signatures = self.native_builtin_signatures();
+        let mut signature_dependencies = BTreeMap::new();
+        let mut representations: BTreeMap<_, _> = signatures
+            .iter()
+            .filter_map(|(p, s)| {
+                matches!(s.kind, SignatureKind::Type(_)).then_some((p.clone(), None))
+            })
+            .collect();
+        let mut checked_sources = std::collections::BTreeSet::new();
+        let mut executable_paths = std::collections::BTreeSet::new();
+        let mut constant_paths = std::collections::BTreeSet::new();
+        for path in &paths {
+            let current = self.item_signature(path)?;
+            if crate::queries::has_errors(&current.diagnostics) {
+                return Err(QueryError::Diagnostics(current.diagnostics));
+            }
+            signature_dependencies.insert(path.clone(), current.dependencies);
+            signatures.insert(path.clone(), current.value.clone());
+            if matches!(current.value.kind, SignatureKind::Type(_)) {
+                let record = match self.owner_representation(path, path) {
+                    Ok(record) => Some(record),
+                    Err(QueryError::NotImplemented) => None,
+                    Err(error) => return Err(error),
+                };
+                representations.insert(path.clone(), record);
+            }
+            let syntax = self.parse_definition(path)?.value;
+            let owner = &input.source_owners[path];
+            if owner.syntax.item.definition != *path
+                || owner.implementation_revision != syntax.text_hash
                 || owner.syntax.text_hash != owner.implementation_revision
-                || owner.syntax.as_ref() != expected.syntax.as_ref()
+                || !Arc::ptr_eq(&owner.syntax, &syntax)
             {
                 return Err(invalid("stale or forged source owner"));
             }
-            let expected_file = current
-                .sources
-                .file(current.sources.resolve(item.origin.span).file)
-                .ok_or_else(|| invalid("missing selected source"))?;
-            if input
-                .sources
-                .file(input.sources.resolve(item.origin.span).file)
-                .is_none_or(|f| f.text() != expected_file.text())
-            {
+            let span = syntax.item.origin.span;
+            let expected = self.sources.resolve(span);
+            if input.sources.resolve(span) != expected {
                 return Err(invalid("source snapshot mismatch"));
             }
-        }
-        for (path, signature) in &input.signatures {
-            if signature.as_ref() != current.signatures[path].as_ref()
-                || signature.definition != *path
-                || input.signature_dependencies.get(path)
-                    != current.signature_dependencies.get(path)
-            {
-                return Err(invalid("forged declaration snapshot"));
+            if checked_sources.insert(expected.file) {
+                let expected_file = self
+                    .sources
+                    .file(expected.file)
+                    .ok_or_else(|| invalid("missing selected source"))?;
+                if input.sources.file(expected.file).is_none_or(|file| {
+                    !std::ptr::eq(file, expected_file) && file.text() != expected_file.text()
+                }) {
+                    return Err(invalid("source snapshot mismatch"));
+                }
+            }
+            if crate::queries::generation::executable(&syntax) {
+                executable_paths.insert(path.clone());
+            } else if !self.imaged(&path.0.package) {
+                let modes = self.mode_definition(path)?;
+                if crate::queries::has_errors(&modes.diagnostics) {
+                    return Err(QueryError::Diagnostics(modes.diagnostics));
+                }
+            }
+            if matches!(current.value.kind, SignatureKind::Const { .. }) {
+                constant_paths.insert(path.clone());
             }
         }
-        for (path, definition) in &input.definitions {
-            if definition.path != *path
-                || definition.signature_hash != input.signatures[path].fingerprint
+        if input.definitions.keys().ne(executable_paths.iter())
+            || input.materialized.keys().ne(executable_paths.iter())
+        {
+            return Err(invalid("incomplete or mixed program selection"));
+        }
+        if input.audits.keys().ne(executable_paths.iter()) {
+            return Err(invalid("forged or missing source audit record"));
+        }
+        for path in &executable_paths {
+            let definition = &input.definitions[path];
+            if definition.path.path() != path
+                || definition.signature_hash != signatures[path].fingerprint
             {
                 return Err(invalid("definition/declaration identity mismatch"));
             }
-            let report = self.run_v(&path.0.package, |signatures| {
-                signatures.validate_once(definition)
-            });
-            if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
-                return Err(error);
+            let current = self.lower_to_tir(path)?;
+            if crate::queries::has_errors(&current.diagnostics) {
+                return Err(QueryError::Diagnostics(current.diagnostics));
             }
-            if !report.violations.is_empty() {
-                return Err(invalid(format!(
-                    "invalid imported TIR: {:?}",
-                    report.violations
-                )));
-            }
-            if definition.as_ref() != current.definitions[path].as_ref() {
+            if !Arc::ptr_eq(definition, &current.value)
+                && definition.as_ref() != current.value.as_ref()
+            {
                 return Err(invalid("forged implementation"));
             }
-        }
-        if input.audits.keys().ne(input.definitions.keys())
-            || input
-                .audits
-                .iter()
-                .any(|(path, audit)| audit != &current.audits[path])
-        {
-            return Err(invalid("forged or missing source audit record"));
-        }
-        for (path, record) in &input.representations {
-            if record != &current.representations[path] {
-                return Err(invalid("stale or forged owner representation"));
+            if input.source_owners[path].generated.as_ref() != self.generated_source(path) {
+                return Err(invalid("forged generated source origin"));
             }
-        }
-        let equal_value = |a: &Materialized, b: &Materialized| {
-            use hirsel_tir::ValueKind;
-            let mut todo = vec![(&a.root, &b.root)];
-            while let Some((left, right)) = todo.pop() {
-                if hirsel_types::semantic_equal(&a.types, left.ty, &b.types, right.ty) != Ok(true) {
-                    return false;
+            // Revalidate every source the exact TIR cites, including generated
+            // text and nested bodies. A valid declaration anchor alone cannot
+            // authorize remapping a generated operation to another file/base.
+            for anchor in hirsel_tir::source_anchors(definition) {
+                let expected = self.sources.anchor(anchor);
+                if input.sources.anchor(anchor) != expected {
+                    return Err(invalid("source anchor mismatch"));
                 }
-                match (&left.kind, &right.kind) {
-                    (ValueKind::Constant(x), ValueKind::Constant(y)) if x == y => (),
-                    (ValueKind::FunctionReference(x), ValueKind::FunctionReference(y))
-                        if x == y =>
-                    {
-                        ()
-                    }
-                    (
-                        ValueKind::Construct {
-                            constructor: x,
-                            fields: xs,
-                        },
-                        ValueKind::Construct {
-                            constructor: y,
-                            fields: ys,
-                        },
-                    ) if x == y && xs.len() == ys.len() => todo.extend(xs.iter().zip(ys)),
-                    _ => return false,
+                let (file, _) = expected.ok_or_else(|| invalid("missing TIR source anchor"))?;
+                let expected = self
+                    .sources
+                    .file(file)
+                    .ok_or_else(|| invalid("missing TIR source"))?;
+                let actual = input
+                    .sources
+                    .file(file)
+                    .ok_or_else(|| invalid("missing TIR source"))?;
+                if actual.text() != expected.text()
+                    || actual.logical_path() != expected.logical_path()
+                    || actual.path != expected.path
+                {
+                    return Err(invalid("TIR source snapshot mismatch"));
                 }
             }
-            true
-        };
-        for (path, constant) in &input.constants {
-            if !equal_value(constant, &current.constants[path]) {
-                return Err(invalid("forged materialized constant"));
+            if self.verify == Verify::On {
+                self.ensure_lowered_verdict(definition)?;
             }
-        }
-        for (path, values) in &input.materialized {
-            let expected = &current.materialized[path];
-            if values.len() != expected.len()
+            let products = self.source_audit_products(path)?;
+            if input.audits[path] != products.audit {
+                return Err(invalid("forged or missing source audit record"));
+            }
+            let values = &input.materialized[path];
+            if values.len() != products.materialized.len()
                 || !values
                     .iter()
-                    .zip(expected)
-                    .all(|((e, a), (f, b))| e == f && equal_value(a, b))
+                    .zip(&products.materialized)
+                    .all(|((a, x), (b, y))| a == b && equal_native_value(&input.types, x, y))
             {
                 return Err(invalid("forged materialization substitutions"));
             }
         }
-        if input.instance_bodies != current.instance_bodies {
+        let diagnostics = crate::generic_graph::check(self)?;
+        if crate::queries::has_errors(&diagnostics) {
+            return Err(QueryError::Diagnostics(diagnostics));
+        }
+        let items: std::collections::BTreeSet<_> = self.item_paths().into_iter().collect();
+        let mut constant_definitions = self.constant_definitions()?;
+        constant_definitions.retain(|path| paths.contains(path) || !items.contains(path));
+        if input.constant_definitions != constant_definitions {
+            return Err(invalid("forged constant initialization order"));
+        }
+        constant_paths.extend(constant_definitions);
+        for path in &constant_paths {
+            let current = self.materialize_value(path)?;
+            if input
+                .constants
+                .get(path)
+                .is_none_or(|value| !equal_native_value(&input.types, value, &current))
+            {
+                return Err(invalid("forged materialized constant"));
+            }
+        }
+        for (path, constant) in &self.staged_constants {
+            if paths.contains(&constant.owner) {
+                signatures.insert(path.clone(), constant.signature.clone());
+            }
+        }
+        for ((path, arguments), value) in &self.staged_values {
+            if self
+                .staged_constants
+                .get(path)
+                .is_some_and(|c| paths.contains(&c.owner))
+            {
+                let path = hirsel_tir::constant_instance_path(path, arguments);
+                if input
+                    .constants
+                    .get(&path)
+                    .is_none_or(|v| !equal_native_value(&input.types, v, &value.value))
+                {
+                    return Err(invalid("forged materialized constant"));
+                }
+                constant_paths.insert(path);
+            }
+        }
+        if input.constants.keys().ne(constant_paths.iter())
+            || input.signatures.keys().ne(signatures.keys())
+            || input.representations != representations
+        {
+            return Err(invalid(
+                "incomplete or mixed program selection or owner representation",
+            ));
+        }
+        for (path, signature) in &input.signatures {
+            if (!Arc::ptr_eq(signature, &signatures[path])
+                && signature.as_ref() != signatures[path].as_ref())
+                || signature.definition.path() != path
+                || input.signature_dependencies.get(path) != signature_dependencies.get(path)
+            {
+                return Err(invalid("forged declaration snapshot"));
+            }
+        }
+        if input
+            .signature_dependencies
+            .keys()
+            .ne(signature_dependencies.keys())
+        {
+            return Err(invalid("forged declaration dependencies"));
+        }
+        if input.instance_bodies != self.instance_bodies(&paths) {
             return Err(invalid("forged or incomplete instance bodies"));
         }
         let timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
         let violations = hirsel_validate::validate_instance_bodies(
+            &input.types,
             &input.instance_bodies,
             &input.signatures,
             &input.definitions,
@@ -399,10 +504,10 @@ impl QueryEngine {
         if !violations.is_empty() {
             return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }
-        if !InstanceGraph::native(&input)?.same(&input.instances) {
+        if !InstanceGraph::native(&input)?.same(&input.instances, &input.types) {
             return Err(invalid("forged or incomplete instance graph"));
         }
-        if let Some(site) = input.instances.growing_sites().first() {
+        if let Some(site) = input.instances.growing_sites(&input.types).first() {
             return Err(invalid(format!(
                 "instance expansion grows through an implicit instance at {site:?} (spec #87)"
             )));
@@ -411,8 +516,39 @@ impl QueryEngine {
         let escapes = self.escapes(&semantic_program)?;
         Ok(ValidatedNativeInput {
             input,
+            verify: self.verify,
             semantic_program,
             escapes,
         })
     }
+}
+
+fn equal_native_value(
+    types: &hirsel_types::TypeInterner,
+    a: &Materialized,
+    b: &Materialized,
+) -> bool {
+    use hirsel_tir::ValueKind;
+    let mut todo = vec![(&a.root, &b.root)];
+    while let Some((left, right)) = todo.pop() {
+        if !types.semantic_eq(left.ty, right.ty) {
+            return false;
+        }
+        match (&left.kind, &right.kind) {
+            (ValueKind::Constant(x), ValueKind::Constant(y)) if x == y => (),
+            (ValueKind::FunctionReference(x), ValueKind::FunctionReference(y)) if x == y => (),
+            (
+                ValueKind::Construct {
+                    constructor: x,
+                    fields: xs,
+                },
+                ValueKind::Construct {
+                    constructor: y,
+                    fields: ys,
+                },
+            ) if x == y && xs.len() == ys.len() => todo.extend(xs.iter().zip(ys)),
+            _ => return false,
+        }
+    }
+    true
 }

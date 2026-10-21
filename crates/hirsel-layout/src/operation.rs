@@ -2,58 +2,58 @@
 //! Only the type structure read by native layout/ABI instantiation crosses LIR.
 use crate::layout::{LayoutBuilder, Owners};
 use hirsel_core_contract::OperationId;
+use hirsel_intern::Symbol;
 use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbi};
 use hirsel_lir::layout::{LayoutError, MAX_DEPTH};
 use hirsel_lir::operation::{NativeType, OperationArgument, OperationDeclarations};
+use hirsel_syntax::DefId;
 use hirsel_types::*;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn collect_arguments(
-    store: &TypeStore,
+    types: &TypeInterner,
     arguments: &[GenericArgument],
 ) -> Result<Vec<OperationArgument>, LayoutError> {
     arguments
         .iter()
-        .map(|a| from_argument(store, a, 0))
+        .map(|a| from_argument(types, a, 0))
         .collect()
 }
 
 fn from_argument(
-    store: &TypeStore,
+    types: &TypeInterner,
     argument: &GenericArgument,
     depth: u32,
 ) -> Result<OperationArgument, LayoutError> {
     Ok(match argument {
-        GenericArgument::Type(ty) => OperationArgument::Type(from_type(store, *ty, depth)?),
+        GenericArgument::Type(ty) => OperationArgument::Type(from_type(types, *ty, depth)?),
         GenericArgument::Size(Size::Constant(n)) => OperationArgument::Size(*n),
         GenericArgument::Size(Size::Parameter(_)) => return Err(LayoutError::Incomplete),
     })
 }
 
-fn import_argument(
+fn intern_argument(
     actual: &OperationArgument,
-    store: &mut TypeStore,
+    types: &TypeInterner,
     depth: u32,
 ) -> Result<GenericArgument, LayoutError> {
     Ok(match actual {
-        OperationArgument::Type(ty) => GenericArgument::Type(import_type(ty, store, depth)?),
+        OperationArgument::Type(ty) => GenericArgument::Type(intern_native(ty, types, depth)?),
         OperationArgument::Size(n) => GenericArgument::Size(Size::Constant(*n)),
     })
 }
 
-fn from_type(store: &TypeStore, ty: TypeId, depth: u32) -> Result<NativeType, LayoutError> {
+fn from_type(types: &TypeInterner, ty: TypeId, depth: u32) -> Result<NativeType, LayoutError> {
     if depth > MAX_DEPTH {
         return Err(LayoutError::InstanceLimit);
     }
-    if store.id(ty.index()) != Some(ty) {
-        return Err(LayoutError::MissingType);
-    }
-    let row = store.get(ty).ok_or(LayoutError::MissingType)?;
-    let child = |ty| from_type(store, ty, depth + 1);
+    let row = types.get(ty).ok_or(LayoutError::MissingType)?;
+    let child = |ty| from_type(types, ty, depth + 1);
     let args = |arguments: &[GenericArgument]| {
         arguments
             .iter()
-            .map(|a| from_argument(store, a, depth + 1))
+            .map(|a| from_argument(types, a, depth + 1))
             .collect::<Result<_, _>>()
     };
     Ok(match &row.kind {
@@ -64,7 +64,7 @@ fn from_type(store: &TypeStore, ty: TypeId, depth: u32) -> Result<NativeType, La
         TypeKind::Named {
             definition,
             arguments,
-        } => NativeType::Named(definition.clone(), args(arguments)?),
+        } => NativeType::Named(definition.path().clone(), args(arguments)?),
         TypeKind::Record(fields) => NativeType::Record(
             fields
                 .iter()
@@ -92,32 +92,32 @@ fn from_type(store: &TypeStore, ty: TypeId, depth: u32) -> Result<NativeType, La
     })
 }
 
-fn import_type(
+fn intern_native(
     actual: &NativeType,
-    store: &mut TypeStore,
+    types: &TypeInterner,
     depth: u32,
 ) -> Result<TypeId, LayoutError> {
     if depth > MAX_DEPTH {
         return Err(LayoutError::InstanceLimit);
     }
-    let children = |items: &[NativeType], store: &mut TypeStore| {
+    let children = |items: &[NativeType], types: &TypeInterner| {
         items
             .iter()
-            .map(|t| import_type(t, store, depth + 1))
+            .map(|t| intern_native(t, types, depth + 1))
             .collect::<Result<Vec<_>, _>>()
     };
-    let args = |items: &[OperationArgument], store: &mut TypeStore| {
+    let args = |items: &[OperationArgument], types: &TypeInterner| {
         items
             .iter()
-            .map(|a| import_argument(a, store, depth + 1))
+            .map(|a| intern_argument(a, types, depth + 1))
             .collect::<Result<Vec<_>, _>>()
     };
     let kind = match actual {
         NativeType::Primitive(p) => TypeKind::Primitive(primitive_from_native(*p)),
-        NativeType::Tuple(items) => TypeKind::Tuple(children(items, store)?.into()),
+        NativeType::Tuple(items) => TypeKind::Tuple(children(items, types)?.into()),
         NativeType::Named(definition, arguments) => TypeKind::Named {
-            definition: definition.clone(),
-            arguments: args(arguments, store)?.into(),
+            definition: DefId::intern(definition),
+            arguments: args(arguments, types)?.into(),
         },
         NativeType::Record(fields) => TypeKind::Record(
             fields
@@ -125,9 +125,9 @@ fn import_type(
                 .enumerate()
                 .map(|(i, (growable, t))| {
                     Ok(Field {
-                        name: i.to_string(),
+                        name: Symbol::intern(&i.to_string()),
                         growable: *growable,
-                        ty: import_type(t, store, depth + 1)?,
+                        ty: intern_native(t, types, depth + 1)?,
                     })
                 })
                 .collect::<Result<Vec<_>, LayoutError>>()?
@@ -139,8 +139,8 @@ fn import_type(
                 .enumerate()
                 .map(|(i, fields)| {
                     Ok(Variant {
-                        name: i.to_string(),
-                        fields: children(fields, store)?
+                        name: Symbol::intern(&i.to_string()),
+                        fields: children(fields, types)?
                             .into_iter()
                             .map(|t| (None, t))
                             .collect(),
@@ -150,13 +150,13 @@ fn import_type(
                 .into(),
         ),
         NativeType::Function(_) => {
-            let unit = store.push(Type::unit());
+            let unit = types.intern(Type::unit());
             TypeKind::Function(empty_function(unit))
         }
-        NativeType::Box(inner) => TypeKind::Box(import_type(inner, store, depth + 1)?),
+        NativeType::Box(inner) => TypeKind::Box(intern_native(inner, types, depth + 1)?),
         NativeType::Builtin(kind, arguments) => TypeKind::Builtin {
             kind: builtin_from_native(*kind),
-            arguments: args(arguments, store)?.into(),
+            arguments: args(arguments, types)?.into(),
         },
     };
     let mut row = Type {
@@ -166,7 +166,7 @@ fn import_type(
     if let NativeType::Function(CallMultiplicity::Once) = actual {
         row.modes.multiplicity = Multiplicity::Once;
     }
-    Ok(store.push(row))
+    Ok(types.intern(row))
 }
 
 fn empty_function(result: TypeId) -> FunctionType {
@@ -186,8 +186,10 @@ fn empty_function(result: TypeId) -> FunctionType {
 }
 
 /// Trusted input, supplied alongside the manifest rather than inside a unit.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OperationRegistry {
+    /// The session interner the signatures' rows live in.
+    pub types: Arc<TypeInterner>,
     pub signatures: BTreeMap<OperationId, SignatureRef>,
     pub owners: Owners,
 }
@@ -204,7 +206,7 @@ impl OperationDeclarations for OperationRegistry {
             .signatures
             .get(operation)
             .ok_or_else(|| LayoutError::Invalid("missing operation declaration".into()))?;
-        if signature.definition != operation.definition
+        if signature.definition.path() != &operation.definition
             || signature.fingerprint != operation.declaration_digest
         {
             return Err(LayoutError::Invalid(
@@ -229,10 +231,10 @@ impl OperationDeclarations for OperationRegistry {
                 "operation actual kinds or arity".into(),
             ));
         }
-        let mut store = TypeStore::default();
+        let types = &*self.types;
         let arguments = arguments
             .iter()
-            .map(|a| import_argument(a, &mut store, 0))
+            .map(|a| intern_argument(a, types, 0))
             .collect::<Result<Vec<_>, _>>()?;
         let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
         let substitution = hirsel_types::Substitution {
@@ -241,18 +243,19 @@ impl OperationDeclarations for OperationRegistry {
             authorities: &authorities,
             ..Default::default()
         };
-        let one = |ty, store: &mut TypeStore| {
-            substitute_type(&signature.types, ty, store, substitution)
+        let memo = TypeMemo::new();
+        let one = |ty| {
+            substitute(types, &memo, ty, &substitution)
                 .map_err(|e| LayoutError::Invalid(format!("operation substitution: {e:?}")))
         };
         let mut parameters = Vec::new();
         for parameter in function.parameters.iter() {
             let mut p = parameter.clone();
-            p.ty = one(p.ty, &mut store)?;
+            p.ty = one(p.ty)?;
             parameters.push(p);
         }
-        let result = one(function.result, &mut store)?;
-        let callable = store.push(Type {
+        let result = one(function.result)?;
+        let callable = types.intern(Type {
             kind: TypeKind::Function(FunctionType {
                 parameters: parameters.into(),
                 foreign: function.foreign.clone(),
@@ -261,7 +264,7 @@ impl OperationDeclarations for OperationRegistry {
             ..Type::unit()
         });
         let mut builder = LayoutBuilder::new(target, &self.owners);
-        let abi = builder.fn_abi(&store, callable, CallableShape::Definition)?;
+        let abi = builder.fn_abi(types, callable, CallableShape::Definition)?;
         let abi = if signature.metadata.track_caller {
             builder.with_caller_site(abi)?
         } else {

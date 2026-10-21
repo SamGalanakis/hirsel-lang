@@ -3,8 +3,6 @@
 //! can reach a `home` package is handed only to a `home` package's extern.
 use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_engine::{NativeInput, ValidatedNativeInput};
-use hirsel_lir::ir::{Inst, ValueRepr};
-use hirsel_lir::layout_types::ScalarKind;
 use hirsel_lir::runtime_abi::{
     FOREIGN_BLOCKING, FOREIGN_PACKAGE_SHIFT, FOREIGN_THREADS_ANY, FOREIGN_THREADS_HOME,
     FOREIGN_THREADS_MASK, FOREIGN_THREADS_SERIAL,
@@ -12,7 +10,7 @@ use hirsel_lir::runtime_abi::{
 use hirsel_syntax::DefPath;
 use hirsel_types::{
     BuiltinType, ForeignThreads, FunctionType, GenericArgument, SignatureKind, Type, TypeId,
-    TypeKind, TypeStore,
+    TypeInterner, TypeKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -87,7 +85,7 @@ pub(crate) fn check_callbacks(
             continue;
         };
         for parameter in function.parameters.iter() {
-            callback_types(&signature.types, parameter.ty, &mut |shape| {
+            callback_types(&snapshot.types, parameter.ty, &mut |shape| {
                 handed.entry(shape).or_insert_with(|| path.clone());
             });
         }
@@ -95,52 +93,44 @@ pub(crate) fn check_callbacks(
     if handed.is_empty() {
         return Ok(());
     }
-    let mut checked = BTreeSet::new();
-    for unit in &program.units {
-        let unit = unit.unit();
-        for inst in &unit.instructions {
-            let Inst::FunctionRef { result, symbol } = *inst else {
-                continue;
-            };
-            let ty = &unit.types[unit.values[result.index()].ty.index()];
-            if ty.repr != ValueRepr::Scalar(ScalarKind::Pointer) {
-                continue;
-            }
-            let callback = &unit.tables.symbols[symbol.index()].definition;
-            if !checked.insert(callback.clone()) {
-                continue;
-            }
-            let Some(signature) = snapshot.signatures.get(callback) else {
-                continue;
-            };
-            let SignatureKind::Function(function) = &signature.kind else {
-                continue;
-            };
-            let Some(extern_) = handed.get(&function_shape(&signature.types, function)) else {
-                continue;
-            };
-            if let Some(reach) = input.home_reach(callback) {
-                let home = reach.path.last().unwrap_or(callback);
-                return Err(NativeError {
-                    definition: Some(callback.clone()),
-                    ..NativeError::new(
-                        StageName::Import,
-                        format!(
-                            "PROG-4: the callback {callback} can reach {home}, an extern of the \
-                             home package {}@{} (through {}), and its callback type is a \
-                             parameter of {extern_}, an extern of the {} package {}@{}, \
-                             whose calls do not run on the home thread; only a home \
-                             package's extern may take such a callback (S-13)",
-                            home.0.package.name,
-                            home.0.package.version,
-                            reach.spelled().join(" -> "),
-                            threads(snapshot, extern_).name(),
-                            extern_.0.package.name,
-                            extern_.0.package.version,
-                        ),
-                    )
-                });
-            }
+    // Compact summaries survive both object hits and whole-plan assembly, where
+    // no Ready bodies remain. Copied callbacks retain their independent owner.
+    let callbacks: BTreeSet<_> = program
+        .summaries
+        .iter()
+        .flat_map(|unit| unit.glue.callbacks.iter().map(|(path, _)| path))
+        .collect();
+    for callback in callbacks {
+        let Some(signature) = snapshot.signatures.get(callback) else {
+            continue;
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            continue;
+        };
+        let Some(extern_) = handed.get(&function_shape(&snapshot.types, function)) else {
+            continue;
+        };
+        if let Some(reach) = input.home_reach(callback) {
+            let home = reach.path.last().unwrap_or(callback);
+            return Err(NativeError {
+                definition: Some(callback.clone()),
+                ..NativeError::new(
+                    StageName::Import,
+                    format!(
+                        "PROG-4: the callback {callback} can reach {home}, an extern of the \
+                     home package {}@{} (through {}), and its callback type is a \
+                     parameter of {extern_}, an extern of the {} package {}@{}, \
+                     whose calls do not run on the home thread; only a home \
+                     package's extern may take such a callback (S-13)",
+                        home.0.package.name,
+                        home.0.package.version,
+                        reach.spelled().join(" -> "),
+                        threads(snapshot, extern_).name(),
+                        extern_.0.package.name,
+                        extern_.0.package.version,
+                    ),
+                )
+            });
         }
     }
     Ok(())
@@ -148,7 +138,7 @@ pub(crate) fn check_callbacks(
 
 /// Visit the shape of each callback type `ty` carries: a `FnPtr`'s function type, also as a
 /// type argument or a tuple element.
-fn callback_types(types: &TypeStore, ty: TypeId, visit: &mut impl FnMut(String)) {
+fn callback_types(types: &TypeInterner, ty: TypeId, visit: &mut impl FnMut(String)) {
     let Some(row) = types.get(ty) else {
         return;
     };
@@ -191,7 +181,7 @@ fn callback_types(types: &TypeStore, ty: TypeId, visit: &mut impl FnMut(String))
 /// A function type's nominal shape: its parameters' and result's types, without names,
 /// passing modes or uniqueness, which a callback's definition and an extern's `FnPtr`
 /// spell differently.
-fn function_shape(types: &TypeStore, function: &FunctionType) -> String {
+fn function_shape(types: &TypeInterner, function: &FunctionType) -> String {
     let mut out = String::from("fn(");
     for parameter in function.parameters.iter() {
         type_shape(types, parameter.ty, &mut out, 0);
@@ -202,7 +192,7 @@ fn function_shape(types: &TypeStore, function: &FunctionType) -> String {
     out
 }
 
-fn type_shape(types: &TypeStore, ty: TypeId, out: &mut String, depth: u32) {
+fn type_shape(types: &TypeInterner, ty: TypeId, out: &mut String, depth: u32) {
     use std::fmt::Write;
     let Some(row) = types.get(ty).filter(|_| depth < 32) else {
         out.push('?');

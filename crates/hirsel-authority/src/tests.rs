@@ -54,7 +54,7 @@ fn projected_paths_preserve_elaborated_scalar_types_without_symbols() {
         .into(),
         access: SourceAccess::Read,
     });
-    let expected = f.body.types.get(scalar).unwrap().clone();
+    let expected = session().get(scalar).unwrap().clone();
     let block = f.block(vec![root, projected], None, f.unit);
     let out = f.finish(block);
     clean(&out);
@@ -65,7 +65,7 @@ fn projected_paths_preserve_elaborated_scalar_types_without_symbols() {
         .find(|r| r.expression == projected)
         .unwrap()
         .ty;
-    assert_eq!(out.body.types.get(ty).unwrap(), &expected);
+    assert_eq!(session().get(ty).unwrap(), &expected);
 }
 
 fn cross(f: &mut Fixture, value: ExprId) -> ExprId {
@@ -98,7 +98,7 @@ fn scoped_call(
 ) -> ExprId {
     let mut cb = function(f.unit);
     if let Some(row) = f.body.expressions.iter().find(|r| r.expression == closure) {
-        if let TypeKind::Function(actual) = &f.body.types.get(row.ty).unwrap().kind {
+        if let TypeKind::Function(actual) = &session().get(row.ty).unwrap().kind {
             cb.parameters = actual.parameters.clone();
         }
     }
@@ -200,13 +200,13 @@ fn every_repeated_generic_occurrence_is_checked_before_weakening() {
 fn provider_failures_are_preserved_outside_the_result() {
     let mut f = Fixture::new();
     let missing = f.ty(TypeKind::Named {
-        definition: path("Missing"),
+        definition: DefId::intern(&path("Missing")),
         arguments: vec![].into(),
     });
     let arg = f.expr(ExprKind::Literal(Literal::Bool(true)), missing);
     let root = inert(&mut f, arg);
     f.provider.failures.insert(
-        path("Missing"),
+        DefId::intern(&path("Missing")),
         QueryError::Operational(OperationalFailure {
             operation: "signature".into(),
             message: "offline".into(),
@@ -215,7 +215,7 @@ fn provider_failures_are_preserved_outside_the_result() {
     let out = f.finish(root);
     assert!(matches!(out.failure, Some(QueryError::Operational(_))));
     assert!(out.reads.contains(&DependencyRead::Signature {
-        definition: path("Missing"),
+        definition: hirsel_syntax::DefId::intern(&path("Missing")),
         fingerprint: None
     }));
 }
@@ -408,8 +408,8 @@ proptest! {
             let root = scoped_call(&mut f, closure, Uses::Unrestricted, None);
             if reverse {f.body.bindings.reverse(); f.body.expressions.reverse(); f.body.resolution.expressions.reverse();}
             let out = f.finish(root); clean(&out);
-            let captures: Vec<_> = out.captures.iter().flat_map(|table| table.captures.iter().map(|capture| (table.expression, table.context, capture.owner.clone(), capture.binding.clone(), capture.usage, out.body.types.get(capture.ty).unwrap().clone()))).collect();
-            let results: Vec<_> = out.result_types.iter().map(|(owner, ty)| (owner.clone(), out.body.types.get(*ty).unwrap().clone())).collect();
+            let captures: Vec<_> = out.captures.iter().flat_map(|table| table.captures.iter().map(|capture| (table.expression, table.context, capture.owner.clone(), capture.binding.clone(), capture.usage, session().get(capture.ty).unwrap().clone()))).collect();
+            let results: Vec<_> = out.result_types.iter().map(|(owner, ty)| (owner.clone(), session().get(*ty).unwrap().clone())).collect();
             (out.capture_modes(), out.call_allocations, captures, results)
         };
         prop_assert_eq!(build(false), build(reverse));
@@ -481,8 +481,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
         assert_eq!(out.captures[0].captures.len(), usize::from(captures_outer));
         assert_eq!(out.body.closures[0].expression, body);
         assert!(matches!(
-            out.body
-                .types
+            session()
                 .get(
                     out.body
                         .expressions
@@ -496,7 +495,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
             TypeKind::Tuple(_)
         ));
         assert!(matches!(
-            out.body.types.get(out.body.closures[0].ty).unwrap().kind,
+            session().get(out.body.closures[0].ty).unwrap().kind,
             TypeKind::Function(_)
         ));
         if captures_outer {
@@ -654,7 +653,6 @@ fn function_uses_parameter_limits_resolve_its_declared_authority() {
             UseKind::Borrow,
             false,
         );
-        f.signature.types = f.body.types.clone();
         if let SignatureKind::Function(signature) = &mut f.signature.kind {
             signature.parameters = vec![parameter(clock, PassingMode::Borrow)].into();
             signature.uses = Uses::Only(AuthoritySummary::Known(
@@ -689,7 +687,7 @@ fn contextual_callback_uses_are_published_on_the_checked_function_value() {
         let out = f.finish(root);
         clean(&out);
         let checked = &out.body.closures[0];
-        let TypeKind::Function(function) = &out.body.types.get(checked.ty).unwrap().kind else {
+        let TypeKind::Function(function) = &session().get(checked.ty).unwrap().kind else {
             panic!("closure type");
         };
         assert_eq!(function.uses, uses);
@@ -699,9 +697,7 @@ fn contextual_callback_uses_are_published_on_the_checked_function_value() {
             .iter()
             .find(|row| row.expression == closure)
             .unwrap();
-        assert!(
-            semantic_equal(&out.body.types, expression.ty, &out.body.types, checked.ty).unwrap()
-        );
+        assert!(session().semantic_eq(expression.ty, checked.ty));
     }
 }
 
@@ -740,7 +736,7 @@ fn call_instantiation_ignores_implicit_loop_edges_on_the_same_expression() {
         .unwrap()
         .ty;
     assert!(matches!(
-        out.body.types.get(ty).unwrap().kind,
+        session().get(ty).unwrap().kind,
         TypeKind::Primitive(Primitive::U64)
     ));
 }
@@ -784,7 +780,7 @@ fn ownership_markers_preserve_instantiated_nested_provenance() {
                 .find(|r| r.expression == marked)
                 .unwrap()
                 .ty;
-            let payload = match &out.body.types.get(ty).unwrap().kind {
+            let payload = match &session().get(ty).unwrap().kind {
                 TypeKind::Tuple(ts) => ts[0],
                 TypeKind::Box(t) => *t,
                 TypeKind::Builtin { arguments, .. } => {
@@ -796,7 +792,7 @@ fn ownership_markers_preserve_instantiated_nested_provenance() {
                 _ => panic!(),
             };
             assert_eq!(
-                out.body.types.get(payload).unwrap().brand,
+                session().get(payload).unwrap().brand,
                 brand(OriginRoot::Local(lexical(), LocalId(8)))
             );
         }
@@ -851,4 +847,65 @@ fn a_dependent_callable_refuses_missing_capture_evidence() {
         &dependent_callable_receipt(Sendability::NotSendable),
         "MODE-4",
     );
+}
+
+#[test]
+fn nongeneric_calls_skip_refinement_walks_but_generic_calls_keep_them() {
+    for generic_call in [false, true] {
+        let mut f = Fixture::new();
+        let scalar = f.ty(TypeKind::Primitive(Primitive::U64));
+        let tuple = f.ty(TypeKind::Tuple(vec![scalar; 64].into()));
+        let argument = f.binding(
+            ResolvedName::Parameter(ParamId(0)),
+            tuple,
+            NameSite::Item,
+            UseKind::Borrow,
+            false,
+        );
+        let formal = if generic_call {
+            f.ty(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))))
+        } else {
+            tuple
+        };
+        let mut callee = function(f.unit);
+        callee.parameters = vec![parameter(formal, PassingMode::Borrow)].into();
+        if generic_call {
+            callee.generics = vec![GenericParameter::Type {
+                name: "T".into(),
+                bounds: vec![].into(),
+            }]
+            .into();
+        }
+        let call = f.call("observe", callee, vec![argument], None);
+        if generic_call {
+            f.body.instantiations.push(Instantiation {
+                expression: call,
+                callee: path("observe"),
+                arguments: vec![GenericArgument::Type(tuple)],
+            });
+        }
+        let before = super::walk::generic_refinement_rows();
+        let out = f.finish(call);
+        clean(&out);
+        let visited = super::walk::generic_refinement_rows() - before;
+        let checked = out
+            .body
+            .calls
+            .iter()
+            .find(|r| r.expression == call)
+            .unwrap();
+        if generic_call {
+            assert!(visited > 0, "generic occurrence refinement must still run");
+            let GenericArgument::Type(actual) = checked.generic_arguments[0] else {
+                panic!("type actual")
+            };
+            assert!(session().semantic_eq(actual, tuple));
+        } else {
+            assert!(checked.generic_arguments.is_empty());
+            assert_eq!(
+                visited, 0,
+                "there is no generic slot for any header walk to refine"
+            );
+        }
+    }
 }

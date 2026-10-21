@@ -4,16 +4,31 @@ Own semantic types, complete signatures, checked decisions and shared query data
 Allowed dependencies: syntax, intern, span, diag, codec; no implementation crates.
 Wire tests use run-config's shared `hex` formatter as a dev dependency.
 
-- `TypeStore` owns immutable rows. TypeIds have ephemeral provenance, checked by
-  `get` (debug assertion, None in release for a foreign row). Clone shares immutable
-  existing rows with constant-time access; append detaches shared storage; independently appended rows have distinct IDs. Use
-  `push`, `id`, `iter`, `len`, `is_empty`; `from_graph` constructs forward edges
-  without mutable published rows. Provenance never enters fingerprints or IDs on
-  disk: an encoded TypeId (`encode_types`) carries its index and an alias class
-  numbered within the encoding session, and decoding (`decode_types`) gives each
-  class fresh provenance. An old ID must not be paired with a rebuilt graph. The shared
-  `hirsel_intern::work` registry counts copied rows for deterministic scaling
-  assertions.
+- `TypeInterner` is the session's one canonical, concurrent type interner
+  (design §1a). Every phase and thread interns into it exactly and losslessly
+  (`intern`), so one row has one `TypeId` and promotion cannot fork identity.
+  `TypeId(u32)` has no provenance and no order; ids never reach output.
+  Rows live in address-stable chunks over an optional immutable `TypeBase`
+  (the std image), indexed by 64 hash shards. `intern_graph` admits rows
+  naming each other before they exist (hand-built and invalid cyclic graphs).
+  Per-id memos: `validate`/`valid` (missing rows, recovery rows, cycles),
+  `sem` (callable parameter names erased, erased captures sorted, Known(Unknown)
+  as None), `strip_modes` and `shape`. `semantic_eq` is `valid` and equal `sem`.
+- `TypeMemo` (structural, session-wide, one each for I and V) memoizes
+  `substitute` by root, binder, arguments, authorities and roles; `instantiate`
+  by the view's exact `ViewDigest` and actuals; `project` by (owner, part,
+  plain). `ContextMemo` (one per query, bound to its `GenericDeclarations` and
+  signature lookup) memoizes `prove`, `plain` and the directional `compatible`
+  relation, and replays each entry's lookups on a hit.
+- Persisted forms use canonical per-definition tables (`closure`,
+  `encode_table`, `decode_table`): first-encounter order from the roots, never
+  interner numbering. `TypeId` serializes only inside `with_table_encoding`/
+  `with_table_decoding`, as a table position. The std image's one table grows
+  as its values serialize (`TableBuilder`), and its rows become an immutable
+  `TypeBase` (`TypeTable::into_base`) whose positions values decode to
+  directly (`with_base_decoding`).
+- `GeneratedActualKey` is main's CT-5 key, the CT-3 closed spelling of each
+  actual, interned once and memoized per TypeId.
 - `Signature` is self-contained. Fixed header defaults never come from bodies
   (LANG-6). `SignatureMetadata` carries visibility, transparent-alias status,
   the `unsafe ffi` package fact, a safe wrapper's trusted kind and model, and nominal
@@ -287,22 +302,15 @@ and independent validation reject foreign Body/depth/ordinal references.
 SortedMap's retained borrowed key provisionally requires Copyable (spec #48);
 section 22 ledger signatures remain verbatim.
 
-Rooted semantic equality validates both complete graphs and compares corresponding
-rows directly; it does not intern a second canonical graph. The shared
-`hirsel_intern::work` registry counts row inspections on this thread for the
-wide-graph scaling regression.
-`visit_type_origins` retains the origin rewriter's traversal and binder policy
-without constructing output rows. `import_type_row` imports a synthetic root with
-children in an immutable source; `substitute_type_in_place` reads existing immutable
-rows and appends substituted rows in the same caller-owned store. Structural
-property and compatibility proofs borrow their inputs; nominal expansion imports
-only reachable actual arguments into private proof scratch storage.
-
-`TypeStore::mark()` records a closed immutable prefix for temporary graph work;
-`truncate_to(mark)` discards its appended suffix while keeping allocated capacity.
-The mark checks prefix closure once in debug; truncation checks the retained
-boundary identity. Immutable rows cannot gain edges into the discarded suffix,
-and fresh provenance prevents an old temporary ID selecting a replacement row.
+Rooted semantic equality is `semantic_eq`: both graphs valid and equal `sem`
+normal forms, each row normalized once per session. `shape_eq` compares `shape`
+normal forms the same way. `ContextMemo::compatible` keeps main's directional
+walk for the pairs a policy can weaken and compares the rest by receiving-contract
+normal forms; test-only copies of main's walks (`reference`) check both on every
+unit test and on random graph pairs. `visit_type_origins` retains the origin
+rewriter's traversal and binder policy without constructing output rows.
+Substitution interns its result rows into the session interner, memoized in a
+`TypeMemo`; proofs expand nominal representations the same way.
 
 `CheckedBody.tails` records H's source tail decision, kind and counted argument
 ordinals/source expressions. It carries decisions rather than proof evidence;
@@ -317,7 +325,7 @@ Revision 4 stores every child collection within a `Type` row in `SharedSlice<T>`
 (`Arc<[T]>`): structural children, function parameters/generics/contracts, variant
 fields, bounds, brands, authority terms and qualifier obligations. Row cloning
 shares unchanged children. Mutating an unpublished producer row detaches only the
-edited slice; published TypeStore rows remain immutable. Construct from a Vec or
+edited slice; interned rows are immutable. Construct from a Vec or
 iterator, borrow slices for consumers, and use `storage_identity` only for retained
 allocation accounting. Identity never affects equality or canonical encoding.
 
@@ -527,3 +535,7 @@ normalization remains with the shared property normalizer.
 `core_roles::table_key_parameters` identifies key argument positions of the
 std@1/table surface. It supplies operation identities, never a schema proof;
 source checking and V independently inspect the declared representations.
+
+`SharedPath::node_allocation_bytes` reports the current tail allocation including
+Arc counters and alignment, or zero for an empty path. Walk `prefix` and deduplicate
+`node_identity` for retained-byte accounting; payload-owned buffers are separate.

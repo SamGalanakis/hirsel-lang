@@ -1,7 +1,7 @@
 use super::*;
 use crate::PassError;
 
-impl Inline for Importer<'_, '_> {
+impl Inline for Importer<'_> {
     fn construct_inline(
         &mut self,
         layout: LayoutId,
@@ -87,10 +87,10 @@ impl Inline for Importer<'_, '_> {
         let ty = self.ty(ty)?;
         let signatures = &self.program.signatures;
         hirsel_types::serialization::serializable_schema(
-            &self.store,
+            self.types,
             ty,
             &hirsel_types::GenericDeclarations::default(),
-            &mut |path| Ok(signatures.get(path).cloned()),
+            &mut |d| Ok(signatures.get(d.path()).cloned()),
         )
         .map_err(|e| PassError::Unsupported(format!("codec schema: {e:?}")))
     }
@@ -230,12 +230,12 @@ impl Inline for Importer<'_, '_> {
             &call.generics[1..],
         )?;
         request.path = helper.clone();
-        let mut callable = request.actuals.store.get(request.callable).unwrap().clone();
+        let mut callable = self.types.row(request.callable).clone();
         let hirsel_types::TypeKind::Function(ref mut function) = callable.kind else {
             unreachable!()
         };
         function.parameters = Vec::new().into();
-        request.callable = request.actuals.store.push(callable);
+        request.callable = self.types.intern(callable);
         request.shape = CallableShape::IterNext;
         let mut fields = Vec::new();
         let mut values = Vec::new();
@@ -244,14 +244,7 @@ impl Inline for Importer<'_, '_> {
         for argument in call.arguments {
             let source = self.body.places[argument.value.place.0 as usize].ty;
             let ty = self.ty(source)?;
-            let imported = hirsel_types::substitute_type(
-                &self.store,
-                ty,
-                &mut request.actuals.store,
-                Default::default(),
-            )
-            .map_err(|e| PassError::Instance(InstanceError::Substitution(helper.clone(), e)))?;
-            fields.push((imported, Passing::Take));
+            fields.push((ty, Passing::Take));
             values.push(CaptureValue {
                 value: self.operand(&argument.value)?,
                 usage: hirsel_lir::ir::CaptureUse::Take,
@@ -265,14 +258,16 @@ impl Inline for Importer<'_, '_> {
             .collect();
         request.environment = Some(
             self.layouts
-                .environment(&hirsel_layout::layout::EnvironmentShape {
-                    definition: helper,
-                    body: 0,
-                    store: &request.actuals.store,
-                    captures: &fields,
-                    sizes: &[],
-                    movable: &[],
-                })
+                .environment(
+                    self.types,
+                    &hirsel_layout::layout::EnvironmentShape {
+                        definition: DefId::intern(helper),
+                        body: 0,
+                        captures: &fields,
+                        sizes: &[],
+                        movable: &[],
+                    },
+                )
                 .map_err(|e| PassError::Layout(helper.clone(), e))?,
         );
         let environment = request.environment.unwrap();
@@ -316,17 +311,17 @@ impl Inline for Importer<'_, '_> {
         let callee = self.operand(&value)?;
         let body =
             crate::library::body_index(&crate::library::native_path("iter_from_step")).unwrap();
-        let mut request = self.library_request(body, call.path, call.generics)?;
-        let mut callable = request.actuals.store.get(request.callable).unwrap().clone();
+        let request = self.library_request(body, call.path, call.generics)?;
+        let mut callable = self.types.row(request.callable).clone();
         let hirsel_types::TypeKind::Function(ref mut function) = callable.kind else {
             unreachable!()
         };
         function.parameters = Vec::new().into();
-        let callable = request.actuals.store.push(callable);
+        let callable = self.types.intern(callable);
         let abi = self
             .layouts
-            .fn_abi(&request.actuals.store, callable, CallableShape::IterNext)
-            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
+            .fn_abi(self.types, callable, CallableShape::IterNext)
+            .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?;
         let fn_abi = self.layouts.table().fn_abis[abi.0 as usize].clone();
         let result = self.new_value(fn_abi.result.unwrap().layout, None);
         self.consumed(callee);

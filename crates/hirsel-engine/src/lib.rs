@@ -3,6 +3,8 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod work;
+pub use work::WorkStats;
 mod operations;
 pub use operations::*;
 mod native_audit;
@@ -13,28 +15,43 @@ mod representation;
 pub use representation::RepresentationRecord;
 mod compiler;
 mod comptime;
+mod config;
 pub use compiler::Compiler;
+pub use config::CompileConfig;
 mod materialized;
 mod phases;
 pub mod registry;
 pub use phases::*;
 mod diagnostics;
+pub mod memo;
+pub mod store;
+pub use memo::{Durability, ReadKey, Reads, ReadsBuilder, Revision};
 mod generic_graph;
-mod layered;
 mod table_keys;
 pub use diagnostics::*;
-pub use generic_graph::{GenericParameterRef, InstanceEdge, InstanceGraph, InstanceKind};
-pub use layered::Layered;
+pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
+mod summary;
+pub use summary::{
+    CallClass, CheckedSummary, DefinitionSummary, Frame, FrameKind, GenericParameterRef,
+    GrowthEdge, ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
+};
 mod semantic;
+mod snapshot;
 pub use semantic::*;
+pub use snapshot::{
+    CitationSource, DeclarationIndex, Declarations, FrozenProvider, ModuleInputs, PackageViews,
+    SignatureSnapshot, SnapshotSeed, View, ViewTable,
+};
 mod adapters;
 mod facts;
 pub use adapters::*;
+pub mod image;
 mod package;
-mod package_cache;
-pub use package_cache::{PackageCache, release_shared_caches, report_prechecks};
+pub use image::{ImageRecord, StdImage, StdImages, release_shared_caches, report_images};
 mod policy;
-pub use policy::{LoweringPolicy, Verify, free_sessions};
+pub use policy::{
+    LoweringPolicy, Verify, free_sessions, persistent_results, verify_cached_results,
+};
 mod admission;
 mod proof_export;
 mod queries;
@@ -47,9 +64,9 @@ use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
 pub use hirsel_interp::library::SimulationConfig;
 use hirsel_span::{FileId, SourceMap};
-pub use hirsel_syntax::DefPath;
 pub use hirsel_syntax::FileContext;
 use hirsel_syntax::{ContentHash, ItemSyntax, SyntaxFile, Token};
+pub use hirsel_syntax::{DefId, DefPath};
 pub use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
 use hirsel_types::{CheckedBody, Resolution, Signature};
 pub use hirsel_types::{QueryError, QueryOutput, SignatureDependency, SignatureProvider};
@@ -120,7 +137,7 @@ pub enum CheckCompletion {
     },
 }
 /// Cache domains keep outputs of different phases distinct (PROG-5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub enum QueryKind {
     Lex,
     Format,
@@ -131,6 +148,8 @@ pub enum QueryKind {
     Modes,
     Check,
     Lower,
+    Summary,
+    CheckedSummary,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -144,6 +163,8 @@ impl QueryKind {
             Self::Lower => "TIR lowering",
             Self::Format => "formatting",
             Self::Interpret => "interpretation",
+            Self::Summary => "definition summary",
+            Self::CheckedSummary => "checked definition summary",
         }
     }
 }
@@ -169,7 +190,7 @@ impl DefinitionKey {
     /// Reject conflicting observations of a dependency; duplicate equal reads are harmless.
     pub fn fingerprint(&self) -> Result<ContentHash, &'static str> {
         let mut deps = self.dependencies.clone();
-        deps.sort_by(|a, b| a.definition.cmp(&b.definition));
+        deps.sort_by_key(|a| a.definition);
         if deps
             .windows(2)
             .any(|p| p[0].definition == p[1].definition && p[0].fingerprint != p[1].fingerprint)
@@ -187,6 +208,8 @@ impl DefinitionKey {
             QueryKind::Signature => 1,
             QueryKind::Check => 2,
             QueryKind::Lower => 3,
+            QueryKind::Summary => 9,
+            QueryKind::CheckedSummary => 10,
         };
         let mut parts = vec![
             vec![kind],
@@ -231,13 +254,13 @@ pub trait DefinitionQueries {
 }
 /// Shared leaf phase signatures; implementations may expose equivalent free functions (LANG-1).
 /// These traits live in the driver boundary; implementation crates need only the data crates.
-pub trait LexerPhase {
+pub trait LexerPhase: Send + Sync {
     fn lex(&self, file: FileId, sources: &SourceMap)
     -> Result<QueryOutput<Vec<Token>>, QueryError>;
 }
 /// Parsing receives tokens and file naming context; it does not resolve types
 /// (LANG-1/2). It places one anchor per item in `sources`.
-pub trait ParserPhase {
+pub trait ParserPhase: Send + Sync {
     fn parse(
         &self,
         file: FileId,
@@ -247,7 +270,7 @@ pub trait ParserPhase {
     ) -> Result<QueryOutput<SyntaxFile>, QueryError>;
 }
 /// Formatting uses the complete token tape including error recovery and comments (LANG-1).
-pub trait FormatterPhase {
+pub trait FormatterPhase: Send + Sync {
     fn format(&self, file: &SyntaxFile, sources: &SourceMap) -> Result<String, Vec<Diagnostic>>;
     /// Additive driver wrapper: adapters can distinguish conservative fallback from success.
     fn format_query(&self, file: &SyntaxFile, sources: &SourceMap) -> Result<String, QueryError> {
@@ -255,17 +278,23 @@ pub trait FormatterPhase {
     }
 }
 /// Names are resolved against signatures, never implementation internals (LANG-4/6).
-pub trait ResolverPhase {
+pub trait ResolverPhase: Send + Sync {
     fn resolve(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError>;
 }
 /// Type checking produces body tables; modes then enrich/check them before lowering (LANG-6, MODE-7).
-pub trait CheckerPhase {
+pub trait CheckerPhase: Send + Sync {
     fn check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<ItemSyntax>,
         resolution: Resolution,
         signature: &Signature,
@@ -273,26 +302,35 @@ pub trait CheckerPhase {
     ) -> Result<QueryOutput<TypedBody>, QueryError>;
 }
 /// Modes consume the complete typed artifact and refine its shared tables (OWN-1/8).
-pub trait ModesPhase {
+pub trait ModesPhase: Send + Sync {
     fn check_modes(
         &self,
-        body: TypedBody,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: std::sync::Arc<TypedBody>,
         signature: &Signature,
+        products: &mut PhaseProducts,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError>;
 }
 /// Lowering makes evaluation order and cleanup explicit before execution (LANG-3, DROP-2).
-pub trait LoweringPhase {
+pub trait LoweringPhase: Send + Sync {
     fn lower(
         &self,
-        body: AnalyzedBody,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        comptime: &Comptime,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError>;
     /// Lowers one checked subexpression as a zero-input compile-time initializer
     /// whose result is `result`; `constants` are its already materialized parts.
     fn lower_evaluation(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         body: &AnalyzedBody,
+        staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
         signature: &Signature,
         expression: hirsel_syntax::ExprId,
         result: hirsel_types::TypeId,
@@ -302,7 +340,7 @@ pub trait LoweringPhase {
     fn entry_body(&self) -> hirsel_tir::BodyId;
 }
 /// Runtime output includes failure cause data; stdout is delivered as exact bytes (FAIL-2; issue #12).
-pub trait InterpreterPhase {
+pub trait InterpreterPhase: Send {
     fn prepare(
         &mut self,
         _signature: hirsel_types::SignatureRef,
@@ -352,13 +390,131 @@ mod tests {
         })
     }
     #[test]
+    fn signature_dependency_wire_stays_path_based_inside_image_scopes() {
+        use hirsel_intern::persist::{Numbering, Source};
+        use hirsel_syntax::{DefId, with_def_numbering, with_def_source};
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct LegacyDependency {
+            definition: DefPath,
+            fingerprint: ContentHash,
+        }
+        struct NoDefinitions;
+        impl Source<DefId> for NoDefinitions {
+            fn id(&self, _: u32) -> Option<DefId> {
+                panic!("a signature dependency must decode its path directly")
+            }
+        }
+        let paths = [path("z"), path("a"), DefPath::core("nested")];
+        // Intern in reverse canonical order; neither wire encoding may expose it.
+        for path in &paths {
+            DefId::intern(path);
+        }
+        for path in paths {
+            let fingerprint = ContentHash::of_bytes(path.to_string().as_bytes());
+            let legacy = LegacyDependency {
+                definition: path.clone(),
+                fingerprint,
+            };
+            let dependency = SignatureDependency {
+                definition: DefId::intern(&path),
+                fingerprint,
+            };
+            let old_json = serde_json::to_vec(&legacy).unwrap();
+            let old_binary = bincode::serialize(&legacy).unwrap();
+            assert_eq!(serde_json::to_vec(&dependency).unwrap(), old_json);
+            assert_eq!(bincode::serialize(&dependency).unwrap(), old_binary);
+            let mut numbering = Numbering::default();
+            with_def_numbering(&mut numbering, || {
+                assert_eq!(serde_json::to_vec(&dependency).unwrap(), old_json);
+                assert_eq!(bincode::serialize(&dependency).unwrap(), old_binary);
+            });
+            assert!(
+                numbering.ids().is_empty(),
+                "dependency paths never use the image id table"
+            );
+            with_def_source(std::sync::Arc::new(NoDefinitions), || {
+                assert_eq!(
+                    serde_json::from_slice::<SignatureDependency>(&old_json).unwrap(),
+                    dependency
+                );
+                assert_eq!(
+                    bincode::deserialize::<SignatureDependency>(&old_binary).unwrap(),
+                    dependency
+                );
+            });
+            assert_eq!(
+                serde_json::from_slice::<SignatureDependency>(&old_json).unwrap(),
+                dependency
+            );
+            assert_eq!(
+                bincode::deserialize::<SignatureDependency>(&old_binary).unwrap(),
+                dependency
+            );
+        }
+    }
+    #[test]
+    fn signature_read_wire_keeps_legacy_enum_tag_and_path_inside_image_scopes() {
+        use hirsel_intern::persist::{Numbering, Source};
+        use hirsel_syntax::{DefId, with_def_numbering, with_def_source};
+        use hirsel_types::DependencyRead;
+        struct NoDefinitions;
+        impl Source<DefId> for NoDefinitions {
+            fn id(&self, _: u32) -> Option<DefId> {
+                panic!("a signature read must decode its path directly")
+            }
+        }
+        for path in [path("z"), path("a"), DefPath::core(&"long".repeat(1024))] {
+            for fingerprint in [None, Some(ContentHash::of_bytes(b"observed"))] {
+                let read = DependencyRead::Signature {
+                    definition: DefId::intern(&path),
+                    fingerprint,
+                };
+                let json = format!(
+                    "{{\"Signature\":{{\"definition\":{},\"fingerprint\":{}}}}}",
+                    serde_json::to_string(&path).unwrap(),
+                    serde_json::to_string(&fingerprint).unwrap(),
+                )
+                .into_bytes();
+                // Legacy bincode: the fourth enum variant's fixed u32 tag,
+                // then the owned DefPath and optional observed fingerprint.
+                let mut binary = 3u32.to_le_bytes().to_vec();
+                binary.extend(bincode::serialize(&path).unwrap());
+                binary.extend(bincode::serialize(&fingerprint).unwrap());
+                let encode = || {
+                    assert_eq!(serde_json::to_vec(&read).unwrap(), json);
+                    assert_eq!(bincode::serialize(&read).unwrap(), binary);
+                };
+                let decode = || {
+                    assert_eq!(
+                        serde_json::from_slice::<DependencyRead>(&json).unwrap(),
+                        read
+                    );
+                    assert_eq!(
+                        bincode::deserialize::<DependencyRead>(&binary).unwrap(),
+                        read
+                    );
+                };
+                encode();
+                decode();
+                let mut numbering = Numbering::default();
+                with_def_numbering(&mut numbering, encode);
+                assert!(numbering.ids().is_empty());
+                with_def_source(std::sync::Arc::new(NoDefinitions), decode);
+                let DependencyRead::Signature { definition, .. } = read.clone() else {
+                    unreachable!()
+                };
+                assert!(std::ptr::eq(definition.path(), DefId::intern(&path).path()));
+            }
+        }
+    }
+    #[test]
     fn dependency_order_is_irrelevant_but_text_and_signature_edits_invalidate() {
         let a = SignatureDependency {
-            definition: path("a"),
+            definition: hirsel_syntax::DefId::intern(&path("a")),
             fingerprint: ContentHash::of_bytes(b"a"),
         };
         let b = SignatureDependency {
-            definition: path("b"),
+            definition: hirsel_syntax::DefId::intern(&path("b")),
             fingerprint: ContentHash::of_bytes(b"b"),
         };
         let mut key = DefinitionKey {

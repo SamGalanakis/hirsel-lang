@@ -14,6 +14,7 @@ mod tests;
 use hirsel_diag::Diagnostic;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
+use hirsel_syntax::DefId;
 use hirsel_syntax::{ExprId, ItemSyntax};
 use hirsel_types::*;
 
@@ -57,6 +58,8 @@ impl Place {
 /// `results` are the authority pass's formal frame results: they are derived
 /// summaries of the same rows as the callable types, and are normalised with them.
 pub fn check_ownership_with_clauses(
+    t: &TypeInterner,
+    m: &TypeMemo,
     syntax: &ItemSyntax,
     signature: &Signature,
     body: &mut CheckedBody,
@@ -69,7 +72,7 @@ pub fn check_ownership_with_clauses(
 ) -> Result<QueryOutput<OwnershipFacts>, QueryError> {
     let tree = &syntax.tree;
     let rows = source_rows::SourceRows::new(body);
-    let arenas = crate::arenas::Arenas::new(body, signature);
+    let arenas = crate::arenas::Arenas::new(t, body, signature);
     let mut introductions: std::collections::BTreeMap<NameSite, Vec<(NameSite, Origin, usize)>> =
         std::collections::BTreeMap::new();
     for (site, owner, origin) in identity_joins {
@@ -87,15 +90,40 @@ pub fn check_ownership_with_clauses(
                 .push((*owner, origin.clone(), ordinal));
         }
     }
-    let mut signatures = properties::Signatures::default();
-    let mut graphs = cfg::build(syntax, signature, body, captures, clauses, results, &rows)?;
+    // Both proof memos read through one recording Reader. Flow refinements
+    // can need a nested declaration that classification never reached.
+    let generics = body.resolution.generic_declarations.clone();
+    let reader = hirsel_modes::reader::Reader::new(&mut *provider, signature);
+    let mut read = |d: DefId| reader.borrow_mut().read(d).map(Some);
+    let mut flow_read = |d: DefId| reader.borrow_mut().read(d).map(Some);
+    let memo = ContextMemo::new(t, &generics, &mut read);
+    let flow_memo = ContextMemo::new(t, &generics, &mut flow_read);
+    let mut signatures = properties::Signatures::new(m, &reader, memo, flow_memo);
+    let mut graphs = cfg::build(
+        t, syntax, signature, body, captures, clauses, results, &rows,
+    )?;
     let projection_lifetimes =
-        properties::projection_lifetimes(body, signature, &mut signatures, provider)?;
-    let pattern_declarations =
-        properties::pattern_declarations(body, signature, &mut signatures, provider)?;
+        properties::projection_lifetimes(t, body, signature, &mut signatures)?;
+    let pattern_declarations = properties::pattern_declarations(t, body, &mut signatures)?;
     let field_loan_places =
-        properties::field_loan_places(body, signature, &graphs, &mut signatures, provider, &rows)?;
-    let mut properties = properties::classify(body, signature, &mut signatures, provider)?;
+        properties::field_loan_places(t, body, &graphs, &mut signatures, &rows)?;
+    // The rows the body's store held when main classified it: the tables'
+    // rows and those the declaration-layout passes above derived.
+    let derived = projection_lifetimes
+        .values()
+        .map(|p| p.physical)
+        .chain(pattern_declarations.values().copied())
+        .chain(field_loan_places.values().map(|p| p.declared))
+        .chain(cfg::graph_types(&graphs))
+        .chain(results.iter().map(|(_, ty)| *ty))
+        .chain(clauses.iter().map(|(_, ty)| *ty))
+        .chain(
+            identity_fields
+                .iter()
+                .flat_map(|(_, _, _, parts)| parts.iter().map(|(_, ty)| *ty)),
+        )
+        .collect::<Vec<_>>();
+    let mut properties = properties::classify(t, body, derived, &mut signatures)?;
     // MODE-2: an error mapper's parameter mode is checked on the failure edge.
     for graph in &graphs {
         for node in &graph.nodes {
@@ -114,13 +142,13 @@ pub fn check_ownership_with_clauses(
                 });
             // J reports an unreadable mapper; this read only feeds the check.
             if let Some(path) = mapper {
-                let _ = signatures.read(&path, body, provider);
+                let _ = signatures.read(DefId::intern(&path), &mut body.resolution.reads);
             }
         }
     }
     // MODE-1: the caller-side `mut` content bound asks which storage can hold
     // a part of which content; read the nominal representations it needs.
-    let mut held = std::collections::BTreeSet::new();
+    let mut held = Vec::new();
     for graph in &graphs {
         for node in &graph.nodes {
             let cfg::Op::Call {
@@ -148,18 +176,17 @@ pub fn check_ownership_with_clauses(
         }
     }
     if !held.is_empty() {
-        let mut scratch = body.types.clone();
+        let mut seen = std::collections::HashSet::new();
         for ty in held {
-            hirsel_type_analysis::representation::may_hold_content(
-                &mut scratch,
-                ty,
-                ty,
-                &mut |path| signatures.read(path, body, provider).ok(),
-            );
+            if !seen.insert(ty) {
+                continue;
+            }
+            hirsel_type_analysis::representation::may_hold_content(t, m, ty, ty, &mut |path| {
+                signatures.read(path, &mut body.resolution.reads).ok()
+            });
         }
     }
-    let result_sharing =
-        properties::result_sharing(body, signature, &graphs, &mut signatures, provider, &rows)?;
+    let result_sharing = properties::result_sharing(t, body, &graphs, &mut signatures, &rows)?;
     let mut mutation_sites = Vec::new();
     let mut facts = OwnershipFacts {
         captures: captures.to_vec(),
@@ -168,18 +195,18 @@ pub fn check_ownership_with_clauses(
     };
     let mut diagnostics: Vec<Diagnostic> = vec![];
     let mut replacement_live = std::collections::BTreeMap::new();
-    let mut initial_storage = flow::InitialStorage::new(tree, body, &properties);
+    let mut initial_storage = flow::InitialStorage::new(t, tree, body, &properties);
     // A postcondition observes continuing exits, including modes lost in the body.
     graphs.sort_by_key(|graph| graph.clause.is_some());
     let frame_results: std::collections::BTreeMap<_, _> = results.iter().cloned().collect();
     let capture_crossing_uses =
-        flow::capture_crossing_uses(body, &graphs, &rows, signature, &signatures)?;
+        flow::capture_crossing_uses(t, body, &graphs, &rows, signature, &signatures)?;
     // MODE-2: a `@preserves_unique` body is checked again with its selected
     // parameter and its taken and `mut` inputs entering unique; only whether
     // the selected parameter leaves unique is kept from that run.
     let association = match &signature.kind {
         SignatureKind::Function(f) => {
-            properties::format_association(&signature.types, f, &signature.definition, &signatures)
+            properties::format_association(t, f, signature.definition.path(), &signatures)
         }
         _ => None,
     };
@@ -211,7 +238,8 @@ pub fn check_ownership_with_clauses(
             let mut proof_storage = initial_storage.clone();
             let mut proof_facts = facts.clone();
             let mut proof_diagnostics = Vec::new();
-            flow::check(
+            let checked = flow::check(
+                t,
                 syntax,
                 signature,
                 &mut proof_body,
@@ -230,7 +258,9 @@ pub fn check_ownership_with_clauses(
                 &frame_results,
                 &introductions,
                 Some(parameter),
-            )?;
+            );
+            signatures.record(&mut body.resolution.reads);
+            checked?;
             diagnostics.extend(
                 proof_diagnostics
                     .into_iter()
@@ -249,6 +279,7 @@ pub fn check_ownership_with_clauses(
     }
     for graph in &graphs {
         let checked = flow::check(
+            t,
             syntax,
             signature,
             body,
@@ -267,8 +298,11 @@ pub fn check_ownership_with_clauses(
             &frame_results,
             &introductions,
             None,
-        )?;
+        );
+        signatures.record(&mut body.resolution.reads);
+        let checked = checked?;
         initial_storage.postcondition_inputs(
+            t,
             syntax,
             graph.owner,
             body,
@@ -295,19 +329,19 @@ pub fn check_ownership_with_clauses(
             .iter_mut()
             .find(|(site, _)| *site == hirsel_types::NameSite::Expression(*expression))
         {
-            let mut row = body.types.get(*result).unwrap().clone();
+            let mut row = t.get(*result).unwrap().clone();
             row.modes.relation = arenas.relocate(&row.modes.relation, &Relation::environment());
-            properties.push(properties[result.index()]);
-            *result = body.types.push(row);
+            let old = *result;
+            *result = t.intern(row);
+            properties.inherit(*result, old);
         }
     }
     properties::normalize(
+        t,
         body,
-        signature,
         results,
         &mut facts.physical_projections,
         &mut signatures,
-        provider,
     )?;
     let targets = mutation_sites;
     for expression in targets {
@@ -319,9 +353,7 @@ pub fn check_ownership_with_clauses(
                 body.bindings[place.binding].usage,
                 UseKind::Take | UseKind::Copy
             ) && (place.projections.is_empty()
-                || body
-                    .types
-                    .get(body.bindings[place.binding].ty)
+                || t.get(body.bindings[place.binding].ty)
                     .unwrap()
                     .modes
                     .relation
@@ -346,18 +378,16 @@ pub fn check_ownership_with_clauses(
                     .unwrap()
                     .ty
             });
-        let mut store = body.types.clone();
         let content = if owned_receiver {
             root
         } else {
             storage_content_type(
-                &mut store,
+                t,
                 root,
                 &body.resolution.generic_declarations.clone(),
-                &mut |path| signatures.read(path, body, provider).map(Some),
+                &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
             )?
         };
-        body.types = store;
         let live = replacement_live[&expression];
         facts.replacements.push((expression, content, live));
     }
@@ -378,49 +408,45 @@ pub fn check_ownership_with_clauses(
         })
         .cloned()
         .collect();
-    properties::identity_projections(
-        body,
-        signature,
-        &mut facts.identity_fields,
-        &mut signatures,
-        provider,
-    )?;
+    properties::identity_projections(t, body, &mut facts.identity_fields, &mut signatures)?;
     // Flow refines modes without changing Plain. Reuse those classified rows;
-    // normalization and replacement storage can append further structural rows.
-    let declarations = body.resolution.generic_declarations.clone();
-    let store = body.types.clone();
-    for (id, row) in store.iter() {
-        let mut lookup = |path: &hirsel_syntax::DefPath| {
-            if path == &signature.definition {
-                Ok(Some(std::sync::Arc::new(signature.clone())))
-            } else {
-                signatures.read(path, body, provider).map(Some)
+    // normalization and replacement storage can derive further structural rows.
+    // The published rows are the final tables' graphs and the facts' rows.
+    let mut published = hirsel_modes::rows::BodyRows::new(t, body);
+    for &(_, ty, _) in &facts.replacements {
+        published.note(t, ty);
+    }
+    for &(_, ty) in facts.physical_projections.iter().chain(&facts.field_loans) {
+        published.note(t, ty);
+    }
+    for (_, _, _, parts) in &facts.identity_fields {
+        for &(_, ty) in parts {
+            published.note(t, ty);
+        }
+    }
+    for &(_, ty) in results.iter() {
+        published.note(t, ty);
+    }
+    for &id in published.ids() {
+        let (plain, copyable) = match properties.get(id) {
+            Some(property) => (property.plain, property.copyable),
+            None => {
+                let reads = &mut body.resolution.reads;
+                let mut proof = |property| {
+                    signatures.prove(reads, |memo| {
+                        hirsel_modes::proofs::property(memo, id, property)
+                    })
+                };
+                (
+                    proof(StructuralProperty::Plain)?,
+                    proof(StructuralProperty::Copyable)?,
+                )
             }
-        };
-        let (plain, copyable) = if let Some(property) = properties.get(id.index()) {
-            (property.plain, property.copyable)
-        } else {
-            (
-                structural_property(
-                    &store,
-                    id,
-                    StructuralProperty::Plain,
-                    &declarations,
-                    &mut lookup,
-                )?,
-                structural_property(
-                    &store,
-                    id,
-                    StructuralProperty::Copyable,
-                    &declarations,
-                    &mut lookup,
-                )?,
-            )
         };
         if plain {
             facts.plain_types.insert(id);
         }
-        if copyable && row.modes.multiplicity != Multiplicity::Once {
+        if copyable && t.row(id).modes.multiplicity != Multiplicity::Once {
             facts.silent_drop_types.insert(id);
         }
     }
@@ -460,6 +486,7 @@ fn suffix(rule: &str) -> u32 {
 /// Build internal clause headers from independently checked formal rows.
 /// Entry clauses keep entry modes; postconditions carry continuing-exit modes.
 pub fn checked_clause_types(
+    t: &TypeInterner,
     body: &mut CheckedBody,
     clauses: &[(ExprId, TypeId)],
 ) -> Result<Vec<TypeId>, GraphError> {
@@ -477,7 +504,7 @@ pub fn checked_clause_types(
         .iter()
         .map(|(expression, original)| {
             let scope = NameSite::Expression(*expression);
-            let mut row = body.types.get(*original).unwrap().clone();
+            let mut row = t.get(*original).unwrap().clone();
             let TypeKind::Function(function) = &mut row.kind else {
                 return Ok(*original);
             };
@@ -488,8 +515,8 @@ pub fn checked_clause_types(
                 }
             }
             function.parameters = parameters.into();
-            let row = body.types.push(row);
-            abstract_parameter_scope(&mut body.types, row, body.lexical.site(scope))
+            let row = t.intern(row);
+            abstract_parameter_scope(t, row, body.lexical.site(scope))
         })
         .collect()
 }

@@ -20,8 +20,8 @@ pub fn check(arguments: &[String], context: &str) {
         std::fs::write(source.with_extension("hir.json"), manifest.to_string()).unwrap();
         std::fs::write(dir.join("grants.json"), "{}").unwrap();
         let binary = dir.join("vectors");
-        native::build_path_native(&source, &binary, TargetSpec::x86_64_unknown_linux_gnu(),
-            BuildProfile::Release, None).unwrap().unwrap();
+        native::build_path_native_backend_with_validation(&source, &binary, TargetSpec::x86_64_unknown_linux_gnu(),
+            BuildProfile::Release, native::Backend::Llvm, None, false, hirsel_engine::Verify::On, native::Validation::EveryStage).unwrap().unwrap();
         binary
     });
     let result = Command::new(checker)

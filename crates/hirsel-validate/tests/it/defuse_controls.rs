@@ -13,10 +13,8 @@ enum Mutation {
 fn fixture(mutation: Mutation) -> Fixture {
     let mut f = Fixture::unit();
     let mut signature = function_signature("Token", vec![], TypeKind::Tuple(vec![].into()));
-    let scalar = signature
-        .types
-        .push(ty(TypeKind::Primitive(Primitive::U64)));
-    let representation = signature.types.push(ty(TypeKind::Record(
+    let scalar = interner().intern(ty(TypeKind::Primitive(Primitive::U64)));
+    let representation = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "value".into(),
             ty: scalar,
@@ -47,11 +45,11 @@ fn fixture(mutation: Mutation) -> Fixture {
         fact: None,
         captures: None,
     });
-    f.signatures.insert(path("Token"), signature);
+    f.signatures.insert(id("Token"), signature);
     let input = f.slot(TypeKind::Primitive(Primitive::U64), Storage::Temporary);
     let parent = f.slot(
         TypeKind::Named {
-            definition: path("Token"),
+            definition: id("Token"),
             arguments: vec![].into(),
         },
         Storage::Temporary,
@@ -103,7 +101,11 @@ fn fixture(mutation: Mutation) -> Fixture {
     }
     f.body().blocks[0].terminator = ret(0, cleanup);
     if matches!(mutation, Mutation::ForeignModule) {
-        f.definition.path.0.modules = vec!["client".into()];
+        {
+            let mut path = f.definition.path.path().clone();
+            path.0.modules = vec!["client".into()];
+            f.definition.path = DefId::intern(&path);
+        }
     }
     f
 }

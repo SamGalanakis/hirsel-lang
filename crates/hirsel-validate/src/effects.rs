@@ -11,10 +11,9 @@ impl Checker<'_> {
         if self.site.body == self.definition.entry {
             return None;
         }
-        let inputs = self.scratch.definition_inputs(self.definition);
+        let inputs = self.scratch.definition_inputs(self.t, self.definition);
         let TypeKind::Function(function) = &self
-            .definition
-            .types
+            .t
             .get(inputs.producers[self.site.body.0 as usize].last_header?)
             .unwrap()
             .kind
@@ -28,7 +27,7 @@ impl Checker<'_> {
         if self.site.body == self.definition.entry {
             return self
                 .signatures
-                .get(&self.definition.path)
+                .get(self.definition.path)
                 .and_then(|signature| {
                     if let SignatureKind::Function(function) = &signature.kind {
                         Some(function)
@@ -52,7 +51,7 @@ impl Checker<'_> {
         if self.site.body != self.definition.entry {
             return None;
         }
-        match &self.signatures.get(&self.definition.path)?.kind {
+        match &self.signatures.get(self.definition.path)?.kind {
             SignatureKind::Type(d) if d.resource && d.capability.is_some() => Some(d),
             _ => None,
         }
@@ -64,8 +63,7 @@ impl Checker<'_> {
         let mut access = self.body.places[place.0 as usize].clone();
         let path = access.projection.clone();
         let root = self
-            .definition
-            .types
+            .t
             .get(self.body.locals[access.root.0 as usize].ty)
             .unwrap();
         if !path.is_empty() && root.modes.relation.scoped(|o| self.arena_place(o)) {
@@ -74,13 +72,13 @@ impl Checker<'_> {
         if unique {
             return false;
         }
-        let mut store = self.working_store();
+        let store = self.t;
         for depth in 0..path.len() {
             access.projection.truncate(depth);
-            let Some(owner) = self.projection_type(&mut store, &access, |_, _| None) else {
+            let Some(owner) = self.projection_type(store, &access, |_, _| None) else {
                 return true;
             };
-            let Some(kind) = self.layout(&mut store, owner) else {
+            let Some(kind) = self.layout(store, owner) else {
                 return true;
             };
             if matches!(
@@ -110,7 +108,7 @@ impl Checker<'_> {
             let mut seeds = vec![];
             let plain = |place: PlaceId| {
                 self.bound(
-                    &self.definition.types,
+                    self.t,
                     self.place_type(place),
                     hirsel_types::Bound::Plain,
                     self.generic_declarations(),
@@ -160,24 +158,18 @@ impl Checker<'_> {
                                 self.signatures.get(path).and_then(|signature| {
                                     match &signature.kind {
                                         SignatureKind::Function(function) => {
-                                            Some((&signature.types, function))
+                                            Some((self.t, function))
                                         }
                                         _ => None,
                                     }
                                 })
                             }
-                            Callee::Indirect { value, .. } => match &self
-                                .definition
-                                .types
-                                .get(self.place_type(value.place))
-                                .unwrap()
-                                .kind
-                            {
-                                TypeKind::Function(function) => {
-                                    Some((&self.definition.types, function))
+                            Callee::Indirect { value, .. } => {
+                                match &self.t.get(self.place_type(value.place)).unwrap().kind {
+                                    TypeKind::Function(function) => Some((self.t, function)),
+                                    _ => None,
                                 }
-                                _ => None,
-                            },
+                            }
                         };
                         if let Some((types, function)) = callable {
                             let locality = &types.get(function.result).unwrap().modes.relation;
@@ -229,7 +221,7 @@ impl Checker<'_> {
         }
         // Explicit worklist, including nominal representations. A recursive
         // owned shape cannot have a fixed-size construction destination.
-        let mut store = self.working_store();
+        let store = self.t;
         let mut todo = vec![(root, None)];
         let mut active = BTreeSet::new();
         let mut fixed = true;
@@ -284,7 +276,7 @@ impl Checker<'_> {
                         fixed = false;
                         break;
                     }
-                    let Some(signature) = self.signatures.get(&definition) else {
+                    let Some(signature) = self.signatures.get(definition) else {
                         fixed = false;
                         break;
                     };
@@ -296,11 +288,11 @@ impl Checker<'_> {
                         fixed = false;
                         break;
                     };
-                    let representation = hirsel_types::substitute_type(
-                        &signature.types,
+                    let representation = hirsel_types::substitute(
+                        self.t,
+                        self.memo,
                         representation,
-                        &mut store,
-                        hirsel_types::Substitution {
+                        &hirsel_types::Substitution {
                             binder: Some(hirsel_types::GenericBinder::Bound(0)),
                             roles: &signature.metadata.roles,
                             arguments: &arguments,
@@ -332,12 +324,7 @@ impl Checker<'_> {
         if !self.noalloc_body() {
             return;
         }
-        let row = self
-            .definition
-            .types
-            .get(self.place_type(destination))
-            .unwrap()
-            .clone();
+        let row = self.t.get(self.place_type(destination)).unwrap().clone();
         if let Rvalue::Unary {
             op: hirsel_syntax::UnaryOp::Unique,
             value,
@@ -480,7 +467,7 @@ impl Checker<'_> {
             .iter()
             .map(|parameter| {
                 self.authority_with_generics(
-                    &self.definition.types,
+                    self.t,
                     self.body.locals[parameter.0 as usize].ty,
                     &self.generic_declarations(),
                 )
@@ -537,11 +524,8 @@ impl Checker<'_> {
             if !seen.insert(place.root.0) {
                 continue;
             }
-            if self.authority_with_generics(
-                &self.definition.types,
-                place.ty,
-                &self.generic_declarations(),
-            ) == AuthoritySummary::inert()
+            if self.authority_with_generics(self.t, place.ty, &self.generic_declarations())
+                == AuthoritySummary::inert()
             {
                 continue;
             }
@@ -569,7 +553,7 @@ impl Checker<'_> {
                     super::variant_brands::Producer::Transfer(source) => pending.push(*source),
                     super::variant_brands::Producer::Closure(callback)
                         if !self
-                            .lifetime(&self.definition.types.get(place.ty).unwrap().modes.relation)
+                            .lifetime(&self.t.get(place.ty).unwrap().modes.relation)
                             .is_global() =>
                     {
                         let mut found = false;
@@ -627,18 +611,12 @@ impl Checker<'_> {
                 .parameters
                 .get(argument.parameter.0 as usize)
                 .is_some_and(|parameter| parameter.passing == hirsel_syntax::PassingMode::Borrow)
-                && matches!(
-                    self.definition.types.get(ty).unwrap().kind,
-                    TypeKind::Function(_)
-                )
+                && matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_))
                 && !self
-                    .lifetime(&self.definition.types.get(ty).unwrap().modes.relation)
+                    .lifetime(&self.t.get(ty).unwrap().modes.relation)
                     .is_global()
-                && self.authority_with_generics(
-                    &self.definition.types,
-                    ty,
-                    &self.generic_declarations(),
-                ) == AuthoritySummary::Unknown
+                && self.authority_with_generics(self.t, ty, &self.generic_declarations())
+                    == AuthoritySummary::Unknown
         });
         // Named-body invocation checks elsewhere retain their existing policy.
         // This additional proof is the exact unrestricted parameter invocation
@@ -648,7 +626,7 @@ impl Checker<'_> {
                 let place = &self.body.places[value.place.0 as usize];
                 self.body.locals[place.root.0 as usize].storage == Storage::Parameter
                     && !self
-                        .lifetime(&self.definition.types.get(place.ty).unwrap().modes.relation)
+                        .lifetime(&self.t.get(place.ty).unwrap().modes.relation)
                         .is_global()
                     && matches!(function.uses, Uses::Unrestricted)
             } else {
@@ -665,11 +643,9 @@ impl Checker<'_> {
         let type_authorities: Vec<_> = generics
             .iter()
             .map(|argument| match argument {
-                GenericArgument::Type(ty) => self.authority_with_generics(
-                    &self.definition.types,
-                    *ty,
-                    &self.generic_declarations(),
-                ),
+                GenericArgument::Type(ty) => {
+                    self.authority_with_generics(self.t, *ty, &self.generic_declarations())
+                }
                 _ => AuthoritySummary::inert(),
             })
             .collect();
@@ -701,8 +677,7 @@ impl Checker<'_> {
                 .is_some_and(|parameter| parameter.passing != hirsel_syntax::PassingMode::Take)
             {
                 if let TypeKind::Function(callback) = &self
-                    .definition
-                    .types
+                    .t
                     .get(self.body.places[argument.value.place.0 as usize].ty)
                     .unwrap()
                     .kind
@@ -713,7 +688,7 @@ impl Checker<'_> {
                     if function.parameters[argument.parameter.0 as usize].passing
                         == hirsel_syntax::PassingMode::Borrow
                         && self.authority_with_generics(
-                            &self.definition.types,
+                            self.t,
                             self.place_type(argument.value.place),
                             &self.generic_declarations(),
                         ) == AuthoritySummary::Unknown
@@ -726,7 +701,7 @@ impl Checker<'_> {
         }
         if let Callee::Indirect { value, .. } = callee {
             let place = &self.body.places[value.place.0 as usize];
-            let row = self.definition.types.get(place.ty).unwrap();
+            let row = self.t.get(place.ty).unwrap();
             let parameter = self.body.locals[place.root.0 as usize].storage == Storage::Parameter;
             if !self.lifetime(&row.modes.relation).is_global() {
                 // Known capture authority is checked at its source in flow.
@@ -772,12 +747,10 @@ impl Checker<'_> {
         };
         let additional_callbacks = arguments.iter().any(|argument| {
             let ty = self.place_type(argument.value.place);
-            matches!(
-                self.definition.types.get(ty).unwrap().kind,
-                TypeKind::Function(_)
-            ) && !self
-                .authority_with_generics(&self.definition.types, ty, &self.generic_declarations())
-                .is_subset_of(&allowed)
+            matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_))
+                && !self
+                    .authority_with_generics(self.t, ty, &self.generic_declarations())
+                    .is_subset_of(&allowed)
         });
         let provided_unknown = (self.site.body != self.definition.entry
             || scoped_unknown_callback && selected.is_some())
@@ -787,14 +760,9 @@ impl Checker<'_> {
             && selected.as_ref().is_none_or(|selected| {
                 arguments.iter().all(|argument| {
                     let ty = self.place_type(argument.value.place);
-                    !matches!(
-                        self.definition.types.get(ty).unwrap().kind,
-                        TypeKind::Function(_)
-                    ) || self.authority_with_generics(
-                        &self.definition.types,
-                        ty,
-                        &self.generic_declarations(),
-                    ) != AuthoritySummary::Unknown
+                    !matches!(self.t.get(ty).unwrap().kind, TypeKind::Function(_))
+                        || self.authority_with_generics(self.t, ty, &self.generic_declarations())
+                            != AuthoritySummary::Unknown
                         || self.parameter_callback(argument.value.place, Some(selected))
                 })
             });

@@ -393,7 +393,11 @@ fn scalar_harness(program: &Program) -> (String, String) {
         let site = site_code(
             &path(case.name),
             &revision(case.name),
-            hirsel_lir::ir::SiteRange { start: 10, end: 20 },
+            hirsel_lir::ir::SiteRange {
+                source: 0,
+                start: 10,
+                end: 20,
+            },
         );
         let values = operands(case.kind);
         let rights = if binary { values.clone() } else { vec![0] };
@@ -413,7 +417,6 @@ fn scalar_harness(program: &Program) -> (String, String) {
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn every_target_executes_the_scalar_boundary_matrix() {
-    let codes = failure_codes();
     let input = input();
     for target in TargetSpec::executed() {
         let program = scalar_program(&target);
@@ -422,22 +425,19 @@ fn every_target_executes_the_scalar_boundary_matrix() {
             let dir = scratch(&format!("scalar-{}-{opt:?}", target.triple));
             let bytes = {
                 let inputs = EmitInputs {
+                    index: None,
                     verify_backend: true,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    callbacks: false,
                     foreign: &hirsel_lir::emission::NO_FOREIGN,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -446,7 +446,12 @@ fn every_target_executes_the_scalar_boundary_matrix() {
             };
             let source = dir.join("harness.c");
             std::fs::write(&source, &harness).unwrap();
-            let executable = link(&target, &dir, &[("scalar.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("scalar.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             let actual = run(&target, &executable);
             if actual != expected {
                 let first = actual
@@ -555,7 +560,11 @@ fn abi_expected() -> String {
         let site = site_code(
             &path(unit),
             &revision(unit),
-            hirsel_lir::ir::SiteRange { start, end },
+            hirsel_lir::ir::SiteRange {
+                source: 0,
+                start,
+                end,
+            },
         );
         format!("fail {} {} {site:016x}", code.kind, code.rule)
     };
@@ -611,26 +620,22 @@ fn every_target_executes_the_abi_probes() {
         for opt in OPTS {
             let dir = scratch(&format!("abi-{}-{opt:?}", target.triple));
             let (bytes, names) = {
-                let codes = failure_codes();
                 let input = input();
                 let program = abi_program(&target);
                 let inputs = EmitInputs {
+                    index: None,
                     verify_backend: true,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    callbacks: false,
                     foreign: &hirsel_lir::emission::NO_FOREIGN,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
@@ -647,13 +652,22 @@ fn every_target_executes_the_abi_probes() {
                 // The imports are the C-defined entry, the runtime and toolchain routines.
                 let host = symbol_name(&path(HOST_SCALE), Some(&instance(HOST_SCALE)));
                 assert!(artifact.imports.iter().any(|i| i.name == host));
-                (artifact.bytes, (abi_names(&program), abi_entries(&program)))
+                let glue = program.glue();
+                (
+                    [artifact.bytes, glue],
+                    (abi_names(&program), abi_entries(&program)),
+                )
             };
             std::fs::write(dir.join("names.h"), names.0).unwrap();
             std::fs::write(dir.join("entries.h"), names.1).unwrap();
             let source = dir.join("abi_harness.c");
             std::fs::write(&source, ABI_HARNESS).unwrap();
-            let executable = link(&target, &dir, &[("abi.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("abi.o", &bytes[0]), ("program-glue.o", &bytes[1])],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,
@@ -677,7 +691,11 @@ fn heap_expected() -> String {
     let site = site_code(
         &path("list_get"),
         &revision("list_get"),
-        hirsel_lir::ir::SiteRange { start: 60, end: 70 },
+        hirsel_lir::ir::SiteRange {
+            source: 0,
+            start: 60,
+            end: 70,
+        },
     );
     // Over i in 0..10000: box_roundtrip gives i, nested gives i, reuse gives i, and
     // list_get gives i unless i % 4 == 3, when it fails.
@@ -703,11 +721,16 @@ fn heap_expected() -> String {
 #[ignore = "native: run by tools/check-native.sh"]
 fn every_target_executes_the_heap_probes() {
     let expected = heap_expected();
-    for target in TargetSpec::executed() {
-        for opt in OPTS {
-            let dir = scratch(&format!("heap-{}-{opt:?}", target.triple));
+    // With debug intervals recorded, each unit object is rebuilt without its DWARF
+    // (`hirsel_llvm`'s `debug::split`) and must run the same.
+    for (target, opt, debug) in TargetSpec::executed()
+        .into_iter()
+        .flat_map(|t| OPTS.map(|o| (t.clone(), o)))
+        .flat_map(|(t, o)| [(t.clone(), o, false), (t, o, true)])
+    {
+        {
+            let dir = scratch(&format!("heap-{}-{opt:?}-{debug}", target.triple));
             let (bytes, entries) = {
-                let codes = failure_codes();
                 let input = input();
                 let program = heap_program(&target);
                 let entries: String = HEAP_ENTRIES
@@ -715,39 +738,45 @@ fn every_target_executes_the_heap_probes() {
                     .map(|name| program.c_call(name, &format!("call_{name}")))
                     .collect();
                 let inputs = EmitInputs {
+                    index: None,
                     verify_backend: true,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
+                    keys: &program.table.keys,
                     manifest: &program.manifest,
-                    failures: &codes,
                     statics: &program.statics,
-                    finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
-                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+                    callbacks: false,
                     foreign: &hirsel_lir::emission::NO_FOREIGN,
-                    registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                        &program.table.table,
-                        &program.finalizers,
-                    ),
+                    tracking: false,
                     opt,
                     measurement: false,
                     fuel: false,
                 };
-                (
-                    emit_object(&program.units(), &inputs).unwrap().bytes,
-                    entries,
-                )
+                let profile = hirsel_lir::debug::Profile {
+                    debug,
+                    sources: None,
+                };
+                let object =
+                    hirsel_llvm::emit_object_profile(&program.units(), &inputs, profile).unwrap();
+                assert_eq!(object.debug.is_empty(), !debug);
+                ([object.bytes, program.glue()], entries)
             };
             std::fs::write(dir.join("entries.h"), entries).unwrap();
             let source = dir.join("heap_harness.c");
             std::fs::write(&source, HEAP_HARNESS).unwrap();
-            let executable = link(&target, &dir, &[("heap.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("heap.o", &bytes[0]), ("program-glue.o", &bytes[1])],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,
-                "{} {opt:?}",
+                "{} {opt:?} debug {debug}",
                 target.triple
             );
         }

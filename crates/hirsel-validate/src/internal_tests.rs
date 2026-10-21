@@ -8,8 +8,7 @@ use hirsel_types::*;
 #[test]
 fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     let mut f = captured_generic_copy(true, false, false);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -18,12 +17,21 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     };
     *bounds = vec![Bound::Flat].into();
     let body = &f.definition.bodies[1];
-    let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
-    let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+    let declarations = typing::declaration_tables(
+        interner(),
+        &f.definition,
+        &crate::input::Reader::new(&f.signatures),
+    )
+    .unwrap();
+    let scratch = scratch::Scratch::new(f.definition.bodies.len());
+    let reader = crate::input::Reader::new(&f.signatures);
+    let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
+        t: interner(),
+        memo: &memo,
         body,
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -38,12 +46,8 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
         static_data: None,
         proof_errors: std::cell::RefCell::new(Vec::new()),
     };
-    let mut types = f.definition.types.clone();
-    let weakened = checker.weakened_type(
-        &mut types,
-        body.places[1].ty,
-        &checker.generic_declarations(),
-    );
+    let types = interner();
+    let weakened = checker.weakened_type(types, body.places[1].ty, &checker.generic_declarations());
     assert_eq!(
         types.get(weakened).unwrap().modes.sendability,
         Sendability::Sendable
@@ -53,8 +57,7 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
 #[test]
 fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let mut f = captured_generic_copy(false, true, false);
-    let SignatureKind::Function(owner) =
-        &mut f.signatures.get_mut(&f.definition.path).unwrap().kind
+    let SignatureKind::Function(owner) = &mut f.signatures.get_mut(f.definition.path).unwrap().kind
     else {
         panic!()
     };
@@ -64,19 +67,28 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     }]
     .into();
     let parameter = f.definition.bodies[1].places[1].ty;
-    let mut row = f.definition.types.get(parameter).unwrap().clone();
+    let mut row = interner().get(parameter).unwrap().clone();
     row.modes.relation = Relation::global();
     let parameter = f.definition.types.push(row);
     let mut row = ty(TypeKind::Box(parameter));
     row.modes.uniqueness = Uniqueness::Unique;
     let actual = f.definition.types.push(row);
     let body = &f.definition.bodies[1];
-    let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
-    let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+    let declarations = typing::declaration_tables(
+        interner(),
+        &f.definition,
+        &crate::input::Reader::new(&f.signatures),
+    )
+    .unwrap();
+    let scratch = scratch::Scratch::new(f.definition.bodies.len());
+    let reader = crate::input::Reader::new(&f.signatures);
+    let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
+        t: interner(),
+        memo: &memo,
         body,
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -91,15 +103,15 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
         static_data: None,
         proof_errors: std::cell::RefCell::new(Vec::new()),
     };
-    let mut types = f.definition.types.clone();
-    let mut declaration = TypeStore::default();
+    let types = interner();
+    let declaration = interner();
     let formal = declaration.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
     let arguments = [GenericArgument::Type(actual)];
     let declarations = checker.generic_declarations();
     let expected = checker
-        .imported_in(&declaration, formal, &mut types, &arguments, &declarations)
+        .imported_in(formal, &arguments, &declarations)
         .unwrap();
     assert_ne!(
         types.get(expected).unwrap().modes.sendability,
@@ -112,18 +124,16 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let mut forged_row = types.get(actual).unwrap().clone();
     forged_row.kind = TypeKind::Box(forged_parameter);
     let forged_actual = types.push(forged_row);
-    let forged = hirsel_types::normalize_type_properties(
-        &mut types,
-        forged_actual,
-        &declarations,
-        &mut |_| Ok::<_, hirsel_types::QueryError>(None),
-    )
-    .unwrap();
+    let forged =
+        hirsel_types::normalize_type_properties(types, forged_actual, &declarations, &mut |_| {
+            Ok::<_, hirsel_types::QueryError>(None)
+        })
+        .unwrap();
     assert_eq!(
         types.get(forged).unwrap().modes.sendability,
         Sendability::Sendable
     );
-    assert!(!semantic_equal(&types, expected, &types, forged).unwrap());
+    assert!(!types.semantic_eq(expected, forged));
 }
 
 #[test]
@@ -160,12 +170,21 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
             "{kind:?}: {kinds:?}"
         );
         let body = &f.definition.bodies[0];
-        let declarations = typing::declaration_tables(&f.definition, &f.signatures).unwrap();
-        let scratch = scratch::Scratch::new(&f.definition.types, f.definition.bodies.len());
+        let declarations = typing::declaration_tables(
+            interner(),
+            &f.definition,
+            &crate::input::Reader::new(&f.signatures),
+        )
+        .unwrap();
+        let scratch = scratch::Scratch::new(f.definition.bodies.len());
+        let reader = crate::input::Reader::new(&f.signatures);
+        let memo = TypeMemo::new();
         let checker = Checker {
             definition: &f.definition,
+            t: interner(),
+            memo: &memo,
             body,
-            signatures: &f.signatures,
+            signatures: &reader,
             declarations: &declarations,
             scratch: &scratch,
             contract: false,
@@ -182,7 +201,7 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
         };
         assert_eq!(
             checker.bound(
-                &f.definition.types,
+                interner(),
                 body.places[source as usize].ty,
                 Bound::Key,
                 &GenericDeclarations::default()
@@ -213,8 +232,8 @@ fn erased_capture_authority_is_checked_at_its_generic_binder() {
         ))]
         .into(),
     )));
-    f.result = signature.types.push(iterator.clone());
-    assert!(typing::signature_valid(&signature));
+    f.result = interner().intern(iterator.clone());
+    assert!(typing::signature_valid(interner(), &signature));
     iterator.erased_captures = Some(ErasedCaptures::Known(AuthoritySummary::Known(
         vec![AuthorityTerm::TypeParameter(TypeParameterRef::Bound {
             depth: 1,
@@ -222,12 +241,12 @@ fn erased_capture_authority_is_checked_at_its_generic_binder() {
         })]
         .into(),
     )));
-    let forged = signature.types.push(iterator);
+    let forged = interner().intern(iterator);
     let SignatureKind::Function(f) = &mut signature.kind else {
         panic!()
     };
     f.result = forged;
-    assert!(!typing::signature_valid(&signature));
+    assert!(!typing::signature_valid(interner(), &signature));
 }
 
 #[test]
@@ -263,8 +282,8 @@ fn callable_authority_uses_and_size_constraints_reject_foreign_binders() {
                 1 => f.uses = Uses::Only(authority),
                 2 => signature.metadata.schema = vec![SchemaConstraint::PositiveSize(sp)],
                 _ => {
-                    f.result = signature.types.push(ty(TypeKind::Named {
-                        definition: path("Sized"),
+                    f.result = interner().intern(ty(TypeKind::Named {
+                        definition: id("Sized"),
                         arguments: vec![GenericArgument::Size(Size::Parameter(sp))].into(),
                     }))
                 }
@@ -272,12 +291,12 @@ fn callable_authority_uses_and_size_constraints_reject_foreign_binders() {
         };
         set(&mut signature, 0);
         assert!(
-            typing::signature_valid(&signature),
+            typing::signature_valid(interner(), &signature),
             "valid consumer {consumer}"
         );
         set(&mut signature, 1);
         assert!(
-            !typing::signature_valid(&signature),
+            !typing::signature_valid(interner(), &signature),
             "forged consumer {consumer}"
         );
     }
@@ -290,7 +309,7 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
         let source = param(
             &mut f,
             TypeKind::Named {
-                definition: path("Gate"),
+                definition: id("Gate"),
                 arguments: vec![].into(),
             },
         );
@@ -303,15 +322,19 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
         } else {
             AuthoritySummary::inert()
         };
-        f.signatures.insert(path("Gate"), signature);
+        f.signatures.insert(id("Gate"), signature);
         owner_sig(&mut f, &[PassingMode::Borrow]);
         let body = &f.definition.bodies[0];
+        let reader = crate::input::Reader::new(&f.signatures);
+        let memo = TypeMemo::new();
         let checker = Checker {
             definition: &f.definition,
+            t: interner(),
+            memo: &memo,
             body,
-            signatures: &f.signatures,
-            declarations: &typing::declaration_tables(&f.definition, &f.signatures).unwrap(),
-            scratch: &scratch::Scratch::new(&f.definition.types, f.definition.bodies.len()),
+            signatures: &reader,
+            declarations: &typing::declaration_tables(interner(), &f.definition, &reader).unwrap(),
+            scratch: &scratch::Scratch::new(f.definition.bodies.len()),
             contract: false,
             site: Site {
                 body: BodyId(0),
@@ -328,7 +351,7 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
             AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Gate"))].into());
         assert_eq!(
             checker.authority_with_generics(
-                &f.definition.types,
+                interner(),
                 body.places[source as usize].ty,
                 &GenericDeclarations::default()
             ),
@@ -340,7 +363,7 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
 #[test]
 fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
     let mut f = Fixture::unit();
-    let mut declaration = TypeStore::default();
+    let declaration = interner();
     let parameter = declaration.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
@@ -349,15 +372,14 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
         arguments: vec![GenericArgument::Type(parameter)].into(),
     }));
     let next = declaration.push(ty(TypeKind::Named {
-        definition: path("Grow"),
+        definition: id("Grow"),
         arguments: vec![GenericArgument::Type(list)].into(),
     }));
     let representation = declaration.push(ty(TypeKind::Box(next)));
     f.signatures.insert(
-        path("Grow"),
+        id("Grow"),
         Signature {
-            definition: path("Grow"),
-            types: declaration,
+            definition: id("Grow"),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
@@ -389,15 +411,19 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
         .types
         .push(ty(TypeKind::Primitive(Primitive::U32)));
     let root = f.definition.types.push(ty(TypeKind::Named {
-        definition: path("Grow"),
+        definition: id("Grow"),
         arguments: vec![GenericArgument::Type(scalar)].into(),
     }));
     let declarations = vec![GenericDeclarations::default()];
-    let scratch = scratch::Scratch::new(&f.definition.types, 1);
+    let scratch = scratch::Scratch::new(1);
+    let reader = crate::input::Reader::new(&f.signatures);
+    let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
+        t: interner(),
+        memo: &memo,
         body: &f.definition.bodies[0],
-        signatures: &f.signatures,
+        signatures: &reader,
         declarations: &declarations,
         scratch: &scratch,
         contract: false,
@@ -412,7 +438,7 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
         static_data: None,
         proof_errors: std::cell::RefCell::new(Vec::new()),
     };
-    assert!(!checker.bound(&f.definition.types, root, Bound::Copyable, &declarations[0]));
+    assert!(!checker.bound(interner(), root, Bound::Copyable, &declarations[0]));
     let report = Validation {
         violations: checker.proof_errors.into_inner(),
     };
@@ -447,12 +473,11 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
             };
             let mut root = base;
             for n in 0..depth {
-                let definition = path(&format!("D{n}"));
+                let definition = id(&format!("D{n}"));
                 f.signatures.insert(
-                    definition.clone(),
+                    definition,
                     Signature {
-                        definition: definition.clone(),
-                        types: f.definition.types.clone(),
+                        definition,
                         metadata: SignatureMetadata::default(),
                         fingerprint: ContentHash::default(),
                         kind: SignatureKind::Type(TypeDefinition {
@@ -482,11 +507,15 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                 }));
             }
             let declarations = vec![GenericDeclarations::default()];
-            let scratch = scratch::Scratch::new(&f.definition.types, 1);
+            let scratch = scratch::Scratch::new(1);
+            let reader = crate::input::Reader::new(&f.signatures);
+            let memo = TypeMemo::new();
             let mut checker = Checker {
                 definition: &f.definition,
+                t: interner(),
+                memo: &memo,
                 body: &f.definition.bodies[0],
-                signatures: &f.signatures,
+                signatures: &reader,
                 declarations: &declarations,
                 scratch: &scratch,
                 contract: false,
@@ -501,11 +530,11 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                 static_data: None,
                 proof_errors: std::cell::RefCell::new(Vec::new()),
             };
-            let mut store = f.definition.types.clone();
-            assert!(checker.bound(&store, root, Bound::NoallocDrop, &declarations[0]));
-            assert_eq!(checker.packed_carrier(&mut store, root), packed);
+            let store = interner();
+            assert!(checker.bound(store, root, Bound::NoallocDrop, &declarations[0]));
+            assert_eq!(checker.packed_carrier(store, root), packed);
             assert_eq!(
-                checker.layout(&mut store, root),
+                checker.layout(store, root),
                 Some(if packed {
                     match store.get(base).unwrap().kind {
                         TypeKind::Builtin { ref arguments, .. } => store

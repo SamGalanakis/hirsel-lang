@@ -1,61 +1,85 @@
-use crate::layered::Layered;
+use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod arm_fixes;
+mod frontier;
+pub use frontier::FrontChanges;
+mod parallel;
+pub(crate) mod s1;
+pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
+pub use s1::{LoweringResult, S1LowerWork};
+/// One S1 root's captured outcome. Phase, tooling limit and complete execution
+/// reads belong to this root, including when another root finished afterward.
+#[derive(Clone, Debug)]
+pub struct MaterializationResult {
+    pub definition: DefPath,
+    pub result: Result<hirsel_tir::Materialized, QueryError>,
+    pub phase: Option<QueryKind>,
+    pub limit: Option<hirsel_tir::ToolingLimit>,
+    pub reads: Arc<Reads>,
+}
+
 mod dead_arms;
 mod definition_hash;
 pub use definition_hash::DefinitionHashes;
 mod dependencies;
 pub(crate) mod generation;
 pub use generation::GeneratedSource;
-mod lowering;
-mod package_image;
-pub(crate) use package_image::{ImageInput, ImagePackage, PackageImage};
-mod package_snapshot;
+pub(crate) mod lowering;
+pub(crate) mod memos;
+pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
-mod precheck;
-pub use precheck::Precheck;
-pub(crate) use precheck::PrecheckWriter;
+mod image;
+pub(crate) use image::ImageBuild;
+mod persistent;
+mod retention;
 mod safety;
+mod summaries;
 pub use safety::{Escape, UnsafeReach};
-mod signature_input;
 mod type_groups;
-pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
 use hirsel_intern::timings::{self, Count, Interval, Phase};
 use hirsel_span::Span;
-use hirsel_syntax::{ItemKind, ItemPath, ItemSyntax};
-pub(crate) use package_snapshot::PackageSnapshot;
-pub use signature_input::SignatureInput;
-pub(crate) use signature_input::release_signature_inputs;
+use hirsel_syntax::{DefId, ItemKind, ItemPath, ItemSyntax};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    rc::Rc,
     sync::Arc,
 };
 
 /// Signature normalization only reads the declared header and its contracts (LANG-6).
 /// Revision-1 construction seam; the driver publishes its owned output as SignatureRef.
-pub trait SignaturePhase {
+pub trait SignaturePhase: Send + Sync {
     fn signature_items(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         items: &[Arc<ItemSyntax>],
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let syntax = items.first().ok_or(QueryError::NotImplemented)?;
-        self.signature(syntax.clone(), provider)
+        self.signature(t, m, syntax.clone(), declarations, products, provider)
     }
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
     /// A recursive type group member's provisional signature at `stage`,
     /// which another member reads; it publishes nothing.
     fn staged_signature(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _items: &[Arc<ItemSyntax>],
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
         _stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
@@ -67,22 +91,21 @@ pub trait SignaturePhase {
 /// Installed leaf adapters may also return unavailable or operational errors.
 #[derive(Default)]
 pub struct PhaseAdapters {
-    pub lexer: Option<Rc<dyn LexerPhase>>,
-    pub parser: Option<Rc<dyn ParserPhase>>,
-    pub formatter: Option<Rc<dyn FormatterPhase>>,
-    pub resolver: Option<Rc<dyn ResolverPhase>>,
-    pub signature: Option<Rc<dyn SignaturePhase>>,
-    pub checker: Option<Rc<dyn CheckerPhase>>,
-    pub modes: Option<Rc<dyn ModesPhase>>,
-    pub lowering: Option<Rc<dyn LoweringPhase>>,
+    pub lexer: Option<Arc<dyn LexerPhase>>,
+    pub parser: Option<Arc<dyn ParserPhase>>,
+    pub formatter: Option<Arc<dyn FormatterPhase>>,
+    pub resolver: Option<Arc<dyn ResolverPhase>>,
+    pub signature: Option<Arc<dyn SignaturePhase>>,
+    pub checker: Option<Arc<dyn CheckerPhase>>,
+    pub modes: Option<Arc<dyn ModesPhase>>,
+    pub lowering: Option<Arc<dyn LoweringPhase>>,
     pub interpreter: Option<Box<dyn InterpreterPhase>>,
-    pub compiler_state: Option<Rc<std::cell::RefCell<CompilerState>>>,
     /// The front phases a complete compiler was built from (`PhaseAdapters::compiler`).
-    pub phases: Option<Rc<dyn Phases>>,
+    pub phases: Option<Arc<dyn Phases>>,
 }
 
 /// Reads survive errors and missing phases, rather than being lost in QueryError.
-#[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct DependencyReads {
     pub operational_failure: Option<hirsel_types::OperationalFailure>,
     pub signatures: Vec<SignatureDependency>,
@@ -94,35 +117,6 @@ pub struct DependencyReads {
     /// Other items' name sites a result cites, as read (`cite_name`).
     pub citations: Vec<(DefPath, Option<Span>)>,
 }
-#[derive(Clone)]
-struct Cached<T> {
-    id: u64,
-    key: DefinitionKey,
-    reads: DependencyReads,
-    result: Result<Arc<QueryOutput<T>>, QueryError>,
-    lookups: dependencies::LookupInputs,
-    executed: ExecutionReads,
-    /// Body-only receipts, separate from the public query schemas and fingerprints.
-    representations: BTreeMap<DefPath, ContentHash>,
-    /// A signature's fingerprint coverage: the adapter's own dependency list,
-    /// before the query's reads join it in the output (PS-9).
-    covered: Vec<SignatureDependency>,
-}
-
-impl<T: Clone> Cached<T> {
-    fn output(&self) -> Result<QueryOutput<T>, QueryError> {
-        self.result
-            .as_ref()
-            .map(|output| (**output).clone())
-            .map_err(Clone::clone)
-    }
-}
-#[derive(Default)]
-struct ValidationWalk {
-    // Completed immutable nodes, scoped to a query with unchanged source inputs.
-    // A freshly computed entry has a new ID and still gets its first replay.
-    visited: BTreeSet<u64>,
-}
 
 /// A file's parse result under its package's query environment.
 pub(crate) type ParsedFile = (
@@ -133,13 +127,33 @@ pub(crate) type ParsedFile = (
 /// A single coherent session. Items are item-local syntax at anchors: moving an
 /// item moves its anchor, never its IDs, spans or cached results.
 pub struct QueryEngine {
+    pub(crate) work: crate::WorkStats,
+    pub(crate) store_identity: ContentHash,
+    pub(crate) verify_store: crate::store::VerifyStore,
+    pending_store_checks: BTreeMap<(DefId, QueryKind), persistent::Expected>,
+    store_check_spool: std::sync::Weak<persistent::Spool>,
+    pub(crate) lower_verdicts:
+        hirsel_syntax::DefMap<(hirsel_tir::DefinitionRef, Vec<hirsel_validate::VRead>)>,
+    pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
+    pub(crate) retention: crate::memo::Retention,
+    pub(crate) hold_bytes: u64,
+    pub(crate) configured_jobs: Option<hirsel_intern::jobs::Jobs>,
+    pub(crate) configured_lowering: LoweringPolicy,
     /// A `Compiler` opened this engine as a session (`free_sessions`).
     pub(crate) session: bool,
+    /// Image construction requires closure-local evidence. Until worker V
+    /// receipts are closure-qualified, its source materializations stay scalar.
+    pub(crate) portable_products: bool,
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
-    pub(crate) comptime_stack: Vec<(DefPath, hirsel_span::Span)>,
+    /// This engine's S1 stack: the open evaluations, generators and staged
+    /// instances with their requests' depth evidence, claimed through the
+    /// session's coordinator (design §1c).
+    pub(crate) s1: crate::memo::S1Worker<DefPath, Span>,
+    pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
+    materialization_environment: Option<(QueryEnvironment, hirsel_interp::Limits)>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
@@ -150,19 +164,37 @@ pub struct QueryEngine {
     pub environment: QueryEnvironment,
     pub adapters: PhaseAdapters,
     /// Each definition's candidates in occurrence order.
-    items: Layered<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub(crate) items: BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     /// The items the last index dropped, which the next can adopt.
     detached: Vec<Arc<ItemSyntax>>,
-    parsed: Layered<FileId, ParsedFile>,
-    registry: crate::registry::BuiltinRegistry,
-    builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
-    syntax_keys: Layered<(DefPath, QueryKind), DefinitionKey>,
-    signatures: Layered<DefPath, Arc<Cached<hirsel_types::SignatureRef>>>,
-    resolutions: Layered<DefPath, Arc<Cached<Resolution>>>,
-    checked: Layered<DefPath, Arc<Cached<TypedBody>>>,
-    modes: Layered<DefPath, Arc<Cached<AnalyzedBody>>>,
-    lowered: Layered<DefPath, Arc<Cached<hirsel_tir::DefinitionRef>>>,
-    manifest_identity_hash: ContentHash,
+    parsed: BTreeMap<FileId, ParsedFile>,
+    pub(crate) registry: crate::registry::BuiltinRegistry,
+    pub(crate) builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
+    syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
+    signatures: Table<hirsel_types::SignatureRef>,
+    resolutions: Table<Resolution>,
+    checked: Table<TypedBody>,
+    modes: Table<AnalyzedBody>,
+    lowered: Table<hirsel_tir::DefinitionRef>,
+    lower_receipts: hirsel_syntax::DefMap<Arc<retention::LowerReceipt>>,
+    lower_holds: crate::memo::Holds<()>,
+    pub(crate) summaries: Table<Arc<PublishedSummary>>,
+    pub(crate) checked_summaries: Table<Arc<CheckedSummary>>,
+    /// The memo records, the reverse subscriber index and the dirty marks.
+    pub(crate) graph: MemoGraph,
+    front_changes: frontier::FrontTracker,
+    pub(crate) front_products: crate::tools::FrontProducts,
+    /// Each indexed definition's inputs as last indexed (S0's diff).
+    inputs: hirsel_syntax::DefMap<memos::DefInputs>,
+    /// The environment and limits the memos were last checked under.
+    environment_seen: Option<(QueryEnvironment, hirsel_interp::Limits, Option<ContentHash>)>,
+    /// The manifest revision indexing last published; any other value was
+    /// set explicitly by the caller (its build inputs changed).
+    published_manifest: Option<ContentHash>,
+    /// Detached definitions whose readers were told they are gone.
+    vanished: BTreeSet<DefId>,
+    /// Every indexed item, by file and by definition.
+    pub(crate) declarations: crate::snapshot::DeclarationIndex,
     /// Dependency packages key on their own closure's manifests, not the whole
     /// graph's, so their queries are shared across programs (package images).
     pub(crate) package_manifests: BTreeMap<hirsel_syntax::PackageId, ContentHash>,
@@ -173,28 +205,42 @@ pub struct QueryEngine {
     pub foreign_unreplayable: bool,
     /// Each selected `unsafe ffi` package's `threads` (S-13).
     pub foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
-    pub(crate) execution_stack: Vec<ExecutionReads>,
+    /// Open evaluation frames: each collects the complete reads of what it
+    /// executes or materializes (execution closure by union).
+    pub(crate) execution_stack: Vec<ReadsBuilder>,
     active: BTreeSet<(DefPath, QueryKind)>,
-    validation_walk: Option<ValidationWalk>,
-    cache_sequence: u64,
-    source_revision: u64,
-    /// The runtime types compile-time evaluation runs with, built from every
-    /// item's signature. They change only with the items, their recorded
-    /// private representations or the manifest, so each evaluation reuses
-    /// them rather than reading every signature again (GAP 5).
+    /// The runtime types compile-time evaluation runs with, and the epoch of
+    /// the signature snapshot they were built from.
     comptime_runtime: Option<(
-        (usize, ContentHash),
+        crate::memo::Revision,
         Arc<hirsel_interp::aggregate::RuntimeTypes>,
     )>,
-    package_proofs: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackageProof>,
-    package_publications: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackagePublication>,
     pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
-    signature_input: BTreeMap<hirsel_syntax::PackageId, signature_input::ProgramInput>,
+    /// The last signature snapshot and the inputs it was built from.
+    pub(crate) snapshot: Option<(
+        crate::snapshot::SnapshotStamp,
+        Arc<crate::snapshot::SignatureSnapshot>,
+    )>,
+    pub(crate) snapshot_epoch: crate::memo::Revision,
+    /// Producer identity for rows in the retained frozen snapshot. Weak
+    /// references establish provenance without retaining old memo generations.
+    pub(crate) snapshot_sources:
+        hirsel_syntax::DefMap<std::sync::Weak<Entry<hirsel_types::SignatureRef>>>,
+    /// Successful durable view receipts, candidates for the next snapshot.
+    pub(crate) snapshot_seed_verdicts: hirsel_validate::ValidatedSignatures,
+    /// Signatures published or retired outside declaration indexing (S1).
+    pub(crate) snapshot_inputs_revision: u64,
+    /// The session's one type interner (design §1(a)), over the core rows.
+    pub(crate) types: Arc<hirsel_types::TypeInterner>,
+    /// The session's structural memo over `types`.
+    pub(crate) memo: Arc<hirsel_types::TypeMemo>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
-    reads: Layered<(DefPath, QueryKind), DependencyReads>,
-    /// Dependency packages whose checked products come from a precheck.
-    prechecks: BTreeMap<hirsel_syntax::PackageId, precheck::AdoptedPrecheck>,
+    scalar_lower_calls: hirsel_syntax::DefMap<u64>,
+    scalar_validation_runs: hirsel_syntax::DefMap<u64>,
+    s1_lower_work: hirsel_syntax::DefMap<S1LowerWork>,
+    /// The std image whose package's checked products this engine reads.
+    image: Option<image::AdoptedImage>,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
     /// Interpretation refuses to enter a definition outside its entry's
@@ -202,6 +248,12 @@ pub struct QueryEngine {
     /// debug assertions; the conformance runner turns it on in every build.
     pub closure_assertions: bool,
 }
+const _: () = {
+    const fn movable<T: Send>() {}
+    movable::<QueryEngine>();
+    const fn shared<T: Send + Sync>() {}
+    shared::<PhaseProducts>();
+};
 /// Dropping an engine drops its tables as the teardown phase. With a heap
 /// meter (`--mem-usage`) it records the bytes each table frees; tables still
 /// shared with a package image free nothing here, and the image's bytes are
@@ -211,56 +263,113 @@ impl Drop for QueryEngine {
     fn drop(&mut self) {
         use hirsel_intern::memory::released;
         use std::mem::take;
+        // Scratch resources must close even when process-exit policy leaves
+        // ordinary query allocations to the operating system.
+        self.pending_store_checks.clear();
         if self.session && !crate::policy::frees_sessions() {
             let vacant = QueryEngine::new(self.environment.clone(), PhaseAdapters::default());
             std::mem::forget(std::mem::replace(self, vacant));
             return;
         }
         let _timing = timings::interval(Interval::Merge);
+        released("engine: lower verdicts", take(&mut self.lower_verdicts));
         released("engine: lowered", take(&mut self.lowered));
+        released("engine: lower receipts", take(&mut self.lower_receipts));
+        let holds = self.lower_holds.stats();
+        timings::count_by(Count::S1LowerHoldEvictions, holds.evictions);
+        timings::count_by(Count::S1LowerHoldRecomputes, holds.recomputes);
+        timings::count_by(Count::S1LowerHoldPeakBytes, holds.peak_bytes);
+        released(
+            "engine: lower holds",
+            std::mem::replace(&mut self.lower_holds, crate::memo::Holds::new(0)),
+        );
         released("engine: modes", take(&mut self.modes));
         released("engine: checked", take(&mut self.checked));
+        released("engine: summaries", take(&mut self.summaries));
+        released(
+            "engine: checked summaries",
+            take(&mut self.checked_summaries),
+        );
         released("engine: resolutions", take(&mut self.resolutions));
         released("engine: signatures", take(&mut self.signatures));
-        released("engine: reads", take(&mut self.reads));
+        released("engine: memo graph", take(&mut self.graph));
+        released(
+            "engine: pending front changes",
+            take(&mut self.front_changes),
+        );
+        released(
+            "engine: compact front products",
+            take(&mut self.front_products),
+        );
+        released("engine: inputs", take(&mut self.inputs));
         released("engine: syntax keys", take(&mut self.syntax_keys));
         released("engine: items", take(&mut self.items));
         released("engine: parsed", take(&mut self.parsed));
-        released("engine: signature input", take(&mut self.signature_input));
+        released("engine: signature snapshot", take(&mut self.snapshot));
+        released(
+            "engine: snapshot row provenance",
+            take(&mut self.snapshot_sources),
+        );
+        released(
+            "engine: imported signature verdicts",
+            take(&mut self.snapshot_seed_verdicts),
+        );
         released("engine: instance bodies", take(&mut self.instance_bodies));
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
         released("engine: recomputes", take(&mut self.recomputes));
-        released("engine: package proofs", take(&mut self.package_proofs));
         released(
-            "engine: package publications",
-            take(&mut self.package_publications),
+            "engine: scalar lower calls",
+            take(&mut self.scalar_lower_calls),
         );
-        released("engine: prechecks", take(&mut self.prechecks));
-        if let Some(state) = self.adapters.compiler_state.take() {
-            if let Ok(mut state) = state.try_borrow_mut() {
-                released(
-                    "engine: resolver outputs",
-                    take(&mut state.resolver_outputs),
-                );
-                released(
-                    "engine: signature resolutions",
-                    take(&mut state.signature_resolutions),
-                );
-                released("engine: representations", take(&mut state.representations));
-                released("engine: constant values", take(&mut state.constant_values));
-            }
-            released("engine: compiler state", state);
-        }
+        released(
+            "engine: validation work",
+            take(&mut self.scalar_validation_runs),
+        );
+        released("engine: S1 lower work", take(&mut self.s1_lower_work));
+        released("engine: image", take(&mut self.image));
+        released("engine: constant values", take(&mut self.constant_values));
         released("engine: sources", take(&mut self.sources));
         released("engine: adapters", take(&mut self.adapters));
         released("engine: builtins", take(&mut self.builtins));
     }
 }
 impl QueryEngine {
+    /// The session's type interner, which every phase and thread shares.
+    pub fn types(&self) -> &Arc<hirsel_types::TypeInterner> {
+        &self.types
+    }
+    /// The session's structural type memo over [`QueryEngine::types`].
+    pub fn type_memo(&self) -> &Arc<hirsel_types::TypeMemo> {
+        &self.memo
+    }
+    /// This engine over `types` instead of its own fresh interner, so
+    /// sessions that exchange type ids share one table. Only before the
+    /// first query: every memo is keyed by ids from one interner.
+    pub fn with_types(mut self, types: Arc<hirsel_types::TypeInterner>) -> Self {
+        assert!(
+            self.graph.is_empty(),
+            "an engine changes interner only before its first query"
+        );
+        self.types = types;
+        self.memo = Arc::new(hirsel_types::TypeMemo::new());
+        self
+    }
+}
+impl QueryEngine {
+    pub(crate) fn prepare_signature_snapshot(&mut self) {
+        self.note_environment();
+        self.settle_signatures();
+    }
+    pub(crate) fn signature_memo_source(
+        &self,
+        definition: DefId,
+    ) -> Option<&Arc<Entry<hirsel_types::SignatureRef>>> {
+        self.signatures.get(&definition)
+    }
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
-        self.items.keys().cloned().collect()
+        self.source_paths()
     }
     /// The source definitions a native export selects: the semantic closure
     /// (`semantic_program`, the closure check-time lowering and the program
@@ -281,7 +390,7 @@ impl QueryEngine {
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<BTreeSet<DefPath>, QueryError> {
         let mut selected = self.semantic_program(roots)?.definitions;
-        selected.retain(|path| self.items.contains_key(path));
+        selected.retain(|path| self.declared(path));
         // CT-3: a non-generic compile-time-only function never runs: no
         // run-time code can hold the TypeShape or Body its signature mentions.
         let mut compile_time = vec![];
@@ -293,7 +402,7 @@ impl QueryEngine {
                     .iter()
                     .map(|p| p.ty)
                     .chain([f.result])
-                    .any(|t| hirsel_types::mentions_compile_time_only(&signature.types, t))
+                    .any(|t| hirsel_types::mentions_compile_time_only(&self.types, t))
             {
                 compile_time.push(path.clone());
             }
@@ -308,7 +417,7 @@ impl QueryEngine {
     ) -> BTreeMap<DefPath, hirsel_types::SignatureRef> {
         self.registry
             .signatures()
-            .map(|s| (s.definition.clone(), s.clone()))
+            .map(|s| (s.definition.path().clone(), s.clone()))
             .chain(self.builtins.iter().map(|(p, s)| (p.clone(), s.clone())))
             .collect()
     }
@@ -319,20 +428,19 @@ impl QueryEngine {
         if self.definition_items(path).is_ok() {
             return Ok(None);
         }
-        self.registry.dictionary_value(path)
+        self.registry
+            .dictionary_value(&self.types, &self.memo, path)
     }
     pub(crate) fn prepare_materialization_environment(&mut self) {
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            if state.materialization_environment.as_ref() != Some(&self.environment)
-                || state.materialization_limits != Some(self.comptime_limits)
-            {
-                state.constant_values.clear();
-                self.staged_values.clear();
-                self.lowered.clear();
-                state.materialization_environment = Some(self.environment.clone());
-                state.materialization_limits = Some(self.comptime_limits);
-            }
+        let now = (self.environment.clone(), self.comptime_limits);
+        if self.materialization_environment.as_ref() != Some(&now) {
+            self.constant_values.clear();
+            self.staged_values.clear();
+            self.lowered.clear();
+            self.lower_receipts.clear();
+            self.lower_holds.clear();
+            self.lower_verdicts.clear();
+            self.materialization_environment = Some(now);
         }
     }
 
@@ -341,32 +449,35 @@ impl QueryEngine {
         definition: &hirsel_tir::Definition,
         artifact: Signature,
     ) -> Result<(), QueryError> {
-        let report = self.run_v(&definition.path.0.package, |signatures| {
-            let _timing = timings::phase(Phase::Verify);
-            timings::count(Count::VRuns);
-            signatures.validate_with_signature(definition, &artifact)
-        });
-        if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
-            return Err(error);
+        if self.verify == Verify::Off {
+            return Ok(());
         }
-        if report.violations.is_empty() {
-            Ok(())
-        } else {
-            Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "compile-time TIR validation".into(),
-                message: format!("{:?}", report.violations),
-            }))
-        }
+        let snapshot = self.signature_snapshot();
+        crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify)
     }
     pub fn new(mut environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
-        let registry = crate::registry::BuiltinRegistry::new();
+        let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
         Self {
+            work: crate::WorkStats::default(),
+            store_identity: ContentHash::default(),
+            verify_store: crate::store::VerifyStore::Off,
+            pending_store_checks: BTreeMap::new(),
+            store_check_spool: std::sync::Weak::new(),
+            lower_verdicts: Default::default(),
+            result_store: None,
             verify: Verify::On,
+            retention: crate::memo::Retention::Resident,
+            hold_bytes: crate::config::configured_hold_bytes(),
+            configured_jobs: None,
+            configured_lowering: LoweringPolicy::Comptime,
             session: false,
+            portable_products: false,
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
-            comptime_stack: vec![],
+            s1: crate::memo::S1Coordinator::new().worker(),
+            constant_values: BTreeMap::new(),
+            materialization_environment: None,
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
             generated: BTreeMap::new(),
@@ -374,36 +485,50 @@ impl QueryEngine {
             sources: SourceMap::default(),
             environment,
             adapters,
-            items: Layered::default(),
+            items: BTreeMap::new(),
             detached: vec![],
-            parsed: Layered::default(),
+            parsed: BTreeMap::new(),
             registry,
             builtins: BTreeMap::new(),
-            syntax_keys: Layered::default(),
-            signatures: Layered::default(),
-            resolutions: Layered::default(),
-            checked: Layered::default(),
-            modes: Layered::default(),
-            lowered: Layered::default(),
-            manifest_identity_hash: ContentHash::default(),
+            syntax_keys: BTreeMap::new(),
+            signatures: Default::default(),
+            resolutions: Default::default(),
+            checked: Default::default(),
+            modes: Default::default(),
+            lowered: Default::default(),
+            lower_receipts: Default::default(),
+            lower_holds: crate::memo::Holds::new(crate::config::configured_hold_bytes()),
+            summaries: Default::default(),
+            checked_summaries: Default::default(),
+            graph: MemoGraph::default(),
+            front_changes: Default::default(),
+            front_products: Default::default(),
+            inputs: Default::default(),
+            environment_seen: None,
+            vanished: BTreeSet::new(),
+            published_manifest: None,
+            declarations: Default::default(),
             package_manifests: BTreeMap::new(),
             foreign_links: vec![],
             foreign_unreplayable: false,
             foreign_threads: BTreeMap::new(),
             execution_stack: vec![],
             active: BTreeSet::new(),
-            validation_walk: None,
-            cache_sequence: 0,
-            source_revision: 0,
             comptime_runtime: None,
-            package_proofs: BTreeMap::new(),
-            package_publications: BTreeMap::new(),
             generic_verdict: None,
-            signature_input: BTreeMap::new(),
+            snapshot: None,
+            snapshot_seed_verdicts: Default::default(),
+            snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
+            snapshot_sources: Default::default(),
+            snapshot_inputs_revision: 0,
+            types: crate::registry::session_types(),
+            memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
-            reads: Layered::default(),
-            prechecks: BTreeMap::new(),
+            scalar_lower_calls: Default::default(),
+            scalar_validation_runs: Default::default(),
+            s1_lower_work: Default::default(),
+            image: None,
             unavailable: None,
             last_phase: None,
             closure_assertions: cfg!(debug_assertions),
@@ -439,8 +564,87 @@ impl QueryEngine {
         definition: &DefPath,
         kind: QueryKind,
     ) -> Option<&DependencyReads> {
-        self.reads.get(&(definition.clone(), kind))
+        let id = DefId::intern(definition);
+        match kind {
+            QueryKind::Signature => self.signatures.get(&id).map(|e| &e.detail),
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| &e.detail),
+            QueryKind::Check => self.checked.get(&id).map(|e| &e.detail),
+            QueryKind::Modes => self.modes.get(&id).map(|e| &e.detail),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| &e.detail)
+                .or_else(|| self.lower_receipts.get(&id).map(|e| &e.detail)),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| &e.detail),
+            QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| &e.detail),
+            _ => None,
+        }
     }
+    /// The typed reads of `definition`'s memo of `kind`.
+    pub fn memo_reads(&self, definition: &DefPath, kind: QueryKind) -> Option<&Reads> {
+        let id = DefId::intern(definition);
+        match kind {
+            QueryKind::Signature => self.signatures.get(&id).map(|e| e.reads()),
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.reads()),
+            QueryKind::Check => self.checked.get(&id).map(|e| e.reads()),
+            QueryKind::Modes => self.modes.get(&id).map(|e| e.reads()),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| e.reads())
+                .or_else(|| self.lower_receipts.get(&id).map(|e| e.reads())),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| e.reads()),
+            QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| e.reads()),
+            _ => None,
+        }
+    }
+    /// The recorded read allocation of a completed query, shared with its memo.
+    pub fn shared_memo_reads(&self, definition: &DefPath, kind: QueryKind) -> Option<Arc<Reads>> {
+        let id = DefId::intern(definition);
+        match kind {
+            QueryKind::Signature => self.signatures.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Check => self.checked.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Modes => self.modes.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| e.memo.reads.clone())
+                .or_else(|| self.lower_receipts.get(&id).map(|e| e.memo.reads.clone())),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::CheckedSummary => self
+                .checked_summaries
+                .get(&id)
+                .map(|e| e.memo.reads.clone()),
+            _ => None,
+        }
+    }
+    /// The memo graph's counters: memos touched and invalidations by read kind.
+    pub fn memo_stats(&self) -> &crate::memo::MemoStats {
+        self.graph.stats()
+    }
+    /// Read-only memo/read inventory for independent affected-set checks.
+    pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+        self.graph.snapshot()
+    }
+    /// Physical body V runs, including cache-hit work and discarded S1 attempts.
+    pub fn body_validation_runs(&self, definition: &DefPath) -> u64 {
+        self.scalar_validation_runs
+            .get(&DefId::intern(definition))
+            .copied()
+            .unwrap_or(0)
+            + self.s1_lower_work(definition).validation_runs
+    }
+
+    /// Inventory the distinct query records read or written by one host request.
+    /// Raw per-operation `memo_stats().touched` remains unchanged.
+    pub fn begin_memo_touch_tracking(&mut self) {
+        self.graph.begin_touch_tracking();
+    }
+    pub fn take_touched_memos(&mut self) -> Vec<crate::memo::MemoKey> {
+        self.graph.take_touched_memos()
+    }
+
     fn missing<T>(&mut self, kind: QueryKind) -> Result<T, QueryError> {
         self.unavailable = Some(kind);
         Err(QueryError::NotImplemented)
@@ -452,48 +656,94 @@ impl QueryEngine {
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    fn key(&self, definition: &DefPath, kind: QueryKind) -> Result<DefinitionKey, QueryError> {
-        let snapshot = self.snapshot(definition)?;
-        let text_hash = if kind == QueryKind::Signature {
-            // Each header's text and its offset in its item, which positions
-            // the header's spans relative to the item's anchor.
-            let hashes: Vec<_> = self
-                .items
-                .get(definition)
-                .unwrap()
-                .iter()
-                .map(|snapshot| {
-                    let header = header_span(snapshot);
-                    ContentHash::of_parts(
-                        "hirsel.signature.header.v2",
-                        [
-                            self.sources.slice(header).unwrap_or_default().as_bytes(),
-                            header.start.to_le_bytes().as_slice(),
-                        ],
-                    )
-                })
-                .collect();
-            ContentHash::of_parts(
-                "hirsel.signature.inputs.v2",
-                hashes.iter().map(|h| h.0.as_slice()),
-            )
+    /// The hash of one header item: its text and its offset in its item,
+    /// which positions the header's spans relative to the item's anchor.
+    pub(crate) fn header_hash(&self, snapshot: &ItemSyntax) -> ContentHash {
+        let header = header_span(snapshot);
+        ContentHash::of_parts(
+            "hirsel.signature.header.v2",
+            [
+                self.sources.slice(header).unwrap_or_default().as_bytes(),
+                header.start.to_le_bytes().as_slice(),
+            ],
+        )
+    }
+    /// The own content a query of `kind` keys on: the definition's headers
+    /// (signatures) or its first item's text (every body query), with the
+    /// package's closure manifest. Header hashes are taken once per index.
+    fn key_text(
+        &mut self,
+        definition: &DefPath,
+        kind: QueryKind,
+    ) -> Result<ContentHash, QueryError> {
+        let text = if let Some(inputs) = self.image_inputs(definition) {
+            if kind == QueryKind::Signature {
+                inputs.header
+            } else {
+                inputs.body
+            }
         } else {
-            snapshot.text_hash
+            self.materialize(definition)?;
+            let snapshot = self.snapshot(definition)?;
+            if kind == QueryKind::Signature {
+                match self.inputs.get(&DefId::intern(definition)) {
+                    Some(inputs) => inputs.header(),
+                    None => self.headers_hash(definition),
+                }
+            } else {
+                snapshot.text_hash
+            }
         };
-        Ok(DefinitionKey {
-            kind,
-            definition: definition.clone(),
-            text_hash,
-            dependencies: vec![],
-            environment: self.package_environment(&definition.0.package),
-        })
+        let manifest = self
+            .package_manifests
+            .get(&definition.0.package)
+            .copied()
+            .unwrap_or(self.environment.package_manifest_hash);
+        Ok(ContentHash::of_parts(
+            "hirsel.query.text.v1",
+            [text.0.as_slice(), manifest.0.as_slice()],
+        ))
+    }
+    /// Every candidate's header hash, combined.
+    pub(crate) fn headers_hash(&self, definition: &DefPath) -> ContentHash {
+        let hashes: Vec<_> = self
+            .items
+            .get(definition)
+            .into_iter()
+            .flatten()
+            .map(|snapshot| self.header_hash(snapshot))
+            .collect();
+        ContentHash::of_parts(
+            "hirsel.signature.inputs.v2",
+            hashes.iter().map(|h| h.0.as_slice()),
+        )
     }
     fn signature_query(
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        self.signature_query_id(DefId::intern(definition))
+    }
+
+    fn signature_query_id(
+        &mut self,
+        id: DefId,
+    ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        // Indexing marks each changed header/candidate and its subscribers.
+        // An unmarked memo needs neither a text hash nor a path-based probe;
+        // the graph stamps its own verified-at revision when it is read.
+        if let Some(entry) = self.signatures.get(&id).cloned() {
+            self.note_environment();
+            if matches!(self.graph.check(&entry.memo), crate::memo::Verdict::Valid) {
+                return entry.result();
+            }
+        }
+        let definition = id.path();
         if let Some(constant) = self.staged_constants.get(definition) {
             return Ok(Arc::new(output(constant.signature.clone())));
+        }
+        if let Some(signature) = self.image_signature(definition) {
+            return Ok(signature.output.clone());
         }
         if !self.items.contains_key(definition) {
             if let Some(signature) = self.registry.get(definition) {
@@ -504,160 +754,97 @@ impl QueryEngine {
             }
         }
         let _timing = timings::phase(Phase::Signatures);
-        if let Some(cached) = self.signatures.get(definition).cloned() {
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Signature)?;
+        if let Some(entry) = self.signatures.get(&id).cloned() {
             if self
                 .active
                 .contains(&(definition.clone(), QueryKind::Signature))
             {
                 return self.reentrant(definition, QueryKind::Signature);
             }
-            if self
-                .validation_walk
-                .as_ref()
-                .unwrap()
-                .visited
-                .contains(&cached.id)
-            {
-                return cached.result.clone();
-            }
-            let key = self.key(definition, QueryKind::Signature)?;
             self.active
                 .insert((definition.clone(), QueryKind::Signature));
-            let valid = self.valid(&cached, &key);
+            let valid = self.memo_valid(definition, &entry, text);
             self.active
                 .remove(&(definition.clone(), QueryKind::Signature));
             if valid {
-                return cached.result.clone();
+                return entry.result();
             }
         }
-        let key = self.key(definition, QueryKind::Signature)?;
         self.start(definition, QueryKind::Signature)?;
         let candidates = self.definition_items(definition)?;
+        let declarations = self.frozen_declarations();
         let adapter = self.adapters.signature.clone();
+        let mut products = PhaseProducts::default();
         let mut recorder = Recorder {
             owner: definition.clone(),
             private_shapes: false,
-            representations: BTreeMap::new(),
+            observed: Observed::default(),
             engine: self,
             reads: DependencyReads::default(),
             groups: BTreeMap::new(),
         };
         recorder.engine.signature_stack.push(definition.clone());
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.signature_items(&candidates, &mut recorder),
+            Some(adapter) => adapter.signature_items(
+                &types,
+                &memo,
+                &candidates,
+                &declarations,
+                &mut products,
+                &mut recorder,
+            ),
             None => recorder.engine.missing(QueryKind::Signature),
         };
         recorder.engine.signature_stack.pop();
-        let representations = recorder.representations;
+        recorder.observed.products = Arc::new(products);
+        let observed = recorder.observed;
         let reads = recorder.reads;
         let covered = result
             .as_ref()
             .map(|output| output.dependencies.clone())
             .unwrap_or_default();
-        let mut cached = self.finish(key, reads, result.map(shared_output), representations);
-        Arc::make_mut(&mut cached).covered = covered;
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.signatures.insert(definition.clone(), cached.clone());
-        }
-        cached.result.clone()
-    }
-    fn with_validation_walk<T>(&mut self, query: impl FnOnce(&mut Self) -> T) -> T {
-        let root = self.validation_walk.is_none();
-        if root {
-            self.validation_walk = Some(ValidationWalk::default());
-        }
-        let result = query(self);
-        if root {
-            self.validation_walk = None;
-        }
-        result
-    }
-    fn valid<T>(&mut self, cached: &Cached<T>, key: &DefinitionKey) -> bool {
-        self.with_validation_walk(|engine| engine.valid_node(cached, key))
-    }
-    fn valid_node<T>(&mut self, cached: &Cached<T>, key: &DefinitionKey) -> bool {
-        if cached
-            .result
-            .as_ref()
-            .is_err_and(|error| !error.cacheable())
-        {
-            return false;
-        }
-        if cached.key.kind != key.kind
-            || cached.key.definition != key.definition
-            || cached.key.text_hash != key.text_hash
-            || cached.key.environment != key.environment
-        {
-            return false;
-        }
-        if self
-            .package_proofs
-            .get(&key.definition.0.package)
-            .is_some_and(|proof| proof.matches(self))
-        {
-            return true;
-        }
-        if self
-            .validation_walk
-            .as_ref()
-            .unwrap()
-            .visited
-            .contains(&cached.id)
-        {
-            return true;
-        }
-        hirsel_intern::work::count(hirsel_intern::work::Counter::CacheValidationRows);
-        if !self.lookup_reads_valid(&cached.reads, &cached.lookups, &key.definition)
-            || !self.executions_valid(&cached.executed)
-            || cached
-                .representations
-                .iter()
-                .any(|(path, hash)| self.implementation_hash(path) != Some(*hash))
-        {
-            return false;
-        }
-        for dep in &cached.reads.signatures {
-            if !self
-                .signature(&dep.definition)
-                .is_ok_and(|s| s.fingerprint == dep.fingerprint)
-            {
-                return false;
-            }
-        }
-        if cached
-            .reads
-            .citations
-            .iter()
-            .any(|(path, cited)| self.cited_name(&key.definition, path) != *cited)
-        {
-            return false;
-        }
-        for (path, previous) in &cached.reads.failed_signature_keys {
-            if self.signature(path).is_ok() || self.failed_signature_key(path) != *previous {
-                return false;
-            }
-        }
-        self.validation_walk
-            .as_mut()
-            .unwrap()
-            .visited
-            .insert(cached.id);
-        true
+        let key = MemoKey::new(QueryKind::Signature, id);
+        let mut entry = self.finish(key, text, reads, result.map(shared_output), observed);
+        entry.covered = covered;
+        let entry = Arc::new(entry);
+        keep(
+            &mut self.signatures,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
+        entry.result()
     }
     /// The name site of `path`'s first item in the file of `owner`'s first
     /// item, relative to that item's anchor.
     fn cited_name(&self, owner: &DefPath, path: &DefPath) -> Option<Span> {
-        let file = self.item_file(self.items.get(owner)?.first()?);
-        self.items
-            .get(path)?
-            .iter()
-            .find(|candidate| self.item_file(candidate) == file)
-            .map(|candidate| candidate.item.name_span)
+        self.citation_source()
+            .cited_name(DefId::intern(owner), DefId::intern(path))
     }
-    fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {
-        self.signatures
-            .get(path)
-            .and_then(|cached| cached.key.fingerprint().ok())
+    /// Citation reads of the current source revision, borrowed independently of
+    /// retained signature snapshots so ordinary body edits stay observable.
+    pub fn citation_source(&self) -> impl CitationSource + '_ {
+        crate::snapshot::SourceContext {
+            sources: &self.sources,
+            items: &self.items,
+            declarations: &self.declarations,
+            image: self.image.as_ref().map(|adopted| &*adopted.image),
+        }
+    }
+    /// A failed signature's key: its own content and what it read.
+    pub(crate) fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {
+        self.signatures.get(&DefId::intern(path)).map(|entry| {
+            ContentHash::of_parts(
+                "hirsel.failed-signature.v1",
+                [
+                    entry.memo.text.0.as_slice(),
+                    entry.memo.reads.digest().0.as_slice(),
+                ],
+            )
+        })
     }
     fn reentrant<T>(&mut self, definition: &DefPath, kind: QueryKind) -> Result<T, QueryError> {
         if kind == QueryKind::Signature
@@ -697,54 +884,31 @@ impl QueryEngine {
     }
     fn finish<T>(
         &mut self,
-        mut key: DefinitionKey,
+        key: MemoKey,
+        text: ContentHash,
         mut reads: DependencyReads,
         mut result: Result<QueryOutput<T>, QueryError>,
-        representations: BTreeMap<DefPath, ContentHash>,
-    ) -> Arc<Cached<T>> {
-        if let Ok(output) = &mut result {
-            reads.signatures.extend(output.dependencies.clone());
-            output.dependencies = reads.signatures.clone();
-            if has_errors(&output.diagnostics) {
-                result = Err(QueryError::Diagnostics(output.diagnostics.clone()));
-            }
-        }
-        if let Some(error) = &reads.operational_failure {
-            result = Err(QueryError::Operational(error.clone()));
-        }
-        key.dependencies = reads.signatures.clone();
-        if key.fingerprint().is_err() {
-            result = Err(QueryError::NotImplemented);
-        }
-        if let Some(state) = &self.adapters.compiler_state {
-            let state = state.borrow();
-            let native = match key.kind {
-                QueryKind::Resolve => state.resolver_outputs.get(&key.definition),
-                QueryKind::Signature => state.signature_resolutions.get(&key.definition),
-                _ => None,
-            };
-            if let Some(native) = native {
-                reads.resolver = native.reads.clone();
-            }
-        }
-        self.active.remove(&(key.definition.clone(), key.kind));
+        observed: Observed,
+    ) -> Entry<T> {
+        prepare_result(&mut reads, &mut result, &observed.products);
+        self.finish_prepared(key, text, reads, result.map(Arc::new), observed)
+    }
+    /// Worker results have already applied the same diagnostic/dependency
+    /// completion as serial phases; record them without adding reads twice.
+    fn finish_prepared<T>(
+        &mut self,
+        key: MemoKey,
+        text: ContentHash,
+        reads: DependencyReads,
+        result: Result<Arc<QueryOutput<T>>, QueryError>,
+        observed: Observed,
+    ) -> Entry<T> {
+        let definition = key.def.path();
+        self.active.remove(&(definition.clone(), key.kind));
         if result.is_err() {
             self.last_phase = Some(key.kind);
         }
-        self.reads
-            .insert((key.definition.clone(), key.kind), reads.clone());
-        let lookups = self.lookup_inputs(&reads);
-        self.cache_sequence += 1;
-        Arc::new(Cached {
-            id: self.cache_sequence,
-            key,
-            reads,
-            result: result.map(Arc::new),
-            lookups,
-            executed: ExecutionReads::default(),
-            representations,
-            covered: vec![],
-        })
+        self.record(key, text, result, reads, &observed)
     }
     /// The file an item stands in.
     pub(crate) fn item_file(&self, syntax: &ItemSyntax) -> FileId {
@@ -771,53 +935,30 @@ impl QueryEngine {
     /// items this snapshot dropped stay adoptable until the next index, for a
     /// definition moving to another file.
     fn index(&mut self, file: &mut SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
-        self.drop_precheck(&context.package);
-        self.source_revision += 1;
+        self.release_image(&context.package)?;
         self.comptime_runtime = None;
         let source_path = self.sources.file(file.file).unwrap().path.clone();
-        let from_source = |engine: &Self, old: &ItemSyntax| engine.position(old).0 == source_path;
+        // Every snapshot of this source, each at its own FileId.
+        let mut snapshots = self.declarations.snapshots(&source_path);
+        snapshots.insert(file.file);
+        let from_source = |engine: &Self, old: &ItemSyntax| {
+            engine
+                .sources
+                .anchor(old.anchor)
+                .is_some_and(|(file, _)| snapshots.contains(&file))
+        };
         // Only definitions this source owned or now owns can change; every
         // other entry, including a shared image's, is left untouched.
-        let owned: Vec<DefPath> = self
-            .items
-            .iter()
-            .filter(|(_, candidates)| candidates.iter().any(|old| from_source(self, old)))
-            .map(|(path, _)| path.clone())
+        let source_items = self.declarations.source_definitions(&source_path);
+        self.work.index_owner_visits += source_items.len() as u64;
+        let owned: Vec<_> = source_items
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|path| self.items.contains_key(path))
             .collect();
-        // Which items stand where, before: a query whose candidates now stand
-        // elsewhere names other anchors and is retired.
-        let anchors = |engine: &Self, path: &DefPath| -> Vec<hirsel_span::Anchor> {
-            engine
-                .items
-                .get(path)
-                .into_iter()
-                .flatten()
-                .map(|candidate| candidate.anchor)
-                .collect()
-        };
-        // A detached item stands where it was dropped until this index adopts
-        // it, so adopting it is not a move.
+        // A detached item stands where it was dropped until this index adopts it.
         let carried = std::mem::take(&mut self.detached);
-        let placed = |engine: &Self, path: &DefPath| -> Vec<hirsel_span::Anchor> {
-            let mut placed = anchors(engine, path);
-            placed.extend(
-                carried
-                    .iter()
-                    .filter(|old| &old.item.definition == path)
-                    .map(|old| old.anchor),
-            );
-            placed.sort();
-            placed
-        };
-        let before: BTreeMap<DefPath, Vec<hirsel_span::Anchor>> = owned
-            .iter()
-            .chain(file.items.iter().map(|new| &new.item.definition))
-            .flat_map(|path| [path.clone(), hirsel_check_protocol::fact::fact_path(path)])
-            .map(|path| {
-                let anchors = placed(self, &path);
-                (path, anchors)
-            })
-            .collect();
         // Fact helpers are derived again from their sources below.
         let mut previous: Vec<Arc<ItemSyntax>> = owned
             .iter()
@@ -832,15 +973,16 @@ impl QueryEngine {
         // CT-5: a retired declaration's instances are made again from its new
         // text when a call selects them.
         for path in &owned {
-            self.instance_bodies.declarations.remove(path);
+            let id = DefId::intern(path);
+            self.instance_bodies.declarations.remove(&id);
             for (_, instance) in self
                 .instance_bodies
                 .instances
-                .remove(path)
+                .remove(&id)
                 .unwrap_or_default()
             {
-                self.items.remove(&instance.definition);
-                self.generated.remove(&instance.definition);
+                self.items.remove(instance.definition.path());
+                self.generated.remove(instance.definition.path());
             }
         }
         for path in &owned {
@@ -861,12 +1003,14 @@ impl QueryEngine {
         let new_positions: Vec<_> = file.items.iter().map(|new| self.position(new)).collect();
         let mut occurrences = vec![0u32; file.items.len()];
         let mut reordered = vec![];
-        for path in file
-            .items
-            .iter()
-            .map(|new| &new.item.definition)
-            .collect::<BTreeSet<_>>()
-        {
+        let mut ordinals: BTreeMap<DefPath, Vec<usize>> = BTreeMap::new();
+        for (i, new) in file.items.iter().enumerate() {
+            ordinals
+                .entry(new.item.definition.clone())
+                .or_default()
+                .push(i);
+        }
+        for (path, indices) in &ordinals {
             let mut order: Vec<(std::path::PathBuf, u32, Result<usize, Arc<ItemSyntax>>)> = self
                 .items
                 .get(path)
@@ -877,11 +1021,10 @@ impl QueryEngine {
                     (p, base, Err(old.clone()))
                 })
                 .collect();
-            for (i, new) in file.items.iter().enumerate() {
-                if &new.item.definition == path {
-                    let (p, base) = new_positions[i].clone();
-                    order.push((p, base, Ok(i)));
-                }
+            for &i in indices {
+                self.work.index_occurrence_visits += 1;
+                let (p, base) = new_positions[i].clone();
+                order.push((p, base, Ok(i)));
             }
             order.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
             for (occurrence, (_, _, entry)) in order.into_iter().enumerate() {
@@ -922,26 +1065,40 @@ impl QueryEngine {
             affected.insert(path);
         }
         let file_id = file.file;
+        let mut predecessor_slots: BTreeMap<(DefPath, u32), Vec<usize>> = BTreeMap::new();
+        for (i, old) in previous.iter().enumerate() {
+            predecessor_slots
+                .entry((old.item.definition.clone(), old.occurrence))
+                .or_default()
+                .push(i);
+        }
+        let mut previous: Vec<_> = previous.into_iter().map(Some).collect();
         for (i, new) in file.items.iter_mut().enumerate() {
             let occurrence = occurrences[i];
             let base = new_positions[i].1;
             let definition = new.item.definition.clone();
-            let unchanged = previous.iter().position(|old| {
-                old.item.definition == definition
-                    && old.text_hash == new.text_hash
-                    && old.occurrence == occurrence
+            let slots = predecessor_slots
+                .get(&(definition, occurrence))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let unchanged = slots.iter().copied().find(|&index| {
+                self.work.index_anchor_visits += 1;
+                previous[index]
+                    .as_ref()
+                    .is_some_and(|old| old.text_hash == new.text_hash)
             });
             if let Some(index) = unchanged {
-                let old = previous.remove(index);
+                let old = previous[index].take().unwrap();
                 self.sources.move_anchor(old.anchor, file_id, base);
                 *new = old;
             } else {
                 let syntax = Arc::make_mut(new);
                 syntax.occurrence = occurrence;
-                if let Some(index) = previous.iter().position(|old| {
-                    old.item.definition == definition && old.occurrence == occurrence
+                if let Some(index) = slots.iter().copied().find(|&index| {
+                    self.work.index_anchor_visits += 1;
+                    previous[index].is_some()
                 }) {
-                    let old = previous.remove(index);
+                    let old = previous[index].take().unwrap();
                     self.sources.move_anchor(old.anchor, file_id, base);
                     syntax.reanchor(old.anchor);
                 }
@@ -949,9 +1106,12 @@ impl QueryEngine {
         }
         // Items this source dropped stay adoptable through the next index, with
         // their queries; a carried item nobody adopted expires now.
+        let carried_identity: std::collections::HashSet<_> =
+            carried.iter().map(Arc::as_ptr).collect();
         let (expired, dropped): (Vec<_>, Vec<_>) = previous
             .into_iter()
-            .partition(|old| carried.iter().any(|c| Arc::ptr_eq(c, old)));
+            .flatten()
+            .partition(|old| carried_identity.contains(&Arc::as_ptr(old)));
         for old in &expired {
             affected.insert(old.item.definition.clone());
         }
@@ -962,12 +1122,14 @@ impl QueryEngine {
             if let Some(helper) = crate::facts::snapshot(new) {
                 affected.insert(helper.item.definition.clone());
                 self.items
-                    .entry_or_default(helper.item.definition.clone())
+                    .entry(helper.item.definition.clone())
+                    .or_default()
                     .push(helper);
             }
             affected.insert(new.item.definition.clone());
             self.items
-                .entry_or_default(new.item.definition.clone())
+                .entry(new.item.definition.clone())
+                .or_default()
                 .push(new.clone());
         }
         for path in &affected {
@@ -976,135 +1138,81 @@ impl QueryEngine {
                 self.items.insert(path.clone(), candidates);
             }
         }
-        // Retire changed inputs. Unchanged headers survive body edits.
-        let body_hashes: BTreeMap<_, _> = affected
-            .iter()
-            .filter(|path| self.items.contains_key(*path))
-            .map(|path| {
-                (
-                    path.clone(),
-                    self.key(path, QueryKind::Check).unwrap().text_hash,
-                )
-            })
-            .collect();
-        let header_hashes: BTreeMap<_, _> = affected
-            .iter()
-            .filter(|path| self.items.contains_key(*path))
-            .map(|path| {
-                (
-                    path.clone(),
-                    self.key(path, QueryKind::Signature).unwrap().text_hash,
-                )
-            })
-            .collect();
+        self.declarations
+            .update(file_id, &affected, &self.items, &self.sources);
+        let revision = self.manifest_revision();
+        if self.declarations.inputs().manifest_revision != revision {
+            self.declarations.inputs_mut().manifest_revision = revision;
+        }
+        self.published_manifest = Some(revision);
         // A definition whose only item this source just dropped keeps its
-        // queries while that item waits to be adopted.
+        // memos while that item waits to be adopted.
         let waiting: BTreeSet<DefPath> = self
             .detached
             .iter()
             .map(|old| old.item.definition.clone())
             .filter(|path| !self.items.contains_key(path))
             .collect();
-        let moved: BTreeSet<DefPath> = affected
+        // S0's change set: each affected definition's inputs against what was
+        // last indexed. Unchanged headers survive body edits.
+        self.note_inputs(
+            affected
+                .iter()
+                .filter(|path| !waiting.contains(*path))
+                .cloned(),
+        );
+        self.note_detached(waiting);
+        let candidates: Vec<_> = self
+            .staged_constants
             .iter()
-            .filter(|path| !waiting.contains(*path))
-            .filter(|path| before.get(*path) != Some(&anchors(self, path)))
-            .cloned()
+            .filter(|(_, constant)| affected.contains(&constant.owner))
+            .map(|(path, constant)| (path.clone(), constant.owner.clone()))
             .collect();
-        macro_rules! retire {
-            ($field:ident, $hashes:ident) => {
-                for path in affected.iter().filter(|path| !waiting.contains(*path)) {
-                    if self.$field.get(path).is_some_and(|c| {
-                        moved.contains(path) || $hashes.get(path) != Some(&c.key.text_hash)
-                    }) {
-                        self.$field.remove(path);
-                    }
-                }
-            };
+        let retired: Vec<DefPath> = candidates
+            .into_iter()
+            .filter(|(_, owner)| {
+                let current = self.key_text(owner, QueryKind::Modes).ok();
+                !self.modes.get(&DefId::intern(owner)).is_some_and(|entry| {
+                    !self.graph.is_dirty(&entry.memo.key) && current == Some(entry.memo.text)
+                })
+            })
+            .map(|(path, _)| path)
+            .collect();
+        for path in &retired {
+            self.staged_constants.remove(path);
         }
-        retire!(signatures, header_hashes);
-        retire!(resolutions, body_hashes);
-        retire!(checked, body_hashes);
-        retire!(modes, body_hashes);
-        retire!(lowered, body_hashes);
-        self.staged_constants.retain(|_, constant| {
-            !affected.contains(&constant.owner) || self.modes.contains_key(&constant.owner)
-        });
         self.staged_values
             .retain(|(path, _), _| self.staged_constants.contains_key(path));
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            state.constant_values.retain(|_, value| {
-                value.executed.bodies.iter().all(|(path, hash)| {
-                    !affected.contains(path) || body_hashes.get(path) == Some(hash)
-                })
-            });
-            for path in &affected {
-                if !self.resolutions.contains_key(path) {
-                    state.resolver_outputs.remove(path);
-                }
-                if !self.signatures.contains_key(path) {
-                    state.signature_resolutions.remove(path);
-                }
+        if !retired.is_empty() {
+            // Reinstalling the same hidden signature does not restore its
+            // materialized instances. Retained callers must reconstruct those
+            // products even if a later registration has the same fingerprint.
+            let retired: BTreeSet<_> = retired.iter().map(DefId::intern).collect();
+            let uses_retired = |reads: &Reads| {
+                reads
+                    .iter()
+                    .any(|(read, _)| matches!(read, ReadKey::Signature(id) if retired.contains(id)))
+            };
+            self.constant_values
+                .retain(|_, value| !uses_retired(&value.executed));
+            let mut lowers = BTreeSet::new();
+            for id in &retired {
+                lowers.extend(
+                    self.graph
+                        .subscribers(&ReadKey::Signature(*id))
+                        .filter(|key| key.kind == QueryKind::Lower)
+                        .copied(),
+                );
             }
+            for key in lowers {
+                self.forget(&key);
+            }
+            self.retire_snapshot();
+            let retired: Vec<_> = retired.iter().map(|id| id.path().clone()).collect();
+            self.note_signatures(&retired);
         }
-        self.publish_declarations();
+        self.settle_signatures();
         Ok(())
-    }
-    /// Publish the indexed declarations: manifest identities and the
-    /// resolver's module declarations.
-    pub(crate) fn publish_declarations(&mut self) {
-        let hashes: Vec<_> = self
-            .items
-            .iter()
-            .flat_map(|(path, candidates)| {
-                let item = &candidates[0].item;
-                let public = item.visibility != hirsel_syntax::Visibility::Private;
-                let kind = match &item.kind {
-                    ItemKind::Function { .. } => 0,
-                    ItemKind::Const { .. } => 1,
-                    ItemKind::Type {
-                        body: hirsel_syntax::TypeBody::Alias(_),
-                        ..
-                    } => 2,
-                    ItemKind::Type { .. } => 3,
-                };
-                [
-                    path.fingerprint(),
-                    ContentHash::of_bytes(&[u8::from(public), kind]),
-                ]
-            })
-            .collect();
-        self.manifest_identity_hash = ContentHash::of_parts(
-            "hirsel.manifest.identities.v1",
-            hashes.iter().map(|h| h.0.as_slice()),
-        );
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            let mut files: BTreeMap<FileId, Vec<Arc<ItemSyntax>>> = BTreeMap::new();
-            for item in self.items.values().flatten() {
-                files
-                    .entry(self.item_file(item))
-                    .or_default()
-                    .push(item.clone());
-            }
-            state.set_declarations(
-                files
-                    .into_values()
-                    .map(|mut items| {
-                        items.sort_by_key(|item| self.sources.anchor(item.anchor).unwrap().1);
-                        items
-                    })
-                    .collect(),
-            );
-            state.manifest_revision = ContentHash::of_parts(
-                "hirsel.manifest.v1",
-                [
-                    self.environment.package_manifest_hash.0.as_slice(),
-                    self.manifest_identity_hash.0.as_slice(),
-                ],
-            );
-        }
     }
     /// All source items sharing a semantic path, in occurrence order. Ordinals stay
     /// local; neither duplicates nor file positions are ever appended to DefPath identity.
@@ -1126,7 +1234,8 @@ impl QueryEngine {
         Ok(output(self.snapshot(definition)?))
     }
     fn syntax_view(&mut self, definition: &DefPath, kind: QueryKind) -> Result<(), QueryError> {
-        let key = self.key(definition, kind)?;
+        self.materialize(definition)?;
+        let key = self.key_text(definition, kind)?;
         let identity = (definition.clone(), kind);
         if self.syntax_keys.get(&identity) != Some(&key) {
             *self.recomputes.entry(identity.clone()).or_default() += 1;
@@ -1156,9 +1265,12 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Vec<SignatureDependency>, QueryError> {
+        if let Some(signature) = self.image_signature(definition) {
+            return Ok(signature.covered.clone());
+        }
         let output = self.signature_output(definition)?;
-        Ok(match self.signatures.get(definition) {
-            Some(cached) if self.items.contains_key(definition) => cached.covered.clone(),
+        Ok(match self.signatures.get(&DefId::intern(definition)) {
+            Some(entry) if self.items.contains_key(definition) => entry.covered.clone(),
             _ => output.dependencies.clone(),
         })
     }
@@ -1166,7 +1278,7 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
-        self.with_validation_walk(|engine| engine.signature_query(definition))
+        self.signature_query(definition)
     }
     fn resolve_query(
         &mut self,
@@ -1174,34 +1286,50 @@ impl QueryEngine {
     ) -> Result<Arc<QueryOutput<Resolution>>, QueryError> {
         self.syntax_views(definition)?;
         let _timing = timings::phase(Phase::Resolve);
-        let key = self.key(definition, QueryKind::Resolve)?;
-        if let Some(cached) = self.resolutions.get(definition).cloned() {
-            if self.valid(&cached, &key) {
-                return cached.result.clone();
-            }
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Resolve)?;
+        if let Some(entry) = self.resolutions.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return entry.result();
         }
         self.start(definition, QueryKind::Resolve)?;
         let snapshot = self.snapshot(definition)?;
+        let declarations = self.frozen_declarations();
+        let mut products = PhaseProducts::default();
         let adapter = self.adapters.resolver.clone();
         let mut recorder = Recorder {
             owner: definition.clone(),
             private_shapes: true,
-            representations: BTreeMap::new(),
+            observed: Observed::default(),
             engine: self,
             reads: DependencyReads::default(),
             groups: BTreeMap::new(),
         };
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.resolve(snapshot.clone(), &mut recorder),
+            Some(adapter) => adapter.resolve(
+                &types,
+                &memo,
+                snapshot.clone(),
+                &declarations,
+                &mut products,
+                &mut recorder,
+            ),
             None => recorder.engine.missing(QueryKind::Resolve),
         };
-        let representations = recorder.representations;
+        recorder.observed.products = Arc::new(products);
+        let observed = recorder.observed;
         let reads = recorder.reads;
-        let cached = self.finish(key, reads, result, representations);
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.resolutions.insert(definition.clone(), cached.clone());
-        }
-        cached.result.clone()
+        let key = MemoKey::new(QueryKind::Resolve, id);
+        let entry = Arc::new(self.finish(key, text, reads, result.map(|o| o), observed));
+        keep(
+            &mut self.resolutions,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
+        entry.result()
     }
     pub fn mode_definition(
         &mut self,
@@ -1213,90 +1341,132 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Modes)?;
+        if let Some(entry) = self.modes.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return self.mode_result(entry);
+        }
+        if let Some(entry) = self.load_mode(definition) {
+            self.modes.insert(id, entry.clone());
+            return self.mode_result(entry);
+        }
         let checked = self.check_query(definition)?;
         let signature = self.signature_output(definition)?;
         let timing = timings::phase(Phase::Modes);
-        let key = self.key(definition, QueryKind::Modes)?;
-        let cached = self.modes.get(definition).cloned();
-        let body = if let Some(cached) = cached.filter(|c| self.valid(c, &key)) {
-            cached.result.clone()?
-        } else {
-            self.start(definition, QueryKind::Modes)?;
-            let adapter = self.adapters.modes.clone();
-            let reads = self
-                .checked
-                .get(definition)
-                .map(|c| c.reads.clone())
-                .unwrap_or_else(|| DependencyReads {
-                    signatures: checked.dependencies.clone(),
-                    ..Default::default()
-                });
-            let mut recorder = Recorder {
-                owner: definition.clone(),
-                private_shapes: true,
-                representations: self
-                    .checked
-                    .get(definition)
-                    .map(|c| c.representations.clone())
-                    .unwrap_or_default(),
-                engine: self,
-                reads,
-                groups: BTreeMap::new(),
-            };
-            let result = match adapter {
-                Some(adapter) => {
-                    adapter.check_modes(checked.value.clone(), &signature.value, &mut recorder)
-                }
-                None => recorder.engine.missing(QueryKind::Modes),
-            };
-            let representations = recorder.representations;
-            let reads = recorder.reads;
-            let cached = self.finish(key, reads, result, representations);
-            if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-                self.modes.insert(definition.clone(), cached.clone());
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Modes)?;
+        let cached = self.modes.get(&id).cloned();
+        let entry = match cached {
+            Some(entry) if self.memo_valid(definition, &entry, text) => entry,
+            _ => {
+                self.start(definition, QueryKind::Modes)?;
+                let adapter = self.adapters.modes.clone();
+                let mut products = PhaseProducts::default();
+                let previous = self.checked.get(&id).cloned();
+                let reads = previous
+                    .as_ref()
+                    .map(|c| c.detail.clone())
+                    .unwrap_or_else(|| DependencyReads {
+                        signatures: checked.dependencies.clone(),
+                        ..Default::default()
+                    });
+                let mut recorder = Recorder {
+                    owner: definition.clone(),
+                    private_shapes: true,
+                    observed: Observed::inheriting(previous.as_ref().map(|c| c.reads())),
+                    engine: self,
+                    reads,
+                    groups: BTreeMap::new(),
+                };
+                let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
+                let result = match adapter {
+                    Some(adapter) => adapter.check_modes(
+                        &types,
+                        &memo,
+                        Arc::new(checked.value.clone()),
+                        &signature.value,
+                        &mut products,
+                        &mut recorder,
+                    ),
+                    None => recorder.engine.missing(QueryKind::Modes),
+                };
+                recorder.observed.products = Arc::new(products);
+                let observed = recorder.observed;
+                let reads = recorder.reads;
+                let key = MemoKey::new(QueryKind::Modes, id);
+                let entry = Arc::new(self.finish(key, text, reads, result, observed));
+                self.store_mode(definition, &entry)?;
+                keep(
+                    &mut self.modes,
+                    &mut self.graph,
+                    entry.clone(),
+                    self.s1.failure_is_own(),
+                );
+                entry
             }
-            cached.result.clone()?
         };
         drop(timing);
+        self.mode_result(entry)
+    }
+    fn mode_result(
+        &mut self,
+        entry: Arc<Entry<AnalyzedBody>>,
+    ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        // A materialization executes this checked body regardless of whether
+        // Modes was computed now, retained, or restored. Preserve its entire
+        // receipt (including negative lookups and diagnostic citations).
+        self.merge_execution(entry.reads());
         // Compile-time users also depend on private shapes used by a body,
         // including when its public signature and source text are unchanged.
-        let representations: Vec<_> = self
-            .modes
-            .get(definition)
-            .map(|c| c.representations.keys().cloned().collect())
-            .unwrap_or_default();
+        let representations: Vec<_> = entry
+            .reads()
+            .iter()
+            .filter(|(k, _)| matches!(k, ReadKey::Representation(_)))
+            .map(|(k, _)| k.definition().unwrap().path().clone())
+            .collect();
         for path in representations {
             self.read_implementation(&path);
         }
-        Ok(body)
+        entry.result()
     }
     fn check_query(
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
+        self.materialize(definition)?;
         let snapshot = self.snapshot(definition)?;
         if let Some(body) = generation::generator(&snapshot) {
             return self.generated_check_query(definition, snapshot, body);
         }
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Check)?;
+        if let Some(entry) = self.checked.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return entry.result();
+        }
         let resolution = self.resolve_query(definition)?;
         let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Check);
-        let key = self.key(definition, QueryKind::Check)?;
-        if let Some(cached) = self.checked.get(definition).cloned() {
-            if self.valid(&cached, &key) {
-                return cached.result.clone();
-            }
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Check)?;
+        if let Some(entry) = self.checked.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return entry.result();
         }
         timings::count(Count::Definitions);
-        let mut initial = self
-            .resolutions
-            .get(definition)
-            .map(|c| c.reads.clone())
+        let previous = self.resolutions.get(&id).cloned();
+        let mut initial = previous
+            .as_ref()
+            .map(|c| c.detail.clone())
             .unwrap_or_default();
         initial.signatures.extend(resolution.dependencies.clone());
         initial.signatures.extend(signature.dependencies.clone());
         initial.signatures.push(SignatureDependency {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             fingerprint: signature.value.fingerprint,
         });
         self.start(definition, QueryKind::Check)?;
@@ -1305,17 +1475,16 @@ impl QueryEngine {
         let mut recorder = Recorder {
             owner: definition.clone(),
             private_shapes: true,
-            representations: self
-                .resolutions
-                .get(definition)
-                .map(|c| c.representations.clone())
-                .unwrap_or_default(),
+            observed: Observed::inheriting(previous.as_ref().map(|c| c.reads())),
             engine: self,
             reads: initial,
             groups: BTreeMap::new(),
         };
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
             Some(adapter) => adapter.check(
+                &types,
+                &memo,
                 snapshot.clone(),
                 resolution.value.clone(),
                 &signature.value,
@@ -1323,29 +1492,33 @@ impl QueryEngine {
             ),
             None => recorder.engine.missing(QueryKind::Check),
         };
-        let mut representations = recorder.representations;
+        let mut observed = recorder.observed;
         let reads = recorder.reads;
         let mut result = result;
         if let Ok(output) = &mut result {
-            self.place_arm_fixes(output, &mut representations);
+            self.place_arm_fixes(output, &mut observed.representations);
         }
-        let cached = self.finish(key, reads, result, representations);
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.checked.insert(definition.clone(), cached.clone());
-        }
-        cached.result.clone()
+        let key = MemoKey::new(QueryKind::Check, id);
+        let entry = Arc::new(self.finish(key, text, reads, result, observed));
+        keep(
+            &mut self.checked,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
+        entry.result()
     }
     /// GEN-5 owns these body snapshots independently of per-definition cache keys.
     pub(crate) fn instantiation_bodies(
         &mut self,
     ) -> Result<Vec<(DefPath, Arc<QueryOutput<TypedBody>>)>, QueryError> {
         let mut bodies = vec![];
-        // A prechecked package reaches no definition outside its closure, so it closes no
-        // instantiation cycle through one, and its own verdict is in its precheck.
+        // An image package reaches no definition outside its closure, so it closes no
+        // instantiation cycle through one, and its own verdict is in its image.
         for path in self
             .items
             .keys()
-            .filter(|path| !self.prechecked(&path.0.package))
+            .filter(|path| !self.imaged(&path.0.package))
             .cloned()
             .collect::<Vec<_>>()
         {
@@ -1354,10 +1527,29 @@ impl QueryEngine {
         }
         Ok(bodies)
     }
+    pub(crate) fn signature_products(&self, definition: DefId) -> Option<&PhaseProducts> {
+        self.signatures
+            .get(&definition)
+            .map(|entry| &*entry.products)
+    }
+    pub fn resolver_snapshot(
+        &self,
+        definition: &DefPath,
+        kind: QueryKind,
+    ) -> Option<&ResolverSnapshot> {
+        let id = DefId::intern(definition);
+        let entry = match kind {
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| &e.products),
+            QueryKind::Signature => self.signatures.get(&id).map(|e| &e.products),
+            _ => None,
+        }?;
+        entry.resolution.as_ref()
+    }
+
     pub fn diagnostic_phase(&self, diagnostic: &Diagnostic) -> Option<String> {
-        if let Some(state) = &self.adapters.compiler_state {
-            if let Some((_, phase)) = state
-                .borrow()
+        for entry in self.modes.values() {
+            if let Some((_, phase)) = entry
+                .products
                 .mode_diagnostics
                 .iter()
                 .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
@@ -1365,8 +1557,42 @@ impl QueryEngine {
                 return Some(phase.clone());
             }
         }
-        fn contains<T>(cached: &Cached<T>, diagnostic: &Diagnostic) -> bool {
-            let diagnostics = match &cached.result {
+        for (id, entry) in &self.summaries {
+            // A detached or edited owner's receipt no longer attributes a
+            // warning, even if its old summary awaits adoption/retirement.
+            if entry.products.mode_diagnostics.is_empty()
+                || !entry.consistent
+                || self.graph.is_dirty(&entry.memo.key)
+            {
+                continue;
+            }
+            let Some(body) = self.implementation_hash(id.path()) else {
+                continue;
+            };
+            let manifest = self
+                .package_manifests
+                .get(&id.path().0.package)
+                .copied()
+                .unwrap_or(self.environment.package_manifest_hash);
+            if entry.memo.text
+                != ContentHash::of_parts(
+                    "hirsel.query.text.v1",
+                    [body.0.as_slice(), manifest.0.as_slice()],
+                )
+            {
+                continue;
+            }
+            if let Some((_, phase)) = entry
+                .products
+                .mode_diagnostics
+                .iter()
+                .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
+            {
+                return Some(phase.clone());
+            }
+        }
+        fn contains<T>(entry: &Entry<T>, diagnostic: &Diagnostic) -> bool {
+            let diagnostics = match &entry.memo.value {
                 Ok(o) => &o.diagnostics,
                 Err(QueryError::Diagnostics(ds)) => ds,
                 _ => return false,
@@ -1386,8 +1612,22 @@ impl QueryEngine {
         }
         self.last_phase.map(|p| p.phase_name().into())
     }
+    /// The runtime types a program runs with: every item's view as its own
+    /// package's bodies see it, with each owned drop body lowered.
     pub fn runtime_types(&mut self) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
-        self.runtime_types_with_finalizers(true)
+        let mut views: Vec<_> = self
+            .registry
+            .signatures()
+            .map(|s| (s.clone(), ContentHash::default()))
+            .collect();
+        for path in self.source_paths() {
+            let public = self.item_signature(&path)?.value;
+            views.push((
+                self.body_signature(&path.0.package, public)?.0,
+                ContentHash::default(),
+            ));
+        }
+        self.build_runtime_types(views, true)
     }
     /// Runtime metadata plus the declared facts checked execution enforces:
     /// `@noalloc` definitions, library `in ..` results and `arena.with`.
@@ -1401,33 +1641,35 @@ impl QueryEngine {
         };
         let library: Vec<_> = self.registry.signatures().cloned().collect();
         let mut signatures: Vec<_> = library.iter().cloned().collect();
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
+        for path in self.source_paths() {
             signatures.push(self.item_signature(&path)?.value);
         }
         for signature in signatures {
             if let hirsel_types::SignatureKind::Type(t) = &signature.kind {
                 if t.layout.flat {
-                    checked.flat.insert(signature.definition.clone());
+                    checked.flat.insert(signature.definition.path().clone());
                 }
                 if t.loop_source.is_some() {
                     checked
                         .operations
-                        .insert(signature.definition.clone(), signature.clone());
+                        .insert(signature.definition.path().clone(), signature.clone());
                 }
                 if t.destructor_allocation == hirsel_types::Allocation::NoAlloc {
-                    checked.noalloc_drop.insert(signature.definition.clone());
-                    checked.noalloc.insert(signature.definition.clone());
+                    checked
+                        .noalloc_drop
+                        .insert(signature.definition.path().clone());
+                    checked.noalloc.insert(signature.definition.path().clone());
                 }
             }
             let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
                 continue;
             };
             if function.allocation == hirsel_types::Allocation::NoAlloc {
-                checked.noalloc.insert(signature.definition.clone());
+                checked.noalloc.insert(signature.definition.path().clone());
             }
             checked
                 .operations
-                .insert(signature.definition.clone(), signature);
+                .insert(signature.definition.path().clone(), signature);
         }
         if let Some(forget) = &runtime.forget {
             checked.noalloc.insert(forget.clone());
@@ -1435,32 +1677,69 @@ impl QueryEngine {
         runtime.checked = Some(checked);
         Ok(runtime)
     }
+    /// The runtime types compile-time evaluation runs with, built once per
+    /// signature snapshot from its body views. Reflection and codecs read
+    /// them through the recorded serialization view.
     pub(crate) fn comptime_runtime_types(
         &mut self,
     ) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
-        let representations = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map_or(0, |state| state.borrow().representations.len());
-        let key = (representations, self.manifest_revision());
-        if let Some((cached, runtime)) = &self.comptime_runtime {
-            if *cached == key {
-                return Ok(runtime.clone());
+        let snapshot = self.signature_snapshot();
+        if let Some((epoch, runtime)) = &self.comptime_runtime
+            && *epoch == snapshot.epoch()
+        {
+            return Ok(runtime.clone());
+        }
+        let mut views: Vec<_> = self
+            .registry
+            .signatures()
+            .map(|s| {
+                let digest = snapshot
+                    .representation(s.definition)
+                    .and_then(Result::ok)
+                    .map_or_else(ContentHash::default, |(_, digest)| digest.0);
+                (s.clone(), digest)
+            })
+            .collect();
+        for path in self.source_paths() {
+            match snapshot.representation(hirsel_syntax::DefId::intern(&path)) {
+                Some(Ok((view, digest))) => views.push((view.clone(), digest.0)),
+                Some(Err(error)) => return Err(error.clone()),
+                None => {}
             }
         }
-        let runtime = Arc::new(self.runtime_types_with_finalizers(false)?);
-        // Building them may record a representation; key on the state after.
-        let representations = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map_or(0, |state| state.borrow().representations.len());
-        self.comptime_runtime = Some(((representations, key.1), runtime.clone()));
+        let runtime = Arc::new(self.build_runtime_types(views, false)?);
+        self.comptime_runtime = Some((snapshot.epoch(), runtime.clone()));
         Ok(runtime)
     }
-    fn runtime_types_with_finalizers(
+    /// The digest a reflection of `path` now records: its view in its own
+    /// package, from the current snapshot when one is kept.
+    pub(crate) fn representation_digest(&mut self, path: &DefPath) -> ContentHash {
+        let d = hirsel_syntax::DefId::intern(path);
+        if let Some((stamp, snapshot)) = &self.snapshot
+            && *stamp == self.snapshot_stamp()
+            && let Some(view) = snapshot.representation(d)
+        {
+            return view.map_or_else(|_| ContentHash::default(), |(_, digest)| digest.0);
+        }
+        let view = match self.registry.get(d) {
+            Some(signature) => Ok(signature.clone()),
+            None if self.declared(path) => self
+                .item_signature(path)
+                .and_then(|public| self.body_signature(&path.0.package, public.value))
+                .map(|(view, _)| view),
+            None => return ContentHash::default(),
+        };
+        view.map_or_else(
+            |_| ContentHash::default(),
+            |view| hirsel_validate::digest(self.types(), &view).0,
+        )
+    }
+    /// Runtime types over `views` (each with the digest a reflection of it
+    /// records). A program's run lowers each owned drop body; compile-time
+    /// evaluation names the entry body and lowers a finalizer when it runs.
+    fn build_runtime_types(
         &mut self,
+        views: Vec<(hirsel_types::SignatureRef, ContentHash)>,
         eager: bool,
     ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
         let mut runtime = hirsel_interp::aggregate::RuntimeTypes {
@@ -1468,24 +1747,20 @@ impl QueryEngine {
             forget: Some(hirsel_syntax::DefPath::core(
                 hirsel_interp::library::FORGET_OPERATION,
             )),
-            ..Default::default()
+            ..hirsel_interp::aggregate::RuntimeTypes::new(self.types().clone())
         };
-        let mut signatures: Vec<_> = self.registry.signatures().cloned().collect();
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
-            let public = self.item_signature(&path)?.value;
-            signatures.push(self.body_signature(&path.0.package, public)?.0);
-        }
-        runtime.serialization = signatures
-            .iter()
-            .map(|s| (s.definition.clone(), s.clone()))
-            .collect();
-        for signature in signatures {
+        runtime.serialization = hirsel_interp::aggregate::Serialization::new(
+            views
+                .iter()
+                .map(|(s, digest)| (s.definition.path().clone(), s.clone(), *digest)),
+        );
+        for (signature, _) in views {
             let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
                 continue;
             };
             let fields = t
                 .representation
-                .and_then(|id| signature.types.get(id))
+                .and_then(|id| self.types().get(id))
                 .map(|r| match &r.kind {
                     hirsel_types::TypeKind::Record(fs) => fs.len(),
                     hirsel_types::TypeKind::Variant(vs) => {
@@ -1495,7 +1770,7 @@ impl QueryEngine {
                 })
                 .unwrap_or(0);
             let finalizer = match &t.drop {
-                Some(drop) if self.items.contains_key(drop) => {
+                Some(drop) if self.declared(drop) => {
                     let entry = if eager {
                         self.lower_to_tir(drop)?.value.entry
                     } else {
@@ -1518,14 +1793,12 @@ impl QueryEngine {
                 None => None,
             };
             runtime.nominals.push(hirsel_interp::aggregate::Nominal {
-                definition: signature.definition.clone(),
+                definition: signature.definition.path().clone(),
                 resource: t.resource,
                 distinct: t.distinct,
                 finalizer,
                 fields,
-                representation: t
-                    .representation
-                    .map(|shape| (signature.types.clone(), shape)),
+                representation: t.representation,
             });
         }
         Ok(runtime)
@@ -1535,7 +1808,7 @@ impl QueryEngine {
             "hirsel.manifest.v1",
             [
                 self.environment.package_manifest_hash.0.as_slice(),
-                self.manifest_identity_hash.0.as_slice(),
+                self.declarations.identity().0.as_slice(),
             ],
         )
     }
@@ -1556,51 +1829,36 @@ impl QueryEngine {
         self.parse_file(file, context).map(|_| ())
     }
 }
-impl DefinitionQueries for QueryEngine {
-    fn parse_file(
+impl QueryEngine {
+    /// Lex and parse `file` under `context`, with the diagnostics std's
+    /// shared module heads add; indexing is the caller's.
+    fn parse_syntax(
         &mut self,
         file: FileId,
         context: &FileContext,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
-        let package_environment = self.package_environment(&context.package);
-        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
-            if old_context == context && environment == &package_environment {
-                return result.clone();
-            }
+        if self.package_manifests.contains_key(&context.package) {
+            timings::count(Count::DependencyParses);
         }
         let _timing = timings::phase(Phase::Parse);
         let Some(lexer) = self.adapters.lexer.clone() else {
             return self.missing(QueryKind::Lex);
         };
         self.last_phase = Some(QueryKind::Lex);
+        self.work.parsed_bytes += self
+            .sources
+            .file(file)
+            .map_or(0, |source| source.text().len() as u64);
         let tokens = lexer.lex(file, &self.sources)?;
         if has_errors(&tokens.diagnostics) {
-            let result = Err(QueryError::Diagnostics(tokens.diagnostics));
-            self.parsed.insert(
-                file,
-                (context.clone(), package_environment.clone(), result.clone()),
-            );
-            return result;
+            return Err(QueryError::Diagnostics(tokens.diagnostics));
         }
         let Some(parser) = self.adapters.parser.clone() else {
             return self.missing(QueryKind::Parse);
         };
         self.last_phase = Some(QueryKind::Parse);
-        let mut output = match parser.parse(file, tokens.value, context, &mut self.sources) {
-            Ok(output) => output,
-            Err(error) => {
-                // This fixed implementation limit is deterministic for an exact
-                // source snapshot. Retain only its failure, never partial syntax.
-                if matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
-                {
-                    self.parsed.insert(
-                        file,
-                        (context.clone(), package_environment, Err(error.clone())),
-                    );
-                }
-                return Err(error);
-            }
-        };
+        let mut output = parser.parse(file, tokens.value, context, &mut self.sources)?;
+        self.work.parsed_definitions += output.value.items.len() as u64;
         let mut diagnostics = tokens.diagnostics;
         diagnostics.append(&mut output.diagnostics);
         if context.package.name_is("std") {
@@ -1621,39 +1879,16 @@ impl DefinitionQueries for QueryEngine {
             }
         }
         output.diagnostics = diagnostics;
-        let result = if has_errors(&output.diagnostics) {
-            Err(QueryError::Diagnostics(output.diagnostics.clone()))
-        } else {
-            self.index(&mut output.value, context).map(|_| output)
-        };
-        self.parsed.insert(
-            file,
-            (context.clone(), package_environment.clone(), result.clone()),
-        );
-        result
+        Ok(output)
     }
-    fn item_signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<QueryOutput<hirsel_types::SignatureRef>, QueryError> {
-        self.with_validation_walk(|engine| {
-            engine
-                .signature_query(definition)
-                .map(|output| (*output).clone())
-        })
-    }
-    fn check_definition(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<QueryOutput<TypedBody>, QueryError> {
-        self.check_query(definition).map(|output| (*output).clone())
-    }
-    fn lower_to_tir(
+}
+impl QueryEngine {
+    fn lower_query(
         &mut self,
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(prechecked) = self.prechecked_lowering(definition)? {
+        if let Some(prechecked) = self.image_lowering(definition)? {
             if crate::comptime::has_staged_reads(&prechecked.value) {
                 let body = self.mode_query(definition)?;
                 self.register_staged(&body.value)?;
@@ -1664,38 +1899,70 @@ impl DefinitionQueries for QueryEngine {
         self.register_staged(&modes.value)?;
         let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Lower);
-        let key = self.key(definition, QueryKind::Lower)?;
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Lower)?;
         self.read_execution_signatures(&modes.dependencies);
-        if let Some(cached) = self.lowered.get(definition).cloned() {
-            if self.valid(&cached, &key) {
-                self.inherit_execution(&cached.executed);
-                return cached.output();
+        if let Some(entry) = self.lowered.get(&id).cloned()
+            && entry
+                .depth
+                .as_ref()
+                .is_none_or(|depth| depth.limit() == self.depth_limit())
+            && self.memo_valid(definition, &entry, text)
+        {
+            if self.verify == Verify::On {
+                if let Ok(output) = entry.result() {
+                    self.ensure_lowered_verdict(&output.value)?;
+                }
             }
+            if let Some(depth) = &entry.depth {
+                self.depth_replay_requests(depth)?;
+            }
+            self.merge_execution(entry.reads());
+            return entry.output();
         }
+        self.lower_holds
+            .demand_evicted(&MemoKey::new(QueryKind::Lower, id));
+        if let Some(entry) = self.load_lower(definition) {
+            self.merge_execution(entry.reads());
+            self.lowered.insert(id, entry.clone());
+            return entry.output();
+        }
+        self.lower_receipts.remove(&id);
         timings::count(Count::Lowered);
         self.start(definition, QueryKind::Lower)?;
-        let mut reads = self
-            .modes
-            .get(definition)
-            .map(|c| c.reads.clone())
+        let previous = self.modes.get(&id).cloned();
+        let mut reads = previous
+            .as_ref()
+            .map(|c| c.detail.clone())
             .unwrap_or_default();
         reads.signatures.extend(modes.dependencies.clone());
-        let mut body = (*modes).clone();
-        let representations = self
-            .modes
-            .get(definition)
-            .map(|c| c.representations.clone())
-            .unwrap_or_default();
-        self.execution_stack.push(ExecutionReads::default());
-        let prepared = self.prepare_comptime(&mut body.value, &signature.value);
-        let result = prepared.and_then(|()| match self.adapters.lowering.clone() {
-            Some(adapter) => adapter.lower(body.value, &signature.value),
+        let mut observed = Observed::inheriting(previous.as_ref().map(|c| c.reads()));
+        self.execution_stack.push(ReadsBuilder::new());
+        self.s1.begin_requests();
+        let prepared = self.prepare_comptime(&modes.value, &signature.value);
+        let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
+            Some(adapter) => {
+                *self.scalar_lower_calls.entry(id).or_default() += 1;
+                adapter.lower(
+                    &self.types,
+                    &self.memo,
+                    &modes.value,
+                    &comptime,
+                    &signature.value,
+                )
+            }
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);
+        let mut vreads = vec![];
         if let Ok(lowered) = &result {
-            let report = self.run_v(&definition.0.package, |signatures| {
-                signatures.validate_once(&lowered.value)
+            if self.verify == Verify::On {
+                *self.scalar_validation_runs.entry(id).or_default() += 1;
+            }
+            let report = self.run_v(&definition.0.package, |types, signatures| {
+                let _timing = timings::phase(Phase::Verify);
+                timings::count(Count::VRuns);
+                hirsel_validate::validate(&lowered.value, types, signatures, &mut vreads)
             });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);
@@ -1710,25 +1977,108 @@ impl DefinitionQueries for QueryEngine {
             .execution_stack
             .pop()
             .expect("lowering execution frame");
-        let mut cached = self.finish(key, reads, result, representations);
-        Arc::make_mut(&mut cached).executed = executed;
-        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
-            self.lowered.insert(definition.clone(), cached.clone());
+        observed.merged.extend(executed);
+        let depth = self.s1.finish_requests(self.depth_limit());
+        let key = MemoKey::new(QueryKind::Lower, id);
+        let mut entry = self.finish(key, text, reads, result, observed);
+        entry.depth = entry.result().is_ok().then_some(depth);
+        let entry = Arc::new(entry);
+        if self.verify == Verify::On
+            && let Ok(output) = entry.result()
+        {
+            self.remember_lowered_verdict(output.value.clone(), vreads.clone());
         }
-        self.publish_lowering(definition);
-        cached.output()
+        self.store_lower(
+            definition,
+            &entry,
+            (self.verify == Verify::On).then_some(vreads),
+        )?;
+        keep(
+            &mut self.lowered,
+            &mut self.graph,
+            entry.clone(),
+            self.s1.failure_is_own(),
+        );
+        if !self.lowered.contains_key(&id) {
+            self.lower_holds.forget(&key);
+            self.lower_verdicts.remove(&id);
+        }
+        // Execution closure by union: whoever executes this body reads all it read.
+        self.merge_execution(entry.reads());
+        entry.output()
+    }
+}
+
+impl DefinitionQueries for QueryEngine {
+    fn parse_file(
+        &mut self,
+        file: FileId,
+        context: &FileContext,
+    ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
+        // An unedited source of the adopted image keeps the image.
+        self.materialize_source(file)?;
+        let package_environment = self.package_environment(&context.package);
+        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
+            if old_context == context && environment == &package_environment {
+                return result.clone();
+            }
+        }
+        let mut output = match self.parse_syntax(file, context) {
+            Ok(output) => output,
+            Err(error) => {
+                // A lexing failure, and this fixed implementation limit, are
+                // deterministic for an exact source snapshot. Retain only the
+                // failure, never partial syntax.
+                if matches!(&error, QueryError::Diagnostics(_))
+                    || matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
+                {
+                    self.parsed.insert(
+                        file,
+                        (context.clone(), package_environment, Err(error.clone())),
+                    );
+                }
+                return Err(error);
+            }
+        };
+        let result = if has_errors(&output.diagnostics) {
+            Err(QueryError::Diagnostics(output.diagnostics.clone()))
+        } else {
+            let _timing = timings::phase(Phase::Declarations);
+            self.index(&mut output.value, context).map(|_| output)
+        };
+        self.parsed.insert(
+            file,
+            (context.clone(), package_environment.clone(), result.clone()),
+        );
+        result
+    }
+    fn item_signature(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<hirsel_types::SignatureRef>, QueryError> {
+        self.signature_query(definition)
+            .map(|output| (*output).clone())
+    }
+    fn check_definition(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<TypedBody>, QueryError> {
+        self.check_query(definition).map(|output| (*output).clone())
+    }
+    fn lower_to_tir(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
+        let result = self.lower_query(definition);
+        let released = self.release_batch_front(definition);
+        self.retain_lowering(DefId::intern(definition));
+        result.and_then(|output| released.map(|()| output))
     }
 }
 impl SignatureProvider for QueryEngine {
-    fn signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<hirsel_types::SignatureRef, QueryError> {
-        self.with_validation_walk(|engine| {
-            engine
-                .signature_query(definition)
-                .map(|output| output.value.clone())
-        })
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.signature_query_id(definition)
+            .map(|output| output.value.clone())
     }
     fn lookup(
         &mut self,
@@ -1752,7 +2102,7 @@ impl SignatureProvider for QueryEngine {
                     return Err(QueryError::NotImplemented);
                 }
                 let definition = lookup_path(context, path).ok_or(QueryError::NotImplemented)?;
-                if self.items.contains_key(&definition) || self.builtins.contains_key(&definition) {
+                if self.declared(&definition) || self.builtins.contains_key(&definition) {
                     Ok(definition)
                 } else {
                     self.registry
@@ -1781,16 +2131,31 @@ impl TirProvider for QueryEngine {
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         // #63: dependency-first; ties use source file path and declaration position.
         let mut declarations: Vec<_> = self
-            .items
-            .iter()
-            .filter_map(|(path, items)| {
-                let item = items.first()?;
-                matches!(item.item.kind, ItemKind::Const { .. }).then(|| {
-                    let site = self.sources.resolve(item.item.name_span);
+            .source_paths()
+            .into_iter()
+            .filter_map(|path| {
+                let (constant, name) = match self.items.get(&path) {
+                    Some(items) => {
+                        let item = items.first()?;
+                        (
+                            matches!(item.item.kind, ItemKind::Const { .. }),
+                            item.item.name_span,
+                        )
+                    }
+                    None => (
+                        matches!(
+                            self.image_signature(&path)?.output.value.kind,
+                            hirsel_types::SignatureKind::Const { .. }
+                        ),
+                        self.declarations.sites(&path).first()?.name_span,
+                    ),
+                };
+                constant.then(|| {
+                    let site = self.sources.resolve(name);
                     (
                         self.sources.file(site.file).unwrap().path.clone(),
                         site.start,
-                        path.clone(),
+                        path,
                     )
                 })
             })
@@ -1800,7 +2165,7 @@ impl TirProvider for QueryEngine {
             .registry
             .signatures()
             .filter(|s| matches!(s.kind, hirsel_types::SignatureKind::Const { ty: _, .. }))
-            .map(|s| s.definition.clone())
+            .map(|s| s.definition.path().clone())
             .collect();
         paths.extend(declarations.into_iter().map(|(_, _, path)| path));
         let ranks: BTreeMap<_, _> = paths
@@ -1812,8 +2177,11 @@ impl TirProvider for QueryEngine {
         let mut counts = vec![0; paths.len()];
         for (i, path) in paths.iter().enumerate() {
             let value = self.evaluate_constant(path)?;
-            for dependency in value.executed.bodies.keys() {
-                if let Some(&dependency) = ranks.get(dependency).filter(|&&d| d != i) {
+            for (read, _) in value.executed.iter() {
+                let ReadKey::ExecutedBody(dependency) = read else {
+                    continue;
+                };
+                if let Some(&dependency) = ranks.get(dependency.path()).filter(|&&d| d != i) {
                     users[dependency].push(i);
                     counts[i] += 1;
                 }
@@ -1849,33 +2217,30 @@ impl TirProvider for QueryEngine {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        self.resolve_instance(path, types, arguments)
+        self.resolve_instance(path, arguments)
     }
 }
 struct Recorder<'a> {
     owner: DefPath,
     private_shapes: bool,
-    representations: BTreeMap<DefPath, ContentHash>,
+    observed: Observed,
     engine: &'a mut QueryEngine,
     reads: DependencyReads,
     /// Recursive type groups found so far, by member.
-    groups: BTreeMap<DefPath, Option<Rc<type_groups::TypeGroup>>>,
+    groups: BTreeMap<DefPath, Option<Arc<type_groups::TypeGroup>>>,
 }
 impl SignatureProvider for Recorder<'_> {
-    fn signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<hirsel_types::SignatureRef, QueryError> {
-        let result = self.engine.signature(definition);
+    fn signature(&mut self, id: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let definition = id.path();
+        let result = self.engine.signature(id);
         if let Err(QueryError::Operational(error)) = &result {
             self.reads.operational_failure = Some(error.clone());
         }
         match &result {
             Ok(signature) => self.reads.signatures.push(SignatureDependency {
-                definition: definition.clone(),
+                definition: DefId::intern(definition),
                 fingerprint: signature.fingerprint,
             }),
             // A group member's published signature may be the one being
@@ -1899,8 +2264,10 @@ impl SignatureProvider for Recorder<'_> {
         if self.private_shapes {
             let public = result?;
             let (view, revision) = self.engine.body_signature(&self.owner.0.package, public)?;
-            if let Some(revision) = revision {
-                self.representations.insert(definition.clone(), revision);
+            if let Some(digest) = revision {
+                self.observed
+                    .merged
+                    .record(ReadKey::Representation(id), digest);
             }
             Ok(view)
         } else {
@@ -1946,7 +2313,7 @@ impl SignatureProvider for Recorder<'_> {
         self.group_at(definition, stage)
     }
 }
-fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
+pub(crate) fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
     let mut segments: Vec<_> = path
         .segments
         .iter()
@@ -1978,6 +2345,44 @@ pub(crate) fn has_errors(diagnostics: &[Diagnostic]) -> bool {
     diagnostics.iter().any(|d| d.severity == Severity::Error)
 }
 
+/// Complete a phase before the next phase consumes it. Shared by serial and
+/// frozen workers so diagnostic rejection and dependency order stay identical.
+fn prepare_result<T>(
+    reads: &mut DependencyReads,
+    result: &mut Result<QueryOutput<T>, QueryError>,
+    products: &PhaseProducts,
+) {
+    if let Ok(output) = result {
+        reads.signatures.extend(output.dependencies.clone());
+        output.dependencies = reads.signatures.clone();
+        if has_errors(&output.diagnostics) {
+            *result = Err(QueryError::Diagnostics(output.diagnostics.clone()));
+        }
+    }
+    if let Some(error) = &reads.operational_failure {
+        *result = Err(QueryError::Operational(error.clone()));
+    }
+    if let Some(resolution) = &products.resolution {
+        reads.resolver = resolution.reads.clone();
+    }
+}
+
+/// Keeps a recorded memo in its table, or forgets it to be recomputed:
+/// inconsistent reads, an uncacheable result (an operational failure or a
+/// missing phase), or a failure that met a compile-time cycle or the depth
+/// limit outside its own frames (`own` false), which another stack would not
+/// meet.
+fn keep<T>(table: &mut Table<T>, graph: &mut MemoGraph, entry: Arc<Entry<T>>, own: bool) {
+    let key = entry.memo.key;
+    let value = entry.memo.value.as_ref();
+    if !entry.consistent || value.is_err_and(|e| !e.cacheable()) || (value.is_err() && !own) {
+        graph.remove(&key);
+        table.remove(&key.def);
+    } else {
+        table.insert(key.def, entry);
+    }
+}
+
 fn shared_output<T>(output: QueryOutput<T>) -> QueryOutput<std::sync::Arc<T>> {
     QueryOutput {
         value: std::sync::Arc::new(output.value),
@@ -1986,7 +2391,7 @@ fn shared_output<T>(output: QueryOutput<T>) -> QueryOutput<std::sync::Arc<T>> {
     }
 }
 
-fn header_span(syntax: &ItemSyntax) -> Span {
+pub(crate) fn header_span(syntax: &ItemSyntax) -> Span {
     let item = &syntax.item;
     let end = match item.kind {
         ItemKind::Function {

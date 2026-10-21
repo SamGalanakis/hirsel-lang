@@ -30,7 +30,7 @@ pub use hirsel_run_schema::BudgetKind;
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::DefPath;
 use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
-use hirsel_types::{GenericArgument, QueryError, TypeId, TypeStore};
+use hirsel_types::{GenericArgument, QueryError, TypeId, TypeInterner};
 pub use value::{Integer, Value};
 
 /// Limits are explicit inputs, independent of host stack size or wall time.
@@ -508,7 +508,7 @@ pub struct OperationCall<'a> {
     /// other argument.
     pub arguments: &'a mut [Value],
     pub result_type: TypeId,
-    pub types: &'a TypeStore,
+    pub types: &'a TypeInterner,
     pub site: Span,
 }
 pub struct OperationContext<'a> {

@@ -122,20 +122,20 @@ fn core_graph_schema(
     count: usize,
     rows: impl FnOnce(&[hirsel_types::TypeId]) -> Vec<hirsel_types::Type>,
 ) -> Result<SerializableSchema, Error> {
-    let store = hirsel_types::TypeStore::from_graph(count, rows);
-    let root = store.iter().next().map(|(id, _)| id).unwrap();
+    let ids = runtime.types.intern_graph(count, rows);
+    let root = ids[0];
     hirsel_types::serialization::serializable_schema(
-        &store,
+        &runtime.types,
         root,
         &hirsel_types::GenericDeclarations::default(),
-        &mut |path| Ok(runtime.serialization.get(path).cloned()),
+        &mut |d: hirsel_syntax::DefId| Ok(runtime.serialization.get(d.path()).cloned()),
     )
     .map_err(Error::Query)?
     .ok_or_else(|| invalid("a core type has no codec schema"))
 }
 fn named(definition: &str, arguments: Vec<GenericArgument>) -> hirsel_types::Type {
     hirsel_types::Type::with_kind(hirsel_types::TypeKind::Named {
-        definition: hirsel_syntax::DefPath::core(definition),
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(definition)),
         arguments: arguments.into(),
     })
 }
@@ -477,7 +477,7 @@ impl Library {
                                 .filter(|n| n.distinct)
                                 .cloned()
                                 .collect(),
-                            ..Default::default()
+                            ..crate::aggregate::RuntimeTypes::new(call.runtime.types.clone())
                         },
                         place: runner.entry.name.clone(),
                         key,

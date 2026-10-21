@@ -478,6 +478,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]
@@ -492,9 +493,11 @@ dependencies = [
  "hirsel-intern",
  "hirsel-rt",
  "hirsel-run-schema",
+ "libc",
  "mimalloc",
  "rustls",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -536,11 +539,13 @@ dependencies = [
  "hirsel-driver",
  "hirsel-engine",
  "hirsel-guard",
+ "hirsel-intern",
  "hirsel-proof-export",
  "hirsel-run-config",
  "hirsel-run-schema",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-types",
  "serde_json",
 ]
 
@@ -594,6 +599,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-engine",
  "hirsel-free",
+ "hirsel-graph",
  "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",
@@ -636,6 +642,7 @@ dependencies = [
  "hirsel-fmt",
  "hirsel-graph",
  "hirsel-guard",
+ "hirsel-image",
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-lexer",
@@ -700,11 +707,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-image"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-types",
+ "libc",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "hirsel-intern"
 version = "0.1.0"
 dependencies = [
  "hirsel-guard",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -741,6 +765,7 @@ dependencies = [
  "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-guard",
+ "hirsel-intern",
  "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",
@@ -781,6 +806,7 @@ dependencies = [
 name = "hirsel-llvm"
 version = "0.1.0"
 dependencies = [
+ "gimli",
  "hirsel-core-contract",
  "hirsel-cranelift",
  "hirsel-graph",
@@ -792,6 +818,7 @@ dependencies = [
  "hirsel-tir",
  "hirsel-types",
  "llvm-sys",
+ "object",
 ]
 
 [[package]]
@@ -924,7 +951,9 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-diag",
+ "hirsel-graph",
  "hirsel-guard",
+ "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
@@ -948,6 +977,7 @@ dependencies = [
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]
@@ -1121,6 +1151,7 @@ dependencies = [
  "hirsel-tir",
  "hirsel-type-analysis",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]

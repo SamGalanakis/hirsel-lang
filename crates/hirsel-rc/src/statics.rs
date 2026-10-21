@@ -33,11 +33,12 @@ fn unsupported<T>(message: impl Into<String>) -> Result<T, StaticError> {
 /// Encode `value`, the constant `symbol` names, at its type's layout.
 pub fn encode(
     layouts: &mut LayoutBuilder<'_>,
+    types: &hirsel_types::TypeInterner,
     symbol: Symbol,
     value: &Materialized,
 ) -> Result<StaticData, StaticError> {
     let layout = layouts
-        .layout(&value.types, value.root.ty)
+        .layout(types, value.root.ty)
         .map_err(|e| StaticError(format!("the constant's layout: {e:?}")))?;
     let mut encoder = Encoder {
         layouts,
@@ -65,6 +66,7 @@ pub fn encode(
 /// and an ordinal or niche tag.
 pub fn nullary_variant_instance(
     record: &hirsel_lir::layout_types::LayoutRecord,
+    key: hirsel_lir::layout_types::LayoutKey,
     variant: u32,
 ) -> Option<hirsel_syntax::ContentHash> {
     let tag = record.tag.as_ref()?;
@@ -80,25 +82,26 @@ pub fn nullary_variant_instance(
         && nullary
         && matches!(tag.form, TagForm::Ordinal | TagForm::Niche { .. }))
     .then(|| {
-        let layout = hirsel_lir::snapshot::digest("nullary-variant", record);
         hirsel_syntax::ContentHash::of_parts(
-            "hirsel.nullary-variant.v1",
-            [layout.0.as_slice(), &variant.to_le_bytes()],
+            "hirsel.nullary-variant.v2",
+            [key.0.0.as_slice(), &variant.to_le_bytes()],
         )
     })
 }
 
-/// The static block of the boxed nullary variant `symbol` names at `payload`, whose layout
-/// is `record`: zero bytes but the ordinal at the tag (a niche's null word is the nullary
+/// The static block of the boxed nullary variant `symbol` names at `payload`:
+/// zero bytes but the ordinal at the tag (a niche's null word is the nullary
 /// variant). `None` when no variant of the layout has the symbol's instance.
 pub fn nullary_variant(
-    record: &hirsel_lir::layout_types::LayoutRecord,
+    table: &hirsel_lir::layout_types::LayoutTable,
     symbol: Symbol,
     payload: LayoutId,
 ) -> Option<StaticData> {
+    let record = table.layout(payload)?;
+    let key = hirsel_lir::LayoutKeys::rooted(table, payload);
     let tag = record.tag.as_ref()?;
     let variant = tag.variants.iter().map(|v| v.ordinal).find(|&v| {
-        symbol.instance.is_some() && nullary_variant_instance(record, v) == symbol.instance
+        symbol.instance.is_some() && nullary_variant_instance(record, key, v) == symbol.instance
     })?;
     let SizeSpec::Fixed(size) = record.size else {
         return None;

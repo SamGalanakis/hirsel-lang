@@ -159,21 +159,20 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
 
 fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
-    let failures = failure_codes();
     let inputs = EmitInputs {
+        index: None,
         verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &failures,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -241,7 +240,12 @@ int main(void) {{
             let source = dir.join("root.c");
             std::fs::write(&source, &c).unwrap();
             let bytes = object(&program, opt);
-            let executable = link(&target, &dir, &[("root.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("root.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             assert_eq!(run(&target, &executable), "root hand-back ok\n");
         }
     }

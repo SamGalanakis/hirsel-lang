@@ -1,6 +1,6 @@
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     // --- failure successors and cleanup chains ---
 
     /// The TIR actions of a cleanup chain, in execution order.

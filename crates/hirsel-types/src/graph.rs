@@ -1,7 +1,8 @@
 //! Pure graph transport. Signature lookup and rule diagnostics remain phase-owned.
 use crate::*;
-use hirsel_intern::work::{self, Counter};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+type IdMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+type IdSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 
 /// Role of an edge in the complete structural type graph. Callable edges cross
 /// one binder for value, type and size parameters, even on nongeneric callables.
@@ -94,8 +95,8 @@ pub fn compile_time_only(kind: &TypeKind) -> bool {
 /// Whether `ty` reaches a compile-time-only type through its complete graph,
 /// type arguments and callable headers included; nominal representations are
 /// their declarations' own.
-pub fn mentions_compile_time_only(store: &TypeStore, ty: TypeId) -> bool {
-    let mut seen = BTreeSet::new();
+pub fn mentions_compile_time_only(store: &TypeInterner, ty: TypeId) -> bool {
+    let mut seen = IdSet::default();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if !seen.insert(ty) {
@@ -110,8 +111,8 @@ pub fn mentions_compile_time_only(store: &TypeStore, ty: TypeId) -> bool {
     false
 }
 /// Whether `ty` names a generic type or size parameter anywhere in its graph.
-pub fn mentions_parameter(store: &TypeStore, ty: TypeId) -> bool {
-    let mut seen = BTreeSet::new();
+pub fn mentions_parameter(store: &TypeInterner, ty: TypeId) -> bool {
+    let mut seen = IdSet::default();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if !seen.insert(ty) {
@@ -134,51 +135,39 @@ pub fn mentions_parameter(store: &TypeStore, ty: TypeId) -> bool {
     }
     false
 }
-/// The closed generic arguments of an invocation, rows of their own store.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// The closed generic arguments of an invocation, rows of the session interner.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Actuals {
-    pub types: std::sync::Arc<TypeStore>,
     pub arguments: Vec<GenericArgument>,
 }
 /// The actuals bound to each enclosing generic binder of an invocation.
 pub type ActualBindings = BTreeMap<SiteRef, Actuals>;
-/// `arguments`, rows of `source`, with every parameter of a binder in
-/// `bindings` replaced by that binder's actuals.
+/// `arguments` with every parameter of a binder in `bindings` replaced by that
+/// binder's actuals.
 pub fn close_arguments(
-    source: &TypeStore,
+    t: &TypeInterner,
+    m: &TypeMemo,
     arguments: &[GenericArgument],
     bindings: &ActualBindings,
 ) -> Result<Actuals, GraphError> {
-    let mut store = source.clone();
     let mut result = arguments.to_vec();
     for (&scope, actuals) in bindings.iter().filter(|_| !arguments.is_empty()) {
-        let imported = actuals
-            .arguments
-            .iter()
-            .map(|a| match a {
-                GenericArgument::Type(t) => {
-                    import_type(&actuals.types, *t, &mut store).map(GenericArgument::Type)
-                }
-                GenericArgument::Size(n) => Ok(GenericArgument::Size(n.clone())),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let authorities = vec![AuthoritySummary::Unknown; imported.len()];
+        let authorities = vec![AuthoritySummary::Unknown; actuals.arguments.len()];
         let substitution = Substitution {
             binder: Some(GenericBinder::Body(scope)),
-            arguments: &imported,
+            arguments: &actuals.arguments,
             authorities: &authorities,
             ..Default::default()
         };
         for argument in &mut result {
             match argument {
-                GenericArgument::Type(t) => {
-                    *t = substitute_type_in_place(&mut store, *t, substitution)?
-                }
+                GenericArgument::Type(ty) => *ty = substitute(t, m, *ty, &substitution)?,
                 GenericArgument::Size(Size::Parameter(SizeParameterRef::Body {
                     scope: owner,
                     parameter,
                 })) if *owner == scope => {
-                    *argument = imported
+                    *argument = actuals
+                        .arguments
                         .get(parameter.0 as usize)
                         .cloned()
                         .ok_or(GraphError::MissingArgument(parameter.0))?;
@@ -187,10 +176,7 @@ pub fn close_arguments(
             }
         }
     }
-    Ok(Actuals {
-        types: std::sync::Arc::new(store),
-        arguments: result,
-    })
+    Ok(Actuals { arguments: result })
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphError {
@@ -236,12 +222,12 @@ impl Default for Substitution<'_> {
     }
 }
 /// The derived error channel is selected by nominal role, never by spelling.
-pub fn result_error(store: &TypeStore, result: TypeId, roles: &NominalRoles) -> Option<TypeId> {
+pub fn result_error(store: &TypeInterner, result: TypeId, roles: &NominalRoles) -> Option<TypeId> {
     match &store.get(result)?.kind {
         TypeKind::Named {
             definition,
             arguments,
-        } if roles.result_type.as_ref() == Some(definition) => match arguments.as_slice() {
+        } if roles.result_type.as_ref() == Some(definition.path()) => match arguments.as_slice() {
             [GenericArgument::Type(_), GenericArgument::Type(error)] => Some(*error),
             _ => None,
         },
@@ -254,7 +240,7 @@ pub fn result_error(store: &TypeStore, result: TypeId, roles: &NominalRoles) -> 
 /// `arena` says which relation places name arenas: a type argument transports
 /// its actual's placement (PROV-4) but none of its lifetime.
 pub fn generic_type_argument(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     actual: TypeId,
     arena: impl Fn(&Origin) -> bool,
 ) -> Result<TypeId, GraphError> {
@@ -290,77 +276,94 @@ pub fn generic_type_argument(
     ) {
         row.modes.sendability = Sendability::NotSendable;
     }
-    Ok(store.push(row))
+    Ok(store.intern(row))
 }
-/// Imports reachable rows, preserving modes/effects; no signature provider reads.
-pub fn import_type(
-    source: &TypeStore,
-    root: TypeId,
-    destination: &mut TypeStore,
+/// Binder-aware substitution over the session interner. Source rows are
+/// immutable and the result is interned beside them; nested callables keep
+/// their own binders. Memoized session-wide in `m` by every explicit input:
+/// the root, the binder, the arguments, their authorities and the roles.
+pub fn substitute(
+    t: &TypeInterner,
+    m: &TypeMemo,
+    ty: TypeId,
+    s: &Substitution<'_>,
 ) -> Result<TypeId, GraphError> {
-    substitute_type(source, root, destination, Substitution::default())
-}
-/// Import a new root row whose children belong to the supplied source snapshot.
-/// No source row is added or copied merely to introduce that root.
-pub fn import_type_row(
-    source: &TypeStore,
-    row: &Type,
-    destination: &mut TypeStore,
-) -> Result<TypeId, GraphError> {
-    let root = (TypeStore::fresh_id(source.len()), row.clone());
-    Importer {
-        source: Some(source),
-        root_row: Some(&root),
-        destination,
-        substitution: Substitution::default(),
-        memo: BTreeMap::new(),
-        active: BTreeSet::new(),
+    // rustc type_ir/flags.rs:5-23: no generic transport for closed graphs.
+    if !crate::parameters::needs_substitution(t, ty, s.roles.result_type.is_some()) {
+        return Ok(ty);
     }
-    .ty(root.0, 0)
+    m.substitute(ty, s, || {
+        Importer {
+            t,
+            substitution: *s,
+            memo: IdMap::default(),
+            active: IdSet::default(),
+        }
+        .ty(ty, 0)
+    })
 }
 
-/// Binder-aware import/substitution. Source rows are immutable; destination IDs
-/// are never looked up in the source. Failure may leave unused destination rows.
-pub fn substitute_type(
-    source: &TypeStore,
-    root: TypeId,
-    destination: &mut TypeStore,
-    substitution: Substitution<'_>,
-) -> Result<TypeId, GraphError> {
-    Importer {
-        source: Some(source),
-        root_row: None,
-        destination,
-        substitution,
-        memo: BTreeMap::new(),
-        active: BTreeSet::new(),
+/// A signature header's edges substituted at their own binder: every
+/// parameter, result and error type, and the header's authority terms.
+pub(crate) fn substitute_header(
+    t: &TypeInterner,
+    m: &TypeMemo,
+    f: &FunctionType,
+    s: &Substitution<'_>,
+) -> Result<FunctionType, GraphError> {
+    let mut f = f.clone();
+    for p in f.parameters.iter_mut() {
+        p.ty = substitute(t, m, p.ty, s)?;
     }
-    .ty(root, 0)
+    f.result = substitute(t, m, f.result, s)?;
+    f.error = f.error.map(|e| substitute(t, m, e, s)).transpose()?;
+    if s.roles.result_type.is_some() {
+        f.error = result_error(t, f.result, s.roles);
+    }
+    let importer = Importer {
+        t,
+        substitution: *s,
+        memo: IdMap::default(),
+        active: IdSet::default(),
+    };
+    importer.authority(&mut f.authority, 0)?;
+    if let Uses::Only(a) = &mut f.uses {
+        importer.authority(a, 0)?;
+    }
+    Ok(f)
 }
-/// Substitute a rooted graph in its own store, appending immutable output rows.
-pub fn substitute_type_in_place(
-    store: &mut TypeStore,
-    root: TypeId,
-    substitution: Substitution<'_>,
+
+/// A nominal's representation at its actual arguments, for proofs that open
+/// declarations. Unmemoized: proofs own no structural memo.
+pub(crate) fn expand(
+    t: &TypeInterner,
+    representation: TypeId,
+    arguments: &[GenericArgument],
+    roles: &NominalRoles,
 ) -> Result<TypeId, GraphError> {
-    Importer {
-        source: None,
-        root_row: None,
-        destination: store,
-        substitution,
-        memo: BTreeMap::new(),
-        active: BTreeSet::new(),
+    if !crate::parameters::needs_substitution(t, representation, roles.result_type.is_some()) {
+        return Ok(representation);
     }
-    .ty(root, 0)
+    let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
+    Importer {
+        t,
+        substitution: Substitution {
+            binder: Some(GenericBinder::Bound(0)),
+            arguments,
+            authorities: &authorities,
+            roles,
+        },
+        memo: IdMap::default(),
+        active: IdSet::default(),
+    }
+    .ty(representation, 0)
 }
 
 struct Importer<'a> {
-    source: Option<&'a TypeStore>,
-    root_row: Option<&'a (TypeId, Type)>,
-    destination: &'a mut TypeStore,
+    t: &'a TypeInterner,
     substitution: Substitution<'a>,
-    memo: BTreeMap<(TypeId, u32), TypeId>,
-    active: BTreeSet<TypeId>,
+    memo: IdMap<(TypeId, u32), TypeId>,
+    active: IdSet<TypeId>,
 }
 fn raise_reference<P: Copy>(p: BinderRef<P>, amount: u32) -> BinderRef<P> {
     match p {
@@ -428,7 +431,7 @@ impl Importer<'_> {
                     let id = self.type_argument(p)?;
                     effect = effect.join(
                         match self
-                            .destination
+                            .t
                             .get(id)
                             .ok_or(GraphError::MissingType(id))?
                             .drop_allocation
@@ -458,7 +461,7 @@ impl Importer<'_> {
                     }
                     let id = self.type_argument(p)?;
                     match &self
-                        .destination
+                        .t
                         .get(id)
                         .ok_or(GraphError::MissingType(id))?
                         .modes
@@ -523,6 +526,15 @@ impl Importer<'_> {
         Ok(())
     }
     fn ty(&mut self, id: TypeId, nested: u32) -> Result<TypeId, GraphError> {
+        // Skip only structurally closed subgraphs. Role-bearing callable
+        // error channels and all generic/authority normalization remain live.
+        if !crate::parameters::needs_substitution(
+            self.t,
+            id,
+            self.substitution.roles.result_type.is_some(),
+        ) {
+            return Ok(id);
+        }
         let key = (id, nested);
         if let Some(id) = self.memo.get(&key) {
             return Ok(*id);
@@ -530,23 +542,15 @@ impl Importer<'_> {
         if !self.active.insert(id) {
             return Err(GraphError::StructuralCycle(id));
         }
-        let mut t = if let Some((_, row)) = self.root_row.filter(|(root, _)| *root == id) {
-            row.clone()
-        } else {
-            self.source
-                .unwrap_or(&*self.destination)
-                .get(id)
-                .cloned()
-                .ok_or(GraphError::MissingType(id))?
-        };
+        let mut t = self.t.get(id).cloned().ok_or(GraphError::MissingType(id))?;
         if let TypeKind::Parameter(p) = t.kind {
             let (p, selected) = self.reference(p, nested);
             t.kind = TypeKind::Parameter(p);
             if selected {
                 let target = self.type_argument(p)?;
-                let target = shift_type_binders(self.destination, target, nested)?;
+                let target = shift_type_binders(self.t, target, nested)?;
                 let mut replacement = self
-                    .destination
+                    .t
                     .get(target)
                     .cloned()
                     .ok_or(GraphError::MissingType(target))?;
@@ -568,12 +572,12 @@ impl Importer<'_> {
                 if !t.brand.alternatives.is_empty() {
                     replacement.brand = t.brand;
                 }
-                let mut target = self.destination.push(replacement.clone());
+                let mut target = self.t.intern(replacement.clone());
                 // Qualifiers written on the parameter occurrence say nothing
                 // about plain bits. Nominal arguments need their declaration:
                 // callers holding a lookup normalize the substituted graph.
                 if structural_property(
-                    self.destination,
+                    self.t,
                     target,
                     StructuralProperty::Plain,
                     &GenericDeclarations::default(),
@@ -582,7 +586,7 @@ impl Importer<'_> {
                 .unwrap()
                 {
                     replacement.canonicalize_plain();
-                    target = self.destination.push(replacement);
+                    target = self.t.intern(replacement);
                 }
                 self.memo.insert(key, target);
                 self.active.remove(&id);
@@ -594,47 +598,31 @@ impl Importer<'_> {
         }
         t.drop_allocation = self.drop_effect(t.drop_allocation, nested)?;
         t.modes.sendability = self.sendability(t.modes.sendability, nested)?;
-        match &mut t.kind {
-            TypeKind::Tuple(ts) => {
-                for t in ts {
-                    *t = self.ty(*t, nested)?;
-                }
-            }
-            TypeKind::Box(t) => *t = self.ty(*t, nested)?,
-            TypeKind::Record(fs) => {
-                for f in fs {
-                    f.ty = self.ty(f.ty, nested)?;
-                }
-            }
-            TypeKind::Variant(vs) => {
-                for v in vs {
-                    for (_, t) in &mut v.fields {
-                        *t = self.ty(*t, nested)?;
-                    }
-                }
-            }
-            TypeKind::Function(f) => {
-                for p in &mut f.parameters {
-                    p.ty = self.ty(p.ty, nested + 1)?;
-                }
-                f.result = self.ty(f.result, nested + 1)?;
-                f.error = f.error.map(|t| self.ty(t, nested + 1)).transpose()?;
-                if self.substitution.roles.result_type.is_some() {
-                    f.error = result_error(self.destination, f.result, self.substitution.roles);
-                }
-                self.authority(&mut f.authority, nested + 1)?;
-                if let Uses::Only(a) = &mut f.uses {
-                    self.authority(a, nested + 1)?;
-                }
-            }
+        // Retain shared children until a substituted edge actually changes.
+        // Borrowed from rustc15c1044 rustc_type_ir/src/fold.rs:296-325's
+        // allocation-preserving fold. Hirsel's interned source remains shared,
+        // so defer Arc::make_mut until an edge changes instead of taking it.
+        t.kind = match &t.kind {
             TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for a in arguments {
-                    match a {
-                        GenericArgument::Type(t) => *t = self.ty(*t, nested)?,
+                let mut kind = t.kind.clone();
+                let (TypeKind::Named {
+                    arguments: output, ..
+                }
+                | TypeKind::Builtin {
+                    arguments: output, ..
+                }) = &mut kind
+                else {
+                    unreachable!()
+                };
+                // Preserve argument order, including which malformed actual
+                // reports its GraphError first, across type and size edges.
+                for (i, argument) in arguments.iter().enumerate() {
+                    let new = match argument {
+                        GenericArgument::Type(ty) => GenericArgument::Type(self.ty(*ty, nested)?),
                         GenericArgument::Size(Size::Parameter(p)) => {
                             let (reference, selected) = self.reference(*p, nested);
                             if selected {
-                                *a = match self.argument(p.parameter().0)? {
+                                match self.argument(p.parameter().0)? {
                                     GenericArgument::Size(size) => {
                                         let mut size = size.clone();
                                         if let Size::Parameter(BinderRef::Bound { depth, .. }) =
@@ -645,19 +633,35 @@ impl Importer<'_> {
                                         GenericArgument::Size(size)
                                     }
                                     _ => return Err(GraphError::ArgumentKind(p.parameter().0)),
-                                };
+                                }
                             } else {
-                                *p = reference;
+                                GenericArgument::Size(Size::Parameter(reference))
                             }
                         }
-                        _ => (),
+                        argument => argument.clone(),
+                    };
+                    if new != *argument {
+                        output[i] = new;
                     }
                 }
+                kind
             }
             TypeKind::Error => return Err(GraphError::RecoveryType(id)),
-            _ => (),
+            kind => {
+                let depth = nested + u32::from(matches!(kind, TypeKind::Function(_)));
+                kind.try_map_edges(|child| self.ty(child, depth))?
+            }
+        };
+        if let TypeKind::Function(f) = &mut t.kind {
+            if self.substitution.roles.result_type.is_some() {
+                f.error = result_error(self.t, f.result, self.substitution.roles);
+            }
+            self.authority(&mut f.authority, nested + 1)?;
+            if let Uses::Only(a) = &mut f.uses {
+                self.authority(a, nested + 1)?;
+            }
         }
-        let result = self.destination.push(t);
+        let result = self.t.intern(t);
         self.memo.insert(key, result);
         self.active.remove(&id);
         Ok(result)
@@ -672,7 +676,7 @@ impl Importer<'_> {
 /// `mut` parameter, which the callee writes back, keeps the exact contract.
 /// A nominal type's arguments stay exact: its declaration may use them in
 /// either direction.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Variance {
     Exact,
     Covariant,
@@ -710,144 +714,61 @@ impl Variance {
         }
     }
 }
-/// Rooted structural equality of normalized types. Nominal identity is DefPath;
-/// unreachable rows, interning order, and provenance do not participate.
-/// Generic ordinals must be in corresponding binder scopes; this is not alias
-/// expansion, subtyping, or proof search.
-pub fn semantic_equal(
-    a: &TypeStore,
-    a_root: TypeId,
-    b: &TypeStore,
-    b_root: TypeId,
-) -> Result<bool, GraphError> {
-    semantic_equal_adjusted(a, a_root, None, b, b_root, None, false, None, false)
-}
-
-// Compare row data independently of arena identity; edge correspondence is
-// checked by the worklist. This also retains canonical erased-capture policy.
-pub(crate) fn without_edges(row: &Type, placeholder: TypeId) -> Type {
-    let mut row = row.clone();
-    if let Some(ErasedCaptures::FromArguments(ps)) = &mut row.erased_captures {
-        ps.sort();
-        ps.dedup();
-    }
-    if row.erased_captures == Some(ErasedCaptures::Known(AuthoritySummary::Unknown)) {
-        row.erased_captures = None;
-    }
-    match &mut row.kind {
-        TypeKind::Tuple(ts) => ts.fill(placeholder),
-        TypeKind::Box(t) => *t = placeholder,
-        TypeKind::Record(fs) => fs.iter_mut().for_each(|f| f.ty = placeholder),
-        TypeKind::Variant(vs) => vs
-            .iter_mut()
-            .flat_map(|v| &mut v.fields)
-            .for_each(|f| f.1 = placeholder),
-        TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-            for argument in arguments {
-                if let GenericArgument::Type(t) = argument {
-                    *t = placeholder;
-                }
-            }
-        }
-        TypeKind::Function(f) => {
-            for parameter in &mut f.parameters {
-                parameter.name = None;
-                parameter.ty = placeholder;
-            }
-            f.result = placeholder;
-            if let Some(error) = &mut f.error {
-                *error = placeholder;
-            }
-        }
-        _ => (),
-    }
-    row
-}
-
-pub(crate) fn semantic_equal_adjusted(
-    a: &TypeStore,
-    a_root: TypeId,
-    a_row: Option<&Type>,
-    b: &TypeStore,
-    b_root: TypeId,
-    b_row: Option<&Type>,
-    // A nested row of `b` may carry a brand where the row of `a` names none.
+/// The directional walk behind `ContextMemo::compatible`: `actual`, whose root
+/// row the root reception rules already adjusted to `actual_root`, is received
+/// where `expected` stands. The adjusted row stands in for `actual`'s own row
+/// at the root pair only; payload membership names `actual`. Exact sub-comparisons that no policy can
+/// weaken are decided by semantic normal forms.
+pub(crate) fn directional_equal(
+    t: &TypeInterner,
+    expected: TypeId,
+    actual: TypeId,
+    actual_root: Type,
+    // A nested row of `actual` may carry a brand where `expected` names none.
     forget_brands: bool,
-    payloads: Option<&BTreeSet<TypeId>>,
-    // `b` is a value received where `a` is expected: its nested rows may make
-    // the stronger promise along `Variance` edges.
+    payloads: Option<&HashSet<TypeId>>,
+    // `actual` is a value received where `expected` is expected: its nested
+    // rows may make the stronger promise along `Variance` edges.
     received: bool,
 ) -> Result<bool, GraphError> {
-    fn row<'a>(
-        store: &'a TypeStore,
-        id: TypeId,
-        root: TypeId,
-        adjusted: Option<&'a Type>,
-    ) -> Result<&'a Type, GraphError> {
-        if id == root {
-            if let Some(row) = adjusted {
-                return Ok(row);
-            }
-        }
-        store.get(id).ok_or(GraphError::MissingType(id))
-    }
-    fn valid(store: &TypeStore, root: TypeId, adjusted: Option<&Type>) -> Result<(), GraphError> {
-        let mut pending = vec![(root, false)];
-        let mut active = BTreeSet::new();
-        let mut done = BTreeSet::new();
-        while let Some((id, exit)) = pending.pop() {
-            if exit {
-                active.remove(&id);
-                done.insert(id);
-                continue;
-            }
-            if done.contains(&id) {
-                continue;
-            }
-            if !active.insert(id) {
-                return Err(GraphError::StructuralCycle(id));
-            }
-            work::count(Counter::EqualityRows);
-            let row = row(store, id, root, adjusted)?;
-            if matches!(row.kind, TypeKind::Error) {
-                return Err(GraphError::RecoveryType(id));
-            }
-            pending.push((id, true));
-            pending.extend(
-                row.kind
-                    .graph_edges()
-                    .into_iter()
-                    .rev()
-                    .map(|edge| (edge.ty, false)),
-            );
-        }
-        Ok(())
-    }
-    // Both complete graphs must be valid even if their roots immediately differ.
-    valid(a, a_root, a_row)?;
-    valid(b, b_root, b_row)?;
+    // Both complete graphs must be valid even if their roots immediately
+    // differ. The adjusted root keeps its row's kind and edges.
+    t.validate(expected)?;
+    t.validate(actual)?;
+    let b_root = actual;
     let root = if received {
         Variance::Covariant
     } else {
         Variance::Exact
     };
     // `header`: the row is a callable's parameter or result.
-    let mut pending = vec![(a_root, b_root, payloads.is_some(), root, false)];
-    let mut seen = BTreeSet::new();
+    let mut pending = vec![(expected, b_root, payloads.is_some(), root, false)];
+    let mut seen = IdSet::default();
     while let Some((left, right, view, variance, header)) = pending.pop() {
         if !seen.insert((left, right, view, variance, header)) {
             continue;
         }
-        work::count(Counter::EqualityRows);
+        let adjusted_root = left == expected && right == b_root;
+        if !adjusted_root && variance == Variance::Exact && !view && !forget_brands {
+            // Nothing below can weaken: this is equality of receiving
+            // contracts, current content summaries aside.
+            if crate::normal::contract(t, left) != crate::normal::contract(t, right) {
+                return Ok(false);
+            }
+            continue;
+        }
         let children_view = view && payloads.is_some_and(|ids| ids.contains(&right));
-        let adjusted_root =
-            left == a_root && right == b_root && (a_row.is_some() || b_row.is_some());
-        let left = row(a, left, a_root, a_row)?;
-        let right = row(b, right, b_root, b_row)?;
-        let mut expected = without_edges(left, a_root);
-        let mut actual = without_edges(right, a_root);
-        if (a_row.is_some() || b_row.is_some())
-            && variance == Variance::Exact
+        let left = t.row(left);
+        let right_row = if adjusted_root {
+            &actual_root
+        } else {
+            t.row(right)
+        };
+        let mut expected_row = crate::normal::semantic_row(left);
+        let mut actual = crate::normal::semantic_row(right_row);
+        strip_edges(&mut expected_row);
+        strip_edges(&mut actual);
+        if variance == Variance::Exact
             && (!matches!(
                 actual.kind,
                 TypeKind::Function(_)
@@ -855,12 +776,12 @@ pub(crate) fn semantic_equal_adjusted(
                         kind: BuiltinType::Iter,
                         ..
                     }
-            ) || expected.sendability_requirement == SendabilityRequirement::Sendable)
-            && expected.sendability_requirement == actual.sendability_requirement
+            ) || expected_row.sendability_requirement == SendabilityRequirement::Sendable)
+            && expected_row.sendability_requirement == actual.sendability_requirement
         {
             // Mutable/owned structural equality compares fixed receiving
             // contracts. Current content is checked separately by receipt flow.
-            actual.modes.sendability = expected.modes.sendability.clone();
+            actual.modes.sendability = expected_row.modes.sendability.clone();
         }
         if forget_brands && left.brand.alternatives.is_empty() {
             actual.brand = Brand::default();
@@ -890,21 +811,23 @@ pub(crate) fn semantic_equal_adjusted(
         // MODE-2: a callable's result may promise uniqueness its required
         // type does not, and a parameter may ask for less than it is given.
         // Only the header row's root weakens, as a received value's root does.
-        if header && header_weakens_uniqueness(&expected, &actual, variance) {
-            actual.modes.uniqueness = expected.modes.uniqueness;
+        if header && header_weakens_uniqueness(&expected_row, &actual, variance) {
+            actual.modes.uniqueness = expected_row.modes.uniqueness;
         }
         let subsumed = if adjusted_root {
             true
         } else {
             match variance {
                 Variance::Exact => true,
-                Variance::Covariant => crate::properties::nested_promise(&expected, &mut actual),
+                Variance::Covariant => {
+                    crate::properties::nested_promise(&expected_row, &mut actual)
+                }
                 Variance::Contravariant => {
-                    crate::properties::nested_promise(&actual, &mut expected)
+                    crate::properties::nested_promise(&actual, &mut expected_row)
                 }
             }
         };
-        if !subsumed || expected != actual {
+        if !subsumed || expected_row != actual {
             return Ok(false);
         }
         let children_header = matches!(left.kind, TypeKind::Function(_));
@@ -912,12 +835,17 @@ pub(crate) fn semantic_equal_adjusted(
             left.kind
                 .graph_edges()
                 .into_iter()
-                .zip(right.kind.graph_edges())
+                .zip(right_row.kind.graph_edges())
                 .zip(variance.edges(&left.kind))
                 .map(|((a, b), variance)| (a.ty, b.ty, children_view, variance, children_header)),
         );
     }
     Ok(true)
+}
+
+/// Row data compared independently of its edges, which the walk pairs.
+fn strip_edges(row: &mut Type) {
+    row.kind = row.kind.map_edges(|_| TypeId::DANGLING);
 }
 
 /// MODE-2 for a callable's header row read in `variance`: a covariant row
@@ -938,68 +866,10 @@ pub fn header_weakens_uniqueness(expected: &Type, actual: &Type, variance: Varia
     }
 }
 
-/// Proof expansions own only imported actual arguments and declaration rows.
-/// Untouched input rows remain borrowed; every scratch graph is self-contained.
-pub(crate) struct RootedScratch<'a> {
-    source: &'a TypeStore,
-    scratch: TypeStore,
-}
-impl<'a> RootedScratch<'a> {
-    pub(crate) fn new(source: &'a TypeStore) -> Self {
-        Self {
-            source,
-            scratch: TypeStore::default(),
-        }
-    }
-    pub(crate) fn store(&self, id: TypeId) -> &TypeStore {
-        if self.scratch.id(id.index()) == Some(id) {
-            &self.scratch
-        } else {
-            self.source
-        }
-    }
-    pub(crate) fn get(&self, id: TypeId) -> Option<&Type> {
-        self.store(id).get(id)
-    }
-    pub(crate) fn equal(&self, a: TypeId, b: TypeId) -> bool {
-        semantic_equal(self.store(a), a, self.store(b), b).unwrap_or(false)
-    }
-    pub(crate) fn expand(
-        &mut self,
-        source: &TypeStore,
-        root: TypeId,
-        arguments: &[GenericArgument],
-        roles: &NominalRoles,
-    ) -> Result<TypeId, GraphError> {
-        let arguments = arguments
-            .iter()
-            .map(|argument| {
-                Ok(match argument {
-                    GenericArgument::Type(id) if self.source.id(id.index()) == Some(*id) => {
-                        GenericArgument::Type(import_type(self.source, *id, &mut self.scratch)?)
-                    }
-                    argument => argument.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, GraphError>>()?;
-        substitute_type(
-            source,
-            root,
-            &mut self.scratch,
-            Substitution {
-                binder: Some(GenericBinder::Bound(0)),
-                arguments: &arguments,
-                authorities: &vec![AuthoritySummary::Unknown; arguments.len()],
-                roles,
-            },
-        )
-    }
-}
-
 /// Visit origin-bearing rows without rebuilding them. Visits retain lexical
 /// depth, declaration-order edges, and the rewriting walk's cycle/error policy.
 pub fn visit_type_origins(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     visit: impl FnMut(&Origin, u32) -> Result<(), GraphError>,
 ) -> Result<(), GraphError> {
@@ -1010,14 +880,14 @@ pub fn visit_type_origins(
 /// brands are always visited. A checker that tracks only arena identity
 /// passes its arena predicate.
 pub fn visit_type_origins_where(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     place: impl Fn(&Origin) -> bool,
     mut visit: impl FnMut(&Origin, u32) -> Result<(), GraphError>,
 ) -> Result<(), GraphError> {
     let mut pending = vec![(root, 0u32, false)];
-    let mut active = BTreeSet::new();
-    let mut done = BTreeSet::new();
+    let mut active = IdSet::default();
+    let mut done = IdSet::default();
     while let Some((id, depth, exit)) = pending.pop() {
         if exit {
             active.remove(&id);
@@ -1054,78 +924,22 @@ pub fn visit_type_origins_where(
     Ok(())
 }
 
-/// H's rooted type-shape judgment. It retains constructors, nominal identity,
-/// generic declarations/arguments, labels, passing conventions and layout flags.
-/// Modes, origins, placement, cleanup, capture/allocator evidence and callable
-/// authority/allocation/contracts are judged independently by later phases.
-/// Complete semantic equality and receiving relations remain strict.
-pub fn shape_equal(
-    a: &TypeStore,
-    a_root: TypeId,
-    b: &TypeStore,
-    b_root: TypeId,
-) -> Result<bool, GraphError> {
-    shape_equal_with_holes(a, a_root, b, b_root, |_| false)
+/// `TypeInterner::shape_eq`, under its pre-interner name until the cutover
+/// removes the last caller.
+#[deprecated(note = "use TypeInterner::shape_eq")]
+pub fn shape_equal(t: &TypeInterner, a: TypeId, b: TypeId) -> Result<bool, GraphError> {
+    t.shape_eq(a, b)
 }
 
 /// Compare known type shape while allowing caller-designated inference holes.
 /// Both complete graphs are still validated; recovery rows and cycles are errors.
 /// This does not bind holes or change strict semantic/receiving comparisons.
 pub fn shape_equal_with_holes(
-    a: &TypeStore,
+    t: &TypeInterner,
     a_root: TypeId,
-    b: &TypeStore,
     b_root: TypeId,
     hole: impl Fn(&TypeKind) -> bool,
 ) -> Result<bool, GraphError> {
-    fn valid(source: &TypeStore, root: TypeId) -> Result<(), GraphError> {
-        let mut pending = vec![(root, false)];
-        let mut active = BTreeSet::new();
-        let mut done = BTreeSet::new();
-        while let Some((id, exit)) = pending.pop() {
-            if exit {
-                active.remove(&id);
-                done.insert(id);
-                continue;
-            }
-            if done.contains(&id) {
-                continue;
-            }
-            if !active.insert(id) {
-                return Err(GraphError::StructuralCycle(id));
-            }
-            // Reject foreign IDs before the accessor's debug provenance assertion.
-            if source.id(id.index()) != Some(id) {
-                return Err(GraphError::MissingType(id));
-            }
-            let row = source.get(id).ok_or(GraphError::MissingType(id))?;
-            pending.push((id, true));
-            let mut edge = |t| pending.push((t, false));
-            match &row.kind {
-                TypeKind::Tuple(ts) => ts.iter().copied().for_each(edge),
-                TypeKind::Record(fs) => fs.iter().for_each(|f| edge(f.ty)),
-                TypeKind::Variant(vs) => vs.iter().flat_map(|v| &v.fields).for_each(|f| edge(f.1)),
-                TypeKind::Box(t) => edge(*t),
-                TypeKind::Function(f) => {
-                    f.parameters.iter().for_each(|p| edge(p.ty));
-                    edge(f.result);
-                    if let Some(t) = f.error {
-                        edge(t);
-                    }
-                }
-                TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                    for argument in arguments {
-                        if let GenericArgument::Type(t) = argument {
-                            edge(*t);
-                        }
-                    }
-                }
-                TypeKind::Error => return Err(GraphError::RecoveryType(id)),
-                TypeKind::Primitive(_) | TypeKind::Parameter(_) => (),
-            }
-        }
-        Ok(())
-    }
     fn arguments(
         a: &[GenericArgument],
         b: &[GenericArgument],
@@ -1141,16 +955,19 @@ pub fn shape_equal_with_holes(
                 _ => false,
             })
     }
-    valid(a, a_root)?;
-    valid(b, b_root)?;
+    t.validate(a_root)?;
+    t.validate(b_root)?;
     let mut pending = vec![(a_root, b_root)];
-    let mut seen = BTreeSet::new();
+    let mut seen = IdSet::default();
     while let Some((a_id, b_id)) = pending.pop() {
         if !seen.insert((a_id, b_id)) {
             continue;
         }
-        let a = &a.get(a_id).ok_or(GraphError::MissingType(a_id))?.kind;
-        let b = &b.get(b_id).ok_or(GraphError::MissingType(b_id))?.kind;
+        if t.shape(a_id) == t.shape(b_id) {
+            continue;
+        }
+        let a = &t.row(a_id).kind;
+        let b = &t.row(b_id).kind;
         if hole(a) || hole(b) {
             continue;
         }
@@ -1233,25 +1050,23 @@ mod shape_tests {
 
     #[test]
     fn inference_holes_preserve_known_nested_shapes_and_graph_validation() {
-        let mut store = TypeStore::default();
+        let store = TypeInterner::new(None);
         let variable = TypeParameterRef::bound(TypeParamId(0));
-        let hole = store.push(row(TypeKind::Parameter(variable)));
-        let boolean = store.push(Type::boolean());
-        let byte = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let partial = store.push(row(TypeKind::Tuple(vec![hole, boolean].into())));
-        let complete = store.push(row(TypeKind::Tuple(vec![byte, boolean].into())));
-        let wrong_part = store.push(row(TypeKind::Tuple(vec![byte, byte].into())));
-        let wrong_constructor = store.push(row(TypeKind::Box(complete)));
+        let hole = store.intern(row(TypeKind::Parameter(variable)));
+        let boolean = store.intern(Type::boolean());
+        let byte = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let partial = store.intern(row(TypeKind::Tuple(vec![hole, boolean].into())));
+        let complete = store.intern(row(TypeKind::Tuple(vec![byte, boolean].into())));
+        let wrong_part = store.intern(row(TypeKind::Tuple(vec![byte, byte].into())));
+        let wrong_constructor = store.intern(row(TypeKind::Box(complete)));
         let is_hole = |kind: &TypeKind| matches!(kind, TypeKind::Parameter(p) if *p == variable);
-        assert!(!shape_equal(&store, partial, &store, complete).unwrap());
-        assert!(shape_equal_with_holes(&store, partial, &store, complete, is_hole).unwrap());
-        assert!(!shape_equal_with_holes(&store, partial, &store, wrong_part, is_hole).unwrap());
-        assert!(
-            !shape_equal_with_holes(&store, partial, &store, wrong_constructor, is_hole).unwrap()
-        );
-        let recovery = store.push(row(TypeKind::Error));
+        assert!(!store.shape_eq(partial, complete).unwrap());
+        assert!(shape_equal_with_holes(&store, partial, complete, is_hole).unwrap());
+        assert!(!shape_equal_with_holes(&store, partial, wrong_part, is_hole).unwrap());
+        assert!(!shape_equal_with_holes(&store, partial, wrong_constructor, is_hole).unwrap());
+        let recovery = store.intern(row(TypeKind::Error));
         assert!(matches!(
-            shape_equal_with_holes(&store, hole, &store, recovery, is_hole),
+            shape_equal_with_holes(&store, hole, recovery, is_hole),
             Err(GraphError::RecoveryType(_))
         ));
     }
@@ -1297,9 +1112,9 @@ mod shape_tests {
             foreign: None,
         }
     }
-    fn shapes(store: &mut TypeStore) -> Vec<TypeId> {
-        let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let parameter = store.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+    fn shapes(store: &TypeInterner) -> Vec<TypeId> {
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let parameter = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
         let kinds = vec![
@@ -1326,7 +1141,7 @@ mod shape_tests {
                 .into(),
             ),
             TypeKind::Named {
-                definition: path("Owner"),
+                definition: DefId::intern(&path("Owner")),
                 arguments: vec![
                     GenericArgument::Type(parameter),
                     GenericArgument::Size(Size::Constant(2)),
@@ -1345,27 +1160,27 @@ mod shape_tests {
         ];
         kinds
             .into_iter()
-            .map(|kind| store.push(row(kind)))
+            .map(|kind| store.intern(row(kind)))
             .collect()
     }
     #[test]
     fn shape_constructors_and_structural_children_remain_distinct() {
-        let mut store = TypeStore::default();
-        let roots = shapes(&mut store);
+        let store = TypeInterner::new(None);
+        let roots = shapes(&store);
         for (i, a) in roots.iter().enumerate() {
             for (j, b) in roots.iter().enumerate() {
-                assert_eq!(shape_equal(&store, *a, &store, *b).unwrap(), i == j);
+                assert_eq!(store.shape_eq(*a, *b).unwrap(), i == j);
             }
         }
     }
     #[test]
     fn callable_shapes_keep_binders_labels_passing_and_error_edges() {
-        let mut store = TypeStore::default();
-        let t = store.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let store = TypeInterner::new(None);
+        let t = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
         let f = callable(t);
-        let root = store.push(row(TypeKind::Function(f.clone())));
+        let root = store.intern(row(TypeKind::Function(f.clone())));
         for change in [
             |f: &mut FunctionType| f.parameters[0].name = Some("renamed".into()),
             |f: &mut FunctionType| f.allocation = Allocation::NoAlloc,
@@ -1389,8 +1204,8 @@ mod shape_tests {
         ] {
             let mut changed = f.clone();
             change(&mut changed);
-            let changed = store.push(row(TypeKind::Function(changed)));
-            assert!(shape_equal(&store, root, &store, changed).unwrap());
+            let changed = store.intern(row(TypeKind::Function(changed)));
+            assert!(store.shape_eq(root, changed).unwrap());
         }
         for change in [
             |f: &mut FunctionType| f.parameters[0].label = Some("other".into()),
@@ -1412,19 +1227,19 @@ mod shape_tests {
         ] {
             let mut changed = f.clone();
             change(&mut changed);
-            let changed = store.push(row(TypeKind::Function(changed)));
-            assert!(!shape_equal(&store, root, &store, changed).unwrap());
+            let changed = store.intern(row(TypeKind::Function(changed)));
+            assert!(!store.shape_eq(root, changed).unwrap());
         }
-        let other = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let inner = store.push(row(TypeKind::Function(callable(other))));
-        let outer = store.push(row(TypeKind::Function(callable(root))));
-        let changed = store.push(row(TypeKind::Function(callable(inner))));
-        assert!(!shape_equal(&store, outer, &store, changed).unwrap());
+        let other = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let inner = store.intern(row(TypeKind::Function(callable(other))));
+        let outer = store.intern(row(TypeKind::Function(callable(root))));
+        let changed = store.intern(row(TypeKind::Function(callable(inner))));
+        assert!(!store.shape_eq(outer, changed).unwrap());
     }
     #[test]
     fn shapes_keep_field_layout_nominal_arguments_and_generic_sizes() {
-        let mut store = TypeStore::default();
-        let t = store.push(row(TypeKind::Primitive(Primitive::U8)));
+        let store = TypeInterner::new(None);
+        let t = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let record = TypeKind::Record(
             vec![Field {
                 name: "field".into(),
@@ -1433,9 +1248,9 @@ mod shape_tests {
             }]
             .into(),
         );
-        let root = store.push(row(record.clone()));
+        let root = store.intern(row(record.clone()));
         for (name, growable) in [("other", false), ("field", true)] {
-            let changed = store.push(row(TypeKind::Record(
+            let changed = store.intern(row(TypeKind::Record(
                 vec![Field {
                     name: name.into(),
                     ty: t,
@@ -1443,10 +1258,10 @@ mod shape_tests {
                 }]
                 .into(),
             )));
-            assert!(!shape_equal(&store, root, &store, changed).unwrap());
+            assert!(!store.shape_eq(root, changed).unwrap());
         }
-        let nominal = store.push(row(TypeKind::Named {
-            definition: path("Owner"),
+        let nominal = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Owner")),
             arguments: vec![
                 GenericArgument::Type(t),
                 GenericArgument::Size(Size::Constant(2)),
@@ -1461,34 +1276,33 @@ mod shape_tests {
                 Size::Parameter(SizeParameterRef::bound(SizeParamId(0))),
             ),
         ] {
-            let changed = store.push(row(TypeKind::Named {
-                definition: path(name),
+            let changed = store.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path(name)),
                 arguments: vec![GenericArgument::Type(t), GenericArgument::Size(size)].into(),
             }));
-            assert!(!shape_equal(&store, nominal, &store, changed).unwrap());
+            assert!(!store.shape_eq(nominal, changed).unwrap());
         }
-        let mut other = TypeStore::default();
-        let imported = import_type(&store, nominal, &mut other).unwrap();
-        assert!(shape_equal(&store, nominal, &other, imported).unwrap());
+        // Import is the identity: the nominal's own id is its only id.
+        assert!(store.shape_eq(nominal, nominal).unwrap());
     }
     #[test]
     fn rooted_shapes_reject_malformed_reachable_graphs_and_ignore_unrelated_rows() {
-        let mut store = TypeStore::default();
-        let root = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        store.push(row(TypeKind::Error));
-        assert!(shape_equal(&store, root, &store, root).unwrap());
-        let cycle = TypeStore::from_graph(1, |ids| vec![row(TypeKind::Box(ids[0]))]);
+        let store = TypeInterner::new(None);
+        let root = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        store.intern(row(TypeKind::Error));
+        assert!(store.shape_eq(root, root).unwrap());
+        let cycle = store.intern_graph(1, |ids| vec![row(TypeKind::Box(ids[0]))])[0];
         assert!(matches!(
-            shape_equal(&cycle, cycle.id(0).unwrap(), &cycle, cycle.id(0).unwrap()),
+            store.shape_eq(cycle, cycle),
             Err(GraphError::StructuralCycle(_))
         ));
         assert!(matches!(
-            shape_equal(&store, cycle.id(0).unwrap(), &store, root),
+            store.shape_eq(TypeId::DANGLING, root),
             Err(GraphError::MissingType(_))
         ));
-        let recovery = store.push(row(TypeKind::Error));
+        let recovery = store.intern(row(TypeKind::Error));
         assert!(matches!(
-            shape_equal(&store, recovery, &store, root),
+            store.shape_eq(recovery, root),
             Err(GraphError::RecoveryType(_))
         ));
     }
@@ -1501,9 +1315,9 @@ mod value_parts_tests {
 
     #[test]
     fn value_parts_follow_declaration_order_without_entering_callable_binders() {
-        let mut store = TypeStore::default();
-        let a = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let b = store.push(row(TypeKind::Primitive(Primitive::Bytes)));
+        let store = TypeInterner::new(None);
+        let a = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let b = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
         let field = Field {
             name: "first".into(),
             ty: a,
@@ -1525,7 +1339,7 @@ mod value_parts_tests {
             (TypeKind::Box(a), vec![a]),
             (
                 TypeKind::Named {
-                    definition: path("Wrap"),
+                    definition: DefId::intern(&path("Wrap")),
                     arguments: vec![
                         GenericArgument::Size(Size::Constant(4)),
                         GenericArgument::Type(a),

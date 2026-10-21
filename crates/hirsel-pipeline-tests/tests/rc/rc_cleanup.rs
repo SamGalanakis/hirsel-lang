@@ -583,7 +583,7 @@ pub fn main() -> u64 {{
     // the native-disposition check rather than reject an unrelated signature.
     let declaration = &b.program.signatures[&path("make")];
     let unimplemented = hirsel_core_contract::OperationId {
-        definition: declaration.definition.clone(),
+        definition: declaration.definition.path().clone(),
         declaration_digest: declaration.fingerprint,
     };
     b.program
@@ -745,9 +745,6 @@ pub fn main() -> u64 {{
         table.layouts.push(header);
         let header = hirsel_lir::layout_types::LayoutId(table.layouts.len() as u32 - 1);
         let mut units = b.ready.clone();
-        for u in &mut units {
-            u.header.layouts = table.digest();
-        }
         let u = &mut units[main];
         let t = new_value(u, ValueRepr::Token, header, Holding::Owned);
         prepend(u, Inst::TokenNone { result: t });

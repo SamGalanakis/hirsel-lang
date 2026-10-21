@@ -7,7 +7,7 @@
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_syntax::DefPath;
 
-pub const OBSERVATION_SCHEMA_VERSION: u32 = 2;
+pub const OBSERVATION_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Observed {
@@ -38,8 +38,10 @@ pub enum Observed {
 pub struct ObservedFailure {
     pub rule: String,
     pub definition: DefPath,
-    /// Byte range of the failing site, relative to its definition's item anchor.
+    /// Byte range of the failing site, relative to its selected source anchor.
     pub site: (u32, u32),
+    pub source: u32,
+    pub operation_source: u32,
     /// Original operation definition and byte range when attribution differs.
     pub operation: Option<(DefPath, (u32, u32))>,
 }

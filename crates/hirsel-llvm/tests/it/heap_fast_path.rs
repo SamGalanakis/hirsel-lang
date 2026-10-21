@@ -52,25 +52,24 @@ fn program(target: &TargetSpec) -> Program {
 fn inputs<'a>(
     p: &'a Program,
     input: &'a hirsel_lir::stage::InputIdentity,
-    failures: &'a hirsel_lir::emission::FailureCodes,
     opt: OptLevel,
 ) -> EmitInputs<'a> {
     static INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        index: None,
         verify_backend: true,
         input,
         target: &p.table.target,
         layouts: &p.table.table,
+        keys: &p.table.keys,
         manifest: &p.manifest,
-        failures,
         statics: &p.statics,
-        finalizers: &p.finalizers,
         inline_instances: &INLINE,
         available_externally: &INLINE,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -81,9 +80,9 @@ fn inputs<'a>(
 fn heap_fast_paths_are_inlined_after_optimization_on_either_target() {
     for target in TargetSpec::executed() {
         let p = program(&target);
-        let (input, failures) = (input(), failure_codes());
+        let input = input();
         for opt in [OptLevel::None, OptLevel::Speed] {
-            let ir = emit_optimized_ir(&p.units(), &inputs(&p, &input, &failures, opt)).unwrap();
+            let ir = emit_optimized_ir(&p.units(), &inputs(&p, &input, opt)).unwrap();
             // Every fast path function was inlined and deleted: only its exit labels remain.
             assert!(!ir.contains("@hirsel.fast."), "{opt:?}: {ir}");
             for exit in ["hirsel.fast.alloc.0.exit", "hirsel.fast.free.exit"] {
@@ -112,15 +111,14 @@ fn heap_fast_paths_are_inlined_after_optimization_on_either_target() {
             }
         }
         // At O0 the dup's fast block adds its holder without a call.
-        let ir =
-            emit_optimized_ir(&p.units(), &inputs(&p, &input, &failures, OptLevel::None)).unwrap();
+        let ir = emit_optimized_ir(&p.units(), &inputs(&p, &input, OptLevel::None)).unwrap();
         let dup: Vec<_> = ir
             .split("\n\n")
             .filter(|b| b.contains("add i32") && b.contains("!tbaa"))
             .collect();
         assert_eq!(dup.len(), 1, "{ir}");
         assert!(!dup[0].contains("call "), "{}", dup[0]);
-        emit_object(&p.units(), &inputs(&p, &input, &failures, OptLevel::Speed)).unwrap();
+        emit_object(&p.units(), &inputs(&p, &input, OptLevel::Speed)).unwrap();
     }
 }
 
@@ -189,9 +187,14 @@ int main(void) {{
             let dir = scratch(&format!("heap-fast-path-{}-{opt:?}", target.triple));
             let source = dir.join("heap.c");
             std::fs::write(&source, &c).unwrap();
-            let (input, failures) = (input(), failure_codes());
-            let object = emit_object(&p.units(), &inputs(&p, &input, &failures, opt)).unwrap();
-            let executable = link(&target, &dir, &[("heap.o", &object.bytes)], &[source]);
+            let input = input();
+            let object = emit_object(&p.units(), &inputs(&p, &input, opt)).unwrap();
+            let executable = link(
+                &target,
+                &dir,
+                &[("heap.o", &object.bytes), ("program-glue.o", &p.glue())],
+                &[source],
+            );
             assert_eq!(run(&target, &executable), "heap fast path ok\n");
         }
     }

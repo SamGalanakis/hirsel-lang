@@ -53,6 +53,7 @@ fn clean(
 /// #46: pending finalization/release excludes a tail call. A listed counted
 /// temporary is carried by an internal loop owner, not an old-frame obligation.
 pub(crate) fn verify_self_tail(
+    t: &hirsel_types::TypeInterner,
     definition: &Definition,
     owner: BodyId,
     site: &TailSite,
@@ -76,7 +77,7 @@ pub(crate) fn verify_self_tail(
     else {
         return false;
     };
-    if path != &definition.path {
+    if path != definition.path.path() {
         return false;
     }
     let mut loop_roots = BTreeSet::new();
@@ -224,7 +225,7 @@ pub(crate) fn verify_self_tail(
                         return false;
                     };
                     if matches!(value,Rvalue::Constant(Constant::Unit))
-                        && body.places.get(call_destination.0 as usize).is_some_and(|p|matches!(definition.types.get(p.ty).map(|t|&t.kind),Some(hirsel_types::TypeKind::Tuple(fields)) if fields.is_empty())) {
+                        && body.places.get(call_destination.0 as usize).is_some_and(|p|matches!(t.get(p.ty).map(|t|&t.kind),Some(hirsel_types::TypeKind::Tuple(fields)) if fields.is_empty())) {
                         values.push(*destination);
                         continue;
                     }

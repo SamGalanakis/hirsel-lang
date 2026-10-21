@@ -1,7 +1,7 @@
 //! Copies used only through flat-aware reads can retain their source encoding.
 use super::*;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     /// A stable source and a nested, read-only receiver see identical bytes.
     /// Record copies still materialize: whole-record calls need an ordinary block.
     pub(super) fn flat_copies(&mut self) -> R<()> {

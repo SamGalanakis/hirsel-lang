@@ -539,7 +539,7 @@ oracle="$(.buck2/bin/buck2 build //:hirsel-conformance-bin-oracle --show-full-si
 tools/capped "$oracle" o1 --path conformance/CT/ --limit 20 [--native]
 tools/capped "$oracle" o2 [--scenario body-edit]...
 tools/capped "$oracle" o3
-tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
+HIRSEL_ORACLE_CLI=/path/to/matching/hirsel "$oracle" o4 --path conformance/PROG/ --limit 20
 ```
 
 - **O1** compiles each selected corpus file once per cell, each cell in its own
@@ -550,7 +550,7 @@ tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
   (default 1,2,8) × `--salts` (default 1,2,3; `none` is unsalted).
 - **O2** runs each edit scenario of `oracles/o2/`: a cold run of the edited
   tree against warm runs that saw the tree before the edit: `mem` (one shared
-  store; today a shared `PackageCache`, which reuses dependency packages only),
+  `mem@1` result store across fresh sessions),
   `resident` (one `Session`) and `disk` (two processes over one `dir@1` store).
   Scenarios that copy std (`// with: std`) check std from source: about 270 s
   and 2.5 GB today, so the crate's test leaves them to an explicit `--scenario`.
@@ -559,8 +559,12 @@ tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
   names `recomputed` do. V's recomputes, reasons by read kind and
   `SessionStats.touched` are TODO.
 - **O4** compares a corpus file served from a warm store with a cold run: a
-  shared in-process store today, then two processes over a `dir@1` store under
-  `VerifyStore::Recompute`, and the CLI's `--verify-cache`.
+  shared in-process result store, then two processes over a `dir@1` store under
+  `VerifyStore::Recompute`. The CLI cell invokes the matching binary selected
+  by `HIRSEL_ORACLE_CLI`: cold and verified disk-warm check/build diagnostics,
+  statuses and successful complete executable bytes must agree. Missing CLI
+  input fails. Conformance and agreement checkers explicitly select Recompute
+  with an ephemeral memory store; V stays on.
 
 A scenario file (format in `src/oracle/edits.rs`) holds the tree before the
 edit as `=== <path>` sections and the edit as `+++` (replace or add), `---`

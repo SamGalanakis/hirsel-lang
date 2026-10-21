@@ -5,14 +5,14 @@ use hirsel_tir::*;
 use hirsel_types::*;
 use support::{Provider, ty};
 fn signature(name: &str, parameters: &[&str]) -> Signature {
-    let mut types = TypeStore::default();
-    let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
-    let error = types.push(ty(TypeKind::Named {
-        definition: support::path("E"),
+    let types = crate::support::session();
+    let unit = types.intern(ty(TypeKind::Tuple(vec![].into())));
+    let error = types.intern(ty(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&support::path("E")),
         arguments: vec![].into(),
     }));
-    let result = types.push(ty(TypeKind::Named {
-        definition: hirsel_syntax::DefPath::core("Result"),
+    let result = types.intern(ty(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Result")),
         arguments: vec![GenericArgument::Type(unit), GenericArgument::Type(error)].into(),
     }));
     let parameters = parameters
@@ -21,15 +21,14 @@ fn signature(name: &str, parameters: &[&str]) -> Signature {
             name: Some(name.to_string()),
             label: None,
             passing: PassingMode::Borrow,
-            ty: types.push(ty(TypeKind::Named {
-                definition: hirsel_syntax::DefPath::core(name),
+            ty: types.intern(ty(TypeKind::Named {
+                definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(name)),
                 arguments: vec![].into(),
             })),
         })
         .collect();
     Signature {
-        definition: support::path(name),
-        types,
+        definition: hirsel_syntax::DefId::intern(&support::path(name)),
         fingerprint: ContentHash::default(),
         metadata: SignatureMetadata {
             visibility: Visibility::Public,
@@ -65,6 +64,7 @@ fn invalid_and_unavailable_entries_never_query_a_body_or_partly_grant() {
         };
         let error = launch(
             &mut provider,
+            &crate::support::session(),
             &support::sources(),
             &sig,
             &run,
@@ -82,28 +82,28 @@ fn invalid_and_unavailable_entries_never_query_a_body_or_partly_grant() {
     sig.metadata.visibility = Visibility::Private;
     let mut lib = Library::new(&run, Default::default()).unwrap();
     assert!(matches!(
-        lib.entry_arguments(&sig),
+        lib.entry_arguments(&crate::support::session(), &sig),
         Err(LaunchError::InvalidEntry(_))
     ));
     sig.metadata.visibility = Visibility::Public;
-    let unit = sig.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let unit = crate::support::session().intern(ty(TypeKind::Tuple(vec![].into())));
     if let SignatureKind::Function(f) = &mut sig.kind {
         f.result = unit;
     }
     assert!(matches!(
-        lib.entry_arguments(&sig),
+        lib.entry_arguments(&crate::support::session(), &sig),
         Err(LaunchError::InvalidEntry(_))
     ));
     let mut sig = signature("main", &["Io"]);
-    let imposter = sig.types.push(ty(TypeKind::Named {
-        definition: support::path("Io"),
+    let imposter = crate::support::session().intern(ty(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&support::path("Io")),
         arguments: vec![].into(),
     }));
     if let SignatureKind::Function(f) = &mut sig.kind {
         f.parameters[0].ty = imposter;
     }
     assert!(matches!(
-        lib.entry_arguments(&sig),
+        lib.entry_arguments(&crate::support::session(), &sig),
         Err(LaunchError::InvalidEntry(_))
     ));
 }
@@ -111,15 +111,22 @@ fn invalid_and_unavailable_entries_never_query_a_body_or_partly_grant() {
 fn explicitly_configured_unsafe_is_granted_and_configuration_is_deterministic() {
     let sig = signature("main", &["Unsafe"]);
     let run = RunConfiguration {
-        entry: sig.definition.clone(),
+        entry: sig.definition.path().clone(),
         hash_seed: 1,
         inputs: vec![],
     };
     let mut config = SimulationConfig::default();
     config.grants.insert("Unsafe".into());
     let mut library = Library::new(&run, config.clone()).unwrap();
-    let first = library.entry_arguments(&sig).unwrap();
+    let first = library
+        .entry_arguments(&crate::support::session(), &sig)
+        .unwrap();
     assert!(matches!(&first[0],Value::Handle{kind,..}if kind=="Unsafe"));
     let mut other = Library::new(&run, config).unwrap();
-    assert_eq!(other.entry_arguments(&sig).unwrap(), first);
+    assert_eq!(
+        other
+            .entry_arguments(&crate::support::session(), &sig)
+            .unwrap(),
+        first
+    );
 }

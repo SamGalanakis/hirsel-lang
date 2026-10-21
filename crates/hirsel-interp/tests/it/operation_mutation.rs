@@ -29,7 +29,7 @@ fn operation_updates_only_mut_argument_places() {
     for usage in [UseKind::Mut, UseKind::Borrow, UseKind::Copy, UseKind::Take] {
         let mut b = Builder::new();
         let p = b.parameter(TypeKind::Named {
-            definition: path("Counter"),
+            definition: hirsel_syntax::DefId::intern(&path("Counter")),
             arguments: vec![].into(),
         });
         let result = b.local(TypeKind::Tuple(vec![].into()), Storage::Temporary);
@@ -97,6 +97,7 @@ fn operation_updates_only_mut_argument_places() {
                 definitions: vec![d],
                 queries: vec![],
             },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),
@@ -165,7 +166,7 @@ fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displa
     }
     let mut b = Builder::new();
     let kind = || TypeKind::Named {
-        definition: path("Counter"),
+        definition: hirsel_syntax::DefId::intern(&path("Counter")),
         arguments: vec![].into(),
     };
     let first = b.parameter(kind());
@@ -203,6 +204,7 @@ fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displa
             definitions: vec![main],
             queries: vec![],
         },
+        &crate::support::session(),
         &sources(),
         &RunConfiguration {
             entry: path("main"),
@@ -265,6 +267,7 @@ fn api_execution_errors_retain_exact_prior_stdout_and_original_cause() {
                 definitions: vec![definition],
                 queries: vec![],
             },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),

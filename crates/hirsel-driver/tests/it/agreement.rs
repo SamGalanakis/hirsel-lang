@@ -6,10 +6,21 @@ use hirsel_engine::*;
 use hirsel_validate::{ViolationKind, validate};
 use std::collections::BTreeMap;
 
-type Signatures = BTreeMap<hirsel_syntax::DefPath, hirsel_types::Signature>;
+type Signatures = hirsel_validate::SignatureMap;
+
+/// One interner for every engine here, so signatures from separate
+/// lowerings combine in one universe.
+fn types() -> &'static std::sync::Arc<hirsel_types::TypeInterner> {
+    static TYPES: std::sync::OnceLock<std::sync::Arc<hirsel_types::TypeInterner>> =
+        std::sync::OnceLock::new();
+    TYPES.get_or_init(hirsel_engine::registry::session_types)
+}
+fn new_engine() -> QueryEngine {
+    QueryEngine::new(default_environment(), compiler_adapters()).with_types(types().clone())
+}
 
 fn lowered(source: &str, name: &str) -> (hirsel_tir::Definition, Signatures) {
-    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+    let mut engine = new_engine();
     let file = engine.sources.add("agreement.hir", source.into()).unwrap();
     let result = check_progress(&mut engine, file, &default_context())
         .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
@@ -17,11 +28,8 @@ fn lowered(source: &str, name: &str) -> (hirsel_tir::Definition, Signatures) {
     let input = engine.export_native_input().unwrap();
     let mut path = entry_path(&default_context());
     path.0.name = name.into();
-    let signatures = input
-        .signatures
-        .iter()
-        .map(|(p, s)| (p.clone(), (**s).clone()))
-        .collect();
+    let mut signatures = Signatures::new(types().clone());
+    signatures.extend(input.signatures.iter().map(|(p, s)| (p, (**s).clone())));
     ((*input.definitions[&path]).clone(), signatures)
 }
 /// `signatures` with the signature of `name` replaced by the one `source` declares.
@@ -30,12 +38,15 @@ fn with(signatures: &Signatures, source: &str, name: &str) -> Signatures {
     let mut signatures = signatures.clone();
     signatures.insert(
         definition.path.clone(),
-        replacement[&definition.path].clone(),
+        replacement.get(definition.path).unwrap().clone(),
     );
     signatures
 }
 fn kinds(definition: &hirsel_tir::Definition, signatures: &Signatures) -> Vec<ViolationKind> {
-    validate(definition, signatures)
+    // A forged body's own type closure, as lowering would have recorded it.
+    let mut definition = definition.clone();
+    definition.types = hirsel_tir::definition_types(types(), &definition);
+    validate(&definition, types(), signatures, &mut vec![])
         .violations
         .into_iter()
         .map(|v| v.kind)
@@ -60,13 +71,13 @@ fn a_mixed_local_result_retains_only_its_local_argument_storage() {
         let (mut forged, signatures) = lowered(source, "f");
         // Hand-built control: keep the actual call and its Local second input,
         // but promise a result dependent only on xs, as the rejected twin does.
-        let mut result = forged.types.get(forged.bodies[0].result).unwrap().clone();
+        let mut result = types().get(forged.bodies[0].result).unwrap().clone();
         result.modes.relation =
             hirsel_types::Relation::parameters([hirsel_types::ParameterRef::body(
                 forged.bodies[0].parameter_scope,
                 hirsel_types::ParamId(0),
             )]);
-        forged.bodies[0].result = forged.types.push(result);
+        forged.bodies[0].result = types().intern(result);
         let signatures = with(
             &signatures,
             "fn f(xs: List[Bytes], x: Bytes) -> Bytes in xs { xs[0] }\nfn main() {}",
@@ -82,7 +93,7 @@ fn a_mixed_local_result_retains_only_its_local_argument_storage() {
             "fn f(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x}",
             "fn f(xs: List[Bytes], x: Bytes) -> Bytes in xs",
         );
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut engine = new_engine();
         let file = engine
             .sources
             .add("rejected.hir", rejected.clone())
@@ -110,7 +121,7 @@ fn an_indexed_write_detaches_a_copied_containers_identity() {
             let source = format!(
                 "{header}\nfn probe(take r0: List[R]) {{ let mut r = copy r0; let old = make(r); r[0].n = 3u64; inspect({owner}, old) }}\nfn main() {{}}"
             );
-            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let mut engine = new_engine();
             let file = engine.sources.add("indexed.hir", source.clone()).unwrap();
             let output = check_progress(&mut engine, file, &default_context()).unwrap();
             if accepted {
@@ -171,10 +182,12 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
                     .unwrap();
                 hirsel_types::OriginRoot::Expression(probe.owner(), call)
             };
-            let mut signatures: Signatures = hirsel_engine::registry::BuiltinRegistry::new()
-                .signatures()
-                .map(|s| (s.definition.clone(), (**s).clone()))
-                .collect();
+            let mut signatures = hirsel_validate::SignatureMap::new(types().clone());
+            signatures.extend_signatures(
+                hirsel_engine::registry::BuiltinRegistry::new()
+                    .signatures()
+                    .map(|s| (**s).clone()),
+            );
             for root in &parsed.value.items {
                 let path = &root.item.definition;
                 let signature = engine.item_signature(path).unwrap();
@@ -184,15 +197,23 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
             path.0.name = "probe".into();
             let analyzed = engine.mode_definition(&path).unwrap();
             assert!(analyzed.diagnostics.is_empty());
+            let declared = signatures.get(&path).unwrap();
+            let comptime = engine.prepare_comptime(&analyzed.value, declared).unwrap();
             let mut forged = lower
-                .lower(analyzed.value, &signatures[&path])
+                .lower(
+                    types(),
+                    engine.type_memo(),
+                    &analyzed.value,
+                    &comptime,
+                    declared,
+                )
                 .unwrap()
                 .value;
             // Hand-built control: every receiving row claims that the post-write
             // result belongs to r0 or the indexed element, rather than the live
             // container. The storage instructions remain honest.
             let scope = forged.bodies[0].parameter_scope;
-            let roots: std::collections::BTreeSet<_> = forged
+            let roots: std::collections::HashSet<_> = forged
                 .bodies
                 .iter()
                 .flat_map(|body| {
@@ -203,30 +224,29 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
                         .chain([body.result])
                 })
                 .collect();
-            let remapped: BTreeMap<_, _> = roots
+            let remapped: std::collections::HashMap<_, _> = roots
                 .into_iter()
                 .map(|root| {
-                    let mapped =
-                        hirsel_types::map_type_origins(&mut forged.types, root, |origin, _| {
-                            let mut origin = origin.clone();
-                            if origin.root == received {
-                                origin.root = if old_owner {
-                                    hirsel_types::OriginRoot::Parameter(
-                                        hirsel_types::ParameterRef::body(
-                                            scope,
-                                            hirsel_types::ParamId(0),
-                                        ),
-                                    )
-                                } else {
-                                    hirsel_types::OriginRoot::Expression(probe.owner(), indexed)
-                                };
-                                if receipt != "copy r0" {
-                                    origin.fields.insert(0, hirsel_types::FieldId(0));
-                                }
+                    let mapped = hirsel_types::map_type_origins(types(), root, |origin, _| {
+                        let mut origin = origin.clone();
+                        if origin.root == received {
+                            origin.root = if old_owner {
+                                hirsel_types::OriginRoot::Parameter(
+                                    hirsel_types::ParameterRef::body(
+                                        scope,
+                                        hirsel_types::ParamId(0),
+                                    ),
+                                )
+                            } else {
+                                hirsel_types::OriginRoot::Expression(probe.owner(), indexed)
+                            };
+                            if receipt != "copy r0" {
+                                origin.fields.insert(0, hirsel_types::FieldId(0));
                             }
-                            Ok(origin)
-                        })
-                        .unwrap();
+                        }
+                        Ok(origin)
+                    })
+                    .unwrap();
                     (root, mapped)
                 })
                 .collect();
@@ -290,7 +310,7 @@ fn a_local_result_outlives_only_the_storage_of_a_taken_parameter_it_names() {
         // The same body, with its result declared local to the other parameter.
         let mut forged = keep.clone();
         let body = &forged.bodies[0];
-        let mut result = forged.types.get(body.result).unwrap().clone();
+        let mut result = types().get(body.result).unwrap().clone();
         let Some(sources) = result.modes.relation.named_parameters() else {
             panic!("{result:?}")
         };
@@ -315,7 +335,7 @@ fn a_local_result_outlives_only_the_storage_of_a_taken_parameter_it_names() {
             })],
             r => vec![r.clone()],
         });
-        forged.bodies[0].result = forged.types.push(result);
+        forged.bodies[0].result = types().intern(result);
         let signatures = with(
             &signatures,
             "fn keep(a: Arena, take x: Bytes in a, take y: Bytes in a) -> Bytes in y { y }\nfn main() {}",
@@ -341,12 +361,12 @@ fn a_function_value_copied_from_borrowed_storage_is_an_owned_share_only_if_globa
         // received as a global one. The closure reads `fs` as a borrowed
         // view, so its element is already scoped and only the receiver lies.
         let mut forged = first.clone();
-        let mut scoped = BTreeMap::new();
-        let mut global = BTreeMap::new();
+        let mut scoped = std::collections::HashMap::new();
+        let mut global = std::collections::HashMap::new();
         for body in &mut forged.bodies {
             let function = |ty| {
                 matches!(
-                    forged.types.get(ty).unwrap().kind,
+                    types().get(ty).unwrap().kind,
                     hirsel_types::TypeKind::Function(_)
                 )
             };
@@ -359,7 +379,7 @@ fn a_function_value_copied_from_borrowed_storage_is_an_owned_share_only_if_globa
             }
             for index in 0..body.places.len() {
                 let ty = body.places[index].ty;
-                let row = forged.types.get(ty).unwrap().clone();
+                let row = types().get(ty).unwrap().clone();
                 if !matches!(row.kind, hirsel_types::TypeKind::Function(_)) {
                     continue;
                 }
@@ -375,7 +395,7 @@ fn a_function_value_copied_from_borrowed_storage_is_an_owned_share_only_if_globa
                 let forged_ty = *forged_rows.entry(ty).or_insert_with(|| {
                     let mut row = row.clone();
                     row.modes.relation = locality;
-                    forged.types.push(row)
+                    types().intern(row)
                 });
                 body.places[index].ty = forged_ty;
                 if !projected {
@@ -480,19 +500,19 @@ fn borrowed_capture_physical_elements_keep_the_declared_callable_header() {
         let (first, signatures) = lowered(source, "first");
         assert_eq!(kinds(&first, &signatures), []);
         let mut forged = first.clone();
-        let mut wrong_result = first.types.get(first.bodies[0].result).unwrap().clone();
+        let mut wrong_result = types().get(first.bodies[0].result).unwrap().clone();
         wrong_result.kind = hirsel_types::TypeKind::Primitive(hirsel_types::Primitive::U32);
-        let wrong_result = forged.types.push(wrong_result);
+        let wrong_result = types().intern(wrong_result);
         let mut changed = 0;
         for body in &mut forged.bodies {
             for place in &mut body.places {
                 if place.projection.is_empty() {
                     continue;
                 }
-                let mut row = forged.types.get(place.ty).unwrap().clone();
+                let mut row = types().get(place.ty).unwrap().clone();
                 if let hirsel_types::TypeKind::Function(fun) = &mut row.kind {
                     fun.result = wrong_result;
-                    place.ty = forged.types.push(row);
+                    place.ty = types().intern(row);
                     changed += 1;
                 }
             }
@@ -516,14 +536,14 @@ fn a_global_environment_cannot_own_a_part_placed_in_scoped_storage() {
         let (probe, signatures) = lowered(source, "probe");
         assert_eq!(kinds(&probe, &signatures), []);
         let mut forged = probe.clone();
-        let mut retargeted = BTreeMap::new();
+        let mut retargeted = std::collections::HashMap::new();
         for body in &probe.bodies {
             for ty in body.locals.iter().map(|l| l.ty) {
-                let row = probe.types.get(ty).unwrap();
+                let row = types().get(ty).unwrap();
                 let hirsel_types::TypeKind::Tuple(parts) = &row.kind else {
                     continue;
                 };
-                let mut string = probe.types.get(parts[0]).unwrap().clone();
+                let mut string = types().get(parts[0]).unwrap().clone();
                 if string.kind != hirsel_types::TypeKind::Primitive(hirsel_types::Primitive::String)
                 {
                     continue;
@@ -532,10 +552,10 @@ fn a_global_environment_cannot_own_a_part_placed_in_scoped_storage() {
                     string.modes.relation.union(&hirsel_types::Relation::new([
                         hirsel_types::Reach::Region(hirsel_types::RegionId(0)),
                     ]));
-                let string = forged.types.push(string);
+                let string = types().intern(string);
                 let mut tuple = row.clone();
                 tuple.kind = hirsel_types::TypeKind::Tuple(vec![string, parts[1]].into());
-                let tuple = forged.types.push(tuple);
+                let tuple = types().intern(tuple);
                 retargeted.entry(ty).or_insert(tuple);
             }
         }
@@ -566,15 +586,15 @@ fn a_global_environment_cannot_own_a_part_placed_in_scoped_storage() {
 /// that promises a global result.
 fn promise_global_closure_results(definition: &hirsel_tir::Definition) -> hirsel_tir::Definition {
     let mut forged = definition.clone();
-    let mut promised = BTreeMap::new();
+    let mut promised = std::collections::HashMap::new();
     for body in &mut forged.bodies {
         for index in 0..body.places.len() {
             let ty = body.places[index].ty;
-            let row = forged.types.get(ty).unwrap().clone();
+            let row = types().get(ty).unwrap().clone();
             let hirsel_types::TypeKind::Function(f) = &row.kind else {
                 continue;
             };
-            let result = forged.types.get(f.result).unwrap().clone();
+            let result = types().get(f.result).unwrap().clone();
             if !result.modes.relation.has_environment() {
                 continue;
             }
@@ -582,10 +602,10 @@ fn promise_global_closure_results(definition: &hirsel_tir::Definition) -> hirsel
                 let mut result = result.clone();
                 result.modes.relation = hirsel_types::Relation::global();
                 let mut f = f.clone();
-                f.result = forged.types.push(result);
+                f.result = types().intern(result);
                 let mut row = row.clone();
                 row.kind = hirsel_types::TypeKind::Function(f);
-                forged.types.push(row)
+                types().intern(row)
             });
             body.places[index].ty = forged_ty;
             if body.places[index].projection.is_empty() {
@@ -657,7 +677,7 @@ fn a_captured_callable_keeps_the_authority_creation_fixed_and_no_more() {
             assert_eq!(kinds(&probe, &signatures), []);
             // The same call through a callee whose row admits any authority.
             let mut forged = probe.clone();
-            let mut unknown = BTreeMap::new();
+            let mut unknown = std::collections::HashMap::new();
             for body in &mut forged.bodies {
                 for index in 0..body.places.len() {
                     let place = &body.places[index];
@@ -667,7 +687,7 @@ fn a_captured_callable_keeps_the_authority_creation_fixed_and_no_more() {
                         continue;
                     }
                     let ty = place.ty;
-                    let row = forged.types.get(ty).unwrap().clone();
+                    let row = types().get(ty).unwrap().clone();
                     let hirsel_types::TypeKind::Function(f) = &row.kind else {
                         continue;
                     };
@@ -676,7 +696,7 @@ fn a_captured_callable_keeps_the_authority_creation_fixed_and_no_more() {
                         f.authority = hirsel_types::AuthoritySummary::Unknown;
                         let mut row = row.clone();
                         row.kind = hirsel_types::TypeKind::Function(f);
-                        forged.types.push(row)
+                        types().intern(row)
                     });
                     let root = body.places[index].root;
                     body.places[index].ty = forged_ty;
@@ -704,11 +724,11 @@ fn a_specialised_function_result_is_sendable_only_over_a_sendable_environment() 
         let (library, signatures) = lowered(source, "library");
         assert_eq!(kinds(&library, &signatures), []);
         let mut forged = library.clone();
-        let mut unsendable = BTreeMap::new();
+        let mut unsendable = std::collections::HashMap::new();
         let body = &mut forged.bodies[0];
         for index in 0..body.places.len() {
             let ty = body.places[index].ty;
-            let row = forged.types.get(ty).unwrap().clone();
+            let row = types().get(ty).unwrap().clone();
             if !matches!(row.kind, hirsel_types::TypeKind::Function(_))
                 || body.locals[body.places[index].root.0 as usize].storage
                     != hirsel_tir::Storage::Local
@@ -718,7 +738,7 @@ fn a_specialised_function_result_is_sendable_only_over_a_sendable_environment() 
             let forged_ty = *unsendable.entry(ty).or_insert_with(|| {
                 let mut row = row.clone();
                 row.modes.sendability = hirsel_types::Sendability::NotSendable;
-                forged.types.push(row)
+                types().intern(row)
             });
             let root = body.places[index].root;
             body.places[index].ty = forged_ty;
@@ -739,7 +759,7 @@ fn a_specialised_function_result_is_sendable_only_over_a_sendable_environment() 
 /// result into one that promises a global result.
 fn promise_global_captured_results(definition: &hirsel_tir::Definition) -> hirsel_tir::Definition {
     let mut forged = definition.clone();
-    let mut promised = BTreeMap::new();
+    let mut promised = std::collections::HashMap::new();
     for body in &mut forged.bodies {
         for index in 0..body.places.len() {
             let place = &body.places[index];
@@ -749,11 +769,11 @@ fn promise_global_captured_results(definition: &hirsel_tir::Definition) -> hirse
                 continue;
             }
             let ty = place.ty;
-            let row = forged.types.get(ty).unwrap().clone();
+            let row = types().get(ty).unwrap().clone();
             let hirsel_types::TypeKind::Function(f) = &row.kind else {
                 continue;
             };
-            let result = forged.types.get(f.result).unwrap().clone();
+            let result = types().get(f.result).unwrap().clone();
             if !result.modes.relation.has_environment() {
                 continue;
             }
@@ -761,10 +781,10 @@ fn promise_global_captured_results(definition: &hirsel_tir::Definition) -> hirse
                 let mut result = result.clone();
                 result.modes.relation = hirsel_types::Relation::global();
                 let mut f = f.clone();
-                f.result = forged.types.push(result);
+                f.result = types().intern(result);
                 let mut row = row.clone();
                 row.kind = hirsel_types::TypeKind::Function(f);
-                forged.types.push(row)
+                types().intern(row)
             });
             let root = body.places[index].root;
             body.places[index].ty = forged_ty;
@@ -947,7 +967,7 @@ fn an_arena_only_argument_bounds_a_result_by_its_arena_unless_it_is_taken_storag
         let (f, signatures) = lowered(&source, "f");
         assert_eq!(kinds(&f, &signatures), []);
         let mut forged = f.clone();
-        let mut result = forged.types.get(forged.bodies[0].result).unwrap().clone();
+        let mut result = types().get(forged.bodies[0].result).unwrap().clone();
         result.modes.relation = result.modes.relation.map(|r| match r {
             hirsel_types::Reach::Place(hirsel_types::Origin {
                 root:
@@ -959,11 +979,11 @@ fn an_arena_only_argument_bounds_a_result_by_its_arena_unless_it_is_taken_storag
             }) => vec![],
             r => vec![r.clone()],
         });
-        forged.bodies[0].result = forged.types.push(result);
+        forged.bodies[0].result = types().intern(result);
         // Every row claims the copy holds only its arena bound, as a checker
         // that treated taken storage as arena-only would lower it.
         let mut strip = |ty: hirsel_types::TypeId| {
-            let mut row = forged.types.get(ty).unwrap().clone();
+            let mut row = types().get(ty).unwrap().clone();
             if !row.modes.relation.has_environment() {
                 return ty;
             }
@@ -971,7 +991,7 @@ fn an_arena_only_argument_bounds_a_result_by_its_arena_unless_it_is_taken_storag
                 hirsel_types::Reach::Environment => vec![],
                 r => vec![r.clone()],
             });
-            forged.types.push(row)
+            types().intern(row)
         };
         let body = forged.bodies[0].clone();
         let own = |root: hirsel_tir::LocalId| {
@@ -1039,7 +1059,7 @@ fn a_closure_call_over_a_taken_capture_is_taken_storage_for_the_ir_checker() {
             assert_eq!(kinds(&f, &signatures), [], "{source}");
             let mut forged = f.clone();
             let mut strip = |ty: hirsel_types::TypeId| {
-                let mut row = forged.types.get(ty).unwrap().clone();
+                let mut row = types().get(ty).unwrap().clone();
                 if !row.modes.relation.has_environment()
                     || !matches!(
                         row.kind,
@@ -1052,7 +1072,7 @@ fn a_closure_call_over_a_taken_capture_is_taken_storage_for_the_ir_checker() {
                     hirsel_types::Reach::Environment => vec![],
                     r => vec![r.clone()],
                 });
-                forged.types.push(row)
+                types().intern(row)
             };
             let body = forged.bodies[0].clone();
             let own = |root: hirsel_tir::LocalId| {

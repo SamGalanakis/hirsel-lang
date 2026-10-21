@@ -111,9 +111,9 @@ impl Checker<'_> {
 
     /// A closed type fixes every envelope axis of each of its values. A
     /// callable slot's root row is only its call-bounded view.
-    pub(super) fn closed(&self, types: &TypeStore, root: TypeId, view: bool) -> bool {
+    pub(super) fn closed(&self, types: &TypeInterner, root: TypeId, view: bool) -> bool {
         let mut pending = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -159,15 +159,15 @@ impl Checker<'_> {
         place: PlaceId,
     ) -> bool {
         (relation == Relation::Part || !selection.advance)
-            && self.closed(&self.definition.types, self.place_type(place), false)
+            && self.closed(self.t, self.place_type(place), false)
     }
 
     /// Pure counted data has no hidden environment; only its ownership receipt
     /// can vary. The root row is the owner's mutable view, not stored locality.
     fn fixed_inert_data(&self, root: TypeId) -> bool {
-        let types = &self.definition.types;
+        let types = self.t;
         let mut pending = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -212,13 +212,14 @@ impl Checker<'_> {
         if self.operand_unique(state, value) {
             return true;
         }
-        let mut store = self.working_store();
-        let ty = self.transferred_type(state, value, &mut store);
-        hirsel_types::content_sendability(&store, ty, &self.generic_declarations(), &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(
-                self.signatures.get(path).cloned().map(std::sync::Arc::new),
-            )
-        })
+        let store = self.t;
+        let ty = self.transferred_type(state, value, store);
+        self.proof(
+            &store,
+            ty,
+            super::proofs::Proof::Content,
+            &self.generic_declarations(),
+        )
         .is_ok_and(|proof| proof == hirsel_types::Sendability::Sendable)
     }
 
@@ -230,14 +231,14 @@ impl Checker<'_> {
                     _ => None,
                 })
             }
-            Callee::Indirect { value, .. } => self
-                .definition
-                .types
-                .get(self.place_type(value.place))
-                .and_then(|row| match &row.kind {
-                    TypeKind::Function(f) => Some(f),
-                    _ => None,
-                }),
+            Callee::Indirect { value, .. } => {
+                self.t
+                    .get(self.place_type(value.place))
+                    .and_then(|row| match &row.kind {
+                        TypeKind::Function(f) => Some(f),
+                        _ => None,
+                    })
+            }
         }
     }
 
@@ -319,7 +320,7 @@ impl Checker<'_> {
         let local = self.body.places[destination.0 as usize].root;
         if self.body.locals[local.0 as usize].storage != Storage::Temporary
             || !matches!(
-                self.definition.types.get(self.place_type(*destination)),
+                self.t.get(self.place_type(*destination)),
                 Some(row) if matches!(row.kind, TypeKind::Function(_))
                     && row.modes.multiplicity == Multiplicity::Many
             )
@@ -399,7 +400,7 @@ impl Checker<'_> {
                 && arguments.iter().all(|other| {
                     other.parameter == argument.parameter
                         || self.bound(
-                            &self.definition.types,
+                            self.t,
                             self.place_type(other.value.place),
                             hirsel_types::Bound::Plain,
                             &self.generic_declarations(),

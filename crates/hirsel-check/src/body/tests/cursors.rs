@@ -18,12 +18,17 @@ fn run(
     for signature in BuiltinRegistry::new().signatures() {
         provider
             .signatures
-            .insert(signature.definition.clone(), signature.clone());
+            .insert(signature.definition.path().clone(), signature.clone());
     }
     support::normalize_file(&file, &mut provider).unwrap();
     let item = &file.items[0];
-    let resolution =
-        hirsel_resolve::resolve_item(&file, item, &provider.index.clone(), &mut provider);
+    let resolution = hirsel_resolve::resolve_item(
+        &file,
+        item,
+        &provider.index.clone(),
+        super::support::session(),
+        &mut provider,
+    );
     assert!(
         resolution.query.diagnostics.is_empty(),
         "{:?}",
@@ -35,6 +40,8 @@ fn run(
     let output = check_with_loop_protocols(
         LoopInput {
             body: Input {
+                types: super::support::session(),
+                memo: super::support::memo(),
                 syntax: item,
                 context: &support::context(),
                 resolution: &resolution,
@@ -96,24 +103,8 @@ fn cursor_plans_do_not_depend_on_symbols_mapping_order_or_signature_store_ids() 
                 b.step.some_variant
             )
         );
-        assert!(
-            semantic_equal(
-                &first.checked.value.types,
-                a.cursor,
-                &second.checked.value.types,
-                b.cursor
-            )
-            .unwrap()
-        );
-        assert!(
-            semantic_equal(
-                &first.checked.value.types,
-                a.step.result,
-                &second.checked.value.types,
-                b.step.result
-            )
-            .unwrap()
-        );
+        assert!(support::session().semantic_eq(a.cursor, b.cursor));
+        assert!(support::session().semantic_eq(a.step.result, b.step.result));
     }
 }
 
@@ -129,16 +120,14 @@ fn cursor_tags_come_from_the_provider_layout() {
         let SignatureKind::Type(td) = &mut option.kind else {
             panic!()
         };
-        let mut row = option
-            .types
-            .get(td.representation.unwrap())
-            .unwrap()
+        let mut row = super::support::session()
+            .row(td.representation.unwrap())
             .clone();
         let TypeKind::Variant(variants) = &mut row.kind else {
             panic!()
         };
         variants.reverse();
-        td.representation = Some(option.types.push(row));
+        td.representation = Some(super::support::session().intern(row));
         option.fingerprint = ast::ContentHash::of_bytes(b"reversed cursor Option");
     });
     let output = output.unwrap();
@@ -182,7 +171,7 @@ fn mappings_use_supplied_identities_and_malformed_protocols_fail_operationally()
             (&mappings[0].2, &renamed[0].2),
         ] {
             let mut signature = (*provider.signatures.remove(old).unwrap()).clone();
-            signature.definition = new.clone();
+            signature.definition = new.clone().into();
             provider.signatures.insert(new.clone(), Arc::new(signature));
         }
     });

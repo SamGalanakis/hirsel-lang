@@ -227,7 +227,7 @@ fn discover(program: &Program, def: &Definition, fuser: &mut Fuser) -> Vec<Plan>
                 .iter()
                 .skip(if first { start + 1 } else { 0 })
             {
-                if (appended && instruction_fails(body, &def.types, inst))
+                if (appended && instruction_fails(body, &program.types, inst))
                     || operand_places(body, inst)
                         .iter()
                         .any(|p| root(body, *p) == root(body, target))
@@ -275,7 +275,7 @@ fn discover(program: &Program, def: &Definition, fuser: &mut Fuser) -> Vec<Plan>
         for _ in 0..body.blocks.len() {
             let block = &body.blocks[b];
             if block.instructions.iter().any(|i| {
-                instruction_fails(body, &def.types, i)
+                instruction_fails(body, &program.types, i)
                     || loan.is_none_or(|loan| touches(body, i, root(body, target), loan))
             }) {
                 okay = false;
@@ -343,7 +343,7 @@ pub(super) fn fuse(program: &Program, def: &Definition, fuser: &mut Fuser) -> Op
                 retained.push(i);
             }
         }
-        if let Some(origin) = fuser.origins.get_mut(&def.path) {
+        if let Some(origin) = fuser.origins.get_mut(def.path.path()) {
             let old = origin.sites[entry][b].clone();
             origin.sites[entry][b] = retained
                 .iter()
@@ -426,7 +426,7 @@ pub(super) fn fuse(program: &Program, def: &Definition, fuser: &mut Fuser) -> Op
             on_failure,
         });
         body.blocks[plan.freeze].terminator = Terminator::Goto(ret.next);
-        if let Some(origin) = fuser.origins.get_mut(&def.path) {
+        if let Some(origin) = fuser.origins.get_mut(def.path.path()) {
             let sites = &mut origin.sites[entry][plan.freeze];
             sites.pop();
             sites.extend([None, None]);

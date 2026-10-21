@@ -61,6 +61,7 @@ fn checked(program: &hirsel_heapcheck::Program<Ready>, name: &str, a: i64, b: i6
             &failure.definition,
             &revision(&failure.definition.0.name),
             SiteRange {
+                source: failure.source,
                 start: failure.site.0,
                 end: failure.site.1,
             },
@@ -87,7 +88,11 @@ fn expected(program: &Program) -> String {
     let site = site_code(
         &path("bump"),
         &revision("bump"),
-        SiteRange { start: 10, end: 20 },
+        SiteRange {
+            source: 0,
+            start: 10,
+            end: 20,
+        },
     );
     let _ = writeln!(out, "c bump 41 ok 42");
     let _ = writeln!(
@@ -103,7 +108,11 @@ fn expected(program: &Program) -> String {
     let site = site_code(
         &path("close_held"),
         &revision("close_held"),
-        SiteRange { start: 80, end: 90 },
+        SiteRange {
+            source: 0,
+            start: 80,
+            end: 90,
+        },
     );
     let _ = writeln!(out, "c close 12 ok 5");
     let _ = writeln!(
@@ -230,25 +239,21 @@ fn harness(program: &Program) -> String {
 }
 
 fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
-    let codes = failure_codes();
     let input = input();
     let inputs = EmitInputs {
+        index: None,
         verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &codes,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-            &program.table.table,
-            &program.finalizers,
-        ),
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -297,7 +302,12 @@ fn every_target_executes_the_ready_probes_as_the_heap_checker_does() {
             let bytes = emit(&program, opt);
             let source = dir.join("ready_harness.c");
             std::fs::write(&source, harness(&program)).unwrap();
-            let executable = link(&target, &dir, &[("ready.o", &bytes)], &[source]);
+            let executable = link(
+                &target,
+                &dir,
+                &[("ready.o", &bytes), ("program-glue.o", &program.glue())],
+                &[source],
+            );
             assert_eq!(
                 run(&target, &executable),
                 expected,

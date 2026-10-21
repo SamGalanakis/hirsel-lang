@@ -9,7 +9,8 @@
 //! artifact must be revalidated.
 use hirsel_syntax::ContentHash;
 
-/// Domain of every snapshot digest; bump it when the encoding changes.
+/// Shared domain of native snapshot digests. Artifact schemas bind their own
+/// versions (e.g. LIR_VERSION); bump this for a change to the shared encoding.
 pub const SNAPSHOT_DOMAIN: &str = "hirsel.lir.snapshot.v3";
 
 /// Content digest of the canonical text under a named artifact domain.

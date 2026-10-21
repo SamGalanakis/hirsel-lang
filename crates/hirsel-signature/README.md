@@ -23,17 +23,20 @@ The sibling body checker owns todo marking validation and incomplete-call checks
 `hirsel_types::encoding::canonical_encoding` and `fingerprint` accept a Signature plus its dependency list;
 they validate reachable graphs and implement length-framed, domain-separated SHA-256
 v2. Keep dependencies with the snapshot when recomputing its fingerprint. Aliases
-expand with fresh IDs; nominal references keep DefPaths. Opaque representations
-are omitted from public fingerprints. Their public TypeStore also carries no
-private rows; normalize_owned retains the defining graph in its separate owner
-artifact for the driver's package-scoped body and validation views.
+expand by substitution through `TypeMemo`; nominal references keep their DefIds.
+Opaque representations are omitted from public fingerprints and from the public
+signature; normalize_owned retains the defining representation in its separate
+owner artifact for the driver's package-scoped body and validation views. All
+rows live in the session `TypeInterner` passed in `Input.types`.
 Contract ordinals remain owned by the item.
 Revision 1 copies growable field markers and declared destructor allocation flags
 into semantic data and hashes them. It also hashes signature visibility, alias,
 FFI flags and nominal roles. Type rows are immutable; create a new adjusted row
-instead of mutating a stored type. The shared graph importer/substituter handles
+instead of mutating a stored type; finished drop summaries rebuild the rooted
+graph with `hirsel_check_protocol::rows::rebuild`. `TypeMemo::substitute` handles
 binder scopes; this module's wrapper records nominal dependencies and translates
-GraphError. Provider snapshots are Arc SignatureRef values.
+GraphError. A builtin row that any occurrence spelled without a resolved core
+declaration carries no declaration (interning merges equal occurrences). Provider snapshots are Arc SignatureRef values.
 
 A recursive type group (type declarations naming each other through their bodies,
 such as `Tree = Leaf | Node(box Entry)` with `Entry { left: Tree, .. }`) is read from

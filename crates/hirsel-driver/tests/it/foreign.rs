@@ -55,6 +55,69 @@ fn deterministic_add() -> serde_json::Value {
 }
 
 #[test]
+fn foreign_dispatch_ordinals_are_bound_in_glue_in_both_backends() {
+    with_compiler_stack(|| {
+        let dir = fixture("dispatch-glue", deterministic_add());
+        let path = launch(&dir, json!([select_lib()]));
+        let mut loaded = load_program(&path).unwrap();
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let mut ready = native::build(
+                &validated,
+                &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
+            )
+            .unwrap();
+            let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                &ready.table,
+                &ready.finalizers,
+            );
+            let objects = |ready: &native::ReadyProgram| {
+                native::partition_backend_objects_with_jobs(
+                    ready,
+                    backend,
+                    native::OptLevel::None,
+                    native::Partition::Singleton,
+                    &registry,
+                    false,
+                    None,
+                    hirsel_intern::jobs::Jobs::ONE,
+                )
+                .unwrap()
+            };
+            let first = objects(&ready);
+            assert!(!ready.foreign_dispatch.is_empty());
+            for word in ready.foreign_dispatch.values_mut() {
+                *word += 17 << hirsel_lir::runtime_abi::FOREIGN_PACKAGE_SHIFT;
+            }
+            let second = objects(&ready);
+            assert_eq!(first.len(), second.len());
+            let (first_glue, first_units) = first.split_last().unwrap();
+            let (second_glue, second_units) = second.split_last().unwrap();
+            assert!(!first_units.is_empty());
+            assert_eq!(
+                first_units, second_units,
+                "{backend:?}: dispatch leaked into units"
+            );
+            assert_ne!(
+                first_glue.bytes, second_glue.bytes,
+                "{backend:?}: stale dispatch glue"
+            );
+            let foreign = ready.foreign_dispatch.keys().next().unwrap();
+            let symbol = hirsel_lir::glue::foreign_dispatch_symbol(foreign);
+            assert!(first_glue.exports.iter().any(|s| s.name == symbol));
+            assert!(
+                first_units
+                    .iter()
+                    .any(|o| o.imports.iter().any(|s| s.name == symbol))
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
 fn the_root_selects_unsafe_ffi_and_check_reports_it() {
     with_compiler_stack(|| {
         let dir = fixture("root", deterministic_add());
@@ -460,7 +523,7 @@ fn native_c_fixture(
     std::fs::write(root.join("grants.json"), r#"{"unsafe":true}"#).unwrap();
     let path = launch(&root, json!([select_lib()]));
     let executable = root.join("app");
-    let built = native::build_path_native_backend(
+    let built = native::build_path_native_backend_with_validation(
         &path,
         &executable,
         target,
@@ -469,6 +532,7 @@ fn native_c_fixture(
         None,
         false,
         hirsel_engine::Verify::On,
+        hirsel_driver::native::Validation::EveryStage,
     )
     .unwrap();
     assert!(built.is_ok(), "{built:?}");
@@ -512,14 +576,17 @@ fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
             record: Some(&tape),
             revocations: None,
         };
-        let refused = native::run_path_native_with_config(
+        let refused = native::run_path_native_backend_with_validation(
             &path,
             launch,
             None,
+            native::Backend::Llvm,
             native::Output::Streams {
                 stdout: &mut Vec::new(),
                 stderr: &mut Vec::new(),
             },
+            hirsel_engine::Verify::On,
+            native::Validation::EveryStage,
         );
         let Err(ToolError::Runtime(message)) = refused else {
             panic!(
@@ -612,7 +679,7 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
             if library {
                 let mut unit = ready.units[index].clone().into_raw();
                 unit.header.origin = UnitOrigin::Library;
-                ready.units[index] = validate_ready(
+                let unit = validate_ready(
                     unit,
                     &Inputs {
                         memo: Default::default(),
@@ -624,6 +691,7 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
                     },
                 )
                 .unwrap();
+                ready.replace_unit(index, unit).unwrap();
             } else {
                 ready
                     .inline_instances

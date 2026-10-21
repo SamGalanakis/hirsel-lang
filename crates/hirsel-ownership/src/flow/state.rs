@@ -36,7 +36,7 @@ fn meet(q: &[Projection], p: &[u32]) -> Option<Meet> {
     Some(Meet::Covering)
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// The callable type this graph's body implements.
     fn graph_function(&self) -> Option<&FunctionType> {
         self.graph_callable().map(|(function, _)| function)
@@ -72,7 +72,7 @@ impl Checker<'_> {
             }
             _ => return None,
         };
-        match &self.body.types.get(ty)?.kind {
+        match &self.t.get(ty)?.kind {
             TypeKind::Function(f) => Some((f.clone(), false)),
             _ => None,
         }
@@ -158,12 +158,12 @@ impl Checker<'_> {
     /// A `mut` parameter's root row is the call-bounded view of its content.
     pub(super) fn closed_content(&self, root: TypeId, view: bool) -> bool {
         let mut pending = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let row = self.body.types.get(ty).unwrap();
+            let row = self.t.get(ty).unwrap();
             if row.erased_captures.is_some()
                 || row.brand != Brand::default()
                 || !(view && ty == root || row.modes.relation.is_global())
@@ -179,7 +179,7 @@ impl Checker<'_> {
                     ..
                 } => return false,
                 TypeKind::Named { .. } => {
-                    if !self.properties[ty.index()].plain {
+                    if !self.properties[ty].plain {
                         return false;
                     }
                 }
@@ -187,19 +187,11 @@ impl Checker<'_> {
             }
         }
         structural_authority(
-            &self.body.types,
+            self.t,
             root,
             &self.own.metadata.roles,
             &self.body.resolution.generic_declarations,
-            &mut |_, path| {
-                Ok::<_, QueryError>(path.and_then(|path| {
-                    if path == &self.own.definition {
-                        Some(Arc::new(self.own.clone()))
-                    } else {
-                        self.signatures.cached(path)
-                    }
-                }))
-            },
+            &mut |_, d| Ok::<_, QueryError>(d.and_then(|d| self.signatures.cached(d))),
         )
         .map(|authority| authority == AuthoritySummary::inert())
         .unwrap_or_else(|error| {
@@ -217,12 +209,12 @@ impl Checker<'_> {
 
     fn fixed_inert_content(&self, root: TypeId) -> bool {
         let mut pending = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let row = self.body.types.get(ty).unwrap();
+            let row = self.t.get(ty).unwrap();
             if row.erased_captures.is_some()
                 || row.brand != Brand::default()
                 || ty != root && !row.modes.relation.is_global()
@@ -238,24 +230,16 @@ impl Checker<'_> {
                     kind: BuiltinType::Iter,
                     ..
                 } => return false,
-                TypeKind::Named { .. } if !self.properties[ty.index()].copyable => return false,
+                TypeKind::Named { .. } if !self.properties[ty].copyable => return false,
                 kind => pending.extend(kind.value_parts()),
             }
         }
         structural_authority(
-            &self.body.types,
+            self.t,
             root,
             &self.own.metadata.roles,
             &self.body.resolution.generic_declarations,
-            &mut |_, path| {
-                Ok::<_, QueryError>(path.and_then(|path| {
-                    if path == &self.own.definition {
-                        Some(Arc::new(self.own.clone()))
-                    } else {
-                        self.signatures.cached(path)
-                    }
-                }))
-            },
+            &mut |_, d| Ok::<_, QueryError>(d.and_then(|d| self.signatures.cached(d))),
         )
         .map(|authority| authority == AuthoritySummary::inert())
         .unwrap_or_else(|error| {
@@ -298,7 +282,7 @@ impl Checker<'_> {
         fields: &[u32],
     ) -> bool {
         self.ty(callee)
-            .and_then(|ty| self.body.types.get(ty))
+            .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| {
                 let TypeKind::Function(function) = &row.kind else {
                     return false;
@@ -378,8 +362,7 @@ impl Checker<'_> {
                         Context::Copy => ty.is_some_and(|ty| self.stable_creation_copy(ty)),
                         // Invoking a many-use callable borrows it.
                         Context::Invoke => ty.is_some_and(|ty| {
-                            self.body.types.get(ty).unwrap().modes.multiplicity
-                                == Multiplicity::Many
+                            self.t.get(ty).unwrap().modes.multiplicity == Multiplicity::Many
                         }),
                         _ => self.closed_effect(&selection, relation, ty),
                     };

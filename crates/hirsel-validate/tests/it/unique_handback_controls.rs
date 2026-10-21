@@ -8,7 +8,7 @@ fn handback(unique: bool) -> (Fixture, u32) {
     let x = param(&mut f, TypeKind::Primitive(Primitive::String));
     if unique {
         let old = f.body().places[x as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let row = f.definition.types.push(row);
         f.body().locals[x as usize].ty = row;
@@ -154,7 +154,7 @@ fn a_preserving_call_with_unique_inputs_keeps_the_argument_unique() {
 fn preserving_result(preserves: bool) -> Fixture {
     let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
     let result = f.body().result;
-    let mut row = f.definition.types.get(result).unwrap().clone();
+    let mut row = interner().get(result).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let row = f.definition.types.push(row);
     f.body().result = row;
@@ -217,12 +217,12 @@ fn a_preserving_taken_input_makes_the_result_unique() {
 fn an_indirect_call_does_not_use_the_promise() {
     let mut f = preserving_call(true, false);
     f.valid(); // The direct call keeps `x` unique.
-    let mut signature = f.signatures[&path("callee")].clone();
+    let mut signature = f.signatures.get(id("callee")).unwrap().clone();
     let SignatureKind::Function(fun) = signature.kind.clone() else {
         panic!()
     };
-    let row = signature.types.push(ty(TypeKind::Function(fun)));
-    let imported = import_type(&signature.types, row, &mut f.definition.types).unwrap();
+    let row = interner().intern(ty(TypeKind::Function(fun)));
+    let imported = row;
     let slot = f.body().locals.len() as u32;
     f.body().locals.push(Local {
         ty: imported,
@@ -299,7 +299,7 @@ fn borrowing_call(core: bool, unretained: &[u32]) -> Fixture {
         ],
         TypeKind::Tuple(vec![].into()),
     );
-    callee.definition = callee_path.clone();
+    callee.definition = DefId::intern(&callee_path);
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
@@ -316,7 +316,7 @@ fn borrowing_call(core: bool, unretained: &[u32]) -> Fixture {
             .into(),
     }]
     .into();
-    f.signatures.insert(callee_path, callee);
+    f.signatures.insert(&callee_path, callee);
     f
 }
 
@@ -403,10 +403,10 @@ fn viewing_call(escape: bool) -> Fixture {
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
-    let mut result = callee.types.get(fun.result).unwrap().clone();
+    let mut result = interner().get(fun.result).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    fun.result = callee.types.push(result);
-    f.signatures.insert(path("view"), callee);
+    fun.result = interner().intern(result);
+    f.signatures.insert(id("view"), callee);
     f
 }
 
@@ -580,10 +580,10 @@ fn view_and_need(f: &mut Fixture) {
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
-    let mut result = callee.types.get(fun.result).unwrap().clone();
+    let mut result = interner().get(fun.result).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    fun.result = callee.types.push(result);
-    f.signatures.insert(path("view"), callee);
+    fun.result = interner().intern(result);
+    f.signatures.insert(id("view"), callee);
     let mut need = function_signature(
         "need",
         vec![(PassingMode::Mut, string)],
@@ -592,10 +592,10 @@ fn view_and_need(f: &mut Fixture) {
     let SignatureKind::Function(fun) = &mut need.kind else {
         panic!()
     };
-    let mut row = need.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
-    fun.parameters[0].ty = need.types.push(row);
-    f.signatures.insert(path("need"), need);
+    fun.parameters[0].ty = interner().intern(row);
+    f.signatures.insert(id("need"), need);
 }
 
 #[test]
@@ -751,11 +751,11 @@ fn digested_then_needed(related: bool) -> Fixture {
         let SignatureKind::Function(fun) = &mut digest.kind else {
             panic!()
         };
-        let mut result = digest.types.get(fun.result).unwrap().clone();
+        let mut result = interner().get(fun.result).unwrap().clone();
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        fun.result = digest.types.push(result);
+        fun.result = interner().intern(result);
     }
-    f.signatures.insert(path("digest"), digest);
+    f.signatures.insert(id("digest"), digest);
     f
 }
 
@@ -775,7 +775,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
     param(
         &mut f,
         TypeKind::Named {
-            definition: path("Point"),
+            definition: id("Point"),
             arguments: vec![].into(),
         },
     );
@@ -796,7 +796,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
     }
     owner_sig(&mut f, &[PassingMode::Borrow, PassingMode::Mut]);
     let mut point = function_signature("Point", vec![], TypeKind::Tuple(vec![].into()));
-    let representation = point.types.push(Type::unit());
+    let representation = interner().intern(Type::unit());
     point.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
         format: associated.then(|| path("main")),
@@ -874,7 +874,7 @@ fn sibling_call(core: bool, proving: bool) -> Fixture {
         ],
         TypeKind::Tuple(vec![].into()),
     );
-    callee.definition = callee_path.clone();
+    callee.definition = DefId::intern(&callee_path);
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
@@ -886,7 +886,7 @@ fn sibling_call(core: bool, proving: bool) -> Fixture {
         unretained: Default::default(),
     }]
     .into();
-    f.signatures.insert(callee_path, callee);
+    f.signatures.insert(&callee_path, callee);
     f
 }
 
@@ -914,7 +914,7 @@ fn generic_result(forged: bool) -> Fixture {
         .definition
         .types
         .push(ty(TypeKind::Primitive(Primitive::String)));
-    let mut row = f.definition.types.get(string).unwrap().clone();
+    let mut row = interner().get(string).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let unique = f.definition.types.push(row);
     let xs = param(
@@ -960,7 +960,7 @@ fn generic_result(forged: bool) -> Fixture {
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
-    let list = callee.types.push(ty(TypeKind::Builtin {
+    let list = interner().intern(ty(TypeKind::Builtin {
         kind: BuiltinType::List,
         arguments: vec![GenericArgument::Type(fun.result)].into(),
     }));
@@ -1000,7 +1000,7 @@ fn a_bare_generic_result_holds_its_declared_modes() {
 fn parametric_call(unique: bool) -> Fixture {
     let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
     let result = f.body().result;
-    let mut row = f.definition.types.get(result).unwrap().clone();
+    let mut row = interner().get(result).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let row = f.definition.types.push(row);
     f.body().result = row;
@@ -1019,7 +1019,7 @@ fn parametric_call(unique: bool) -> Fixture {
     );
     if unique {
         let old = f.body().places[xs as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let row = f.definition.types.push(row);
         f.body().locals[xs as usize].ty = row;
@@ -1050,7 +1050,7 @@ fn parametric_call(unique: bool) -> Fixture {
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
-    let list = callee.types.push(ty(TypeKind::Builtin {
+    let list = interner().intern(ty(TypeKind::Builtin {
         kind: BuiltinType::List,
         arguments: vec![GenericArgument::Type(fun.result)].into(),
     }));
@@ -1086,10 +1086,8 @@ fn a_parametric_result_is_unique_only_from_unique_inputs() {
 /// A resource whose finalizer may fail (DROP-2).
 fn token_signature() -> Signature {
     let mut signature = function_signature("Token", vec![], TypeKind::Tuple(vec![].into()));
-    let scalar = signature
-        .types
-        .push(ty(TypeKind::Primitive(Primitive::U64)));
-    let representation = signature.types.push(ty(TypeKind::Record(
+    let scalar = interner().intern(ty(TypeKind::Primitive(Primitive::U64)));
+    let representation = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "value".into(),
             ty: scalar,
@@ -1127,7 +1125,7 @@ fn released_resource(weakened: bool) -> Fixture {
     let string = TypeKind::Primitive(Primitive::String);
     let fresh = param(&mut f, string.clone());
     let old = f.body().places[fresh as usize].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
     let row = f.definition.types.push(row);
     f.body().locals[fresh as usize].ty = row;
@@ -1135,11 +1133,11 @@ fn released_resource(weakened: bool) -> Fixture {
     let b = param(
         &mut f,
         TypeKind::Named {
-            definition: path("Token"),
+            definition: id("Token"),
             arguments: vec![].into(),
         },
     );
-    f.signatures.insert(path("Token"), token_signature());
+    f.signatures.insert(id("Token"), token_signature());
     let kept = f.slot(string.clone(), Storage::Local);
     let displaced = f.slot(string, Storage::Temporary);
     let release = |on_failure| {
@@ -1220,31 +1218,23 @@ enum Extra {
 
 fn tagged(thunk: bool) -> Signature {
     let mut tagged = function_signature("Tagged", vec![], TypeKind::Tuple(vec![].into()));
-    let item = tagged
-        .types
-        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-            TypeParamId(0),
-        ))));
+    let item = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
     let label = if thunk {
-        let inner = tagged
-            .types
-            .push(ty(TypeKind::Parameter(TypeParameterRef::Bound {
-                depth: 1,
-                parameter: TypeParamId(0),
-            })));
-        tagged
-            .types
-            .push(ty(TypeKind::Function(fn_type(vec![], inner))))
+        let inner = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::Bound {
+            depth: 1,
+            parameter: TypeParamId(0),
+        })));
+        interner().intern(ty(TypeKind::Function(fn_type(vec![], inner))))
     } else {
-        let string = tagged
-            .types
-            .push(ty(TypeKind::Primitive(Primitive::String)));
-        tagged.types.push(ty(TypeKind::Builtin {
+        let string = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
+        interner().intern(ty(TypeKind::Builtin {
             kind: BuiltinType::Shared,
             arguments: vec![GenericArgument::Type(string)].into(),
         }))
     };
-    let representation = tagged.types.push(ty(TypeKind::Record(
+    let representation = interner().intern(ty(TypeKind::Record(
         vec![
             Field {
                 growable: false,
@@ -1302,7 +1292,7 @@ fn parametric_variant(extra: Extra) -> Fixture {
         ),
         Extra::Named { .. } => (
             TypeKind::Named {
-                definition: path("Tagged"),
+                definition: id("Tagged"),
                 arguments: vec![GenericArgument::Type(string)].into(),
             },
             UseKind::Take,
@@ -1329,7 +1319,7 @@ fn parametric_variant(extra: Extra) -> Fixture {
     let second = param(&mut f, kind);
     if matches!(extra, Extra::Named { .. }) {
         let old = f.body().places[second as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let row = f.definition.types.push(row);
         f.body().locals[second as usize].ty = row;
@@ -1353,7 +1343,7 @@ fn parametric_variant(extra: Extra) -> Fixture {
     let called = called.clone();
     owner_sig(&mut f, &[PassingMode::Take, passing]);
     let mut callee = f.signatures.remove(&path("callee")).unwrap();
-    callee.definition = called.clone();
+    callee.definition = DefId::intern(&called);
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
@@ -1365,23 +1355,23 @@ fn parametric_variant(extra: Extra) -> Fixture {
     };
     let ty_kind = match extra {
         Extra::Borrowed { .. } => {
-            let element = callee.types.push(t(0));
+            let element = interner().intern(t(0));
             TypeKind::Builtin {
                 kind: BuiltinType::List,
                 arguments: vec![GenericArgument::Type(element)].into(),
             }
         }
         Extra::Named { thunk } => {
-            let element = callee.types.push(t(0));
-            f.signatures.insert(path("Tagged"), tagged(thunk));
+            let element = interner().intern(t(0));
+            f.signatures.insert(id("Tagged"), tagged(thunk));
             TypeKind::Named {
-                definition: path("Tagged"),
+                definition: id("Tagged"),
                 arguments: vec![GenericArgument::Type(element)].into(),
             }
         }
         Extra::Lent { pure } => {
-            let element = callee.types.push(t(1));
-            let count = callee.types.push(ty(TypeKind::Primitive(Primitive::U64)));
+            let element = interner().intern(t(1));
+            let count = interner().intern(ty(TypeKind::Primitive(Primitive::U64)));
             let mut callback = fn_type(
                 vec![Parameter {
                     name: None,
@@ -1402,10 +1392,10 @@ fn parametric_variant(extra: Extra) -> Fixture {
         name: None,
         label: None,
         passing,
-        ty: callee.types.push(ty(ty_kind)),
+        ty: interner().intern(ty(ty_kind)),
     });
     fun.parameters = parameters.into();
-    f.signatures.insert(called, callee);
+    f.signatures.insert(&called, callee);
     f
 }
 
@@ -1458,7 +1448,7 @@ fn tuple_result(unique: bool) -> Fixture {
         .definition
         .types
         .push(ty(TypeKind::Primitive(Primitive::String)));
-    let mut unique_row = f.definition.types.get(string).unwrap().clone();
+    let mut unique_row = interner().get(string).unwrap().clone();
     unique_row.modes.uniqueness = Uniqueness::Unique;
     let unique_string = f.definition.types.push(unique_row);
     let second = if unique { unique_string } else { string };
@@ -1533,10 +1523,10 @@ fn tuple_result(unique: bool) -> Fixture {
             parameter: TypeParamId(ordinal),
         }))
     };
-    let value = callee.types.push(parameter(0, 0));
-    let received = callee.types.push(parameter(1, 0));
-    let returned = callee.types.push(parameter(1, 1));
-    let f_ty = callee.types.push(ty(TypeKind::Function(fn_type(
+    let value = interner().intern(parameter(0, 0));
+    let received = interner().intern(parameter(1, 0));
+    let returned = interner().intern(parameter(1, 1));
+    let f_ty = interner().intern(ty(TypeKind::Function(fn_type(
         vec![Parameter {
             name: None,
             label: None,

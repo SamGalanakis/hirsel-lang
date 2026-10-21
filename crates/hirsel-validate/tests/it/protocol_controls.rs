@@ -13,7 +13,7 @@ fn core_option() -> DefPath {
 }
 fn nominal(name: &str) -> Signature {
     let mut s = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
-    let unit = s.types.push(Type::unit());
+    let unit = interner().intern(Type::unit());
     s.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
         format: None,
@@ -41,7 +41,7 @@ fn association() -> Fixture {
     let mut view = nominal("View");
     let mut cursor = nominal("Cursor");
     let mut option = nominal("Option");
-    option.definition = core_option();
+    option.definition = DefId::intern(&core_option());
     if let SignatureKind::Type(t) = &mut option.kind {
         t.generics = vec![GenericParameter::Type {
             name: "T".into(),
@@ -64,9 +64,9 @@ fn association() -> Fixture {
         },
     );
     if let SignatureKind::Function(fun) = &mut open.kind {
-        let mut row = open.types.get(fun.result).unwrap().clone();
+        let mut row = interner().get(fun.result).unwrap().clone();
         row.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-        fun.result = open.types.push(row);
+        fun.result = interner().intern(row);
     }
     let mut next = function_signature(
         "next",
@@ -79,18 +79,18 @@ fn association() -> Fixture {
         )],
         TypeKind::Tuple(vec![].into()),
     );
-    let item = next.types.push(ty(TypeKind::Primitive(Primitive::U64)));
+    let item = interner().intern(ty(TypeKind::Primitive(Primitive::U64)));
     if let SignatureKind::Function(fun) = &mut next.kind {
-        fun.result = next.types.push(ty(TypeKind::Named {
+        fun.result = interner().intern(ty(TypeKind::Named {
             definition: option.definition.clone(),
             arguments: vec![GenericArgument::Type(item)].into(),
         }));
     }
     if let SignatureKind::Type(t) = &mut view.kind {
         t.loop_source = Some(LoopSourceDeclaration {
-            open: open.definition.clone(),
-            next: next.definition.clone(),
-            option: option.definition.clone(),
+            open: open.definition.path().clone(),
+            next: next.definition.path().clone(),
+            option: option.definition.path().clone(),
         });
     }
     // Only the operation result is Local; the cursor declaration's shape is Plain.
@@ -104,19 +104,19 @@ fn association() -> Fixture {
 fn unused_association_rejects_foreign_option_with_unchanged_executable_typing() {
     let mut f = association();
     f.valid();
-    let mut foreign = f.signatures[&core_option()].clone();
-    foreign.definition = path("ForeignOption");
+    let mut foreign = f.signatures.get(&core_option()).unwrap().clone();
+    foreign.definition = id("ForeignOption");
     f.signatures.insert(foreign.definition.clone(), foreign);
     let next = f.signatures.get_mut(&path("next")).unwrap();
     let SignatureKind::Function(fun) = &mut next.kind else {
         panic!()
     };
-    let mut row = next.types.get(fun.result).unwrap().clone();
+    let mut row = interner().get(fun.result).unwrap().clone();
     let TypeKind::Named { definition, .. } = &mut row.kind else {
         panic!()
     };
-    *definition = path("ForeignOption");
-    fun.result = next.types.push(row);
+    *definition = id("ForeignOption");
+    fun.result = interner().intern(row);
     assert_eq!(
         f.kinds(),
         vec![ViolationKind::InvalidSignature(path("View"))]
@@ -140,10 +140,8 @@ fn unused_association_rejects_next_receiver_mode() {
 fn unused_association_rejects_a_next_mode_the_open_result_does_not_supply() {
     let mut f = association();
     let cursor = f.signatures.get_mut(&path("Cursor")).unwrap();
-    let string = cursor
-        .types
-        .push(ty(TypeKind::Primitive(Primitive::String)));
-    let record = cursor.types.push(ty(TypeKind::Record(
+    let string = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
+    let record = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "source".into(),
             ty: string,
@@ -161,9 +159,9 @@ fn unused_association_rejects_a_next_mode_the_open_result_does_not_supply() {
     let SignatureKind::Function(fun) = &next.kind else {
         panic!()
     };
-    let mut row = next.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.modes.uniqueness = Uniqueness::Unique;
-    let parameter = next.types.push(row);
+    let parameter = interner().intern(row);
     let SignatureKind::Function(fun) = &mut next.kind else {
         panic!()
     };
@@ -278,10 +276,10 @@ fn calls_with_receipt() -> Fixture {
     let SignatureKind::Type(t) = &mut view.kind else {
         panic!()
     };
-    t.representation = Some(view.types.push(ty(TypeKind::Record(vec![].into()))));
+    t.representation = Some(interner().intern(ty(TypeKind::Record(vec![].into()))));
     let source = f.slot(
         TypeKind::Named {
-            definition: path("View"),
+            definition: id("View"),
             arguments: vec![].into(),
         },
         Storage::Local,
@@ -297,18 +295,18 @@ fn calls_with_receipt() -> Fixture {
     );
     let cursor = f.slot(
         TypeKind::Named {
-            definition: path("Cursor"),
+            definition: id("Cursor"),
             arguments: vec![].into(),
         },
         Storage::Local,
     );
-    let next = &f.signatures[&path("next")];
+    let next = &f.signatures.get(id("next")).unwrap();
     let SignatureKind::Function(fun) = &next.kind else {
         panic!()
     };
-    let result = import_type(&next.types, fun.result, &mut f.definition.types).unwrap();
+    let result = fun.result;
     let option = f.slot(
-        f.definition.types.get(result).unwrap().kind.clone(),
+        interner().get(result).unwrap().kind.clone(),
         Storage::Temporary,
     );
     f.body().blocks[0].terminator = Terminator::Call {
@@ -401,7 +399,7 @@ fn unused_association_rejects_private_signature_types_but_grants_private_operati
             .visibility = hirsel_syntax::Visibility::Public;
     }
     assert_eq!(
-        f.signatures[&path("open")].metadata.visibility,
+        f.signatures.get(id("open")).unwrap().metadata.visibility,
         hirsel_syntax::Visibility::Private
     );
     f.valid();
@@ -425,12 +423,12 @@ fn unused_association_rejects_an_unrelated_same_shape_cursor() {
     let SignatureKind::Function(fun) = &mut next.kind else {
         panic!()
     };
-    let mut row = next.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     let TypeKind::Named { definition, .. } = &mut row.kind else {
         panic!()
     };
-    *definition = path("OtherCursor");
-    fun.parameters[0].ty = next.types.push(row);
+    *definition = id("OtherCursor");
+    fun.parameters[0].ty = interner().intern(row);
     assert_eq!(
         f.kinds(),
         vec![ViolationKind::InvalidSignature(path("View"))]
@@ -441,10 +439,8 @@ fn retained_source_calls() -> Fixture {
     let mut f = association();
     for name in ["View", "Cursor"] {
         let declaration = f.signatures.get_mut(&path(name)).unwrap();
-        let string = declaration
-            .types
-            .push(ty(TypeKind::Primitive(Primitive::String)));
-        let record = declaration.types.push(ty(TypeKind::Record(
+        let string = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
+        let record = interner().intern(ty(TypeKind::Record(
             vec![Field {
                 name: "source".into(),
                 growable: false,
@@ -459,12 +455,10 @@ fn retained_source_calls() -> Fixture {
         t.bounds = vec![Bound::Copyable];
     }
     let option = f.signatures.get_mut(&core_option()).unwrap();
-    let parameter = option
-        .types
-        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-            TypeParamId(0),
-        ))));
-    let representation = option.types.push(ty(TypeKind::Variant(
+    let parameter = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    let representation = interner().intern(ty(TypeKind::Variant(
         vec![
             Variant {
                 name: "None".into(),
@@ -483,20 +477,20 @@ fn retained_source_calls() -> Fixture {
     t.representation = Some(representation);
     t.bounds = vec![];
     let next = f.signatures.get_mut(&path("next")).unwrap();
-    let string = next.types.push(ty(TypeKind::Primitive(Primitive::String)));
+    let string = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
     let mut result = ty(TypeKind::Named {
-        definition: core_option(),
+        definition: DefId::intern(&core_option()),
         arguments: vec![GenericArgument::Type(string)].into(),
     });
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    let result = next.types.push(result);
+    let result = interner().intern(result);
     let SignatureKind::Function(fun) = &mut next.kind else {
         panic!()
     };
     fun.result = result;
     let localize = |f: &mut Fixture, p: u32| {
         let ty = f.body().places[p as usize].ty;
-        let mut row = f.definition.types.get(ty).unwrap().clone();
+        let mut row = interner().get(ty).unwrap().clone();
         row.modes.relation = Relation::environment();
         let ty = f.definition.types.push(row);
         let root = f.body().places[p as usize].root;
@@ -505,7 +499,7 @@ fn retained_source_calls() -> Fixture {
     };
     let source = f.slot(
         TypeKind::Named {
-            definition: path("View"),
+            definition: id("View"),
             arguments: vec![].into(),
         },
         Storage::Parameter,
@@ -515,7 +509,7 @@ fn retained_source_calls() -> Fixture {
     owner_signature(&mut f, PassingMode::Borrow);
     let cursor = f.slot(
         TypeKind::Named {
-            definition: path("Cursor"),
+            definition: id("Cursor"),
             arguments: vec![].into(),
         },
         Storage::Local,
@@ -527,7 +521,7 @@ fn retained_source_calls() -> Fixture {
         .push(ty(TypeKind::Primitive(Primitive::String)));
     let option = f.slot(
         TypeKind::Named {
-            definition: core_option(),
+            definition: DefId::intern(&core_option()),
             arguments: vec![GenericArgument::Type(string)].into(),
         },
         Storage::Temporary,
@@ -536,12 +530,12 @@ fn retained_source_calls() -> Fixture {
     let read = function_signature("read", vec![], TypeKind::Tuple(vec![].into()));
     // Import the Option item into the independent callee store.
     let mut read = read;
-    let item = read.types.push(ty(TypeKind::Primitive(Primitive::String)));
+    let item = interner().intern(ty(TypeKind::Primitive(Primitive::String)));
     let SignatureKind::Function(fun) = &mut read.kind else {
         panic!()
     };
-    let ty = read.types.push(ty(TypeKind::Named {
-        definition: core_option(),
+    let ty = interner().intern(ty(TypeKind::Named {
+        definition: DefId::intern(&core_option()),
         arguments: vec![GenericArgument::Type(item)].into(),
     }));
     fun.parameters = vec![Parameter {
@@ -731,13 +725,13 @@ fn returned_source_calls() -> Fixture {
     let option = 3;
     let cursor = 2;
     let option_type = f.body().places[option].ty;
-    let mut result = f.definition.types.get(option_type).unwrap().clone();
+    let mut result = interner().get(option_type).unwrap().clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
     f.body().result = f.definition.types.push(result);
     owner_signature(&mut f, PassingMode::Borrow);
     let scope = f.body().parameter_scope;
     let result = f.body().result;
-    f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+    f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
     let cleanup = f.cleanup(vec![
         CleanupAction::EndLoan {
             loan: LoanId(1),
@@ -784,13 +778,13 @@ fn an_owned_return_cannot_erase_its_original_source_bound() {
     f.valid();
     let other = f.slot(
         TypeKind::Named {
-            definition: path("View"),
+            definition: id("View"),
             arguments: vec![].into(),
         },
         Storage::Parameter,
     );
     let source_type = f.body().places[1].ty;
-    let mut parameter = f.definition.types.get(source_type).unwrap().clone();
+    let mut parameter = interner().get(source_type).unwrap().clone();
     parameter.modes.relation = Relation::environment();
     let ty = f.definition.types.push(parameter);
     let other_root = f.body().places[other as usize].root;
@@ -798,13 +792,13 @@ fn an_owned_return_cannot_erase_its_original_source_bound() {
     f.body().places[other as usize].ty = ty;
     f.body().parameters.push(other_root);
     let result = f.body().result;
-    let mut wrong = f.definition.types.get(result).unwrap().clone();
+    let mut wrong = interner().get(result).unwrap().clone();
     wrong.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(1))]);
     f.body().result = f.definition.types.push(wrong);
     owner_signature(&mut f, PassingMode::Borrow);
     let scope = f.body().parameter_scope;
     let result = f.body().result;
-    f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+    f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
     let kinds = f.kinds();
     assert!(
         kinds.contains(&ViolationKind::InvalidResultSource(PlaceId(3))),

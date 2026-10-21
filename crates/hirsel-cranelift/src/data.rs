@@ -5,15 +5,14 @@
 use cranelift_codegen::ir::{self, AbiParam, InstBuilder, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
-use hirsel_lir::emission::{
-    IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, PrefixWord, descriptor_name, symbol_name,
-};
-use hirsel_lir::layout::{SEQUENCE_CAPACITY_OFFSET, align_up, sequence_elements_offset};
-use hirsel_lir::layout_types::{Endian, FinalizerRef, LayoutId, LayoutKind};
+use hirsel_lir::emission::{IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, PrefixWord, symbol_name};
+use hirsel_lir::glue::descriptor_name;
+use hirsel_lir::layout::align_up;
+use hirsel_lir::layout_types::{Endian, FinalizerRef, LayoutId};
 use hirsel_lir::rt_program;
 use hirsel_lir::runtime_abi::{COUNT_IMMORTAL, LAYOUT_DESCRIPTOR_VERSION, LAYOUT_MAGIC};
 use hirsel_lir::stage::ObjectSymbolKind;
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::DefPath;
 
 use crate::CodegenError;
 use crate::module::{CheckThunk, Emitted, Emitter, Helper, PTR};
@@ -68,14 +67,14 @@ impl Emitter<'_> {
         })
     }
 
-    /// The registry index of `layout`'s descriptor, which the object then defines.
+    /// The registry index of `layout`'s descriptor, which the glue object then defines.
     pub(crate) fn descriptor_index(
         &mut self,
         layout: LayoutId,
         definition: &DefPath,
     ) -> Emitted<u32> {
         self.descriptor(layout, definition)?;
-        match self.inputs.registry.index(layout) {
+        match self.inputs.glue().registry.index(layout) {
             Some(index) => Ok(index),
             None => Self::invalid_at(
                 definition,
@@ -86,7 +85,10 @@ impl Emitter<'_> {
 
     /// The empty descriptor the registry starts with.
     fn empty_descriptor(&mut self) -> Emitted<DataId> {
-        let name = format!("hirsel.layout.empty.{}", self.inputs.registry.symbol());
+        let name = format!(
+            "hirsel.layout.empty.{}",
+            self.inputs.glue().registry.symbol()
+        );
         let (id, new) = self.declare_data(&name, Linkage::Preemptible)?;
         if new {
             self.manifested.descriptors.insert(name.clone());
@@ -101,12 +103,12 @@ impl Emitter<'_> {
     /// The descriptor registry this object shares with the program's other objects, and
     /// its binding `hirsel.program.registry`.
     pub(crate) fn registry_table(&mut self, definition: &DefPath) -> Emitted {
-        let name = self.inputs.registry.symbol();
+        let name = self.inputs.glue().registry.symbol();
         if self.data.contains_key(&name) {
             return Ok(());
         }
         let mut entries = vec![self.empty_descriptor()?];
-        for id in self.inputs.registry.layouts.clone() {
+        for id in self.inputs.glue().registry.layouts.clone() {
             entries.push(self.descriptor(id, definition)?);
         }
         let (table, _) = self.declare_data(&name, Linkage::Preemptible)?;
@@ -135,18 +137,17 @@ impl Emitter<'_> {
     /// The `hirsel_rt_v2_layout` of `layout`, defined once per object with every descriptor
     /// its steps name. A layout with a user finalizer names its drop wrapper.
     pub(crate) fn descriptor(&mut self, layout: LayoutId, definition: &DefPath) -> Emitted<DataId> {
-        let record = match self.inputs.layouts.layout(layout) {
-            Some(record) => record,
-            None => return Self::invalid_at(definition, format!("no layout {}", layout.0)),
-        };
-        let name = descriptor_name(record);
+        if self.inputs.layouts.layout(layout).is_none() {
+            return Self::invalid_at(definition, format!("no layout {}", layout.0));
+        }
+        let name = descriptor_name(&self.inputs.keys.key(layout));
         if let Some(&id) = self.data.get(&name) {
             return Ok(id);
         }
         let descriptors = match rt_program::descriptors_with_storage(
             self.inputs.layouts,
             &[layout],
-            &self.inputs.registry.map_storage,
+            &self.inputs.glue().registry.map_storage,
         ) {
             Ok(descriptors) => descriptors,
             Err(error) => {
@@ -159,10 +160,10 @@ impl Emitter<'_> {
         // Declare every new descriptor first: a step names another.
         let mut new = Vec::new();
         for d in &descriptors {
-            let Some(record) = self.inputs.layouts.layout(d.layout) else {
+            if self.inputs.layouts.layout(d.layout).is_none() {
                 return Self::invalid_at(definition, format!("no layout {}", d.layout.0));
-            };
-            let name = descriptor_name(record);
+            }
+            let name = descriptor_name(&self.inputs.keys.key(d.layout));
             let (id, fresh) = self.declare_data(&name, Linkage::Preemptible)?;
             if fresh {
                 self.manifested.descriptors.insert(name.clone());
@@ -188,10 +189,13 @@ impl Emitter<'_> {
                     put_u64(&mut bytes, at + 32, step.count);
                     put_u64(&mut bytes, at + 40, step.count_offset);
                     if let Some(target) = step.layout {
-                        let Some(record) = self.inputs.layouts.layout(target) else {
+                        if self.inputs.layouts.layout(target).is_none() {
                             return Self::invalid_at(definition, "a step naming no layout");
-                        };
-                        match self.data.get(&descriptor_name(record)) {
+                        }
+                        match self
+                            .data
+                            .get(&descriptor_name(&self.inputs.keys.key(target)))
+                        {
                             Some(&target) => targets.push((at + 48, target)),
                             None => {
                                 return Self::invalid_at(
@@ -236,7 +240,7 @@ impl Emitter<'_> {
             } else {
                 None
             };
-            let scan = d.scan.linked(|id| self.inputs.registry.index(id));
+            let scan = d.scan.linked(|id| self.inputs.glue().registry.index(id));
             let scan_words = scan.as_ref().map_or(u64::MAX, |w| w.len() as u64);
             let scan_id = match scan {
                 Some(words) if !words.is_empty() => {
@@ -305,7 +309,7 @@ impl Emitter<'_> {
         finalizer: &FinalizerRef,
         definition: &DefPath,
     ) -> Emitted<FuncId> {
-        let Some(instance) = self.inputs.finalizers.get(&layout) else {
+        let Some(instance) = self.inputs.glue().finalizers.get(&layout) else {
             return Self::invalid_at(
                 definition,
                 format!(
@@ -347,11 +351,12 @@ impl Emitter<'_> {
             AbiParam::new(types::I64),
         ]);
         sig.returns.push(AbiParam::new(types::I8).uext());
-        let name = format!("hirsel.drop.{}", layout.0);
+        let name = format!("hirsel.drop.{}", self.inputs.keys.key(layout).hex());
         self.helper(&name, &sig, |_| Helper::Drop { body, caller_site })
     }
 
-    /// A private static immortal block named `name`: the immortal prefix with
+    /// A static immortal block named `name` (exported from glue, else private): the
+    /// immortal prefix with
     /// `COUNT_IMMORTAL` and the static domain over `descriptor`, then `bytes` at the payload
     /// offset of `align`, with the pointer-sized cell at each offset of `references` holding
     /// that block's header address.
@@ -362,6 +367,7 @@ impl Emitter<'_> {
         align: u32,
         bytes: &[u8],
         references: &[(u64, StaticBlock)],
+        exported: bool,
         definition: &DefPath,
     ) -> Emitted<StaticBlock> {
         let physical = align.max(8);
@@ -392,7 +398,12 @@ impl Emitter<'_> {
                 return Self::invalid_at(definition, "a static reference outside its block");
             }
         }
-        let (id, _) = self.declare_data(name, Linkage::Local)?;
+        let linkage = if exported {
+            Linkage::Export
+        } else {
+            Linkage::Local
+        };
+        let (id, _) = self.declare_data(name, linkage)?;
         let mut description = DataDescription::new();
         description.define(image.into_boxed_slice());
         description.set_align(u64::from(physical));
@@ -407,14 +418,37 @@ impl Emitter<'_> {
     }
 
     /// The environment of a function reference: one static immortal block with an empty
-    /// payload and the empty descriptor.
+    /// payload and the empty descriptor (index 2, which the runtime fixes, not the program).
     pub(crate) fn empty_environment(&mut self, definition: &DefPath) -> Emitted<StaticBlock> {
-        self.empty_descriptor()?;
-        self.static_block("hirsel.env.empty", 2, 1, &[], &[], definition)
+        self.static_block("hirsel.env.empty", 2, 1, &[], &[], false, definition)
     }
 
-    /// The static block of a String or Bytes literal: a counted `Sequence` payload of
-    /// `payload` (its u64 element count, its u64 capacity, then the bytes).
+    /// The header of glue's static immortal block `name` (`hirsel_lir::glue`), whose
+    /// payload has `align`, imported.
+    pub(crate) fn glue_block(
+        &mut self,
+        name: &str,
+        align: u32,
+        definition: &DefPath,
+    ) -> Emitted<StaticBlock> {
+        let Ok(start) = align_up(IMMORTAL_PREFIX_BYTES, u64::from(align.max(8))) else {
+            return Self::invalid_at(definition, "static extent overflow");
+        };
+        Ok(StaticBlock {
+            data: self.glue_data(name)?,
+            header: start - 8,
+        })
+    }
+
+    /// The glue data symbol `name`, imported and recorded in the manifest.
+    pub(crate) fn glue_data(&mut self, name: &str) -> Emitted<DataId> {
+        self.manifested.import(name, ObjectSymbolKind::Data, None);
+        Ok(self.declare_data(name, Linkage::Import)?.0)
+    }
+
+    /// The static block of a String or Bytes literal: glue's `literal_symbol` block of the
+    /// counted `Sequence` payload `payload` (its u64 element count, its u64 capacity, then
+    /// the bytes), whose prefix holds the program's descriptor index.
     pub(crate) fn literal_block(
         &mut self,
         payload: LayoutId,
@@ -427,40 +461,15 @@ impl Emitter<'_> {
                 what: "a static literal on a big-endian target".into(),
             });
         }
+        let data = match hirsel_lir::glue::literal_data(self.inputs.layouts, payload, bytes) {
+            Ok(data) => data,
+            Err(what) => return Self::invalid_at(definition, what),
+        };
         let Some(record) = self.inputs.layouts.layout(payload) else {
             return Self::invalid_at(definition, "no literal payload layout");
         };
-        let LayoutKind::Sequence { element } = record.kind else {
-            return Self::invalid_at(definition, "a text literal whose storage is not a sequence");
-        };
-        let Some(element_record) = self.inputs.layouts.layout(element) else {
-            return Self::invalid_at(definition, "no literal element layout");
-        };
-        if element_record.size.storage() != Some(1) {
-            return Self::invalid_at(definition, "a text literal of elements wider than a byte");
-        }
-        let start = match sequence_elements_offset(element_record) {
-            Ok(start) => start as usize,
-            Err(_) => return Self::invalid_at(definition, "a sequence element offset beyond u64"),
-        };
-        let mut data = vec![0u8; start];
-        let count = (bytes.len() as u64).to_le_bytes();
-        data[..8].copy_from_slice(&count);
-        let capacity = SEQUENCE_CAPACITY_OFFSET as usize;
-        data[capacity..capacity + 8].copy_from_slice(&count);
-        data.extend_from_slice(bytes);
-        let descriptor = self.descriptor_index(payload, definition)?;
-        let align = record.align;
-        let name = format!(
-            "hirsel.literal.{}",
-            ContentHash::of_parts("hirsel.native-literal.v1", [data.as_slice()])
-                .0
-                .iter()
-                .take(8)
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
-        self.static_block(&name, descriptor, align, &data, &[], definition)
+        let name = hirsel_lir::glue::literal_symbol(&self.inputs.keys.key(payload), &data);
+        self.glue_block(&name, record.align, definition)
     }
 
     /// A private constant of a static live mask's words.

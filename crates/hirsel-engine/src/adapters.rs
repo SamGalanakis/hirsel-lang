@@ -1,7 +1,7 @@
 //! Implementation crates expose free functions; the engine composes those it may
 //! depend on and reaches the rest through [`Phases`].
 use crate::*;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct LexerAdapter;
 impl LexerPhase for LexerAdapter {
@@ -10,6 +10,7 @@ impl LexerPhase for LexerAdapter {
         file: FileId,
         sources: &SourceMap,
     ) -> Result<QueryOutput<Vec<Token>>, QueryError> {
+        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Lex);
         let result = hirsel_lexer::lex(file, sources);
         Ok(QueryOutput {
             value: result.tokens,
@@ -55,7 +56,6 @@ impl ParserPhase for ParserAdapter {
 }
 
 /// Sources, root arguments and limits are explicit; no capabilities are granted implicitly.
-#[derive(Default)]
 pub struct InterpreterAdapter {
     pub entry_signature: Option<hirsel_types::SignatureRef>,
     pub runtime: hirsel_interp::aggregate::RuntimeTypes,
@@ -63,6 +63,21 @@ pub struct InterpreterAdapter {
     pub sources: SourceMap,
     pub arguments: Vec<hirsel_interp::Value>,
     pub limits: hirsel_interp::Limits,
+}
+impl Default for InterpreterAdapter {
+    /// An empty placeholder interner: `prepare` installs the session's runtime before a run.
+    fn default() -> Self {
+        Self {
+            entry_signature: None,
+            runtime: hirsel_interp::aggregate::RuntimeTypes::new(hirsel_types::TypeInterner::new(
+                None,
+            )),
+            simulation: Default::default(),
+            sources: Default::default(),
+            arguments: Vec::new(),
+            limits: Default::default(),
+        }
+    }
 }
 impl InterpreterPhase for InterpreterAdapter {
     fn prepare(
@@ -152,6 +167,7 @@ impl InterpreterPhase for InterpreterAdapter {
         } else {
             hirsel_interp::run(
                 definitions,
+                &self.runtime.types,
                 sources,
                 config,
                 self.arguments.clone(),
@@ -179,7 +195,7 @@ impl InterpreterPhase for InterpreterAdapter {
             if let Some(signature) = &self.entry_signature {
                 if let hirsel_types::SignatureKind::Function(function) = &signature.kind {
                     match hirsel_types::encoding::canonical_type_encoding(
-                        &signature.types,
+                        &self.runtime.types,
                         function.result,
                     ) {
                         Ok(encoded) => observation.returned_type = Some(encoded),
@@ -239,25 +255,20 @@ impl FormatterPhase for FormatterAdapter {
 }
 impl PhaseAdapters {
     /// The complete compiler: the engine's own adapters around `phases`, all
-    /// sharing one compiler state.
-    pub fn compiler(phases: Rc<dyn Phases>) -> Self {
-        let state = Rc::new(std::cell::RefCell::new(CompilerState::default()));
+    /// using immutable phase adapters.
+    pub fn compiler(phases: Arc<dyn Phases>) -> Self {
         Self {
-            lexer: Some(Rc::new(LexerAdapter)),
-            parser: Some(Rc::new(ParserAdapter)),
-            resolver: Some(Rc::new(ResolverAdapter {
-                state: state.clone(),
-            })),
-            signature: Some(Rc::new(SignatureAdapter {
-                state: state.clone(),
+            lexer: Some(Arc::new(LexerAdapter)),
+            parser: Some(Arc::new(ParserAdapter)),
+            resolver: Some(Arc::new(ResolverAdapter)),
+            signature: Some(Arc::new(SignatureAdapter {
                 phases: phases.clone(),
             })),
             checker: Some(phases.checker()),
-            modes: Some(phases.modes(state.clone())),
+            modes: Some(phases.modes()),
             lowering: Some(phases.lowering()),
-            compiler_state: Some(state),
             interpreter: Some(Box::new(InterpreterAdapter::default())),
-            formatter: Some(Rc::new(FormatterAdapter)),
+            formatter: Some(Arc::new(FormatterAdapter)),
             phases: Some(phases),
         }
     }

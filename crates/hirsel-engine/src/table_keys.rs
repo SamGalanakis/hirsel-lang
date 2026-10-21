@@ -24,16 +24,16 @@ struct Edge {
 }
 
 pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryError> {
-    let bodies = engine.instantiation_bodies()?;
     // Most programs have no store operations. Avoid schema building until a
     // backward walk from a table operation identifies a relevant generic slot.
     let mut required: BTreeMap<DefPath, BTreeSet<usize>> = BTreeMap::new();
-    for (_, body) in &bodies {
-        for call in &body.value.checked.instantiations {
-            let positions = core_roles::table_key_parameters(&call.callee);
+    for (_, checked) in engine.checked_definition_summaries()? {
+        for call in &checked.summary.calls {
+            let callee = call.callee.path();
+            let positions = core_roles::table_key_parameters(callee);
             if !positions.is_empty() {
                 required
-                    .entry(call.callee.clone())
+                    .entry(callee.clone())
                     .or_default()
                     .extend(positions);
             }
@@ -42,6 +42,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
     if required.is_empty() {
         return Ok(vec![]);
     }
+    let bodies = engine.instantiation_bodies()?;
     let mut edges = Vec::new();
     // Cache each argument's schema only when that slot becomes relevant.
     for (owner, body) in &bodies {
@@ -57,6 +58,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
         }
     }
     let mut errors = Vec::new();
+    let types = engine.types().clone();
     let mut reported = BTreeSet::new();
     loop {
         let mut changed = false;
@@ -73,7 +75,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
                     };
                     if edge.arguments[position].is_none() {
                         let schema = serializable_schema(
-                            &checked.types,
+                            &types,
                             *actual,
                             &checked.resolution.generic_declarations,
                             &mut |path| engine.signature(path).map(Some),

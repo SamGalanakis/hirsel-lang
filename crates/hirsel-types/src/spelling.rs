@@ -6,13 +6,13 @@ use crate::*;
 /// spell through the actual arguments, which `outer` owns. Modes are not
 /// spelled.
 pub struct CanonicalSpelling<'a> {
-    pub types: &'a TypeStore,
+    pub types: &'a TypeInterner,
     pub arguments: &'a [GenericArgument],
     pub outer: Option<&'a CanonicalSpelling<'a>>,
 }
 impl CanonicalSpelling<'_> {
     /// The spelling of a type with no free parameters of its own.
-    pub fn closed(types: &TypeStore, ty: TypeId) -> String {
+    pub fn closed(types: &TypeInterner, ty: TypeId) -> String {
         CanonicalSpelling {
             types,
             arguments: &[],
@@ -73,7 +73,7 @@ impl CanonicalSpelling<'_> {
                 definition,
                 arguments,
             } => {
-                let item = &definition.0;
+                let item = &definition.path().0;
                 out.push_str(&format!("{}@{}/", item.package.name, item.package.version));
                 if !item.modules.is_empty() {
                     out.push_str(&item.modules.join("/"));

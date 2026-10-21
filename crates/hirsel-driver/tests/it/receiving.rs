@@ -45,22 +45,21 @@ fn initialized_local_receivers_cannot_export_borrowed_content_as_global() {
         let mut path = entry_path(&default_context());
         path.0.name = "probe".into();
         let mut forged = (*input.definitions[&path]).clone();
-        let mut signatures: std::collections::BTreeMap<_, _> = input
-            .signatures
-            .iter()
-            .map(|(path, signature)| (path.clone(), (**signature).clone()))
-            .collect();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         let signature = signatures.get_mut(&path).unwrap();
         let hirsel_types::SignatureKind::Function(function) = &mut signature.kind else {
             panic!()
         };
-        let mut row = signature.types.get(function.result).unwrap().clone();
+        let mut row = engine.types().get(function.result).unwrap().clone();
         row.modes.relation = hirsel_types::Relation::global();
-        function.result = signature.types.push(row);
-        let mut row = forged.types.get(forged.bodies[0].result).unwrap().clone();
+        function.result = engine.types().intern(row);
+        let mut row = engine.types().get(forged.bodies[0].result).unwrap().clone();
         row.modes.relation = hirsel_types::Relation::global();
-        forged.bodies[0].result = forged.types.push(row);
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        forged.bodies[0].result = engine.types().intern(row);
+        forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+        let violations =
+            hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,
@@ -158,25 +157,24 @@ fn current_call_content_cannot_launder_a_borrowed_result_as_global() {
                 _ => None,
             })
             .unwrap();
-        let mut row = forged
-            .types
+        let mut row = engine
+            .types()
             .get(forged.bodies[0].locals[root.0 as usize].ty)
             .unwrap()
             .clone();
         row.modes.relation = hirsel_types::Relation::global();
-        let global = forged.types.push(row);
+        let global = engine.types().intern(row);
         forged.bodies[0].locals[root.0 as usize].ty = global;
         for place in &mut forged.bodies[0].places {
             if place.root == root && place.projection.is_empty() {
                 place.ty = global;
             }
         }
-        let signatures: std::collections::BTreeMap<_, _> = input
-            .signatures
-            .iter()
-            .map(|(p, s)| (p.clone(), (**s).clone()))
-            .collect();
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
+        forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+        let violations =
+            hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,
@@ -219,7 +217,7 @@ fn local_iterator_receivers_cannot_invent_sendable_content() {
                 .iter()
                 .enumerate()
                 .find_map(|(i, local)| {
-                    let row = forged.types.get(local.ty).unwrap();
+                    let row = engine.types().get(local.ty).unwrap();
                     (matches!(
                         row.kind,
                         hirsel_types::TypeKind::Builtin {
@@ -232,21 +230,21 @@ fn local_iterator_receivers_cannot_invent_sendable_content() {
                         .then_some(i)
                 })
                 .unwrap();
-            let mut row = forged.types.get(body.locals[root].ty).unwrap().clone();
+            let mut row = engine.types().get(body.locals[root].ty).unwrap().clone();
             row.modes.sendability = hirsel_types::Sendability::Sendable;
-            let bogus = forged.types.push(row);
+            let bogus = engine.types().intern(row);
             body.locals[root].ty = bogus;
             for place in &mut body.places {
                 if place.root.0 as usize == root && place.projection.is_empty() {
                     place.ty = bogus
                 }
             }
-            let signatures: std::collections::BTreeMap<_, _> = input
-                .signatures
-                .iter()
-                .map(|(p, s)| (p.clone(), (**s).clone()))
-                .collect();
-            let violations = hirsel_validate::validate(&forged, &signatures).violations;
+            let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+            signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
+            forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+            let violations =
+                hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![])
+                    .violations;
             assert!(
                 violations.iter().any(|v| matches!(
                     v.kind,
@@ -280,14 +278,11 @@ fn local_function_receivers_cannot_invent_sendable_content() {
         let input = engine.export_native_input().unwrap();
         let mut path = entry_path(&default_context());
         path.0.name = "probe".into();
-        let signatures: std::collections::BTreeMap<_, _> = input
-            .signatures
-            .iter()
-            .map(|(p, s)| (p.clone(), (**s).clone()))
-            .collect();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         let original = (*input.definitions[&path]).clone();
         assert!(
-            hirsel_validate::validate(&original, &signatures)
+            hirsel_validate::validate(&original, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -300,7 +295,7 @@ fn local_function_receivers_cannot_invent_sendable_content() {
             .iter()
             .enumerate()
             .find_map(|(i, local)| {
-                let row = forged.types.get(local.ty).unwrap();
+                let row = engine.types().get(local.ty).unwrap();
                 (matches!(row.kind, hirsel_types::TypeKind::Function(_))
                     && row.modes.relation.is_global()
                     && row.modes.sendability == hirsel_types::Sendability::NotSendable
@@ -308,16 +303,18 @@ fn local_function_receivers_cannot_invent_sendable_content() {
                     .then_some(i)
             })
             .unwrap();
-        let mut row = forged.types.get(body.locals[root].ty).unwrap().clone();
+        let mut row = engine.types().get(body.locals[root].ty).unwrap().clone();
         row.modes.sendability = hirsel_types::Sendability::Sendable;
-        let bogus = forged.types.push(row);
+        let bogus = engine.types().intern(row);
         body.locals[root].ty = bogus;
         for place in &mut body.places {
             if place.root.0 as usize == root && place.projection.is_empty() {
                 place.ty = bogus
             }
         }
-        let violations = hirsel_validate::validate(&forged, &signatures).violations;
+        forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+        let violations =
+            hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]).violations;
         assert!(
             violations.iter().any(|v| matches!(
                 v.kind,

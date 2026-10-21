@@ -18,7 +18,7 @@ fn run_config() -> RunConfiguration {
 }
 struct Harness {
     library: Library,
-    types: TypeStore,
+    types: std::sync::Arc<TypeInterner>,
     sources: SourceMap,
     stdout: Vec<u8>,
     trace: Vec<TraceEvent>,
@@ -30,7 +30,7 @@ impl Harness {
         let sources = support::sources_of("library.hir", "\n".repeat(20));
         Self {
             library: Library::new(&run, config).unwrap(),
-            types: TypeStore::default(),
+            types: crate::support::session(),
             sources,
             stdout: vec![],
             trace: vec![],
@@ -43,13 +43,13 @@ impl Harness {
         args: Vec<Value>,
         result: TypeKind,
     ) -> Result<OperationResult, Error> {
-        let result = self.types.push(ty(result));
+        let result = self.types.intern(ty(result));
         let path = hirsel_syntax::DefPath::core(name);
         let operation = self
             .library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &path,
                     generics: &[],
                     arguments: &mut args.to_vec(),
@@ -508,7 +508,7 @@ fn rejected_random_replay_publishes_no_draw_and_keeps_the_seed_state() {
     let random = h.project(&io, "random");
     draw(&mut h, &random).unwrap();
     let recorded = h.library.simulation.events.clone();
-    let mut replay = |seed| {
+    let replay = |seed| {
         let mut h = Harness::new(SimulationConfig {
             random_seed: seed,
             ..Default::default()
@@ -627,11 +627,11 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     };
     let mut lib = Library::new(&run, Default::default()).unwrap();
     let io = lib.simulation.grant_root("Io").unwrap();
-    let t = h.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let t = h.types.intern(ty(TypeKind::Tuple(vec![].into())));
     let path = hirsel_syntax::DefPath::core("io.stdout");
     lib.call(
         OperationCall {
-            runtime: &Default::default(),
+            runtime: &crate::support::runtime(),
             path: &path,
             generics: &[],
             arguments: &mut [io],
@@ -655,7 +655,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
 #[test]
 fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
     let mut h = Harness::new(Default::default());
-    let t = h.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let t = h.types.intern(ty(TypeKind::Tuple(vec![].into())));
     let path = hirsel_syntax::DefPath::core("arena.seal");
     let mut context = OperationContext {
         trace_mode: Default::default(),
@@ -668,7 +668,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
     assert!(matches!(
         h.library.call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &path,
                 generics: &[],
                 arguments: &mut [],
@@ -685,7 +685,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
         h.library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &path,
                     generics: &[],
                     arguments: &mut [],
@@ -714,12 +714,12 @@ fn replay_mismatch_cannot_publish_stdout_or_consume_fault_configuration() {
     };
     let mut library = Library::new(&run, Default::default()).unwrap();
     let io = library.simulation.grant_root("Io").unwrap();
-    let ty = h.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let ty = h.types.intern(ty(TypeKind::Tuple(vec![].into())));
     let path = hirsel_syntax::DefPath::core("io.stdout");
     assert!(matches!(
         library.call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &path,
                 generics: &[],
                 arguments: &mut [io],
@@ -790,6 +790,7 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
             definitions: vec![b.definition("main")],
             queries: vec![],
         },
+        &crate::support::session(),
         &h.sources,
         &h.run,
         vec![Value::Tuple(vec![Some(file), Some(atomic)])],
@@ -815,8 +816,8 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
 fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
     let mut h = Harness::new(Default::default());
     let scalar = Value::Integer(n(Primitive::U8, 3));
-    let lane = h.types.push(ty(TypeKind::Primitive(Primitive::U8)));
-    let result = h.types.push(ty(TypeKind::Builtin {
+    let lane = h.types.intern(ty(TypeKind::Primitive(Primitive::U8)));
+    let result = h.types.intern(ty(TypeKind::Builtin {
         kind: BuiltinType::Simd,
         arguments: vec![
             GenericArgument::Type(lane),
@@ -829,7 +830,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         .library
         .call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[
                     GenericArgument::Type(lane),
@@ -878,7 +879,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         let args = vec![Value::String("invalid scalar".into())];
         let err = h.library.call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[GenericArgument::Size(Size::Constant(width))],
                 arguments: &mut args.to_vec(),
@@ -1251,12 +1252,12 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     assert_eq!(released, vec![u32_value(7)]);
     assert!(h.library.take_yield());
     let path = hirsel_syntax::DefPath::core("mutex.with");
-    let result_type = h.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let result_type = h.types.intern(ty(TypeKind::Tuple(vec![].into())));
     let OperationResult::FailureChain { failures, released } = h
         .library
         .call(
             OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::support::runtime(),
                 path: &path,
                 generics: &[],
                 arguments: &mut [tasks, mutex, body],

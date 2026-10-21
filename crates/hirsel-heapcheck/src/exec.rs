@@ -153,7 +153,7 @@ enum Role {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CallerSite {
     unit: usize,
-    range: (u32, u32),
+    range: SiteRange,
 }
 
 #[derive(Clone)]
@@ -2750,7 +2750,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     fn caller_sites(
         &self,
         f: &Frame,
-        range: (u32, u32),
+        range: SiteRange,
         forward: bool,
     ) -> (Option<CallerSite>, Option<CallerSite>) {
         let header = &self.unit(f.unit).header;
@@ -2782,12 +2782,12 @@ impl<'p, S: Stage> Machine<'p, S> {
         u.tables.calls.get(call.index())
     }
 
-    fn source_range(&self, f: &Frame, anchor: SourceAnchorId) -> (u32, u32) {
+    fn source_range(&self, f: &Frame, anchor: SourceAnchorId) -> SiteRange {
         self.unit(f.unit)
             .tables
             .source_anchors
             .get(anchor.index())
-            .map_or((0, 0), |a| (a.site.start, a.site.end))
+            .map_or(SiteRange::UNMAPPED, |a| a.site)
     }
 
     fn cleanup_sites(
@@ -2809,7 +2809,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 .tables
                 .cleanup_anchors
                 .get(anchor.index())
-                .map_or((0, 0), |a| (a.site.start, a.site.end));
+                .map_or(SiteRange::UNMAPPED, |a| a.site);
             return self.caller_sites(f, range, true);
         }
         if let Some(call) = self.active_call(f) {
@@ -2817,11 +2817,13 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         let range = failure
             .and_then(|id| u.tables.failures.get(id.index()))
-            .map_or((0, 0), |edge| self.source_range(f, edge.anchor));
+            .map_or(SiteRange::UNMAPPED, |edge| {
+                self.source_range(f, edge.anchor)
+            });
         self.caller_sites(f, range, true)
     }
 
-    fn observe_site(&self, site: CallerSite) -> (hirsel_syntax::DefPath, (u32, u32)) {
+    fn observe_site(&self, site: CallerSite) -> (hirsel_syntax::DefPath, SiteRange) {
         (self.unit(site.unit).header.definition.clone(), site.range)
     }
 
@@ -2837,7 +2839,12 @@ impl<'p, S: Stage> Machine<'p, S> {
         let primary = caller.or(operation);
         let (definition, site) = primary
             .map(|site| self.observe_site(site))
-            .unwrap_or_else(|| (self.unit(fallback).header.definition.clone(), (0, 0)));
+            .unwrap_or_else(|| {
+                (
+                    self.unit(fallback).header.definition.clone(),
+                    SiteRange::UNMAPPED,
+                )
+            });
         let operation = operation.map(|site| self.observe_site(site)).filter(
             |(operation_definition, operation_range)| {
                 operation_definition != &definition || operation_range != &site
@@ -2847,10 +2854,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             self.unanchored_failures.insert(self.failures.len());
         }
         self.failures.push(ObservedFailure {
-            operation,
+            operation_source: operation.as_ref().map_or(u32::MAX, |(_, s)| s.source),
+            operation: operation.map(|(d, s)| (d, (s.start, s.end))),
+            source: site.source,
             rule: rule.to_string(),
             definition,
-            site,
+            site: (site.start, site.end),
         });
         self.ledger.trace.push(Event::Failure {
             rule: rule.to_string(),
@@ -8957,8 +8966,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                                     .map(|site| self.observe_site(site));
                                 for i in std::mem::take(&mut self.unanchored_failures) {
                                     self.failures[i].definition = definition.clone();
-                                    self.failures[i].site = range;
-                                    self.failures[i].operation = operation.clone();
+                                    self.failures[i].site = (range.start, range.end);
+                                    self.failures[i].source = range.source;
+                                    self.failures[i].operation_source =
+                                        operation.as_ref().map_or(u32::MAX, |(_, s)| s.source);
+                                    self.failures[i].operation =
+                                        operation.clone().map(|(d, s)| (d, (s.start, s.end)));
                                 }
                             }
                         }
@@ -9391,6 +9404,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                             d.failed = true;
                             let definition = finalizer.definition.clone();
                             self.failures.push(ObservedFailure {
+                                source: u32::MAX,
+                                operation_source: u32::MAX,
                                 operation: None,
                                 rule: INJECTED_RULE.to_string(),
                                 definition,

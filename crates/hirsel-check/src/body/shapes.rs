@@ -6,17 +6,15 @@ impl Checker<'_, '_> {
     /// signature mentions TypeShape or Body), no expression has a type that
     /// mentions one, so no run-time code calls a compile-time-only definition.
     pub(super) fn check_compile_time_values(&mut self) {
-        let types = &self.body.types;
+        let types = self.types;
         let compile_time_only = match &self.input.signature.kind {
             SignatureKind::Const { .. } => true,
-            SignatureKind::Function(f) => {
-                let types = &self.input.signature.types;
-                f.parameters
-                    .iter()
-                    .map(|p| p.ty)
-                    .chain([f.result])
-                    .any(|t| mentions_compile_time_only(types, t))
-            }
+            SignatureKind::Function(f) => f
+                .parameters
+                .iter()
+                .map(|p| p.ty)
+                .chain([f.result])
+                .any(|t| mentions_compile_time_only(types, t)),
             SignatureKind::Type(_) => false,
         };
         if compile_time_only {

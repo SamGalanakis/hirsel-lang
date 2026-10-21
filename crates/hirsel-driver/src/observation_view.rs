@@ -691,6 +691,7 @@ mod tests {
             effects: vec![hirsel_interp::observation::ObservedEffect {
                 anchor: hirsel_interp::observation::SemanticAnchor {
                     source: hirsel_interp::observation::SourceSite {
+                        file: "fixture".into(),
                         definition: hirsel_syntax::DefPath::core("main"),
                         line: 1,
                         column: 1,

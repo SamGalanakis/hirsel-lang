@@ -2,7 +2,7 @@ use super::*;
 
 fn row(f: &mut Fixture, place: u32, change: impl FnOnce(&mut Type)) {
     let old = f.body().places[place as usize].ty;
-    let mut ty = f.definition.types.get(old).unwrap().clone();
+    let mut ty = interner().get(old).unwrap().clone();
     change(&mut ty);
     let ty = f.definition.types.push(ty);
     let root = f.body().places[place as usize].root;
@@ -69,9 +69,7 @@ fn unplaced_join(escape: bool) -> Fixture {
         },
     ));
     if escape {
-        let mut result = f
-            .definition
-            .types
+        let mut result = interner()
             .get(f.definition.bodies[0].places[destination as usize].ty)
             .unwrap()
             .clone();
@@ -83,7 +81,7 @@ fn unplaced_join(escape: bool) -> Fixture {
     if escape {
         let scope = f.body().parameter_scope;
         let result = f.body().result;
-        f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+        f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
     }
     f
 }
@@ -192,9 +190,7 @@ fn unplaced_part_join(escape: bool) -> Fixture {
         },
     ));
     if escape {
-        let mut result = f
-            .definition
-            .types
+        let mut result = interner()
             .get(f.definition.bodies[0].places[destination as usize].ty)
             .unwrap()
             .clone();
@@ -206,7 +202,7 @@ fn unplaced_part_join(escape: bool) -> Fixture {
     if escape {
         let scope = f.body().parameter_scope;
         let result = f.body().result;
-        f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+        f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
     }
     f
 }
@@ -251,22 +247,13 @@ fn dependent_cursor(global: bool) -> Fixture {
         });
     }
     let mut signature = function_signature("consume", vec![], TypeKind::Tuple(vec![].into()));
-    let parameter = import_type(
-        &f.definition.types,
-        f.definition.bodies[0].places[list as usize].ty,
-        &mut signature.types,
-    )
-    .unwrap();
-    let mut result = f
-        .definition
-        .types
+    let parameter = f.definition.bodies[0].places[list as usize].ty;
+    let mut result = interner()
         .get(f.definition.bodies[0].places[cursor as usize].ty)
         .unwrap()
         .clone();
     result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
-    let mut store = f.definition.types.clone();
-    let result = store.push(result);
-    let result = import_type(&store, result, &mut signature.types).unwrap();
+    let result = interner().intern(result);
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
@@ -277,7 +264,7 @@ fn dependent_cursor(global: bool) -> Fixture {
         ty: parameter,
     });
     fun.result = result;
-    f.signatures.insert(path("consume"), signature);
+    f.signatures.insert(id("consume"), signature);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
             path: path("consume"),
@@ -329,12 +316,7 @@ fn fresh_capture(refill: bool) -> Fixture {
     // the body's local result is promised global only over global content.
     for place in [0, 1] {
         let nested = &f.definition.bodies[1];
-        let mut ty = f
-            .definition
-            .types
-            .get(nested.places[place].ty)
-            .unwrap()
-            .clone();
+        let mut ty = interner().get(nested.places[place].ty).unwrap().clone();
         ty.modes.relation = Relation::environment();
         let ty = f.definition.types.push(ty);
         let nested = &mut f.definition.bodies[1];
@@ -565,17 +547,17 @@ fn loop_owner_introduction(kind: OriginBindingKind) -> Fixture {
         unreachable!()
     };
     let result = fun.result;
-    let mut result_row = signature.types.get(result).unwrap().clone();
+    let mut result_row = interner().get(result).unwrap().clone();
     result_row.brand.alternatives.push(Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
         fields: vec![].into(),
     });
-    let result = signature.types.push(result_row);
+    let result = interner().intern(result_row);
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
     fun.result = result;
-    f.signatures.insert(path("brand"), signature);
+    f.signatures.insert(id("brand"), signature);
     f.body().blocks[0].terminator = Terminator::Goto(BlockId(1));
     let failure = f.cleanup(vec![drop(owner)]);
     f.body().blocks.push(block(
@@ -703,17 +685,17 @@ fn parameter_alias(kind: OriginBindingKind) -> Fixture {
     let SignatureKind::Function(fun) = &signature.kind else {
         unreachable!()
     };
-    let mut result = signature.types.get(fun.result).unwrap().clone();
+    let mut result = interner().get(fun.result).unwrap().clone();
     result.brand.alternatives.push(Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
         fields: vec![].into(),
     });
-    let result = signature.types.push(result);
+    let result = interner().intern(result);
     let SignatureKind::Function(fun) = &mut signature.kind else {
         unreachable!()
     };
     fun.result = result;
-    f.signatures.insert(path("brand"), signature);
+    f.signatures.insert(id("brand"), signature);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
             path: path("brand"),
@@ -791,9 +773,7 @@ fn unplaced_constructor(escape: bool) -> Fixture {
         ret(0, cleanup)
     };
     if escape {
-        let mut result = f
-            .definition
-            .types
+        let mut result = interner()
             .get(f.definition.bodies[0].places[destination as usize].ty)
             .unwrap()
             .clone();
@@ -805,7 +785,7 @@ fn unplaced_constructor(escape: bool) -> Fixture {
     if escape {
         let scope = f.body().parameter_scope;
         let result = f.body().result;
-        f.body().result = bind_parameter_scopes(&mut f.definition.types, result, &[scope]).unwrap();
+        f.body().result = bind_parameter_scopes(interner(), result, &[scope]).unwrap();
     }
     f
 }
@@ -897,11 +877,10 @@ fn fresh_call_payload(shared: bool, parameter: bool) -> Fixture {
         owner_signature(&mut f, PassingMode::Take);
     } else {
         let mut signature = function_signature("receipt", vec![], TypeKind::Tuple(vec![].into()));
-        signature.types = f.definition.types.clone();
         if let SignatureKind::Function(fun) = &mut signature.kind {
             fun.result = root_ty;
         }
-        f.signatures.insert(path("receipt"), signature);
+        f.signatures.insert(id("receipt"), signature);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
                 path: path("receipt"),
@@ -1039,7 +1018,7 @@ fn copied_run_owned_handles_bound_a_unique_constructions_graph() {
         let input_type = f.body().places[input as usize].ty;
         let output = f.slot(TypeKind::Tuple(vec![input_type].into()), Storage::Local);
         let old = f.body().places[output as usize].ty;
-        let mut row = f.definition.types.get(old).unwrap().clone();
+        let mut row = interner().get(old).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let unique = f.definition.types.push(row);
         f.body().places[output as usize].ty = unique;

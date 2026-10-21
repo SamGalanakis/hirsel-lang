@@ -152,7 +152,7 @@ fn the_hash_is_a_pinned_function_of_content() {
         // with TIR_VERSION, the content encoding, or an edit to anything `f`
         // reaches, which includes the core types its signature's role table
         // names (core@1/Result, Unsafe, Tasks, Scope, Arena and heap).
-        const PINNED: &str = "0eadf2dcbd76cf454d14a351eed95a2337117e04ddf7e8e5a44fd585e7049728";
+        const PINNED: &str = "7512feaa36650866f1ea44b5b5b92fd5f37dd07fe86e397313a2824db7cea866";
         let hash = hashes("fn f(x: u64) -> u64 { x + 1u64 }\n", &["f"])[0];
         let text: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
         assert!(
@@ -249,7 +249,7 @@ fn closure(engine: &mut QueryEngine, roots: &[DefPath]) -> BTreeMap<DefPath, Def
                 tir: Some(tir),
             }
         };
-        pending.extend(hirsel_proof_export::references(&content));
+        pending.extend(hirsel_proof_export::references(engine.types(), &content));
         contents.insert(path, content);
     }
     contents
@@ -261,7 +261,7 @@ fn an_edit_to_a_core_type_moves_the_definitions_that_use_it_and_no_other() {
         let mut engine = engine(&[("program.hir", &[], CORE_USERS)]);
         let roots: Vec<_> = ["f", "tried", "matched", "launch"].map(named).to_vec();
         let contents = closure(&mut engine, &roots);
-        let base = hirsel_proof_export::definition_hashes(&contents).unwrap();
+        let base = hirsel_proof_export::definition_hashes(engine.types(), &contents).unwrap();
         for (core, users) in [
             ("Result", &["tried", "matched"][..]),
             ("Scope", &["launch"]),
@@ -282,7 +282,7 @@ fn an_edit_to_a_core_type_moves_the_definitions_that_use_it_and_no_other() {
             };
             t.serializable = !t.serializable;
             *signature = Arc::new(signature_edit);
-            let moved = hirsel_proof_export::definition_hashes(&edited).unwrap();
+            let moved = hirsel_proof_export::definition_hashes(engine.types(), &edited).unwrap();
             for user in users {
                 assert_ne!(base[&named(user)], moved[&named(user)], "{core}: {user}");
             }

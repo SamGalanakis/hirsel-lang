@@ -55,10 +55,10 @@ fn frozen_value(b: &Body<'_, '_>, root: LayoutId, what: &str) -> R<LayoutId> {
 /// frozen in `s`, read in place through the root (field 0 of its `Frozen`
 /// payload). No count changes: the view's loan keeps the borrowed root live.
 fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let callback = super::tasks::parameter(&cx.store, cx.callable, 1)?;
+    let callback = super::tasks::parameter(cx.types, cx.callable, 1)?;
     let abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let mut b = Body::new(cx)?;
     let &[s, body] = b.parameters.as_slice() else {

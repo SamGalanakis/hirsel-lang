@@ -1,18 +1,17 @@
 //! Declaration proofs for equality and held authority (GEN-1/CAP-2).
+type IdSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
 use crate::*;
-use hirsel_syntax::DefPath;
-use std::collections::BTreeSet;
 
 /// Data/Key are representation properties. Parameter evidence belongs to the
 /// occurrence's lexical scope; a bare ordinal cannot select that scope.
 /// Missing declarations and recovery prove nothing. Non-regular polymorphic
 /// recursion is an operational tooling failure, never negative evidence.
 pub fn structural_equality(
-    source: &TypeStore,
+    source: &TypeInterner,
     root: TypeId,
     bound: Bound,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(&DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<bool, QueryError> {
     assert!(matches!(bound, Bound::Data | Bound::Key));
     let proves = |bounds: &[Bound]| {
@@ -21,9 +20,9 @@ pub fn structural_equality(
     if source.get(root).is_none() {
         return Ok(false);
     }
-    let mut store = crate::graph::RootedScratch::new(source);
+    let store = source;
     let mut pending = vec![(root, false)];
-    let mut seen = BTreeSet::new();
+    let mut seen = IdSet::default();
     let mut nominals = NominalExpansions::default();
     while let Some((id, exit)) = pending.pop() {
         if exit {
@@ -54,7 +53,7 @@ pub fn structural_equality(
                 definition,
                 arguments,
             } => {
-                let Some(signature) = lookup(&definition)? else {
+                let Some(signature) = lookup(definition)? else {
                     return Ok(false);
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -69,15 +68,15 @@ pub fn structural_equality(
                 if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
                     return Ok(false);
                 }
-                if !nominals.enter(id, 0, |id| store.store(id))? {
+                if !nominals.enter(id, 0, store)? {
                     continue;
                 }
                 pending.push((id, true));
                 let Some(representation) = declaration.representation else {
                     return Ok(false);
                 };
-                let Ok(representation) = store.expand(
-                    &signature.types,
+                let Ok(representation) = crate::graph::expand(
+                    store,
                     representation,
                     &arguments,
                     &signature.metadata.roles,
@@ -138,14 +137,14 @@ pub fn bounds_imply_inert(bounds: &[Bound]) -> bool {
 /// exact lexical evidence. Callable parameter references remain symbolic: evaluating
 /// them against checked value bindings belongs to the authority pass.
 pub fn structural_authority<E>(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     roles: &NominalRoles,
     declarations: &GenericDeclarations,
-    lookup: &mut impl FnMut(TypeId, Option<&DefPath>) -> Result<Option<SignatureRef>, E>,
+    lookup: &mut impl FnMut(TypeId, Option<DefId>) -> Result<Option<SignatureRef>, E>,
 ) -> Result<AuthoritySummary, E> {
     let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut seen = IdSet::default();
     let mut summary = AuthoritySummary::inert();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
@@ -172,7 +171,7 @@ pub fn structural_authority<E>(
                 definition,
                 arguments,
             } => {
-                let Some(signature) = lookup(id, Some(definition))? else {
+                let Some(signature) = lookup(id, Some(*definition))? else {
                     return Ok(AuthoritySummary::Unknown);
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -180,7 +179,7 @@ pub fn structural_authority<E>(
                 };
                 if declaration.capability.is_some() {
                     summary = summary.join(AuthoritySummary::Known(
-                        vec![AuthorityTerm::Capability(definition.clone())].into(),
+                        vec![AuthorityTerm::Capability(definition.path().clone())].into(),
                     ));
                     // CAP-5: actuals and owner ceilings do not refine the
                     // nominal permission of a whole seal.
@@ -298,14 +297,12 @@ pub(crate) mod tests {
             name: name.into(),
         })
     }
-    pub(crate) fn nominal(
-        types: TypeStore,
-        representation: Option<TypeId>,
-        bounds: Vec<Bound>,
-    ) -> SignatureRef {
+    pub(crate) fn def(name: &str) -> DefId {
+        DefId::intern(&path(name))
+    }
+    pub(crate) fn nominal(representation: Option<TypeId>, bounds: Vec<Bound>) -> SignatureRef {
         std::sync::Arc::new(Signature {
-            definition: path("Wrap"),
-            types,
+            definition: def("Wrap"),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
@@ -336,12 +333,12 @@ pub(crate) mod tests {
     }
     #[test]
     fn scoped_evidence_and_intrinsic_capability_authority_are_independent() {
-        let mut store = TypeStore::default();
-        let a = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
+        let store = TypeInterner::new(None);
+        let a = store.intern(row(TypeKind::Parameter(TypeParameterRef::body(
             item(0),
             TypeParamId(0),
         ))));
-        let b = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
+        let b = store.intern(row(TypeKind::Parameter(TypeParameterRef::body(
             item(1),
             TypeParamId(0),
         ))));
@@ -360,7 +357,7 @@ pub(crate) mod tests {
                 bounds: vec![].into(),
             }],
         );
-        let root = store.push(row(TypeKind::Tuple(vec![a, b].into())));
+        let root = store.intern(row(TypeKind::Tuple(vec![a, b].into())));
         assert_eq!(
             structural_authority(
                 &store,
@@ -387,14 +384,14 @@ pub(crate) mod tests {
             ))
             .unwrap()
         );
-        let mut signature = nominal(TypeStore::default(), None, vec![]).as_ref().clone();
+        let mut signature = nominal(None, vec![]).as_ref().clone();
         let SignatureKind::Type(d) = &mut signature.kind else {
             unreachable!()
         };
         d.capability = Some(CapabilityKind::Global);
         d.authority = AuthoritySummary::inert();
-        let root = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let root = store.intern(row(TypeKind::Named {
+            definition: def("Wrap"),
             arguments: vec![].into(),
         }));
         assert_eq!(
@@ -408,7 +405,7 @@ pub(crate) mod tests {
             .unwrap(),
             AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Wrap"))].into())
         );
-        let error = store.push(row(TypeKind::Error));
+        let error = store.intern(row(TypeKind::Error));
         assert_eq!(
             structural_authority(
                 &store,
@@ -423,38 +420,38 @@ pub(crate) mod tests {
     }
     #[test]
     fn nominal_transport_preserves_scoped_parameter_proofs() {
-        let mut declaration = TypeStore::default();
-        let p = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let declaration = TypeInterner::new(None);
+        let p = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let signature = nominal(declaration, Some(p), vec![]);
+        let signature = nominal(Some(p), vec![]);
         for composite in [false, true] {
             for both in [false, true] {
-                let mut store = TypeStore::default();
-                let bad = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
+                let store = std::sync::Arc::clone(&declaration);
+                let bad = store.intern(row(TypeKind::Parameter(TypeParameterRef::body(
                     item(0),
                     TypeParamId(0),
                 ))));
-                let good = store.push(row(TypeKind::Parameter(TypeParameterRef::body(
+                let good = store.intern(row(TypeKind::Parameter(TypeParameterRef::body(
                     item(1),
                     TypeParamId(0),
                 ))));
                 let mut roots = vec![];
                 for argument in [bad, good] {
                     let argument = if composite {
-                        store.push(row(TypeKind::Builtin {
+                        store.intern(row(TypeKind::Builtin {
                             kind: BuiltinType::Array,
                             arguments: vec![GenericArgument::Type(argument)].into(),
                         }))
                     } else {
                         argument
                     };
-                    roots.push(store.push(row(TypeKind::Named {
-                        definition: path("Wrap"),
+                    roots.push(store.intern(row(TypeKind::Named {
+                        definition: def("Wrap"),
                         arguments: vec![GenericArgument::Type(argument)].into(),
                     })));
                 }
-                let root = store.push(row(TypeKind::Tuple(roots.into())));
+                let root = store.intern(row(TypeKind::Tuple(roots.into())));
                 for bound in [Bound::Data, Bound::Key] {
                     let actual = structural_equality(
                         &store,
@@ -492,39 +489,36 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod finite_nominal_tests {
-    use super::tests::{item, nominal, path, row};
+    use super::tests::{def, nominal, row};
     use super::*;
     #[test]
     fn finite_nominal_depth_is_not_a_property_failure() {
         for depth in [128, 129, 200] {
             let mut signatures = std::collections::BTreeMap::new();
+            let store = TypeInterner::new(None);
             for level in 0..depth {
-                let mut declaration = TypeStore::default();
-                let parameter = declaration.push(row(TypeKind::Parameter(
-                    TypeParameterRef::bound(TypeParamId(0)),
-                )));
+                let parameter = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
+                    TypeParamId(0),
+                ))));
                 let representation = if level == 0 {
                     parameter
                 } else {
-                    declaration.push(row(TypeKind::Named {
-                        definition: path(&format!("D{}", level - 1)),
+                    store.intern(row(TypeKind::Named {
+                        definition: def(&format!("D{}", level - 1)),
                         arguments: vec![GenericArgument::Type(parameter)].into(),
                     }))
                 };
-                let mut signature = nominal(declaration, Some(representation), vec![])
-                    .as_ref()
-                    .clone();
-                signature.definition = path(&format!("D{level}"));
-                signatures.insert(signature.definition.clone(), std::sync::Arc::new(signature));
+                let mut signature = nominal(Some(representation), vec![]).as_ref().clone();
+                signature.definition = def(&format!("D{level}"));
+                signatures.insert(signature.definition, std::sync::Arc::new(signature));
             }
-            let mut store = TypeStore::default();
-            let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-            let root = store.push(row(TypeKind::Named {
-                definition: path(&format!("D{}", depth - 1)),
+            let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+            let root = store.intern(row(TypeKind::Named {
+                definition: def(&format!("D{}", depth - 1)),
                 arguments: vec![GenericArgument::Type(scalar)].into(),
             }));
             let generics = GenericDeclarations::default();
-            let mut lookup = |p: &hirsel_syntax::DefPath| Ok(signatures.get(p).cloned());
+            let mut lookup = |p: hirsel_syntax::DefId| Ok(signatures.get(&p).cloned());
             for property in [
                 StructuralProperty::Plain,
                 StructuralProperty::Copyable,
@@ -546,17 +540,17 @@ mod finite_nominal_tests {
     }
     #[test]
     fn structural_properties_accept_finished_siblings_at_the_old_limit() {
-        let mut declaration = TypeStore::default();
-        let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let declaration = TypeInterner::new(None);
+        let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let signature = nominal(declaration, Some(parameter), vec![]);
+        let signature = nominal(Some(parameter), vec![]);
         for width in [128, 129] {
-            let mut store = TypeStore::default();
-            let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
+            let store = std::sync::Arc::clone(&declaration);
+            let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
             let fields = (0..width)
                 .map(|size| {
-                    let actual = store.push(row(TypeKind::Builtin {
+                    let actual = store.intern(row(TypeKind::Builtin {
                         kind: BuiltinType::Inline,
                         arguments: vec![
                             GenericArgument::Type(scalar),
@@ -564,13 +558,13 @@ mod finite_nominal_tests {
                         ]
                         .into(),
                     }));
-                    store.push(row(TypeKind::Named {
-                        definition: path("Wrap"),
+                    store.intern(row(TypeKind::Named {
+                        definition: def("Wrap"),
                         arguments: vec![GenericArgument::Type(actual)].into(),
                     }))
                 })
                 .collect::<Vec<_>>();
-            let root = store.push(row(TypeKind::Tuple(fields.into())));
+            let root = store.intern(row(TypeKind::Tuple(fields.into())));
             for property in [
                 StructuralProperty::Plain,
                 StructuralProperty::Copyable,
@@ -601,21 +595,21 @@ mod finite_nominal_tests {
     }
     #[test]
     fn finite_sibling_nominals_do_not_spend_recursive_expansion_depth() {
-        let mut declaration = TypeStore::default();
-        let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let declaration = TypeInterner::new(None);
+        let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let signature = nominal(declaration, Some(parameter), vec![]);
+        let signature = nominal(Some(parameter), vec![]);
         for rejected in [false, true] {
-            let mut store = TypeStore::default();
-            let scalar = store.push(row(if rejected {
+            let store = std::sync::Arc::clone(&declaration);
+            let scalar = store.intern(row(if rejected {
                 TypeKind::Error
             } else {
                 TypeKind::Primitive(Primitive::U8)
             }));
             let mut fields = vec![];
             for width in 0..130 {
-                let actual = store.push(row(TypeKind::Builtin {
+                let actual = store.intern(row(TypeKind::Builtin {
                     kind: BuiltinType::Inline,
                     arguments: vec![
                         GenericArgument::Type(scalar),
@@ -623,18 +617,13 @@ mod finite_nominal_tests {
                     ]
                     .into(),
                 }));
-                fields.push(store.push(row(TypeKind::Named {
-                    definition: path("Wrap"),
+                fields.push(store.intern(row(TypeKind::Named {
+                    definition: def("Wrap"),
                     arguments: vec![GenericArgument::Type(actual)].into(),
                 })));
             }
-            for _ in 0..1024 {
-                store.push(row(TypeKind::Primitive(Primitive::U8)));
-            }
-            let root = store.push(row(TypeKind::Tuple(fields.into())));
+            let root = store.intern(row(TypeKind::Tuple(fields.into())));
             for bound in [Bound::Data, Bound::Key] {
-                let before =
-                    hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
                 assert_eq!(
                     structural_equality(
                         &store,
@@ -645,11 +634,6 @@ mod finite_nominal_tests {
                     )
                     .unwrap(),
                     !rejected
-                );
-                assert_eq!(
-                    hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows),
-                    before,
-                    "proof copied unrelated owner rows"
                 );
             }
         }

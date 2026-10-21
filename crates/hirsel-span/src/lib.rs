@@ -70,6 +70,8 @@ impl Span {
 /// holds and maps them back to anchors of the reading process. Number 0 is no
 /// anchor. Outside a codec a span carries its anchor id as is.
 pub enum AnchorCodec {
+    /// Number anchors in first-encounter order while collecting a record.
+    Collect(Vec<Anchor>),
     /// Each anchor's number; another anchor fails the serialization.
     Encode(BTreeMap<Anchor, u32>),
     /// The anchor of each number, from 1.
@@ -89,7 +91,18 @@ pub fn with_anchor_codec<R>(codec: &mut AnchorCodec, f: impl FnOnce() -> R) -> R
 }
 impl serde::Serialize for Span {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let anchor = CODEC.with_borrow(|codec| match codec {
+        let anchor = CODEC.with_borrow_mut(|codec| match codec {
+            Some(AnchorCodec::Collect(anchors)) if self.anchor != Anchor(0) => {
+                let index = anchors
+                    .iter()
+                    .position(|a| *a == self.anchor)
+                    .unwrap_or_else(|| {
+                        anchors.push(self.anchor);
+                        anchors.len() - 1
+                    });
+                Ok(index as u32 + 1)
+            }
+            Some(AnchorCodec::Collect(_)) => Ok(0),
             Some(AnchorCodec::Encode(numbers)) if self.anchor != Anchor(0) => numbers
                 .get(&self.anchor)
                 .copied()
@@ -144,10 +157,19 @@ pub struct SourceFile {
     logical_path: PathBuf,
     /// This file's own anchor, with base 0.
     pub anchor: Anchor,
-    text: String,
-    line_starts: Vec<u32>,
+    /// Shared: a source map is cloned into every check's output, and a
+    /// clone copies no text.
+    text: std::sync::Arc<str>,
+    line_starts: std::sync::Arc<[u32]>,
+    /// The id of this source's first snapshot, the id a fresh load gives it:
+    /// a resident session's later snapshots of a source keep it, so output
+    /// naming a file by id is the same as a fresh process's.
+    ordinal: u32,
 }
 impl SourceFile {
+    pub fn ordinal(&self) -> u32 {
+        self.ordinal
+    }
     /// Synthetic DWARF root, identical on every host. GDB remaps the package
     /// prefix in relative file names to that package's local manifest directory.
     pub const COMPILATION_DIRECTORY: &str = "/hirsel";
@@ -184,12 +206,14 @@ impl SourceFile {
 }
 
 /// Vec-backed immutable file snapshots and where each anchor stands in them;
-/// FileIds are valid only in this map (PROG-5).
+/// FileIds are valid only in this map (PROG-5). Both tables are shared on
+/// clone and copied on the next change, so every check's output carries the
+/// map at no cost.
 #[derive(Clone, Debug, Default)]
 pub struct SourceMap {
-    files: Vec<SourceFile>,
+    files: std::sync::Arc<Vec<SourceFile>>,
     /// Each placed anchor's file and base offset in it.
-    anchors: BTreeMap<Anchor, (FileId, u32)>,
+    anchors: std::sync::Arc<BTreeMap<Anchor, (FileId, u32)>>,
 }
 impl Anchor {
     /// A new anchor, distinct from every other in the process.
@@ -224,13 +248,24 @@ impl SourceMap {
                 line_starts.push((i + 1) as u32);
             }
         }
-        self.files.push(SourceFile {
+        std::sync::Arc::make_mut(&mut self.files).push(SourceFile {
             path: path.as_ref().to_owned(),
             logical_path: logical_path.as_ref().to_owned(),
             anchor,
-            text,
-            line_starts,
+            text: text.into(),
+            line_starts: line_starts.into(),
+            ordinal: id.0,
         });
+        Some(id)
+    }
+    /// A new snapshot of `file`'s source with `text`: the same path, logical
+    /// path and ordinal at a new id, as a resident session replaces an edited
+    /// source.
+    pub fn add_snapshot(&mut self, file: FileId, text: String) -> Option<FileId> {
+        let old = self.file(file)?;
+        let (path, logical, ordinal) = (old.path.clone(), old.logical_path.clone(), old.ordinal);
+        let id = self.add_logical(path, logical, text)?;
+        std::sync::Arc::make_mut(&mut self.files)[id.0 as usize].ordinal = ordinal;
         Some(id)
     }
     pub fn file(&self, id: FileId) -> Option<&SourceFile> {
@@ -244,13 +279,13 @@ impl SourceMap {
     /// A new anchor at byte `base` of `f`, for one top-level item occurrence.
     pub fn item_anchor(&mut self, f: FileId, base: u32) -> Anchor {
         let anchor = Anchor::fresh();
-        self.anchors.insert(anchor, (f, base));
+        std::sync::Arc::make_mut(&mut self.anchors).insert(anchor, (f, base));
         anchor
     }
     /// Place `a` at byte `base` of `f`: every span relative to it moves with
     /// it. The anchor may come from another map holding the same text.
     pub fn move_anchor(&mut self, a: Anchor, f: FileId, base: u32) {
-        self.anchors.insert(a, (f, base));
+        std::sync::Arc::make_mut(&mut self.anchors).insert(a, (f, base));
     }
     /// The file and base an anchor stands at in this map.
     pub fn anchor(&self, a: Anchor) -> Option<(FileId, u32)> {

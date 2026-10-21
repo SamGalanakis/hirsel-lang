@@ -63,7 +63,12 @@ fn findings(analysis: &str, name: &str) -> Vec<String> {
     let parsed = Findings::parse(&sidecar).unwrap_or_else(|e| panic!("{e}\n{sidecar}"));
     assert_eq!(parsed.to_json(), sidecar, "the sidecar is not canonical");
     let header = hirsel_proof_export::read_header(&text).unwrap();
-    let imported = hirsel_proof_export::import(&text, &header.environment).unwrap();
+    let imported = hirsel_proof_export::import(
+        &text,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .unwrap();
     parsed.check(&imported).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     parsed
@@ -110,8 +115,18 @@ fn findings_for_another_export_are_stale() {
     let text = export("units/mismatch.hir");
     let other = export("units/same.hir");
     let header = hirsel_proof_export::read_header(&text).unwrap();
-    let export = hirsel_proof_export::import(&text, &header.environment).unwrap();
-    let other = hirsel_proof_export::import(&other, &header.environment).unwrap();
+    let export = hirsel_proof_export::import(
+        &text,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .unwrap();
+    let other = hirsel_proof_export::import(
+        &other,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .unwrap();
     let findings = Findings {
         export: other.digest(),
         analyzer: "units@0".into(),

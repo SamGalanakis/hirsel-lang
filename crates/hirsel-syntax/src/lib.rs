@@ -14,7 +14,7 @@ mod origins;
 pub use hirsel_intern::IdHasher;
 #[cfg(feature = "id-salt")]
 pub use hirsel_intern::salt_ids;
-pub use ids::{DefId, DefMap};
+pub use ids::{DefId, DefMap, with_def_numbering, with_def_source};
 
 /// Stable SHA-256 digest of domain-separated, length-framed inputs (PROG-5).
 #[derive(
@@ -294,7 +294,7 @@ pub struct Path {
     pub segments: Vec<Symbol>,
 }
 /// Parameter passing mode; copy/unique are expressions, not parameter conventions (OWN-1/2/3).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum PassingMode {
     Borrow,
     Take,
@@ -340,7 +340,7 @@ pub enum BinaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AssignOp(pub Option<BinaryOp>);
 /// Literal spelling is preserved independently of type inference and numeric conversion (LANG-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Literal {
     Integer(String),
     Float(String),
@@ -839,7 +839,7 @@ pub struct Attribute {
     pub origin: Origin,
 }
 /// Contract kind; before() snapshots are expressions (FACT-1).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ContractKind {
     Requires,
     Ensures,
@@ -861,7 +861,7 @@ pub struct FunctionSyntax {
     pub contracts: Vec<ContractSyntax>,
 }
 /// Private/public/opaque visibility is package-based (PROG-2).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Visibility {
     Private,
     Public,
@@ -1363,16 +1363,13 @@ pub struct LexicalOwner {
 }
 impl serde::Serialize for LexicalOwner {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        serde::Serialize::serialize(&(self.def.path(), self.occurrence), s)
+        serde::Serialize::serialize(&(self.def, self.occurrence), s)
     }
 }
 impl<'de> serde::Deserialize<'de> for LexicalOwner {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let (path, occurrence): (DefPath, u32) = serde::Deserialize::deserialize(d)?;
-        Ok(Self {
-            def: DefId::intern(&path),
-            occurrence,
-        })
+        let (def, occurrence): (DefId, u32) = serde::Deserialize::deserialize(d)?;
+        Ok(Self { def, occurrence })
     }
 }
 /// A lexical site inside one item's arenas. `Item` is the item itself.
@@ -1518,7 +1515,7 @@ mod tests {
 }
 
 /// Definition manifest assigns module identity independently of file layout (PROG-1/5; issue #4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FileContext {
     pub package: PackageId,
     pub modules: Vec<String>,

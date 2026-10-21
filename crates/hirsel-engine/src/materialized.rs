@@ -5,7 +5,7 @@ use hirsel_span::Span;
 use hirsel_tir::{Constant, Constructor};
 use hirsel_tir::{Materialized, ValueKind, ValueNode};
 use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
-use hirsel_types::{GenericArgument, SignatureKind, Substitution, TypeId, TypeKind, TypeStore};
+use hirsel_types::{GenericArgument, SignatureKind, Substitution, TypeId, TypeKind};
 fn invalid(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "compile-time materialization".into(),
@@ -25,28 +25,100 @@ fn non_data(site: Span) -> QueryError {
         .push("constant value semantics are tracked by spec issue #44".into());
     QueryError::Diagnostics(vec![diagnostic])
 }
+/// The declared views reification needs. Implementations record the public
+/// signature and, when the owning package sees an opaque shape, its private
+/// representation. The iterative value conversion itself has no engine state.
+pub(crate) trait MaterializationSource {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError>;
+    fn body_view(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError>;
+}
+
+struct EngineMaterialization<'a> {
+    engine: &'a mut QueryEngine,
+    package: &'a hirsel_syntax::PackageId,
+}
+impl MaterializationSource for EngineMaterialization<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.engine
+            .item_signature(definition.path())
+            .map(|output| output.value)
+    }
+    fn body_view(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let public = self.signature(definition)?;
+        let (signature, revision) = self.engine.body_signature(self.package, public)?;
+        if revision.is_some() {
+            self.engine.read_implementation(definition.path());
+        }
+        Ok(signature)
+    }
+}
+impl MaterializationSource for FrozenProvider<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        SignatureProvider::signature(self, definition)
+    }
+    fn body_view(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        FrozenProvider::body_view(self, definition)
+    }
+}
+
 impl QueryEngine {
     /// Reify an evaluated value as compile-time data of the checked type `ty`.
     pub fn reify_value(
         &mut self,
         package: &hirsel_syntax::PackageId,
         value: Value,
-        source: &TypeStore,
         ty: TypeId,
         site: Span,
     ) -> Result<Materialized, QueryError> {
-        let mut types = source.clone();
-        let root = self.reify_node(package, value, ty, &mut types, site)?;
-        Ok(Materialized { types, root })
+        let types = self.types.clone();
+        let memo = self.memo.clone();
+        reify_value(
+            &types,
+            &memo,
+            &mut EngineMaterialization {
+                engine: self,
+                package,
+            },
+            value,
+            ty,
+            site,
+        )
     }
+}
+
+/// Reify a task's interpreter result over its immutable views and local read
+/// recorder. Both serial evaluation and S1 workers use this conversion.
+pub(crate) fn reify_value(
+    types: &hirsel_types::TypeInterner,
+    memo: &hirsel_types::TypeMemo,
+    source: &mut impl MaterializationSource,
+    value: Value,
+    ty: TypeId,
+    site: Span,
+) -> Result<Materialized, QueryError> {
+    let root = Materializer {
+        types,
+        memo,
+        source,
+    }
+    .reify_node(value, ty, site)?;
+    Ok(Materialized { root })
+}
+
+struct Materializer<'a, S> {
+    types: &'a hirsel_types::TypeInterner,
+    memo: &'a hirsel_types::TypeMemo,
+    source: &'a mut S,
+}
+impl<S: MaterializationSource> Materializer<'_, S> {
     fn reify_node(
         &mut self,
-        package: &hirsel_syntax::PackageId,
         value: Value,
         ty: TypeId,
-        types: &mut TypeStore,
         site: Span,
     ) -> Result<ValueNode, QueryError> {
+        let (types, memo) = (self.types, self.memo);
+        let source = &mut *self.source;
         enum Work {
             Enter(Option<Value>, TypeId),
             Construct {
@@ -106,11 +178,7 @@ impl QueryEngine {
                         arguments,
                     } = &root.kind
                     {
-                        let public = self.item_signature(definition)?.value;
-                        let (signature, revision) = self.body_signature(package, public)?;
-                        if revision.is_some() {
-                            self.read_implementation(definition);
-                        }
+                        let signature = source.body_view(*definition)?;
                         let SignatureKind::Type(declaration) = &signature.kind else {
                             return Err(invalid("aggregate identity is not a type declaration"));
                         };
@@ -145,11 +213,11 @@ impl QueryEngine {
                             .iter()
                             .map(|_| hirsel_types::AuthoritySummary::Unknown)
                             .collect::<Vec<_>>();
-                        representation = hirsel_types::substitute_type(
-                            &signature.types,
-                            declared,
+                        representation = hirsel_types::substitute(
                             types,
-                            Substitution {
+                            memo,
+                            declared,
+                            &Substitution {
                                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                                 roles: &signature.metadata.roles,
                                 arguments,
@@ -196,11 +264,11 @@ impl QueryEngine {
                         ty,
                         hirsel_types::Bound::Data,
                         &hirsel_types::GenericDeclarations::default(),
-                        &mut |path| self.item_signature(path).map(|output| Some(output.value)),
+                        &mut |d| source.signature(d).map(Some),
                     )? {
                         return Err(non_data(site));
                     }
-                    let layout = types.get(representation).unwrap().kind.clone();
+                    let layout = types.row(representation).kind.clone();
                     let (constructor, values, field_types) = match (value, layout) {
                         (Value::Tuple(values), TypeKind::Tuple(fields)) => {
                             (Constructor::Tuple, values, fields)
@@ -252,7 +320,7 @@ impl QueryEngine {
                                 .collect();
                             (
                                 Constructor::Variant {
-                                    definition,
+                                    definition: definition.path().clone(),
                                     variant,
                                 },
                                 values,
@@ -284,12 +352,10 @@ impl QueryEngine {
                                 .ok_or_else(|| invalid("map entry type is missing"))?;
                             let kind = hirsel_types::TypeKind::Tuple(fields.to_vec().into());
                             let drop_allocation = cleanup_summary(&kind, |leaf| match leaf {
-                                CleanupLeaf::Component(t) => {
-                                    types.get(t).unwrap().drop_allocation.clone()
-                                }
+                                CleanupLeaf::Component(t) => types.row(t).drop_allocation.clone(),
                                 _ => unreachable!("tuple cleanup contains only components"),
                             });
-                            let entry = types.push(hirsel_types::Type {
+                            let entry = types.intern(hirsel_types::Type {
                                 drop_allocation,
                                 ..hirsel_types::Type::with_kind(kind)
                             });
@@ -297,9 +363,7 @@ impl QueryEngine {
                                 types,
                                 entry,
                                 &hirsel_types::GenericDeclarations::default(),
-                                &mut |path| {
-                                    self.item_signature(path).map(|output| Some(output.value))
-                                },
+                                &mut |d| source.signature(d).map(Some),
                             )?;
                             // Removed entries are holes in the simulation's insertion
                             // ordered storage, not partially moved materialized values.
@@ -358,12 +422,90 @@ impl QueryEngine {
         Ok(nodes.pop().expect("evaluated value tree has a root"))
     }
 }
+
 fn require_identity(kind: &TypeKind, path: &DefPath) -> Result<(), QueryError> {
-    if matches!(kind, TypeKind::Named { definition, .. } if definition == path) {
+    if matches!(kind, TypeKind::Named { definition, .. } if definition.path() == path) {
         Ok(())
     } else {
         Err(invalid(
             "evaluated nominal identity disagrees with its checked type",
         ))
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn frozen_materialization_matches_serial_and_records_owning_private_views() {
+        let types = registry::session_types();
+        let memo = hirsel_types::TypeMemo::new();
+        let registry = registry::BuiltinRegistry::new();
+        let path = DefPath::core("Option");
+        let id = DefId::intern(&path);
+        let private = registry.get(id).unwrap();
+        let mut public = (*private).clone();
+        public.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+        let SignatureKind::Type(declaration) = &mut public.kind else {
+            panic!("Option is a type");
+        };
+        declaration.representation = None;
+        public.fingerprint = ContentHash::of_bytes(b"opaque Option fixture");
+        let snapshot = SignatureSnapshot::new(
+            Revision::FIRST,
+            types.clone(),
+            [(id, Ok(Arc::new(public)))],
+            [private],
+            None,
+        );
+        let boolean = types.intern(hirsel_types::Type::boolean());
+        let ty = types.intern(hirsel_types::Type::with_kind(TypeKind::Named {
+            definition: id,
+            arguments: vec![GenericArgument::Type(boolean)].into(),
+        }));
+        let value = || Value::Variant {
+            variant: 1,
+            fields: vec![Some(Value::Bool(true))],
+        };
+        let mut engine =
+            QueryEngine::new(default_environment(), crate::phases::engine_only_adapters())
+                .with_types(types.clone());
+        let serial = engine
+            .reify_value(&path.0.package, value(), ty, Span::default())
+            .unwrap();
+        let mut recorded = vec![];
+        for _ in 0..2 {
+            let mut reads = ReadsBuilder::new();
+            let mut source = FrozenProvider::new(&snapshot, path.0.package.clone(), &mut reads);
+            let frozen =
+                reify_value(&types, &memo, &mut source, value(), ty, Span::default()).unwrap();
+            assert_eq!(frozen.root, serial.root);
+            let reads = reads.finish().unwrap();
+            assert!(reads.iter().any(|(key, _)| *key == ReadKey::Signature(id)));
+            assert!(reads.iter().any(|(key, digest)| {
+                *key == ReadKey::Representation(id)
+                    && *digest == snapshot.representation(id).unwrap().unwrap().1.0
+            }));
+            recorded.push(reads);
+        }
+        assert_eq!(
+            recorded[0], recorded[1],
+            "reusing immutable views replays the reads"
+        );
+        let mut reads = ReadsBuilder::new();
+        let mut outsider = FrozenProvider::new(&snapshot, default_context().package, &mut reads);
+        assert!(matches!(
+            reify_value(&types, &memo, &mut outsider, value(), ty, Span::default()),
+            Err(QueryError::Operational(_))
+        ));
+        assert!(
+            !reads
+                .finish()
+                .unwrap()
+                .iter()
+                .any(|(key, _)| *key == ReadKey::Representation(id))
+        );
     }
 }

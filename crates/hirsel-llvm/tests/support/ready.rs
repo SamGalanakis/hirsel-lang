@@ -328,18 +328,17 @@ impl Unit<'_> {
 /// The nominal recursive `Chain = Nil | Cons(i64, Box<Chain>)`.
 fn chain_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Chain");
-    let mut t = Types::default();
+    let mut t = super::session_types();
     let i64_ = t.p(Primitive::I64);
     let own = t.named(&definition, Vec::new());
     let link = t.boxed(own);
     let shape = t.variant(&[&[], &[i64_, link]]);
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Chain revision"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout::default(),
             resource: false,
@@ -353,16 +352,15 @@ fn chain_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
 /// The resource `Res { i64 }` whose drop body `Res_drop` fails LANG-9 on a zero field.
 fn resource_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Res");
-    let mut t = Types::default();
+    let mut t = super::session_types();
     let i64_ = t.p(Primitive::I64);
     let shape = t.record(&[i64_]);
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Res revision"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout::default(),
             resource: true,
@@ -378,19 +376,18 @@ fn resource_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
 /// its fields are released after it, last first.
 fn trace_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Trace");
-    let mut t = Types::default();
+    let mut t = super::session_types();
     let i64_ = t.p(Primitive::I64);
     let rec1 = t.record(&[i64_]);
     let count = t.boxed(rec1);
     let text = t.p(Primitive::String);
     let shape = t.record(&[text, count]);
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Trace revision"),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout::default(),
             resource: true,
@@ -408,16 +405,15 @@ fn flat_owner(
     fields: impl FnOnce(&mut Types) -> Vec<hirsel_types::TypeId>,
 ) -> DefPath {
     let definition = path(name);
-    let mut t = Types::default();
+    let mut t = super::session_types();
     let fields = fields(&mut t);
     let shape = t.record(&fields);
     owners.nominals.insert(
-        definition.clone(),
+        hirsel_syntax::DefId::intern(&definition.clone()),
         hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash(&format!("{name} revision")),
             generics: Vec::new(),
-            types: t.store,
             private_shape: shape,
             layout_promises: hirsel_types::Layout {
                 flat: true,
@@ -463,7 +459,7 @@ fn outer_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
 /// The run-context handle type `File`, closed through the Io adapter when dropped.
 fn file_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     owners.nominals.insert(
-        path("File"),
+        hirsel_syntax::DefId::intern(&path("File")),
         hirsel_layout::layout::OwnerRepresentation::Handle {
             revision: hash("File revision"),
             resource: true,

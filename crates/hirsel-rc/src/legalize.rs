@@ -93,6 +93,14 @@ enum Site {
 
 /// Legalize every operation of `unit` that has no direct native form.
 pub fn legalize(unit: LirUnit<Ready>, table: &LayoutTable) -> Result<LirUnit<Ready>, PassError> {
+    legalize_indexed(unit, &hirsel_lir::LayoutIndex::new(table))
+}
+
+pub fn legalize_indexed(
+    unit: LirUnit<Ready>,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Ready>, PassError> {
+    let table = index.table();
     let mut ed = Editor::new(unit);
     let sites: Vec<(BlockId, Site)> = ed
         .unit
@@ -114,7 +122,11 @@ pub fn legalize(unit: LirUnit<Ready>, table: &LayoutTable) -> Result<LirUnit<Rea
         })
         .collect();
     for (b, site) in sites {
-        let mut lowering = Lowering { ed: &mut ed, table };
+        let mut lowering = Lowering {
+            ed: &mut ed,
+            table,
+            index,
+        };
         match site {
             Site::Simd(op) => lowering.simd(b, op)?,
             Site::Scalar(op) => lowering.scalar(b, op)?,
@@ -197,6 +209,7 @@ fn simd_op(definition: &hirsel_syntax::DefPath) -> Option<SimdOp> {
 struct Lowering<'a> {
     ed: &'a mut Editor<Ready>,
     table: &'a LayoutTable,
+    index: &'a hirsel_lir::LayoutIndex<'a>,
 }
 
 impl Lowering<'_> {
@@ -548,11 +561,8 @@ impl Lowering<'_> {
     }
 
     fn scalar_layout(&self, kind: ScalarKind) -> Result<LayoutId, PassError> {
-        self.table
-            .layouts
-            .iter()
-            .position(|l| l.kind == LayoutKind::Scalar(kind))
-            .map(|i| LayoutId(i as u32))
+        self.index
+            .scalar(kind)
             .ok_or_else(|| PassError::Malformed(format!("no {kind:?} layout in the table")))
     }
 

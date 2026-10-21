@@ -1,5 +1,5 @@
-//! P1 to P6: one Ready program from a validated snapshot. Each stage's output
-//! is used only after that stage's validator in `hirsel-lir` accepted it; a
+//! P1 to P6: one Ready program from a validated snapshot. Production validates
+//! the emitted unit at Ready; harnesses also validate each intermediate stage. A
 //! rejected unit, a pass error and an unavailable feature are all
 //! `NativeError`s that name the stage and the definition.
 use super::adapt;
@@ -10,9 +10,7 @@ use hirsel_lir::discharge::Discharge;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, TargetSpec};
 use hirsel_lir::stage::{InputIdentity, Ready, Stage, ValidatedUnit};
-use hirsel_lir::validate::{
-    Inputs, Rejected, validate_placed, validate_rc, validate_ready, validate_reuse, validate_value,
-};
+use hirsel_lir::validate::{Inputs, Rejected};
 use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::{InstanceRole, Program};
@@ -20,10 +18,21 @@ use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+/// When the independent LIR validator runs. Ready is mandatory in both modes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Validation {
+    /// Production: validate each emitted unit once, after all lowering.
+    Ready,
+    /// Harnesses: also validate every intermediate stage to localize pass faults.
+    EveryStage,
+}
+
 /// Compiler choices and explicit launch inputs. Compiler choices and the hash
 /// seed preserve observations; capability seeds select their own inputs.
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// Production judges Ready once; harnesses retain the stage ladder.
+    pub validation: Validation,
     /// Explicit launch inputs; placement and capability seeds are independent.
     pub launch: hirsel_run_schema::Inputs,
     pub target: TargetSpec,
@@ -37,12 +46,16 @@ pub struct Options {
     pub flat_walk: bool,
     /// PS-13 checks accepted evidence licenses removing (`--proofs`).
     pub discharge: Discharge,
+    /// Emit each unit's object during the build through an object store
+    /// (`super::units`), instead of leaving every Ready unit to the link.
+    pub objects: Option<super::units::UnitObjects>,
 }
 
 impl Options {
-    /// The default configuration for a target: every optimization on.
+    /// The harness configuration: every optimization and every stage validator on.
     pub fn new(target: TargetSpec) -> Self {
         Self {
+            validation: Validation::EveryStage,
             launch: Default::default(),
             target,
             regions: true,
@@ -50,6 +63,7 @@ impl Options {
             reuse: true,
             flat_walk: true,
             discharge: Discharge::default(),
+            objects: None,
         }
     }
 }
@@ -115,7 +129,7 @@ impl NativeError {
             message: message.into(),
         }
     }
-    fn of(stage: StageName, definition: &DefPath, message: impl Into<String>) -> Self {
+    pub(crate) fn of(stage: StageName, definition: &DefPath, message: impl Into<String>) -> Self {
         Self {
             definition: Some(definition.clone()),
             ..Self::new(stage, message)
@@ -141,13 +155,31 @@ impl std::error::Error for NativeError {}
 /// A whole program at Ready: every unit sealed by the Ready validator against
 /// this table, target, manifest and input.
 pub struct ReadyProgram {
+    /// Planned provenance: source definitions (including derived forms) name their
+    /// source owner; library instances name the common semantic runtime bundle.
+    pub(super) semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
+    /// The exact planned unit identities checked when binding the semantic input.
+    pub(super) semantic_units: Option<BTreeSet<(DefPath, ContentHash)>>,
+    pub(super) production: Option<super::plan::Production>,
+    /// Validation policy retained for subsequent inspection and emission.
+    pub validation: Validation,
     pub operations: hirsel_layout::operation::OperationRegistry,
     pub launch: hirsel_run_schema::Inputs,
     pub input: InputIdentity,
     pub target: TargetSpec,
     pub table: LayoutTable,
+    /// The content key of each layout of `table` (`hirsel_lir::layout_keys`), which names
+    /// the glue symbols units import.
+    pub keys: hirsel_lir::LayoutKeys,
     pub manifest: Manifest,
+    /// Every Ready unit; empty when the build emitted its units itself
+    /// (`Options::objects`), whose objects are `unit_objects`.
     pub units: Vec<ValidatedUnit<Ready>>,
+    /// What program assembly reads from each unit (`hirsel_lir::fragment`), in unit order.
+    pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
+    /// The units' objects when the build emitted them, with the backend and optimization
+    /// level they were emitted for.
+    pub unit_objects: Option<UnitObjectArtifacts>,
     /// Callable-target specializations and their known bodies, available in
     /// each calling partition without changing their source failure anchors.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
@@ -185,7 +217,67 @@ pub struct ReadyProgram {
     pub(crate) failure_table: Option<super::observe::FailureTable>,
 }
 
+/// The objects a build emitted for its units (`Options::objects`).
+#[derive(Clone, Debug)]
+pub struct UnitObjectArtifacts {
+    pub backend: super::Backend,
+    pub opt: hirsel_lir::emission::OptLevel,
+    /// The objects record debug intervals.
+    pub debug: bool,
+    pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
+    /// How many of them the object store held.
+    pub hits: usize,
+    /// Units instantiated with type or size arguments, including generated helpers.
+    pub generic_units: usize,
+}
+
 impl ReadyProgram {
+    /// Recheck the linked selection against the identities sealed by semantic binding.
+    pub(crate) fn check_semantic_units(
+        &self,
+        objects: &[hirsel_lir::stage::ObjectArtifact],
+    ) -> Result<(), NativeError> {
+        let Some(covered) = &self.semantic_units else {
+            return Err(NativeError::new(
+                StageName::Link,
+                "native units have no semantic binding",
+            ));
+        };
+        for unit in &self.summaries {
+            if !covered.contains(&(unit.definition.clone(), unit.instance)) {
+                return Err(NativeError::of(
+                    StageName::Link,
+                    &unit.definition,
+                    "linked unit outside the semantic closure covered by the run identity",
+                ));
+            }
+        }
+        let definitions: BTreeSet<_> = covered.iter().map(|(path, _)| path).collect();
+        for export in objects.iter().flat_map(|object| &object.exports) {
+            if export.kind == hirsel_lir::stage::ObjectSymbolKind::Function
+                && export
+                    .definition
+                    .as_ref()
+                    .is_none_or(|path| !definitions.contains(path))
+            {
+                return Err(NativeError::new(
+                    StageName::Link,
+                    format!(
+                        "linked symbol `{}` outside the semantic closure covered by the run identity",
+                        export.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the program builds tracked arena blocks (MEM-6): it opens a bounded arena,
+    /// which only `arena.bounded`'s recovery does.
+    pub fn tracking(&self) -> bool {
+        self.summaries.iter().any(|s| s.recovers)
+    }
+
     /// The semantic program revision a run of `entry` binds to.
     pub fn revision(&self, entry: &DefPath) -> Option<&hirsel_run_schema::ProgramRevision> {
         self.revisions.get(entry)
@@ -199,6 +291,26 @@ impl ReadyProgram {
                 "semantic binding belongs to another input",
             ));
         }
+        for unit in &self.summaries {
+            let covered = match self.semantic_owners.get(&unit.definition) {
+                Some(Some(owner)) => input.semantic_contains(owner),
+                Some(None) => unit.origin == hirsel_lir::ir::UnitOrigin::Library,
+                None => false,
+            };
+            if !covered {
+                return Err(NativeError::of(
+                    StageName::Link,
+                    &unit.definition,
+                    "native unit outside the semantic closure covered by the run identity",
+                ));
+            }
+        }
+        self.semantic_units = Some(
+            self.summaries
+                .iter()
+                .map(|unit| (unit.definition.clone(), unit.instance))
+                .collect(),
+        );
         self.revisions = self
             .launches
             .keys()
@@ -235,6 +347,17 @@ impl ReadyProgram {
         });
         Ok(())
     }
+    /// Put `unit` at `index` in place of the unit there, with its summary.
+    pub fn replace_unit(&mut self, index: usize, unit: ValidatedUnit<Ready>) -> Result<(), String> {
+        self.summaries[index] = hirsel_lir::fragment::UnitSummary::of(
+            unit.unit(),
+            &self.table,
+            &self.keys,
+            &self.manifest,
+        )?;
+        self.units[index] = unit;
+        Ok(())
+    }
     /// The Ready units, as the heap executor and dumps read them.
     pub fn raw_units(&self) -> Vec<LirUnit<Ready>> {
         self.units.iter().map(|u| u.unit().clone()).collect()
@@ -255,14 +378,14 @@ fn unit_jobs() -> hirsel_intern::jobs::Jobs {
 }
 
 /// Run `work` as `phase`.
-fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
+pub(crate) fn timed<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
     let _timing = timings::phase(phase);
     work()
 }
 
 /// A unit sealed at its stage by lir's non-generic per-stage validator, or
 /// every violation it reported.
-fn seal<S: Stage>(
+pub(crate) fn seal<S: Stage>(
     stage: StageName,
     validate: impl FnOnce() -> Result<ValidatedUnit<S>, Box<Rejected<S>>>,
 ) -> Result<ValidatedUnit<S>, NativeError> {
@@ -302,8 +425,113 @@ fn seal<S: Stage>(
     })
 }
 
+/// Validate the immutable program table once, including builds with no units.
+fn preflight(context: &hirsel_lir::validate::ValidationContext<'_>) -> Result<(), NativeError> {
+    timed(Phase::LirValidate, || context.preflight()).map_err(|errors| NativeError {
+        validator: true,
+        ..NativeError::new(StageName::Import, format!("layout table: {errors:?}"))
+    })
+}
+
+/// An intermediate stage stays raw in production. Only the Ready validator
+/// manufactures the seal emission requires; harnesses retain the full ladder.
+pub(crate) fn checkpoint<S: Stage>(
+    stage: StageName,
+    unit: LirUnit<S>,
+    inputs: &Inputs<'_>,
+    context: &hirsel_lir::validate::ValidationContext<'_>,
+    validation: Validation,
+) -> Result<LirUnit<S>, NativeError> {
+    match validation {
+        Validation::Ready => Ok(unit),
+        Validation::EveryStage => {
+            seal(stage, || context.validate(unit, inputs)).map(ValidatedUnit::into_raw)
+        }
+    }
+}
+
+/// Lower one imported unit through placement, RC, reuse and Ready. Production
+/// validates Ready once; harnesses use the identical passes with stage checkpoints.
+pub(crate) fn lower_unit(
+    unit: LirUnit<hirsel_lir::stage::Value>,
+    id: hirsel_rc::instance::InstanceId,
+    options: &Options,
+    instances: &hirsel_rc::instance::Instances,
+    finalizers: &Finalizers,
+    inputs: &Inputs<'_>,
+    validation: &hirsel_lir::validate::ValidationContext<'_>,
+) -> Result<ValidatedUnit<Ready>, NativeError> {
+    let table = inputs.layouts;
+    let definition = unit.header.definition.clone();
+    let fail = |stage, message: String| NativeError::of(stage, &definition, message);
+    timings::count(Count::Units);
+    let value = checkpoint(
+        StageName::Import,
+        unit,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
+    let placed = timed(Phase::Place, || {
+        hirsel_rc::placement::place(value, table, &placement)
+    })
+    .map_err(|e| fail(StageName::Placement, e.to_string()))?;
+    let placed = checkpoint(
+        StageName::Placement,
+        placed,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let proofs = Proofs::for_instance(instances, id);
+    let mut unit = timed(Phase::Rc, || {
+        hirsel_rc::insert::insert(placed, table, &proofs)
+    })
+    .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+    if options.elide {
+        unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
+            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+    }
+    let rc = checkpoint(
+        StageName::Perceus,
+        unit,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let reuse = hirsel_rc::reuse::Options {
+        reuse: options.reuse,
+    };
+    let reused = timed(Phase::Reuse, || {
+        hirsel_rc::reuse::reuse_indexed(rc, &reuse, validation.index())
+    })
+    .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
+    let reused = checkpoint(
+        StageName::Reuse,
+        reused,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let ready = timed(Phase::Ready, || {
+        hirsel_rc::ready::ready_indexed(reused, finalizers, validation.index())
+    })
+    .map_err(|e| fail(StageName::Ready, e.to_string()))?;
+    let ready = seal(StageName::Ready, || validation.validate(ready, inputs))?;
+    super::emit::check_unit_runtime_calls(ready.unit(), table, inputs.manifest)?;
+    Ok(ready)
+}
+
 /// Lower a validated snapshot to a Ready program for `options.target`.
 pub fn build(
+    validated: &ValidatedNativeInput,
+    options: &Options,
+) -> Result<ReadyProgram, NativeError> {
+    super::plan::prepare(validated, options).map(|prepared| prepared.ready)
+}
+
+pub(super) fn build_full(
     validated: &ValidatedNativeInput,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
@@ -333,13 +561,28 @@ pub fn build_program(
     let _interval = timings::interval(Interval::Units);
     let target = &options.target;
     let import = timings::phase(Phase::Import);
-    let mut lowered = hirsel_rc::import::lower_discharging(
+    let mut imports;
+    let mut none = hirsel_rc::import::NoImports;
+    let cache: &mut dyn hirsel_rc::import::ImportCache = match &options.objects {
+        Some(objects) => {
+            imports = super::import_cache::Imports::new(
+                objects.store.as_ref(),
+                target,
+                program.types.clone(),
+                options.validation == Validation::EveryStage,
+            );
+            &mut imports
+        }
+        None => &mut none,
+    };
+    let mut lowered = hirsel_rc::import::lower_cached(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
             enabled: options.flat_walk,
         },
         &options.discharge,
+        cache,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     let discharged = timed(Phase::LirValidate, || {
@@ -349,6 +592,8 @@ pub fn build_program(
         hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
+    let value_units = std::mem::take(&mut lowered.units);
+    hirsel_intern::memory::checkpoint("global Value complete");
     let table = &lowered.table;
     let operations = program.operation_registry();
     drop(import);
@@ -361,68 +606,49 @@ pub fn build_program(
         manifest: &manifest,
     };
     let instances = &lowered.instances;
-    let statics = lowered.statics;
-    let unit_origins = &lowered.unit_origins;
-    let jobs = unit_jobs();
-    // Each unit's stages read only the shared table, instances and inputs, so units run
-    // on `jobs` workers; results come back in unit order, and the first error in that
-    // order is the one a serial build would have stopped at.
-    let tasks: Vec<_> = lowered.units.into_iter().enumerate().collect();
-    let rc = hirsel_intern::jobs::map(
-        jobs,
-        tasks,
-        |(_, unit)| unit.instructions.len() as u64,
-        |(index, unit)| -> Result<_, NativeError> {
-            let id = unit_origins[index];
-            let definition = unit.header.definition.clone();
-            let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-            timings::count(Count::Units);
-            let value = seal(StageName::Import, || validate_value(unit, &inputs))?.into_raw();
-            let placement =
-                hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
-            let placed = timed(Phase::Place, || {
-                hirsel_rc::placement::place(value, table, &placement)
-            })
-            .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-            let placed =
-                seal(StageName::Placement, || validate_placed(placed, &inputs))?.into_raw();
-            let proofs = Proofs::for_instance(instances, id);
-            let mut unit = timed(Phase::Rc, || {
-                hirsel_rc::insert::insert(placed, table, &proofs)
-            })
-            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-            // Elision only cancels a copy against the release after it, so one
-            // validation of its output also judges insertion's.
-            if options.elide {
-                unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
-                    .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-            }
-            Ok(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw())
-        },
-    )
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
-    let finalizers = timed(Phase::Rc, || Finalizers::new(instances, &rc));
-    let reuse = hirsel_rc::reuse::Options {
-        reuse: options.reuse,
-    };
+    let statics = std::mem::take(&mut lowered.statics);
+    if let Some(objects) = &options.objects {
+        return build_units(
+            program,
+            &manifest,
+            options,
+            objects,
+            &operations,
+            &lowered,
+            value_units,
+            statics,
+            discharged,
+        )
+        .map(|built| built.finish(program, manifest, operations, options, lowered));
+    }
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
+    preflight(&validation)?;
+    let finalizers = Finalizers::planned(instances, table);
+    let tasks = value_units.into_iter().zip(&lowered.unit_origins).collect();
+    // Inspection and heap builds use the same complete per-unit pipeline as object
+    // builds. With one worker map runs inline; no stage collects whole-program RC.
     let units = hirsel_intern::jobs::map(
-        jobs,
-        rc,
-        |unit| unit.instructions.len() as u64,
-        |unit| {
-            let definition = unit.header.definition.clone();
-            let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-            let reused = timed(Phase::Reuse, || {
-                hirsel_rc::reuse::reuse(unit, table, &reuse)
-            })
-            .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-            let reused = seal(StageName::Reuse, || validate_reuse(reused, &inputs))?.into_raw();
-            let ready = timed(Phase::Ready, || {
-                hirsel_rc::ready::ready(reused, table, &finalizers)
-            })
-            .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-            seal(StageName::Ready, || validate_ready(ready, &inputs))
+        hirsel_intern::jobs::Jobs::ONE,
+        tasks,
+        |(unit, _)| unit.instructions.len() as u64,
+        |(unit, &id)| {
+            let inputs = Inputs {
+                memo: Default::default(),
+                discharge: Some(&lowered.native_discharge),
+                operations: &operations,
+                target,
+                layouts: table,
+                manifest: &manifest,
+            };
+            lower_unit(
+                unit,
+                id,
+                options,
+                instances,
+                &finalizers,
+                &inputs,
+                &validation,
+            )
         },
     )
     .into_iter()
@@ -440,7 +666,19 @@ pub fn build_program(
         .flat_map(|unit| callbacks(unit.unit()))
         .collect();
     let entries = units.iter().flat_map(|unit| entries(unit.unit())).collect();
+    let keys = hirsel_lir::LayoutKeys::new(&lowered.table);
+    let summaries = units
+        .iter()
+        .map(|u| {
+            hirsel_lir::fragment::UnitSummary::of(u.unit(), &lowered.table, &keys, &manifest)
+                .map_err(|e| NativeError::of(StageName::Emission, &u.unit().header.definition, e))
+        })
+        .collect::<Result<_, _>>()?;
     Ok(ReadyProgram {
+        semantic_owners: lowered.semantic_owners.clone(),
+        semantic_units: None,
+        production: None,
+        validation: options.validation,
         callbacks,
         entries,
         operations,
@@ -450,7 +688,9 @@ pub fn build_program(
         launches: program
             .signatures
             .iter()
-            .filter_map(|(p, s)| super::link::launch_kind(s).map(|k| (p.clone(), k)))
+            .filter_map(|(p, s)| {
+                super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k))
+            })
             .collect(),
         input: program.input.clone(),
         target: target.clone(),
@@ -460,9 +700,12 @@ pub fn build_program(
             .map(|(layout, f)| (*layout, f.instance))
             .collect(),
         functions,
+        keys,
         table: lowered.table,
         manifest,
         units,
+        summaries,
+        unit_objects: None,
         inline_instances: lowered.inline_instances,
         statics,
         discharged,
@@ -473,6 +716,198 @@ pub fn build_program(
         fuel: false,
         failure_table: None,
     })
+}
+
+/// A program whose units the per-unit pipeline lowered or loaded (`Options::objects`),
+/// before it owns the lowering's tables.
+struct BuiltUnits {
+    records: Vec<super::plan::Record>,
+    summaries: Vec<hirsel_lir::fragment::UnitSummary>,
+    objects: UnitObjectArtifacts,
+    keys: hirsel_lir::LayoutKeys,
+    callbacks: BTreeSet<DefPath>,
+    statics: Vec<hirsel_lir::statics::StaticData>,
+    discharged: Discharge,
+}
+
+/// The per-unit pipeline (`super::units`) over a lowered program's Value units.
+#[allow(clippy::too_many_arguments)]
+fn build_units(
+    program: &Program,
+    manifest: &Manifest,
+    options: &Options,
+    objects: &super::units::UnitObjects,
+    operations: &hirsel_layout::operation::OperationRegistry,
+    lowered: &hirsel_rc::import::Lowered,
+    units: Vec<LirUnit<hirsel_lir::stage::Value>>,
+    statics: Vec<hirsel_lir::statics::StaticData>,
+    discharged: Discharge,
+) -> Result<BuiltUnits, NativeError> {
+    let table = &lowered.table;
+    let keys = hirsel_lir::LayoutKeys::new(table);
+    let finalizers = Finalizers::planned(&lowered.instances, table);
+    let callbacks: BTreeSet<DefPath> = units.iter().flat_map(callbacks).collect();
+    let tracking = units.iter().any(|u| {
+        u.terminators
+            .iter()
+            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
+    });
+    let empty = BTreeSet::new();
+    let inputs = Inputs {
+        memo: Default::default(),
+        discharge: Some(&lowered.native_discharge),
+        operations,
+        target: &options.target,
+        layouts: table,
+        manifest,
+    };
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
+    preflight(&validation)?;
+    let emit = hirsel_lir::emission::EmitInputs {
+        verify_backend: options.validation == Validation::EveryStage,
+        index: Some(validation.index()),
+        input: &program.input,
+        target: &options.target,
+        layouts: table,
+        keys: &keys,
+        manifest,
+        statics: &statics,
+        inline_instances: &lowered.inline_instances,
+        available_externally: &empty,
+        callbacks: !callbacks.is_empty(),
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
+        tracking,
+        opt: objects.opt,
+        measurement: false,
+        fuel: objects.fuel,
+    };
+    let lowered_units = super::units::lower(
+        &super::units::Program {
+            capture_plan: super::plan::recording(),
+            options,
+            objects,
+            table,
+            keys: &keys,
+            operations,
+            discharge: Some(&lowered.native_discharge),
+            validation: &validation,
+            emit: &emit,
+            instances: &lowered.instances,
+            finalizers: &finalizers,
+            origins: &lowered.unit_origins,
+        },
+        units,
+    )?;
+    let mut summaries = Vec::with_capacity(lowered_units.len());
+    let mut records = Vec::with_capacity(lowered_units.len());
+    let mut artifacts = Vec::with_capacity(lowered_units.len());
+    let mut hits = 0;
+    for unit in lowered_units {
+        let fragment = unit.fragment;
+        hits += usize::from(unit.hit);
+        if super::plan::recording() {
+            records.push(super::plan::Record {
+                key: unit.key,
+                calls: unit.calls,
+                digest: super::plan::fragment_digest(
+                    &fragment
+                        .encode(table, &keys)
+                        .map_err(|e| NativeError::new(StageName::Emission, e))?,
+                ),
+            });
+        }
+        summaries.push(fragment.summary);
+        artifacts.push(fragment.object);
+    }
+    Ok(BuiltUnits {
+        records,
+        summaries,
+        objects: UnitObjectArtifacts {
+            backend: objects.backend,
+            opt: objects.opt,
+            debug: objects.debug,
+            objects: artifacts,
+            hits,
+            generic_units: lowered
+                .unit_origins
+                .iter()
+                .filter(|id| {
+                    let actuals = &lowered.instances.actuals[id.index()];
+                    !actuals.arguments.is_empty() || !actuals.outer.is_empty()
+                })
+                .count(),
+        },
+        keys,
+        callbacks,
+        statics,
+        discharged,
+    })
+}
+
+impl BuiltUnits {
+    fn finish(
+        self,
+        program: &Program,
+        manifest: Manifest,
+        operations: hirsel_layout::operation::OperationRegistry,
+        options: &Options,
+        lowered: hirsel_rc::import::Lowered,
+    ) -> ReadyProgram {
+        let instances = &lowered.instances;
+        let finalizers = Finalizers::planned(instances, &lowered.table);
+        let functions = instances
+            .ids()
+            .filter(|id| instances.roles[id.index()] == InstanceRole::Function)
+            .map(|id| {
+                let view = instances.view(id);
+                (view.key.definition().clone(), view.key.digest())
+            })
+            .collect();
+        ReadyProgram {
+            entries: summary_entries(&self.summaries),
+            foreign_dispatch: BTreeMap::new(),
+            semantic_owners: lowered.semantic_owners.clone(),
+            semantic_units: None,
+            production: Some(super::plan::Production {
+                records: self.records,
+            }),
+            validation: options.validation,
+            callbacks: self.callbacks,
+            operations,
+            launch: options.launch.clone(),
+            revisions: BTreeMap::new(),
+            exit_reports: BTreeMap::new(),
+            launches: program
+                .signatures
+                .iter()
+                .filter_map(|(p, s)| {
+                    super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k))
+                })
+                .collect(),
+            input: program.input.clone(),
+            target: options.target.clone(),
+            finalizers: finalizers
+                .0
+                .iter()
+                .map(|(layout, f)| (*layout, f.instance))
+                .collect(),
+            functions,
+            keys: self.keys,
+            table: lowered.table,
+            manifest,
+            units: Vec::new(),
+            summaries: self.summaries,
+            unit_objects: Some(self.objects),
+            inline_instances: lowered.inline_instances,
+            statics: self.statics,
+            discharged: self.discharged,
+            foreign_links: Vec::new(),
+            foreign_unreplayable: false,
+            escaping: BTreeSet::new(),
+            fuel: options.objects.as_ref().is_some_and(|o| o.fuel),
+            failure_table: None,
+        }
+    }
 }
 
 /// PS-13: every discharged unit removed exactly its planned sites, and every
@@ -538,7 +973,7 @@ fn entries(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = (Strin
 }
 
 /// The definitions `unit` names as C callbacks: `FunctionRef`s at a pointer scalar (PROG-4).
-fn callbacks(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = DefPath> + '_ {
+fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPath> + '_ {
     use hirsel_lir::ir::{Inst, ValueRepr};
     unit.instructions.iter().filter_map(|inst| match *inst {
         Inst::FunctionRef { result, symbol }
@@ -549,4 +984,179 @@ fn callbacks(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = DefP
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_binding_rejects_unplanned_units_and_object_exports() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let file = engine.sources.add("semantic.hir", "fn helper()->u64 { 7u64 }\npub fn main()->Result[(),()] { let _ = helper(); Ok(()) }\n".into()).unwrap();
+            let output =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(input).unwrap();
+            let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+            options.objects = Some(super::super::UnitObjects {
+                store: std::sync::Arc::new(hirsel_lir::objects::NoObjects),
+                backend: super::super::Backend::Cranelift,
+                opt: hirsel_lir::emission::OptLevel::None,
+                debug: false,
+                fuel: false,
+                jobs: hirsel_intern::jobs::Jobs::ONE,
+                byte_budget: None,
+            });
+            let mut ready = build(&input, &options).unwrap();
+            let mut objects = ready.unit_objects.as_ref().unwrap().objects.clone();
+            ready.check_semantic_units(&objects).unwrap();
+            let definition = ready.summaries[0].definition.clone();
+            ready.summaries[0].definition = DefPath::core("unselected");
+            assert!(ready.check_semantic_units(&objects).is_err());
+            ready.summaries[0].definition = definition.clone();
+            objects[0].exports[0].definition = Some(DefPath::core("unselected"));
+            assert!(ready.check_semantic_units(&objects).is_err());
+            ready
+                .semantic_owners
+                .insert(definition, Some(DefPath::core("unselected")));
+            assert!(ready.bind_revisions(&input).is_err());
+        });
+    }
+
+    #[test]
+    fn unit_pipeline_is_identical_at_every_worker_count_and_validation_policy() {
+        let run = || {
+            hirsel_engine::with_compiler_stack(|| {
+                let mut engine = hirsel_engine::QueryEngine::new(
+                    hirsel_engine::default_environment(),
+                    crate::compiler_adapters(),
+                );
+                let source = r#"
+fn helper(x: u64) -> u64 { x + 1u64 }
+fn main() -> u64 {
+    let built: String = "value"
+    let s: Shared[String] = shared.freeze(take built)
+    let t = copy s
+    match shared.thaw(take t) {
+        Ok(text) => helper(1u64),
+        Error(root) => helper(2u64),
+    }
+}
+"#;
+                let file = engine.sources.add("pipeline.hir", source.into()).unwrap();
+                let checked = hirsel_engine::check_progress(
+                    &mut engine,
+                    file,
+                    &hirsel_engine::default_context(),
+                )
+                .unwrap();
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+                let exported = engine.export_native_input().unwrap();
+                let validated = engine.import_native_input(exported).unwrap();
+                let program = adapt::program(&validated);
+                let target = TargetSpec::x86_64_unknown_linux_gnu();
+                let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+                assert!(lowered.units.len() > 1);
+                let manifest = adapt::manifest(validated.snapshot()).unwrap();
+                let operations = program.operation_registry();
+                let inputs = Inputs {
+                    memo: Default::default(),
+                    discharge: Some(&lowered.native_discharge),
+                    operations: &operations,
+                    target: &target,
+                    layouts: &lowered.table,
+                    manifest: &manifest,
+                };
+                let context = hirsel_lir::validate::ValidationContext::new(&inputs);
+                preflight(&context).unwrap();
+                let finalizers = Finalizers::planned(&lowered.instances, &lowered.table);
+                let mut expected = None;
+                for policy in [Validation::EveryStage, Validation::Ready] {
+                    let mut options = Options::new(target.clone());
+                    options.validation = policy;
+                    for jobs in [1, 2, 8] {
+                        let tasks = lowered
+                            .units
+                            .iter()
+                            .cloned()
+                            .zip(lowered.unit_origins.iter().copied())
+                            .collect();
+                        let results = hirsel_intern::jobs::map(
+                            hirsel_intern::jobs::Jobs::new(jobs),
+                            tasks,
+                            |(u, _)| u.instructions.len() as u64,
+                            |(unit, id)| {
+                                let inputs = Inputs {
+                                    memo: Default::default(),
+                                    discharge: Some(&lowered.native_discharge),
+                                    operations: &operations,
+                                    target: &target,
+                                    layouts: &lowered.table,
+                                    manifest: &manifest,
+                                };
+                                lower_unit(
+                                    unit,
+                                    id,
+                                    &options,
+                                    &lowered.instances,
+                                    &finalizers,
+                                    &inputs,
+                                    &context,
+                                )
+                                .map(|unit| {
+                                    (
+                                        hirsel_codec::to_text(unit.unit()),
+                                        unit.receipt().raw().clone(),
+                                    )
+                                })
+                            },
+                        )
+                        .into_iter()
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap();
+                        if let Some(expected) = &expected {
+                            assert_eq!(expected, &results, "jobs={jobs}, policy={policy:?}");
+                        } else {
+                            expected = Some(results);
+                        }
+                    }
+                }
+                format!("{:?}", expected.unwrap())
+            })
+        };
+        if let Some(outputs) = hirsel_intern::under_salts(
+            "native::stages::tests::unit_pipeline_is_identical_at_every_worker_count_and_validation_policy",
+            &[1, 2, 0x5eed],
+            run,
+        ) {
+            assert_eq!(outputs.len(), 3);
+            assert!(
+                outputs.windows(2).all(|pair| pair[0] == pair[1]),
+                "salt changed complete units or receipts"
+            );
+        }
+    }
+}
+
+/// Program entries retained in portable unit summaries, including object-store hits.
+pub(super) fn summary_entries(
+    summaries: &[hirsel_lir::fragment::UnitSummary],
+) -> BTreeMap<String, String> {
+    summaries
+        .iter()
+        .flat_map(|s| s.glue.entries.iter())
+        .map(|(path, instance)| {
+            (
+                hirsel_lir::emission::function_thunk_name(path, instance.as_ref()),
+                path.to_string(),
+            )
+        })
+        .collect()
 }

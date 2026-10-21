@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-graph = { path = "../hirsel-graph" }
 hirsel-intern = { path = "../hirsel-intern" }
@@ -14,6 +15,8 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+# Seeded session id assignment for oracle O1.
+hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-span = { path = "../hirsel-span" }

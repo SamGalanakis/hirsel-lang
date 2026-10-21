@@ -6,9 +6,12 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   (`obligations.rs`);
 - the per-definition TIR digest (`hirsel.tir.digest.v1`) and the obligation
   checksum over it and the referenced signature fingerprints;
-- the canonical `hirsel.tir.export.v6` text (`wire.rs` encodes every TIR,
+- the canonical `hirsel.tir.export.v7` text (`wire.rs` encodes every TIR,
   type-graph and signature type under the export context, including a recursive
-  type group member's `recursive_group` key) and its importer,
+  type group member's `recursive_group` key) and its importer. Each definition,
+  signature and materialized value carries its canonical type table: the closure
+  of the session-interner rows it names, in first-encounter order, with type ids
+  written as table positions; import interns the rows into the caller's interner,
   which re-derives every signature fingerprint (one derivation for every
   signature; an owner view must seal to its public signature; a checked serializable opt-in's
   published representation graph compares by canonical encoding), recomputes every
@@ -26,8 +29,9 @@ type moves only the definitions whose TIR or types name it.
 each group's members (ordered by hash, then text) with their content texts,
 group references and hashes; `definition_hashes` flattens them.
 `group_hashes` is the one hash computation, from texts and group references
-alone: it refines each member until the group's partition is stable, so a code
-store recomputes a stored group's hashes with it. `content_references` reads
+alone: `hirsel_graph::scc_keys` over the group under
+`hirsel.definition.hash.v2`, so a code store recomputes a stored group's hashes
+with it. `content_references` reads
 the `(Ref ...)` nodes of a content text (definition hashes and group markers).
 `call_sites` lists a TIR's calls and function references with each callee's
 hash. The driver-layer engine chooses each definition's `DefinitionContent`.

@@ -30,6 +30,61 @@ impl Program {
         self.units.iter().collect()
     }
 
+    /// The program's glue object (`hirsel_lir::glue`) with the fixture failure codes: the
+    /// registry, cells, codecs, statics, literals and callbacks its unit objects import.
+    pub fn glue(&self) -> Vec<u8> {
+        let mut glue = hirsel_lir::glue::UnitGlue::default();
+        for unit in &self.units {
+            let needs = hirsel_lir::glue::UnitGlue::of(
+                unit.unit(),
+                &self.table.table,
+                &self.table.keys,
+                &self.manifest,
+            )
+            .unwrap();
+            glue.extend(&needs);
+        }
+        let callbacks: Vec<_> = glue
+            .callbacks
+            .iter()
+            .map(|(definition, instance)| {
+                let header = self
+                    .units
+                    .iter()
+                    .map(|u| &u.unit().header)
+                    .find(|h| {
+                        h.definition == *definition && instance.is_none_or(|i| h.instance == i)
+                    })
+                    .expect("a callback's unit");
+                hirsel_lir::emission::GlueCallback {
+                    definition: definition.clone(),
+                    instance: Some(header.instance),
+                    abi: header.abi,
+                }
+            })
+            .collect();
+        let failures = failure_codes();
+        let inputs = hirsel_lir::emission::GlueInputs {
+            target: &self.table.target,
+            layouts: &self.table.table,
+            keys: &self.table.keys,
+            registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                &self.table.table,
+                &self.finalizers,
+            ),
+            finalizers: &self.finalizers,
+            glue: &glue,
+            failures: &failures,
+            statics: &self.statics,
+            callbacks: &callbacks,
+            foreign: &hirsel_lir::emission::NO_FOREIGN,
+            aliasing_unstated: !callbacks.is_empty(),
+        };
+        hirsel_llvm::emit_glue(&inputs)
+            .unwrap_or_else(|e| panic!("{}: {e}", self.table.target.triple))
+            .bytes
+    }
+
     /// The ABI of the unit defining `name`.
     pub fn abi_of(&self, name: &str) -> &hirsel_lir::abi_types::FnAbi {
         let unit = self

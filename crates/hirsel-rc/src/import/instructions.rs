@@ -1,7 +1,14 @@
 use super::*;
 use crate::PassError;
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
+    fn static_layout_key(&mut self, layout: LayoutId) -> hirsel_lir::layout_types::LayoutKey {
+        *self
+            .static_layout_keys
+            .entry(layout)
+            .or_insert_with(|| hirsel_lir::LayoutKeys::rooted(self.layouts.table(), layout))
+    }
+
     pub(super) fn destination_class(&self, d: &hirsel_types::Destination) -> R<DestinationClass> {
         use hirsel_types::Destination as D;
         Ok(match d {
@@ -568,19 +575,7 @@ impl Importer<'_, '_> {
                     let tir::ValueKind::Construct { fields, .. } = &value.root.kind else {
                         unreachable!()
                     };
-                    let callable = hirsel_types::substitute_type(
-                        &value.types,
-                        fields[0].ty,
-                        &mut self.store,
-                        hirsel_types::Substitution {
-                            binder: None,
-                            roles: &Default::default(),
-                            arguments: &[],
-                            authorities: &[],
-                        },
-                    )
-                    .map_err(|e| InstanceError::Substitution(definition.clone(), e))?;
-                    let callable = self.layout(callable)?;
+                    let callable = self.layout(fields[0].ty)?;
                     let callable = self.intern(callable);
                     let (symbol, _) = self.direct(function, &[])?;
                     let compare = self.fresh(callable);
@@ -925,11 +920,14 @@ impl Importer<'_, '_> {
                 let instance = self
                     .instances
                     .closure(self.id, *body)
-                    .ok_or_else(|| InstanceError::MissingInstance(self.def.path.clone()))?;
+                    .ok_or_else(|| InstanceError::MissingInstance(self.def.path.path().clone()))?;
                 let (code, environment) = {
                     let digest = self.instances.view(instance).key.digest();
-                    let symbol =
-                        self.symbol(SymbolKind::Function, &self.def.path.clone(), Some(digest));
+                    let symbol = self.symbol(
+                        SymbolKind::Function,
+                        &self.def.path.path().clone(),
+                        Some(digest),
+                    );
                     let code = ClosureCode {
                         symbol,
                         abi: self.instances.abis[instance.index()],
@@ -1143,8 +1141,10 @@ impl Importer<'_, '_> {
         {
             return Ok(None);
         }
-        let record = self.layouts.record(payload);
-        let Some(instance) = crate::statics::nullary_variant_instance(record, variant) else {
+        let key = self.static_layout_key(payload);
+        let Some(instance) =
+            crate::statics::nullary_variant_instance(self.layouts.record(payload), key, variant)
+        else {
             return Ok(None);
         };
         self.drop_place(field.value.place)?;
@@ -1182,7 +1182,7 @@ impl Importer<'_, '_> {
                 LayoutKind::Block { payload } if payload == layout
             )
         {
-            let instance = empty_sequence_instance(self.layouts.record(layout));
+            let instance = self.static_layout_key(layout).0;
             let symbol = self.symbol(SymbolKind::Constant, &empty_sequence(), Some(instance));
             let result = self.fresh(ty);
             self.push(Inst::ReadStatic { result, symbol });
@@ -1316,16 +1316,16 @@ impl Importer<'_, '_> {
         };
         self.failure.before.insert(0, release.clone());
         let is_map = kind == hirsel_types::BuiltinType::Map;
-        let candidates: Vec<_> = self
-            .store
-            .iter()
-            .filter_map(|(id, t)| match &t.kind {
-                hirsel_types::TypeKind::Builtin { kind: k, arguments } if *k == kind => {
-                    Some((id, arguments.to_vec()))
-                }
-                _ => None,
-            })
-            .collect();
+        // The container's own type is among the definition's TIR types.
+        let mut candidates = Vec::new();
+        for &ty in self.def.types.iter() {
+            let id = self.ty(ty)?;
+            if let hirsel_types::TypeKind::Builtin { kind: k, arguments } = &self.types.row(id).kind
+                && *k == kind
+            {
+                candidates.push((id, arguments.to_vec()));
+            }
+        }
         let mut actuals = None;
         for (candidate, arguments) in candidates {
             if self.layout(candidate)? == layout {
@@ -1337,13 +1337,7 @@ impl Importer<'_, '_> {
             .ok_or_else(|| PassError::Unsupported("container constructor actuals".into()))?;
         let path = hirsel_syntax::DefPath::core(if is_map { "map.insert" } else { "set.insert" });
         let body = crate::library::body_index(&path).expect("registered insertion");
-        let request = crate::library::Request::operation(
-            self.program,
-            body,
-            &path,
-            self.store.clone(),
-            actuals,
-        )?;
+        let request = crate::library::Request::operation(self.program, body, &path, actuals)?;
         let direct = self.require(request)?;
         let symbol = self.symbol(
             direct.symbol.kind,
@@ -1437,8 +1431,8 @@ impl Importer<'_, '_> {
             return None;
         };
         let representation = t.representation?;
-        match &signature.types.get(representation)?.kind {
-            hirsel_types::TypeKind::Named { definition, .. } => Some(definition.clone()),
+        match &self.types.get(representation)?.kind {
+            hirsel_types::TypeKind::Named { definition, .. } => Some(definition.path().clone()),
             _ => None,
         }
     }
@@ -1451,25 +1445,30 @@ impl Importer<'_, '_> {
     ) -> R<(SymbolId, FnAbiId)> {
         // CT-5: a generic generated declaration is its selected instance's
         // monomorphic definition.
-        if self.program.instance_bodies.declarations.contains(path) {
+        if self
+            .program
+            .instance_bodies
+            .declarations
+            .contains(&DefId::intern(path))
+        {
             let callee = crate::instance::callee_actuals(
+                self.types,
+                &self.program.memo,
                 None,
-                &self.def.types,
                 arguments,
                 self.actuals,
                 false,
                 path,
             )?;
-            let instance =
-                match self
-                    .program
-                    .instance_bodies
-                    .resolve(path, &callee.store, &callee.arguments)
-                {
-                    Ok(Some(instance)) => instance.clone(),
-                    Ok(None) => return unsupported(format!("{path:?} has no instance bodies")),
-                    Err(error) => return unsupported(format!("{error:?}")),
-                };
+            let instance = match self.program.instance_bodies.resolve(
+                DefId::intern(path),
+                self.types,
+                &callee.arguments,
+            ) {
+                Ok(Some(instance)) => instance.path().clone(),
+                Ok(None) => return unsupported(format!("{path:?} has no instance bodies")),
+                Err(error) => return unsupported(format!("{error:?}")),
+            };
             return self.direct(&instance, &[]);
         }
         if let Some(body) = crate::library::body_index(path) {
@@ -1491,19 +1490,16 @@ impl Importer<'_, '_> {
                 ));
             }
             let callee = crate::instance::callee_actuals(
+                self.types,
+                &self.program.memo,
                 self.program.binders.get(path).copied(),
-                &self.def.types,
                 arguments,
                 self.actuals,
                 false,
                 path,
             )?;
-            let request = crate::library::Request::operation_value(
-                self.program,
-                path,
-                callee.store,
-                callee.arguments,
-            )?;
+            let request =
+                crate::library::Request::operation_value(self.program, path, callee.arguments)?;
             let direct = self.require(request)?;
             return Ok((
                 self.symbol(SymbolKind::Function, path, direct.symbol.instance),
@@ -1511,8 +1507,9 @@ impl Importer<'_, '_> {
             ));
         }
         let callee = crate::instance::callee_actuals(
+            self.types,
+            &self.program.memo,
             self.program.binders.get(path).copied(),
-            &self.def.types,
             arguments,
             self.actuals,
             false,

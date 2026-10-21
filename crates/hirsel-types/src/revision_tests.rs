@@ -39,29 +39,40 @@ fn path(name: &str) -> DefPath {
     })
 }
 #[test]
-fn cloned_stores_share_only_immutable_existing_rows() {
-    let mut a = TypeStore::default();
-    let common = a.push(scalar());
-    let mut b = a.clone();
-    assert_eq!(a.get(common), b.get(common));
-    let a_new = a.push(scalar());
-    let b_new = b.push(scalar());
-    assert_eq!(a_new.index(), b_new.index());
-    assert_ne!(a_new, b_new);
-    assert!(
-        std::panic::catch_unwind(|| a.get(b_new)).map_or(cfg!(debug_assertions), |v| v.is_none())
-    );
-    let mut unrelated = TypeStore::default();
-    let wrong = unrelated.push(scalar());
-    assert!(
-        std::panic::catch_unwind(|| a.get(wrong)).map_or(cfg!(debug_assertions), |v| v.is_none())
-    );
+fn equal_rows_intern_to_one_id_and_rows_are_lossless() {
+    let t = TypeInterner::new(None);
+    let common = t.intern(scalar());
+    assert_eq!(t.intern(scalar()), common);
+    let named = |name: &str| {
+        let mut f = function(common, vec![]);
+        let TypeKind::Function(callable) = &mut f.kind else {
+            unreachable!()
+        };
+        callable.parameters = vec![Parameter {
+            name: Some(name.into()),
+            label: None,
+            passing: PassingMode::Borrow,
+            ty: common,
+        }]
+        .into();
+        f
+    };
+    let x = t.intern(named("x"));
+    let y = t.intern(named("y"));
+    assert_ne!(x, y, "parameter names survive interning");
+    assert!(t.semantic_eq(x, y), "and semantic equality erases them");
+    assert_eq!(t.sem(x), t.sem(y));
+    let TypeKind::Function(f) = &t.row(x).kind else {
+        unreachable!()
+    };
+    assert_eq!(f.parameters[0].name.as_deref(), Some("x"));
+    assert!(t.get(TypeId::DANGLING).is_none());
 }
 #[test]
-fn import_remaps_shared_edges_and_equality_is_rooted() {
-    let mut source = TypeStore::default();
-    let child = source.push(scalar());
-    let root = source.push(Type {
+fn shared_edges_survive_and_equality_is_rooted() {
+    let t = TypeInterner::new(None);
+    let child = t.intern(scalar());
+    let root = t.intern(Type {
         kind: TypeKind::Record(
             vec![
                 Field {
@@ -79,55 +90,61 @@ fn import_remaps_shared_edges_and_equality_is_rooted() {
         ),
         ..scalar()
     });
-    let mut target = TypeStore::default();
-    target.push(Type {
+    // An unrelated recovery row does not affect a rooted comparison.
+    t.intern(Type {
         kind: TypeKind::Error,
         ..scalar()
     });
-    let imported = import_type(&source, root, &mut target).unwrap();
-    assert_ne!(root, imported);
-    let TypeKind::Record(fields) = &target.get(imported).unwrap().kind else {
+    let TypeKind::Record(fields) = &t.row(root).kind else {
         panic!()
     };
     assert_eq!(fields[0].ty, fields[1].ty);
     assert!(fields[0].growable);
-    assert!(semantic_equal(&source, root, &target, imported).unwrap());
-    let mut changed = target.get(imported).unwrap().clone();
+    assert!(semantic_equal(&t, root, root).unwrap());
+    let mut changed = t.row(root).clone();
     changed.drop_allocation = DropAllocation::MayAllocate;
-    let changed = target.push(changed);
-    assert!(!semantic_equal(&source, root, &target, changed).unwrap());
+    let changed = t.intern(changed);
+    assert!(!semantic_equal(&t, root, changed).unwrap());
 }
 #[test]
 fn graph_helpers_reject_cycles_and_recovery() {
-    let source = TypeStore::from_graph(1, |ids| {
+    let t = TypeInterner::new(None);
+    let id = t.intern_graph(1, |ids| {
         vec![Type {
             kind: TypeKind::Box(ids[0]),
             ..scalar()
         }]
-    });
-    let id = source.id(0).unwrap();
+    })[0];
+    assert_eq!(t.validate(id), Err(GraphError::StructuralCycle(id)));
     assert_eq!(
-        import_type(&source, id, &mut TypeStore::default()),
+        substitute_fresh(&t, id, Substitution::default()),
         Err(GraphError::StructuralCycle(id))
     );
     assert_eq!(
-        semantic_equal(&source, id, &source, id),
+        semantic_equal(&t, id, id),
         Err(GraphError::StructuralCycle(id))
     );
-    let mut source = TypeStore::default();
-    let id = source.push(Type {
+    let id = t.intern(Type {
         kind: TypeKind::Error,
         ..scalar()
     });
+    assert_eq!(t.validate(id), Err(GraphError::RecoveryType(id)));
     assert_eq!(
-        import_type(&source, id, &mut TypeStore::default()),
+        substitute_fresh(
+            &t,
+            id,
+            Substitution {
+                binder: Some(GenericBinder::Bound(0)),
+                ..Default::default()
+            }
+        ),
         Err(GraphError::RecoveryType(id))
     );
 }
 #[test]
 fn unused_nested_reordered_patterns_keep_types_and_binding_modes() {
-    let mut types = TypeStore::default();
-    let ty = types.push(scalar());
+    let types = TypeInterner::new(None);
+    let ty = types.intern(scalar());
     let owner = NameSite::Expression(ExprId(8));
     let unused = BindingDecision {
         owner: owner.clone(),
@@ -176,7 +193,6 @@ fn unused_nested_reordered_patterns_keep_types_and_binding_modes() {
         tails: vec![],
         places: vec![],
         calls: vec![],
-        types,
         bindings: vec![unused],
         patterns,
         resolution: Resolution::default(),
@@ -185,7 +201,7 @@ fn unused_nested_reordered_patterns_keep_types_and_binding_modes() {
         closures: vec![],
     };
     assert_eq!(body.bindings[0].owner, owner);
-    assert!(body.types.get(body.bindings[0].ty).is_some());
+    assert!(types.get(body.bindings[0].ty).is_some());
     assert_eq!(body.patterns[0].fields[0], (FieldId(1), PatternId(1)));
     assert!(body.expressions.is_empty()); // unused bindings need no expression row
 }
@@ -209,7 +225,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
                 output: lookup.clone(),
             },
             DependencyRead::Signature {
-                definition: path("absent"),
+                definition: hirsel_syntax::DefId::intern(&path("absent")),
                 fingerprint: None,
             },
         ],
@@ -272,8 +288,8 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
 
 #[test]
 fn function_identity_ignores_binder_names_but_preserves_labels_and_conventions() {
-    let mut store = TypeStore::default();
-    let result = store.push(scalar());
+    let store = TypeInterner::new(None);
+    let result = store.intern(scalar());
     let mut original = function(result, vec![]);
     let TypeKind::Function(f) = &mut original.kind else {
         panic!()
@@ -284,26 +300,26 @@ fn function_identity_ignores_binder_names_but_preserves_labels_and_conventions()
         passing: hirsel_syntax::PassingMode::Borrow,
         ty: result,
     });
-    let root = store.push(original.clone());
+    let root = store.intern(original.clone());
     let TypeKind::Function(f) = &mut original.kind else {
         panic!()
     };
     f.parameters[0].name = Some("renamed".into());
-    let renamed = store.push(original.clone());
-    assert!(semantic_equal(&store, root, &store, renamed).unwrap());
+    let renamed = store.intern(original.clone());
+    assert!(semantic_equal(&store, root, renamed).unwrap());
     let TypeKind::Function(f) = &mut original.kind else {
         panic!()
     };
     f.parameters[0].label = Some("from".into());
-    let labelled = store.push(original.clone());
-    assert!(!semantic_equal(&store, root, &store, labelled).unwrap());
+    let labelled = store.intern(original.clone());
+    assert!(!semantic_equal(&store, root, labelled).unwrap());
     let TypeKind::Function(f) = &mut original.kind else {
         panic!()
     };
     f.parameters[0].label = None;
     f.parameters[0].passing = hirsel_syntax::PassingMode::Take;
-    let taken = store.push(original);
-    assert!(!semantic_equal(&store, root, &store, taken).unwrap());
+    let taken = store.intern(original);
+    assert!(!semantic_equal(&store, root, taken).unwrap());
     let TypeKind::Function(f) = &store.get(root).unwrap().kind else {
         panic!()
     };
@@ -312,7 +328,7 @@ fn function_identity_ignores_binder_names_but_preserves_labels_and_conventions()
 
 #[test]
 fn value_brands_allow_erasure_and_membership_but_never_strengthen_or_change_nested_identity() {
-    let mut store = TypeStore::default();
+    let store = TypeInterner::new(None);
     let brand = |parameter| Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(parameter))),
         fields: vec![].into(),
@@ -327,15 +343,15 @@ fn value_brands_allow_erasure_and_membership_but_never_strengthen_or_change_nest
         },
         ..scalar()
     };
-    let erased = store.push(root(vec![].into()));
-    let a = store.push(root(vec![brand(0)].into()));
-    let b = store.push(root(vec![brand(1)].into()));
-    let union = store.push(root(vec![brand(0), brand(1)].into()));
-    let nested_a = store.push(Type {
+    let erased = store.intern(root(vec![].into()));
+    let a = store.intern(root(vec![brand(0)].into()));
+    let b = store.intern(root(vec![brand(1)].into()));
+    let union = store.intern(root(vec![brand(0), brand(1)].into()));
+    let nested_a = store.intern(Type {
         kind: TypeKind::Tuple(vec![a].into()),
         ..scalar()
     });
-    let nested_union = store.push(Type {
+    let nested_union = store.intern(Type {
         kind: TypeKind::Tuple(vec![union].into()),
         ..scalar()
     });
@@ -363,7 +379,7 @@ fn value_brands_allow_erasure_and_membership_but_never_strengthen_or_change_nest
 
 #[test]
 fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
-    let mut types = TypeStore::default();
+    let types = TypeInterner::new(None);
     let own = ParameterRef::bound(ParamId(0));
     let outer = ParameterRef::Bound {
         depth: 1,
@@ -383,7 +399,7 @@ fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
         ]
         .into(),
     };
-    let result = types.push(result);
+    let result = types.intern(result);
     let mut callback = function(result, vec![]);
     callback.brand = Brand {
         alternatives: vec![Origin {
@@ -403,9 +419,9 @@ fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
         ]
         .into(),
     ));
-    let callback = types.push(callback);
+    let callback = types.intern(callback);
     let scope = site(NameSite::Statement(StmtId(7)));
-    let bound = bind_parameter_scopes(&mut types, callback, &[scope]).unwrap();
+    let bound = bind_parameter_scopes(&types, callback, &[scope]).unwrap();
     let row = types.get(bound).unwrap();
     let body = ParameterRef::body(scope, ParamId(0));
     assert_eq!(row.brand.alternatives[0].root, OriginRoot::Parameter(body));
@@ -427,22 +443,18 @@ fn lexical_parameter_graphs_keep_inner_binders_and_bind_outer_references() {
             .collect::<Vec<_>>(),
         vec![OriginRoot::Parameter(own), OriginRoot::Parameter(body)]
     );
-    let sibling = bind_parameter_scopes(
-        &mut types,
-        callback,
-        &[site(NameSite::Statement(StmtId(8)))],
-    )
-    .unwrap();
-    assert!(!semantic_equal(&types, bound, &types, sibling).unwrap());
+    let sibling =
+        bind_parameter_scopes(&types, callback, &[site(NameSite::Statement(StmtId(8)))]).unwrap();
+    assert!(!semantic_equal(&types, bound, sibling).unwrap());
     assert!(matches!(
-        bind_parameter_scopes(&mut types, callback, &[]),
+        bind_parameter_scopes(&types, callback, &[]),
         Err(GraphError::UnboundParameter(_))
     ));
 }
 
 #[test]
 fn call_origin_substitution_reaches_outer_references_inside_callbacks() {
-    let mut types = TypeStore::default();
+    let types = TypeInterner::new(None);
     let inner = ParameterRef::bound(ParamId(0));
     let outer = ParameterRef::Bound {
         depth: 1,
@@ -463,14 +475,14 @@ fn call_origin_substitution_reaches_outer_references_inside_callbacks() {
         ]
         .into(),
     };
-    let result = types.push(result);
-    let callback = types.push(function(result, vec![]));
+    let result = types.intern(result);
+    let callback = types.intern(function(result, vec![]));
     let source = Origin {
         root: OriginRoot::Parameter(ParameterRef::body(site(NameSite::Item), ParamId(3))),
         fields: vec![FieldId(1)].into(),
     };
     let instantiated = instantiate_parameter_origins(
-        &mut types,
+        &types,
         callback,
         &std::collections::BTreeMap::from([(
             inner,
@@ -503,24 +515,24 @@ fn call_origin_substitution_reaches_outer_references_inside_callbacks() {
 #[test]
 fn allocator_targets_respect_binders_and_directional_placement() {
     use std::collections::BTreeMap;
-    let mut store = TypeStore::default();
+    let store = TypeInterner::new(None);
     let mut selected = scalar();
     selected.modes.relation = Relation::place(Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(1))),
         fields: vec![].into(),
     });
-    let selected = store.push(selected);
+    let selected = store.intern(selected);
     let targets = BTreeMap::from([(ParameterRef::bound(ParamId(1)), AllocationTarget::Heap)]);
-    let resolved = instantiate_allocation_targets(&mut store, selected, &targets).unwrap();
+    let resolved = instantiate_allocation_targets(&store, selected, &targets).unwrap();
     assert_eq!(
         store.get(resolved).unwrap().modes.relation,
         Relation::global()
     );
-    let inner = store.push(function(selected, vec![]));
-    let unchanged = instantiate_allocation_targets(&mut store, inner, &targets).unwrap();
-    assert!(semantic_equal(&store, inner, &store, unchanged).unwrap());
-    let unspecified = store.push(scalar());
-    let mut lookup = |_: &hirsel_syntax::DefPath| Ok::<_, QueryError>(None);
+    let inner = store.intern(function(selected, vec![]));
+    let unchanged = instantiate_allocation_targets(&store, inner, &targets).unwrap();
+    assert!(semantic_equal(&store, inner, unchanged).unwrap());
+    let unspecified = store.intern(scalar());
+    let mut lookup = |_: hirsel_syntax::DefId| Ok::<_, QueryError>(None);
     assert!(
         compatible_type(
             &store,
@@ -545,7 +557,7 @@ fn allocator_targets_respect_binders_and_directional_placement() {
     );
     let mut known = scalar();
     known.allocation_target = Some(AllocationTarget::Heap);
-    let known = store.push(known);
+    let known = store.intern(known);
     assert!(
         !compatible_type(
             &store,
@@ -562,14 +574,14 @@ fn allocator_targets_respect_binders_and_directional_placement() {
 #[test]
 fn argument_brand_selection_preserves_all_origins_and_inner_binders() {
     use std::collections::BTreeMap;
-    let mut store = TypeStore::default();
+    let store = TypeInterner::new(None);
     let parameter = ParameterRef::bound(ParamId(0));
     let mut selected = scalar();
     selected.brand.alternatives.push(Origin {
         root: OriginRoot::ArgumentBrand(parameter),
         fields: vec![FieldId(3)].into(),
     });
-    let selected = store.push(selected);
+    let selected = store.intern(selected);
     let source = Origin {
         root: OriginRoot::Local(owner(), LocalId(7)),
         fields: vec![FieldId(1)].into(),
@@ -591,23 +603,23 @@ fn argument_brand_selection_preserves_all_origins_and_inner_binders() {
             relation: Relation::global(),
         },
     )]);
-    let actual = instantiate_parameter_origins(&mut store, selected, &arguments).unwrap();
+    let actual = instantiate_parameter_origins(&store, selected, &arguments).unwrap();
     let mut expected = vec![source, other];
     for origin in &mut expected {
         origin.fields.push(FieldId(3));
     }
     assert_eq!(store.get(actual).unwrap().brand.alternatives, expected);
-    let callable = store.push(function(selected, vec![]));
-    let nested = instantiate_parameter_origins(&mut store, callable, &arguments).unwrap();
-    assert!(semantic_equal(&store, callable, &store, nested).unwrap());
+    let callable = store.intern(function(selected, vec![]));
+    let nested = instantiate_parameter_origins(&store, callable, &arguments).unwrap();
+    assert!(semantic_equal(&store, callable, nested).unwrap());
     let mut invalid = scalar();
     invalid.modes.relation = Relation::place(Origin {
         root: OriginRoot::ArgumentBrand(parameter),
         fields: vec![].into(),
     });
-    let invalid = store.push(invalid);
+    let invalid = store.intern(invalid);
     assert!(matches!(
-        instantiate_parameter_origins(&mut store, invalid, &arguments),
+        instantiate_parameter_origins(&store, invalid, &arguments),
         Err(GraphError::UnboundOrigin(OriginRoot::ArgumentBrand(_)))
     ));
 }
@@ -615,7 +627,7 @@ fn argument_brand_selection_preserves_all_origins_and_inner_binders() {
 #[test]
 fn sibling_substitution_preserves_unresolved_fields_and_nested_scopes() {
     use std::collections::BTreeMap;
-    let mut store = TypeStore::default();
+    let store = TypeInterner::new(None);
     let origin = Origin {
         root: OriginRoot::Sibling(FieldId(1)),
         fields: vec![FieldId(4)].into(),
@@ -625,9 +637,9 @@ fn sibling_substitution_preserves_unresolved_fields_and_nested_scopes() {
         alternatives: vec![origin.clone()].into(),
     };
     field.modes.relation = Relation::place(origin.clone());
-    let field = store.push(field);
-    let missing = instantiate_sibling_origins(&mut store, field, &BTreeMap::new()).unwrap();
-    assert!(semantic_equal(&store, field, &store, missing).unwrap());
+    let field = store.intern(field);
+    let missing = instantiate_sibling_origins(&store, field, &BTreeMap::new()).unwrap();
+    assert!(semantic_equal(&store, field, missing).unwrap());
     let parameter = ParameterRef::bound(ParamId(2));
     let fields = BTreeMap::from([(
         FieldId(1),
@@ -636,7 +648,7 @@ fn sibling_substitution_preserves_unresolved_fields_and_nested_scopes() {
             fields: vec![FieldId(3)].into(),
         },
     )]);
-    let actual = instantiate_sibling_origins(&mut store, field, &fields).unwrap();
+    let actual = instantiate_sibling_origins(&store, field, &fields).unwrap();
     let expected = Origin {
         root: OriginRoot::Parameter(parameter),
         fields: vec![FieldId(3), FieldId(4)].into(),
@@ -649,8 +661,8 @@ fn sibling_substitution_preserves_unresolved_fields_and_nested_scopes() {
         store.get(actual).unwrap().modes.relation,
         Relation::place(expected)
     );
-    let callable = store.push(function(field, vec![]));
-    let actual = instantiate_sibling_origins(&mut store, callable, &fields).unwrap();
+    let callable = store.intern(function(field, vec![]));
+    let actual = instantiate_sibling_origins(&store, callable, &fields).unwrap();
     let TypeKind::Function(callable) = &store.get(actual).unwrap().kind else {
         panic!()
     };
@@ -666,15 +678,15 @@ fn sibling_substitution_preserves_unresolved_fields_and_nested_scopes() {
 
 #[test]
 fn mutable_storage_contract_does_not_accept_a_local_read_row() {
-    let mut store = TypeStore::default();
-    let global = store.push(Type {
+    let store = TypeInterner::new(None);
+    let global = store.intern(Type {
         kind: TypeKind::Primitive(Primitive::String),
         ..scalar()
     });
     let mut row = store.get(global).unwrap().clone();
     row.modes.relation = Relation::environment();
-    let local = store.push(row);
-    let mut lookup = |_: &DefPath| Ok::<_, crate::QueryError>(None);
+    let local = store.intern(row);
+    let mut lookup = |_: DefId| Ok::<_, crate::QueryError>(None);
     assert!(
         compatible_type(
             &store,
@@ -711,7 +723,7 @@ fn mutable_storage_contract_does_not_accept_a_local_read_row() {
 #[test]
 fn dependent_sources_keep_field_paths_and_nested_call_binders() {
     use std::collections::BTreeMap;
-    let mut store = TypeStore::default();
+    let store = TypeInterner::new(None);
     let p = ParameterRef::bound(ParamId(0));
     let mut result = scalar();
     result.kind = TypeKind::Primitive(Primitive::Bytes);
@@ -722,13 +734,13 @@ fn dependent_sources_keep_field_paths_and_nested_call_binders() {
         }),
         fields: vec![FieldId(1)].into(),
     })]);
-    let result = store.push(result);
-    let callback = store.push(function(result, vec![]));
+    let result = store.intern(result);
+    let callback = store.intern(function(result, vec![]));
     let source = Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(2))),
         fields: vec![].into(),
     };
-    let actual = store.push(scalar());
+    let actual = store.intern(scalar());
     let arguments = BTreeMap::from([(
         p,
         OriginArgument {
@@ -741,8 +753,7 @@ fn dependent_sources_keep_field_paths_and_nested_call_binders() {
         },
     )]);
     let actuals = BTreeMap::from([(p, actual)]);
-    let callback =
-        instantiate_parameter_sources(&mut store, callback, &arguments, &actuals).unwrap();
+    let callback = instantiate_parameter_sources(&store, callback, &arguments, &actuals).unwrap();
     let TypeKind::Function(f) = &store.get(callback).unwrap().kind else {
         panic!()
     };
@@ -760,22 +771,21 @@ fn dependent_sources_keep_field_paths_and_nested_call_binders() {
     );
     let mut inner = scalar();
     inner.modes.relation = Relation::parameters([p]);
-    let inner = store.push(inner);
-    let callback = store.push(function(inner, vec![]));
-    let unchanged =
-        instantiate_parameter_sources(&mut store, callback, &arguments, &actuals).unwrap();
-    assert!(semantic_equal(&store, callback, &store, unchanged).unwrap());
+    let inner = store.intern(inner);
+    let callback = store.intern(function(inner, vec![]));
+    let unchanged = instantiate_parameter_sources(&store, callback, &arguments, &actuals).unwrap();
+    assert!(semantic_equal(&store, callback, unchanged).unwrap());
 }
 
 #[test]
 fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
-    let mut store = TypeStore::default();
-    let plain = store.push(scalar());
-    let block = store.push(Type {
+    let store = TypeInterner::new(None);
+    let plain = store.intern(scalar());
+    let block = store.intern(Type {
         kind: TypeKind::Primitive(Primitive::Bytes),
         ..scalar()
     });
-    let explicit = store.push(Type {
+    let explicit = store.intern(Type {
         modes: Modes {
             relation: Relation::environment(),
             ..Modes::global()
@@ -787,7 +797,7 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
         root: OriginRoot::Local(owner(), LocalId(8)),
         fields: vec![].into(),
     });
-    let owner = store.push(Type {
+    let owner = store.intern(Type {
         modes: Modes {
             relation: arena.clone(),
             ..Modes::global()
@@ -795,9 +805,9 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
         kind: TypeKind::Tuple(vec![block, plain, explicit].into()),
         ..scalar()
     });
-    let lookup = &mut |_: &hirsel_syntax::DefPath| Ok::<_, crate::QueryError>(None);
+    let lookup = &mut |_: hirsel_syntax::DefId| Ok::<_, crate::QueryError>(None);
     let field = placed_part_type(
-        &mut store,
+        &store,
         owner,
         block,
         &GenericDeclarations::signature(&[]),
@@ -811,7 +821,7 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
     );
     assert_eq!(
         placed_part_type(
-            &mut store,
+            &store,
             owner,
             plain,
             &GenericDeclarations::signature(&[]),
@@ -822,7 +832,7 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
     );
     assert_eq!(
         placed_part_type(
-            &mut store,
+            &store,
             owner,
             explicit,
             &GenericDeclarations::signature(&[]),
@@ -836,10 +846,10 @@ fn placed_block_fields_inherit_the_owner_but_plain_and_related_fields_do_not() {
 #[test]
 fn complete_graph_view_covers_every_edge_and_preserves_import_ownership() {
     use TypeEdgeRole as R;
-    let mut store = TypeStore::default();
-    let a = store.push(scalar());
-    let b = store.push(scalar());
-    let c = store.push(scalar());
+    let store = TypeInterner::new(None);
+    let a = store.intern(scalar());
+    let b = store.intern(scalar());
+    let c = store.intern(scalar());
     let mut callable = match function(b, vec![]).kind {
         TypeKind::Function(f) => f,
         _ => unreachable!(),
@@ -891,7 +901,7 @@ fn complete_graph_view_covers_every_edge_and_preserves_import_ownership() {
         ),
         (
             TypeKind::Named {
-                definition: path("Pair"),
+                definition: DefId::intern(&path("Pair")),
                 arguments: arguments.clone().into(),
             },
             vec![(a, R::TypeArgument), (b, R::TypeArgument)],
@@ -927,30 +937,21 @@ fn complete_graph_view_covers_every_edge_and_preserves_import_ownership() {
         if matches!(kind, TypeKind::Error) {
             continue;
         }
-        let root = store.push(Type { kind, ..scalar() });
-        let mut destination = TypeStore::default();
-        let imported = import_type(&store, root, &mut destination).unwrap();
-        let imported_edges = destination.get(imported).unwrap().kind.graph_edges();
-        assert_eq!(edges.len(), imported_edges.len());
-        for (source, target) in edges.iter().zip(imported_edges) {
-            assert_eq!(source.role, target.role);
-            assert_eq!(destination.id(target.ty.index()), Some(target.ty));
-            assert_ne!(source.ty, target.ty);
-            assert!(semantic_equal(&store, source.ty, &destination, target.ty).unwrap());
-        }
+        let root = store.intern(Type { kind, ..scalar() });
+        assert_eq!(store.row(root).kind.graph_edges(), edges);
     }
 }
 
 #[test]
 fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
-    let mut types = TypeStore::default();
+    let types = TypeInterner::new(None);
     let outer = site(NameSite::Item);
     let inner = site(NameSite::Statement(StmtId(0)));
-    let t = types.push(Type {
+    let t = types.intern(Type {
         kind: TypeKind::Parameter(TypeParameterRef::body(outer, TypeParamId(0))),
         ..scalar()
     });
-    let u = types.push(Type {
+    let u = types.intern(Type {
         kind: TypeKind::Parameter(TypeParameterRef::body(inner, TypeParamId(0))),
         ..scalar()
     });
@@ -964,7 +965,7 @@ fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
             }],
         );
     }
-    assert!(!semantic_equal(&types, t, &types, u).unwrap());
+    assert!(!semantic_equal(&types, t, u).unwrap());
     for relation in [
         TypeRelation::Exact,
         TypeRelation::Parameter,
@@ -980,12 +981,10 @@ fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
             .unwrap()
         );
     }
-    let actual = types.push(scalar());
-    let source = types.clone();
-    let substituted = substitute_type(
-        &source,
+    let actual = types.intern(scalar());
+    let substituted = substitute_fresh(
+        &types,
         t,
-        &mut types,
         Substitution {
             binder: Some(GenericBinder::Body(inner)),
             arguments: &[GenericArgument::Type(actual)],
@@ -993,14 +992,14 @@ fn identical_ordinals_in_distinct_binders_are_not_equal_or_interchangeable() {
         },
     )
     .unwrap();
-    assert!(semantic_equal(&types, t, &types, substituted).unwrap());
+    assert!(semantic_equal(&types, t, substituted).unwrap());
 }
 
 #[test]
 fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
     // Two items, and two occurrences of one path, number their sites from
     // zero: the same local binder ordinal names a different binder in each.
-    let mut types = TypeStore::default();
+    let types = TypeInterner::new(None);
     let first = LexicalOwner::first(&path("a")).site(NameSite::Statement(StmtId(0)));
     let second = LexicalOwner::first(&path("b")).site(NameSite::Statement(StmtId(0)));
     let duplicate = LexicalOwner {
@@ -1019,7 +1018,7 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
                     bounds: vec![Bound::Plain].into(),
                 }],
             );
-            types.push(Type {
+            types.intern(Type {
                 kind: TypeKind::Parameter(TypeParameterRef::body(scope, TypeParamId(0))),
                 ..scalar()
             })
@@ -1027,7 +1026,7 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
         .collect();
     let t = parameters[0];
     for &u in &parameters[1..] {
-        assert!(!semantic_equal(&types, t, &types, u).unwrap());
+        assert!(!semantic_equal(&types, t, u).unwrap());
         for relation in [
             TypeRelation::Exact,
             TypeRelation::Parameter,
@@ -1046,13 +1045,11 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
     }
     // Substituting the other item's binder leaves this item's parameter alone;
     // substituting its own replaces it.
-    let actual = types.push(scalar());
+    let actual = types.intern(scalar());
     for (scope, replaced) in [(second, false), (duplicate, false), (first, true)] {
-        let source = types.clone();
-        let substituted = substitute_type(
-            &source,
+        let substituted = substitute_fresh(
+            &types,
             t,
-            &mut types,
             Substitution {
                 binder: Some(GenericBinder::Body(scope)),
                 arguments: &[GenericArgument::Type(actual)],
@@ -1060,10 +1057,7 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
             },
         )
         .unwrap();
-        assert_eq!(
-            semantic_equal(&types, t, &types, substituted).unwrap(),
-            !replaced
-        );
+        assert_eq!(semantic_equal(&types, t, substituted).unwrap(), !replaced);
         assert_eq!(
             types.get(substituted).unwrap().kind == TypeKind::Primitive(Primitive::U32),
             replaced
@@ -1073,12 +1067,9 @@ fn identical_local_ordinals_in_two_items_are_not_equal_or_interchangeable() {
 
 #[test]
 fn a_callable_cycle_cannot_escape_detection_by_increasing_binder_depth() {
-    let types = TypeStore::from_graph(1, |ids| vec![function(ids[0], vec![])]);
-    let root = types.id(0).unwrap();
-    assert_eq!(
-        import_type(&types, root, &mut TypeStore::default()),
-        Err(GraphError::StructuralCycle(root))
-    );
+    let types = TypeInterner::new(None);
+    let root = types.intern_graph(1, |ids| vec![function(ids[0], vec![])])[0];
+    assert_eq!(types.validate(root), Err(GraphError::StructuralCycle(root)));
     assert!(!generic_references_valid(
         &types,
         root,
@@ -1088,15 +1079,15 @@ fn a_callable_cycle_cannot_escape_detection_by_increasing_binder_depth() {
 
 #[test]
 fn normalization_keeps_enclosing_bounds_for_a_shared_nested_callable() {
-    let mut types = TypeStore::default();
-    let captured = types.push(Type {
+    let types = TypeInterner::new(None);
+    let captured = types.intern(Type {
         kind: TypeKind::Parameter(TypeParameterRef::Bound {
             depth: 1,
             parameter: TypeParamId(0),
         }),
         ..scalar()
     });
-    let inner = types.push(function(captured, vec![]));
+    let inner = types.intern(function(captured, vec![]));
     let outer = |bounds| {
         function(
             inner,
@@ -1106,19 +1097,17 @@ fn normalization_keeps_enclosing_bounds_for_a_shared_nested_callable() {
             }],
         )
     };
-    let sendable = types.push(outer(vec![Bound::Sendable].into()));
-    let unconstrained = types.push(outer(vec![].into()));
-    let root = types.push(Type {
+    let sendable = types.intern(outer(vec![Bound::Sendable].into()));
+    let unconstrained = types.intern(outer(vec![].into()));
+    let root = types.intern(Type {
         kind: TypeKind::Tuple(vec![sendable, unconstrained].into()),
         ..scalar()
     });
-    let root = normalize_type_properties(
-        &mut types,
-        root,
-        &GenericDeclarations::default(),
-        &mut |_| Ok::<_, QueryError>(None),
-    )
-    .unwrap();
+    let root =
+        normalize_type_properties(&types, root, &GenericDeclarations::default(), &mut |_| {
+            Ok::<_, QueryError>(None)
+        })
+        .unwrap();
     let TypeKind::Tuple(parts) = &types.get(root).unwrap().kind else {
         panic!()
     };
@@ -1136,77 +1125,57 @@ fn normalization_keeps_enclosing_bounds_for_a_shared_nested_callable() {
 }
 
 #[test]
-fn extending_a_working_store_preserves_the_published_snapshot() {
-    let mut working = TypeStore::default();
-    let child = working.push(scalar());
-    working.push(Type {
-        kind: TypeKind::Tuple(vec![child].into()),
-        ..scalar()
-    });
-    let published = working.clone();
-    let before = format!("{published:?}");
-    let copied_before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
-    for _ in 0..32 {
-        working.push(Type {
-            kind: TypeKind::Box(child),
-            ..scalar()
-        });
-    }
-    assert_eq!(format!("{published:?}"), before);
-    assert_eq!(published.len(), 2);
-    assert_eq!(
-        hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - copied_before,
-        2
-    );
-    assert_eq!(working.get(child), published.get(child));
-}
-
-#[test]
 fn semantic_equality_visits_a_wide_graph_linearly() {
     for count in [32, 128, 512] {
-        let mut left = TypeStore::default();
+        let left = TypeInterner::new(None);
         let parts = (0..count)
             .map(|i| {
-                left.push(Type {
+                left.intern(Type {
                     kind: TypeKind::Named {
-                        definition: path(&format!("N{i}")),
+                        definition: DefId::intern(&path(&format!("N{i}"))),
                         arguments: vec![].into(),
                     },
                     ..scalar()
                 })
             })
             .collect();
-        let root = left.push(Type {
+        let root = left.intern(Type {
             kind: TypeKind::Tuple(parts),
             ..scalar()
         });
-        let mut right = TypeStore::default();
-        let other = import_type(&left, root, &mut right).unwrap();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows);
-        assert!(semantic_equal(&left, root, &right, other).unwrap());
-        let work = hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows) - before;
+        // Rows sharing their parts compare by normal form: each row is
+        // normalized once, and a repeated comparison normalizes nothing.
+        let before = left.stats().sem_computed;
+        assert!(semantic_equal(&left, root, root).unwrap());
+        let other = left.intern(Type {
+            kind: TypeKind::Box(root),
+            ..scalar()
+        });
+        assert!(!semantic_equal(&left, root, other).unwrap());
+        let work = left.stats().sem_computed - before;
         assert!(
-            work <= 10 * (count + 1) as u64,
-            "{count} components inspect {work} rows"
+            work <= (count + 2) as u64,
+            "{count} components normalize {work} rows"
         );
+        let before = left.stats().sem_computed;
+        assert!(!semantic_equal(&left, root, other).unwrap());
+        assert_eq!(left.stats().sem_computed, before);
     }
 }
 
 #[test]
 fn graph_transport_in_place_preserves_external_transport_and_snapshot_rows() {
-    let mut store = TypeStore::default();
-    let parameter = store.push(Type {
+    let store = TypeInterner::new(None);
+    let parameter = store.intern(Type {
         kind: TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         ..scalar()
     });
-    let nested = store.push(function(parameter, vec![]));
-    let root = store.push(Type {
+    let nested = store.intern(function(parameter, vec![]));
+    let root = store.intern(Type {
         kind: TypeKind::Tuple(vec![parameter, nested, parameter].into()),
         ..scalar()
     });
-    let actual = store.push(scalar());
-    let snapshot = store.clone();
-    let original = format!("{snapshot:?}");
+    let actual = store.intern(scalar());
     let arguments = [GenericArgument::Type(actual)];
     let roles = NominalRoles::default();
     let substitution = Substitution {
@@ -1215,11 +1184,9 @@ fn graph_transport_in_place_preserves_external_transport_and_snapshot_rows() {
         authorities: &[AuthoritySummary::inert()],
         roles: &roles,
     };
-    let mut external = store.clone();
-    let expected = substitute_type(&snapshot, root, &mut external, substitution).unwrap();
-    let result = substitute_type_in_place(&mut store, root, substitution).unwrap();
-    assert!(semantic_equal(&external, expected, &store, result).unwrap());
-    assert_eq!(format!("{snapshot:?}"), original);
+    let expected = substitute_fresh(&store, root, substitution).unwrap();
+    let result = substitute(&store, &TypeMemo::new(), root, &substitution).unwrap();
+    assert_eq!(expected, result, "substitution is exact: one result row");
     let TypeKind::Tuple(edges) = &store.get(result).unwrap().kind else {
         panic!()
     };
@@ -1234,35 +1201,13 @@ fn graph_transport_in_place_preserves_external_transport_and_snapshot_rows() {
 }
 
 #[test]
-fn synthetic_callable_import_retains_row_order_and_shared_edges() {
-    let mut source = TypeStore::default();
-    let result = source.push(scalar());
-    let row = function(result, vec![]);
-    let before = format!("{source:?}");
-    let copied = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
-    let mut actual = TypeStore::default();
-    let imported = import_type_row(&source, &row, &mut actual).unwrap();
-    assert_eq!(
-        hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows),
-        copied
-    );
-    assert_eq!(format!("{source:?}"), before);
-    let mut legacy_source = source.clone();
-    let root = legacy_source.push(row);
-    let mut expected = TypeStore::default();
-    let legacy = import_type(&legacy_source, root, &mut expected).unwrap();
-    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-    assert!(semantic_equal(&actual, imported, &expected, legacy).unwrap());
-}
-
-#[test]
 fn origin_visiting_retains_rewriter_order_depth_and_cycle_policy() {
-    let mut source = TypeStore::default();
+    let source = TypeInterner::new(None);
     let origin = Origin {
         root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
         fields: vec![].into(),
     };
-    let leaf = source.push(Type {
+    let leaf = source.intern(Type {
         brand: Brand {
             alternatives: vec![origin.clone()].into(),
         },
@@ -1272,13 +1217,13 @@ fn origin_visiting_retains_rewriter_order_depth_and_cycle_policy() {
         },
         ..scalar()
     });
-    let callable = source.push(function(leaf, vec![]));
-    let root = source.push(Type {
+    let callable = source.intern(function(leaf, vec![]));
+    let root = source.intern(Type {
         kind: TypeKind::Tuple(vec![leaf, callable, leaf].into()),
         ..scalar()
     });
     let mut expected = vec![];
-    map_type_origins(&mut source.clone(), root, |origin, depth| {
+    map_type_origins(&source.clone(), root, |origin, depth| {
         expected.push((origin.clone(), depth));
         Ok(origin.clone())
     })
@@ -1294,55 +1239,19 @@ fn origin_visiting_retains_rewriter_order_depth_and_cycle_policy() {
         actual.iter().map(|(_, depth)| *depth).collect::<Vec<_>>(),
         vec![0, 0, 1, 1]
     );
-    let cycle = TypeStore::from_graph(1, |ids| {
+    let root = source.intern_graph(1, |ids| {
         vec![Type {
             kind: TypeKind::Box(ids[0]),
             ..scalar()
         }]
-    });
-    let root = cycle.id(0).unwrap();
+    })[0];
     assert_eq!(
-        visit_type_origins(&cycle, root, |_, _| Ok(())),
+        visit_type_origins(&source, root, |_, _| Ok(())),
         Err(GraphError::StructuralCycle(root))
     );
 }
 
-#[test]
-fn scratch_marks_keep_closed_prefixes_and_never_reuse_row_identity() {
-    let mut store = TypeStore::default();
-    let leaf = store.push(scalar());
-    let root = store.push(Type {
-        kind: TypeKind::Box(leaf),
-        ..scalar()
-    });
-    let snapshot = store.clone();
-    let mark = store.mark();
-    let first = store.push(Type {
-        kind: TypeKind::Tuple(vec![root].into()),
-        ..scalar()
-    });
-    store.truncate_to(mark);
-    assert_eq!(store, snapshot);
-    let copied = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
-    let second = store.push(scalar());
-    assert_eq!(second.index(), first.index());
-    assert_ne!(second, first);
-    assert_eq!(
-        hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows),
-        copied
-    );
-    store.truncate_to(mark);
-    assert_eq!(store.get(root), snapshot.get(root));
-    assert_eq!(store.len(), 2);
-    let mut other = TypeStore::default();
-    other.push(scalar());
-    other.push(scalar());
-    assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| other.truncate_to(mark))).is_err()
-    );
-}
-
-fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
+fn plain_record(types: &TypeInterner) -> (hirsel_syntax::DefPath, SignatureRef) {
     let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
         package: hirsel_syntax::PackageId {
             name: "fixture".into(),
@@ -1351,9 +1260,8 @@ fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
         modules: vec![],
         name: "Point".into(),
     });
-    let mut types = TypeStore::default();
-    let x = types.push(scalar());
-    let representation = types.push(Type {
+    let x = types.intern(scalar());
+    let representation = types.intern(Type {
         kind: TypeKind::Record(
             vec![Field {
                 name: "x".into(),
@@ -1365,8 +1273,7 @@ fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
         ..scalar()
     });
     let signature = Signature {
-        definition: path.clone(),
-        types,
+        definition: DefId::intern(&path),
         metadata: SignatureMetadata::default(),
         fingerprint: hirsel_syntax::ContentHash::default(),
         kind: SignatureKind::Type(TypeDefinition {
@@ -1394,8 +1301,8 @@ fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
 
 #[test]
 fn state_selector_transport_preserves_nested_binders_and_field_paths() {
-    let mut store = TypeStore::default();
-    let scalar = store.push(scalar());
+    let store = TypeInterner::new(None);
+    let scalar = store.intern(scalar());
     let mut inner = function(scalar, vec![]);
     let TypeKind::Function(f) = &mut inner.kind else {
         panic!()
@@ -1418,9 +1325,9 @@ fn state_selector_transport_preserves_nested_binders_and_field_paths() {
         unretained: Default::default(),
     }]
     .into();
-    let inner = store.push(inner);
-    let outer = store.push(function(inner, vec![]));
-    let mapped = bind_parameter_scopes(&mut store, outer, &[site(NameSite::Item)]).unwrap();
+    let inner = store.intern(inner);
+    let outer = store.intern(function(inner, vec![]));
+    let mapped = bind_parameter_scopes(&store, outer, &[site(NameSite::Item)]).unwrap();
     let TypeKind::Function(outer) = &store.get(mapped).unwrap().kind else {
         panic!()
     };
@@ -1435,9 +1342,7 @@ fn state_selector_transport_preserves_nested_binders_and_field_paths() {
         inner.state_promises[0].selector.fields.to_vec(),
         vec![FieldId(2), FieldId(1)]
     );
-    let mut destination = TypeStore::default();
-    let imported = import_type(&store, mapped, &mut destination).unwrap();
-    assert!(semantic_equal(&store, mapped, &destination, imported).unwrap());
+    assert!(semantic_equal(&store, mapped, mapped).unwrap());
 }
 
 #[test]
@@ -1458,9 +1363,9 @@ fn capture_properties_keep_every_incoming_envelope_axis() {
 
 #[test]
 fn state_flags_and_selected_field_identity_change_canonical_bytes() {
-    let mut store = TypeStore::default();
-    let element = store.push(scalar());
-    let value = store.push(Type {
+    let store = TypeInterner::new(None);
+    let element = store.intern(scalar());
+    let value = store.intern(Type {
         kind: TypeKind::Record(
             vec![
                 Field {
@@ -1500,13 +1405,13 @@ fn state_flags_and_selected_field_identity_change_canonical_bytes() {
         unretained: Default::default(),
     }]
     .into();
-    let first = store.push(row.clone());
+    let first = store.intern(row.clone());
     let bytes = encoding::canonical_type_encoding(&store, first).unwrap();
     let TypeKind::Function(f) = &mut row.kind else {
         panic!()
     };
     f.state_promises[0].selector.fields = vec![FieldId(1)].into();
-    let field = store.push(row.clone());
+    let field = store.intern(row.clone());
     assert_ne!(
         bytes,
         encoding::canonical_type_encoding(&store, field).unwrap()
@@ -1516,7 +1421,7 @@ fn state_flags_and_selected_field_identity_change_canonical_bytes() {
     };
     f.state_promises[0].selector.fields = vec![FieldId(0)].into();
     f.state_promises[0].advance_only = true;
-    let flags = store.push(row);
+    let flags = store.intern(row);
     assert_ne!(
         bytes,
         encoding::canonical_type_encoding(&store, flags).unwrap()
@@ -1525,8 +1430,8 @@ fn state_flags_and_selected_field_identity_change_canonical_bytes() {
 
 #[test]
 fn written_crossing_transport_never_proves_an_unproved_actual() {
-    let mut source = TypeStore::default();
-    let parameter = source.push(Type {
+    let source = TypeInterner::new(None);
+    let parameter = source.intern(Type {
         kind: TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
         sendability_requirement: SendabilityRequirement::Sendable,
         modes: Modes {
@@ -1535,19 +1440,18 @@ fn written_crossing_transport_never_proves_an_unproved_actual() {
         },
         ..scalar()
     });
-    let root = source.push(Type {
+    let root = source.intern(Type {
         kind: TypeKind::Tuple(vec![parameter].into()),
         ..scalar()
     });
-    let mut target = TypeStore::default();
-    let actual = target.push(Type {
+    let target = std::sync::Arc::clone(&source);
+    let actual = target.intern(Type {
         kind: TypeKind::Primitive(Primitive::Bytes),
         ..scalar()
     });
-    let substituted = substitute_type(
-        &source,
+    let substituted = substitute_fresh(
+        &target,
         root,
-        &mut target,
         Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles: &NominalRoles::default(),
@@ -1565,11 +1469,9 @@ fn written_crossing_transport_never_proves_an_unproved_actual() {
         SendabilityRequirement::Sendable
     );
     assert_eq!(part.modes.sendability, Sendability::NotSendable);
-    let mut imported = TypeStore::default();
-    let imported_root = import_type(&target, substituted, &mut imported).unwrap();
-    assert!(semantic_equal(&target, substituted, &imported, imported_root).unwrap());
+    assert!(semantic_equal(&target, substituted, substituted).unwrap());
     let normalized = normalize_type_properties(
-        &mut target,
+        &target,
         substituted,
         &GenericDeclarations::default(),
         &mut |_| Ok(None),
@@ -1590,12 +1492,12 @@ fn written_crossing_transport_never_proves_an_unproved_actual() {
 
 #[test]
 fn crossing_contracts_change_semantic_encodings_and_plain_contracts_are_redundant() {
-    let mut store = TypeStore::default();
-    let bytes = store.push(Type {
+    let store = TypeInterner::new(None);
+    let bytes = store.intern(Type {
         kind: TypeKind::Primitive(Primitive::Bytes),
         ..scalar()
     });
-    let qualified = store.push(Type {
+    let qualified = store.intern(Type {
         sendability_requirement: SendabilityRequirement::Sendable,
         ..store.get(bytes).unwrap().clone()
     });
@@ -1603,38 +1505,37 @@ fn crossing_contracts_change_semantic_encodings_and_plain_contracts_are_redundan
         encoding::canonical_type_encoding(&store, bytes).unwrap(),
         encoding::canonical_type_encoding(&store, qualified).unwrap()
     );
-    let plain = store.push(scalar());
-    let qualified_plain = store.push(Type {
+    let plain = store.intern(scalar());
+    let qualified_plain = store.intern(Type {
         sendability_requirement: SendabilityRequirement::Sendable,
         ..scalar()
     });
-    let normal = normalize_type_properties(
-        &mut store,
-        plain,
-        &GenericDeclarations::default(),
-        &mut |_| Ok(None),
-    )
-    .unwrap();
+    let normal =
+        normalize_type_properties(&store, plain, &GenericDeclarations::default(), &mut |_| {
+            Ok(None)
+        })
+        .unwrap();
     let qualified_normal = normalize_type_properties(
-        &mut store,
+        &store,
         qualified_plain,
         &GenericDeclarations::default(),
         &mut |_| Ok(None),
     )
     .unwrap();
-    assert!(semantic_equal(&store, normal, &store, qualified_normal).unwrap());
+    assert!(semantic_equal(&store, normal, qualified_normal).unwrap());
 }
 
 #[test]
 fn schema_opt_in_and_bound_change_public_fingerprints_independently() {
-    let (_, original) = plain_record();
-    let before = encoding::fingerprint(&original, &[]).unwrap();
+    let types = TypeInterner::new(None);
+    let (_, original) = plain_record(&types);
+    let before = encoding::fingerprint(&types, &original, &[]).unwrap();
     let mut opted = (*original).clone();
     let SignatureKind::Type(declaration) = &mut opted.kind else {
         unreachable!()
     };
     declaration.serializable = true;
-    assert_ne!(before, encoding::fingerprint(&opted, &[]).unwrap());
+    assert_ne!(before, encoding::fingerprint(&types, &opted, &[]).unwrap());
     let mut bounded = (*original).clone();
     let SignatureKind::Type(declaration) = &mut bounded.kind else {
         unreachable!()
@@ -1644,42 +1545,49 @@ fn schema_opt_in_and_bound_change_public_fingerprints_independently() {
         bounds: vec![Bound::Serializable].into(),
     });
     assert_ne!(
-        encoding::fingerprint(&opted, &[]).unwrap(),
-        encoding::fingerprint(&bounded, &[]).unwrap()
+        encoding::fingerprint(&types, &opted, &[]).unwrap(),
+        encoding::fingerprint(&types, &bounded, &[]).unwrap()
     );
 }
 
 #[test]
 fn private_capability_ceiling_is_not_a_public_signature_hash_input() {
-    let (_, original) = plain_record();
+    let types = TypeInterner::new(None);
+    let (_, original) = plain_record(&types);
     let mut public = (*original).clone();
     public.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
-    public.types = TypeStore::default();
     let SignatureKind::Type(declaration) = &mut public.kind else {
         unreachable!()
     };
     declaration.representation = None;
     declaration.capability = Some(CapabilityKind::Global);
-    declaration.authority =
-        AuthoritySummary::Known(vec![AuthorityTerm::Capability(public.definition.clone())].into());
-    let public_hash = encoding::fingerprint(&public, &[]).unwrap();
+    declaration.authority = AuthoritySummary::Known(
+        vec![AuthorityTerm::Capability(public.definition.path().clone())].into(),
+    );
+    let public_hash = encoding::fingerprint(&types, &public, &[]).unwrap();
     let SignatureKind::Type(declaration) = &mut public.kind else {
         unreachable!()
     };
     declaration.implementation_authority = Some(AuthoritySummary::Unknown);
-    assert_eq!(public_hash, encoding::fingerprint(&public, &[]).unwrap());
+    assert_eq!(
+        public_hash,
+        encoding::fingerprint(&types, &public, &[]).unwrap()
+    );
     public.metadata.visibility = hirsel_syntax::Visibility::Private;
-    let private_hash = encoding::fingerprint(&public, &[]).unwrap();
+    let private_hash = encoding::fingerprint(&types, &public, &[]).unwrap();
     let SignatureKind::Type(declaration) = &mut public.kind else {
         unreachable!()
     };
     declaration.implementation_authority = Some(AuthoritySummary::inert());
-    assert_ne!(private_hash, encoding::fingerprint(&public, &[]).unwrap());
+    assert_ne!(
+        private_hash,
+        encoding::fingerprint(&types, &public, &[]).unwrap()
+    );
 }
 
 #[test]
 fn cleanup_bound_instantiation_retains_exact_scopes_and_nested_binders() {
-    let mut types = TypeStore::default();
+    let types = TypeInterner::new(None);
     let owner = site(NameSite::Item);
     let sibling = site(NameSite::Statement(StmtId(10)));
     let bounded = GenericParameter::Type {
@@ -1710,18 +1618,18 @@ fn cleanup_bound_instantiation_retains_exact_scopes_and_nested_binders() {
     let parts: Vec<_> = dependencies
         .iter()
         .map(|parameters| {
-            types.push(Type {
+            types.intern(Type {
                 drop_allocation: DropAllocation::DependsOn(parameters.clone().into()),
                 ..scalar()
             })
         })
         .collect();
-    let tuple = types.push(Type {
+    let tuple = types.intern(Type {
         kind: TypeKind::Tuple(parts.clone().into()),
         ..scalar()
     });
-    let root = types.push(function(tuple, vec![unbounded]));
-    let result = instantiate_cleanup_bounds(&mut types, root, &declarations).unwrap();
+    let root = types.intern(function(tuple, vec![unbounded]));
+    let result = instantiate_cleanup_bounds(&types, root, &declarations).unwrap();
     let TypeKind::Function(f) = &types.get(result).unwrap().kind else {
         panic!()
     };
@@ -1763,9 +1671,9 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
         captures: None,
         destructor_allocation: Allocation::MayAllocate,
     };
+    let types = TypeInterner::new(None);
     let mut public = Signature {
-        definition: path("Hidden"),
-        types: TypeStore::default(),
+        definition: DefId::intern(&path("Hidden")),
         kind: SignatureKind::Type(declaration(None, None)),
         metadata: SignatureMetadata {
             visibility: hirsel_syntax::Visibility::PublicOpaque,
@@ -1773,12 +1681,10 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
         },
         fingerprint: Default::default(),
     };
-    public.fingerprint = encoding::fingerprint(&public, &[]).unwrap();
-    let mut types = TypeStore::default();
-    let field = types.push(scalar());
+    public.fingerprint = encoding::fingerprint(&types, &public, &[]).unwrap();
+    let field = types.intern(scalar());
     let view = encoding::owner_view(
         &public,
-        types,
         declaration(Some(field), Some(AuthoritySummary::inert())),
     );
     assert_eq!(view.fingerprint, public.fingerprint);
@@ -1792,22 +1698,321 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
 
 #[test]
 fn caller_tracking_changes_declaration_identity_without_changing_callable_types() {
-    let mut types = TypeStore::default();
-    let result = types.push(Type::unit());
+    let types = TypeInterner::new(None);
+    let result = types.intern(Type::unit());
     let TypeKind::Function(callable) = function(result, vec![]).kind else {
         unreachable!()
     };
     let mut signature = Signature {
-        definition: path("helper"),
-        types,
+        definition: DefId::intern(&path("helper")),
         metadata: SignatureMetadata::default(),
         fingerprint: Default::default(),
         kind: SignatureKind::Function(callable),
     };
     let original = signature.clone();
-    let before = encoding::fingerprint(&signature, &[]).unwrap();
+    let before = encoding::fingerprint(&types, &signature, &[]).unwrap();
     signature.metadata.track_caller = true;
-    assert_ne!(before, encoding::fingerprint(&signature, &[]).unwrap());
+    assert_ne!(
+        before,
+        encoding::fingerprint(&types, &signature, &[]).unwrap()
+    );
     assert_eq!(original.kind, signature.kind);
-    assert_eq!(original.types, signature.types);
+}
+
+#[test]
+fn signature_types_names_each_directly_named_row_in_encoding_order() {
+    let types = TypeInterner::new(None);
+    let (_, record) = plain_record(&types);
+    let SignatureKind::Type(declaration) = &record.kind else {
+        unreachable!()
+    };
+    // The representation's field row is reached through it, not named.
+    assert_eq!(
+        encoding::signature_types(&types, &record),
+        vec![declaration.representation.unwrap()]
+    );
+    let unit = types.intern(Type::unit());
+    let scalar = types.intern(scalar());
+    let TypeKind::Function(mut callable) = function(unit, vec![]).kind else {
+        unreachable!()
+    };
+    callable.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Borrow,
+        ty: scalar,
+    }]
+    .into();
+    callable.error = Some(scalar);
+    let signature = Signature {
+        definition: DefId::intern(&path("f")),
+        metadata: SignatureMetadata::default(),
+        fingerprint: Default::default(),
+        kind: SignatureKind::Function(callable),
+    };
+    let roots = encoding::signature_types(&types, &signature);
+    assert!(
+        roots.contains(&unit) && roots.contains(&scalar),
+        "{roots:?}"
+    );
+    assert!(roots.iter().all(|id| types.contains(*id)));
+}
+
+#[test]
+fn substitution_of_root_evidence_retains_unchanged_child_arrays() {
+    fn storage(kind: &TypeKind) -> usize {
+        match kind {
+            TypeKind::Tuple(parts) => parts.storage_identity(),
+            TypeKind::Record(fields) => fields.storage_identity(),
+            TypeKind::Variant(variants) => variants.storage_identity(),
+            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
+                arguments.storage_identity()
+            }
+            TypeKind::Function(f) => f.parameters.storage_identity(),
+            _ => unreachable!(),
+        }
+    }
+    let t = TypeInterner::new(None);
+    let leaf = t.intern(scalar());
+    let mut callable = function(leaf, vec![]).kind;
+    let TypeKind::Function(f) = &mut callable else {
+        unreachable!()
+    };
+    f.parameters = vec![Parameter {
+        name: Some("value".into()),
+        label: None,
+        passing: hirsel_syntax::PassingMode::Borrow,
+        ty: leaf,
+    }]
+    .into();
+    let kinds = [
+        TypeKind::Tuple(vec![leaf; 64].into()),
+        TypeKind::Record(
+            vec![Field {
+                name: "field".into(),
+                ty: leaf,
+                growable: false,
+            }]
+            .into(),
+        ),
+        TypeKind::Variant(
+            vec![Variant {
+                name: "Case".into(),
+                fields: vec![(None, leaf)].into(),
+            }]
+            .into(),
+        ),
+        TypeKind::Named {
+            definition: DefId::intern(&path("Shell")),
+            arguments: vec![GenericArgument::Type(leaf)].into(),
+        },
+        TypeKind::Builtin {
+            kind: BuiltinType::Inline,
+            arguments: vec![
+                GenericArgument::Type(leaf),
+                GenericArgument::Size(Size::Constant(4)),
+            ]
+            .into(),
+        },
+        callable,
+    ];
+    for kind in kinds {
+        let source = t.intern(Type {
+            drop_allocation: DropAllocation::DependsOn(
+                vec![TypeParameterRef::bound(TypeParamId(0))].into(),
+            ),
+            kind,
+            ..scalar()
+        });
+        let old = t.row(source).clone();
+        let result = substitute(
+            &t,
+            &TypeMemo::new(),
+            source,
+            &Substitution {
+                binder: Some(GenericBinder::Bound(0)),
+                arguments: &[GenericArgument::Type(leaf)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_ne!(source, result, "root evidence must change");
+        assert_eq!(t.row(result).drop_allocation, DropAllocation::NoAlloc);
+        assert_eq!(t.row(result).kind, old.kind);
+        assert_eq!(t.row(source), &old, "source snapshot remains immutable");
+        assert_eq!(
+            storage(&t.row(result).kind),
+            storage(&old.kind),
+            "changing root evidence must not copy unchanged child storage"
+        );
+    }
+}
+
+#[test]
+fn closed_generic_transport_does_not_reintern_unchanged_subgraphs() {
+    let t = TypeInterner::new(None);
+    let mut root = t.intern(scalar());
+    for _ in 0..128 {
+        root = t.intern(Type::with_kind(TypeKind::Tuple(vec![root, root].into())));
+    }
+    let roles = NominalRoles {
+        result_type: Some(path("Result")),
+        ..Default::default()
+    };
+    let before = t.stats().hits;
+    for _ in 0..5 {
+        assert_eq!(
+            substitute(
+                &t,
+                &TypeMemo::new(),
+                root,
+                &Substitution {
+                    binder: Some(GenericBinder::Bound(0)),
+                    roles: &roles,
+                    ..Default::default()
+                }
+            ),
+            Ok(root)
+        );
+    }
+    assert_eq!(
+        t.stats().hits,
+        before,
+        "closed transport must not rebuild or reintern every unchanged child"
+    );
+}
+
+#[test]
+fn substitution_pruning_matches_full_transport_for_binders_roles_and_errors() {
+    let t = TypeInterner::new(None);
+    let byte = t.intern(scalar());
+    let parameter = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::bound(TypeParamId(0)),
+    )));
+    let outer = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::Bound {
+            depth: 1,
+            parameter: TypeParamId(0),
+        },
+    )));
+    let body = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::body(site(NameSite::Item), TypeParamId(0)),
+    )));
+    let mut summary = scalar();
+    summary.drop_allocation = DropAllocation::DependsOn(vec![].into());
+    summary.modes.sendability = Sendability::DependsOn(vec![].into());
+    let summary = t.intern(summary);
+    let mut authority = scalar();
+    authority.erased_captures = Some(ErasedCaptures::Known(AuthoritySummary::Known(
+        vec![AuthorityTerm::TypeParameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))]
+        .into(),
+    )));
+    let authority = t.intern(authority);
+    let sized = t.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Inline,
+        arguments: vec![
+            GenericArgument::Type(byte),
+            GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+        ]
+        .into(),
+    }));
+    let malformed = t.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Inline,
+        arguments: vec![
+            GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+            GenericArgument::Type(TypeId::DANGLING),
+        ]
+        .into(),
+    }));
+    let result = t.intern(Type::with_kind(TypeKind::Named {
+        definition: DefId::intern(&path("Result")),
+        arguments: vec![GenericArgument::Type(byte), GenericArgument::Type(summary)].into(),
+    }));
+    let mut roots = vec![
+        byte,
+        parameter,
+        outer,
+        body,
+        summary,
+        authority,
+        sized,
+        malformed,
+        result,
+        TypeId::DANGLING,
+    ];
+    for child in [
+        byte, parameter, outer, body, summary, authority, sized, result,
+    ] {
+        let callable = t.intern(function(child, vec![]));
+        roots.extend([
+            callable,
+            t.intern(Type::with_kind(TypeKind::Tuple(
+                vec![child, callable].into(),
+            ))),
+        ]);
+    }
+    roots.push(t.intern(Type::with_kind(TypeKind::Error)));
+    roots.push(t.intern_graph(1, |ids| vec![Type::with_kind(TypeKind::Box(ids[0]))])[0]);
+    for root in roots {
+        for roles in [
+            NominalRoles::default(),
+            NominalRoles {
+                result_type: Some(path("Result")),
+                ..Default::default()
+            },
+        ] {
+            for binder in [
+                GenericBinder::Bound(0),
+                GenericBinder::Bound(1),
+                GenericBinder::Body(site(NameSite::Item)),
+            ] {
+                for arguments in [
+                    vec![],
+                    vec![GenericArgument::Type(byte)],
+                    vec![GenericArgument::Size(Size::Constant(3))],
+                ] {
+                    let s = Substitution {
+                        binder: Some(binder),
+                        arguments: &arguments,
+                        authorities: &[AuthoritySummary::inert()],
+                        roles: &roles,
+                    };
+                    let pruned = substitute(&t, &TypeMemo::new(), root, &s);
+                    let original = crate::parameters::with_full_rewrites(|| {
+                        substitute(&t, &TypeMemo::new(), root, &s)
+                    });
+                    assert_eq!(
+                        pruned, original,
+                        "substitute {root:?} {binder:?} {arguments:?}"
+                    );
+                    let pruned = crate::graph::expand(&t, root, &arguments, &roles);
+                    let original = crate::parameters::with_full_rewrites(|| {
+                        crate::graph::expand(&t, root, &arguments, &roles)
+                    });
+                    assert_eq!(pruned, original, "expand {root:?} {arguments:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn signature_dependencies_clone_only_compact_identity_and_hash() {
+    // A dependency owns no path buffers; the session owns the interned path.
+    assert_eq!(std::mem::size_of::<SignatureDependency>(), 36);
+    let dependencies: Vec<_> = (0u32..128)
+        .map(|i| SignatureDependency {
+            definition: DefId::intern(&path(&format!("{i}-{}", "long".repeat(1024)))),
+            fingerprint: ContentHash::of_bytes(&i.to_le_bytes()),
+        })
+        .collect();
+    for _ in 0..16 {
+        let cloned = dependencies.clone();
+        assert_eq!(cloned, dependencies);
+        for (a, b) in cloned.iter().zip(&dependencies) {
+            assert!(std::ptr::eq(a.definition.path(), b.definition.path()));
+        }
+    }
 }

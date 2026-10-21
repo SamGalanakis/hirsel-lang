@@ -48,7 +48,7 @@ pub(super) struct Provenance {
     pub binding: Option<usize>,
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     pub(super) fn span_of(&self, expression: ExprId) -> Span {
         self.tree.expressions[expression.0 as usize].origin.span
     }
@@ -266,11 +266,11 @@ impl Checker<'_> {
             provided: provenance.facts,
             root: provenance
                 .root
-                .map(|root| root_key(&self.own.definition, ("locality", root))),
+                .map(|root| root_key(self.own.definition.path(), ("locality", root))),
             ..Explanation::default()
         };
         if let (Some(cause), Some(index)) = (explanation.cause().cloned(), provenance.binding) {
-            let shared = self.properties[self.body.bindings[index].ty.index()].shared;
+            let shared = self.properties[self.body.bindings[index].ty].shared;
             let x = cause.names.first().cloned().unwrap_or_default();
             let (repairs, cautions) = locality_repairs(cause.kind, required.kind, &x, shared);
             explanation.repairs = repairs;
@@ -321,10 +321,9 @@ impl Checker<'_> {
         let content = value.content.summary();
         let mut pending: Pending = Explanation {
             required: Some(Fact::new(Requirement::ResultNoTemporary, result, &[])),
-            root: content
-                .scopes()
-                .next()
-                .map(|(_, scope, _)| root_key(&self.own.definition, ("locality", (2u8, scope)))),
+            root: content.scopes().next().map(|(_, scope, _)| {
+                root_key(self.own.definition.path(), ("locality", (2u8, scope)))
+            }),
             ..Explanation::default()
         }
         .into();
@@ -369,7 +368,7 @@ impl Checker<'_> {
         let (name, _) = self.binding_site(index);
         let mut pending: Pending = Explanation {
             required: Some(required),
-            root: Some(root_key(&self.own.definition, ("moved", index))),
+            root: Some(root_key(self.own.definition.path(), ("moved", index))),
             provided: vec![Fact::new(
                 Cause::Uninitialised,
                 self.span_of(read),
@@ -455,7 +454,7 @@ impl Checker<'_> {
             .any(|(_, p)| p.moved.is_some() || p.installed.is_some())
     }
     /// Recover trace sites for this graph's explanations, then render them.
-    pub(super) fn explain(&mut self, initial: State, live: &[BTreeSet<Holder>]) {
+    pub(super) fn explain(&mut self, initial: State, live: &LiveSets) {
         if self.explanations.is_empty() {
             return;
         }
@@ -563,7 +562,7 @@ impl Checker<'_> {
     }
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// R6: a `copy` passed to a borrowed parameter whose result keeps nothing
     /// is redundant when its binding is never used again: the borrow reads the
     /// same value, and nothing later observes the copy's sharing. Reported only
@@ -623,7 +622,7 @@ impl Checker<'_> {
         self.diagnostics.push(diagnostic);
     }
 }
-impl Checker<'_> {
+impl Checker<'_, '_> {
     /// The expressions naming `binding`, when no node reachable from the
     /// current one names it and no closure captures it: `use` is its last use.
     pub(super) fn unused_after(&self, binding: usize, use_: ExprId) -> Option<BTreeSet<ExprId>> {
@@ -718,7 +717,7 @@ fn reads_writes(op: &Op) -> (Vec<ExprId>, Vec<ExprId>) {
         _ => (vec![], vec![]),
     }
 }
-fn within_shallow(checker: &Checker<'_>, e: ExprId, names: &BTreeSet<ExprId>) -> bool {
+fn within_shallow(checker: &Checker<'_, '_>, e: ExprId, names: &BTreeSet<ExprId>) -> bool {
     let mut current = e;
     for _ in 0..8 {
         match checker.tree.expressions[current.0 as usize].kind {

@@ -91,6 +91,10 @@ impl QueryEngine {
                     }),
                 }
             }
+            // Exports include executable classification, annotations and source
+            // locations even when the reached definition came from an image.
+            // Missing indexed syntax does not make an imaged body a registry op.
+            self.materialize(path)?;
             let Ok(items) = self.definition_items(path) else {
                 continue;
             };
@@ -205,6 +209,7 @@ impl QueryEngine {
             })
             .collect();
         Ok(ExportInput {
+            types: self.types().clone(),
             header: Header {
                 format: hirsel_proof_export::FORMAT.into(),
                 tir_version: hirsel_tir::TIR_VERSION,
@@ -221,7 +226,7 @@ impl QueryEngine {
         })
     }
 
-    /// `hirsel.tir.export.v6` text of the entry's closure.
+    /// `hirsel.tir.export.v7` text of the entry's closure.
     pub fn export_tir(&mut self, entry: &DefPath) -> Result<String, QueryError> {
         Ok(hirsel_proof_export::export(
             &self.proof_export_input(entry)?,
@@ -231,6 +236,6 @@ impl QueryEngine {
     /// Import an export made by this compiler: refuses unless every digest,
     /// table and V validation recomputes (PS-10).
     pub fn import_tir(&self, text: &str) -> Result<Export, ImportError> {
-        hirsel_proof_export::import(text, &self.proof_environment())
+        hirsel_proof_export::import(text, &self.proof_environment(), self.types())
     }
 }

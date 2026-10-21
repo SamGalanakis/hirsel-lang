@@ -578,8 +578,26 @@ pub fn main(u: Unsafe) -> Result[(), ()] {{
 "#
             );
             let fixture = fixture(&format!("refuse-{threads}"), &main);
+            let mut loaded = load_program(&fixture.manifest).unwrap();
+            loaded.check_for_execution().unwrap();
+            let input = loaded.engine.export_native_input().unwrap();
+            let validated = loaded.engine.import_native_input(input).unwrap();
             for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-                let error = fixture.build(backend).unwrap_err();
+                let mut options =
+                    native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+                options.objects = Some(native::UnitObjects {
+                    store: std::sync::Arc::new(hirsel_lir::objects::NoObjects),
+                    backend,
+                    opt: native::OptLevel::None,
+                    debug: false,
+                    fuel: false,
+                    jobs: hirsel_intern::jobs::Jobs::ONE,
+                    byte_budget: None,
+                });
+                let error = native::build(&validated, &options)
+                    .err()
+                    .expect("callback refusal")
+                    .to_string();
                 assert!(error.contains("PROG-4"), "{error}");
                 assert!(error.contains("sneak"), "{error}");
                 assert!(error.contains("homelib_tid"), "{error}");

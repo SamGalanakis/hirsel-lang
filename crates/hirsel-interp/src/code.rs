@@ -10,7 +10,7 @@ use crate::Value;
 use hirsel_span::Span;
 use hirsel_syntax::{BinaryOp, UnaryOp};
 use hirsel_tir::*;
-use hirsel_types::{Multiplicity, TypeStore, UseKind};
+use hirsel_types::{Multiplicity, TypeInterner, UseKind};
 
 /// A whole local read as an operand.
 #[derive(Clone, Copy)]
@@ -100,8 +100,6 @@ pub(crate) struct Target {
     pub path: hirsel_syntax::DefPath,
     /// Its closed generic arguments.
     pub actuals: hirsel_types::Actuals,
-    /// The call's type store, when it is not the caller's.
-    pub types: Option<std::sync::Arc<TypeStore>>,
     /// The self-tail site the call restarts, when it calls its own definition.
     pub tail: Option<TailSite>,
     pub forget: bool,
@@ -131,7 +129,7 @@ impl Code {
         &self.ops[self.starts[block.0 as usize] as usize + instruction]
     }
 
-    pub fn new(body: &Body, types: &TypeStore) -> Self {
+    pub fn new(body: &Body, types: &TypeInterner) -> Self {
         let lower = Lowering { body, types };
         let mut starts = Vec::with_capacity(body.blocks.len());
         let mut ops = Vec::new();
@@ -180,7 +178,7 @@ impl Code {
 
 struct Lowering<'a> {
     body: &'a Body,
-    types: &'a TypeStore,
+    types: &'a TypeInterner,
 }
 
 impl Lowering<'_> {
@@ -324,12 +322,12 @@ impl Lowering<'_> {
 #[derive(Default)]
 pub(crate) struct Codes {
     /// Each definition's bodies, by body ordinal.
-    ids: std::collections::BTreeMap<hirsel_syntax::DefPath, Vec<Option<u32>>>,
+    ids: hirsel_syntax::DefMap<Vec<Option<u32>>>,
     codes: Vec<Code>,
 }
 
 impl Codes {
-    pub fn id(&mut self, definition: &Definition, body: BodyId) -> u32 {
+    pub fn id(&mut self, types: &TypeInterner, definition: &Definition, body: BodyId) -> u32 {
         let index = body.0 as usize;
         if let Some(&Some(id)) = self
             .ids
@@ -339,9 +337,8 @@ impl Codes {
             return id;
         }
         let id = self.codes.len() as u32;
-        self.codes
-            .push(Code::new(&definition.bodies[index], &definition.types));
-        let ids = self.ids.entry(definition.path.clone()).or_default();
+        self.codes.push(Code::new(&definition.bodies[index], types));
+        let ids = self.ids.entry(definition.path).or_default();
         if ids.len() <= index {
             ids.resize(definition.bodies.len().max(index + 1), None);
         }

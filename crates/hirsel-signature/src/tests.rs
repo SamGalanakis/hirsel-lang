@@ -1,7 +1,40 @@
 use super::*;
 use hirsel_intern::Symbol;
 use hirsel_run_schema::hex;
-use hirsel_types::encoding::{EncodingError, canonical_encoding};
+use hirsel_types::encoding::{EncodingError, canonical_encoding as encode};
+/// The session interner and structural memo these tests share.
+fn session() -> &'static TypeInterner {
+    static SESSION: std::sync::OnceLock<std::sync::Arc<TypeInterner>> = std::sync::OnceLock::new();
+    SESSION.get_or_init(|| TypeInterner::new(None))
+}
+fn memo() -> &'static TypeMemo {
+    static MEMO: std::sync::OnceLock<TypeMemo> = std::sync::OnceLock::new();
+    MEMO.get_or_init(TypeMemo::new)
+}
+/// Every row a signature's roots reach, in first-encounter order.
+fn rows(s: &Signature) -> Vec<(TypeId, Type)> {
+    let roots: Vec<TypeId> = match &s.kind {
+        SignatureKind::Function(f) => f
+            .parameters
+            .iter()
+            .map(|p| p.ty)
+            .chain([f.result])
+            .chain(f.error)
+            .collect(),
+        SignatureKind::Type(t) => t.representation.into_iter().collect(),
+        SignatureKind::Const { ty, .. } => vec![*ty],
+    };
+    closure(session(), roots)
+        .iter()
+        .map(|t| (*t, session().row(*t).clone()))
+        .collect()
+}
+fn canonical_encoding(
+    s: &Signature,
+    deps: &[SignatureDependency],
+) -> Result<Vec<u8>, EncodingError> {
+    encode(session(), s, deps)
+}
 fn def(name: &str) -> ast::DefPath {
     ast::DefPath(ast::ItemPath {
         package: ast::PackageId {
@@ -24,8 +57,9 @@ struct Fake {
     reads: Vec<ast::DefPath>,
 }
 impl SignatureProvider for Fake {
-    fn signature(&mut self, d: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, d: DefId) -> Result<SignatureRef, QueryError> {
         (|| {
+            let d = d.path();
             self.reads.push(d.clone());
             self.signatures
                 .get(d)
@@ -171,6 +205,8 @@ impl Fixture {
     fn run(&mut self) -> Result<QueryOutput<Signature>, QueryError> {
         normalize(
             Input {
+                types: session(),
+                memo: memo(),
                 syntax: &self.syntax,
                 context: &self.context,
                 resolution: &self.resolution,
@@ -218,8 +254,7 @@ impl Fixture {
                 },
                 ..Default::default()
             },
-            definition: d.clone(),
-            types: TypeStore::default(),
+            definition: DefId::intern(&d),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -284,13 +319,13 @@ fn error(f: &mut Fixture, rule: &str, span: Span) {
     assert_eq!(ds[0].primary, span);
 }
 #[test]
-fn signatures_own_independent_type_stores_and_import_aliases() {
+fn signatures_share_session_rows_and_import_aliases() {
     let mut source = Fixture::new();
     let u = source.named("u32");
     let t = source.ty(ast::TypeExprKind::Tuple(vec![u, u]));
     source.declaration(ast::TypeBody::Alias(t), ast::TypeFlavor::Ordinary);
     let mut s = source.sig();
-    s.definition = def("Pair");
+    s.definition = DefId::intern(&def("Pair"));
     let mut f = Fixture::new();
     f.provider.signatures.insert(def("Pair"), s.clone());
     f.metadata.definitions.insert(
@@ -304,26 +339,16 @@ fn signatures_own_independent_type_stores_and_import_aliases() {
     f.param("padding", junk, PassingMode::Take);
     let pair = f.named("Pair");
     f.result(pair);
-    let mut a = f.sig();
+    let a = f.sig();
     let b = f.sig();
     assert_eq!(canonical_encoding(&a, &[]), canonical_encoding(&b, &[]));
-    assert_ne!(typedef(&s).representation.unwrap(), function(&a).result);
-    let mut changed = a.types.iter().next().unwrap().1.clone();
-    changed.kind = TypeKind::Primitive(Primitive::Bool);
-    a.types.push(changed);
-    assert_ne!(a.types, b.types);
-    assert_eq!(
-        s.types.iter().next().unwrap().1.kind,
-        TypeKind::Primitive(Primitive::U32)
-    );
-    let TypeKind::Tuple(ts) = &b.types.get(function(&b).result).unwrap().kind else {
+    // One session row per content: the alias's tuple is the result's tuple.
+    assert_eq!(typedef(&s).representation.unwrap(), function(&a).result);
+    let TypeKind::Tuple(ts) = &session().row(function(&b).result).kind else {
         panic!()
     };
-    for t in ts {
-        assert_eq!(
-            b.types.get(*t).unwrap().kind,
-            TypeKind::Primitive(Primitive::U32)
-        );
+    for t in ts.iter() {
+        assert_eq!(session().row(*t).kind, TypeKind::Primitive(Primitive::U32));
     }
 }
 
@@ -514,69 +539,6 @@ fn foreign_rejects_a_bytes_result_and_accepts_numerics_and_pointers() {
     f.sig();
 }
 
-fn reorder(mut s: Signature) -> Signature {
-    let len = s.types.len();
-    let mut rows: Vec<_> = s.types.iter().map(|(_, t)| t.clone()).collect();
-    let rebuilt = TypeStore::from_graph(len, |ids| {
-        let remap = |t: &mut TypeId| *t = ids[len - 1 - t.index()];
-        fn args(a: &mut [GenericArgument], f: &impl Fn(&mut TypeId)) {
-            for a in a {
-                if let GenericArgument::Type(t) = a {
-                    f(t);
-                }
-            }
-        }
-        fn fun(g: &mut FunctionType, f: &impl Fn(&mut TypeId)) {
-            for p in &mut g.parameters {
-                f(&mut p.ty);
-            }
-            f(&mut g.result);
-            if let Some(t) = &mut g.error {
-                f(t);
-            }
-        }
-        for t in &mut rows {
-            match &mut t.kind {
-                TypeKind::Tuple(ts) => {
-                    for t in ts {
-                        remap(t);
-                    }
-                }
-                TypeKind::Record(fs) => {
-                    for f in fs {
-                        remap(&mut f.ty);
-                    }
-                }
-                TypeKind::Variant(vs) => {
-                    for v in vs {
-                        for (_, t) in &mut v.fields {
-                            remap(t);
-                        }
-                    }
-                }
-                TypeKind::Box(t) => remap(t),
-                TypeKind::Function(f) => fun(f, &remap),
-                TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                    args(arguments, &remap)
-                }
-                _ => {}
-            }
-        }
-        match &mut s.kind {
-            SignatureKind::Function(f) => fun(f, &remap),
-            SignatureKind::Type(t) => {
-                if let Some(r) = &mut t.representation {
-                    remap(r);
-                }
-            }
-            SignatureKind::Const { ty: t, .. } => remap(t),
-        }
-        rows.reverse();
-        rows
-    });
-    s.types = rebuilt;
-    s
-}
 #[test]
 fn hash_traverses_roots_instead_of_semantic_arena_order() {
     let mut f = Fixture::new();
@@ -586,11 +548,30 @@ fn hash_traverses_roots_instead_of_semantic_arena_order() {
     let t = f.ty(ast::TypeExprKind::Tuple(vec![a, b]));
     f.result(t);
     let a = f.sig();
-    let b = reorder(a.clone());
-    assert_ne!(a.types, b.types);
+    // A second interner assigns other ids (and scrambles them differently
+    // after unrelated rows); the encoding traverses roots, not ids.
+    let other = TypeInterner::new(None);
+    other.intern(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
+    let other_memo = TypeMemo::new();
+    let b = normalize(
+        Input {
+            types: &other,
+            memo: &other_memo,
+            syntax: &f.syntax,
+            context: &f.context,
+            resolution: &f.resolution,
+            metadata: &f.metadata,
+            declaration_sites: &f.metadata.declarations,
+            stage: None,
+        },
+        &mut f.provider,
+    )
+    .unwrap()
+    .value;
+    assert_ne!(function(&a).result, function(&b).result);
     assert_eq!(
         canonical_encoding(&a, &[]).unwrap(),
-        canonical_encoding(&b, &[]).unwrap()
+        encode(&other, &b, &[]).unwrap()
     );
 }
 #[test]
@@ -719,7 +700,7 @@ fn contract_dependencies_are_resolved_and_hashed() {
     });
     let a = f.run().unwrap();
     assert_eq!(a.dependencies.len(), 1);
-    assert_eq!(a.dependencies[0].definition, d);
+    assert_eq!(*a.dependencies[0].definition.path(), d);
     let hash = function(&a.value).contracts[0].code_hash;
     f.provider.signatures.get_mut(&d).unwrap().fingerprint =
         ast::ContentHash::of_bytes(b"different");
@@ -781,49 +762,47 @@ fn hash_sorts_and_deduplicates_sets_and_dependencies() {
         ast::GenericKind::Type(vec![Bound::Copyable, Bound::Data, Bound::Data]);
     assert_eq!(a.fingerprint, f.sig().fingerprint);
     let a_ = SignatureDependency {
-        definition: def("a"),
+        definition: hirsel_syntax::DefId::intern(&def("a")),
         fingerprint: ast::ContentHash::of_bytes(b"a"),
     };
     let b = SignatureDependency {
-        definition: def("b"),
+        definition: hirsel_syntax::DefId::intern(&def("b")),
         fingerprint: ast::ContentHash::of_bytes(b"b"),
     };
     assert_eq!(
-        fingerprint(&a, &[a_.clone(), b.clone()]).unwrap(),
-        fingerprint(&a, &[b, a_.clone(), a_]).unwrap()
+        fingerprint(session(), &a, &[a_.clone(), b.clone()]).unwrap(),
+        fingerprint(session(), &a, &[b, a_.clone(), a_]).unwrap()
     );
 }
 #[test]
 fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
     let mut s = Fixture::new().sig();
-    let absent = s.types.id(0).unwrap();
-    s.types = TypeStore::default();
+    let absent = TypeId::DANGLING;
     s.kind = SignatureKind::Const {
         ty: absent,
         generics: Default::default(),
     };
     assert_eq!(
-        fingerprint(&s, &[]),
+        fingerprint(session(), &s, &[]),
         Err(EncodingError::MissingType(absent))
     );
     let mut s = Fixture::new().sig();
-    let template = s.types.iter().next().unwrap().1.clone();
-    s.types = TypeStore::from_graph(1, |ids| {
+    let template = rows(&s)[0].1.clone();
+    let cycle = session().intern_graph(1, |ids| {
         vec![Type {
             kind: TypeKind::Box(ids[0]),
             ..template.clone()
         }]
-    });
-    let cycle = s.types.id(0).unwrap();
+    })[0];
     s.kind = SignatureKind::Const {
         ty: cycle,
         generics: Default::default(),
     };
     assert_eq!(
-        fingerprint(&s, &[]),
+        fingerprint(session(), &s, &[]),
         Err(EncodingError::StructuralCycle(cycle))
     );
-    let recovery = s.types.push(Type {
+    let recovery = session().intern(Type {
         kind: TypeKind::Error,
         ..template
     });
@@ -832,31 +811,31 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
         generics: Default::default(),
     };
     assert_eq!(
-        fingerprint(&s, &[]),
+        fingerprint(session(), &s, &[]),
         Err(EncodingError::RecoveryType(recovery))
     );
     let s = Fixture::new().sig();
     let d = SignatureDependency {
-        definition: def("a"),
+        definition: hirsel_syntax::DefId::intern(&def("a")),
         fingerprint: ast::ContentHash::of_bytes(b"a"),
     };
     let mut e = d.clone();
     e.fingerprint = ast::ContentHash::of_bytes(b"b");
     assert_eq!(
-        fingerprint(&s, &[d, e]),
+        fingerprint(session(), &s, &[d, e]),
         Err(EncodingError::ConflictingDependency(def("a")))
     );
 }
 #[test]
 fn unreachable_nodes_and_stored_fingerprint_do_not_affect_hash() {
     let mut s = Fixture::new().sig();
-    let h = fingerprint(&s, &[]).unwrap();
-    s.types.push(Type {
+    let h = fingerprint(session(), &s, &[]).unwrap();
+    session().intern(Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
         ..Type::with_kind(TypeKind::Error)
     });
     s.fingerprint = ast::ContentHash::of_bytes(b"discard");
-    assert_eq!(h, fingerprint(&s, &[]).unwrap());
+    assert_eq!(h, fingerprint(session(), &s, &[]).unwrap());
 }
 #[test]
 fn ordered_parameters_fields_variants_and_contracts_change_hash() {
@@ -989,7 +968,7 @@ fn hash_preserves_full_named_identity_and_never_uses_resolution_indices() {
     let mut other = d.clone();
     other.0.package.version = "2".into();
     let mut sig = f.provider.signatures[&d].clone();
-    sig.definition = other.clone();
+    sig.definition = DefId::intern(&other);
     f.provider.signatures.insert(other.clone(), sig);
     f.metadata.definitions.insert(
         other.clone(),
@@ -1066,7 +1045,7 @@ fn hash_change(change: impl FnOnce(&mut Signature)) {
     let mut signature = Fixture::new().sig();
     let original = signature.fingerprint;
     change(&mut signature);
-    assert_ne!(original, fingerprint(&signature, &[]).unwrap());
+    assert_ne!(original, fingerprint(session(), &signature, &[]).unwrap());
 }
 macro_rules! hash_component {
     ($name:ident, $change:expr) => {
@@ -1101,9 +1080,9 @@ hash_component!(hash_changes_with_result_nominal_role, |s| s
     Some(def("Result")));
 hash_component!(hash_changes_with_drop_allocation, |s| {
     let old = function(s).result;
-    let ty = s.types.push(Type {
+    let ty = session().intern(Type {
         drop_allocation: DropAllocation::MayAllocate,
-        ..s.types.get(old).unwrap().clone()
+        ..session().row(old).clone()
     });
     if let SignatureKind::Function(f) = &mut s.kind {
         f.result = ty;
@@ -1111,11 +1090,11 @@ hash_component!(hash_changes_with_drop_allocation, |s| {
 });
 hash_component!(hash_changes_with_generic_drop_obligations, |s| {
     let old = function(s).result;
-    let ty = s.types.push(Type {
+    let ty = session().intern(Type {
         drop_allocation: DropAllocation::DependsOn(
             vec![TypeParameterRef::bound(TypeParamId(0))].into(),
         ),
-        ..s.types.get(old).unwrap().clone()
+        ..session().row(old).clone()
     });
     if let SignatureKind::Function(f) = &mut s.kind {
         f.result = ty;
@@ -1141,8 +1120,7 @@ fn hash_changes_with_growable_field_metadata() {
     }
     let changed = f.sig();
     assert_ne!(original, changed.fingerprint);
-    let TypeKind::Record(fs) = &changed
-        .types
+    let TypeKind::Record(fs) = &session()
         .get(typedef(&changed).representation.unwrap())
         .unwrap()
         .kind
@@ -1161,7 +1139,7 @@ fn hash_changes_with_destructor_allocation_promise() {
     if let SignatureKind::Type(t) = &mut signature.kind {
         t.destructor_allocation = Allocation::NoAlloc;
     }
-    assert_ne!(original, fingerprint(&signature, &[]).unwrap());
+    assert_ne!(original, fingerprint(session(), &signature, &[]).unwrap());
 }
 
 #[test]
@@ -1208,8 +1186,7 @@ fn hash_changes_with_declared_resource_authority() {
 
 fn result_drop(f: &mut Fixture) -> DropAllocation {
     let signature = f.sig();
-    signature
-        .types
+    session()
         .get(function(&signature).result)
         .unwrap()
         .drop_allocation
@@ -1280,6 +1257,8 @@ fn ordinary_opaque_self_references_keep_the_exported_plain_cleanup_proof() {
     }
     let output = normalize_owned(
         Input {
+            types: session(),
+            memo: memo(),
             syntax: &f.syntax,
             context: &f.context,
             resolution: &f.resolution,
@@ -1291,9 +1270,10 @@ fn ordinary_opaque_self_references_keep_the_exported_plain_cleanup_proof() {
     )
     .unwrap();
     let owner = output.owner.unwrap();
-    let own = owner.types.iter().find(|(_, t)| {
-        matches!(&t.kind, TypeKind::Named { definition, .. } if definition == &def("example"))
-    }).expect("the phantom pointer argument retains the self reference").1;
+    let roots: Vec<_> = owner.declaration.representation.into_iter().collect();
+    let own = closure(session(), roots).iter().map(|t| session().row(*t).clone()).find(|t| {
+        matches!(&t.kind, TypeKind::Named { definition, .. } if *definition.path() == def("example"))
+    }).expect("the phantom pointer argument retains the self reference");
     assert_eq!(own.drop_allocation, DropAllocation::NoAlloc);
 }
 
@@ -1322,8 +1302,7 @@ fn recursive_nominal_cleanup_includes_the_nonrecursive_owned_leaves() {
     let signature = f.sig();
     assert!(typedef(&signature).bounds.contains(&Bound::NoallocDrop));
     assert!(
-        signature
-            .types
+        rows(&signature)
             .iter()
             .all(|(_, t)| t.drop_allocation == DropAllocation::NoAlloc)
     );
@@ -1342,7 +1321,7 @@ fn recursive_nominal_cleanup_includes_the_nonrecursive_owned_leaves() {
     }
     let signature = f.sig();
     assert!(!typedef(&signature).bounds.contains(&Bound::NoallocDrop));
-    let recursive = signature.types.iter().find(|(_, t)| matches!(t.kind, TypeKind::Named { ref definition, .. } if definition == &def("example"))).unwrap().1;
+    let recursive = rows(&signature).into_iter().find(|(_, t)| matches!(t.kind, TypeKind::Named { ref definition, .. } if *definition.path() == def("example"))).unwrap().1;
     assert_eq!(recursive.drop_allocation, DropAllocation::MayAllocate);
 }
 
@@ -1351,14 +1330,14 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
     let mut f = Fixture::new();
     let tasks = f.dependency("GoverningTasks", Some(CapabilityKind::Global), true);
     let native = f.dependency("Sender", None, true);
-    let mut types = TypeStore::default();
-    let payload = types.push(Type {
+    let types = session();
+    let payload = types.intern(Type {
         drop_allocation: DropAllocation::DependsOn(
             vec![TypeParameterRef::bound(TypeParamId(0))].into(),
         ),
         ..Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))))
     });
-    let repr = types.push(Type {
+    let repr = types.intern(Type {
         drop_allocation: DropAllocation::DependsOn(
             vec![TypeParameterRef::bound(TypeParamId(0))].into(),
         ),
@@ -1368,7 +1347,6 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
         })
     });
     let signature = f.provider.signatures.get_mut(&native).unwrap();
-    signature.types = types;
     if let SignatureKind::Type(t) = &mut signature.kind {
         t.representation = Some(repr);
         t.generics = vec![GenericParameter::Type {
@@ -1400,7 +1378,12 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
         AuthoritySummary::Known(vec![AuthorityTerm::Capability(tasks)].into())
     );
     assert!(!typedef(&output.value).bounds.contains(&Bound::Inert));
-    assert!(output.dependencies.iter().any(|d| d.definition == native));
+    assert!(
+        output
+            .dependencies
+            .iter()
+            .any(|d| d.definition.path() == &native)
+    );
 }
 
 #[test]
@@ -1414,7 +1397,7 @@ fn native_authority_proofs_apply_only_to_the_resolved_type_occurrence() {
         version: "1".into(),
     };
     let mut signature = f.provider.signatures.remove(&local).unwrap();
-    signature.definition = native.clone();
+    signature.definition = DefId::intern(&native);
     f.provider.signatures.insert(native.clone(), signature);
     let metadata = f.metadata.definitions.remove(&local).unwrap();
     f.metadata.definitions.insert(native.clone(), metadata);
@@ -1448,8 +1431,8 @@ fn taken_resource_property_proofs_read_transitive_nominal_declarations() {
         }
         let resource = f.dependency("Resource", None, true);
         let signature = f.provider.signatures.get_mut(&resource).unwrap();
-        let representation = signature.types.push(Type::with_kind(TypeKind::Named {
-            definition: payload.clone(),
+        let representation = session().intern(Type::with_kind(TypeKind::Named {
+            definition: DefId::intern(&payload),
             arguments: vec![].into(),
         }));
         if let SignatureKind::Type(t) = &mut signature.kind {
@@ -1478,14 +1461,16 @@ fn taken_resource_property_proofs_read_transitive_nominal_declarations() {
         };
         f.param("resource", base, PassingMode::Take);
         let out = f.run().unwrap();
-        let row = out
-            .value
-            .types
+        let row = session()
             .get(function(&out.value).parameters[1].ty)
             .unwrap();
         assert_eq!(row.modes.relation, Relation::global());
         assert_eq!(row.modes.sendability, Sendability::Sendable);
-        assert!(out.dependencies.iter().any(|d| d.definition == payload));
+        assert!(
+            out.dependencies
+                .iter()
+                .any(|d| d.definition.path() == &payload)
+        );
         assert!(f.provider.reads.contains(&payload));
     }
 }
@@ -1546,8 +1531,7 @@ fn nested_authority_names_its_lexical_binder_and_shadowing_is_local() {
         }));
         f.param("action", callback, PassingMode::Borrow);
         let signature = f.sig();
-        let TypeKind::Function(callback) = &signature
-            .types
+        let TypeKind::Function(callback) = &session()
             .get(function(&signature).parameters[1].ty)
             .unwrap()
             .kind
@@ -1606,8 +1590,10 @@ fn builtin_handle_authority_follows_the_supplied_nominal_roles() {
 }
 
 impl Fixture {
-    fn held_authority(&mut self, types: TypeStore, root: TypeId) -> AuthoritySummary {
+    fn held_authority(&mut self, root: TypeId) -> AuthoritySummary {
         let input = Input {
+            types: session(),
+            memo: memo(),
             syntax: &self.syntax,
             context: &self.context,
             resolution: &self.resolution,
@@ -1619,13 +1605,14 @@ impl Fixture {
             .provider
             .signatures
             .iter()
-            .map(|(p, s)| (p.clone(), std::sync::Arc::new(s.clone())))
+            .map(|(p, s)| (DefId::intern(p), std::sync::Arc::new(s.clone())))
             .collect();
         let n = Normalizer {
             proof_failure: &std::cell::RefCell::new(None),
             input: &input,
             provider: &mut self.provider,
-            types,
+            types: session(),
+            memo: memo(),
             own_representation: None,
             generics: vec![],
             parameters: vec![],
@@ -1633,12 +1620,12 @@ impl Fixture {
             outer_parameters: vec![],
             outer_generics: vec![],
             siblings: vec![],
-            dependencies: BTreeMap::new(),
+            dependencies: DefMap::default(),
             snapshots,
             group: BTreeMap::new(),
             group_key: None,
             group_drop: BTreeMap::new(),
-            builtin_declarations: BTreeMap::new(),
+            builtin_declarations: Default::default(),
             active: BTreeSet::new(),
             aliases: BTreeSet::new(),
             public: false,
@@ -1655,20 +1642,20 @@ fn recovery_rows_cannot_prove_empty_held_authority() {
     for recovery in [false, true] {
         for nested in [false, true] {
             let mut f = Fixture::new();
-            let mut types = TypeStore::default();
+            let types = session();
             let row = Type::with_kind(if recovery {
                 TypeKind::Error
             } else {
                 TypeKind::Primitive(Primitive::U32)
             });
-            let mut root = types.push(row.clone());
+            let mut root = types.intern(row.clone());
             if nested {
                 let mut row = row;
                 row.kind = TypeKind::Box(root);
-                root = types.push(row);
+                root = types.intern(row);
             }
             assert_eq!(
-                f.held_authority(types, root),
+                f.held_authority(root),
                 if recovery {
                     AuthoritySummary::Unknown
                 } else {
@@ -1688,16 +1675,15 @@ fn typed_ambient_heap_has_empty_authority_without_erasing_arena_authority() {
             arena: arena.clone(),
             operation: def("heap"),
         });
-        let mut types = TypeStore::default();
-        let root = types.push(Type {
+        let root = session().intern(Type {
             allocation_target: heap.then_some(AllocationTarget::Heap),
             ..Type::with_kind(TypeKind::Named {
-                definition: arena.clone(),
+                definition: DefId::intern(&arena),
                 arguments: vec![].into(),
             })
         });
         assert_eq!(
-            f.held_authority(types, root),
+            f.held_authority(root),
             if heap {
                 AuthoritySummary::inert()
             } else {

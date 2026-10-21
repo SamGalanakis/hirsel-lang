@@ -38,7 +38,7 @@ fn hash(label: &str) -> ContentHash {
 
 fn layout(table: &LayoutTable, kind: LayoutKind, size: SizeSpec, align: u32) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: table.target,
@@ -341,27 +341,20 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
     t
 }
 
-fn input() -> InputIdentity {
-    InputIdentity {
-        interface_version: hirsel_lir::INTERFACE_VERSION,
-        digest: hash("fixture native input"),
-    }
-}
-
 /// A referentially valid unit using every instruction and terminator variant and
 /// every enum family the unit schema contains.
 fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     let mut u = LirUnit::<S>::new(UnitHeader {
+        source_count: 1,
+        key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Value,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
-        input: input(),
         definition: path("f"),
         implementation_revision: hash("f source"),
         instance: hash("f instance"),
         target: table.target,
-        layouts: table.digest(),
         abi: FnAbiId(0),
     });
     let reprs = [
@@ -512,13 +505,21 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         body: 0,
         block: 0,
         statement: 3,
-        site: SiteRange { start: 10, end: 24 },
+        site: SiteRange {
+            source: 0,
+            start: 10,
+            end: 24,
+        },
     }];
     t.cleanup_anchors = vec![CleanupAnchor {
         body: 0,
         cleanup: 1,
         action: 0,
-        site: SiteRange { start: 30, end: 31 },
+        site: SiteRange {
+            source: 0,
+            start: 30,
+            end: 31,
+        },
     }];
     t.loans = vec![LoanInfo {
         address: AddressId(0),
@@ -1283,15 +1284,12 @@ fn raw_artifacts_round_trip_deterministically_on_both_targets() {
 }
 
 #[test]
-fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() {
+fn receipts_artifacts_and_manifests_round_trip_and_bind_the_unit_key() {
     let raw = RawReceipt {
-        input: input(),
+        key: hirsel_lir::objects::UnitKey(hash("unit key")),
         stage: StageKind::Ready,
         lir_version: hirsel_lir::LIR_VERSION,
         unit: hash("unit"),
-        target: hash("target"),
-        layouts: hash("layouts"),
-        manifest: hash("manifest"),
         validator_version: hirsel_lir::VALIDATOR_VERSION,
     };
     assert_round_trip(&raw);
@@ -1299,11 +1297,10 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
         assert_round_trip(&stage);
     }
     let mut stale = raw.clone();
-    stale.input.interface_version -= 1;
+    stale.key = hirsel_lir::objects::UnitKey(hash("other key"));
     assert_ne!(raw.digest(), stale.digest());
 
     let artifact = ObjectArtifact {
-        input: input(),
         target: hash("target"),
         format: ObjectFormat::Elf,
         bytes: vec![0x7f, b'E', b'L', b'F'],
@@ -1333,22 +1330,30 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
             kind: 4,
             addend: -4,
         }],
-        debug: vec![DebugSource {
-            definition: path("f"),
-            implementation_revision: hash("f source"),
-        }],
         abi: hash("abi"),
-        layouts: hash("layouts"),
         reproducibility: Reproducibility {
             toolchain: "llvm 21.1.8".into(),
             options: hash("O2"),
             lir_version: hirsel_lir::LIR_VERSION,
             runtime_abi_version: hirsel_lir::RUNTIME_ABI_VERSION,
         },
+        debug: vec![hirsel_lir::debug::DebugFunction::from_source_rows(
+            "hirsel_f".into(),
+            32,
+            vec![(path("f"), 0), (path("f"), 1)],
+            4,
+            [(0, 8, 0, 4), (8, 12, 0, 4), (16, 20, 1, 9), (20, 20, 0, 1)],
+        )],
     };
+    assert!(artifact.debug[0].well_formed());
+    assert_eq!(
+        artifact.debug[0].ranges.len(),
+        2,
+        "rows of one site merge, a gap stays and an empty row is dropped"
+    );
     assert_round_trip(&artifact);
     let mut other = artifact.clone();
-    other.input.interface_version += 1;
+    other.reproducibility.lir_version += 1;
     assert_ne!(artifact.digest(), other.digest());
 
     let id = |name: &str| OperationId {
@@ -1455,7 +1460,50 @@ fn foreign_and_stale_identities_are_rejected() {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let table = fixture_table(&target);
     let unit = fixture_unit::<Rc>(&table);
+    let (_, mut layouts, mut abis) = hirsel_lir::objects::erased(&unit);
+    layouts.sort();
+    abis.sort();
+    assert_eq!(hirsel_lir::objects::references(&unit), (layouts, abis));
+
     assert_eq!(unit.check_identity(&table), Ok(()));
+
+    let mut foreign_source = unit.clone();
+    foreign_source.tables.source_anchors[0].site.source = unit.header.source_count;
+    assert!(matches!(
+        foreign_source.check_identity(&table),
+        Err(SchemaError::ForeignId {
+            kind: "source selector",
+            ..
+        })
+    ));
+    let mut reversed_source = unit.clone();
+    reversed_source.tables.cleanup_anchors[0].site = SiteRange {
+        source: 0,
+        start: 9,
+        end: 8,
+    };
+    assert_eq!(
+        reversed_source.check_identity(&table),
+        Err(SchemaError::Malformed("reversed source range"))
+    );
+    let mut gap = unit.clone();
+    gap.tables.source_anchors[0].site = SiteRange::UNMAPPED;
+    assert_eq!(gap.check_identity(&table), Ok(()));
+    let revision = hash("revision");
+    let declaration = SiteRange {
+        source: 0,
+        start: 10,
+        end: 24,
+    };
+    let generated = SiteRange {
+        source: 1,
+        ..declaration
+    };
+    assert_ne!(
+        hirsel_lir::emission::site_code(&path("f"), &revision, declaration),
+        hirsel_lir::emission::site_code(&path("f"), &revision, generated),
+        "equal offsets from different sources cannot share failure identity"
+    );
 
     let mut foreign_value = unit.clone();
     foreign_value.instructions[0] = Inst::Const {
@@ -1495,13 +1543,6 @@ fn foreign_and_stale_identities_are_rejected() {
         Err(SchemaError::ForeignId { kind: "value", .. })
     ));
 
-    let mut stale_interface = unit.clone();
-    stale_interface.header.input.interface_version = hirsel_lir::INTERFACE_VERSION - 1;
-    assert_eq!(
-        stale_interface.check_identity(&table),
-        Err(SchemaError::Stale("front-end interface version"))
-    );
-
     let mut stale_version = unit.clone();
     stale_version.header.lir_version += 1;
     assert_eq!(
@@ -1513,14 +1554,12 @@ fn foreign_and_stale_identities_are_rejected() {
     let other = fixture_table(&TargetSpec::aarch64_unknown_linux_gnu());
     assert_eq!(
         unit.check_identity(&other),
-        Err(SchemaError::Stale("layout table digest"))
+        Err(SchemaError::Stale("layout table target"))
     );
     let mut edited = table.clone();
     edited.layouts[1].align = 16;
-    assert_eq!(
-        unit.check_identity(&edited),
-        Err(SchemaError::Stale("layout table digest"))
-    );
+    // Same-target row content is checked by validation and receipt evidence.
+    assert_eq!(unit.check_identity(&edited), Ok(()));
 
     let mut torn = unit.clone();
     torn.terminators.pop();
@@ -1595,17 +1634,17 @@ mod instance_keys {
     use super::*;
     use hirsel_types::{
         Brand, GenericArgument, Modes, Origin, OriginRoot, ParamId, ParameterRef, Primitive, Reach,
-        Relation, Sendability, Size, SizeParamId, SizeParameterRef, Type, TypeKind, TypeParamId,
-        TypeParameterRef, TypeStore, Uniqueness,
+        Relation, Sendability, Size, SizeParamId, SizeParameterRef, Type, TypeInterner, TypeKind,
+        TypeParamId, TypeParameterRef, Uniqueness,
     };
 
-    fn element(store: &mut TypeStore, modes: Modes, brand: Brand) -> hirsel_types::TypeId {
-        let int = store.push(Type {
+    fn element(store: &TypeInterner, modes: Modes, brand: Brand) -> hirsel_types::TypeId {
+        let int = store.intern(Type {
             kind: TypeKind::Primitive(Primitive::I64),
             modes: modes.clone(),
             ..Type::unit()
         });
-        store.push(Type {
+        store.intern(Type {
             kind: TypeKind::Builtin {
                 kind: hirsel_types::BuiltinType::List,
                 arguments: vec![GenericArgument::Type(int)].into(),
@@ -1617,7 +1656,7 @@ mod instance_keys {
     }
 
     fn key(
-        store: &TypeStore,
+        store: &TypeInterner,
         actual: hirsel_types::TypeId,
         size: u64,
         binder: TypeParameterRef,
@@ -1644,15 +1683,15 @@ mod instance_keys {
 
     #[test]
     fn keys_erase_relation_brand_uniqueness_and_sendability_but_not_sizes_or_binders() {
-        let mut store = TypeStore::default();
+        let store = crate::support::session();
         let binder = TypeParameterRef::bound(TypeParamId(0));
-        let plain = element(&mut store, Modes::global(), Brand::default());
+        let plain = element(&store, Modes::global(), Brand::default());
         let place = Origin {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
             fields: vec![].into(),
         };
         let related = element(
-            &mut store,
+            &store,
             Modes {
                 relation: Relation::new([Reach::Place(place.clone())]),
                 ..Modes::global()
@@ -1660,14 +1699,14 @@ mod instance_keys {
             Brand::default(),
         );
         let branded = element(
-            &mut store,
+            &store,
             Modes::global(),
             Brand {
                 alternatives: vec![place].into(),
             },
         );
         let unique = element(
-            &mut store,
+            &store,
             Modes {
                 uniqueness: Uniqueness::Unique,
                 ..Modes::global()
@@ -1675,7 +1714,7 @@ mod instance_keys {
             Brand::default(),
         );
         let sendable = element(
-            &mut store,
+            &store,
             Modes {
                 sendability: Sendability::Sendable,
                 ..Modes::global()
@@ -1684,7 +1723,7 @@ mod instance_keys {
         );
         let mut requirement = store.get(plain).unwrap().clone();
         requirement.sendability_requirement = hirsel_types::SendabilityRequirement::Sendable;
-        let requirement = store.push(requirement);
+        let requirement = store.intern(requirement);
         let base = key(&store, plain, 4, binder);
         for (label, actual) in [
             ("crossing requirement", requirement),
@@ -1697,9 +1736,9 @@ mod instance_keys {
             assert_eq!(base, other, "an actual's {label} changed the key");
             assert_eq!(base.digest(), other.digest());
         }
-        // Keys from an independent store with fresh TypeIds are equal too.
-        let mut fresh = TypeStore::default();
-        let again = element(&mut fresh, Modes::global(), Brand::default());
+        // Keys from an independent interner with fresh TypeIds are equal too.
+        let fresh = TypeInterner::new(None);
+        let again = element(&fresh, Modes::global(), Brand::default());
         assert_eq!(base, key(&fresh, again, 4, binder));
 
         assert_ne!(base, key(&store, plain, 5, binder), "size actual");
@@ -1735,7 +1774,7 @@ mod instance_keys {
             ),
             "binder scope"
         );
-        let int = store.push(Type {
+        let int = store.intern(Type {
             kind: TypeKind::Primitive(Primitive::I64),
             ..Type::unit()
         });
@@ -1744,8 +1783,8 @@ mod instance_keys {
 
     #[test]
     fn keys_reject_incomplete_mismatched_and_foreign_actuals() {
-        let mut store = TypeStore::default();
-        let open = store.push(Type {
+        let store = crate::support::session();
+        let open = store.intern(Type {
             kind: TypeKind::Parameter(TypeParameterRef::body(
                 hirsel_syntax::LexicalOwner::first(&path("f")).site(hirsel_types::NameSite::Item),
                 TypeParamId(0),
@@ -1753,7 +1792,7 @@ mod instance_keys {
             ..Type::unit()
         });
         let binder = ActualBinder::Type(TypeParameterRef::bound(TypeParamId(0)));
-        let make = |store: &TypeStore, binder, actual| {
+        let make = |store: &TypeInterner, binder, actual| {
             InstanceKey::new(&path("f"), 0, &[(binder, actual)], store, None, None)
         };
         assert_eq!(
@@ -1764,26 +1803,27 @@ mod instance_keys {
             make(&store, binder, GenericArgument::Size(Size::Constant(1))).unwrap_err(),
             InstanceKeyError::KindMismatch(0)
         );
-        let mut other = TypeStore::default();
-        let foreign = other.push(Type::unit());
-        let _ = other.push(Type::unit());
-        let foreign_second = other.id(1).unwrap();
+        // A TypeId with no row in the session interner.
         assert_eq!(
-            make(&store, binder, GenericArgument::Type(foreign_second)).unwrap_err(),
+            make(
+                &store,
+                binder,
+                GenericArgument::Type(hirsel_types::TypeId::DANGLING)
+            )
+            .unwrap_err(),
             InstanceKeyError::MissingType
         );
-        let _ = foreign;
     }
 
     #[test]
     fn instance_views_reject_foreign_type_ids_and_non_bijective_remaps() {
-        let mut store = TypeStore::default();
-        let unit_ty = store.push(Type::unit());
+        let store = crate::support::session();
+        let unit_ty = store.intern(Type::unit());
         let definition = std::sync::Arc::new(hirsel_tir::Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            types: store.clone(),
-            path: path("f"),
+            types: vec![unit_ty].into(),
+            path: hirsel_syntax::DefId::intern(&path("f")),
             signature_hash: hash("f signature"),
             bodies: vec![super::tir_coverage_body()],
             entry: hirsel_tir::BodyId(0),
@@ -1796,7 +1836,6 @@ mod instance_keys {
             body: hirsel_tir::BodyId(0),
             owner: CallableShape::Definition,
             substitution: Substitution {
-                store: store.clone(),
                 types: vec![(TypeParameterRef::bound(TypeParamId(0)), unit_ty)],
                 sizes: vec![(SizeParameterRef::bound(SizeParamId(0)), 8)],
             },
@@ -1818,24 +1857,23 @@ mod instance_keys {
             }],
             caller_destination: false,
         };
-        assert_eq!(view.check_identity(), Ok(()));
+        assert_eq!(view.check_identity(&store), Ok(()));
         let mut foreign = view.clone();
-        let mut other = TypeStore::default();
-        foreign.substitution.types[0].1 = other.push(Type::unit());
+        foreign.substitution.types[0].1 = hirsel_types::TypeId::DANGLING;
         assert!(matches!(
-            foreign.check_identity(),
+            foreign.check_identity(&store),
             Err(SchemaError::ForeignId { kind: "TypeId", .. })
         ));
         let mut not_bijective = view.clone();
         not_bijective.parameters[1].instance = 1;
         assert!(matches!(
-            not_bijective.check_identity(),
+            not_bijective.check_identity(&store),
             Err(SchemaError::Malformed(_))
         ));
         let mut wrong_body = view.clone();
         wrong_body.body = hirsel_tir::BodyId(4);
         assert!(matches!(
-            wrong_body.check_identity(),
+            wrong_body.check_identity(&store),
             Err(SchemaError::ForeignId { .. })
         ));
     }
@@ -1854,7 +1892,7 @@ fn tir_coverage_body() -> hirsel_tir::Body {
         cleanup_nodes: Vec::new(),
         entry: hirsel_tir::BlockId(0),
         parameters: Vec::new(),
-        result: hirsel_types::TypeStore::default().push(hirsel_types::Type::unit()),
+        result: crate::support::session().intern(hirsel_types::Type::unit()),
         tail_sites: Vec::new(),
         matches: Vec::new(),
     }

@@ -162,7 +162,7 @@ pub fn probe(source: &str) -> Result<Probed, String> {
 /// `evaluation`.
 fn observe(path: &Path, expect: &Expect, native: bool) -> Artifacts {
     let config = Config::default();
-    let mut artifacts = super::produce(path, &config, &super::fresh_cache())
+    let mut artifacts = super::produce(path, &config, &super::fresh_images())
         .expect("the default configuration needs no switch");
     if let Some(text) = artifacts.get("tir").cloned() {
         let text = String::from_utf8_lossy(&text).into_owned();
@@ -203,7 +203,12 @@ fn observe(path: &Path, expect: &Expect, native: bool) -> Artifacts {
 fn split_export(text: &str) -> Result<(String, String, Vec<DefPath>), String> {
     let refused = |e: hirsel_proof_export::ImportError| format!("import: {e:?}");
     let header = hirsel_proof_export::read_header(text).map_err(refused)?;
-    let export = hirsel_proof_export::import(text, &header.environment).map_err(refused)?;
+    let export = hirsel_proof_export::import(
+        text,
+        &header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .map_err(refused)?;
     let mut input = export.to_input();
     let annotations = std::mem::take(&mut input.annotations);
     let roots = export
@@ -260,10 +265,10 @@ fn native_runs(path: &Path) -> String {
 /// LANG-6 definition hashes of `roots`, one `path hash` line each.
 fn hashes(path: &Path, roots: Vec<DefPath>) -> String {
     hirsel_engine::with_compiler_stack(|| {
-        let mut program = match hirsel_driver::load_program_source_with_cache(
+        let mut program = match hirsel_driver::load_program_source_with_images(
             path,
             None,
-            &super::fresh_cache(),
+            &super::fresh_images(),
         ) {
             Ok(program) => program,
             Err(error) => return format!("load: {error}\n"),

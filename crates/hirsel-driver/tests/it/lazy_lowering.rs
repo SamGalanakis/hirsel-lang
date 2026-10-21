@@ -39,12 +39,9 @@ impl Fixture {
         self.0.join("lib.json")
     }
     fn check(&self) -> LoadedProgram {
-        let mut program = load_program_source_with_cache(
-            &self.0.join("app.json"),
-            None,
-            &PackageCache::disabled(),
-        )
-        .unwrap();
+        let mut program =
+            load_program_source_with_images(&self.0.join("app.json"), None, &StdImages::none())
+                .unwrap();
         let output = program
             .check(hirsel_engine::LoweringPolicy::Reachable)
             .unwrap();
@@ -314,7 +311,7 @@ fn library_diagnostics(f: &Fixture, files: &[(&str, &str)], as_dependency: bool)
         "lib.json"
     };
     let mut program =
-        load_program_source_with_cache(&f.0.join(root), None, &PackageCache::disabled()).unwrap();
+        load_program_source_with_images(&f.0.join(root), None, &StdImages::none()).unwrap();
     let output = program
         .check(hirsel_engine::LoweringPolicy::Reachable)
         .unwrap();
@@ -357,12 +354,246 @@ fn a_package_reports_identically_as_a_dependency_and_as_the_program() {
                 "a.hir",
                 "fn reader() -> u64 {\n  C\n}\n\nconst C: u64 = reader()\n",
             )],
+            // A failed S1 evaluation in one file does not withhold another
+            // file's source diagnostics or its own compile-time failure.
+            &[
+                (
+                    "a.hir",
+                    "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                ),
+                ("b.hir", "pub fn bad() -> u64 { true }\n"),
+                (
+                    "c.hir",
+                    "pub fn value() -> u64 { comptime (2u64 / 0u64) }\n",
+                ),
+            ],
         ] {
             let f = Fixture::new();
             let program = library_diagnostics(&f, files, false);
             let dependency = library_diagnostics(&f, files, true);
             assert!(program != ["Complete"], "{files:?}");
             assert_eq!(dependency, program, "{files:?}");
+        }
+    });
+}
+
+#[test]
+fn program_growth_is_decided_before_any_files_comptime_lowering() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let files = [
+            (
+                "a.hir",
+                "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+            ),
+            (
+                "b.hir",
+                "fn grow[T: copyable](x: T) { grow((copy x, copy x)) }\n",
+            ),
+        ];
+        for as_dependency in [false, true] {
+            let diagnostics = library_diagnostics(&f, &files, as_dependency);
+            assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+            assert_eq!(diagnostics[0], "Complete");
+            assert!(diagnostics[1].contains("GEN-5"), "{diagnostics:?}");
+            assert!(!diagnostics[1].contains("CT-4"), "{diagnostics:?}");
+        }
+    });
+}
+/// Drive the production package schedule in separate processes: a worker count
+/// is process configuration, and changing it in a shared test process races.
+#[test]
+fn package_diagnostics_and_warm_edits_match_at_every_worker_count() {
+    const TEST: &str =
+        "lazy_lowering::package_diagnostics_and_warm_edits_match_at_every_worker_count";
+    const CHILD: &str = "HIRSEL_C1_JOBS_CHILD";
+    const START: &str = "C1_TRANSCRIPT_START\n";
+    const END: &str = "C1_TRANSCRIPT_END\n";
+    if std::env::var_os(CHILD).is_some() {
+        let transcript = with_compiler_stack(|| {
+            let mut transcript = String::new();
+            for files in [
+                &[
+                    (
+                        "a.hir",
+                        "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                    ),
+                    ("b.hir", "pub fn bad() -> u64 { true }\n"),
+                ][..],
+                &[
+                    ("a.hir", "pub fn broken() -> Missing { 1 }\n"),
+                    ("b.hir", "pub fn user() -> u64 { a.broken() }\n"),
+                ],
+                &[
+                    (
+                        "a.hir",
+                        "fn grow[T: copyable](x: T) { grow((copy x,copy x)) }\n",
+                    ),
+                    (
+                        "b.hir",
+                        "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                    ),
+                ],
+                &[(
+                    "a.hir",
+                    "const FIRST: u32 = comptime SECOND\nconst SECOND: u32 = comptime FIRST\n",
+                )],
+                &[(
+                    "a.hir",
+                    "fn body() -> Result[Body[fn() -> u32 uses {}], String] { Ok(codegen.body(\"fn() -> u32 uses {} { 7u32 }\")) }\npub fn made() -> u32 uses {} = comptime body()\n",
+                )],
+            ] {
+                let f = Fixture::new();
+                let diagnostics = library_diagnostics(&f, files, false);
+                transcript.push_str(
+                    &format!("case {diagnostics:?}\n")
+                        .replace(&f.0.to_string_lossy().to_string(), "$CASE"),
+                );
+            }
+            let f = Fixture::new();
+            let library = f.library("pub fn value() -> u64 { 1 }\n");
+            f.app("pub fn main() -> u64 { lib.value() }\n", ("lib", &library));
+            let manifest = f.0.join("app.json");
+            let mut warm =
+                load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            let render = |program: &mut LoadedProgram| {
+                let checked = program.check(LoweringPolicy::Reachable).unwrap();
+                let mut text = format!("{:?}\n", checked.completion);
+                for diagnostic in &checked.diagnostics {
+                    text.push_str(&diagnostic.render_human(&checked.sources));
+                }
+                if checked.diagnostics.is_empty() {
+                    text.push_str(&program.engine.export_tir(&program.entry.clone()).unwrap());
+                }
+                text.replace(&f.0.to_string_lossy().to_string(), "$CASE")
+            };
+            transcript.push_str(&render(&mut warm));
+            assert_eq!(render(&mut warm), render(&mut warm), "unchanged warm check");
+            for source in [
+                "pub fn value() -> u64 { true }\n",
+                "pub fn value() -> u64 { 2 }\n",
+            ] {
+                f.library(source);
+                let file = warm
+                    .engine
+                    .sources
+                    .add(f.0.join("lib.hir"), source.into())
+                    .unwrap();
+                let context = hirsel_syntax::FileContext {
+                    package: PackageId {
+                        name: "lib".into(),
+                        version: "1".into(),
+                    },
+                    modules: vec![],
+                };
+                warm.engine.parse_file(file, &context).unwrap();
+                let mut cold =
+                    load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+                let actual = render(&mut warm);
+                assert_eq!(actual, render(&mut cold), "warm/cold after edit");
+                transcript.push_str(&actual);
+            }
+            transcript
+        });
+        print!("{START}{transcript}{END}");
+        return;
+    }
+    let binary = std::env::current_exe().unwrap();
+    let mut reference = None;
+    for jobs in [1, 2, 8] {
+        let output = std::process::Command::new(&binary)
+            .args([TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HIRSEL_JOBS", jobs.to_string())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "jobs {jobs}:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let begin = stdout.find(START).expect("child transcript") + START.len();
+        let end = stdout[begin..].find(END).expect("child transcript end") + begin;
+        let transcript = stdout[begin..end].to_owned();
+        assert!(transcript.contains("GEN-5"));
+        assert!(transcript.contains("CT-4"));
+        if let Some(reference) = &reference {
+            assert_eq!(&transcript, reference, "jobs {jobs}");
+        } else {
+            reference = Some(transcript);
+        }
+    }
+}
+/// Ordinary bodies may run speculatively; generators must respect an earlier
+/// operational stop in their file, while source diagnostics still accumulate.
+#[test]
+fn a_later_generator_respects_its_files_operational_stop() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct PartialChecker {
+        inner: Arc<dyn CheckerPhase>,
+        unavailable: bool,
+        generators: Arc<AtomicUsize>,
+    }
+    impl CheckerPhase for PartialChecker {
+        fn check(
+            &self,
+            types: &hirsel_types::TypeInterner,
+            memo: &hirsel_types::TypeMemo,
+            syntax: Arc<hirsel_syntax::ItemSyntax>,
+            resolution: hirsel_types::Resolution,
+            signature: &hirsel_types::Signature,
+            provider: &mut dyn hirsel_types::SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, hirsel_types::QueryError> {
+            if self.unavailable && syntax.item.definition.0.name == "first" {
+                return Err(hirsel_types::QueryError::NotImplemented);
+            }
+            if syntax.item.definition.0.name.ends_with("$generator") {
+                self.generators.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner
+                .check(types, memo, syntax, resolution, signature, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        for unavailable in [true, false] {
+            let generators = Arc::new(AtomicUsize::new(0));
+            let mut adapters = compiler_adapters();
+            adapters.checker = Some(Arc::new(PartialChecker {
+                inner: adapters.checker.take().unwrap(),
+                unavailable,
+                generators: generators.clone(),
+            }));
+            let mut engine = QueryEngine::new(default_environment(), adapters);
+            let value = if unavailable { "1u32" } else { "true" };
+            let source = format!(
+                "fn first() -> u32 {{ {value} }}\nfn body() -> Result[Body[fn() -> u32 uses {{}}], String] {{ Ok(codegen.body(\"fn() -> u32 uses {{}} {{ 7u32 }}\")) }}\nfn later() -> u32 uses {{}} = comptime body()\n"
+            );
+            let file = engine.sources.add("partial.hir", source).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            if unavailable {
+                assert_eq!(
+                    output.completion,
+                    CheckCompletion::Incomplete {
+                        phase: QueryKind::Check
+                    }
+                );
+                assert_eq!(
+                    generators.load(Ordering::SeqCst),
+                    0,
+                    "generator after unavailable checker ran"
+                );
+            } else {
+                assert!(!output.diagnostics.is_empty(), "source error is reported");
+                assert_eq!(
+                    generators.load(Ordering::SeqCst),
+                    1,
+                    "source diagnostics do not stop later P work"
+                );
+            }
         }
     });
 }

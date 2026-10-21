@@ -4,7 +4,7 @@ use super::*;
 use crate::PassError;
 use hirsel_types::{BuiltinType, TypeKind};
 
-impl Importer<'_, '_> {
+impl Importer<'_> {
     fn scalar_constant(&mut self, ty: LirTypeId, n: u128) -> ValueId {
         let constant = self.constant(ty, ConstantValue::Integer(n));
         let result = self.value(ty, Holding::Plain);
@@ -23,7 +23,7 @@ impl Importer<'_, '_> {
             kind: BuiltinType::List,
             arguments,
         } = self
-            .store
+            .types
             .get(source_type)
             .expect("source type")
             .kind
@@ -47,13 +47,13 @@ impl Importer<'_, '_> {
             return malformed("flat materialization source root");
         };
         let scope = self.out.slots[source_slot.index()].scope;
-        let u64_type = self.store.push(hirsel_types::Type {
+        let u64_type = self.types.intern(hirsel_types::Type {
             kind: TypeKind::Primitive(hirsel_types::Primitive::U64),
             ..hirsel_types::Type::unit()
         });
         let u64_layout = self.layout(u64_type)?;
         let u64_ty = self.intern(u64_layout);
-        let bool_type = self.store.push(hirsel_types::Type::boolean());
+        let bool_type = self.types.intern(hirsel_types::Type::boolean());
         let bool_layout = self.layout(bool_type)?;
         let bool_ty = self.intern(bool_layout);
         let count = self.value(u64_ty, Holding::Plain);
@@ -219,13 +219,8 @@ impl Importer<'_, '_> {
     ) -> R<()> {
         let path = hirsel_syntax::DefPath::core(name);
         let body = crate::library::body_index(&path).expect("list construction body");
-        let request = crate::library::Request::operation(
-            self.program,
-            body,
-            &path,
-            self.store.clone(),
-            actuals.to_vec(),
-        )?;
+        let request =
+            crate::library::Request::operation(self.program, body, &path, actuals.to_vec())?;
         let direct = self.require(request)?;
         let symbol = self.symbol(
             direct.symbol.kind,

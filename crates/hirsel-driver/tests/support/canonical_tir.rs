@@ -1,8 +1,8 @@
 //! Comparison helper: canonical type rows, numbered at first use in the stable dump.
 //! All type fields are retained. Equal recursive graphs share a comparison number;
 //! operational errors and source diagnostics never pass through this helper.
-use hirsel_types::TypeStore;
-use std::collections::BTreeMap;
+use hirsel_types::{TypeId, TypeInterner};
+use std::collections::{BTreeMap, HashMap};
 
 fn replace_ids(text: &str, compact: bool, mut number: impl FnMut(usize) -> usize) -> String {
     let bytes = text.as_bytes();
@@ -68,8 +68,26 @@ fn classes(labels: Vec<String>) -> (Vec<usize>, usize) {
     let count = names.len();
     (labels.iter().map(|s| names[s]).collect(), count)
 }
-pub fn canonical_text(store: &TypeStore, text: &str) -> String {
-    let rows: Vec<_> = store.iter().map(|(_, row)| format!("{row:?}")).collect();
+/// `text` names types by position in `ids` (`tN`); rows name their edges by
+/// session id (`TypeId(N)`), renumbered here to positions too.
+pub fn canonical_text(t: &TypeInterner, ids: &[TypeId], text: &str) -> String {
+    let position: HashMap<usize, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            (
+                format!("{id:?}")[7..]
+                    .trim_end_matches(')')
+                    .parse()
+                    .unwrap(),
+                i,
+            )
+        })
+        .collect();
+    let rows: Vec<_> = ids
+        .iter()
+        .map(|&id| replace_ids(&format!("{:?}", t.row(id)), false, |raw| position[&raw]))
+        .collect();
     let (mut partition, mut count) = classes(
         rows.iter()
             .map(|row| replace_ids(row, false, |_| 0))
@@ -122,8 +140,9 @@ pub fn canonical_text(store: &TypeStore, text: &str) -> String {
     }
     output
 }
-pub fn definition(definition: &hirsel_tir::Definition) -> String {
+pub fn definition(t: &TypeInterner, definition: &hirsel_tir::Definition) -> String {
     canonical_text(
+        t,
         &definition.types,
         &hirsel_lower::print::definition(definition),
     )

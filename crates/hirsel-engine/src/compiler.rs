@@ -2,44 +2,110 @@
 //! entry points start fresh sessions on the compiler thread, so a compiler is
 //! the plain constructor of its phases and crosses threads freely.
 use crate::*;
-use std::{io::Write, path::Path, rc::Rc};
+use std::{io::Write, path::Path, sync::Arc};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Compiler {
-    phases: fn() -> Rc<dyn Phases>,
-    /// Digest of the compiler's own sources; prechecks record the one they were
-    /// checked under (docs/building.md, "The std precheck").
+    phases: fn() -> Arc<dyn Phases>,
+    /// Digest of the compiler's own sources; std images record the one they
+    /// were checked under (docs/building.md, "The std image").
     identity: [u8; 32],
     /// Whether the sessions this compiler starts run V.
     verify: Verify,
+    retention: crate::memo::Retention,
+    jobs: Option<hirsel_intern::jobs::Jobs>,
+    hold_bytes: Option<u64>,
+    lowering: LoweringPolicy,
+    result_store: Option<Arc<dyn crate::store::ResultStore>>,
+    verify_store: crate::store::VerifyStore,
+    comptime_limits: Option<hirsel_interp::Limits>,
 }
 impl Compiler {
     /// A compiler whose sessions run V.
-    pub const fn new(phases: fn() -> Rc<dyn Phases>, identity: [u8; 32]) -> Self {
+    pub const fn new(phases: fn() -> Arc<dyn Phases>, identity: [u8; 32]) -> Self {
         Self {
             phases,
             identity,
             verify: Verify::On,
+            retention: crate::memo::Retention::Batch,
+            jobs: None,
+            hold_bytes: None,
+            lowering: LoweringPolicy::Comptime,
+            result_store: None,
+            verify_store: crate::store::VerifyStore::Off,
+            comptime_limits: None,
         }
     }
     /// This compiler with V `verify` (`--no-verify` selects `Verify::Off`).
-    pub const fn with_verify(self, verify: Verify) -> Self {
-        Self { verify, ..self }
+    pub const fn with_verify(mut self, verify: Verify) -> Self {
+        self.verify = verify;
+        self
+    }
+    /// Retain intermediate front bodies only for an explicit resident host.
+    pub const fn with_retention(mut self, retention: crate::memo::Retention) -> Self {
+        self.retention = retention;
+        self
+    }
+    /// Own explicit per-session policies and a shared result-store provider.
+    /// Cloning a compiler shares that provider; sessions retain separate memos.
+    pub fn with_config(mut self, config: CompileConfig) -> Self {
+        self.verify = config.verify;
+        self.retention = config.retention;
+        self.jobs = Some(config.jobs);
+        self.hold_bytes = Some(config.hold_bytes);
+        self.lowering = config.lowering;
+        self.verify_store = config.verify_store;
+        self.result_store = Some(config.store);
+        self
     }
     pub fn verify(&self) -> Verify {
         self.verify
+    }
+    /// Compile-time limits are part of every image's checked inputs.
+    pub const fn with_comptime_limits(mut self, limits: hirsel_interp::Limits) -> Self {
+        self.comptime_limits = Some(limits);
+        self
+    }
+    pub(crate) fn comptime_limits(&self) -> hirsel_interp::Limits {
+        self.comptime_limits.unwrap_or_default()
     }
     /// A fresh session engine of this compiler.
     pub(crate) fn engine(&self, environment: QueryEnvironment) -> QueryEngine {
         let mut engine = QueryEngine::new(environment, self.adapters());
         engine.verify = self.verify;
+        engine.set_retention(self.retention);
+        engine.configured_jobs = self.jobs;
+        engine.configured_lowering = self.lowering;
+        engine.set_hold_bytes(
+            self.hold_bytes
+                .unwrap_or_else(crate::config::configured_hold_bytes),
+        );
+        engine.verify_store = self.verify_store;
+        engine.comptime_limits = self.comptime_limits();
         engine.session = true;
+        engine.store_identity = self.identity();
+        if let Some(store) = &self.result_store {
+            engine = engine.with_result_store(store.clone());
+        } else if crate::policy::uses_persistent_results() {
+            let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
+            if crate::policy::verifies_cached_results()
+                || std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0")
+            {
+                engine.verify_store = crate::store::VerifyStore::Recompute;
+            }
+            if let Ok(store) = crate::store::store_by_name(
+                &name,
+                std::env::var_os("HIRSEL_RESULTS_DIR").map(Into::into),
+            ) {
+                engine = engine.with_result_store(store);
+            }
+        }
         engine
     }
     pub(crate) fn identity(&self) -> ContentHash {
         ContentHash(self.identity)
     }
-    /// A fresh complete adapter set with its own compiler state.
+    /// A fresh complete adapter set with immutable shared front phases.
     pub fn adapters(&self) -> PhaseAdapters {
         PhaseAdapters::compiler((self.phases)())
     }
@@ -53,7 +119,7 @@ impl Compiler {
         Ok((engine, file))
     }
     /// Index an explicit package and its dependency declarations without an entry
-    /// or any body checking, compile-time evaluation or precheck loading.
+    /// or any body checking, compile-time evaluation or image loading.
     pub fn load_package_declarations(
         &self,
         manifest: &Path,
@@ -71,45 +137,45 @@ impl Compiler {
         path: &Path,
         replacement: Option<&str>,
     ) -> Result<LoadedProgram, ToolError> {
-        self.load_program_source_with_cache(path, replacement, &PackageCache::shared(self.verify))
+        self.load_program_source_with_images(path, replacement, &StdImages::toolchain())
     }
-    /// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
-    /// Sessions with and without V never share `cache`.
-    pub fn load_program_source_with_cache(
+    /// Load adopting exactly `images` (`StdImages::none()` checks every
+    /// package from source).
+    pub fn load_program_source_with_images(
         &self,
         path: &Path,
         replacement: Option<&str>,
-        cache: &PackageCache,
+        images: &StdImages,
     ) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_cache(self, path, replacement, cache, false)
+        crate::package::load_program_source_with_images(self, path, replacement, images, false)
     }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
     pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_cache(
+        crate::package::load_program_source_with_images(
             self,
             manifest,
             None,
-            &PackageCache::shared(self.verify),
+            &StdImages::toolchain(),
             true,
         )
     }
-    /// Write to `output` the precheck of the package `manifest` describes, checked
-    /// freshly as the only dependency of an empty program (docs/building.md, "The
-    /// std precheck"). Readers never see a partial precheck.
-    pub fn precheck_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
-        // Programs trust a precheck's TIR as validated.
+    /// Write to `output` the std image of the package `manifest` describes,
+    /// checked freshly as the only dependency of an empty program
+    /// (docs/building.md, "The std image"). Readers never see a partial image.
+    pub fn image_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
+        // Programs trust an image's TIR as validated.
         if self.verify == Verify::Off {
-            return Err(ToolError::Runtime("precheck always runs V".into()));
+            return Err(ToolError::Runtime("an image always runs V".into()));
         }
         let manifest = std::fs::canonicalize(manifest)?;
         let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)
-            .map_err(|e| ToolError::Runtime(format!("precheck: {}: {e}", manifest.display())))?;
+            .map_err(|e| ToolError::Runtime(format!("image: {}: {e}", manifest.display())))?;
         let package = &value["package"];
         let (Some(name), Some(version)) = (package["name"].as_str(), package["version"].as_str())
         else {
             return Err(ToolError::Runtime(format!(
-                "precheck: {} names no package",
+                "image: {} names no package",
                 manifest.display()
             )));
         };
@@ -120,16 +186,15 @@ impl Compiler {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-precheck-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hirsel-image-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
-        let program = dir.join("precheck.hir");
+        let program = dir.join("image.hir");
         let result = (|| {
             std::fs::write(&program, "pub fn main() -> Result[(), ()] {\n  Ok(())\n}\n")?;
             let sidecar = serde_json::json!({
                 "schema": 1,
-                "package": {"name": "hirsel_precheck", "version": "1"},
-                "sources": [{"path": "precheck.hir", "module": []}],
+                "package": {"name": "hirsel_image", "version": "1"},
+                "sources": [{"path": "image.hir", "module": []}],
                 "dependencies": [{
                     "manifest": manifest,
                     "package": {"name": name, "version": version},
@@ -137,33 +202,21 @@ impl Compiler {
                 }],
                 "entry": {"module": [], "name": "main"},
             });
-            std::fs::write(dir.join("precheck.hir.json"), sidecar.to_string())?;
-            // Records stream through a scratch file beside the program, so the
-            // encoded package is never held in memory.
-            let mut spill = std::fs::File::options()
+            std::fs::write(dir.join("image.hir.json"), sidecar.to_string())?;
+            // Records spill to a scratch file beside the program, so the
+            // checked package is never held in memory.
+            let spill = std::fs::File::options()
                 .read(true)
                 .write(true)
                 .create_new(true)
-                .open(dir.join("precheck.body"))?;
-            let partial = output.with_extension("precheck.partial");
-            let written = (|| -> Result<(), ToolError> {
-                let mut out = std::io::BufWriter::new(std::fs::File::create(&partial)?);
-                with_compiler_stack(|| {
-                    let mut loaded = self.load_program_source_with_cache(
-                        &program,
-                        None,
-                        &PackageCache::disabled(),
-                    )?;
-                    loaded.precheck(&package, &mut out, &mut spill)
-                })?;
-                out.into_inner().map_err(|e| e.into_error())?;
-                std::fs::rename(&partial, output)?;
-                Ok(())
-            })();
-            if written.is_err() {
-                let _ = std::fs::remove_file(&partial);
-            }
-            written
+                .open(dir.join("image.records"))?;
+            let bytes = with_compiler_stack(|| {
+                let mut loaded =
+                    self.load_program_source_with_images(&program, None, &StdImages::none())?;
+                loaded.image(&package, spill)
+            })?;
+            hirsel_image::write_atomically(output, &bytes)?;
+            Ok(())
         })();
         let _ = std::fs::remove_dir_all(&dir);
         result
@@ -173,7 +226,7 @@ impl Compiler {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
             program
-                .check(LoweringPolicy::Comptime)
+                .check(self.lowering)
                 .map_err(|error| program.error(error))
         })
         .or_else(check_diagnostics)
@@ -187,7 +240,7 @@ impl Compiler {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
             let output = program
-                .check(LoweringPolicy::Comptime)
+                .check(self.lowering)
                 .map_err(|error| program.error(error))?;
             if crate::queries::has_errors(&output.diagnostics)
                 || output.completion != CheckCompletion::Complete

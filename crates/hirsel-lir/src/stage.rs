@@ -165,18 +165,15 @@ stages!(Value, Placed, Rc, Reuse, Ready);
 /// The digests a stage receipt binds. Plain data; decodable; never a proof.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RawReceipt {
-    pub input: InputIdentity,
+    pub key: crate::objects::UnitKey,
     pub stage: StageKind,
     pub lir_version: u32,
     pub unit: ContentHash,
-    pub target: ContentHash,
-    pub layouts: ContentHash,
-    pub manifest: ContentHash,
     pub validator_version: u32,
 }
 
 impl RawReceipt {
-    /// Content digest, including the interface version through `input`.
+    /// Content digest, including the unit content key.
     pub fn digest(&self) -> ContentHash {
         crate::snapshot::digest("receipt", self)
     }
@@ -195,12 +192,19 @@ impl RawReceipt {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct NativeReceipt {
     raw: RawReceipt,
+    checked_inputs: ContentHash,
 }
 
 impl NativeReceipt {
     /// For the stage validators only, after every check passed.
-    pub(crate) fn issue(raw: RawReceipt) -> Self {
-        Self { raw }
+    pub(crate) fn issue(raw: RawReceipt, checked_inputs: ContentHash) -> Self {
+        Self {
+            raw,
+            checked_inputs,
+        }
+    }
+    pub(crate) fn checked_inputs(&self) -> ContentHash {
+        self.checked_inputs
     }
     pub fn raw(&self) -> &RawReceipt {
         &self.raw
@@ -272,13 +276,6 @@ pub struct Relocation {
     pub addend: i64,
 }
 
-/// Source revisions the object's debug information refers to.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct DebugSource {
-    pub definition: DefPath,
-    pub implementation_revision: ContentHash,
-}
-
 /// What reproduces the object bit-for-bit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Reproducibility {
@@ -290,24 +287,24 @@ pub struct Reproducibility {
 }
 
 /// Owned object bytes and metadata. No LIR, LLVM context, provider,
-/// arena pointer or borrowed buffer.
+/// arena pointer or borrowed buffer, and nothing that names the program the object was
+/// built in (`crate::glue`).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ObjectArtifact {
-    pub input: InputIdentity,
     pub target: ContentHash,
     pub format: ObjectFormat,
     pub bytes: Vec<u8>,
     pub exports: Vec<ObjectSymbol>,
     pub imports: Vec<ObjectSymbol>,
     pub relocations: Vec<Relocation>,
-    pub debug: Vec<DebugSource>,
     pub abi: ContentHash,
-    pub layouts: ContentHash,
     pub reproducibility: Reproducibility,
+    /// Each function's debug intervals, when the build records them (`debug::Profile`).
+    pub debug: Vec<crate::debug::DebugFunction>,
 }
 
 impl ObjectArtifact {
-    /// Content digest, including the interface version through `input`.
+    /// Content digest.
     pub fn digest(&self) -> ContentHash {
         crate::snapshot::digest("object-artifact", self)
     }
@@ -325,13 +322,10 @@ snapshot_enum!(StageKind {
     Ready
 });
 snapshot_struct!(RawReceipt {
-    input,
+    key,
     stage,
     lir_version,
     unit,
-    target,
-    layouts,
-    manifest,
     validator_version
 });
 snapshot_enum!(ObjectSymbolKind {
@@ -352,10 +346,6 @@ snapshot_struct!(Relocation {
     kind,
     addend
 });
-snapshot_struct!(DebugSource {
-    definition,
-    implementation_revision
-});
 snapshot_struct!(Reproducibility {
     toolchain,
     options,
@@ -363,15 +353,13 @@ snapshot_struct!(Reproducibility {
     runtime_abi_version
 });
 snapshot_struct!(ObjectArtifact {
-    input,
     target,
     format,
     bytes,
     exports,
     imports,
     relocations,
-    debug,
     abi,
-    layouts,
-    reproducibility
+    reproducibility,
+    debug
 });

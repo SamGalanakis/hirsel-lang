@@ -75,13 +75,21 @@ fn deepest_source_phases_fit_with_fourfold_stack_margin() {
         // The scaling tests separately exercise successful 1,024-level lowering.
         let mut analyzed = engine.mode_definition(&path).unwrap().value;
         let signature = engine.item_signature(&path).unwrap().value;
-        analyzed
-            .typed
+        std::sync::Arc::make_mut(&mut analyzed.typed)
             .checked
             .expressions
             .retain(|row| row.expression != hirsel_syntax::ExprId(0));
+        let comptime = engine.prepare_comptime(&analyzed, &signature).unwrap();
         let error = measured("lowering", || {
-            LowerAdapter.lower(analyzed, &signature).unwrap_err()
+            LowerAdapter
+                .lower(
+                    engine.types(),
+                    engine.type_memo(),
+                    &analyzed,
+                    &comptime,
+                    &signature,
+                )
+                .unwrap_err()
         });
         assert!(
             matches!(error, QueryError::Operational(ref failure) if failure.message.contains("missing expression decision"))

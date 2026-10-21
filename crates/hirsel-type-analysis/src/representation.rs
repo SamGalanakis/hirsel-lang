@@ -1,5 +1,5 @@
 //! Nominal representation expansion for stage-owned layout walks.
-use hirsel_syntax::DefPath;
+use hirsel_syntax::DefId;
 use hirsel_types::*;
 use std::collections::HashSet;
 
@@ -32,11 +32,12 @@ pub struct RepresentationError {
 /// evaluated authority and physical layout walks' conservative Unknown authority.
 /// The guard spends its budget only on active polymorphic constructor growth.
 pub fn expand_representation(
-    store: &mut TypeStore,
+    store: &TypeInterner,
+    memo: &TypeMemo,
     mut root: TypeId,
     lookup: &mut impl FnMut(
-        &TypeStore,
-        &DefPath,
+        &TypeInterner,
+        DefId,
         &[GenericArgument],
     ) -> Result<Option<(SignatureRef, Vec<AuthoritySummary>)>, QueryError>,
     steps: Option<usize>,
@@ -58,15 +59,15 @@ pub fn expand_representation(
         else {
             return Ok(root);
         };
-        let definition = definition.clone();
+        let definition = *definition;
         let arguments = arguments.clone();
         if !expansions
-            .enter(root, 0, |_| &*store)
+            .enter(root, 0, store)
             .map_err(|e| error(RepresentationFailure::Query(e)))?
         {
             return Err(error(RepresentationFailure::RecursiveRepresentation));
         }
-        let (signature, authorities) = lookup(store, &definition, &arguments)
+        let (signature, authorities) = lookup(store, definition, &arguments)
             .map_err(|e| error(RepresentationFailure::Query(e)))?
             .ok_or_else(|| error(RepresentationFailure::MissingDeclaration))?;
         let SignatureKind::Type(declaration) = &signature.kind else {
@@ -75,11 +76,11 @@ pub fn expand_representation(
         let representation = declaration
             .representation
             .ok_or_else(|| error(RepresentationFailure::MissingRepresentation))?;
-        root = substitute_type(
-            &signature.types,
-            representation,
+        root = substitute(
             store,
-            Substitution {
+            memo,
+            representation,
+            &Substitution {
                 binder: Some(GenericBinder::Bound(0)),
                 arguments: &arguments,
                 authorities: &authorities,
@@ -97,14 +98,15 @@ pub fn expand_representation(
 /// generic, callable, erased or unexpandable part could be anything, and so
 /// may hold anything; plain scalars hold no storage.
 pub fn may_hold_content(
-    store: &mut TypeStore,
+    store: &TypeInterner,
+    memo: &TypeMemo,
     holder: TypeId,
     content: TypeId,
-    lookup: &mut impl FnMut(&DefPath) -> Option<SignatureRef>,
+    lookup: &mut impl FnMut(DefId) -> Option<SignatureRef>,
 ) -> bool {
     let (Some(holders), Some(contents)) = (
-        counted_parts(store, holder, lookup),
-        counted_parts(store, content, lookup),
+        counted_parts(store, memo, holder, lookup),
+        counted_parts(store, memo, content, lookup),
     ) else {
         return true;
     };
@@ -115,9 +117,10 @@ pub fn may_hold_content(
 /// Every counted part of `root`, nominal representations included, or None
 /// when some part could be anything.
 fn counted_parts(
-    store: &mut TypeStore,
+    store: &TypeInterner,
+    memo: &TypeMemo,
     root: TypeId,
-    lookup: &mut impl FnMut(&DefPath) -> Option<SignatureRef>,
+    lookup: &mut impl FnMut(DefId) -> Option<SignatureRef>,
 ) -> Option<Vec<TypeId>> {
     const LIMIT: usize = 256;
     let mut parts = vec![];
@@ -145,6 +148,7 @@ fn counted_parts(
                 parts.push(ty);
                 let representation = expand_representation(
                     store,
+                    memo,
                     ty,
                     &mut |_, path, arguments| {
                         Ok(lookup(path).map(|signature| {
@@ -169,7 +173,7 @@ fn counted_parts(
     Some(parts)
 }
 /// Structural equality of two types, ignoring modes, brands and relations.
-fn same_shape(store: &TypeStore, a: TypeId, b: TypeId, depth: u32) -> bool {
+fn same_shape(store: &TypeInterner, a: TypeId, b: TypeId, depth: u32) -> bool {
     if a == b || depth > 16 {
         return true;
     }
@@ -227,7 +231,7 @@ fn same_shape(store: &TypeStore, a: TypeId, b: TypeId, depth: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hirsel_syntax::ContentHash;
+    use hirsel_syntax::{ContentHash, DefPath};
 
     fn row(kind: TypeKind) -> Type {
         Type::with_kind(kind)
@@ -242,14 +246,9 @@ mod tests {
             name: name.into(),
         })
     }
-    fn nominal(
-        types: TypeStore,
-        representation: Option<TypeId>,
-        bounds: Vec<Bound>,
-    ) -> SignatureRef {
+    fn nominal(representation: Option<TypeId>, bounds: Vec<Bound>) -> SignatureRef {
         std::sync::Arc::new(Signature {
-            definition: path("Wrap"),
-            types,
+            definition: DefId::intern(&path("Wrap")),
             metadata: SignatureMetadata::default(),
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
@@ -287,16 +286,16 @@ mod tests {
 
     #[test]
     fn storage_holds_content_by_counted_shape_through_representations() {
-        let list = |store: &mut TypeStore, element| {
-            store.push(row(TypeKind::Builtin {
+        let list = |store: &TypeInterner, element| {
+            store.intern(row(TypeKind::Builtin {
                 kind: BuiltinType::List,
                 arguments: vec![GenericArgument::Type(element)].into(),
             }))
         };
         // `Wrap` is a record holding one String.
-        let mut declaration = TypeStore::default();
-        let field = declaration.push(row(TypeKind::Primitive(Primitive::String)));
-        let record = declaration.push(row(TypeKind::Record(
+        let declaration = TypeInterner::new(None);
+        let field = declaration.intern(row(TypeKind::Primitive(Primitive::String)));
+        let record = declaration.intern(row(TypeKind::Record(
             vec![Field {
                 growable: false,
                 name: "text".into(),
@@ -304,52 +303,59 @@ mod tests {
             }]
             .into(),
         )));
-        let signature = nominal(declaration, Some(record), vec![]);
-        let mut store = TypeStore::default();
-        let bytes = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let text = store.push(row(TypeKind::Primitive(Primitive::String)));
-        let wrap = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let signature = nominal(Some(record), vec![]);
+        let store = declaration.clone();
+        let bytes = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let text = store.intern(row(TypeKind::Primitive(Primitive::String)));
+        let wrap = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![].into(),
         }));
-        let generic = store.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let generic = store.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let byte_list = list(&mut store, bytes);
-        let text_list = list(&mut store, text);
-        let mut lookup = |_: &DefPath| Some(signature.clone());
-        let mut holds = |store: &mut TypeStore, holder, content| {
-            may_hold_content(store, holder, content, &mut lookup)
+        let byte_list = list(&store, bytes);
+        let text_list = list(&store, text);
+        let mut lookup = |_: DefId| Some(signature.clone());
+        let memo = TypeMemo::new();
+        let mut holds = |store: &TypeInterner, holder, content| {
+            may_hold_content(store, &memo, holder, content, &mut lookup)
         };
-        assert!(!holds(&mut store, byte_list, text_list));
-        assert!(!holds(&mut store, byte_list, wrap));
-        assert!(holds(&mut store, text, text_list));
-        assert!(holds(&mut store, text_list, wrap));
-        assert!(holds(&mut store, byte_list, generic));
-        let mut missing = |_: &DefPath| None;
-        assert!(may_hold_content(&mut store, byte_list, wrap, &mut missing));
+        assert!(!holds(&store, byte_list, text_list));
+        assert!(!holds(&store, byte_list, wrap));
+        assert!(holds(&store, text, text_list));
+        assert!(holds(&store, text_list, wrap));
+        assert!(holds(&store, byte_list, generic));
+        let mut missing = |_: DefId| None;
+        assert!(may_hold_content(
+            &store,
+            &memo,
+            byte_list,
+            wrap,
+            &mut missing
+        ));
     }
 
     #[test]
-    fn representation_steps_preserve_nested_actuals_without_copying_the_store() {
-        let mut declaration = TypeStore::default();
-        let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+    fn representation_steps_preserve_nested_actuals() {
+        let declaration = TypeInterner::new(None);
+        let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let signature = nominal(declaration, Some(parameter), vec![]);
-        let mut store = TypeStore::default();
-        let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
+        let signature = nominal(Some(parameter), vec![]);
+        let store = std::sync::Arc::clone(&declaration);
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let mut root = scalar;
         for _ in 0..200 {
-            root = store.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            root = store.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(root)].into(),
             }));
         }
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
         assert_eq!(
             expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 root,
                 &mut |_, _, _| panic!("zero-step lookup"),
                 Some(0)
@@ -357,42 +363,40 @@ mod tests {
             Ok(root)
         );
         let mut reads = 0;
-        let mut lookup = |_: &TypeStore, _: &DefPath, arguments: &[GenericArgument]| {
+        let mut lookup = |_: &TypeInterner, _: DefId, arguments: &[GenericArgument]| {
             reads += 1;
             Ok(with_unknown_authorities(Some(signature.clone()), arguments))
         };
-        let one = expand_representation(&mut store, root, &mut lookup, Some(1)).unwrap();
+        let one =
+            expand_representation(&store, &TypeMemo::new(), root, &mut lookup, Some(1)).unwrap();
         assert!(matches!(
             store.get(one).unwrap().kind,
             TypeKind::Named { .. }
         ));
-        let full = expand_representation(&mut store, one, &mut lookup, None).unwrap();
+        let full = expand_representation(&store, &TypeMemo::new(), one, &mut lookup, None).unwrap();
         assert_eq!(
             store.get(full).unwrap().kind,
             store.get(scalar).unwrap().kind
         );
         assert_eq!(reads, 200);
-        assert_eq!(
-            hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows),
-            before
-        );
     }
 
     #[test]
     fn representation_stops_keep_the_last_row_and_exact_failure() {
-        let mut store = TypeStore::default();
-        let root = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let store = TypeInterner::new(None);
+        let root = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![].into(),
         }));
-        let opaque = nominal(TypeStore::default(), None, vec![]);
+        let opaque = nominal(None, vec![]);
         for (declaration, failure) in [
             (None, RepresentationFailure::MissingDeclaration),
             (Some(opaque), RepresentationFailure::MissingRepresentation),
         ] {
             assert_eq!(
                 expand_representation(
-                    &mut store,
+                    &store,
+                    &TypeMemo::new(),
                     root,
                     &mut |_, _, arguments| Ok(with_unknown_authorities(
                         declaration.clone(),
@@ -405,7 +409,8 @@ mod tests {
         }
         assert_eq!(
             expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 root,
                 &mut |_, _, _| Err(type_proof_limit()),
                 None
@@ -415,14 +420,15 @@ mod tests {
                 failure: RepresentationFailure::Query(type_proof_limit())
             })
         );
-        let mut declaration = TypeStore::default();
-        let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+        let declaration = std::sync::Arc::clone(&store);
+        let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
             TypeParamId(0),
         ))));
-        let malformed = nominal(declaration, Some(parameter), vec![]);
+        let malformed = nominal(Some(parameter), vec![]);
         assert_eq!(
             expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 root,
                 &mut |_, _, arguments| Ok(with_unknown_authorities(
                     Some(malformed.clone()),
@@ -436,14 +442,15 @@ mod tests {
             })
         );
         // The accepted twin supplies the missing argument.
-        let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let supplied = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let supplied = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(scalar)].into(),
         }));
         assert!(
             expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 supplied,
                 &mut |_, _, arguments| Ok(with_unknown_authorities(
                     Some(malformed.clone()),
@@ -458,29 +465,30 @@ mod tests {
     #[test]
     fn representation_cycles_stop_and_polymorphic_growth_remains_operational() {
         for growing in [false, true] {
-            let mut declaration = TypeStore::default();
-            let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+            let declaration = TypeInterner::new(None);
+            let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
             let argument = if growing {
-                declaration.push(row(TypeKind::Box(parameter)))
+                declaration.intern(row(TypeKind::Box(parameter)))
             } else {
                 parameter
             };
-            let next = declaration.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            let next = declaration.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(argument)].into(),
             }));
-            let signature = nominal(declaration, Some(next), vec![]);
-            let mut store = TypeStore::default();
-            let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-            let root = store.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            let signature = nominal(Some(next), vec![]);
+            let store = std::sync::Arc::clone(&declaration);
+            let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+            let root = store.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(scalar)].into(),
             }));
             // A single step is useful even for a recursive nominal declaration.
             let one = expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 root,
                 &mut |_, _, arguments| {
                     Ok(with_unknown_authorities(Some(signature.clone()), arguments))
@@ -489,7 +497,8 @@ mod tests {
             )
             .unwrap();
             let error = expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 one,
                 &mut |_, _, arguments| {
                     Ok(with_unknown_authorities(Some(signature.clone()), arguments))
@@ -514,9 +523,9 @@ mod tests {
 
     #[test]
     fn representation_substitution_preserves_caller_supplied_authority() {
-        let mut declaration = TypeStore::default();
-        let unit = declaration.push(row(TypeKind::Tuple(vec![].into())));
-        let callable = declaration.push(row(TypeKind::Function(FunctionType {
+        let declaration = TypeInterner::new(None);
+        let unit = declaration.intern(row(TypeKind::Tuple(vec![].into())));
+        let callable = declaration.intern(row(TypeKind::Function(FunctionType {
             state_promises: Default::default(),
             generics: vec![].into(),
             parameters: vec![].into(),
@@ -535,16 +544,17 @@ mod tests {
             incomplete: false,
             foreign: None,
         })));
-        let signature = nominal(declaration, Some(callable), vec![]);
-        let mut store = TypeStore::default();
-        let argument = store.push(row(TypeKind::Primitive(Primitive::Bytes)));
-        let root = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let signature = nominal(Some(callable), vec![]);
+        let store = std::sync::Arc::clone(&declaration);
+        let argument = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
+        let root = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(argument)].into(),
         }));
         for authority in [AuthoritySummary::Unknown, AuthoritySummary::inert()] {
             let expanded = expand_representation(
-                &mut store,
+                &store,
+                &TypeMemo::new(),
                 root,
                 &mut |store, _, arguments| {
                     // The callback reads actuals from caller-owned scratch.

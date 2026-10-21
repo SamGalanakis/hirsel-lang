@@ -23,7 +23,7 @@ pub(super) fn call(
         call.types,
         *ty,
         &GenericDeclarations::default(),
-        &mut |path| Ok(call.runtime.serialization.get(path).cloned()),
+        &mut |d: hirsel_syntax::DefId| Ok(call.runtime.serialization.get(d.path()).cloned()),
     )
     .map_err(Error::Query)?
     .ok_or_else(|| invalid("codec requires a checked concrete serializable schema"))?;
@@ -65,7 +65,7 @@ pub(super) fn schema(call: &OperationCall<'_>, ty: hirsel_types::TypeId) -> R<Se
         call.types,
         ty,
         &GenericDeclarations::default(),
-        &mut |path| Ok(call.runtime.serialization.get(path).cloned()),
+        &mut |d: hirsel_syntax::DefId| Ok(call.runtime.serialization.get(d.path()).cloned()),
     )
     .map_err(Error::Query)?
     .ok_or_else(|| invalid("a runner call requires checked concrete serializable schemas"))
@@ -118,15 +118,14 @@ fn check_function(
     let hirsel_types::SignatureKind::Function(f) = &signature.kind else {
         return Err(invalid("codec check that is not a function"));
     };
-    let mut types = signature.types.clone();
-    let ty = types.push(hirsel_types::Type::with_kind(
+    let ty = runtime.types.intern(hirsel_types::Type::with_kind(
         hirsel_types::TypeKind::Function(f.clone()),
     ));
     Ok(Value::FunctionReference(Box::new(
         crate::value::NamedFunction {
             definition: path.clone(),
             arguments: vec![],
-            types: std::sync::Arc::new(types),
+            types: runtime.types.clone(),
             ty,
         },
     )))

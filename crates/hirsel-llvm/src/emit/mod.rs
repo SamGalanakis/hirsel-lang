@@ -18,8 +18,8 @@ use hirsel_lir::abi_types::{
 };
 use hirsel_lir::emission::{
     EmitInputs, IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, Manifested, OptLevel, PrefixWord,
-    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, descriptor_name, function_thunk_name,
-    register_result, scalar_shape, site_code, slice_storage, symbol_name,
+    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, function_thunk_name, register_result,
+    scalar_shape, site_code, slice_storage_with_index, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -37,7 +37,7 @@ use hirsel_lir::runtime_abi::{
     LAYOUT_DESCRIPTOR_VERSION, LAYOUT_MAGIC, RuntimeEntry, small_pool,
 };
 use hirsel_lir::stage::{
-    DebugSource, InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
+    InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
     Reproducibility, StageKind, ValidatedUnit,
 };
 use hirsel_syntax::{ContentHash, DefPath};
@@ -50,6 +50,7 @@ use crate::context::{
 use crate::glue;
 use crate::scalar;
 use crate::{CodegenError, PINNED_LLVM, VerifyStage};
+use hirsel_lir::debug::Profile;
 
 mod bindings;
 mod blocks;
@@ -66,6 +67,8 @@ mod instructions;
 mod ownership;
 mod pair;
 mod places;
+mod program;
+pub use program::emit_glue;
 mod sequence_state;
 mod soa;
 use soa::ColumnRow;
@@ -260,28 +263,51 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_object_profile(units, inputs, None)
+    emit_object_profile(units, inputs, Profile::default())
 }
 
-/// Emit optional DWARF line tables and, with measurement, source-site call scopes.
+/// Emits `units` as `emit_object` does, recording what `profile` asks for: each function's
+/// debug intervals (`ObjectArtifact::debug`, for the link's debug object; the object
+/// itself keeps no DWARF) and, under measurement with resolved sources, source-site call
+/// scopes.
 pub fn emit_object_profile(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&crate::ProfileSources>,
+    profile: Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested) = lower(units, inputs, sources, |module, machine| {
+    let (bytes, manifested, plan) = lower(units, inputs, profile, |module, machine| {
         optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs))
     })?;
+    let (bytes, debug) = match plan {
+        Some(plan) => crate::debug::split(&bytes, &plan)
+            .map_err(|message| CodegenError::Object { message })?,
+        None => (bytes, Vec::new()),
+    };
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
-    let mut artifact = artifact(file, manifested, units, inputs, &toolchain())
+    let mut artifact = artifact(file, manifested, inputs, &toolchain())
         .map_err(|problem| CodegenError::Manifest { problem })?;
-    if sources.is_some() {
+    if profile.debug || (inputs.measurement && profile.sources.is_some()) {
         artifact.reproducibility.options = ContentHash::of_parts(
-            "hirsel.profile-lines-options.v1",
-            [artifact.reproducibility.options.0.as_slice()],
+            "hirsel.profile-lines-options.v2",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                &[u8::from(profile.debug)],
+            ],
         );
     }
+    if inputs.measurement
+        && let Some(sources) = profile.sources
+    {
+        artifact.reproducibility.options = ContentHash::of_parts(
+            "hirsel.resolved-profile-options.v1",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                hirsel_lir::profile::dependency_digest(sources).0.as_slice(),
+            ],
+        );
+    }
+    artifact.debug = debug;
     Ok(artifact)
 }
 
@@ -291,11 +317,11 @@ pub fn emit_optimized_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, None, |module, machine| {
+    lower(units, inputs, Profile::default(), |module, machine| {
         optimize(module, machine, inputs.opt, true)?;
         Ok(module.text())
     })
-    .map(|(text, _)| text)
+    .map(|(text, ..)| text)
 }
 
 /// The verified module text before optimization, for IR-level controls.
@@ -303,30 +329,39 @@ pub fn emit_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, None, |module, _| Ok(module.text())).map(|(text, _)| text)
+    lower(units, inputs, Profile::default(), |module, _| {
+        Ok(module.text())
+    })
+    .map(|(text, ..)| text)
 }
 
 /// Lowers `units` into one module for the target and hands it to `finish`.
 fn lower<T>(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
-    sources: Option<&crate::ProfileSources>,
+    profile: Profile<'_>,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
-) -> Result<(T, Manifested), CodegenError> {
+) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
-    let digests = hirsel_lir::emission::InputDigests::of(inputs);
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = hirsel_lir::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let inputs = &EmitInputs {
+        index: Some(index),
+        ..inputs.clone()
+    };
     for unit in units {
-        hirsel_lir::emission::check_receipt_against(unit, inputs, &digests).map_err(|problem| {
+        hirsel_lir::emission::check_receipt(unit, inputs).map_err(|problem| {
             CodegenError::Receipt {
                 definition: unit.unit().header.definition.clone(),
                 problem,
             }
         })?;
-    }
-    if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {
-        return Err(CodegenError::Manifest {
-            problem: "foreign or noncanonical descriptor registry".into(),
-        });
     }
     let mut manifested = Manifested::default();
     let mut optimizer_only = BTreeSet::new();
@@ -335,8 +370,10 @@ fn lower<T>(
         let context = Context::new();
         let module = Module::new(&context, "hirsel");
         module.set_target(&machine);
-        let debug =
-            sources.map(|_| crate::context::DebugInfo::new(&module, inputs.opt != OptLevel::None));
+        let debug = profile
+            .debug
+            .then(|| crate::context::DebugInfo::new(&module, inputs.opt != OptLevel::None));
+        let mut plan = crate::debug::DebugPlan::default();
         let mut functions = Vec::new();
         for unit in units {
             let unit = unit.unit();
@@ -369,7 +406,7 @@ fn lower<T>(
                 &body_name,
                 &unit.header.definition,
                 true,
-                Aliasing::of(inputs),
+                Aliasing::of(inputs.callbacks),
             )?;
             let entry = if signature.roots.is_empty() {
                 function
@@ -380,7 +417,7 @@ fn lower<T>(
                     &name,
                     &unit.header.definition,
                     true,
-                    Aliasing::of(inputs),
+                    Aliasing::of(inputs.callbacks),
                 )?;
                 define_root_adapter(
                     &module,
@@ -399,6 +436,22 @@ fn lower<T>(
                 }
                 module.add_attribute(entry, AttributeSlot::Function, Attribute::InlineHint);
                 manifested.library.insert(body_name);
+                // The adapter has its unit's scope, so a body inlined into it keeps its
+                // locations.
+                if let Some(debug) = debug.as_ref() {
+                    let site = unit.tables.source_anchors
+                        [unit.blocks[unit.entry.index()].anchor.index()]
+                    .site;
+                    let column = plan.column(unit);
+                    let line = hirsel_lir::debug::SiteTable::new(unit)
+                        .code(site)
+                        .unwrap_or(0);
+                    let scope = debug.function(entry, &unit.header.definition.to_string(), line);
+                    debug.locate_all(entry, scope, line, column);
+                    if !inputs.available_externally.contains(&unit.header.instance) {
+                        plan.functions.push((name.clone(), column - 1, site));
+                    }
+                }
                 entry
             };
             // A small source unit another object implements and exports: here only an
@@ -407,37 +460,6 @@ fn lower<T>(
                 module.make_available_externally(function);
                 functions.push((unit, function, signature));
                 continue;
-            }
-            if !copy && inputs.callbacks.contains(&unit.header.definition) {
-                let thunk =
-                    callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
-                let callback = foreign::define_callback_thunk(
-                    &module,
-                    &mut manifested,
-                    inputs.layouts,
-                    inputs.target.c_convention,
-                    &thunk,
-                    entry,
-                    &external,
-                    &unit.header.definition,
-                )?;
-                if unit.header.origin == UnitOrigin::Library
-                    || inputs.inline_instances.contains(&unit.header.instance)
-                {
-                    module.make_weak_odr(callback);
-                    module.add_attribute(callback, AttributeSlot::Function, Attribute::InlineHint);
-                    manifested.library.insert(thunk);
-                } else {
-                    manifested.exports.insert(
-                        thunk.clone(),
-                        ObjectSymbol {
-                            name: thunk,
-                            kind: ObjectSymbolKind::Function,
-                            definition: Some(unit.header.definition.clone()),
-                            abi: Some(abi_digest(abi)),
-                        },
-                    );
-                }
             }
             // rustc_middle/src/mono.rs:132: shared owners at O0, local optimizer
             // copies above. A template's owner retains its definition independently
@@ -462,6 +484,22 @@ fn lower<T>(
                 if unit.header.definition.is_core("$native.list_grow") {
                     module.add_attribute(function, AttributeSlot::Function, Attribute::Cold);
                     module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
+                }
+                // A finalizer's entry is also called through a descriptor in
+                // the separate glue object. Retain it even if every local call
+                // inlines away. Its own receiver layout proves this dependency,
+                // so retention reads no unrelated program layouts or numbering.
+                if abi.parameters.first().is_some_and(|parameter| {
+                    inputs
+                        .layouts
+                        .layout(parameter.layout)
+                        .is_some_and(|layout| {
+                            layout.finalizer.as_ref().is_some_and(|finalizer| {
+                                finalizer.definition == unit.header.definition
+                            })
+                        })
+                }) {
+                    manifested.kept.insert(name.clone());
                 }
                 manifested.library.insert(name);
                 if abi.shape == CallableShape::Definition {
@@ -509,31 +547,46 @@ fn lower<T>(
             functions.push((unit, function, signature));
         }
         for (unit, function, signature) in functions {
+            let rooted = !signature.roots.is_empty();
             let mut emitter =
                 FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
-            if let (Some(debug), Some(source)) = (
-                debug.as_ref(),
-                sources.and_then(|s| s.get(&unit.header.definition)),
-            ) {
+            if let Some(debug) = debug.as_ref() {
                 let site =
                     unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-                let (line, _) = source
-                    .location(site.start)
-                    .map(|p| (p.line, p.column))
-                    .unwrap_or((1, 1));
-                let scope = debug.function(
-                    function,
-                    &source.logical_path().to_string_lossy(),
-                    &unit.header.definition.to_string(),
-                    line,
-                );
-                emitter.profile = Some((debug, scope, source));
-                debug.location(&emitter.prologue, scope, line, 1);
-                debug.location(&emitter.builder, scope, line, 1);
+                let column = plan.column(unit);
+                // Content-only locations: a complete site's table code as the line.
+                let line = hirsel_lir::debug::SiteTable::new(unit)
+                    .code(site)
+                    .unwrap_or(0);
+                let scope = debug.function(function, &unit.header.definition.to_string(), line);
+                if !inputs.available_externally.contains(&unit.header.instance) {
+                    // The scope is the body's: a library unit's behind its root adapter.
+                    let name = symbol_name(&unit.header.definition, Some(&unit.header.instance));
+                    let name = if rooted {
+                        format!("{name}{ROOTS_SUFFIX}")
+                    } else {
+                        name
+                    };
+                    plan.functions.push((name, column - 1, site));
+                }
+                emitter.debug_sites = Some(hirsel_lir::debug::SiteTable::new(unit));
+                emitter.debug = Some((debug, scope, column));
+                debug.location(&emitter.prologue, scope, line, column);
+                debug.location(&emitter.builder, scope, line, column);
             }
-            emitter.registry_table()?;
+            if inputs.measurement {
+                emitter.measured = profile.sources.and_then(|s| s.get(&unit.header.definition));
+            }
             emitter.emit()?;
         }
+        // A library finalizer or C callback entry is kept for glue to call.
+        let kept: Vec<_> = manifested
+            .kept
+            .iter()
+            .filter(|name| module.defines(name) && !optimizer_only.contains(*name))
+            .map(|name| module.function_address(name))
+            .collect();
+        module.keep(&kept);
         // Copied root bodies were visible during lowering for the private root ABI.
         // They are optimizer-only: residual calls resolve to the template's owner.
         for name in &optimizer_only {
@@ -584,9 +637,10 @@ fn lower<T>(
         if let Some(debug) = &debug {
             debug.finalize();
         }
-        finish(&module, &machine)?
+        (finish(&module, &machine)?, profile.debug.then_some(plan))
     };
-    Ok((finished, manifested))
+    let (finished, plan) = finished;
+    Ok((finished, manifested, plan))
 }
 
 /// Defines `name`, the function-reference thunk of the definition entry `target`: the
@@ -859,11 +913,15 @@ struct FnEmitter<'m, 'a> {
     signature: Signature<'m, 'a>,
     manifested: &'a mut Manifested,
     builder: Builder<'m>,
-    profile: Option<(
+    /// With debug intervals: the function's scope and its item's column (`crate::debug`).
+    debug_sites: Option<hirsel_lir::debug::SiteTable>,
+    debug: Option<(
         &'a crate::context::DebugInfo<'m>,
         crate::context::DebugScope,
-        &'a crate::ProfileSource,
+        u32,
     )>,
+    /// Under measurement: the resolved source its instrumentation embeds.
+    measured: Option<&'a crate::ProfileSource>,
     /// Positioned at the end of the prologue, which holds every stack slot.
     prologue: Builder<'m>,
     prologue_block: BasicBlock<'m>,

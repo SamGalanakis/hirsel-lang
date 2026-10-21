@@ -115,7 +115,7 @@ fn a_callback_writeback_cannot_target_a_missing_field() {
 
 fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Execution, ExecutionError> {
     let state_kind = || TypeKind::Named {
-        definition: path("State"),
+        definition: hirsel_syntax::DefId::intern(&path("State")),
         arguments: vec![].into(),
     };
     let mut callback = Builder::new();
@@ -263,14 +263,14 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
             fields: 1,
             representation: None,
         }],
-        ..RuntimeTypes::default()
+        ..crate::support::runtime()
     };
     let mut ops = Writeback {
         callback: if native {
             Value::FunctionReference(Box::new(hirsel_interp::value::NamedFunction {
                 definition: path("step"),
                 arguments: vec![],
-                types: std::sync::Arc::new(main.types.clone()),
+                types: crate::support::session(),
                 ty: callback_type,
             }))
         } else {

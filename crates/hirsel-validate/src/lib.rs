@@ -18,14 +18,21 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+use hashed::{HashMap, HashSet};
 use hirsel_intern::work::{self, Counter};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use hirsel_tir::*;
 use hirsel_types::{
-    Destination, GenericArgument, QueryError, Signature, TypeId, TypeKind, TypeStore, UseKind,
+    Destination, GenericArgument, QueryError, Signature, TypeId, TypeInterner, TypeKind, TypeMemo,
+    UseKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+mod bit_rows;
+mod hashed {
+    pub(super) type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+    pub(super) type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
+}
 mod cleanup_proof;
 mod declaration;
 mod effects;
@@ -33,10 +40,12 @@ mod flow;
 mod flow_origins;
 mod generics;
 mod indexed;
+mod input;
 mod instances;
 mod matching;
 mod origin_dependencies;
 mod origin_types;
+mod proofs;
 mod protocol;
 mod scope_locals;
 mod scratch;
@@ -46,11 +55,13 @@ mod static_data;
 mod tail;
 mod typing;
 mod variant_brands;
+use input::Reader;
+pub use input::{
+    SignatureLookup, SignatureMap, UniverseErrors, VRead, ValidatedSignatures, ValidationDigest,
+    ViewVerdict, check_view, digest, errors_digest, read_holds,
+};
 pub use instances::{InstanceViolation, validate_instance_bodies};
 pub use matching::{MAX_MATCH_WORK, tooling_limit_error};
-
-/// Owned, self-contained snapshots; IDs are never shared between their stores.
-pub type Signatures = BTreeMap<DefPath, Signature>;
 
 /// Deterministic compiler-invariant violations from full validation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -158,115 +169,34 @@ pub enum ViolationKind {
 /// violations, never assumed valid. Call and owner-origin relationships are
 /// checked from executable producer edges. Unit bodies without parameters need
 /// no owner snapshot; if supplied, its result and parameter types are checked too.
-pub fn validate(definition: &Definition, signatures: &Signatures) -> Validation {
-    validate_input(definition, signatures, || invalid_signatures(signatures))
+/// Every view V reads is appended to `reads` (`input`).
+pub fn validate(
+    definition: &Definition,
+    t: &TypeInterner,
+    signatures: &dyn SignatureLookup,
+    reads: &mut Vec<VRead>,
+) -> Validation {
+    // Opt-in per-definition profiling, independent of the driver's phase
+    // accounting (including V invoked by import and compile-time execution).
+    static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let started = PROFILE
+        .get_or_init(|| std::env::var_os("HIRSEL_VALIDATE_PROFILE").is_some())
+        .then(std::time::Instant::now);
+    let reader = Reader::new(signatures);
+    let validation = validate_input(definition, t, &reader);
+    reader.finish(reads);
+    if let Some(started) = started {
+        eprintln!(
+            "hirsel-validate-profile\t{}\t{}\t{}\t{}",
+            definition.path,
+            started.elapsed().as_nanos(),
+            definition.types.len(),
+            validation.violations.len()
+        );
+    }
+    validation
 }
 
-trait SignatureLookup {
-    fn get(&self, path: &DefPath) -> Option<&Signature>;
-    fn first_heap(&self) -> Option<hirsel_types::HeapRole>;
-}
-impl SignatureLookup for Signatures {
-    fn get(&self, path: &DefPath) -> Option<&Signature> {
-        BTreeMap::get(self, path)
-    }
-    fn first_heap(&self) -> Option<hirsel_types::HeapRole> {
-        self.values().find_map(|s| s.metadata.roles.heap.clone())
-    }
-}
-struct SignatureOverlay<'a> {
-    base: &'a ValidatedSignatures,
-    replacement: &'a Signature,
-}
-impl SignatureLookup for SignatureOverlay<'_> {
-    fn get(&self, path: &DefPath) -> Option<&Signature> {
-        if path == &self.replacement.definition {
-            Some(self.replacement)
-        } else {
-            self.base.get(path)
-        }
-    }
-    fn first_heap(&self) -> Option<hirsel_types::HeapRole> {
-        let first = self
-            .base
-            .heaps
-            .iter()
-            .find(|(path, _)| *path != &self.replacement.definition);
-        match (&self.replacement.metadata.roles.heap, first) {
-            (Some(heap), Some((path, _))) if &self.replacement.definition < path => {
-                Some(heap.clone())
-            }
-            (_, Some((_, heap))) => Some(heap.clone()),
-            (heap, None) => heap.clone(),
-        }
-    }
-}
-
-/// Immutable complete signature input, independently validated once at creation.
-/// Every signature is checked, including rows unreachable from a published body.
-/// Reuse is safe only while the owned input is unchanged.
-pub struct ValidatedSignatures {
-    signatures: Signatures,
-    errors: BTreeMap<DefPath, Violation>,
-    heaps: BTreeMap<DefPath, hirsel_types::HeapRole>,
-}
-impl SignatureLookup for ValidatedSignatures {
-    fn get(&self, path: &DefPath) -> Option<&Signature> {
-        self.signatures.get(path)
-    }
-    fn first_heap(&self) -> Option<hirsel_types::HeapRole> {
-        self.heaps.values().next().cloned()
-    }
-}
-impl ValidatedSignatures {
-    pub fn new(signatures: Signatures) -> Self {
-        let errors = signature_errors(&signatures);
-        let heaps = signatures
-            .iter()
-            .filter_map(|(path, signature)| {
-                signature
-                    .metadata
-                    .roles
-                    .heap
-                    .clone()
-                    .map(|heap| (path.clone(), heap))
-            })
-            .collect();
-        Self {
-            signatures,
-            errors,
-            heaps,
-        }
-    }
-    /// Compare the whole input, including malformed rows and metadata that an
-    /// incorrect producer could omit from its fingerprint.
-    pub fn matches(&self, signatures: &Signatures) -> bool {
-        &self.signatures == signatures
-    }
-    pub fn validate(&self, definition: &Definition) -> Validation {
-        validate_input(definition, self, || self.errors.values().cloned().collect())
-    }
-    /// Validate a materialized owner signature without copying the input map.
-    /// The replacement shadows its old signature exactly as map insertion did.
-    pub fn validate_with_signature(
-        &self,
-        definition: &Definition,
-        replacement: &Signature,
-    ) -> Validation {
-        let overlay = SignatureOverlay {
-            base: self,
-            replacement,
-        };
-        validate_input(definition, &overlay, || {
-            let mut errors = self.errors.clone();
-            errors.remove(&replacement.definition);
-            if let Some(error) = signature_error(&replacement.definition, replacement, &overlay) {
-                errors.insert(replacement.definition.clone(), error);
-            }
-            errors.into_values().collect()
-        })
-    }
-}
 fn invalid_signature(path: &DefPath) -> Violation {
     Violation {
         body: None,
@@ -276,21 +206,29 @@ fn invalid_signature(path: &DefPath) -> Violation {
     }
 }
 fn signature_error(
-    path: &DefPath,
+    t: &TypeInterner,
+    d: DefId,
     signature: &Signature,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Option<Violation> {
     work::count(Counter::ValidateSignatureRows);
-    if path != &signature.definition
-        || !typing::signature_valid(signature)
-        || !carrier_rows_valid(&signature.types, signatures)
-        || !declaration::valid(signature, signatures)
-        || !protocol::declaration(signature, signatures)
-        || !protocol::selectors(signature, signatures)
+    let path = d.path();
+    // A view's verdict is its own: it shares no memo with a body or with I.
+    let memo = TypeMemo::new();
+    if d != signature.definition
+        || !typing::signature_valid(t, signature)
+        || !carrier_rows_valid(
+            t,
+            &hirsel_types::closure(t, hirsel_types::signature_types(t, signature)),
+            signatures,
+        )
+        || !declaration::valid(t, signature, signatures)
+        || !protocol::declaration(t, &memo, signature, signatures)
+        || !protocol::selectors(t, &memo, signature, signatures)
     {
         return Some(invalid_signature(path));
     }
-    match serialization::declaration(signature, signatures) {
+    match serialization::declaration(t, &memo, signature, signatures) {
         Ok(true) => None,
         Ok(false) => Some(invalid_signature(path)),
         Err(_) => Some(Violation {
@@ -303,40 +241,31 @@ fn signature_error(
         }),
     }
 }
-fn signature_errors(signatures: &Signatures) -> BTreeMap<DefPath, Violation> {
-    signatures
-        .iter()
-        .filter_map(|(path, signature)| {
-            signature_error(path, signature, signatures).map(|error| (path.clone(), error))
-        })
-        .collect()
-}
-fn invalid_signatures(signatures: &Signatures) -> Vec<Violation> {
-    signature_errors(signatures).into_values().collect()
-}
 fn validate_input(
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
-    signature_errors: impl FnOnce() -> Vec<Violation>,
+    t: &TypeInterner,
+    signatures: &Reader<'_>,
 ) -> Validation {
-    let mut errors = validate_structure(definition);
+    // V's own structural memo: it shares no memo or verdict with inference.
+    let memo = TypeMemo::new();
+    let mut errors = validate_structure(definition, t);
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    if !graph_valid(&definition.types) || !carrier_rows_valid(&definition.types, signatures) || definition.types.iter().any(|(_, t)| {
-        t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
+    if !graph_valid(t, &definition.types) || !carrier_rows_valid(t, &definition.types, signatures) || definition.types.iter().map(|&id| t.row(id)).any(|t| {
+        t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(*definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
     }) {
         errors.push(Violation { body: None, block: None, instruction: None, kind: ViolationKind::InvalidTypeGraph });
     }
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    errors.extend(signature_errors());
+    errors.extend(signatures.universe_errors().iter().cloned());
     // Reconstruct tracked bodies from the declaration and the entry's own clause producers.
     // Contracts inside ordinary nested closures cannot inherit the enclosing declaration.
     let mut caller_bodies = Vec::new();
     if signatures
-        .get(&definition.path)
+        .get(definition.path)
         .is_some_and(|s| s.metadata.track_caller)
     {
         caller_bodies.push(definition.entry);
@@ -372,12 +301,12 @@ fn validate_input(
             },
         });
     }
-    errors.extend(protocol::receipts(definition, signatures));
-    errors.extend(protocol::unproved_promises(definition, signatures));
+    errors.extend(protocol::receipts(t, &memo, definition, signatures));
+    errors.extend(protocol::unproved_promises(t, definition, signatures));
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    let Some(declarations) = typing::declaration_tables(definition, signatures) else {
+    let Some(declarations) = typing::declaration_tables(t, definition, signatures) else {
         return Validation {
             violations: vec![Violation {
                 body: None,
@@ -400,11 +329,13 @@ fn validate_input(
             }
         }
     }
-    let scratch = scratch::Scratch::new(&definition.types, definition.bodies.len());
+    let scratch = scratch::Scratch::new(definition.bodies.len());
     for (index, body) in definition.bodies.iter().enumerate() {
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -423,14 +354,14 @@ fn validate_input(
         let mut witnessed = BTreeSet::new();
         for tail in &body.tail_sites {
             let property = |ty, counted| {
-                let mut lookup = |p: &DefPath| {
+                let mut lookup = |d: DefId| {
                     Ok::<_, hirsel_types::QueryError>(
-                        signatures.get(p).cloned().map(std::sync::Arc::new),
+                        signatures.get(d).cloned().map(std::sync::Arc::new),
                     )
                 };
                 if counted {
                     hirsel_types::structural_equality(
-                        &definition.types,
+                        t,
                         ty,
                         hirsel_types::Bound::Data,
                         &declarations[index],
@@ -439,7 +370,7 @@ fn validate_input(
                     .unwrap_or_else(|error| checker.proof_failure(error, false))
                 } else {
                     hirsel_types::structural_property(
-                        &definition.types,
+                        t,
                         ty,
                         hirsel_types::StructuralProperty::Plain,
                         &declarations[index],
@@ -449,7 +380,13 @@ fn validate_input(
                 }
             };
             if !witnessed.insert(tail.call_block.0)
-                || !crate::tail::verify_self_tail(definition, BodyId(index as u32), tail, &property)
+                || !crate::tail::verify_self_tail(
+                    t,
+                    definition,
+                    BodyId(index as u32),
+                    tail,
+                    &property,
+                )
             {
                 checker.error(ViolationKind::WrongKind {
                     entity: "tail witness",
@@ -481,6 +418,8 @@ fn validate_input(
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -518,6 +457,8 @@ fn validate_input(
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -536,10 +477,12 @@ fn validate_input(
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
             if index as u32 == definition.entry.0 {
-                for parameter in unique_promises(signatures.get(&definition.path), signatures) {
+                for parameter in unique_promises(t, signatures.get(definition.path), signatures) {
                     let mut proof = Checker {
                         definition,
                         body,
+                        t,
+                        memo: &memo,
                         signatures,
                         declarations: &declarations,
                         scratch: &scratch,
@@ -571,8 +514,9 @@ fn validate_input(
 
 /// Explicit and SEM-3-implied `@preserves_unique` selections (MODE-2).
 fn unique_promises(
+    t: &TypeInterner,
     signature: Option<&Signature>,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Vec<hirsel_types::ParamId> {
     let Some(hirsel_types::SignatureKind::Function(f)) = signature.map(|s| &s.kind) else {
         return Vec::new();
@@ -589,7 +533,7 @@ fn unique_promises(
             _ => None,
         })
         .collect();
-    if signature.is_some_and(|s| format_association(s, signatures))
+    if signature.is_some_and(|s| format_association(t, s, signatures))
         && !promised.contains(&hirsel_types::ParamId(1))
     {
         promised.push(hirsel_types::ParamId(1));
@@ -599,7 +543,7 @@ fn unique_promises(
 
 /// Reconstruct SEM-3's implied promise from declaration snapshots, independent
 /// of source annotations and of the producer's ownership decisions.
-fn format_association(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+fn format_association(t: &TypeInterner, signature: &Signature, signatures: &Reader<'_>) -> bool {
     let hirsel_types::SignatureKind::Function(f) = &signature.kind else {
         return false;
     };
@@ -609,22 +553,20 @@ fn format_association(signature: &Signature, signatures: &dyn SignatureLookup) -
     let Some(receiver) = f.parameters.first() else {
         return false;
     };
-    let Some(TypeKind::Named { definition, .. }) =
-        signature.types.get(receiver.ty).map(|r| &r.kind)
-    else {
+    let Some(TypeKind::Named { definition, .. }) = t.get(receiver.ty).map(|r| &r.kind) else {
         return false;
     };
-    signatures.get(definition).is_some_and(|s| {
+    signatures.get(*definition).is_some_and(|s| {
         matches!(&s.kind, hirsel_types::SignatureKind::Type(t)
-            if t.format.as_ref() == Some(&signature.definition))
+            if t.format.as_ref() == Some(signature.definition.path()))
     })
 }
 
 /// Lowering-test helper: make invariant failures readable at their publication
 /// boundary, without introducing a dependency on the interpreter.
 #[track_caller]
-pub fn assert_valid(definition: &Definition, signatures: &Signatures) {
-    let result = validate(definition, signatures);
+pub fn assert_valid(definition: &Definition, t: &TypeInterner, signatures: &dyn SignatureLookup) {
+    let result = validate(definition, t, signatures, &mut vec![]);
     assert!(
         result.violations.is_empty(),
         "invalid typed IR: {:#?}",
@@ -641,9 +583,14 @@ struct Site {
 struct Checker<'a> {
     definition: &'a Definition,
     body: &'a Body,
-    signatures: &'a dyn SignatureLookup,
+    /// The session interner: the definition's rows, signature rows and V's
+    /// own temporaries.
+    t: &'a TypeInterner,
+    /// V's structural memo, never inference's (design §1a).
+    memo: &'a TypeMemo,
+    signatures: &'a Reader<'a>,
     declarations: &'a [hirsel_types::GenericDeclarations],
-    scratch: &'a scratch::Scratch<'a>,
+    scratch: &'a scratch::Scratch,
     contract: bool,
     site: Site,
     errors: Vec<Violation>,
@@ -671,8 +618,21 @@ impl<'a> Checker<'a> {
         }
         fallback
     }
-    fn working_store(&self) -> scratch::Region<'a> {
-        self.scratch.store()
+    /// Run `f` with a contextual memo over `generics` whose lookups are V's
+    /// own recorded signature reads.
+    fn context<R>(
+        &self,
+        generics: &hirsel_types::GenericDeclarations,
+        f: impl FnOnce(&mut hirsel_types::ContextMemo<'_>) -> R,
+    ) -> R {
+        let mut lookup = |d: DefId| {
+            Ok::<_, QueryError>(self.signatures.get(d).cloned().map(std::sync::Arc::new))
+        };
+        f(&mut hirsel_types::ContextMemo::new(
+            self.t,
+            generics,
+            &mut lookup,
+        ))
     }
     /// The lifetime sources of a body row's relation: every reach except its
     /// arena places, which are where its blocks live (PROV-4).
@@ -711,7 +671,7 @@ impl<'a> Checker<'a> {
     /// except the callable's own Arena parameters (PROV-4).
     fn signature_lifetime(
         &self,
-        store: &TypeStore,
+        store: &TypeInterner,
         function: &hirsel_types::FunctionType,
         relation: &hirsel_types::Relation,
     ) -> hirsel_types::Relation {
@@ -727,7 +687,7 @@ impl<'a> Checker<'a> {
     fn arena_type(&self, ty: TypeId) -> bool {
         self.signatures
             .first_heap()
-            .is_some_and(|h| hirsel_types::is_arena_type(&self.definition.types, ty, &h.arena))
+            .is_some_and(|h| hirsel_types::is_arena_type(self.t, ty, &h.arena))
     }
     /// Whether a relation place is an Arena binding (PROV-4): a parameter or a
     /// bound place, typed with the registry's Arena, of this body or of the
@@ -744,8 +704,8 @@ impl<'a> Checker<'a> {
         let arena = |body: &Body, local: LocalId| {
             body.locals
                 .get(local.0 as usize)
-                .and_then(|l| self.definition.types.get(l.ty))
-                .is_some_and(|t| matches!(&t.kind, TypeKind::Named { definition, .. } if *definition == heap.arena))
+                .and_then(|l| self.t.get(l.ty))
+                .is_some_and(|t| matches!(&t.kind, TypeKind::Named { definition, .. } if *definition.path() == heap.arena))
         };
         std::iter::once(self.body)
             .chain(&self.definition.bodies)
@@ -786,40 +746,38 @@ impl<'a> Checker<'a> {
     }
 }
 
-fn owned_type(store: &TypeStore, id: TypeId) -> bool {
-    store.id(id.index()) == Some(id)
-}
-
 /// Only an erased carrier declaration gives a nominal row erased evidence (CAP-2).
-fn carrier_rows_valid(store: &TypeStore, signatures: &dyn SignatureLookup) -> bool {
-    store.iter().all(|(_, row)| match (&row.kind, &row.erased_captures) {
+fn carrier_rows_valid(t: &TypeInterner, rows: &[TypeId], signatures: &Reader<'_>) -> bool {
+    rows.iter().all(|&id| match (&t.row(id).kind, &t.row(id).erased_captures) {
         (TypeKind::Named { definition, .. }, Some(_)) => signatures
-            .get(definition)
+            .get(*definition)
             .is_some_and(|s| matches!(&s.kind, hirsel_types::SignatureKind::Type(d) if d.captures.is_some())),
         _ => true,
     })
 }
-// Check provenance before shared helpers (TypeStore::get asserts on foreign IDs).
-// Iterative DFS also bounds recursion before invoking recursive shared importers.
-fn graph_valid(store: &TypeStore) -> bool {
-    let mut colour = vec![0; store.len()];
-    for (root, _) in store.iter() {
+/// V's own walk of a closure table: every row and edge is in the table (the
+/// caller checked membership), and the graph is acyclic with no recovery row.
+/// Iterative DFS also bounds recursion before invoking recursive shared helpers.
+fn graph_valid(t: &TypeInterner, rows: &[TypeId]) -> bool {
+    let members: crate::hashed::HashSet<TypeId> = rows.iter().copied().collect();
+    let mut colour = crate::hashed::HashMap::<TypeId, u8>::default();
+    for &root in rows {
         let mut stack = vec![(root, false)];
         while let Some((id, leaving)) = stack.pop() {
-            if !owned_type(store, id) {
+            if !members.contains(&id) || !t.contains(id) {
                 return false;
             }
             if leaving {
-                colour[id.index()] = 2;
+                colour.insert(id, 2);
                 continue;
             }
-            match colour[id.index()] {
-                1 => return false,
-                2 => continue,
+            match colour.get(&id) {
+                Some(1) => return false,
+                Some(2) => continue,
                 _ => (),
             }
-            colour[id.index()] = 1;
-            let row = store.get(id).unwrap();
+            colour.insert(id, 1);
+            let row = t.row(id);
             // A nominal row's evidence is checked against its declaration by
             // `carrier_rows_valid`.
             if row.erased_captures.is_some()
@@ -875,7 +833,16 @@ fn graph_valid(store: &TypeStore) -> bool {
 /// scopes, but makes no signature, reachability, type or ownership claim. The
 /// strict API remains the lowering/publication oracle. One terminator is encoded
 /// by Block's type, rather than counted by this function.
-pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
+pub fn validate_structure(definition: &Definition, t: &TypeInterner) -> Vec<Violation> {
+    // TypeIds carry no provenance: a row belongs to this definition exactly
+    // when its closure table lists it.
+    let members: crate::hashed::HashSet<TypeId> = definition
+        .types
+        .iter()
+        .copied()
+        .filter(|&id| t.contains(id))
+        .collect();
+    let owned_type = |id: TypeId| members.contains(&id);
     let mut errors = Vec::new();
     let mut add = |body: Option<BodyId>, block: Option<BlockId>, instruction: Option<u32>, kind| {
         let v = Violation {
@@ -1338,16 +1305,20 @@ pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
                 add(bid, block, inst, ViolationKind::InvalidId { arena, index });
             }
         }
-        for t in type_roots {
-            if !owned_type(&definition.types, t) {
-                add(bid, None, None, ViolationKind::InvalidType(t));
+        for ty in type_roots {
+            if !owned_type(ty) {
+                add(bid, None, None, ViolationKind::InvalidType(ty));
             }
         }
     }
-    // Check shared graph edges once; each body's root IDs were checked above.
-    for (_, row) in definition.types.iter() {
-        for edge in row.kind.graph_edges() {
-            if !owned_type(&definition.types, edge.ty) {
+    // Check the table's graph edges once; each body's root IDs were checked above.
+    for &id in definition.types.iter() {
+        if !owned_type(id) {
+            add(None, None, None, ViolationKind::InvalidType(id));
+            continue;
+        }
+        for edge in t.row(id).kind.graph_edges() {
+            if !owned_type(edge.ty) {
                 add(None, None, None, ViolationKind::InvalidType(edge.ty));
             }
         }
@@ -1369,7 +1340,7 @@ mod support;
 
 /// A row whose copy is an independent global handle: a `Shared[T]` root
 /// (MEM-11) or a run-owned `Mutex` or `Atomic` table entry (MODE-4).
-pub(crate) fn handle_root(store: &TypeStore, ty: TypeId) -> bool {
+pub(crate) fn handle_root(store: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         store.get(ty).map(|row| &row.kind),
         Some(TypeKind::Builtin {

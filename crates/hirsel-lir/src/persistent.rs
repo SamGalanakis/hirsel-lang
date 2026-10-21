@@ -3,7 +3,7 @@
 //! A forward analysis keeps one state per block and per edge, and most of a
 //! state is the same as its neighbours'. `PVec` is a 32-way tree whose clones
 //! share every node: a clone is one reference count, a write copies the path
-//! to its leaf, and `join` skips every subtree the two sides share, so a
+//! to its leaf (sized by the row, at most 32 elements), and `join` skips every subtree the two sides share, so a
 //! state costs what it changes, not what it holds.
 //!
 //! Every node knows which of its element type's flags (`Element::flags`)
@@ -28,9 +28,30 @@ use std::rc::Rc;
 const BITS: u32 = 5;
 const WIDTH: usize = 1 << BITS;
 
+/// Match a leaf's copied storage to an inner node's pointer array, as Immer
+/// derives BL separately from B (immer/detail/rbts/node.hpp:1027-1039 at
+/// bd4fc749b97dfa2b66a8f3de00bbf234db4856ef). Keep compact rows at width 32.
+/// Large ownership rows then copy only the neighbours that fit in that space.
+fn leaf_bits<T>() -> u32 {
+    let bytes = WIDTH * std::mem::size_of::<Rc<()>>();
+    (bytes / std::mem::size_of::<T>().max(1))
+        .max(1)
+        .ilog2()
+        .min(BITS)
+}
+
+fn leaf_width<T>() -> usize {
+    1 << leaf_bits::<T>()
+}
+
+/// The index shift of an inner node `height` levels above the leaves.
+fn shift<T>(height: u32) -> u32 {
+    height.saturating_sub(1) * BITS + leaf_bits::<T>()
+}
+
 /// The number of elements under a full node `height` levels above the leaves.
-fn size(height: u32) -> usize {
-    WIDTH << (height * BITS)
+fn size<T>(height: u32) -> usize {
+    leaf_width::<T>() << (height * BITS)
 }
 
 /// An element of a joined state.
@@ -187,7 +208,7 @@ impl<T: Clone> PVec<T> {
     }
 
     pub fn push(&mut self, value: T) {
-        if self.len == size(self.depth) {
+        if self.len == size::<T>(self.depth) {
             self.deepen();
         }
         let mut node = touch(&mut self.root);
@@ -199,7 +220,7 @@ impl<T: Clone> PVec<T> {
                     break;
                 }
                 Kind::Inner(children) => {
-                    let i = (self.len >> (height * BITS)) & (WIDTH - 1);
+                    let i = (self.len >> shift::<T>(height)) & (WIDTH - 1);
                     if i == children.len() {
                         children.push(Node::empty(height - 1));
                     }
@@ -217,10 +238,10 @@ impl<T: Clone> PVec<T> {
         if self.len == 0 {
             self.root = subtree;
             self.depth = height;
-            self.len = size(height);
+            self.len = size::<T>(height);
             return;
         }
-        while self.depth <= height || self.len == size(self.depth) {
+        while self.depth <= height || self.len == size::<T>(self.depth) {
             self.deepen();
         }
         let mut node = touch(&mut self.root);
@@ -233,14 +254,14 @@ impl<T: Clone> PVec<T> {
                 children.push(subtree);
                 break;
             }
-            let i = (self.len >> (at * BITS)) & (WIDTH - 1);
+            let i = (self.len >> shift::<T>(at)) & (WIDTH - 1);
             if i == children.len() {
                 children.push(Node::empty(at - 1));
             }
             node = touch(&mut children[i]);
             at -= 1;
         }
-        self.len += size(height);
+        self.len += size::<T>(height);
     }
 
     /// Set the length, filling with `value`. The fill shares one node per
@@ -249,18 +270,18 @@ impl<T: Clone> PVec<T> {
         if len < self.len {
             return self.truncate(len);
         }
-        while self.len < len && self.len % WIDTH != 0 {
+        while self.len < len && !self.len.is_multiple_of(leaf_width::<T>()) {
             self.push(value.clone());
         }
         let mut full: Vec<Rc<Node<T>>> = Vec::new();
-        while len - self.len >= WIDTH {
+        while len - self.len >= leaf_width::<T>() {
             let mut height = 0;
-            while len - self.len >= size(height + 1) && self.len % size(height + 1) == 0 {
+            while len - self.len >= size::<T>(height + 1) && self.len % size::<T>(height + 1) == 0 {
                 height += 1;
             }
             while full.len() <= height as usize {
                 let kind = match full.last() {
-                    None => Kind::Leaf(vec![value.clone(); WIDTH]),
+                    None => Kind::Leaf(vec![value.clone(); leaf_width::<T>()]),
                     Some(below) => Kind::Inner(vec![below.clone(); WIDTH]),
                 };
                 full.push(Node::new(kind));
@@ -283,11 +304,11 @@ impl<T: Clone> PVec<T> {
         loop {
             match &mut node.kind {
                 Kind::Leaf(items) => {
-                    items.truncate((last & (WIDTH - 1)) + 1);
+                    items.truncate((last & (leaf_width::<T>() - 1)) + 1);
                     break;
                 }
                 Kind::Inner(children) => {
-                    let i = (last >> (height * BITS)) & (WIDTH - 1);
+                    let i = (last >> shift::<T>(height)) & (WIDTH - 1);
                     children.truncate(i + 1);
                     node = touch(&mut children[i]);
                     height -= 1;
@@ -295,7 +316,7 @@ impl<T: Clone> PVec<T> {
             }
         }
         self.len = len;
-        while self.depth > 0 && len <= size(self.depth - 1) {
+        while self.depth > 0 && len <= size::<T>(self.depth - 1) {
             let Kind::Inner(children) = &self.root.kind else {
                 unreachable!("a root above the leaves is an inner node");
             };
@@ -329,7 +350,13 @@ impl<T: Element> PVec<T> {
                 ),
                 Kind::Inner(children) => {
                     for (i, child) in children.iter().enumerate() {
-                        walk(child, flag, base + i * size(height - 1), height - 1, out);
+                        walk(
+                            child,
+                            flag,
+                            base + i * size::<T>(height - 1),
+                            height - 1,
+                            out,
+                        );
                     }
                 }
             }
@@ -398,13 +425,13 @@ impl<T> Index<usize> for PVec<T> {
     fn index(&self, index: usize) -> &T {
         assert!(index < self.len, "index {index} of {}", self.len);
         let mut node = &self.root;
-        let mut shift = self.depth * BITS;
+        let mut shift = shift::<T>(self.depth);
         loop {
             match &node.kind {
-                Kind::Leaf(items) => return &items[index & (WIDTH - 1)],
+                Kind::Leaf(items) => return &items[index & (leaf_width::<T>() - 1)],
                 Kind::Inner(children) => {
                     node = &children[(index >> shift) & (WIDTH - 1)];
-                    shift -= BITS;
+                    shift = shift.saturating_sub(BITS);
                 }
             }
         }
@@ -415,13 +442,13 @@ impl<T: Clone> IndexMut<usize> for PVec<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         assert!(index < self.len, "index {index} of {}", self.len);
         let mut node = touch(&mut self.root);
-        let mut shift = self.depth * BITS;
+        let mut shift = shift::<T>(self.depth);
         loop {
             match &mut node.kind {
-                Kind::Leaf(items) => return &mut items[index & (WIDTH - 1)],
+                Kind::Leaf(items) => return &mut items[index & (leaf_width::<T>() - 1)],
                 Kind::Inner(children) => {
                     node = touch(&mut children[(index >> shift) & (WIDTH - 1)]);
-                    shift -= BITS;
+                    shift = shift.saturating_sub(BITS);
                 }
             }
         }
@@ -649,6 +676,86 @@ mod tests {
             .collect();
         assert_eq!(agree.iter().filter(|x| **x).count(), 40);
         assert!(agree[..40].iter().all(|x| *x));
+    }
+
+    /// Immer's separate B/BL shapes, including one-element leaves: vector
+    /// operations must agree with dense storage at every leaf/branch boundary.
+    #[test]
+    fn large_rows_keep_canonical_shapes_across_every_tree_boundary() {
+        fn rows<const N: usize>() {
+            let mut dense = Vec::new();
+            let mut tree = PVec::default();
+            let mut kept = Vec::new();
+            for len in [1, 2, 3, 31, 32, 33, 63, 64, 65, 1023, 1024, 1025, 4097] {
+                dense.resize(len, [len as u64; N]);
+                tree.resize(len, [len as u64; N]);
+                for i in [0, len / 2, len - 1] {
+                    dense[i] = [i as u64; N];
+                    tree[i] = [i as u64; N];
+                }
+                kept.push((dense.clone(), tree.clone()));
+                let pushed: PVec<_> = dense.iter().copied().collect();
+                assert_eq!(tree, pushed);
+                let mut matched = Matched::default();
+                assert!(tree.matches(&pushed, &mut matched));
+                let hash = |v: &PVec<[u64; N]>| {
+                    let mut h = DefaultHasher::new();
+                    v.hash(&mut h);
+                    h.finish()
+                };
+                assert_eq!(hash(&tree), hash(&pushed));
+            }
+            for (dense, mut tree) in kept {
+                tree.resize(1, [0; N]);
+                tree.push([99; N]);
+                assert_eq!(
+                    tree.iter().copied().collect::<Vec<_>>(),
+                    [dense[0], [99; N]]
+                );
+            }
+        }
+        rows::<0>();
+        rows::<1>();
+        rows::<2>();
+        rows::<4>();
+        rows::<8>();
+        rows::<16>();
+        rows::<64>();
+    }
+
+    #[test]
+    fn a_sparse_large_row_write_does_not_copy_a_full_branch_of_rows() {
+        #[derive(Debug, PartialEq)]
+        struct Large {
+            value: [u64; 16],
+            clones: Rc<Cell<usize>>,
+        }
+        impl Clone for Large {
+            fn clone(&self) -> Self {
+                self.clones.set(self.clones.get() + 1);
+                Self {
+                    value: self.value,
+                    clones: self.clones.clone(),
+                }
+            }
+        }
+        let clones = Rc::new(Cell::new(0));
+        let base: PVec<_> = (0..4096)
+            .map(|i| Large {
+                value: [i; 16],
+                clones: clones.clone(),
+            })
+            .collect();
+        let mut changed = base.clone();
+        clones.set(0);
+        changed[1025].value[0] = 0;
+        assert!(
+            clones.get() <= 2,
+            "a sparse write copied {} large rows",
+            clones.get()
+        );
+        assert_eq!(base[1025].value, [1025; 16]);
+        assert_ne!(changed, base);
     }
 
     #[test]

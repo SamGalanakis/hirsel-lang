@@ -608,12 +608,15 @@ pub(crate) fn root_handle(root: hirsel_run_config::Root) -> u64 {
         hirsel_rt::launch::IO_HANDLE,
     ][root_index(root)]
 }
-pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchKind> {
+pub(crate) fn launch_kind(
+    types: &hirsel_types::TypeInterner,
+    signature: &hirsel_types::Signature,
+) -> Option<LaunchKind> {
     use hirsel_run_schema::LaunchKind as Kind;
-    if hirsel_engine::entry_launch_kind(signature).ok()? == Kind::Test {
+    if hirsel_engine::entry_launch_kind(types, signature).ok()? == Kind::Test {
         return Some(LaunchKind::Test);
     }
-    let roots = hirsel_engine::entry_roots(signature, Kind::Main).ok()?;
+    let roots = hirsel_engine::entry_roots(types, signature, Kind::Main).ok()?;
     Some(if roots.is_empty() {
         LaunchKind::Zero
     } else {
@@ -633,12 +636,11 @@ fn entry_result(
         .get(entry)
         .ok_or_else(|| refuse("no such non-generic function"))?;
     let unit = program
-        .units
+        .summaries
         .iter()
-        .map(|u| u.unit())
-        .find(|u| u.header.definition == *entry && u.header.instance == *instance)
+        .find(|s| s.definition == *entry && s.instance == *instance)
         .ok_or_else(|| refuse("no unit"))?;
-    let abi = &program.table.fn_abis[unit.header.abi.0 as usize];
+    let abi = &program.table.fn_abis[unit.abi.0 as usize];
     let handle = |p: &hirsel_lir::abi_types::AbiParameter| {
         matches!(
             p.passing,
@@ -757,7 +759,8 @@ pub fn partition_objects(
 }
 
 /// `partition_objects` by `backend`. Cranelift does not inline, so it copies no small
-/// callee bodies at any optimization level.
+/// callee bodies at any optimization level. The last object is the program's glue
+/// (`emit::emit_glue`).
 pub fn partition_backend_objects(
     program: &ReadyProgram,
     backend: Backend,
@@ -798,6 +801,27 @@ pub fn partition_backend_objects_with_jobs(
     jobs: hirsel_intern::jobs::Jobs,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
+    // A build that emitted its units itself has one object per unit already.
+    if let Some(built) = &program.unit_objects {
+        if built.backend != backend || built.opt != opt || sources.is_some() != built.debug {
+            return Err(NativeError::new(
+                StageName::Emission,
+                format!(
+                    "the build emitted its units for {} at {:?}, not {} at {opt:?}",
+                    built.backend.name(),
+                    built.opt,
+                    backend.name()
+                ),
+            ));
+        }
+        let mut objects = built.objects.clone();
+        objects.push(super::emit::emit_glue(program, backend, registry)?);
+        if let Some(sources) = sources {
+            objects.push(debug_artifact(program, &objects, sources)?);
+        }
+        return Ok(objects);
+    }
+    let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
     let assignment = partition.assign(program.units.len());
     let mut groups: Vec<usize> = assignment.clone();
     groups.sort_unstable();
@@ -919,14 +943,70 @@ pub fn partition_backend_objects_with_jobs(
                 opt,
                 |unit| selected[unit],
                 &copies,
-                registry,
                 measurement,
                 sources,
             )
         },
     )
     .into_iter()
-    .collect()
+    .collect::<Result<Vec<_>, _>>()
+    .and_then(|mut objects| {
+        objects.push(super::emit::emit_glue(program, backend, registry)?);
+        if let Some(sources) = sources {
+            objects.push(debug_artifact(program, &objects, sources)?);
+        }
+        Ok(objects)
+    })
+}
+
+/// The link's debug object (`hirsel_cranelift::debug_object`): line tables for the
+/// functions `objects` define, their intervals resolved in `sources`. A body an object
+/// recorded intervals for but no longer defines (a template inlined everywhere) has none.
+fn debug_artifact(
+    program: &ReadyProgram,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    sources: &hirsel_lir::profile::ProfileSources,
+) -> Result<hirsel_lir::stage::ObjectArtifact, NativeError> {
+    use object::{Object as _, ObjectSymbol as _};
+    let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::DebugObject);
+    let failed = |message: String| NativeError::new(StageName::Link, message);
+    let mut functions = Vec::new();
+    for artifact in objects.iter().filter(|o| !o.debug.is_empty()) {
+        let file = object::File::parse(&*artifact.bytes)
+            .map_err(|e| failed(format!("reading an object for its debug intervals: {e}")))?;
+        let defined: std::collections::HashSet<&str> = file
+            .symbols()
+            .filter(|s| s.is_definition())
+            .filter_map(|s| s.name().ok())
+            .collect();
+        functions.extend(
+            artifact
+                .debug
+                .iter()
+                .filter(|f| defined.contains(f.symbol.as_str())),
+        );
+    }
+    let resolve = |item: &DefPath, selector: u32, offset: u32| {
+        let source = sources.get(item)?;
+        let (file, base) = source.source(selector)?;
+        let location = file.location(base.checked_add(offset)?)?;
+        Some(hirsel_cranelift::Resolved {
+            path: file.logical_path().display().to_string(),
+            line: location.line,
+            column: location.column,
+        })
+    };
+    let bytes = hirsel_cranelift::debug_object_sources(&functions, &resolve, &program.target)
+        .map_err(|e| failed(format!("the debug object: {e}")))?;
+    let template = objects.last().expect("the glue object");
+    Ok(hirsel_lir::stage::ObjectArtifact {
+        bytes,
+        exports: Vec::new(),
+        imports: Vec::new(),
+        relocations: Vec::new(),
+        debug: Vec::new(),
+        ..template.clone()
+    })
 }
 
 /// Emit `program` as the objects `partition` names, check the link manifest
@@ -1259,6 +1339,7 @@ fn launcher_object(
     standalone: bool,
     main_symbol: &str,
 ) -> Result<Vec<u8>, NativeError> {
+    program.check_semantic_units(objects)?;
     let (symbol, result_size, caller_site) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -1509,26 +1590,12 @@ fn link_launcher(
 ) -> Result<Linked, NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
-    let library_symbols: std::collections::BTreeSet<String> = program
-        .units
-        .iter()
-        .filter(|u| {
-            u.unit().header.origin == hirsel_lir::ir::UnitOrigin::Library
-                || program.inline_instances.contains(&u.unit().header.instance)
-        })
-        .map(|u| {
-            hirsel_lir::emission::symbol_name(
-                &u.unit().header.definition,
-                Some(&u.unit().header.instance),
-            )
-        })
-        .collect();
     // Link manifest: each definition instance has exactly one implementation
     // across the objects, the entry among them, and every import is another
     // object's export, a runtime entry or a toolchain routine.
     let mut exported = std::collections::BTreeSet::new();
     for export in objects.iter().flat_map(|o| &o.exports) {
-        if !exported.insert(export.name.as_str()) && !library_symbols.contains(&export.name) {
+        if !exported.insert(export.name.as_str()) {
             return Err(NativeError::new(
                 StageName::Link,
                 format!("two objects implement `{}`", export.name),
@@ -2667,6 +2734,7 @@ pub fn observe_run(
                     let operation = sites.failure(&rule, definition, *range)?;
                     failure.operation = Some(hirsel_interp::observation::SourceSite {
                         definition: operation.definition,
+                        file: operation.file,
                         line: operation.line,
                         column: operation.column,
                     });

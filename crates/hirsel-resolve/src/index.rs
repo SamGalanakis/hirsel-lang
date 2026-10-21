@@ -44,7 +44,7 @@ pub struct ManifestFixture {
 pub struct ManifestIndex {
     pub package: PackageId,
     pub revision: ContentHash,
-    entries: Arc<BTreeMap<DefPath, DefinitionEntry>>,
+    entries: Arc<DefMap<DefinitionEntry>>,
     heads: Arc<BTreeMap<String, BTreeSet<(PackageId, Vec<String>)>>>,
     module_heads: Arc<BTreeMap<(PackageId, Vec<String>), BTreeSet<String>>>,
 }
@@ -118,7 +118,7 @@ impl ManifestFixture {
         signatures: impl IntoIterator<Item = &'a hirsel_types::SignatureRef>,
     ) -> Self {
         for signature in signatures {
-            let path = &signature.definition;
+            let path = signature.definition.path();
             if path.0.package == self.package {
                 continue;
             }
@@ -191,7 +191,7 @@ impl ManifestIndex {
                 ))
             })
         });
-        let mut entries: BTreeMap<DefPath, DefinitionEntry> = BTreeMap::new();
+        let mut entries: DefMap<DefinitionEntry> = DefMap::default();
         let mut diagnostics = vec![];
         for entry in fixture.definitions {
             let path = &entry.definition.0;
@@ -208,7 +208,7 @@ impl ManifestIndex {
                 ));
                 continue;
             }
-            if let Some(first) = entries.get(&entry.definition) {
+            if let Some(first) = entries.get(&DefId::intern(&entry.definition)) {
                 let mut diagnostic = Diagnostic::error(
                     const { RuleId::of("LANG-7") },
                     entry.span,
@@ -220,11 +220,11 @@ impl ManifestIndex {
                 });
                 diagnostics.push(diagnostic);
             } else {
-                entries.insert(entry.definition.clone(), entry);
+                entries.insert(DefId::intern(&entry.definition), entry);
             }
         }
         let mut module_heads: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-        for definition in entries.keys() {
+        for definition in entries.keys().map(|id| id.path()) {
             for (i, head) in definition.0.modules.iter().enumerate() {
                 module_heads
                     .entry((
@@ -278,7 +278,7 @@ impl ManifestIndex {
     }
 
     pub fn entry(&self, definition: &DefPath) -> Option<&DefinitionEntry> {
-        self.entries.get(definition)
+        self.entries.get(&DefId::intern(definition))
     }
 
     pub fn has_head(&self, context: &FileContext, head: &str) -> bool {
@@ -301,8 +301,8 @@ impl ManifestIndex {
     ) -> Vec<String> {
         let mut names = BTreeSet::new();
         for definition in self.entries.keys() {
-            names.insert(definition.0.name.clone());
-            names.extend(definition.0.modules.iter().cloned());
+            names.insert(definition.path().0.name.clone());
+            names.extend(definition.path().0.modules.iter().cloned());
         }
         names.extend(self.heads.keys().cloned());
         names
@@ -348,7 +348,10 @@ impl ManifestIndex {
                 make(context.package.clone(), relative),
                 make(context.package.clone(), modules.to_vec()),
             ];
-            if let Some(found) = own.iter().find(|d| self.entries.contains_key(*d)) {
+            if let Some(found) = own
+                .iter()
+                .find(|d| self.entries.contains_key(&DefId::intern(d)))
+            {
                 return self.access(context, found);
             }
             if segments.len() < 2 {
@@ -382,7 +385,7 @@ impl ManifestIndex {
             candidates
         };
         for candidate in &candidates {
-            if self.entries.contains_key(candidate) {
+            if self.entries.contains_key(&DefId::intern(candidate)) {
                 return self.access(context, candidate);
             }
         }
@@ -398,7 +401,7 @@ impl ManifestIndex {
         context: &FileContext,
         definition: &DefPath,
     ) -> Result<DefPath, LookupError> {
-        if let Some(entry) = self.entries.get(definition)
+        if let Some(entry) = self.entries.get(&DefId::intern(definition))
             && entry.visibility == Visibility::Private
             && context.package != definition.0.package
         {

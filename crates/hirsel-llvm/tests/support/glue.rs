@@ -33,15 +33,14 @@ fn nominal(
     soa: bool,
     shape: impl FnOnce(&mut Types) -> TypeId,
 ) -> DefPath {
-    let mut t = Types::default();
+    let mut t = super::session_types();
     let private_shape = shape(&mut t);
     owners.nominals.insert(
-        path(name),
+        hirsel_syntax::DefId::intern(&path(name)),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: path(name),
             representation_revision: hash(name),
             generics: Vec::new(),
-            types: t.store,
             private_shape,
             layout_promises: hirsel_types::Layout {
                 soa,
@@ -110,7 +109,7 @@ pub fn corpus(target: &TargetSpec) -> Corpus {
     let mut schema = Schema::new();
     let owners = &mut schema.owners;
     owners.nominals.insert(
-        path("Socket"),
+        hirsel_syntax::DefId::intern(&path("Socket")),
         OwnerRepresentation::Handle {
             revision: hash("Socket"),
             resource: true,

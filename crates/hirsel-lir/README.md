@@ -132,6 +132,17 @@ Invariants:
   layouts they read are complete, and a Box is complete before its payload is
   derived, so the records do not depend on request order; an inline cycle is
   `InfiniteSize`.
+- Content keys. A record's `LayoutIdentity` names the request it answers; its
+  `LayoutKey` (`layout_keys.rs`) names its content. `hirsel_graph::scc_keys` keys
+  the layout graph, whose edges are a record's references in record order (kind,
+  fields, variants' fields, scan, drop): a layout outside every cycle is a Merkle
+  hash of its record with each reference replaced by its target's key, and a
+  member of a cycle (`Cons`, `Even`/`Odd`) hashes the rooted DFS of its
+  component. Keys never depend on `LayoutId`s, request order or unrelated
+  layouts, and an edit changes the key of every layout that reaches it. FnAbi
+  keys replace parameter and result layouts by their keys. Rooted keys visit only
+  a completed layout's reachable graph and use the same encoding; intrinsic empty
+  sequence and boxed nullary statics use these keys before import.
 - ABI. Passing classes read only the declared convention and the public
   structure of each parameter type. Every nominal travels by address, so a
   private representation change moves layout keys and never the ABI digest
@@ -764,3 +775,7 @@ takes the extern's dispatch word (`FOREIGN_THREADS_*`, `FOREIGN_BLOCKING` and th
 ordinal from `FOREIGN_PACKAGE_SHIFT`), which emission reads from `EmitInputs::foreign`; the
 caller-owned interval record grows to `FOREIGN_SCOPE_BYTES` 40; and callback thunks call
 `hirsel_rt_v2_callback_leave` before returning to C. The LIR vocabulary is unchanged.
+
+`objects::SeededObjects` layers a configured writable store over a read-only
+seed. `ReadOnlyObjects` checks framing without refreshing mtimes or removing
+corrupt entries, allowing shared toolchain installations to remain read-only.

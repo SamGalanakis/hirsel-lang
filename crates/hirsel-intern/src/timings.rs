@@ -26,14 +26,20 @@ pub enum Interval {
     Units,
     Link,
     ImageOpen,
+    /// Serial preparation of immutable per-definition worker inputs.
+    FrontPrepare,
+    /// Whole-program generic-instance growth checking.
+    GenericGraph,
 }
 
 impl Interval {
     /// Every interval, in pipeline order.
-    pub const ALL: [Interval; 9] = [
+    pub const ALL: [Interval; 11] = [
         Interval::ImageOpen,
         Interval::S0,
+        Interval::FrontPrepare,
         Interval::Parallel,
+        Interval::GenericGraph,
         Interval::S1,
         Interval::Parallel2,
         Interval::Merge,
@@ -53,6 +59,8 @@ impl Interval {
             Interval::Units => "units",
             Interval::Link => "link",
             Interval::ImageOpen => "image open",
+            Interval::FrontPrepare => "front prepare",
+            Interval::GenericGraph => "GEN-5",
         }
     }
 }
@@ -77,11 +85,19 @@ pub enum Phase {
     LirValidate,
     Codegen,
     StoreLookup,
+    /// The link's debug object (line tables from the objects' debug intervals).
+    DebugObject,
+    /// Tokenization alone, excluding parser and declaration publication.
+    Lex,
+    /// Declaration indexing, including its signature demands.
+    Declarations,
+    /// Header normalization, excluding header resolution and nested queries.
+    SignatureNormalize,
 }
 
 impl Phase {
     /// Every phase, in declaration order.
-    pub const ALL: [Phase; 17] = [
+    pub const ALL: [Phase; 21] = [
         Phase::Parse,
         Phase::Resolve,
         Phase::Signatures,
@@ -99,6 +115,10 @@ impl Phase {
         Phase::LirValidate,
         Phase::Codegen,
         Phase::StoreLookup,
+        Phase::DebugObject,
+        Phase::Lex,
+        Phase::Declarations,
+        Phase::SignatureNormalize,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -120,6 +140,10 @@ impl Phase {
             Phase::LirValidate => "lir validate",
             Phase::Codegen => "codegen",
             Phase::StoreLookup => "store lookup",
+            Phase::DebugObject => "debug object",
+            Phase::Lex => "lex",
+            Phase::Declarations => "declarations",
+            Phase::SignatureNormalize => "signature normalize",
         }
     }
 }
@@ -141,15 +165,104 @@ pub enum Count {
     ObjectHits,
     /// Object-cache misses (none until the unit cache exists).
     ObjectMisses,
+    /// Native units imported instead of replayed.
+    NativeImports,
+    /// Native imports replayed from stored effects and Value LIR.
+    ImportHits,
+    /// Native import lookups that need fresh importing.
+    ImportMisses,
     /// Bodies lowered to TIR; in `check`, the bodies lowered at check time.
     Lowered,
+    /// Dependency package sources parsed; none for a package a std image holds
+    /// until a query needs its syntax.
+    DependencyParses,
     /// Per-definition queries computed rather than reused.
     Recomputes,
+    /// Memos invalidated by a changed signature read.
+    InvalidatedSignature,
+    /// Memos invalidated by a changed failed signature read.
+    InvalidatedFailedSignature,
+    /// Memos invalidated by a changed lookup read.
+    InvalidatedLookup,
+    /// Memos invalidated by a changed name set read.
+    InvalidatedNameSet,
+    /// Memos invalidated by a changed representation read.
+    InvalidatedRepresentation,
+    /// Memos invalidated by a changed executed body read.
+    InvalidatedExecutedBody,
+    /// Memos invalidated by a changed executed signature read.
+    InvalidatedExecutedSignature,
+    /// Memos invalidated by a changed cited text read.
+    InvalidatedCitedText,
+    /// Memos invalidated by a changed declaration candidates read.
+    InvalidatedDeclarationCandidates,
+    /// Memos invalidated by a changed validation view read.
+    InvalidatedValidationView,
+    /// Memos invalidated by a changed universe errors read.
+    InvalidatedUniverseErrors,
+    /// Memos invalidated by a changed first heap read.
+    InvalidatedFirstHeap,
+    /// Memos invalidated by a changed environment read.
+    InvalidatedEnvironment,
+    /// Proofs and comparisons the mode passes asked their query's `ContextMemo`.
+    ModeMemoQueries,
+    /// Entries those queries reused, interior sub-proofs included.
+    ModeMemoHits,
+    /// S1 keys first claimed by a worker.
+    S1Claims,
+    /// S1 requests that park on another worker's key.
+    S1Parks,
+    /// S1 requests run inline to avoid a wait-for cycle.
+    S1Duplicates,
+    /// Nanoseconds acquiring the S1 coordinator's lock (sum over workers).
+    S1LockWaitNs,
+    /// Nanoseconds parked on S1 dependencies (sum over workers).
+    S1ParkNs,
+    /// Memos invalidated by a changed package-view universe input.
+    InvalidatedValidationUniverse,
+    /// S1 worker helper lowerings evicted by the retention budget.
+    S1LowerHoldEvictions,
+    /// Evicted worker helper lowerings demanded again.
+    S1LowerHoldRecomputes,
+    /// Sum of each worker's insertion-before-eviction peak retained bytes.
+    S1LowerHoldPeakBytes,
+    /// Physical worker Lower misses, including helpers and discarded attempts.
+    S1LowerQueryAttempts,
+    /// Actual worker LoweringPhase::lower calls, including discarded work.
+    S1LowerAdapterCalls,
+    /// Root tasks dispatched, including registration retries and suffix work.
+    S1RootTasks,
+    /// Dispatched root outcomes excluded by an earlier publication barrier.
+    S1DiscardedRoots,
+    /// Rounds repeated after publishing required declarations or generated text.
+    S1RegistrationRounds,
+    /// Root outcomes obtained through the scalar compatibility path.
+    S1ScalarRoots,
+    /// Maximum sum of Value row lengths at native admission (not capacities).
+    NativeValueBytes,
+    /// Maximum estimated bytes admitted simultaneously, including backend contexts.
+    NativeActiveBytes,
+    /// Maximum native admission allowance selected for a build.
+    NativeBudgetBytes,
+    /// Maximum effective native workers, after byte and stack limits.
+    NativeWorkers,
+    /// Stack virtual reservations of additional native workers, not RSS.
+    NativeStackBytes,
+    /// Maximum Ready row bytes retained for uncompleted native consumers.
+    NativeReadyBytes,
+    ValueDecodes,
+    ValueDecodeBytes,
+    ValueRebinds,
+    ImportEffectReplays,
+    NativeAppendExpand,
+    ClosureBodyScans,
+    ArenaBodyScans,
+    LateKeys,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 9] = [
+    pub const ALL: [Count; 57] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -157,12 +270,68 @@ impl Count {
         Count::StoreMisses,
         Count::ObjectHits,
         Count::ObjectMisses,
+        Count::NativeImports,
+        Count::ImportHits,
+        Count::ImportMisses,
         Count::Lowered,
+        Count::DependencyParses,
         Count::Recomputes,
+        Count::InvalidatedSignature,
+        Count::InvalidatedFailedSignature,
+        Count::InvalidatedLookup,
+        Count::InvalidatedNameSet,
+        Count::InvalidatedRepresentation,
+        Count::InvalidatedExecutedBody,
+        Count::InvalidatedExecutedSignature,
+        Count::InvalidatedCitedText,
+        Count::InvalidatedDeclarationCandidates,
+        Count::InvalidatedValidationView,
+        Count::InvalidatedUniverseErrors,
+        Count::InvalidatedFirstHeap,
+        Count::InvalidatedEnvironment,
+        Count::ModeMemoQueries,
+        Count::ModeMemoHits,
+        Count::S1Claims,
+        Count::S1Parks,
+        Count::S1Duplicates,
+        Count::S1LockWaitNs,
+        Count::S1ParkNs,
+        Count::InvalidatedValidationUniverse,
+        Count::S1LowerHoldEvictions,
+        Count::S1LowerHoldRecomputes,
+        Count::S1LowerHoldPeakBytes,
+        Count::S1LowerQueryAttempts,
+        Count::S1LowerAdapterCalls,
+        Count::S1RootTasks,
+        Count::S1DiscardedRoots,
+        Count::S1RegistrationRounds,
+        Count::S1ScalarRoots,
+        Count::NativeValueBytes,
+        Count::NativeActiveBytes,
+        Count::NativeBudgetBytes,
+        Count::NativeWorkers,
+        Count::NativeStackBytes,
+        Count::NativeReadyBytes,
+        Count::ValueDecodes,
+        Count::ValueDecodeBytes,
+        Count::ValueRebinds,
+        Count::ImportEffectReplays,
+        Count::NativeAppendExpand,
+        Count::ClosureBodyScans,
+        Count::ArenaBodyScans,
+        Count::LateKeys,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
         match self {
+            Count::ValueDecodes => "native Value decodes",
+            Count::ValueDecodeBytes => "native Value decode bytes",
+            Count::ValueRebinds => "native Value rebinds",
+            Count::ImportEffectReplays => "native effect replays",
+            Count::NativeAppendExpand => "native append/expand",
+            Count::ClosureBodyScans => "closure body scans",
+            Count::ArenaBodyScans => "arena body scans",
+            Count::LateKeys => "native late keys",
             Count::Definitions => "definitions",
             Count::Units => "units",
             Count::VRuns => "V runs",
@@ -170,8 +339,48 @@ impl Count {
             Count::StoreMisses => "store misses",
             Count::ObjectHits => "object hits",
             Count::ObjectMisses => "object misses",
+            Count::NativeImports => "native imports",
+            Count::ImportHits => "import hits",
+            Count::ImportMisses => "import misses",
             Count::Lowered => "lowered",
+            Count::DependencyParses => "dependency parses",
             Count::Recomputes => "recomputes",
+            Count::InvalidatedSignature => "invalidated by signature",
+            Count::InvalidatedFailedSignature => "invalidated by failed signature",
+            Count::InvalidatedLookup => "invalidated by lookup",
+            Count::InvalidatedNameSet => "invalidated by name set",
+            Count::InvalidatedRepresentation => "invalidated by representation",
+            Count::InvalidatedExecutedBody => "invalidated by executed body",
+            Count::InvalidatedExecutedSignature => "invalidated by executed signature",
+            Count::InvalidatedCitedText => "invalidated by cited text",
+            Count::InvalidatedDeclarationCandidates => "invalidated by declaration candidates",
+            Count::InvalidatedValidationView => "invalidated by validation view",
+            Count::InvalidatedUniverseErrors => "invalidated by universe errors",
+            Count::InvalidatedFirstHeap => "invalidated by first heap",
+            Count::InvalidatedEnvironment => "invalidated by environment",
+            Count::ModeMemoQueries => "mode memo queries",
+            Count::ModeMemoHits => "mode memo hits",
+            Count::S1Claims => "S1 claims",
+            Count::S1Parks => "S1 parks",
+            Count::S1Duplicates => "S1 duplicates",
+            Count::S1LockWaitNs => "S1 lock wait ns",
+            Count::S1ParkNs => "S1 park ns",
+            Count::InvalidatedValidationUniverse => "invalidated by validation universe",
+            Count::S1LowerHoldEvictions => "S1 lower hold evictions",
+            Count::S1LowerHoldRecomputes => "S1 lower hold recomputes",
+            Count::S1LowerHoldPeakBytes => "S1 lower hold peak bytes sum",
+            Count::S1LowerQueryAttempts => "S1 lower query attempts",
+            Count::S1LowerAdapterCalls => "S1 lower adapter calls",
+            Count::S1RootTasks => "S1 root tasks",
+            Count::S1DiscardedRoots => "S1 discarded roots",
+            Count::S1RegistrationRounds => "S1 registration rounds",
+            Count::S1ScalarRoots => "S1 scalar roots",
+            Count::NativeValueBytes => "native Value structural bytes peak",
+            Count::NativeActiveBytes => "native active estimated bytes peak",
+            Count::NativeBudgetBytes => "native admission budget bytes",
+            Count::NativeWorkers => "native effective workers peak",
+            Count::NativeStackBytes => "native worker stack reservation bytes peak",
+            Count::NativeReadyBytes => "native retained Ready structural bytes peak",
         }
     }
 }
@@ -316,6 +525,23 @@ pub fn wait() -> WaitGuard {
 pub fn count(count: Count) {
     if enabled() {
         TOTALS.counts[count as usize].fetch_add(1, Relaxed);
+    }
+}
+
+/// Count `n` `count` events.
+#[inline]
+pub fn count_by(count: Count, n: u64) {
+    if enabled() && n > 0 {
+        TOTALS.counts[count as usize].fetch_add(n, Relaxed);
+    }
+}
+
+/// Retain the maximum observation for a peak counter. Unlike `count_by`,
+/// separate builds in one resident session do not add their byte peaks.
+#[inline]
+pub fn count_peak(count: Count, n: u64) {
+    if enabled() {
+        TOTALS.counts[count as usize].fetch_max(n, Relaxed);
     }
 }
 

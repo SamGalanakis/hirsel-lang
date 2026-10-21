@@ -13,7 +13,12 @@ fn option_path() -> DefPath {
         name: "Option".into(),
     })
 }
-pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+pub(super) fn declaration(
+    t: &TypeInterner,
+    memo: &TypeMemo,
+    signature: &Signature,
+    signatures: &Reader<'_>,
+) -> bool {
     let SignatureKind::Type(nominal) = &signature.kind else {
         return true;
     };
@@ -35,7 +40,7 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
         return false;
     };
     if signature.metadata.visibility != hirsel_syntax::Visibility::Private {
-        for (operation, function) in [(open, open_f), (next, next_f)] {
+        for function in [open_f, next_f] {
             let mut pending: Vec<_> = function
                 .parameters
                 .iter()
@@ -43,17 +48,17 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
                 .chain([function.result])
                 .chain(function.error)
                 .collect();
-            let mut seen = BTreeSet::new();
+            let mut seen = HashSet::default();
             while let Some(ty) = pending.pop() {
                 if !seen.insert(ty) {
                     continue;
                 }
-                let Some(row) = operation.types.get(ty) else {
+                let Some(row) = t.get(ty) else {
                     return false;
                 };
                 pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
                 if let TypeKind::Named { definition, .. } = &row.kind {
-                    if !signatures.get(definition).is_some_and(|s| {
+                    if !signatures.get(*definition).is_some_and(|s| {
                         s.metadata.visibility != hirsel_syntax::Visibility::Private
                     }) {
                         return false;
@@ -73,14 +78,13 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
     {
         return false;
     }
-    let Some(receiver_row) = open.types.get(receiver.ty) else {
+    let Some(receiver_row) = t.get(receiver.ty) else {
         return false;
     };
-    if !matches!(&receiver_row.kind, TypeKind::Named { definition, arguments } if definition == &signature.definition && arguments.len() == nominal.generics.len())
+    if !matches!(&receiver_row.kind, TypeKind::Named { definition, arguments } if *definition == signature.definition && arguments.len() == nominal.generics.len())
     {
         return false;
     }
-    let mut store = TypeStore::default();
     let arguments = nominal
         .generics
         .iter()
@@ -93,7 +97,7 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
                 row.drop_allocation = DropAllocation::DependsOn(
                     vec![TypeParameterRef::bound(TypeParamId(ordinal as u32))].into(),
                 );
-                GenericArgument::Type(store.push(row))
+                GenericArgument::Type(t.intern(row))
             }
             GenericParameter::Size { .. } => GenericArgument::Size(Size::Parameter(
                 SizeParameterRef::bound(SizeParamId(ordinal as u32)),
@@ -102,21 +106,14 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
         .collect();
     let mut row = Type::unit();
     row.kind = TypeKind::Named {
-        definition: signature.definition.clone(),
+        definition: signature.definition,
         arguments,
     };
-    let receiver = store.push(row);
-    let Some(cursor) = instantiate(
-        &open.types,
-        open_f,
-        &mut store,
-        receiver,
-        &nominal.generics,
-        signatures,
-    ) else {
+    let receiver = t.intern(row);
+    let Some(cursor) = instantiate(t, memo, open_f, receiver, &nominal.generics, signatures) else {
         return false;
     };
-    if !store
+    if !t
         .get(cursor)
         .unwrap()
         .modes
@@ -126,50 +123,39 @@ pub(super) fn declaration(signature: &Signature, signatures: &dyn SignatureLooku
     {
         return false;
     }
-    let Some(result) = instantiate(
-        &next.types,
-        next_f,
-        &mut store,
-        cursor,
-        &nominal.generics,
-        signatures,
-    ) else {
+    let Some(result) = instantiate(t, memo, next_f, cursor, &nominal.generics, signatures) else {
         return false;
     };
-    matches!(store.get(result), Some(Type { kind: TypeKind::Named { definition, arguments }, .. }) if definition == &association.option && matches!(arguments.as_slice(), [GenericArgument::Type(_)]))
+    matches!(t.get(result), Some(Type { kind: TypeKind::Named { definition, arguments }, .. }) if *definition.path() == association.option && matches!(arguments.as_slice(), [GenericArgument::Type(_)]))
 }
 
 // V infers the two operation instantiations from declaration graphs, independently
 // of H's checked actual vectors and the receipt's caller-supplied identity.
 fn instantiate(
-    source: &TypeStore,
+    t: &TypeInterner,
+    memo: &TypeMemo,
     function: &FunctionType,
-    store: &mut TypeStore,
     actual: TypeId,
     receiver_generics: &[GenericParameter],
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Option<TypeId> {
-    let formal = import_type(source, function.parameters.first()?.ty, store).ok()?;
+    let formal = function.parameters.first()?.ty;
     let mut arguments: Vec<Option<GenericArgument>> = vec![None; function.generics.len()];
     let mut pairs = vec![(formal, actual, 0)];
-    let mut visited = BTreeSet::new();
+    let mut visited = HashSet::default();
     while let Some((left, right, depth)) = pairs.pop() {
         if !visited.insert((left, right, depth)) {
             continue;
         }
-        let (left_row, right_row) = (store.get(left)?, store.get(right)?);
+        let (left_row, right_row) = (t.get(left)?, t.get(right)?);
         if let TypeKind::Parameter(p) = left_row.kind
             && p.binder() == GenericBinder::Bound(depth)
         {
-            let right = lift_actual(store, right, depth)?;
+            let right = lift_actual(t, right, depth)?;
             let slot = arguments.get_mut(p.parameter().0 as usize)?;
             match slot {
                 None => *slot = Some(GenericArgument::Type(right)),
-                Some(GenericArgument::Type(previous))
-                    if shape_equal(store, *previous, store, right).ok()? =>
-                {
-                    ()
-                }
+                Some(GenericArgument::Type(previous)) if t.shape_eq(*previous, right).ok()? => (),
                 _ => return None,
             }
             continue;
@@ -210,7 +196,7 @@ fn instantiate(
                 }
                 pairs.push((a.result, b.result, depth + 1));
             }
-            _ if shape_equal(store, left, store, right).ok()? => (),
+            _ if t.shape_eq(left, right).ok()? => (),
             _ => return None,
         }
     }
@@ -221,23 +207,20 @@ fn instantiate(
             (GenericParameter::Size { .. }, GenericArgument::Size(_)) => (),
             (GenericParameter::Type { bounds, .. }, GenericArgument::Type(ty)) => {
                 for bound in bounds {
-                    let lookup = &mut |path: &DefPath| {
+                    let lookup = &mut |path: DefId| {
                         Ok::<_, QueryError>(signatures.get(path).cloned().map(std::sync::Arc::new))
                     };
                     let valid = match bound {
                         Bound::Serializable => {
-                            super::serialization::eligible(store, *ty, &context, signatures).ok()?
+                            super::serialization::eligible(t, memo, *ty, &context, signatures)
+                                .ok()?
                         }
-                        Bound::Plain => structural_property(
-                            store,
-                            *ty,
-                            StructuralProperty::Plain,
-                            &context,
-                            lookup,
-                        )
-                        .ok()?,
+                        Bound::Plain => {
+                            structural_property(t, *ty, StructuralProperty::Plain, &context, lookup)
+                                .ok()?
+                        }
                         Bound::Copyable => structural_property(
-                            store,
+                            t,
                             *ty,
                             StructuralProperty::Copyable,
                             &context,
@@ -245,20 +228,20 @@ fn instantiate(
                         )
                         .ok()?,
                         Bound::Sendable => structural_property(
-                            store,
+                            t,
                             *ty,
                             StructuralProperty::Sendable,
                             &context,
                             lookup,
                         )
                         .ok()?,
-                        Bound::Flat => structural_flat(store, *ty, &context, lookup).ok()?,
+                        Bound::Flat => structural_flat(t, *ty, &context, lookup).ok()?,
                         Bound::Data | Bound::Key => {
-                            structural_equality(store, *ty, *bound, &context, lookup).ok()?
+                            structural_equality(t, *ty, *bound, &context, lookup).ok()?
                         }
                         Bound::Inert => {
                             structural_authority(
-                                store,
+                                t,
                                 *ty,
                                 &NominalRoles::default(),
                                 &context,
@@ -273,7 +256,7 @@ fn instantiate(
                             .ok()?
                                 == AuthoritySummary::inert()
                         }
-                        Bound::NoallocDrop => match &store.get(*ty)?.drop_allocation {
+                        Bound::NoallocDrop => match &t.get(*ty)?.drop_allocation {
                             DropAllocation::NoAlloc => true,
                             DropAllocation::DependsOn(ps) => ps.iter().all(|p| {
                                 context
@@ -292,11 +275,11 @@ fn instantiate(
             _ => return None,
         }
     }
-    let parameter = substitute_type(
-        source,
+    let parameter = hirsel_types::substitute(
+        t,
+        memo,
         function.parameters.first()?.ty,
-        store,
-        Substitution {
+        &Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles: &NominalRoles::default(),
             arguments: &arguments,
@@ -307,28 +290,31 @@ fn instantiate(
     // The symbolic nominal receiver starts without a cleanup summary. Its
     // parameter row supplies that type-owned summary, not a value-flow proof.
     let actual = if function.parameters.first()?.passing == PassingMode::Borrow {
-        let mut row = store.get(actual)?.clone();
-        row.drop_allocation = store.get(parameter)?.drop_allocation.clone();
-        store.push(row)
+        let mut row = t.get(actual)?.clone();
+        row.drop_allocation = t.get(parameter)?.drop_allocation.clone();
+        t.intern(row)
     } else {
         actual
     };
-    let lookup = &mut |path: &DefPath| {
+    let lookup = &mut |path: DefId| {
         Ok::<_, QueryError>(signatures.get(path).cloned().map(std::sync::Arc::new))
     };
+    let mut memo_context = hirsel_types::ContextMemo::new(t, &context, lookup);
     let compatible = if function.parameters.first()?.passing == PassingMode::Mut {
-        compatible_handback_type(store, parameter, actual, &context, lookup).ok()?
+        memo_context.handback(parameter, actual).ok()?
     } else {
-        compatible_view_type(store, parameter, actual, &context, lookup).ok()?
+        memo_context
+            .view(parameter, actual, hirsel_types::TypeRelation::Parameter)
+            .ok()?
     };
     if !compatible {
         return None;
     }
-    substitute_type(
-        source,
+    hirsel_types::substitute(
+        t,
+        memo,
         function.result,
-        store,
-        Substitution {
+        &Substitution {
             binder: Some(GenericBinder::Bound(0)),
             roles: &NominalRoles::default(),
             arguments: &arguments,
@@ -380,8 +366,10 @@ fn actuals(
 }
 
 pub(super) fn receipts(
+    t: &TypeInterner,
+    memo: &TypeMemo,
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Vec<Violation> {
     let mut errors = vec![];
     let mut seen = BTreeSet::new();
@@ -389,7 +377,7 @@ pub(super) fn receipts(
         let valid = (|| {
             if !seen.insert((receipt.body.0, receipt.open.0, receipt.next.0)) { return None }
             let signature = signatures.get(&receipt.association.source)?;
-            if signature.fingerprint != receipt.association.fingerprint || !declaration(signature, signatures) { return None }
+            if signature.fingerprint != receipt.association.fingerprint || !declaration(t, memo, signature, signatures) { return None }
             let SignatureKind::Type(nominal) = &signature.kind else { return None };
             let association = nominal.loop_source.as_ref()?;
             let body = definition.bodies.get(receipt.body.0 as usize)?;
@@ -404,7 +392,7 @@ pub(super) fn receipts(
             let destination = body.places.get(destination.0 as usize)?;
             let cursor = body.places.get(cursor.value.place.0 as usize)?;
             if cursor.root != destination.root || cursor.projection != destination.projection { return None }
-            if !matches!(definition.types.get(source.ty), Some(Type { kind: TypeKind::Named { definition: owner, .. }, .. }) if owner == &receipt.association.source) { return None }
+            if !matches!(t.get(source.ty), Some(Type { kind: TypeKind::Named { definition: owner, .. }, .. }) if *owner.path() == receipt.association.source) { return None }
             Some(())
         })().is_some();
         if !valid {
@@ -419,7 +407,7 @@ pub(super) fn receipts(
     errors
 }
 
-fn unproved(store: &TypeStore, f: &FunctionType) -> bool {
+fn unproved(store: &TypeInterner, f: &FunctionType) -> bool {
     matches!(
         store.get(f.result).and_then(|t| t.erased_captures.as_ref()),
         Some(ErasedCaptures::FromArguments(selectors)) if selectors.iter().any(|selector| !selector.fields.is_empty())
@@ -431,13 +419,14 @@ fn unproved(store: &TypeStore, f: &FunctionType) -> bool {
 /// creation results remain fail-closed. Callee headers remain
 /// declaration-owned boundaries.
 pub(super) fn unproved_promises(
+    t: &TypeInterner,
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Vec<Violation> {
     let owner = signatures
-        .get(&definition.path)
+        .get(definition.path)
         .is_some_and(|s| match &s.kind {
-            SignatureKind::Function(f) => unproved(&s.types, f),
+            SignatureKind::Function(f) => unproved(t, f),
             _ => false,
         });
     let mut errors = vec![];
@@ -464,13 +453,13 @@ pub(super) fn unproved_promises(
                 let Some(place) = body.places.get(destination.0 as usize) else {
                     continue;
                 };
-                let Some(row) = definition.types.get(place.ty) else {
+                let Some(row) = t.get(place.ty) else {
                     continue;
                 };
                 let TypeKind::Function(f) = &row.kind else {
                     continue;
                 };
-                if unproved(&definition.types, f)
+                if unproved(t, f)
                     || matches!(row.erased_captures, Some(ErasedCaptures::FromArguments(_)))
                 {
                     errors.push(Violation {
@@ -486,17 +475,23 @@ pub(super) fn unproved_promises(
     errors
 }
 
-pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+pub(super) fn selectors(
+    t: &TypeInterner,
+    memo: &TypeMemo,
+    signature: &Signature,
+    signatures: &Reader<'_>,
+) -> bool {
     fn field(
-        mut store: TypeStore,
+        t: &TypeInterner,
+        memo: &TypeMemo,
         mut ty: TypeId,
         fields: &SharedPath<FieldId>,
-        signatures: &dyn SignatureLookup,
+        signatures: &Reader<'_>,
     ) -> bool {
         for field in fields {
-            let mut seen = BTreeSet::new();
+            let mut seen = HashSet::default();
             loop {
-                let Some(row) = store.get(ty) else {
+                let Some(row) = t.get(ty) else {
                     return false;
                 };
                 match &row.kind {
@@ -504,10 +499,10 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
                         definition,
                         arguments,
                     } => {
-                        if !seen.insert(definition.clone()) {
+                        if !seen.insert(*definition) {
                             return false;
                         }
-                        let Some(s) = signatures.get(definition) else {
+                        let Some(s) = signatures.get(*definition) else {
                             return false;
                         };
                         let SignatureKind::Type(d) = &s.kind else {
@@ -517,11 +512,11 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
                             return false;
                         };
                         let arguments = arguments.to_vec();
-                        let Ok(next) = substitute_type(
-                            &s.types,
+                        let Ok(next) = hirsel_types::substitute(
+                            t,
+                            memo,
                             repr,
-                            &mut store,
-                            Substitution {
+                            &Substitution {
                                 binder: Some(GenericBinder::Bound(0)),
                                 roles: &s.metadata.roles,
                                 arguments: &arguments,
@@ -547,7 +542,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
     }
     let mut pending = Vec::new();
     match &signature.kind {
-        SignatureKind::Type(t) => pending.extend(t.representation.map(|ty| (ty, vec![]))),
+        SignatureKind::Type(d) => pending.extend(d.representation.map(|ty| (ty, vec![]))),
         SignatureKind::Const { ty: ty, .. } => pending.push((*ty, vec![])),
         SignatureKind::Function(_) => (),
     }
@@ -566,17 +561,12 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
             let Some(parameter) = f.parameters.get(parameter.0 as usize) else {
                 return false;
             };
-            if !field(
-                signature.types.clone(),
-                parameter.ty,
-                &p.selector.fields,
-                signatures,
-            ) {
+            if !field(t, memo, parameter.ty, &p.selector.fields, signatures) {
                 return false;
             }
         }
     }
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::default();
     while let Some((ty, mut scopes)) = pending.pop() {
         let key: Vec<_> = scopes
             .iter()
@@ -585,7 +575,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
         if !seen.insert((ty, key)) {
             continue;
         }
-        let Some(row) = signature.types.get(ty) else {
+        let Some(row) = t.get(ty) else {
             return false;
         };
         if let Some(ErasedCaptures::FromArguments(selectors)) = &row.erased_captures {
@@ -599,12 +589,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
                 else {
                     return false;
                 };
-                if !field(
-                    signature.types.clone(),
-                    parameter.ty,
-                    &selector.fields,
-                    signatures,
-                ) {
+                if !field(t, memo, parameter.ty, &selector.fields, signatures) {
                     return false;
                 }
             }
@@ -636,12 +621,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
                 {
                     return false;
                 }
-                if !field(
-                    signature.types.clone(),
-                    parameter.ty,
-                    &p.selector.fields,
-                    signatures,
-                ) {
+                if !field(t, memo, parameter.ty, &p.selector.fields, signatures) {
                     return false;
                 }
             }
@@ -657,7 +637,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
     true
 }
 
-fn lift_actual(store: &mut TypeStore, root: TypeId, removed: u32) -> Option<TypeId> {
+fn lift_actual(store: &TypeInterner, root: TypeId, removed: u32) -> Option<TypeId> {
     if removed == 0 {
         return Some(root);
     }

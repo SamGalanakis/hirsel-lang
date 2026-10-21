@@ -8,17 +8,17 @@ use hirsel_types::*;
 
 #[test]
 fn canonical_fixed_flat_bytes_equal_the_codec_on_both_native_targets() {
-    let mut types = TypeStore::default();
-    let flag = types.push(Type::boolean());
-    let word = types.push(Type {
+    let types = crate::support::session();
+    let flag = types.intern(Type::boolean());
+    let word = types.intern(Type {
         kind: TypeKind::Primitive(Primitive::U32),
         ..Type::unit()
     });
-    let lane = types.push(Type {
+    let lane = types.intern(Type {
         kind: TypeKind::Primitive(Primitive::U16),
         ..Type::unit()
     });
-    let pair = types.push(Type {
+    let pair = types.intern(Type {
         kind: TypeKind::Builtin {
             kind: BuiltinType::Inline,
             arguments: vec![
@@ -29,7 +29,7 @@ fn canonical_fixed_flat_bytes_equal_the_codec_on_both_native_targets() {
         },
         ..Type::unit()
     });
-    let record = types.push(Type {
+    let record = types.intern(Type {
         kind: TypeKind::Record(
             vec![
                 Field {

@@ -40,9 +40,7 @@ impl Fixture {
             parameters.sort_by_key(|(i, _)| *i);
             parameters.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
         } else {
-            let hirsel_types::TypeKind::Function(f) = &self
-                .checked
-                .types
+            let hirsel_types::TypeKind::Function(f) = &session()
                 .get(self.checked.expressions[callee.0 as usize].ty)
                 .unwrap()
                 .kind
@@ -84,8 +82,7 @@ impl Fixture {
     pub fn nominal(&mut self, name: &str, representation: TypeId) {
         self.register(Signature {
             metadata: SignatureMetadata::default(),
-            definition: path(name),
-            types: self.checked.types.clone(),
+            definition: DefId::intern(&path(name)),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -141,7 +138,7 @@ impl TirProvider for Provider {
     fn definition(&mut self, path: &DefPath) -> std::result::Result<DefinitionRef, QueryError> {
         self.0
             .iter()
-            .find(|d| &d.path == path)
+            .find(|d| d.path.path() == path)
             .cloned()
             .map(Arc::new)
             .ok_or_else(|| QueryError::NotImplemented)
@@ -154,6 +151,7 @@ pub fn execute(definitions: Vec<Definition>, arguments: Vec<hirsel_interp::Value
     sources.move_anchor(fixture_anchor(), file, 0);
     run(
         &mut Provider(definitions),
+        session_arc(),
         &sources,
         &RunConfiguration {
             entry: path("main"),
@@ -619,10 +617,10 @@ fn iterator_protocol_uses_checked_tags_and_mutates_its_receiver() {
 fn formal_frame_result_rows_override_pre_mode_results_and_require_complete_owners() {
     let mut f = Fixture::new(P::U8);
     let root = f.integer(7, 1);
-    let result = f
-        .checked
-        .types
-        .push(f.checked.types.get(f.scalar).unwrap().clone());
+    let mut row = session().row(f.scalar).clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let result = session().intern(row);
+    assert_ne!(result, f.scalar);
     f.result_types.push((f.owner.clone(), result));
     let definition = f.lower(root, "main", f.scalar).unwrap();
     assert_eq!(definition.bodies[0].result, result);
@@ -676,10 +674,10 @@ fn formal_frame_result_rows_override_pre_mode_results_and_require_complete_owner
         f.scalar,
         f.owner,
     );
-    let child_result = f
-        .checked
-        .types
-        .push(f.checked.types.get(f.scalar).unwrap().clone());
+    let mut row = session().row(f.scalar).clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let child_result = session().intern(row);
+    assert_ne!(child_result, f.scalar);
     f.result_types = vec![
         (f.owner.clone(), function),
         (NameSite::Expression(closure), child_result),
@@ -700,7 +698,7 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
     let mut f = Fixture::new(P::U8);
     let mut source_type = ty(TypeKind::Box(f.scalar));
     source_type.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-    let source_type = f.checked.types.push(source_type);
+    let source_type = session().intern(source_type);
     let capture_type = f.type_(TypeKind::Box(f.scalar));
     let value = f.integer(4, 1);
     let value = f.expr(
@@ -812,13 +810,9 @@ fn finite_materialized_trees_lower_past_32_and_retain_source_field_order() {
                 };
             }
             let expression = f.expr(ExprKind::Comptime(expression), root, U::Take, 1);
-            f.plans.materialized.push((
-                expression,
-                Materialized {
-                    types: f.checked.types.clone(),
-                    root: node,
-                },
-            ));
+            f.plans
+                .materialized
+                .push((expression, Materialized { root: node }));
             let definition = f.lower(expression, "main", root).unwrap();
             let Outcome::Returned { mut value, .. } = execute(vec![definition], vec![]).outcome
             else {

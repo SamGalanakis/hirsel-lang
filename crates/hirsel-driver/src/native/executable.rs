@@ -85,6 +85,31 @@ pub fn build_path_native_backend(
     fuel: bool,
     verify: hirsel_engine::Verify,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
+    build_path_native_backend_with_validation(
+        source,
+        output,
+        target,
+        profile,
+        backend,
+        evidence,
+        fuel,
+        verify,
+        super::Validation::Ready,
+    )
+}
+
+/// Build with an explicit LIR validation policy. Harnesses use `EveryStage`.
+pub fn build_path_native_backend_with_validation(
+    source: &Path,
+    output: &Path,
+    target: TargetSpec,
+    profile: BuildProfile,
+    backend: super::Backend,
+    evidence: Option<&super::Evidence>,
+    fuel: bool,
+    verify: hirsel_engine::Verify,
+    validation: super::Validation,
+) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     if matches!(profile, BuildProfile::Release | BuildProfile::ReleaseLto)
         && backend == super::Backend::Cranelift
     {
@@ -93,62 +118,81 @@ pub fn build_path_native_backend(
             "release builds use LLVM; select LLVM or a non-release profile",
         )));
     }
-    let mut loaded = crate::COMPILER.with_verify(verify).load_program(source)?;
-    loaded.check_for_execution()?;
-    let mut engine = loaded.engine;
-    let input = engine
-        .export_native_input()
-        .map_err(|error| ToolError::Query {
-            error,
-            phase: engine.unavailable,
-            sources: engine.sources.clone(),
-        })?;
-    let sources = (profile == BuildProfile::Debug).then(|| super::profile_sources(&input));
-    let validated = match engine.import_native_input(input) {
-        Ok(input) => input,
-        Err(error) => {
-            return Ok(Err(NativeError::new(
-                StageName::Manifest,
-                format!("the native snapshot: {error:?}"),
-            )));
-        }
-    };
-    Ok((|| {
-        let mut options = Options::new(target.clone());
-        let proofs = evidence
-            .map(|e| super::Proofs::assess(&mut engine, &loaded.entry, &validated, e))
-            .transpose()?;
-        if let Some(proofs) = &proofs {
-            options.discharge = proofs.discharge.clone();
-        }
-        let mut program = super::build(&validated, &options)?;
-        // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).
-        program.fuel = fuel;
-        let scratch = Scratch::new()?;
-        let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(super::runtime_cache::default_directory);
-        let mut tools = Toolchain::in_tree(&cache, &[&target])?;
-        tools.debug_info = profile == BuildProfile::Debug;
-        let objects = super::emit_backend_objects(
-            &program,
-            backend,
-            profile.opt(),
-            Partition::Whole,
-            false,
-            sources.as_ref(),
-        )?;
-        let linked =
-            super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
-        let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
-        std::fs::copy(&linked.path, output).map_err(io)?;
-        // The debug file keeps its build-id name beside the executable, where
-        // its `.gnu_debuglink` leads a debugger.
-        if let Some(debug) = &linked.debug {
-            let beside = output.with_file_name(debug.file_name().unwrap());
-            std::fs::copy(debug, beside).map_err(io)?;
-        }
-        drop(timing);
-        Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
-    })())
+    crate::session::with_program(source, verify, |loaded| {
+        loaded.check_for_execution()?;
+        hirsel_intern::memory::checkpoint("front complete");
+        let engine = &mut loaded.engine;
+        let input = engine
+            .export_native_input()
+            .map_err(|error| ToolError::Query {
+                error,
+                phase: engine.unavailable,
+                sources: engine.sources.clone(),
+            })?;
+        let sources = (profile == BuildProfile::Debug).then(|| super::profile_sources(&input));
+        let validated = match engine.import_native_input(input) {
+            Ok(input) => input,
+            Err(error) => {
+                return Ok(Err(NativeError::new(
+                    StageName::Manifest,
+                    format!("the native snapshot: {error:?}"),
+                )));
+            }
+        };
+        Ok((|| {
+            let mut options = Options::new(target.clone());
+            options.validation = validation;
+            let proofs = evidence
+                .map(|e| super::Proofs::assess(engine, &loaded.entry, &validated, e))
+                .transpose()?;
+            if let Some(proofs) = &proofs {
+                options.discharge = proofs.discharge.clone();
+            }
+            if profile != BuildProfile::ReleaseLto {
+                options.objects = super::units::selected(
+                    &target,
+                    backend,
+                    profile.opt(),
+                    sources.is_some(),
+                    fuel,
+                )?;
+            }
+            let mut program = super::build(&validated, &options)?;
+            hirsel_intern::memory::checkpoint("native workers complete");
+            // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).
+            program.fuel = fuel;
+            let scratch = Scratch::new()?;
+            let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
+                .map(PathBuf::from)
+                .unwrap_or_else(super::runtime_cache::default_directory);
+            let mut tools = Toolchain::in_tree(&cache, &[&target])?;
+            tools.debug_info = profile == BuildProfile::Debug;
+            let objects = super::emit_backend_objects(
+                &program,
+                backend,
+                profile.opt(),
+                Partition::Whole,
+                false,
+                sources.as_ref(),
+            )?;
+            let linked = super::link::link_standalone(
+                &program,
+                &loaded.entry,
+                &objects,
+                &tools,
+                &scratch.0,
+            )?;
+            hirsel_intern::memory::checkpoint("link complete");
+            let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
+            std::fs::copy(&linked.path, output).map_err(io)?;
+            // The debug file keeps its build-id name beside the executable, where
+            // its `.gnu_debuglink` leads a debugger.
+            if let Some(debug) = &linked.debug {
+                let beside = output.with_file_name(debug.file_name().unwrap());
+                std::fs::copy(debug, beside).map_err(io)?;
+            }
+            drop(timing);
+            Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
+        })())
+    })
 }

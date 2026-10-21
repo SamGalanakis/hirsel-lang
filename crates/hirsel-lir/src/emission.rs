@@ -15,11 +15,11 @@ use crate::abi::abi_digest;
 use crate::abi_types::FnAbi;
 use crate::ir::SiteRange;
 use crate::layout_types::{
-    LayoutId, LayoutKind, LayoutRecord, LayoutTable, ObjectFormat, ScalarKind, TargetSpec,
+    LayoutId, LayoutKind, LayoutTable, ObjectFormat, ScalarKind, TargetSpec,
 };
 use crate::object::ObjectFile;
 use crate::stage::{
-    DebugSource, InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
+    InputIdentity, ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, Relocation,
     Reproducibility, StageKind, ValidatedUnit,
 };
 
@@ -50,6 +50,10 @@ pub struct FailureCodes {
     pub codes: BTreeMap<String, FailureCode>,
 }
 
+/// The failure category code of every language failure (`kind` of
+/// `hirsel_rt_v2_failure_begin`): M1b has one category, FAIL-1's `bug`.
+pub const KIND_BUG: u32 = 1;
+
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
@@ -57,34 +61,42 @@ pub const BOUNDED_RULE: &str = "MEM-6";
 /// explicit policy pass `EmitInputs::verify_backend` directly; shipped builds skip
 /// backend IR verification unless that policy requests it.
 pub fn validate_stages() -> bool {
-    std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|v| v == "1")
+    std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|value| value == "1")
 }
 
 /// The immutable inputs of one emission. The emitter receives no provider, query engine or
-/// linker, and keeps no reference to any input after it returns.
+/// linker, and keeps no reference to any input after it returns. Nothing here is a number
+/// the program assigns (`crate::glue`): a unit's code reads those from glue cells, so what
+/// it emits depends only on its units, the layouts they reach (by `LayoutKey`), the
+/// options and the program-wide bits below.
 #[derive(Clone, Debug)]
 pub struct EmitInputs<'a> {
+    /// Borrow-bound lookup index shared by unit workers. Raw callers may omit it.
+    pub index: Option<&'a crate::LayoutIndex<'a>>,
     /// The frozen front-end input every unit was built from.
     pub input: &'a InputIdentity,
     pub target: &'a TargetSpec,
     /// The table every unit's receipt names.
     pub layouts: &'a LayoutTable,
+    /// The content key of every layout of `layouts`.
+    pub keys: &'a crate::layout_keys::LayoutKeys,
     /// The operation manifest every unit's receipt names.
     pub manifest: &'a Manifest,
-    pub failures: &'a FailureCodes,
-    /// The bytes of each static a `ReadStatic` names.
+    /// The bytes of each static a `ReadStatic` names: a constant slot copies pointer-free
+    /// ones (`statics::constant_slots`); glue defines the blocks.
     pub statics: &'a [crate::statics::StaticData],
-    /// Per layout with a user finalizer, the instance digest of its drop body's unit.
-    pub finalizers: &'a BTreeMap<LayoutId, ContentHash>,
     /// Source specializations and known callable bodies replicated by the driver.
     pub inline_instances: &'a BTreeSet<ContentHash>,
     /// Units owned by another object: LLVM keeps these as optimizer-only bodies,
     /// including library templates and their root adapters and callable thunks.
     /// Cranelift skips these bodies. Omit them entirely when no inlining is needed.
     pub available_externally: &'a BTreeSet<ContentHash>,
-    /// The definitions some unit of the program names as a C callback (PROG-4): each one's
-    /// own object exports its `callback_thunk_name` thunk.
-    pub callbacks: &'a BTreeSet<DefPath>,
+    /// The program names a C callback (PROG-4), so no Hirsel entry states `noalias`
+    /// (`hirsel-llvm`'s `Aliasing`).
+    pub callbacks: bool,
+    /// The program opens a bounded arena (MEM-6), so its constructions build tracked
+    /// arena blocks and charge them.
+    pub tracking: bool,
     /// Each extern's `hirsel_rt_v2_foreign_enter` dispatch word (S-13,
     /// `runtime_abi::FOREIGN_THREADS_HOME` and the rest); an extern absent here is a
     /// non-blocking `home` call.
@@ -93,7 +105,6 @@ pub struct EmitInputs<'a> {
     /// Run the backend IR verifier (the explicit every-stage harness policy).
     /// Debug-assertion compilers verify regardless of this value.
     pub verify_backend: bool,
-    pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
     pub measurement: bool,
     /// Charge the run's fuel at every fuel point (`crate::fuel::fuel_points`): the word at
@@ -101,6 +112,36 @@ pub struct EmitInputs<'a> {
     /// `hirsel_rt_v2_fuel_refill` and continues. Without it no code reads the word, so a run without a
     /// fuel budget pays nothing.
     pub fuel: bool,
+}
+
+/// A C callback thunk glue defines: the definition, its instance and its entry's FnAbi.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GlueCallback {
+    pub definition: DefPath,
+    pub instance: Option<ContentHash>,
+    pub abi: crate::FnAbiId,
+}
+
+/// The inputs of the program's glue object (`crate::glue`), regenerated at every link.
+#[derive(Clone, Debug)]
+pub struct GlueInputs<'a> {
+    pub target: &'a TargetSpec,
+    pub layouts: &'a LayoutTable,
+    pub keys: &'a crate::layout_keys::LayoutKeys,
+    pub registry: crate::descriptor_registry::DescriptorRegistry,
+    /// Per layout with a user finalizer, the instance digest of its drop body's unit.
+    pub finalizers: &'a BTreeMap<LayoutId, ContentHash>,
+    /// What the program's units need from glue, merged.
+    pub glue: &'a crate::glue::UnitGlue,
+    /// Every rule's code: `glue::failure_codes` of `glue.failure_rules`.
+    pub failures: &'a FailureCodes,
+    /// The program's statics; glue defines those `glue.statics` names.
+    pub statics: &'a [crate::statics::StaticData],
+    pub callbacks: &'a [GlueCallback],
+    /// Current S-13 dispatch words; units read only their content-named glue cells.
+    pub foreign: &'a BTreeMap<DefPath, u64>,
+    /// As the units' `EmitInputs::callbacks`.
+    pub aliasing_unstated: bool,
 }
 
 /// C library symbols for byte comparisons and those a backend's lowering may introduce for
@@ -191,27 +232,19 @@ pub fn callback_thunk_name(definition: &DefPath, instance: Option<&ContentHash>)
     format!("_H1C{}", &name[3..])
 }
 
-/// No callbacks, for inputs that name none.
-pub static NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
 /// No extern dispatch words: every extern a non-blocking `home` call.
 pub static NO_FOREIGN: BTreeMap<DefPath, u64> = BTreeMap::new();
-
-/// A digest names the layout's runtime descriptor: one address identity across every object.
-pub fn descriptor_name(layout: &LayoutRecord) -> String {
-    let digest = crate::snapshot::digest("runtime-layout-descriptor", layout);
-    let hex: String = digest.0.iter().map(|b| format!("{b:02x}")).collect();
-    format!("hirsel.layout.{hex}")
-}
 
 /// The `site` code a failure passes to `hirsel_rt_v2_failure_begin`: the first eight bytes of
 /// a digest of the definition, its implementation revision and the anchor's byte range. The
 /// observation layer maps it back by recomputing it for the input's anchors.
 pub fn site_code(definition: &DefPath, revision: &ContentHash, site: SiteRange) -> u64 {
     let digest = ContentHash::of_parts(
-        "hirsel.native-site.v1",
+        "hirsel.native-site.v2",
         [
             definition.fingerprint().0.as_slice(),
             revision.0.as_slice(),
+            &site.source.to_le_bytes(),
             &site.start.to_le_bytes(),
             &site.end.to_le_bytes(),
         ],
@@ -227,6 +260,18 @@ pub fn slice_storage(layouts: &LayoutTable, element: LayoutId) -> Option<LayoutI
         .iter()
         .position(|l| l.kind == LayoutKind::Sequence { element })
         .map(|i| LayoutId(i as u32))
+}
+
+/// The same lookup with a once/build index. A foreign borrow takes the raw path.
+pub fn slice_storage_with_index(
+    layouts: &LayoutTable,
+    index: Option<&crate::LayoutIndex<'_>>,
+    element: LayoutId,
+) -> Option<LayoutId> {
+    match index.filter(|index| index.matches(layouts)) {
+        Some(index) => index.sequence(element),
+        None => slice_storage(layouts, element),
+    }
 }
 
 /// A word of the prefix an immortal block (static, region owner or arena block) carries
@@ -308,38 +353,10 @@ pub fn register_result(layouts: &LayoutTable, abi: &FnAbi) -> Option<ScalarKind>
     (!matches!(kind, ScalarKind::U128 | ScalarKind::I128)).then_some(kind)
 }
 
-/// Checks a unit's receipt against the inputs emission was given. A receipt binds the unit,
-/// the layout table, the target, the manifest, the validator and the front-end input; any
-/// other value means the unit was validated against something else. The error is the
-/// problem, for the unit's definition.
+/// Independently bind the receipt to the unit and its actual reached input rows.
+/// Unrelated layouts, ABIs, manifest rows and program input digests do not affect
+/// a unit. Neither a producer-stamped UnitKey nor cached LayoutKeys is a proof.
 pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Result<(), String> {
-    check_receipt_against(unit, inputs, &InputDigests::of(inputs))
-}
-
-/// The digests of an emission's inputs that every unit's receipt must name: computed
-/// once per emission rather than once per unit.
-pub struct InputDigests {
-    target: ContentHash,
-    layouts: ContentHash,
-    manifest: ContentHash,
-}
-
-impl InputDigests {
-    pub fn of(inputs: &EmitInputs<'_>) -> Self {
-        Self {
-            target: inputs.target.digest(),
-            layouts: inputs.layouts.digest(),
-            manifest: crate::snapshot::digest("manifest", inputs.manifest),
-        }
-    }
-}
-
-/// `check_receipt` given `InputDigests::of(inputs)`.
-pub fn check_receipt_against(
-    unit: &ValidatedUnit<Ready>,
-    inputs: &EmitInputs<'_>,
-    digests: &InputDigests,
-) -> Result<(), String> {
     let raw = unit.receipt().raw();
     let header = &unit.unit().header;
     let reject = |problem: &str| Err(problem.to_owned());
@@ -355,19 +372,29 @@ pub fn check_receipt_against(
     if raw.validator_version != crate::VALIDATOR_VERSION {
         return reject("the receipt is from another validator version");
     }
-    let target = digests.target;
-    if raw.target != target || header.target != target || inputs.layouts.target != target {
+    let target = inputs.target.digest();
+    if header.target != target || inputs.layouts.target != target {
         return reject("the receipt names another target");
     }
-    let layouts = digests.layouts;
-    if raw.layouts != layouts || header.layouts != layouts {
-        return reject("the receipt names another layout table");
+    if raw.key != header.key {
+        return reject("the receipt names another unit key");
     }
-    if raw.manifest != digests.manifest {
-        return reject("the receipt names another operation manifest");
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = crate::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let evidence = crate::validate::UnitInputs {
+        target: inputs.target,
+        layouts: inputs.layouts,
+        manifest: inputs.manifest,
     }
-    if raw.input != *inputs.input || header.input != *inputs.input {
-        return reject("the receipt names another front-end input");
+    .digest_with_index(unit.unit(), index)?;
+    if unit.receipt().checked_inputs() != evidence {
+        return reject("the receipt names other checked inputs");
     }
     if inputs.input.interface_version != crate::INTERFACE_VERSION {
         return reject("the input is of another interface version");
@@ -385,6 +412,9 @@ pub struct Manifested {
     pub library: BTreeSet<String>,
     /// Shared runtime descriptor and step globals emitted by this object.
     pub descriptors: BTreeSet<String>,
+    /// The entries the object's units name as C callbacks. Glue's thunk calls them, so
+    /// a library copy here is kept though nothing in the object calls it.
+    pub kept: BTreeSet<String>,
 }
 
 impl Manifested {
@@ -425,9 +455,53 @@ impl Manifested {
 pub fn artifact(
     file: ObjectFile,
     manifested: Manifested,
-    units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     toolchain: &str,
+) -> Result<ObjectArtifact, String> {
+    let mut options = format!(
+        "{:?} {} {} {}",
+        inputs.opt,
+        inputs.target.triple,
+        inputs.target.cpu,
+        inputs.target.features.join(",")
+    );
+    if inputs.measurement {
+        options.push_str(" measurement");
+    }
+    if inputs.fuel {
+        options.push_str(" fuel");
+    }
+    if inputs.callbacks {
+        options.push_str(" callbacks");
+    }
+    if inputs.tracking {
+        options.push_str(" tracking");
+    }
+    checked_artifact(file, manifested, inputs.target, toolchain, &options)
+}
+
+/// `artifact` for the program's glue object (`crate::glue`).
+pub fn glue_artifact(
+    file: ObjectFile,
+    manifested: Manifested,
+    target: &TargetSpec,
+    toolchain: &str,
+) -> Result<ObjectArtifact, String> {
+    let options = format!(
+        "glue {} {} {}",
+        target.triple,
+        target.cpu,
+        target.features.join(",")
+    );
+    checked_artifact(file, manifested, target, toolchain, &options)
+}
+
+fn checked_artifact(
+    file: ObjectFile,
+    manifested: Manifested,
+    target: &TargetSpec,
+    toolchain: &str,
+    options: &str,
 ) -> Result<ObjectArtifact, String> {
     if !file.thread_locals.is_empty() {
         return Err(format!(
@@ -489,45 +563,21 @@ pub fn artifact(
             .filter_map(|s| s.abi.as_ref())
             .map(|h| h.0.as_slice()),
     );
-    let mut options = format!(
-        "{:?} {} {} {}",
-        inputs.opt,
-        inputs.target.triple,
-        inputs.target.cpu,
-        inputs.target.features.join(",")
-    );
-    if inputs.measurement {
-        options.push_str(" measurement");
-    }
-    if inputs.fuel {
-        options.push_str(" fuel");
-    }
-    let mut debug: Vec<DebugSource> = units
-        .iter()
-        .map(|u| DebugSource {
-            definition: u.unit().header.definition.clone(),
-            implementation_revision: u.unit().header.implementation_revision,
-        })
-        .collect();
-    debug.sort_by(|a, b| a.definition.cmp(&b.definition));
-    debug.dedup();
     Ok(ObjectArtifact {
-        input: inputs.input.clone(),
-        target: inputs.target.digest(),
+        target: target.digest(),
         format: ObjectFormat::Elf,
         bytes: file.bytes,
         exports,
         imports,
         relocations,
-        debug,
         abi,
-        layouts: inputs.layouts.digest(),
         reproducibility: Reproducibility {
             toolchain: toolchain.to_owned(),
             options: ContentHash::of_parts("hirsel.native-options.v1", [options.as_bytes()]),
             lir_version: crate::LIR_VERSION,
             runtime_abi_version: crate::RUNTIME_ABI_VERSION,
         },
+        debug: Vec::new(),
     })
 }
 
@@ -636,6 +686,7 @@ mod tests {
             imports: imports.iter().map(symbol).collect(),
             library: BTreeSet::new(),
             descriptors: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -653,31 +704,30 @@ mod tests {
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let layouts = LayoutTable::new(&target);
         let manifest = Manifest::skeleton([]);
-        let failures = FailureCodes::default();
         let input = InputIdentity {
             interface_version: crate::INTERFACE_VERSION,
             digest: ContentHash::of_bytes(b"input"),
         };
-        let finalizers = BTreeMap::new();
+        let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
+            index: None,
             verify_backend: true,
             input: &input,
             target: &target,
             layouts: &layouts,
+            keys: &keys,
             manifest: &manifest,
-            failures: &failures,
             statics: &[],
-            finalizers: &finalizers,
             inline_instances: &BTreeSet::new(),
             available_externally: &BTreeSet::new(),
-            callbacks: &NO_CALLBACKS,
+            callbacks: false,
             foreign: &NO_FOREIGN,
-            registry: crate::descriptor_registry::DescriptorRegistry::new(&layouts, &finalizers),
+            tracking: false,
             opt: OptLevel::None,
             measurement: false,
             fuel: false,
         };
-        artifact(file, manifested, &[], &inputs, "fixture")
+        artifact(file, manifested, &inputs, "fixture")
     }
 
     #[test]

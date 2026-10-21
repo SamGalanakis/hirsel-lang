@@ -40,7 +40,7 @@ fn byte_descriptor_and_text_records_match_derivation_on_both_targets() {
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
-        let mut ty = support::schema::Ty::default();
+        let mut ty = support::schema::ty();
         let string = ty.p(Primitive::String);
         let bytes = ty.p(Primitive::Bytes);
         let result = ty.variant(&[&[string], &[bytes]]);
@@ -115,7 +115,7 @@ fn bytes_list_descriptor_matches_derivation_on_both_targets() {
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
-        let mut ty = support::schema::Ty::default();
+        let mut ty = support::schema::ty();
         let bytes = ty.p(Primitive::Bytes);
         let list = ty.list(bytes);
         let owners = Owners::default();

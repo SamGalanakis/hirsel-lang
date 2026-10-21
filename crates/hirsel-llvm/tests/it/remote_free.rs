@@ -65,7 +65,7 @@ fn program(target: &TargetSpec) -> Program {
 fn inputs<'a>(
     p: &'a Program,
     input: &'a hirsel_lir::stage::InputIdentity,
-    failures: &'a hirsel_lir::emission::FailureCodes,
+    _failures: &'a hirsel_lir::emission::FailureCodes,
     opt: OptLevel,
 ) -> EmitInputs<'a> {
     static INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
@@ -76,14 +76,14 @@ fn inputs<'a>(
         target: &p.table.target,
         layouts: &p.table.table,
         manifest: &p.manifest,
-        failures,
+        index: None,
+        keys: &p.table.keys,
+        tracking: false,
         statics: &p.statics,
-        finalizers: &p.finalizers,
         inline_instances: &INLINE,
         available_externally: &INLINE,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
         opt,
         measurement: false,
         fuel: false,

@@ -227,7 +227,7 @@ released or reset under a static live mask (a private `hirsel.mask` constant). `
 callable resets its environment block. Drop glue (`glue.rs`) lowers a LayoutRecord's drop program to straight code. A `Release`
 of a whole block whose payload layout has no finalizer, inline resource or columns calls
 the private `hirsel.release.<key>(ctx, block, anchor, site, budget)`, one per layout and
-object, named by the layout's `LayoutKey`: it consumes one credit on the count word (the contract in `hirsel_rt_v2.h`; T04,
+object, named by the layout's `LayoutIdentity`: it consumes one credit on the count word (the contract in `hirsel_rt_v2.h`; T04,
 T16), and when that was the last it walks the payload, tags switched on, static repeats
 unrolled or looped, sequences looped from the highest element, then frees the block
 through `hirsel_rt_v2_free`'s fast path (`runtime::free_fast`), onto its page's deferred list

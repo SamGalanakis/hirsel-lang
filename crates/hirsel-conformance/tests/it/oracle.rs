@@ -1,7 +1,7 @@
 //! The O1–O4 harnesses on today's compiler: every check either passes or names
 //! a switch the compiler lacks, and each comparison fails on a planted difference.
 use hirsel_conformance::oracle::{
-    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o4, o5, switches::Switch,
+    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o5, switches::Switch,
 };
 use std::{
     path::{Path, PathBuf},
@@ -47,18 +47,26 @@ fn scenarios(oracle: &str) -> Vec<Scenario> {
 fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
     let work = work("o1");
     let output = Command::new(env!("CARGO_BIN_EXE_oracle"))
-        .args(["o1", "--native", "--json", "--allow-todo", "--work"])
+        .args(["o1", "--native", "--json", "--work"])
         .arg(&work)
         .args(["--root"])
         .arg(root())
-        .args(["--path", "conformance/CT/CT-2-dependent-constant.hir"])
+        .args([
+            "--path",
+            "conformance/CT/CT-2-dependent-constant.hir",
+            "--path",
+            "conformance/CT/CT-5-cross-module-spelling-run.hir",
+            "--path",
+            "conformance/CT/CT-5-generator-error-bad.hir",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["fail"], 0, "{stderr}");
-    assert!(report["pass"].as_u64().unwrap() >= 2, "{stderr}");
+    assert_eq!(report["todo"], 0, "{stderr}");
+    assert_eq!(report["pass"], 33, "{stderr}");
     let baseline = work.join("0/baseline");
     for artifact in [
         "diagnostics",
@@ -103,7 +111,135 @@ fn o2_warm_runs_equal_cold_after_every_scripted_edit() {
         &work,
     );
     holds(&report);
+    assert!(report.passed(false), "{}", report.text());
     assert_eq!(report.checks.len(), 3 * selected.len(), "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// Keep the source-std case separately selectable on the pool: a changed std
+/// body must invalidate both the resident session and a second process's disk hit.
+#[test]
+fn o2_std_body_edit_matches_cold() {
+    let work = work("o2-std");
+    let scenario = Scenario::read(
+        &root().join(SCENARIOS).join("o2/std-touching.edit"),
+        &root(),
+    )
+    .unwrap();
+    assert!(scenario.with_std);
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    require_accepted_export(&work.join("std-touching/cold"));
+    if !report.failures().is_empty() {
+        show_tir_difference(&work.join("std-touching"));
+    }
+    assert!(report.passed(false), "{}", report.text());
+    assert_eq!(report.checks.len(), 3, "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+fn require_accepted_export(artifacts: &Path) {
+    let diagnostics = std::fs::read_to_string(artifacts.join("diagnostics")).unwrap();
+    let tir = std::fs::read_to_string(artifacts.join("tir"))
+        .unwrap_or_else(|e| panic!("{e}: {diagnostics}"));
+    assert!(!tir.starts_with("export:"), "{tir}");
+    let header = hirsel_proof_export::read_header(&tir).unwrap();
+    assert_eq!(header.format, hirsel_proof_export::FORMAT);
+    for line in diagnostics.lines() {
+        let diagnostic: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_ne!(diagnostic["severity"], "error", "{line}");
+    }
+}
+
+fn show_tir_difference(base: &Path) {
+    let cold = std::fs::read_to_string(base.join("cold/tir")).unwrap();
+    let expected: Vec<_> = cold.lines().collect();
+    for mode in ["resident", "disk-after"] {
+        let warm = std::fs::read_to_string(base.join(mode).join("tir")).unwrap();
+        let actual: Vec<_> = warm.lines().collect();
+        if let Some(first) = expected.iter().zip(&actual).position(|(a, b)| a != b) {
+            let start = first.saturating_sub(8);
+            eprintln!(
+                "{mode}: TIR lines {} versus {}; first difference at {}\ncold: {}\nwarm: {}",
+                expected.len(),
+                actual.len(),
+                first + 1,
+                expected[start..(first + 16).min(expected.len())].join("\n"),
+                actual[start..(first + 16).min(actual.len())].join("\n")
+            );
+        }
+    }
+}
+
+#[test]
+fn o2_std_option_body_edit_matches_cold_in_minimal_manifest() {
+    let work = work("o2-std-minimal");
+    let mut scenario = Scenario::read(
+        &root().join(SCENARIOS).join("o2/std-touching.edit"),
+        &root(),
+    )
+    .unwrap();
+    // Keep the actual std option source and edit, narrowing only its manifest
+    // to the module reached by this program.
+    let manifest = r#"{"schema":1,"package":{"name":"std","version":"1"},"sources":[{"path":"option.hir","module":["option"]}],"dependencies":[]}"#;
+    scenario
+        .before
+        .insert("std@1/hirsel.json".into(), manifest.into());
+    scenario
+        .after
+        .insert("std@1/hirsel.json".into(), manifest.into());
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    require_accepted_export(&work.join("std-touching/cold"));
+    if !report.failures().is_empty() {
+        show_tir_difference(&work.join("std-touching"));
+    }
+    assert!(report.passed(false), "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn o2_reflected_private_field_edit_matches_cold() {
+    let work = work("o2-reflected-field");
+    let mut scenario = Scenario::read(
+        &root()
+            .join(SCENARIOS)
+            .join("o2/reflected-opaque-field.edit"),
+        &root(),
+    )
+    .unwrap();
+    // The reflected result alone is enough: no I/O or loop participates.
+    let main = "const FIELDS: List[FieldShape] = comptime field_types(shape(Secret))\n\npub fn main() -> List[FieldShape] { FIELDS }\n";
+    scenario.before.insert("main.hir".into(), main.into());
+    scenario.after.insert("main.hir".into(), main.into());
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    if !report.failures().is_empty() {
+        let base = work.join("reflected-opaque-field");
+        let cold = std::fs::read_to_string(base.join("cold/tir")).unwrap();
+        let resident = std::fs::read_to_string(base.join("resident/tir")).unwrap();
+        let differences: Vec<_> = cold
+            .lines()
+            .zip(resident.lines())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .take(10)
+            .collect();
+        eprintln!("reflected-field TIR differences: {differences:#?}");
+    }
+    assert!(report.passed(false), "{}", report.text());
     let _ = std::fs::remove_dir_all(&work);
 }
 
@@ -133,6 +269,28 @@ fn o3_recompute_claims_hold_and_a_false_claim_fails() {
 }
 
 #[test]
+fn o3_ten_thousand_line_body_edit_touches_only_affected_memos() {
+    let mut scenario = scenarios("o3")
+        .into_iter()
+        .find(|s| s.name == "callee-body")
+        .unwrap();
+    let mut padding = String::new();
+    for i in 0..2500 {
+        padding.push_str(&format!("\nfn spare_{i}() -> u64 {{\n    {i}u64\n}}\n"));
+    }
+    for tree in [&mut scenario.before, &mut scenario.after] {
+        let source = tree.get_mut(&scenario.entry).unwrap();
+        source.push_str(&padding);
+        assert!(source.lines().count() >= 10_000);
+    }
+    scenario
+        .unchanged
+        .extend(["spare_1".into(), "spare_1200".into()]);
+    let report = o3::run(&[scenario]);
+    assert!(report.passed(false), "{}", report.text());
+}
+
+#[test]
 fn o4_store_hits_equal_cold_runs() {
     let work = work("o4");
     let programs = oracle::corpus(
@@ -145,19 +303,31 @@ fn o4_store_hits_equal_cold_runs() {
         None,
     )
     .unwrap();
-    let report = o4::run(
-        Path::new(env!("CARGO_BIN_EXE_oracle")),
-        &root(),
-        &programs,
-        &work,
-    );
-    holds(&report);
-    assert_eq!(
-        report.count(|v| *v == Verdict::Pass),
-        2,
+    let output = Command::new(env!("CARGO_BIN_EXE_oracle"))
+        .env("HIRSEL_ORACLE_CLI", env!("CARGO_BIN_EXE_hirsel"))
+        .args(["o4", "--json", "--root"])
+        .arg(root())
+        .arg("--work")
+        .arg(&work)
+        .args(programs.iter().flat_map(|path| {
+            [
+                "--path".to_owned(),
+                path.strip_prefix(root())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ]
+        }))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
         "{}",
-        report.text()
+        String::from_utf8_lossy(&output.stderr)
     );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["pass"], 6);
+    assert_eq!(report["todo"], 0);
     let _ = std::fs::remove_dir_all(&work);
 }
 

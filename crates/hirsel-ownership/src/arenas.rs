@@ -5,7 +5,7 @@
 use hirsel_syntax::DefPath;
 use hirsel_types::{
     CheckedBody, Origin, OriginRoot, ParameterRef, Reach, Relation, ResolvedName, Signature,
-    TypeId, TypeStore, is_arena_type,
+    TypeId, TypeInterner, is_arena_type,
 };
 use std::collections::BTreeSet;
 
@@ -16,14 +16,14 @@ pub(crate) struct Arenas {
     pub(crate) definition: Option<DefPath>,
 }
 impl Arenas {
-    pub(crate) fn new(body: &CheckedBody, signature: &Signature) -> Self {
+    pub(crate) fn new(t: &TypeInterner, body: &CheckedBody, signature: &Signature) -> Self {
         let Some(heap) = &signature.metadata.roles.heap else {
             return Self::default();
         };
         let roots = body
             .bindings
             .iter()
-            .filter(|b| is_arena_type(&body.types, b.ty, &heap.arena))
+            .filter(|b| is_arena_type(t, b.ty, &heap.arena))
             .filter_map(|b| match b.binding {
                 ResolvedName::Local(l) => Some(OriginRoot::Local(body.lexical, l)),
                 ResolvedName::Parameter(p) => Some(OriginRoot::Parameter(ParameterRef::body(
@@ -65,7 +65,12 @@ impl Arenas {
     /// Whether `holder`, at its root or any part, is an unplaced local join of
     /// scoped content `value` holds at the same position (PROV-4). The content
     /// is then bounded by the frame that made the join, as its placement was.
-    pub(crate) fn unplaced_scoped(&self, store: &TypeStore, holder: TypeId, value: TypeId) -> bool {
+    pub(crate) fn unplaced_scoped(
+        &self,
+        store: &TypeInterner,
+        holder: TypeId,
+        value: TypeId,
+    ) -> bool {
         let (Some(h), Some(v)) = (store.get(holder), store.get(value)) else {
             return false;
         };

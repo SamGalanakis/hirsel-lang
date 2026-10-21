@@ -124,7 +124,7 @@ impl Checker<'_, '_> {
     /// The function a nominal type's `@format` association names, if any.
     fn format_association(
         &mut self,
-        definition: &ast::DefPath,
+        definition: &DefId,
     ) -> Result<Option<ast::DefPath>, QueryError> {
         Ok(match &self.snapshot(definition)?.kind {
             SignatureKind::Type(nominal) => nominal.format.clone(),
@@ -282,7 +282,7 @@ impl Checker<'_, '_> {
                 message: format!("{operation} is not a function"),
             }));
         };
-        let f = self.import_function(f, &signature.types)?;
+        let f = self.import_function(f)?;
         let ty = self.named_function(f);
         self.put(callee, ty, None, UseKind::Borrow)?;
         self.body

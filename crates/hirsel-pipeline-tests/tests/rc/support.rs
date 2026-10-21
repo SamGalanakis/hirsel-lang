@@ -88,9 +88,10 @@ pub fn program(input: &NativeInput) -> Program {
     for (path, record) in &input.representations {
         match record {
             Some(record) => {
-                owners
-                    .nominals
-                    .insert(path.clone(), OwnerRepresentation::Defined(record.clone()));
+                owners.nominals.insert(
+                    hirsel_syntax::DefId::intern(path),
+                    OwnerRepresentation::Defined(record.clone()),
+                );
             }
             None => {
                 let signature = &input.signatures[path];
@@ -102,12 +103,11 @@ pub fn program(input: &NativeInput) -> Program {
                     // the driver exports no record for it yet, so the adapter
                     // derives one from the public signature.
                     owners.nominals.insert(
-                        path.clone(),
+                        hirsel_syntax::DefId::intern(path),
                         OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
                             definition: path.clone(),
                             representation_revision: signature.fingerprint,
                             generics: t.generics.clone(),
-                            types: signature.types.clone(),
                             private_shape: shape,
                             layout_promises: t.layout.clone(),
                             resource: t.resource,
@@ -119,7 +119,7 @@ pub fn program(input: &NativeInput) -> Program {
                     && (t.capability.is_some() || *path == hirsel_syntax::DefPath::core("Instant"))
                 {
                     owners.nominals.insert(
-                        path.clone(),
+                        hirsel_syntax::DefId::intern(path),
                         OwnerRepresentation::Handle {
                             revision: input.signatures[path].fingerprint,
                             resource: t.resource,
@@ -134,6 +134,8 @@ pub fn program(input: &NativeInput) -> Program {
             interface_version: hirsel_lir::INTERFACE_VERSION,
             digest: ContentHash::of_parts("hirsel-rc.test-input", [b"test".as_slice()]),
         },
+        types: input.types.clone(),
+        memo: std::sync::Arc::new(hirsel_types::TypeMemo::new()),
         definitions: input.definitions.clone(),
         signatures: input.signatures.clone(),
         revisions: input
@@ -170,7 +172,6 @@ pub fn program(input: &NativeInput) -> Program {
                 kind: kind(e.kind),
                 callee: e.callee.clone(),
                 binder: e.binder,
-                types: e.types.clone(),
                 arguments: e.arguments.clone(),
             })
             .collect(),

@@ -139,7 +139,7 @@ pub fn analyze(export: &Export) -> Vec<Finding> {
                 let Terminator::Call { arguments, .. } = &block.terminator else {
                     continue;
                 };
-                let writes = arguments.iter().any(|a| is_stdout(section, body, &a.value));
+                let writes = arguments.iter().any(|a| is_stdout(export, body, &a.value));
                 let leaks = arguments
                     .iter()
                     .any(|a| tainted.contains(&(s, b as u32, operand_root(body, &a.value).0)));

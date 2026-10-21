@@ -1,11 +1,19 @@
 //! Stable snapshots omit TypeId provenance, hash/interner allocation identities.
 use hirsel_tir::*;
-/// Deterministic TIR listing. Arena IDs are local indices, types are printed by
-/// index only; the ephemeral provenance of cloned/imported rows is omitted.
+/// Deterministic TIR listing. Arena IDs are local indices; a type is printed by
+/// its index in the definition's canonical type table, never by session id.
 pub fn definition(definition: &Definition) -> String {
+    let table: std::collections::HashMap<hirsel_types::TypeId, usize> = definition
+        .types
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (*t, i))
+        .collect();
+    let index = |t: &hirsel_types::TypeId| table.get(t).copied().unwrap_or(usize::MAX);
     let mut output = format!(
         "definition {} entry b{}\n",
-        definition.path.0.name, definition.entry.0
+        definition.path.path().0.name,
+        definition.entry.0
     );
     for receipt in &definition.protocol_associations {
         output.push_str(&format!(
@@ -20,13 +28,13 @@ pub fn definition(definition: &Definition) -> String {
     for (n, body) in definition.bodies.iter().enumerate() {
         output.push_str(&format!(
             "body {n} result t{} parameters {:?}\n",
-            body.result.index(),
+            index(&body.result),
             body.parameters
         ));
         for (i, local) in body.locals.iter().enumerate() {
             output.push_str(&format!(
                 "  slot {i}: t{} {:?} scope {}\n",
-                local.ty.index(),
+                index(&local.ty),
                 local.storage,
                 local.scope.0
             ));
@@ -36,7 +44,7 @@ pub fn definition(definition: &Definition) -> String {
                 "  place {i}: slot {} {:?} t{}{}\n",
                 place.root.0,
                 place.projection,
-                place.ty.index(),
+                index(&place.ty),
                 place
                     .loan
                     .map(|id| format!(" through loan {}", id.0))
@@ -45,7 +53,7 @@ pub fn definition(definition: &Definition) -> String {
         }
         for (i, rv) in body.rvalues.iter().enumerate() {
             let text = match rv {
-                Rvalue::Shape(ty) => format!("Shape(t{})", ty.index()),
+                Rvalue::Shape(ty) => format!("Shape(t{})", index(&ty)),
                 _ => format!("{rv:?}"),
             };
             output.push_str(&format!("  rvalue {i}: {text}\n"));
@@ -91,7 +99,7 @@ pub fn definition(definition: &Definition) -> String {
                     let generics = generics
                         .iter()
                         .map(|g| match g {
-                            hirsel_types::GenericArgument::Type(t) => format!("t{}", t.index()),
+                            hirsel_types::GenericArgument::Type(t) => format!("t{}", index(&t)),
                             hirsel_types::GenericArgument::Size(s) => format!("{s:?}"),
                         })
                         .collect::<Vec<_>>()

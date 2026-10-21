@@ -10,6 +10,85 @@ fn engine(text: &str) -> QueryEngine {
     engine
 }
 const PROGRAM: &str = "pub type E = Error()\npub opaque type Hidden: () uses {} { value: u64 }\nconst answer: u64 = 42u64\npub fn main() -> Result[(), E] { let n = answer; Ok(()) }\n";
+
+#[test]
+fn native_import_reuses_exact_verdicts_and_validates_detached_tir() {
+    let run = || {
+        with_compiler_stack(|| {
+            use hirsel_intern::timings::{self, Count};
+            let mut engine = engine(PROGRAM);
+            let base = engine.export_native_input().unwrap();
+            let path = entry_path(&default_context());
+            timings::enable();
+            let runs = || {
+                timings::report()
+                    .counts
+                    .into_iter()
+                    .find(|(kind, _)| *kind == Count::VRuns)
+                    .unwrap()
+                    .1
+            };
+            let before = runs();
+            engine.import_native_input(base.clone()).unwrap();
+            engine.import_native_input(base.clone()).unwrap();
+            assert_eq!(
+                runs(),
+                before,
+                "exact accepted TIR should reuse its verdict"
+            );
+
+            let mut detached = base.clone();
+            detached.definitions.insert(
+                path.clone(),
+                Arc::new(base.definitions[&path].as_ref().clone()),
+            );
+            engine.import_native_input(detached).unwrap();
+            assert!(
+                runs() > before,
+                "detached TIR requires independent validation"
+            );
+
+            let mut forged = base.clone();
+            Arc::make_mut(forged.definitions.get_mut(&path).unwrap()).bodies[0]
+                .entry
+                .0 = 999;
+            assert!(engine.import_native_input(forged).is_err());
+            let mut forged = base;
+            forged.foreign_unreplayable = !forged.foreign_unreplayable;
+            assert!(engine.import_native_input(forged).is_err());
+
+            // Off must not mint a verdict that a later On import can reuse.
+            let mut unchecked = QueryEngine::new(default_environment(), compiler_adapters());
+            unchecked.verify = Verify::Off;
+            let file = unchecked
+                .sources
+                .add("off-on.hir", "fn main() {}".into())
+                .unwrap();
+            let output = check_progress(&mut unchecked, file, &default_context()).unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = unchecked.export_native_input().unwrap();
+            let before = runs();
+            unchecked.import_native_input(input.clone()).unwrap();
+            assert_eq!(runs(), before);
+            unchecked.verify = Verify::On;
+            unchecked.import_native_input(input.clone()).unwrap();
+            assert_eq!(runs() - before, input.definitions.len() as u64);
+            let accepted = runs();
+            unchecked.import_native_input(input).unwrap();
+            assert_eq!(runs(), accepted);
+            "checked".to_owned()
+        })
+    };
+    // Keep process-wide V counters independent of other harness tests.
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "native_input::native_import_reuses_exact_verdicts_and_validates_detached_tir",
+        &[1],
+        run,
+    ) {
+        assert_eq!(outputs, ["checked"]);
+    }
+}
+
 #[test]
 fn native_snapshot_owns_declarations_materializations_sources_and_program_selection() {
     let mut engine = engine(PROGRAM);
@@ -171,18 +250,15 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         "fn key(last:u64)->Set[u64]{let mut s:Set[u64]=set.empty();set.insert(mut s,1);set.insert(mut s,last);take s}\nfn build()->Map[Set[u64],u64]{let mut m:Map[Set[u64],u64]=map.empty();map.insert(mut m,key(2),10);map.insert(mut m,key(3),20);take m}\nconst M:Map[Set[u64],u64]=build()\npub fn main()->Result[(),()]{let m=comptime build();Ok(())}\n",
     );
     let input = engine.export_native_input().unwrap();
-    let signatures = input
-        .signatures
-        .iter()
-        .map(|(p, s)| (p.clone(), (**s).clone()))
-        .collect();
+    let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+    signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
     let mut path = entry_path(&default_context());
     path.0.name = "M".into();
     let output = engine
         .lower_to_tir(&entry_path(&default_context()))
         .unwrap()
         .value;
-    hirsel_validate::assert_valid(&output, &signatures);
+    hirsel_validate::assert_valid(&output, engine.types(), &signatures);
     let mut forged = (*output).clone();
     let mut changed = 0;
     for body in &mut forged.bodies {
@@ -194,7 +270,8 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         }
     }
     assert_eq!(changed, 1);
-    let report = hirsel_validate::validate(&forged, &signatures);
+    forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+    let report = hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -701,7 +778,7 @@ fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
     .into();
     assert!(engine.import_native_input(bad).is_err());
     let mut bad = base;
-    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.0.package.name_is("core"))).unwrap();
+    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.path().0.package.name_is("core"))).unwrap();
     let SignatureKind::Type(t) = &mut Arc::make_mut(nominal).kind else {
         panic!()
     };

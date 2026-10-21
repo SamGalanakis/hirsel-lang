@@ -9,7 +9,7 @@
   (LayoutTable #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7 2
     (list
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Scalar
@@ -30,7 +30,7 @@
             (pair 0
               (U64))) 0))
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Scalar
@@ -51,7 +51,7 @@
             (pair 0
               (Bool))) 0))
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Aggregate)
@@ -70,7 +70,7 @@
         (AbiInputs
           (list) 0))
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Block 2)
@@ -90,7 +90,7 @@
         (AbiInputs
           (list) 0))
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Aggregate)
@@ -114,7 +114,7 @@
         (AbiInputs
           (list) 0))
       (LayoutRecord
-        (LayoutKey
+        (LayoutIdentity
           (none)
           (none) #950f673dd9fa090983884b418c70fdcbcdf376b4c2a77930dc5c6aec53315ac1 7)
         (Block 4)

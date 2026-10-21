@@ -7,6 +7,7 @@ hirsel_guard::install!();
 
 pub mod jobs;
 pub mod memory;
+pub mod persist;
 mod salt;
 mod table;
 pub mod timings;
@@ -98,6 +99,35 @@ impl Ord for Symbol {
 impl PartialOrd for Symbol {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(text: &str) -> Self {
+        Symbol::intern(text)
+    }
+}
+
+/// Persisted as its spelling, or as its number in a persisted string table
+/// (`persist`); never as a session id.
+impl serde::Serialize for Symbol {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match persist::symbol_number(*self) {
+            Some(number) => s.serialize_u32(number),
+            None => s.serialize_str(self.as_str()),
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for Symbol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if let Some(source) = persist::symbol_source() {
+            let number = <u32 as serde::Deserialize>::deserialize(d)?;
+            return source
+                .id(number)
+                .ok_or_else(|| serde::de::Error::custom("symbol number out of range"));
+        }
+        let text = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+        Ok(Symbol::intern(&text))
     }
 }
 

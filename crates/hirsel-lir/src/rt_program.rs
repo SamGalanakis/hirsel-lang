@@ -876,12 +876,12 @@ impl Lower<'_> {
 mod tests {
     use super::*;
     use crate::layout_types::{
-        AbiInputs, CopyRecipe, InitializedBytes, LayoutKey, LayoutKind, TargetSpec,
+        AbiInputs, CopyRecipe, InitializedBytes, LayoutIdentity, LayoutKind, TargetSpec,
     };
 
     fn record(kind: LayoutKind, size: u64, drop: Vec<DropStep>) -> LayoutRecord {
         LayoutRecord {
-            key: LayoutKey {
+            key: LayoutIdentity {
                 owner_revision: None,
                 instance: None,
                 target: TargetSpec::x86_64_unknown_linux_gnu().digest(),

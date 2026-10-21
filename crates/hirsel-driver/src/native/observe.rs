@@ -21,6 +21,7 @@ pub const OBSERVATION_SCHEMA: u32 = 4;
 pub struct Failure {
     pub rule: String,
     pub definition: DefPath,
+    pub file: String,
     pub line: u32,
     pub column: u32,
     pub operation: Option<hirsel_interp::observation::SourceSite>,
@@ -60,6 +61,7 @@ impl Observation {
                 .map(|f| Failure {
                     rule: f.rule.as_str().to_string(),
                     definition: f.stable_site.definition.clone(),
+                    file: f.stable_site.file.clone(),
                     line: f.stable_site.line,
                     column: f.stable_site.column,
                     operation: f.operation.clone(),
@@ -135,14 +137,14 @@ impl Observation {
         for f in &self.failures {
             let _ = writeln!(
                 out,
-                "failure {} {} {}:{}",
-                f.rule, f.definition.0.name, f.line, f.column
+                "failure {} {} {:?} {}:{}",
+                f.rule, f.definition.0.name, f.file, f.line, f.column
             );
             if let Some(operation) = &f.operation {
                 let _ = writeln!(
                     out,
-                    "  in {} {}:{}",
-                    operation.definition, operation.line, operation.column
+                    "  in {} {:?} {}:{}",
+                    operation.definition, operation.file, operation.line, operation.column
                 );
             }
         }
@@ -154,10 +156,10 @@ impl Observation {
 }
 
 /// Source positions of the snapshot's definitions: a failure site is a byte
-/// range relative to its definition's anchor.
+/// range relative to its selected existing source anchor.
 pub struct Sites<'a> {
     input: &'a NativeInput,
-    anchors: BTreeMap<&'a DefPath, hirsel_span::Anchor>,
+    anchors: BTreeMap<&'a DefPath, Vec<hirsel_span::Anchor>>,
 }
 
 impl<'a> Sites<'a> {
@@ -165,7 +167,15 @@ impl<'a> Sites<'a> {
         let anchors = input
             .source_owners
             .iter()
-            .map(|(path, owner)| (path, owner.syntax.anchor))
+            .map(|(path, owner)| {
+                (
+                    path,
+                    input.definitions.get(path).map_or_else(
+                        || vec![owner.syntax.anchor],
+                        |d| hirsel_tir::source_anchors(d),
+                    ),
+                )
+            })
             .collect();
         Self { input, anchors }
     }
@@ -185,6 +195,12 @@ impl<'a> Sites<'a> {
         Ok(Failure {
             rule: rule.to_string(),
             definition: definition.clone(),
+            file: self
+                .file(definition, site.source)
+                .ok_or_else(|| NativeError::new(StageName::Launch, "missing failure source"))?
+                .path
+                .to_string_lossy()
+                .into_owned(),
             line: location.0,
             column: location.1,
             operation: None,
@@ -192,15 +208,17 @@ impl<'a> Sites<'a> {
     }
 
     /// The file a definition's source stands in.
-    fn file(&self, definition: &DefPath) -> Option<&hirsel_span::SourceFile> {
-        let (file, _) = self.input.sources.anchor(*self.anchors.get(definition)?)?;
+    fn file(&self, definition: &DefPath, source: u32) -> Option<&hirsel_span::SourceFile> {
+        let (file, _) = self
+            .input
+            .sources
+            .anchor(*self.anchors.get(definition)?.get(source as usize)?)?;
         self.input.sources.file(file)
     }
     pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
-        let file = self.file(&failure.definition)?;
         Some(hirsel_run_schema::Site {
             definition: failure.definition.to_string(),
-            file: file.path.to_string_lossy().into_owned(),
+            file: failure.file.clone(),
             line: failure.line.into(),
             column: failure.column.into(),
         })
@@ -221,17 +239,16 @@ impl<'a> Sites<'a> {
         &self,
         source: &hirsel_interp::observation::SourceSite,
     ) -> Option<hirsel_run_schema::Site> {
-        let file = self.file(&source.definition)?;
         Some(hirsel_run_schema::Site {
             definition: source.definition.to_string(),
-            file: file.path.to_string_lossy().into_owned(),
+            file: source.file.clone(),
             line: source.line.into(),
             column: source.column.into(),
         })
     }
     /// The one-based line and column a failure site starts at.
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
-        let anchor = self.anchors.get(definition)?;
+        let anchor = self.anchors.get(definition)?.get(site.source as usize)?;
         let span = Span::new(*anchor, site.start, site.end)?;
         let location = self.input.sources.location(span)?;
         Some((location.line, location.column))
@@ -242,23 +259,15 @@ impl<'a> Sites<'a> {
 /// back to its definition and byte range.
 pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)> {
     let mut codes = BTreeMap::new();
-    for unit in &program.units {
-        let unit = unit.unit();
-        let header = &unit.header;
-        let sites = unit
-            .tables
-            .source_anchors
-            .iter()
-            .map(|a| a.site)
-            .chain(unit.tables.cleanup_anchors.iter().map(|a| a.site));
-        for site in sites {
+    for summary in &program.summaries {
+        for &site in &summary.sites {
             codes.insert(
                 hirsel_lir::emission::site_code(
-                    &header.definition,
-                    &header.implementation_revision,
+                    &summary.definition,
+                    &summary.implementation_revision,
                     site,
                 ),
-                (header.definition.clone(), site),
+                (summary.definition.clone(), site),
             );
         }
     }
@@ -267,12 +276,7 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
 
 /// Whether the program catches failures (`task.isolate`'s `Isolate` terminator).
 pub fn isolates(program: &ReadyProgram) -> bool {
-    program.units.iter().any(|u| {
-        u.unit()
-            .terminators
-            .iter()
-            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Isolate { .. }))
-    })
+    program.summaries.iter().any(|s| s.isolates)
 }
 
 /// The program's failure table (`hirsel_rt::isolate`): each site code's definition path and
@@ -328,7 +332,7 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
                 // A site inside a library body has no source position: line and column 0.
                 let (line, column) = sites.position(&definition, range).unwrap_or((0, 0));
                 let file = sites
-                    .file(&definition)
+                    .file(&definition, range.source)
                     .map(|f| f.logical_path().to_string_lossy().into_owned())
                     .unwrap_or_else(|| "<core>".into());
                 (code, definition.to_string(), line, column, file)

@@ -728,27 +728,28 @@ fn consuming_cursors_record_uniqueness_where_their_transfer_needs_it() {
     let registry = hirsel_engine::registry::BuiltinRegistry::new();
     let signatures = registry
         .signatures()
-        .map(|s| (s.definition.clone(), s.clone()))
+        .map(|s| (s.definition.path().clone(), s.clone()))
         .collect();
-    let owners = hirsel_rc::library::owners(&signatures);
+    let owners = hirsel_rc::library::owners(registry.types(), &signatures);
     for (name, count) in [
         ("OwnedCursor", 3),
         ("OwnedMapCursor", 3),
         ("OwnedSortedMapCursor", 3),
     ] {
-        let OwnerRepresentation::Defined(record) =
-            &owners.nominals[&hirsel_syntax::DefPath::core(&format!("$intrinsic.{name}"))]
-        else {
+        let OwnerRepresentation::Defined(record) = &owners.nominals[&hirsel_syntax::DefId::intern(
+            &hirsel_syntax::DefPath::core(&format!("$intrinsic.{name}")),
+        )] else {
             panic!("cursor representation")
         };
-        let TypeKind::Record(fields) = &record.types.get(record.private_shape).unwrap().kind else {
+        let TypeKind::Record(fields) = &registry.types().get(record.private_shape).unwrap().kind
+        else {
             panic!("cursor record")
         };
         assert_eq!(fields.len(), count);
         if count == 3 {
-            assert_eq!(fields[2].name, "unique");
+            assert_eq!(fields[2].name.as_str(), "unique");
             assert_eq!(
-                record.types.get(fields[2].ty).unwrap().kind,
+                registry.types().get(fields[2].ty).unwrap().kind,
                 TypeKind::Primitive(Primitive::Bool)
             );
         }

@@ -17,10 +17,16 @@ fn signatures(
     let file = engine.sources.add("group.hir", source.into()).unwrap();
     engine.parse_file(file, &default_context()).unwrap();
     for name in order {
-        engine.signature(&path(name)).unwrap();
+        engine
+            .signature(hirsel_syntax::DefId::intern(&path(name)))
+            .unwrap();
     }
     ["Tree", "Entry"]
-        .map(|name| engine.signature(&path(name)).unwrap())
+        .map(|name| {
+            engine
+                .signature(hirsel_syntax::DefId::intern(&path(name)))
+                .unwrap()
+        })
         .to_vec()
 }
 /// What a signature means: its fingerprint covers its content and group key.
@@ -44,8 +50,10 @@ fn recursive_type_groups_normalize_alike_in_any_order_and_move_together() {
         for (signature, other) in first.iter().zip(["Entry", "Tree"]) {
             let mut engine = fresh();
             signatures(&mut engine, GROUP, ["Tree", "Entry"]);
-            let covered = engine.signature_coverage(&signature.definition).unwrap();
-            assert!(covered.iter().all(|d| d.definition != path(other)));
+            let covered = engine
+                .signature_coverage(signature.definition.path())
+                .unwrap();
+            assert!(covered.iter().all(|d| *d.definition.path() != path(other)));
         }
         // Editing one member moves both, also through a session's caches.
         let edited = GROUP.replace("key: u64", "key: u32");

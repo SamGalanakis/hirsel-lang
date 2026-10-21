@@ -82,8 +82,10 @@ impl<T: Dependencies> DependencyRows<T> {
             .map(|rows| rows.entries().into_iter().map(|(index, _)| index).collect())
             .unwrap_or_default()
     }
-    pub fn union(&mut self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
-        for index in self.values.differences(&other.values) {
+    /// Union `other`, which is `base` changed in place, into rows that
+    /// already joined `base`: only rows changed since `base` are visited.
+    pub fn union_since(&mut self, base: &Self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
+        for index in base.values.differences(&other.values) {
             let mut value = self.values[index].clone();
             join(&mut value, &other.values[index]);
             self.set(index, value);
@@ -119,7 +121,8 @@ mod tests {
         assert!(rows.holders(&a.root).is_empty());
         assert_eq!(rows.holders(&b.root), vec![7, 31]);
         assert_eq!(old.holders(&a.root), vec![7]);
-        rows.union(&old, |a, b| a.extend(b.iter().cloned()));
+        let base = rows.clone();
+        rows.union_since(&base, &old, |a, b| a.extend(b.iter().cloned()));
         assert_eq!(rows.holders(&a.root), vec![7]);
         assert_eq!(rows[7], BTreeSet::from([a, b]));
         rows.update(7, BTreeSet::clear);

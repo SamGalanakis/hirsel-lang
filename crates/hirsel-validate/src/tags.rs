@@ -1,7 +1,7 @@
 //! Active cases are finite flow facts; absence means any case is possible.
 use super::super::flow_origins::EnvironmentField as EnvField;
 use super::*;
-use hirsel_types::{BuiltinType, TypeId, TypeStore};
+use hirsel_types::{BuiltinType, TypeId, TypeInterner};
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum Field {
@@ -217,7 +217,7 @@ impl Checker<'_> {
             _ => Parts::new(),
         }
     }
-    pub(crate) fn packed_carrier(&self, store: &mut TypeStore, mut ty: TypeId) -> bool {
+    pub(crate) fn packed_carrier(&self, store: &TypeInterner, mut ty: TypeId) -> bool {
         let mut expansions = hirsel_types::NominalExpansions::default();
         loop {
             match store.get(ty).unwrap().kind.clone() {
@@ -230,12 +230,12 @@ impl Checker<'_> {
                     arguments,
                 } => {
                     if !expansions
-                        .enter(ty, 0, |_| store)
+                        .enter(ty, 0, store)
                         .unwrap_or_else(|error| self.proof_failure(error, false))
                     {
                         return false;
                     }
-                    let Some(signature) = self.signatures.get(&definition) else {
+                    let Some(signature) = self.signatures.get(definition) else {
                         return false;
                     };
                     let SignatureKind::Type(declaration) = &signature.kind else {
@@ -245,13 +245,13 @@ impl Checker<'_> {
                         return false;
                     };
                     let next = if arguments.is_empty() {
-                        hirsel_types::import_type(&signature.types, root, store)
+                        Ok(root)
                     } else {
-                        hirsel_types::substitute_type(
-                            &signature.types,
+                        hirsel_types::substitute(
+                            self.t,
+                            self.memo,
                             root,
-                            store,
-                            hirsel_types::Substitution {
+                            &hirsel_types::Substitution {
                                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                                 roles: &signature.metadata.roles,
                                 arguments: &arguments,
@@ -271,7 +271,7 @@ impl Checker<'_> {
     }
     pub(super) fn active_tag(&mut self, state: &State, place: PlaceId, report: bool) -> bool {
         let access = self.body.places[place.0 as usize].clone();
-        let mut store = self.working_store();
+        let store = self.t;
         let mut valid = true;
         for (depth, projection) in access.projection.iter().enumerate() {
             let Projection::VariantField { variant, .. } = projection else {
@@ -279,7 +279,7 @@ impl Checker<'_> {
             };
             let mut prefix = access.clone();
             prefix.projection.truncate(depth);
-            let Some(ty) = self.projection_type(&mut store, &prefix, |_, field| {
+            let Some(ty) = self.projection_type(store, &prefix, |_, field| {
                 Some(Origin {
                     root: OriginRoot::Sibling(field),
                     fields: vec![].into(),
@@ -288,10 +288,10 @@ impl Checker<'_> {
                 valid = false;
                 continue;
             };
-            if self.packed_carrier(&mut store, ty) {
+            if self.packed_carrier(store, ty) {
                 continue;
             }
-            let single = matches!(self.layout(&mut store, ty), Some(TypeKind::Variant(v)) if v.len() == 1 && *variant == 0);
+            let single = matches!(self.layout(store, ty), Some(TypeKind::Variant(v)) if v.len() == 1 && *variant == 0);
             if !single
                 && !proven(&state.tags, &carrier(&prefix))
                     .is_some_and(|f| f.cases == BTreeSet::from([*variant]))
@@ -358,8 +358,8 @@ impl Checker<'_> {
         else {
             return true;
         };
-        let mut store = self.working_store();
-        let count = match self.layout(&mut store, self.place_type(value.place)) {
+        let store = self.t;
+        let count = match self.layout(store, self.place_type(value.place)) {
             Some(TypeKind::Variant(variants)) => variants.len(),
             Some(TypeKind::Primitive(hirsel_types::Primitive::Bool)) => 2,
             _ => return true,

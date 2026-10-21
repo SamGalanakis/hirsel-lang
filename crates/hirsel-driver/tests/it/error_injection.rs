@@ -23,8 +23,7 @@ fn file(source: &str) -> PathBuf {
 
 fn check(path: &Path) -> CheckOutput {
     with_compiler_stack(|| {
-        let mut program =
-            load_program_source_with_cache(path, None, &PackageCache::disabled()).unwrap();
+        let mut program = load_program_source_with_images(path, None, &StdImages::none()).unwrap();
         let output = program.check(LoweringPolicy::Comptime).unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         output
@@ -89,7 +88,9 @@ fn applying_the_no_arm_fix_makes_the_program_check() {
         "{human}"
     );
     let mut text = NO_ARM.to_string();
-    text.insert_str(fix.span.start as usize, &fix.replacement);
+    // Spans are item-relative; the edit lands at its resolved file offset.
+    let at = output.sources.resolve(fix.span).start as usize;
+    text.insert_str(at, &fix.replacement);
     assert!(
         text.contains("type AppError = Input(ParseError) | Limit(u64) | Config(ConfigError)\n")
     );

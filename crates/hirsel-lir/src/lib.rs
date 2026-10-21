@@ -10,17 +10,23 @@ hirsel_guard::install!();
 pub mod abi;
 pub mod abi_types;
 pub mod codec;
+pub mod debug;
 pub mod descriptor_registry;
 pub mod discharge;
 pub mod effect;
 pub mod emission;
+pub mod fragment;
 pub mod fuel;
+pub mod glue;
 pub mod handle_scan;
 pub mod ir;
 pub mod layout;
+pub mod layout_index;
+pub mod layout_keys;
 pub mod layout_types;
 pub mod layout_validate;
 pub mod object;
+pub mod objects;
 pub mod operation;
 pub mod persistent;
 pub mod profile;
@@ -34,7 +40,9 @@ pub mod validate;
 pub use abi_types::{FnAbi, FnAbiId};
 pub use effect::{Effects, Opcode};
 pub use ir::{LirUnit, SchemaError};
-pub use layout_types::{LayoutId, LayoutRecord, LayoutTable, TargetSpec};
+pub use layout_index::LayoutIndex;
+pub use layout_keys::LayoutKeys;
+pub use layout_types::{LayoutId, LayoutKey, LayoutRecord, LayoutTable, TargetSpec};
 pub use stage::{
     InputIdentity, NativeReceipt, ObjectArtifact, Placed, RawReceipt, Rc, Ready, Reuse, Stage,
     StageKind, ValidatedUnit, Value,
@@ -43,7 +51,7 @@ pub use stage::{
 /// The front-end interface version these schemas consume
 /// (`QueryEnvironment.interface_version`). A change invalidates every artifact.
 pub const INTERFACE_VERSION: u32 = 11;
-pub const LIR_VERSION: u32 = 44;
+pub const LIR_VERSION: u32 = 46;
 pub const LAYOUT_VERSION: u32 = 7;
 /// Hirsel cross-unit ABI v2.
 pub const ABI_VERSION: u32 = 2;
@@ -51,7 +59,7 @@ pub const ABI_VERSION: u32 = 2;
 pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.
 pub const FLAT_FORMAT_VERSION: u32 = 0;
-pub const VALIDATOR_VERSION: u32 = 10;
+pub const VALIDATOR_VERSION: u32 = 13;
 
 /// Shared hand-built LIR assembly, available only with the `testing` feature.
 #[cfg(feature = "testing")]

@@ -86,7 +86,7 @@ impl Checker<'_, '_> {
                         let variant = if let TypeKind::Variant(vs) = self.kind(repr) {
                             vs.iter()
                                 .enumerate()
-                                .find(|(_, v)| v.name == self.name(*name) && v.fields.is_empty())
+                                .find(|(_, v)| v.name == *name && v.fields.is_empty())
                                 .map(|(i, _)| (i, vs.len()))
                         } else {
                             None
@@ -201,20 +201,20 @@ impl Checker<'_, '_> {
                                         .collect::<Vec<_>>(),
                                     false,
                                 )),
-                                TypeKind::Variant(vs) => {
-                                    vs.iter().enumerate().find(|(_, v)| v.name == name).map(
-                                        |(i, v)| {
-                                            (
-                                                ContextualName::Variant {
-                                                    owner: owner.clone(),
-                                                    variant: VariantId(i as u32),
-                                                },
-                                                v.fields.to_vec(),
-                                                vs.len() > 1,
-                                            )
-                                        },
-                                    )
-                                }
+                                TypeKind::Variant(vs) => vs
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, v)| v.name.as_str() == name)
+                                    .map(|(i, v)| {
+                                        (
+                                            ContextualName::Variant {
+                                                owner: owner.clone(),
+                                                variant: VariantId(i as u32),
+                                            },
+                                            v.fields.to_vec(),
+                                            vs.len() > 1,
+                                        )
+                                    }),
                                 _ => None,
                             };
                             if let Some((ctx, slots, refut)) = shape {
@@ -229,7 +229,10 @@ impl Checker<'_, '_> {
                                     fs.iter().map(|f| f.label.map(|s| self.name(s))).collect();
                                 let ordinals = self.labels(
                                     &labels,
-                                    &slots.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+                                    &slots
+                                        .iter()
+                                        .map(|(l, _)| l.map(|l| l.as_str().to_owned()))
+                                        .collect::<Vec<_>>(),
                                     *rest,
                                     p.origin.span,
                                 );
@@ -474,13 +477,7 @@ impl Checker<'_, '_> {
                 let same = mutable == expected_mutable
                     && (self.invalid(*ty)
                         || self.invalid(*expected)
-                        || hirsel_types::semantic_equal(
-                            &self.body.types,
-                            *ty,
-                            &self.body.types,
-                            *expected,
-                        )
-                        .unwrap_or(false));
+                        || self.types.semantic_eq(*ty, *expected));
                 if !same {
                     let span = self.input.syntax.tree.patterns[alternative.0 as usize]
                         .origin
@@ -704,9 +701,9 @@ impl Checker<'_, '_> {
         query: Row,
     ) -> Result<bool, QueryError> {
         let mut todo = vec![(vec![root], rows, query)];
-        while let Some((types, rows, (query, asked_choice))) = todo.pop() {
+        while let Some((columns, rows, (query, asked_choice))) = todo.pop() {
             work::count(Counter::BodyUsefulnessMatrices);
-            let rows: Vec<Row> = if types.is_empty() {
+            let rows: Vec<Row> = if columns.is_empty() {
                 rows
             } else {
                 rows.into_iter()
@@ -725,13 +722,13 @@ impl Checker<'_, '_> {
                     )
                     .collect()
             };
-            if !types.is_empty()
+            if !columns.is_empty()
                 && let Some(alternatives) = self.alternatives_of(query[0], &asked_choice)
             {
                 for alternative in alternatives {
                     let mut q = query.clone();
                     q[0] = Some(alternative);
-                    todo.push((types.clone(), rows.clone(), (q, asked_choice.clone())));
+                    todo.push((columns.clone(), rows.clone(), (q, asked_choice.clone())));
                 }
                 continue;
             }
@@ -741,11 +738,11 @@ impl Checker<'_, '_> {
             if rows.is_empty() {
                 return Ok(true);
             }
-            if types.is_empty() {
+            if columns.is_empty() {
                 continue;
             }
-            let first = types[0];
-            let rest = &types[1..];
+            let first = columns[0];
+            let rest = &columns[1..];
             let inspected = self.box_payload(first);
             let (_, repr) = self.representation(inspected)?;
             let mut choices: Option<Vec<(Tag, Vec<TypeId>)>> = match self.kind(repr) {

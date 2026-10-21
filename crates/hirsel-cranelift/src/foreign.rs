@@ -179,14 +179,13 @@ impl FnEmitter<'_, '_, '_> {
             hirsel_lir::runtime_abi::FOREIGN_SCOPE_ALIGN,
         );
         // The runtime dispatches the call to its effective thread (S-13).
-        let dispatch = self
+        let cell = self
             .em
-            .inputs
-            .foreign
-            .get(&symbol.definition)
-            .copied()
-            .unwrap_or(0);
-        let dispatch = self.u64c(dispatch);
+            .glue_data(&hirsel_lir::glue::foreign_dispatch_symbol(
+                &symbol.definition,
+            ))?;
+        let address = self.data_addr(cell, 0);
+        let dispatch = self.load_ty(ir::types::I64, address, 0);
         self.rt(
             RuntimeEntry::ForeignEnter,
             &[self.context, site_value, previous, dispatch],

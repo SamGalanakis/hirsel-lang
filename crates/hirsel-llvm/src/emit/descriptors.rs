@@ -1,5 +1,7 @@
 use super::*;
-use hirsel_lir::codec::CodecCheck;
+use hirsel_lir::glue::{
+    codec_symbol, descriptor_index_symbol, descriptor_word_symbol, literal_symbol,
+};
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
     /// The `const uint64_t *live_mask` of a release: null when every field is live, else
@@ -47,98 +49,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
     }
 
-    /// The LLVM types of `hirsel_rt_v2_layout` and `hirsel_rt_v2_step`.
-    pub(super) fn descriptor_types(&self) -> (Type<'m>, Type<'m>) {
-        let (ptr, i32_ty, i64_ty) = (
-            self.module.ptr_type(),
-            self.module.int_type(32),
-            self.module.int_type(64),
-        );
-        (
-            self.module.struct_type(&[
-                i32_ty, i32_ty, i64_ty, i64_ty, ptr, ptr, i64_ty, i32_ty, i32_ty, i64_ty, ptr, ptr,
-                i64_ty,
-            ]),
-            self.module.struct_type(&[
-                i32_ty, i32_ty, i32_ty, i32_ty, i64_ty, i64_ty, i64_ty, i64_ty, ptr,
-            ]),
-        )
-    }
-
-    /// The unit's codec `codec` as static `hirsel_rt_v2_codec` data: its descriptor bytes and
-    /// its program, whose descriptor indices are the linked registry's (runtime ABI 9).
-    pub(super) fn codec(&mut self, codec: CodecId) -> Emitted<Value<'m>> {
-        let Some(plan) = self.unit.tables.codecs.get(codec.index()) else {
-            return self.invalid("a codec outside the codec table");
-        };
-        for layout in plan.allocated(self.inputs.layouts) {
-            self.descriptor_pointer(layout)?;
-        }
-        let registry = &self.inputs.registry;
-        let words = match plan.program(self.inputs.layouts, &|id| registry.index(id)) {
-            Ok(words) => words,
-            Err(error) => return self.invalid(format!("a codec plan off its layouts: {error}")),
-        };
-        let (ptr, i8_ty, i64_ty) = (
-            self.module.ptr_type(),
-            self.module.int_type(8),
-            self.module.int_type(64),
-        );
-        let descriptor = self.module.private_constant(
-            "hirsel.codec.descriptor",
-            self.module.array_type(i8_ty, plan.descriptor.len() as u64),
-            1,
-        );
-        self.module
-            .set_initializer(descriptor, self.module.const_bytes(&plan.descriptor));
-        let program = self.module.private_constant(
-            "hirsel.codec.program",
-            self.module.array_type(i64_ty, words.len() as u64),
-            8,
-        );
-        let items: Vec<_> = words
-            .iter()
-            .map(|&w| self.module.const_int(i64_ty, u128::from(w)))
-            .collect();
-        self.module
-            .set_initializer(program, self.module.const_array(i64_ty, &items));
-        let checks = if plan.checks.is_empty() {
-            self.module.const_zero(ptr)
-        } else {
-            let mut thunks = Vec::with_capacity(plan.checks.len());
-            for (check, value) in plan.checks.iter().zip(plan.check_layouts()) {
-                let Some(layout) = value else {
-                    return self.invalid("a codec check no CHECKED node calls");
-                };
-                thunks.push(self.check_wrapper(check, layout)?);
-            }
-            let table = self.module.private_constant(
-                "hirsel.codec.checks",
-                self.module.array_type(ptr, thunks.len() as u64),
-                8,
-            );
-            self.module
-                .set_initializer(table, self.module.const_array(ptr, &thunks));
-            table
-        };
-        let global = self.module.private_constant(
-            "hirsel.codec",
-            self.module
-                .struct_type(&[ptr, i64_ty, ptr, i64_ty, ptr, i64_ty]),
-            8,
-        );
-        let initializer = self.module.const_struct(&[
-            descriptor,
-            self.const_u64(plan.descriptor.len() as u64),
-            program,
-            self.const_u64(words.len() as u64),
-            checks,
-            self.const_u64(plan.checks.len() as u64),
-        ]);
-        self.module.set_initializer(global, initializer);
-        Ok(global)
-    }
-
     /// The header stores the linked descriptor index and storage kind.
     pub(super) fn block_descriptor(&self, block: Value<'m>) -> Value<'m> {
         let word = self.builder.load(
@@ -153,383 +63,39 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         )
     }
 
+    /// `layout`'s descriptor index, loaded from its glue cell (`hirsel_lir::glue`): units
+    /// carry no number the program assigns.
     pub(super) fn descriptor(&mut self, layout: LayoutId) -> Emitted<Value<'m>> {
-        self.descriptor_pointer(layout)?;
-        let Some(index) = self.inputs.registry.index(layout) else {
-            return self.invalid("a layout absent from the linked descriptor registry");
-        };
-        Ok(self
-            .module
-            .const_int(self.module.int_type(32), index.into()))
-    }
-
-    pub(super) fn empty_descriptor(&mut self) -> Value<'m> {
-        let name = format!("hirsel.layout.empty.{}", self.inputs.registry.symbol());
-        if let Some(global) = self.module.named_global(&name) {
-            return global;
-        }
-        let (ty, _) = self.descriptor_types();
-        self.manifested.descriptors.insert(name.clone());
-        let global = self.module.linkonce_constant(&name, ty, 8);
-        let null = self.module.const_zero(self.module.ptr_type());
-        let initializer = self.descriptor_initializer(0, 1, null, null, 0, 0, 0, 0, null, null, 0);
-        self.module.set_initializer(global, initializer);
-        global
-    }
-
-    pub(super) fn registry_table(&mut self) -> Emitted<()> {
-        let name = self.inputs.registry.symbol();
-        if self.module.named_global(&name).is_some() {
-            return Ok(());
-        }
-        let ids = self.inputs.registry.layouts.clone();
-        let mut values = vec![self.empty_descriptor()];
-        for id in ids {
-            values.push(self.descriptor_pointer(id)?);
-        }
-        let ptr = self.module.ptr_type();
-        let global = self
-            .module
-            .registry_constant(&name, self.module.array_type(ptr, values.len() as u64));
-        self.manifested.descriptors.insert(name);
-        self.module
-            .set_initializer(global, self.module.const_array(ptr, &values));
-        let binding_name = "hirsel.program.registry";
-        let binding = self.module.registry_constant(
-            binding_name,
-            self.module.struct_type(&[ptr, self.module.int_type(64)]),
-        );
-        self.manifested.descriptors.insert(binding_name.into());
-        self.module.set_initializer(
-            binding,
-            self.module
-                .const_struct(&[global, self.const_u64(values.len() as u64)]),
-        );
-        Ok(())
-    }
-
-    /// A descriptor's initializer.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn descriptor_initializer(
-        &self,
-        size: u64,
-        align: u64,
-        finalizer: Value<'m>,
-        steps: Value<'m>,
-        step_count: u64,
-        field_count: u32,
-        flags: u32,
-        logical: u64,
-        logical_count: Value<'m>,
-        scan: Value<'m>,
-        scan_words: u64,
-    ) -> Value<'m> {
-        let (i32_ty, i64_ty) = (self.module.int_type(32), self.module.int_type(64));
-        let u32_ = |n: u32| self.module.const_int(i32_ty, u128::from(n));
-        let u64_ = |n: u64| self.module.const_int(i64_ty, u128::from(n));
-        self.module.const_struct(&[
-            u32_(LAYOUT_MAGIC),
-            u32_(LAYOUT_DESCRIPTOR_VERSION),
-            u64_(size),
-            u64_(align),
-            finalizer,
-            steps,
-            u64_(step_count),
-            u32_(field_count),
-            u32_(flags),
-            u64_(logical),
-            logical_count,
-            scan,
-            u64_(scan_words),
-        ])
-    }
-
-    /// The `hirsel_rt_v2_layout` (version 2) of `layout`, emitted once per module with every
-    /// descriptor its steps name, as `hirsel_lir::rt_program` lowers them. A layout with a user
-    /// finalizer names its drop wrapper.
-    pub(super) fn descriptor_pointer(&mut self, layout: LayoutId) -> Emitted<Value<'m>> {
-        if let Some(global) = self
-            .module
-            .named_global(&descriptor_name(self.layout(layout)?))
-        {
-            return Ok(global);
-        }
-        let descriptors = match rt_program::descriptors_with_storage(
-            self.inputs.layouts,
-            &[layout],
-            &self.inputs.registry.map_storage,
-        ) {
-            Ok(descriptors) => descriptors,
-            Err(error) => {
-                return self.invalid(format!(
-                    "no runtime descriptor for layout {}: {error:?}",
-                    layout.0
-                ));
-            }
-        };
-        let ptr = self.module.ptr_type();
-        let (layout_ty, step_ty) = self.descriptor_types();
-        // Declare every new descriptor first: a Finalize step names another.
-        let mut new = Vec::new();
-        for d in &descriptors {
-            let name = descriptor_name(self.layout(d.layout)?);
-            if self.module.named_global(&name).is_none() {
-                self.manifested.descriptors.insert(name.clone());
-                new.push((d, self.module.linkonce_constant(&name, layout_ty, 8)));
-            }
-        }
+        self.layout(layout)?;
+        let name = descriptor_index_symbol(&self.inputs.keys.key(layout));
         let i32_ty = self.module.int_type(32);
-        let i64_ty = self.module.int_type(64);
-        for (d, global) in new {
-            let mut steps = Vec::new();
-            for step in &d.steps {
-                let target = match step.layout {
-                    Some(l) => match self.module.named_global(&descriptor_name(self.layout(l)?)) {
-                        Some(target) => target,
-                        None => return self.invalid("a step naming a layout without a descriptor"),
-                    },
-                    None => self.module.const_zero(ptr),
-                };
-                debug_assert!(step.kind != StepKind::Finalize || step.layout.is_some());
-                let u32_ = |n: u32| self.module.const_int(i32_ty, u128::from(n));
-                let u64_ = |n: u64| self.module.const_int(i64_ty, u128::from(n));
-                steps.push(self.module.const_struct(&[
-                    u32_(step.kind.code()),
-                    u32_(step.field),
-                    u32_(step.variant),
-                    u32_(step.span),
-                    u64_(step.offset),
-                    u64_(step.stride),
-                    u64_(step.count),
-                    u64_(step.count_offset),
-                    target,
-                ]));
-            }
-            let steps_ptr = if steps.is_empty() {
-                self.module.const_zero(ptr)
-            } else {
-                let ty = self.module.array_type(step_ty, steps.len() as u64);
-                let name = descriptor_name(self.layout(d.layout)?)
-                    .replace("hirsel.layout.", "hirsel.steps.");
-                self.manifested.descriptors.insert(name.clone());
-                let array = self.module.linkonce_constant(&name, ty, 8);
-                self.module
-                    .set_initializer(array, self.module.const_array(step_ty, &steps));
-                array
-            };
-            let finalizer = match &d.finalizer {
-                Some(finalizer) => self.drop_wrapper(d.layout, finalizer)?,
-                None => self.module.const_zero(ptr),
-            };
-            let logical_count = if let Some(program) = d.logical_count {
-                let word = self.module.int_type(64);
-                let ty = self.module.array_type(word, 5);
-                let name = descriptor_name(self.layout(d.layout)?)
-                    .replace("hirsel.layout.", "hirsel.logical-count.");
-                self.manifested.descriptors.insert(name.clone());
-                let global = self.module.linkonce_constant(&name, ty, 8);
-                let words: Vec<_> = program.iter().map(|&n| self.const_u64(n)).collect();
-                self.module
-                    .set_initializer(global, self.module.const_array(word, &words));
-                global
-            } else {
-                self.module.const_zero(ptr)
-            };
-            let linked_scan = d.scan.linked(|id| self.inputs.registry.index(id));
-            let scan_words = linked_scan.as_ref().map_or(u64::MAX, |w| w.len() as u64);
-            let scan = match linked_scan {
-                Some(words) if !words.is_empty() => {
-                    let word = self.module.int_type(64);
-                    let ty = self.module.array_type(word, words.len() as u64);
-                    let name = descriptor_name(self.layout(d.layout)?)
-                        .replace("hirsel.layout.", "hirsel.scan.");
-                    self.manifested.descriptors.insert(name.clone());
-                    let array = self.module.linkonce_constant(&name, ty, 8);
-                    let values: Vec<_> = words.iter().map(|&n| self.const_u64(n)).collect();
-                    self.module
-                        .set_initializer(array, self.module.const_array(word, &values));
-                    array
-                }
-                _ => self.module.const_zero(ptr),
-            };
-            let initializer = self.descriptor_initializer(
-                d.size,
-                d.align,
-                finalizer,
-                steps_ptr,
-                d.steps.len() as u64,
-                d.field_count,
-                d.flags,
-                d.logical,
-                logical_count,
-                scan,
-                scan_words,
-            );
-            self.module.set_initializer(global, initializer);
-        }
-        match self
-            .module
-            .named_global(&descriptor_name(self.layout(layout)?))
-        {
-            Some(global) => Ok(global),
-            None => self.invalid("a descriptor that was not emitted"),
-        }
+        let cell = self.glue_cell(&name, i32_ty);
+        Ok(self.builder.load(i32_ty, cell, 4))
     }
 
-    /// The drop thunk of `layout`, whose finalizer is `finalizer`: a private wrapper with the
-    /// runtime's `hirsel_rt_v2_drop_thunk` type that calls the drop body's unit, named
-    /// `symbol_name` of its definition instance, with the self address (Borrow for source bodies, Mut for library bodies), and returns its
-    /// status. The unit records its own failure; the cleanup anchor is not its to report.
-    pub(super) fn drop_wrapper(
-        &mut self,
-        layout: LayoutId,
-        finalizer: &FinalizerRef,
-    ) -> Emitted<Value<'m>> {
-        let Some(instance) = self.inputs.finalizers.get(&layout) else {
-            return self.invalid(format!(
-                "layout {} has a finalizer but no drop body instance",
-                layout.0
-            ));
-        };
-        let ptr = self.module.ptr_type();
-        let i8_ty = self.module.int_type(8);
-        let body_name = symbol_name(&finalizer.definition, Some(instance));
-        let caller_site = finalizer.definition.0.package == DefPath::core("").0.package;
-        let i64_ty = self.module.int_type(64);
-        let body_slots = if caller_site {
-            vec![ptr, i64_ty, i64_ty, ptr]
-        } else {
-            vec![ptr, ptr]
-        };
-        let body_ty = self.module.function_type(i8_ty, &body_slots);
-        let body = match self.module.function(&body_name, body_ty) {
-            Ok(body) => body,
-            Err(_) => {
-                return self.invalid(format!(
-                    "the drop body `{body_name}` does not take (context, self address)"
-                ));
-            }
-        };
-        self.manifested
-            .imports
-            .entry(body_name.clone())
-            .or_insert_with(|| ObjectSymbol {
-                name: body_name.clone(),
-                kind: ObjectSymbolKind::Function,
-                definition: Some(finalizer.definition.clone()),
-                abi: None,
-            });
-        let ty = self
-            .module
-            .function_type(i8_ty, &[ptr, ptr, i64_ty, i64_ty]);
-        let wrapper = match self
-            .module
-            .function(&format!("hirsel.drop.{}", layout.0), ty)
-        {
-            Ok(wrapper) => wrapper,
-            Err(what) => return self.invalid(what),
-        };
-        self.module.make_private(wrapper);
-        let builder = Builder::new(self.module);
-        builder.position(self.module.append_block(wrapper));
-        let mut arguments = vec![self.module.parameter(wrapper, 0)];
-        if caller_site {
-            arguments.extend([
-                self.module.parameter(wrapper, 2),
-                self.module.parameter(wrapper, 3),
-            ]);
-        }
-        arguments.push(self.module.parameter(wrapper, 1));
-        let status = builder.call(body, &arguments);
-        builder.ret(status);
-        Ok(wrapper.value)
+    /// The glue data symbol `name`, declared as `ty` and recorded as an import.
+    pub(super) fn glue_cell(&mut self, name: &str, ty: Type<'m>) -> Value<'m> {
+        self.manifested.import(name, ObjectSymbolKind::Data, None);
+        self.module.external_constant(name, ty)
     }
 
-    /// The `hirsel_rt_v2_check_thunk` of a codec check (SER-1): `(ctx, value, verdict) ->
-    /// status` calling the check on the borrowed value at `value`, of `layout`, and storing
-    /// its bool verdict as a byte.
-    fn check_wrapper(&mut self, check: &CodecCheck, layout: LayoutId) -> Emitted<Value<'m>> {
-        let Some(symbol) = self.unit.tables.symbols.get(check.symbol.index()) else {
-            return self.invalid("a codec check outside the symbol table");
+    /// The unit's codec `codec`: glue's `hirsel_rt_v2_codec` record of its `CodecKey`,
+    /// bound to the program's registry there (`hirsel_lir::glue`).
+    pub(super) fn codec(&mut self, codec: CodecId) -> Emitted<Value<'m>> {
+        let Some(plan) = self.unit.tables.codecs.get(codec.index()) else {
+            return self.invalid("a codec outside the codec table");
         };
-        let definition = symbol.definition.clone();
-        let abi = fn_abi(self.inputs.layouts, check.abi, &definition)?;
-        let name = self.named_function(check.symbol, abi)?;
-        let wrapper_name = format!("hirsel.check.{name}");
-        let (ptr, i8_ty) = (self.module.ptr_type(), self.module.int_type(8));
-        let ty = self.module.function_type(i8_ty, &[ptr, ptr, ptr]);
-        let wrapper = match self.module.function(&wrapper_name, ty) {
-            Ok(wrapper) => wrapper,
-            Err(what) => return self.invalid(what),
-        };
-        if self.module.defines(&wrapper_name) {
-            return Ok(wrapper.value);
-        }
-        self.module.make_private(wrapper);
-        let signature = Signature::of(self.module, self.inputs.layouts, abi, &definition)?;
-        let callee = signature.declare(
-            self.module,
+        let key = match hirsel_lir::glue::GlueCodec::new(
+            plan,
+            self.unit,
             self.inputs.layouts,
-            &name,
-            &definition,
-            false,
-            Aliasing::of(self.inputs),
-        )?;
-        let builder = Builder::new(self.module);
-        builder.position(self.module.append_block(wrapper));
-        let value = self.module.parameter(wrapper, 1);
-        let mut arguments = Vec::new();
-        let mut result = None;
-        for hidden in &signature.hidden {
-            match hidden {
-                Hidden::Context => arguments.push(self.module.parameter(wrapper, 0)),
-                Hidden::Result => {
-                    let place = builder.alloca(i8_ty, 1);
-                    arguments.push(place);
-                    result = Some(place);
-                }
-                _ => return self.invalid("a codec check with a hidden slot besides its result"),
-            }
-        }
-        let [parameter] = abi.parameters.as_slice() else {
-            return self.invalid("a codec check without exactly one parameter");
+            self.inputs.keys,
+        ) {
+            Ok(codec) => codec.key,
+            Err(error) => return self.invalid(format!("a codec plan off its layouts: {error}")),
         };
-        match parameter.passing {
-            ParameterPassing::ReadOnlyAddress => arguments.push(value),
-            ParameterPassing::ByValue => {
-                let scalars = &self.layout(layout)?.abi.scalars;
-                if scalars.len() != parameter.slots.len() {
-                    return self.invalid("a codec check's slots differ from its layout's");
-                }
-                // Each slot is its scalar's bytes in memory (a Bool's byte is 0 or 1).
-                for (&(offset, _), slot) in scalars.iter().zip(&parameter.slots) {
-                    let at = builder.offset(value, self.const_u64(offset));
-                    let of = signature::physical(self.module, slot.ty);
-                    arguments.push(builder.load(of, at, 1));
-                }
-            }
-            _ => return self.invalid("a codec check's value passed other than by borrow"),
-        }
-        let returned = builder.call(callee, &arguments);
-        signature.attribute_call(self.module, returned);
-        let verdict = match (signature.value, result) {
-            (Some((kind, field)), None) => {
-                let word = builder.extract(returned, field);
-                let ty = value_word(self.module, kind);
-                let bit = decode_word(&builder, kind, word, ty);
-                builder.cast(Cast::ZExt, bit, i8_ty)
-            }
-            (None, Some(place)) => builder.load(i8_ty, place, 1),
-            _ => return self.invalid("a codec check without its bool result"),
-        };
-        let status = if signature.value.is_some() {
-            builder.extract(returned, signature.status_field)
-        } else {
-            returned
-        };
-        builder.store(verdict, self.module.parameter(wrapper, 2), 1);
-        builder.ret(status);
-        Ok(wrapper.value)
+        let ty = self.module.array_type(self.module.int_type(8), 0);
+        Ok(self.glue_cell(&codec_symbol(&key), ty))
     }
 
     /// Flat content needs an owner a callee can copy. Reserve its real immortal
@@ -605,139 +171,78 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         })
     }
 
-    /// A static immortal block named `name`: a counted header with `COUNT_IMMORTAL`, the
-    /// static domain and `descriptor`, then `bytes` at the payload offset of `align`. The
-    /// runtime never writes it: dups and releases of an immortal count return at once.
-    /// A private static immortal block of `bytes`, with the pointer-sized
-    /// cell at each offset of `references` holding that block reference (a
-    /// relocation; its bytes are zero).
-    pub(super) fn static_block(
-        &mut self,
-        name: &str,
-        descriptor: Value<'m>,
-        align: u32,
-        bytes: &[u8],
-        references: &[(u64, Value<'m>)],
-    ) -> Emitted<Value<'m>> {
-        let physical = align.max(8);
-        let start = match align_up(IMMORTAL_PREFIX_BYTES, u64::from(physical)) {
-            Ok(n) => n,
-            Err(_) => return self.invalid("static extent overflow"),
-        };
-        let header_offset = start - 8;
-        if let Some(global) = self.module.named_global(name) {
-            return Ok(self.module.const_offset(global, header_offset));
-        }
-        let (ptr, i8_ty, i32_ty) = (
-            self.module.ptr_type(),
-            self.module.int_type(8),
-            self.module.int_type(32),
-        );
-        // Static extents have exactly their initialized bytes. Padding them
-        // like heap classes would give [] spare capacity and send its first
-        // push through a detach instead of directly through sequence growth.
-        let capacity = bytes.len();
-        let word = self
-            .module
-            .const_or(descriptor, self.module.const_int(i32_ty, 2u128 << 29));
-        let prefix = IMMORTAL_PREFIX.map(|field| match field {
-            PrefixWord::Capacity => self.const_u64(capacity as u64),
-            PrefixWord::Align => self.const_u64(u64::from(physical)),
-            PrefixWord::Count => self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
-            PrefixWord::Descriptor => word,
-        });
-        let prefix_ty = self.module.struct_type(
-            &IMMORTAL_PREFIX.map(|field| self.module.int_type(8 * field.bytes() as u32)),
-        );
-        let padding = vec![0u8; (start - IMMORTAL_PREFIX_BYTES) as usize];
-        let (payload_ty, payload) = if references.is_empty() {
-            (
-                self.module.array_type(i8_ty, bytes.len() as u64),
-                self.module.const_bytes(bytes),
-            )
-        } else {
-            // Byte runs between the reference cells, packed so each cell lies
-            // at its own offset.
-            let word = u64::from(self.inputs.target.pointer_bytes);
-            let mut sorted = references.to_vec();
-            sorted.sort_by_key(|(offset, _)| *offset);
-            let (mut types, mut parts) = (Vec::new(), Vec::new());
-            let mut at = 0u64;
-            for (offset, target) in sorted {
-                if offset < at || offset + word > bytes.len() as u64 {
-                    return self.invalid("a static reference outside its block");
-                }
-                let run = &bytes[at as usize..offset as usize];
-                types.push(self.module.array_type(i8_ty, run.len() as u64));
-                parts.push(self.module.const_bytes(run));
-                types.push(ptr);
-                parts.push(target);
-                at = offset + word;
-            }
-            let run = &bytes[at as usize..];
-            types.push(self.module.array_type(i8_ty, run.len() as u64));
-            parts.push(self.module.const_bytes(run));
-            (
-                self.module.packed_struct_type(&types),
-                self.module.const_packed_struct(&parts),
-            )
-        };
-        let ty = self.module.packed_struct_type(&[
-            self.module.array_type(i8_ty, padding.len() as u64),
-            prefix_ty,
-            payload_ty,
-        ]);
-        let global = self.module.private_constant(name, ty, physical);
-        let initializer = self.module.const_packed_struct(&[
-            self.module.const_bytes(&padding),
-            self.module.const_struct(&prefix),
-            payload,
-        ]);
-        self.module.set_initializer(global, initializer);
-        Ok(self.module.const_offset(global, header_offset))
-    }
-
     /// The environment of a function reference: one static immortal block with an empty
-    /// payload and the empty descriptor, never released (a static is consumed without credit).
+    /// payload and the empty descriptor (index 2, which the runtime fixes, not the
+    /// program), never released (a static is consumed without credit).
     pub(super) fn empty_environment(&mut self) -> Emitted<Value<'m>> {
-        self.empty_descriptor();
         let index = self.module.const_int(self.module.int_type(32), 2);
-        self.static_block("hirsel.env.empty", index, 1, &[], &[])
+        program::static_block(
+            self.module,
+            self.inputs.target,
+            "hirsel.env.empty",
+            index,
+            1,
+            &[],
+            &[],
+            false,
+        )
+        .map(|(_, header)| header)
+        .or_else(|what| self.invalid(what))
     }
 
-    /// The static block of a String or Bytes literal: a counted `Sequence` payload of `payload`
-    /// (its u64 element count, its u64 capacity, the count, then the bytes).
+    /// The static block of a String or Bytes literal: glue's `literal_symbol` block of the
+    /// counted `Sequence` payload `payload` (its u64 element count, its u64 capacity, the
+    /// count, then the bytes), whose prefix holds the program's descriptor index.
     pub(super) fn literal_block(&mut self, payload: LayoutId, bytes: &[u8]) -> Emitted<Value<'m>> {
         if self.inputs.target.endian != Endian::Little {
             return self.unsupported("a static literal on a big-endian target");
         }
-        let LayoutKind::Sequence { element } = self.layout(payload)?.kind else {
-            return self.invalid("a text literal whose storage is not a sequence");
+        let data = match hirsel_lir::glue::literal_data(self.inputs.layouts, payload, bytes) {
+            Ok(data) => data,
+            Err(what) => return self.invalid(what),
         };
-        if self.fixed_size(element)? != 1 {
-            return self.invalid("a text literal of elements wider than a byte");
-        }
-        let start = match sequence_elements_offset(self.layout(element)?) {
-            Ok(start) => start as usize,
-            Err(_) => return self.invalid("a sequence element offset beyond u64"),
+        let name = literal_symbol(&self.inputs.keys.key(payload), &data);
+        self.glue_block(&name, payload, &data, &[])
+    }
+
+    /// The header of glue's static immortal block `name` of the payload layout `layout`,
+    /// holding `bytes` with the block references `references`. The block is declared
+    /// `available_externally` with that content, so reads of it fold; its descriptor word
+    /// names glue's `descriptor_word_symbol`, so a folded read of it is a relocation.
+    pub(super) fn glue_block(
+        &mut self,
+        name: &str,
+        layout: LayoutId,
+        bytes: &[u8],
+        references: &[(u64, Value<'m>)],
+    ) -> Emitted<Value<'m>> {
+        let align = self.layout(layout)?.align;
+        let Some(offset) = program::static_header_offset(align) else {
+            return self.invalid("static extent overflow");
         };
-        let mut data = vec![0u8; start];
-        let count = (bytes.len() as u64).to_le_bytes();
-        data[..8].copy_from_slice(&count);
-        let capacity = SEQUENCE_CAPACITY_OFFSET as usize;
-        data[capacity..capacity + 8].copy_from_slice(&count);
-        data.extend_from_slice(bytes);
-        let descriptor = self.descriptor(payload)?;
-        let align = self.layout(payload)?.align;
-        let name = format!(
-            "hirsel.literal.{}",
-            ContentHash::of_parts("hirsel.native-literal.v1", [data.as_slice()])
-                .0
-                .iter()
-                .take(8)
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
-        self.static_block(&name, descriptor, align, &data, &[])
+        self.manifested.import(name, ObjectSymbolKind::Data, None);
+        let global = match self.module.named_global(name) {
+            Some(global) => global,
+            None => {
+                let word = descriptor_word_symbol(&self.inputs.keys.key(layout));
+                let i8_ty = self.module.int_type(8);
+                let symbol = self.glue_cell(&word, i8_ty);
+                let descriptor = self
+                    .module
+                    .const_ptr_to_int(symbol, self.module.int_type(32));
+                let (ty, initializer) = program::static_image(
+                    self.module,
+                    self.inputs.target,
+                    descriptor,
+                    align,
+                    bytes,
+                    references,
+                )
+                .or_else(|what| self.invalid(what))?;
+                self.module
+                    .available_constant(name, ty, align.max(8), initializer)
+            }
+        };
+        Ok(self.module.const_offset(global, offset))
     }
 }

@@ -2353,8 +2353,8 @@ fn destination(call: &OperationCall<'_>) -> Result<Primitive, Error> {
         definition,
         arguments,
     } = &t.kind
-        && definition.0.name == "Option"
-        && definition.is_core("Option")
+        && definition.path().0.name == "Option"
+        && definition.path().is_core("Option")
     {
         if let GenericArgument::Type(id) = arguments[0] {
             t = call

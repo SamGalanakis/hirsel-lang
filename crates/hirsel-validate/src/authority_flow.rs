@@ -8,15 +8,11 @@ impl Checker<'_> {
             let valid = self.body.parameters.contains(&LocalId(root as u32))
                 || local.storage == Storage::Capture
                     && allowed.as_ref().is_none_or(|allowed| {
-                        self.authority_with_generics(
-                            &self.definition.types,
-                            local.ty,
-                            &self.generic_declarations(),
-                        )
-                        .is_subset_of(allowed)
+                        self.authority_with_generics(self.t, local.ty, &self.generic_declarations())
+                            .is_subset_of(allowed)
                     });
             for &part in &model.root_parts[root] {
-                state.must[part].set(MustFacts::AUTHORITY, valid);
+                state.must.set_fact(part, MustFacts::AUTHORITY, valid);
             }
         }
     }
@@ -36,7 +32,7 @@ impl Checker<'_> {
         valid: bool,
     ) {
         for part in model.parts(place) {
-            state.must[part].set(MustFacts::AUTHORITY, valid);
+            state.must.set_fact(part, MustFacts::AUTHORITY, valid);
         }
     }
 
@@ -57,7 +53,7 @@ impl Checker<'_> {
                         }).collect()
                     } else {
                         arguments.iter().map(|argument| match argument {
-                            hirsel_types::GenericArgument::Type(ty) => self.authority_with_generics(&self.definition.types, *ty, &self.generic_declarations()),
+                            hirsel_types::GenericArgument::Type(ty) => self.authority_with_generics(self.t, *ty, &self.generic_declarations()),
                             _ => hirsel_types::AuthoritySummary::inert(),
                         }).collect()
                     };

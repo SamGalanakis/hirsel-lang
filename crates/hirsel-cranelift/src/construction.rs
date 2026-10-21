@@ -5,9 +5,9 @@
 
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::Switch;
-use cranelift_module::{DataDescription, Linkage, Module};
+
 use hirsel_lir::emission::{
-    IMMORTAL_PREFIX_BYTES, function_thunk_name, slice_storage, symbol_name,
+    IMMORTAL_PREFIX_BYTES, function_thunk_name, slice_storage_with_index, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -28,11 +28,14 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         self.data_addr(block.data, block.header)
     }
 
-    /// `layout`'s registry index as the `u32` descriptor argument.
+    /// `layout`'s descriptor index as the `u32` descriptor argument, loaded from its glue
+    /// cell (`hirsel_lir::glue`): units carry no number the program assigns.
     pub(crate) fn descriptor_value(&mut self, layout: LayoutId) -> Emitted<Value> {
-        let definition = self.definition();
-        let index = self.em.descriptor_index(layout, definition)?;
-        Ok(self.b.ins().iconst(types::I32, i64::from(index)))
+        self.layout(layout)?;
+        let name = hirsel_lir::glue::descriptor_index_symbol(&self.em.inputs.keys.key(layout));
+        let cell = self.em.glue_data(&name)?;
+        let address = self.data_addr(cell, 0);
+        Ok(self.load_ty(types::I32, address, 0))
     }
 
     /// The descriptor index a block's header names.
@@ -125,7 +128,11 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 else {
                     return self.invalid("a slice layout without owner, start and length");
                 };
-                let Some(payload) = slice_storage(self.em.layouts(), element) else {
+                let Some(payload) = slice_storage_with_index(
+                    self.em.layouts(),
+                    self.em.inputs.unit.and_then(|i| i.index),
+                    element,
+                ) else {
                     return self.invalid("a slice without its element's sequence layout");
                 };
                 let block = self.em.literal_block(payload, bytes, definition)?;
@@ -166,52 +173,26 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
             return self.invalid("a static outside the symbol table");
         };
-        let Some(data) = self.em.inputs.statics.iter().find(|d| d.symbol == *symbol) else {
+        let Some(data) = self
+            .em
+            .inputs
+            .unit()
+            .statics
+            .iter()
+            .find(|d| d.symbol == *symbol)
+        else {
             return self.invalid("a static without its data");
         };
         let Some(root) = data.blocks.first() else {
             return self.invalid("static data without a block");
         };
         let held = root.layout;
-        let name = format!(
-            "hirsel.static.{}",
-            symbol_name(&symbol.definition, symbol.instance.as_ref())
-        );
+        // Glue defines the blocks: their prefixes hold the program's descriptor indices.
         let definition = self.definition();
-        // A block names only blocks after it, so each is emitted after its targets.
-        let mut emitted: Vec<Option<StaticBlock>> = vec![None; data.blocks.len()];
-        for (index, block) in data.blocks.iter().enumerate().rev() {
-            if let SizeSpec::Fixed(size) = self.layout(block.layout)?.size
-                && size != block.bytes.len() as u64
-            {
-                return self.invalid("static data of another size than its layout");
-            }
-            let mut references = Vec::with_capacity(block.references.len());
-            for r in &block.references {
-                let target = r.target as usize;
-                let Some(Some(target)) = emitted.get(target).filter(|_| target > index) else {
-                    return self.invalid("a static reference to no later block");
-                };
-                references.push((r.offset, *target));
-            }
-            let descriptor = self.em.descriptor_index(block.layout, definition)?;
-            let align = self.layout(block.layout)?.align;
-            let block_name = match index {
-                0 => name.clone(),
-                _ => format!("{name}.{index}"),
-            };
-            emitted[index] = Some(self.em.static_block(
-                &block_name,
-                descriptor,
-                align,
-                &block.bytes,
-                &references,
-                definition,
-            )?);
-        }
-        let Some(block) = emitted[0] else {
-            return self.invalid("static data without a block");
-        };
+        let align = self.layout(held)?.align;
+        let block =
+            self.em
+                .glue_block(&hirsel_lir::glue::static_symbol(symbol), align, definition)?;
         let header = self.static_header(block);
         let ty = self.value_type(result)?;
         match (ty.repr, &self.layout(ty.layout)?.kind) {
@@ -303,133 +284,24 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         self.callable(layout, code, environment)
     }
 
-    /// A codec plan as the runtime reads it: `{descriptor, descriptor length, program,
-    /// program length, check thunks, check count}`, private to the object, with every layout its program allocates
-    /// described.
+    /// The unit's codec `codec`: glue's `hirsel_rt_v2_codec` record of its `CodecKey`,
+    /// bound to the program's registry there (`hirsel_lir::glue`).
     pub(crate) fn codec(&mut self, codec: CodecId) -> Emitted<Value> {
         let unit = self.unit;
         let Some(plan) = unit.tables.codecs.get(codec.index()) else {
             return self.invalid("a codec outside the codec table");
         };
-        let definition = &unit.header.definition;
-        let layouts = self.em.inputs.layouts;
-        for layout in plan.allocated(layouts) {
-            self.em.descriptor(layout, definition)?;
-        }
-        let registry = &self.em.inputs.registry;
-        let words = match plan.program(layouts, &|id| registry.index(id)) {
-            Ok(words) => words,
+        let key = match hirsel_lir::glue::GlueCodec::new(
+            plan,
+            unit,
+            self.em.inputs.layouts,
+            self.em.inputs.keys,
+        ) {
+            Ok(codec) => codec.key,
             Err(error) => return self.invalid(format!("a codec plan off its layouts: {error}")),
         };
-        let descriptor = self
-            .em
-            .constant("hirsel.codec.descriptor", plan.descriptor.clone(), 1)?;
-        let bytes = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let program = self.em.constant("hirsel.codec.program", bytes, 8)?;
-        let checks = self.codec_checks(plan)?;
-        let mut image = vec![0u8; 48];
-        image[8..16].copy_from_slice(&(plan.descriptor.len() as u64).to_le_bytes());
-        image[24..32].copy_from_slice(&(words.len() as u64).to_le_bytes());
-        image[40..48].copy_from_slice(&(plan.checks.len() as u64).to_le_bytes());
-        self.em.anonymous += 1;
-        let name = format!("hirsel.codec.{}", self.em.anonymous);
-        let (id, _) = self.em.declare_data(&name, Linkage::Local)?;
-        let mut description = DataDescription::new();
-        description.define(image.into_boxed_slice());
-        description.set_align(8);
-        for (offset, target) in [(0, descriptor), (16, program)]
-            .into_iter()
-            .chain(checks.map(|table| (32, table)))
-        {
-            let gv = self
-                .em
-                .module
-                .declare_data_in_data(target, &mut description);
-            description.write_data_addr(offset, gv, 0);
-        }
-        self.em.define_data(&name, id, &description)?;
+        let id = self.em.glue_data(&hirsel_lir::glue::codec_symbol(&key))?;
         Ok(self.data_addr(id, 0))
-    }
-
-    /// The table of a decode plan's check thunks (SER-1), or None without checks.
-    fn codec_checks(
-        &mut self,
-        plan: &hirsel_lir::codec::CodecPlan,
-    ) -> Emitted<Option<cranelift_module::DataId>> {
-        if plan.checks.is_empty() {
-            return Ok(None);
-        }
-        let mut thunks = Vec::with_capacity(plan.checks.len());
-        for (check, layout) in plan.checks.iter().zip(plan.check_layouts()) {
-            let Some(layout) = layout else {
-                return self.invalid("a codec check no CHECKED node calls");
-            };
-            let Some(symbol) = self.unit.tables.symbols.get(check.symbol.index()) else {
-                return self.invalid("a codec check outside the symbol table");
-            };
-            let definition = symbol.definition.clone();
-            let abi = self.em.fn_abi(check.abi, &definition)?;
-            let name = self.named_function(check.symbol, abi)?;
-            let signature = self.em.entry_signature(abi, &definition)?;
-            if signature
-                .hidden
-                .iter()
-                .any(|h| !matches!(h, Hidden::Context | Hidden::Result))
-            {
-                return self.invalid("a codec check with a hidden slot besides its result");
-            }
-            let body = self.em.import_function(&name, &signature.ir)?;
-            let [parameter] = abi.parameters.as_slice() else {
-                return self.invalid("a codec check without exactly one parameter");
-            };
-            let slots = match parameter.passing {
-                hirsel_lir::abi_types::ParameterPassing::ReadOnlyAddress => None,
-                hirsel_lir::abi_types::ParameterPassing::ByValue => {
-                    let scalars = &self.layout(layout)?.abi.scalars;
-                    if scalars.len() != parameter.slots.len() {
-                        return self.invalid("a codec check's slots differ from its layout's");
-                    }
-                    Some(
-                        scalars
-                            .iter()
-                            .zip(&parameter.slots)
-                            .map(|(&(offset, _), slot)| (offset, crate::module::physical(slot.ty)))
-                            .collect(),
-                    )
-                }
-                _ => return self.invalid("a codec check's value passed other than by borrow"),
-            };
-            let register = signature.value.is_some();
-            let mut sig = cranelift_codegen::ir::Signature::new(self.em.call_conv);
-            sig.params.extend([
-                cranelift_codegen::ir::AbiParam::new(PTR),
-                cranelift_codegen::ir::AbiParam::new(PTR),
-                cranelift_codegen::ir::AbiParam::new(PTR),
-            ]);
-            sig.returns
-                .push(cranelift_codegen::ir::AbiParam::new(types::I8).uext());
-            let thunk = self.em.helper(&format!("hirsel.check.{name}"), &sig, |_| {
-                crate::module::Helper::Check(crate::module::CheckThunk {
-                    body,
-                    slots,
-                    register,
-                })
-            })?;
-            thunks.push(thunk);
-        }
-        let word = u64::from(self.em.inputs.target.pointer_bytes) as usize;
-        self.em.anonymous += 1;
-        let name = format!("hirsel.codec.checks.{}", self.em.anonymous);
-        let (id, _) = self.em.declare_data(&name, Linkage::Local)?;
-        let mut description = DataDescription::new();
-        description.define(vec![0u8; word * thunks.len()].into_boxed_slice());
-        description.set_align(8);
-        for (i, thunk) in thunks.into_iter().enumerate() {
-            let f = self.em.module.declare_func_in_data(thunk, &mut description);
-            description.write_function_addr((i * word) as u32, f);
-        }
-        self.em.define_data(&name, id, &description)?;
-        Ok(Some(id))
     }
 
     /// `Closure`: a counted heap environment holding the captures, or the static empty
@@ -790,7 +662,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         self.b.ins().jump(done, &[allocated.into()]);
         self.b.switch_to_block(in_arena);
         // A bounded arena is charged before the allocation (MEM-6).
-        if self.bounded_code().is_some() {
+        if self.tracking() {
             let bytes = self.construction_charge(site)?;
             self.charge(token, bytes, site.anchor, failure)?;
         }
@@ -828,10 +700,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted {
-        let Some(code) = self.bounded_code() else {
-            return Ok(());
-        };
-        if bytes == 0 {
+        if !self.tracking() || bytes == 0 {
             return Ok(());
         }
         let offset = hirsel_lir::runtime_abi::REGION_REMAINING_OFFSET;
@@ -841,7 +710,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             .b
             .ins()
             .icmp(IntCC::UnsignedGreaterThan, bytes, remaining);
-        let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+        let exhausted = self.exhausted_block(region, anchor, failure)?;
         self.branch_to(over, exhausted)?;
         let left = self.b.ins().isub(remaining, bytes);
         self.store_at(left, region, offset);

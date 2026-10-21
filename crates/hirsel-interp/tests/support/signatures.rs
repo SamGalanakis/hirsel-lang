@@ -7,10 +7,9 @@ use hirsel_interp::aggregate::RuntimeTypes;
 use hirsel_syntax::PassingMode;
 use std::collections::BTreeMap;
 
-fn snapshot(definition: DefPath, types: TypeStore, kind: SignatureKind) -> Signature {
+fn snapshot(definition: DefPath, kind: SignatureKind) -> Signature {
     Signature {
-        definition,
-        types,
+        definition: DefId::intern(&definition),
         kind,
         metadata: SignatureMetadata::default(),
         fingerprint: ContentHash::default(),
@@ -79,7 +78,7 @@ pub fn fixture_signatures(
         let finalizer = runtime.nominals.iter().any(|n| {
             n.finalizer
                 .as_ref()
-                .is_some_and(|(p, _)| p == &definition.path)
+                .is_some_and(|(p, _)| p == definition.path.path())
         });
         let parameters = body
             .parameters
@@ -90,7 +89,7 @@ pub fn fixture_signatures(
                     PassingMode::Borrow
                 } else {
                     conventions
-                        .get(&definition.path)
+                        .get(definition.path.path())
                         .and_then(|c| c.get(i))
                         .copied()
                         .unwrap_or(PassingMode::Take)
@@ -99,10 +98,9 @@ pub fn fixture_signatures(
             })
             .collect();
         signatures.insert(
-            definition.path.clone(),
+            definition.path.path().clone(),
             snapshot(
-                definition.path.clone(),
-                definition.types.clone(),
+                definition.path.path().clone(),
                 SignatureKind::Function(callable(parameters, body.result)),
             ),
         );
@@ -131,7 +129,6 @@ pub fn fixture_signatures(
                             .collect();
                         snapshot(
                             path.clone(),
-                            definition.types.clone(),
                             SignatureKind::Function(callable(
                                 parameters,
                                 body.places[destination.0 as usize].ty,
@@ -159,7 +156,7 @@ pub fn fixture_signatures(
                     if signatures.contains_key(path) {
                         continue;
                     }
-                    let mut types = definition.types.clone();
+                    let types = session();
                     let destination = body.places[destination.0 as usize].ty;
                     let representation = if !matches!(
                         types.get(destination).unwrap().kind,
@@ -173,7 +170,7 @@ pub fn fixture_signatures(
                             Constructor::Variant { variant, .. } => TypeKind::Variant(
                                 (0..=*variant)
                                     .map(|i| Variant {
-                                        name: format!("Case{i}"),
+                                        name: format!("Case{i}").as_str().into(),
                                         fields: if i == *variant {
                                             fields
                                                 .iter()
@@ -192,13 +189,13 @@ pub fn fixture_signatures(
                                     .iter()
                                     .map(|f| Field {
                                         growable: false,
-                                        name: format!("field{}", f.field),
+                                        name: format!("field{}", f.field).as_str().into(),
                                         ty: body.places[f.value.place.0 as usize].ty,
                                     })
                                     .collect(),
                             ),
                         };
-                        types.push(ty(kind))
+                        types.intern(ty(kind))
                     };
                     let nominal = runtime.get(path);
                     let resource = nominal.is_some_and(|n| n.resource);
@@ -231,7 +228,7 @@ pub fn fixture_signatures(
                     };
                     signatures.insert(
                         path.clone(),
-                        snapshot(path.clone(), types, SignatureKind::Type(declaration)),
+                        snapshot(path.clone(), SignatureKind::Type(declaration)),
                     );
                 }
             }
@@ -254,7 +251,7 @@ pub fn fixture_signatures(
                 if let TypeKind::Builtin {
                     kind: BuiltinType::Packed,
                     arguments,
-                } = &definition.types.get(repr).unwrap().kind
+                } = &session().row(repr).kind
                 {
                     let [GenericArgument::Type(payload)] = arguments.as_slice() else {
                         continue;
@@ -262,7 +259,7 @@ pub fn fixture_signatures(
                     repr = *payload;
                 }
                 if !matches!(
-                    definition.types.get(repr).unwrap().kind,
+                    session().row(repr).kind,
                     TypeKind::Record(_) | TypeKind::Variant(_)
                 ) {
                     continue;
@@ -271,7 +268,6 @@ pub fn fixture_signatures(
                     owner.clone(),
                     snapshot(
                         owner.clone(),
-                        definition.types.clone(),
                         SignatureKind::Type(TypeDefinition {
                             loop_source: None,
                             format: None,
@@ -299,15 +295,15 @@ pub fn fixture_signatures(
     // Acquisition fixtures carry the canonical Result/GrantError declarations,
     // independently of the executable Library dispatcher.
     for (name, generic) in [("GrantError", false), ("Result", true)] {
-        let mut types = TypeStore::default();
+        let types = session();
         let (generics, representation, bounds, authority) = if generic {
-            let t = types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            let t = types.intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
-            let e = types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            let e = types.intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(1),
             ))));
-            let representation = types.push(ty(TypeKind::Variant(
+            let representation = types.intern(ty(TypeKind::Variant(
                 vec![
                     Variant {
                         name: "Ok".into(),
@@ -342,7 +338,7 @@ pub fn fixture_signatures(
                 ),
             )
         } else {
-            let representation = types.push(ty(TypeKind::Variant(
+            let representation = types.intern(ty(TypeKind::Variant(
                 vec![Variant {
                     name: "NotGranted".into(),
                     fields: vec![].into(),
@@ -367,7 +363,6 @@ pub fn fixture_signatures(
             path.clone(),
             snapshot(
                 path,
-                types,
                 SignatureKind::Type(TypeDefinition {
                     loop_source: None,
                     format: None,
@@ -414,9 +409,9 @@ pub fn fixture_signatures(
             fact: None,
             captures: None,
         };
-        signatures.entry(path.clone()).or_insert_with(|| {
-            snapshot(path, TypeStore::default(), SignatureKind::Type(declaration))
-        });
+        signatures
+            .entry(path.clone())
+            .or_insert_with(|| snapshot(path, SignatureKind::Type(declaration)));
     }
     signatures
 }

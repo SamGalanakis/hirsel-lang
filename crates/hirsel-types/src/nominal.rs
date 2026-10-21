@@ -1,7 +1,8 @@
 //! Declaration-path memoization for finite instantiated nominal graphs.
 use crate::*;
 use hirsel_intern::work::{self, Counter};
-use std::collections::{HashMap, HashSet};
+type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 
 /// Operational budget for strictly growing polymorphic recursion. Ordinary
 /// graph width, depth and regular recursive cycles do not consume this budget.
@@ -44,140 +45,79 @@ fn head(mut kind: TypeKind, marker: TypeId) -> TypeKind {
     }
     kind
 }
-/// One row's structural class and height, memoized per TypeId. Rows are
-/// immutable and every appended row has fresh provenance, so a TypeId names
-/// one row for the process lifetime, whichever store a caller resolves it in.
-#[derive(Clone, Copy, Debug)]
-struct Shape {
-    /// None for a graph `semantic_equal` rejects: one reaching a cycle, a
-    /// missing row or a recovery row. Such a graph equals nothing.
-    class: Option<u32>,
-    /// Rows on the longest edge path; None when the graph reaches a cycle.
-    height: Option<usize>,
-}
-
-/// Hash-consed structural classes: two valid graphs have one class exactly
-/// when `semantic_equal` holds, since a class is the edge-erased row with
-/// that function's normalization plus its children's classes in edge order.
-/// Each row is shaped once, so equality and height cost one walk of the
-/// rows reached, instead of a walk of both complete graphs per comparison.
+/// Heights of the rows a proof reaches. Structural classes are the
+/// interner's semantic normal forms: two valid graphs share a class exactly
+/// when `semantic_eq` holds.
+#[derive(Default)]
 pub(crate) struct Shapes {
-    rows: HashMap<TypeId, Shape>,
-    classes: HashMap<u64, Vec<(Type, Vec<u32>, u32)>>,
-    count: u32,
-    placeholder: TypeId,
-}
-impl Default for Shapes {
-    fn default() -> Self {
-        Self {
-            rows: HashMap::new(),
-            classes: HashMap::new(),
-            count: 0,
-            placeholder: TypeStore::fresh_id(0),
-        }
-    }
+    heights: HashMap<TypeId, Option<usize>>,
 }
 impl Shapes {
-    fn shape<'s>(&mut self, root: TypeId, store: &impl Fn(TypeId) -> &'s TypeStore) -> Shape {
-        if let Some(shape) = self.rows.get(&root) {
-            return *shape;
+    /// The class of a valid graph; None for one `semantic_eq` rejects.
+    fn class(&self, t: &TypeInterner, root: TypeId) -> Option<TypeId> {
+        t.valid(root).then(|| t.sem(root))
+    }
+    /// Rows on the longest edge path; None when the graph is invalid.
+    fn height(&mut self, t: &TypeInterner, root: TypeId) -> Option<usize> {
+        if let Some(height) = self.heights.get(&root) {
+            return *height;
+        }
+        if !t.valid(root) {
+            self.heights.insert(root, None);
+            return None;
         }
         let mut pending = vec![(root, false)];
-        let mut path = HashSet::new();
-        while let Some((t, exit)) = pending.pop() {
-            if !exit && self.rows.contains_key(&t) {
+        while let Some((id, exit)) = pending.pop() {
+            if self.heights.contains_key(&id) {
                 continue;
             }
-            let row = store(t).get(t);
-            let children: Vec<_> = row
-                .map(|r| r.kind.graph_edges().into_iter().map(|e| e.ty).collect())
-                .unwrap_or_default();
+            let children: Vec<_> = t
+                .row(id)
+                .kind
+                .graph_edges()
+                .into_iter()
+                .map(|e| e.ty)
+                .collect();
             if !exit {
-                if !path.insert(t) {
-                    // A back edge: `t` is on a cycle, so every row reaching it is too.
-                    self.rows.insert(
-                        t,
-                        Shape {
-                            class: None,
-                            height: None,
-                        },
-                    );
-                    continue;
-                }
-                pending.push((t, true));
+                pending.push((id, true));
                 pending.extend(children.into_iter().map(|c| (c, false)));
                 continue;
             }
-            path.remove(&t);
-            work::count(Counter::EqualityRows);
-            let shapes: Vec<Shape> = children.iter().map(|c| self.rows[c]).collect();
-            let height = shapes
+            work::count(Counter::TypeNormalRows);
+            let height = children
                 .iter()
-                .try_fold(0, |h, s| s.height.map(|c| h.max(c)))
-                .map(|h| h + 1);
-            let class = match (row, height) {
-                (Some(row), Some(_)) if !matches!(row.kind, TypeKind::Error) => shapes
-                    .iter()
-                    .map(|s| s.class)
-                    .collect::<Option<Vec<_>>>()
-                    .map(|children| self.intern(row, children)),
-                _ => None,
-            };
-            self.rows.insert(t, Shape { class, height });
+                .map(|c| self.heights[c].expect("a valid graph's rows have heights"))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            self.heights.insert(id, Some(height));
         }
-        self.rows[&root]
+        self.heights[&root]
     }
-    fn intern(&mut self, row: &Type, children: Vec<u32>) -> u32 {
-        use std::hash::{Hash, Hasher};
-        let row = crate::graph::without_edges(row, self.placeholder);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::mem::discriminant(&row.kind).hash(&mut hasher);
-        if let TypeKind::Named { definition, .. } = &row.kind {
-            definition.hash(&mut hasher);
-        }
-        children.hash(&mut hasher);
-        let bucket = self.classes.entry(hasher.finish()).or_default();
-        if let Some((_, _, class)) = bucket.iter().find(|(r, c, _)| *c == children && *r == row) {
-            return *class;
-        }
-        bucket.push((row, children, self.count));
-        self.count += 1;
-        self.count - 1
-    }
-    fn equal<'s>(
-        &mut self,
-        a: TypeId,
-        b: TypeId,
-        store: &impl Fn(TypeId) -> &'s TypeStore,
-    ) -> bool {
-        let a = self.shape(a, store).class;
-        a.is_some() && a == self.shape(b, store).class
+    fn equal(&mut self, t: &TypeInterner, a: TypeId, b: TypeId) -> bool {
+        let a = self.class(t, a);
+        a.is_some() && a == self.class(t, b)
     }
     // Homeomorphic embedding, using a finite pair worklist instead of the host
     // stack. Some(true) includes a strict constructor insertion; None cannot embed.
-    fn embedding<'s>(
-        &mut self,
-        old: TypeId,
-        new: TypeId,
-        store: &impl Fn(TypeId) -> &'s TypeStore,
-    ) -> Option<bool> {
+    fn embedding(&mut self, t: &TypeInterner, old: TypeId, new: TypeId) -> Option<bool> {
         // A shrinking actual cannot embed the older argument. This also keeps
         // finite nested generic aliases out of the pair-product worklist.
-        match (self.shape(old, store).height, self.shape(new, store).height) {
+        match (self.height(t, old), self.height(t, new)) {
             (Some(a), Some(b)) if a <= b => (),
             _ => return None,
         }
-        let mut memo = std::collections::BTreeMap::new();
+        let mut memo = HashMap::default();
         let mut pending = vec![(old, new, false)];
         while let Some((a, b, exit)) = pending.pop() {
             if memo.contains_key(&(a, b)) {
                 continue;
             }
-            if self.equal(a, b, store) {
+            if self.equal(t, a, b) {
                 memo.insert((a, b), Some(false));
                 continue;
             }
-            let (Some(ar), Some(br)) = (store(a).get(a), store(b).get(b)) else {
+            let (Some(ar), Some(br)) = (t.get(a), t.get(b)) else {
                 memo.insert((a, b), None);
                 continue;
             };
@@ -216,12 +156,7 @@ impl Shapes {
     /// at least one strict constructor insertion. This includes growth inside a
     /// fixed outer constructor. Sizes cannot grow (LANG-7). Shrinking finite actuals
     /// and regular cycles/permutations spend no polymorphic expansion budget.
-    fn arguments_grow<'s>(
-        &mut self,
-        old: TypeId,
-        new: TypeId,
-        store: &impl Fn(TypeId) -> &'s TypeStore,
-    ) -> bool {
+    fn arguments_grow(&mut self, t: &TypeInterner, old: TypeId, new: TypeId) -> bool {
         let (
             Some(Type {
                 kind:
@@ -239,7 +174,7 @@ impl Shapes {
                     },
                 ..
             }),
-        ) = (store(old).get(old), store(new).get(new))
+        ) = (t.get(old), t.get(new))
         else {
             return false;
         };
@@ -248,7 +183,7 @@ impl Shapes {
         }
         // An older root taller than the new one has an argument taller than
         // every new argument, which cannot embed.
-        match (self.shape(old, store).height, self.shape(new, store).height) {
+        match (self.height(t, old), self.height(t, new)) {
             (Some(a), Some(b)) if a <= b => (),
             _ => return false,
         }
@@ -257,7 +192,7 @@ impl Shapes {
             match (a, b) {
                 (GenericArgument::Size(a), GenericArgument::Size(b)) if a == b => (),
                 (GenericArgument::Type(a), GenericArgument::Type(b)) => {
-                    match self.embedding(*a, *b, store) {
+                    match self.embedding(t, *a, *b) {
                         Some(growth) => grew |= growth,
                         None => return false,
                     }
@@ -271,37 +206,36 @@ impl Shapes {
 
 /// A proof's finite instantiation memo and active declaration path. Context
 /// distinguishes inherited uniqueness or ownership state when the property
-/// depends on it. Equality and growth inspect the caller's rooted scratch,
-/// through `store`, which names the store holding each TypeId.
+/// depends on it. Equality and growth read the session interner.
 #[derive(Default)]
 pub struct NominalExpansions {
     shapes: Shapes,
-    memo: HashSet<(u32, usize)>,
+    memo: HashSet<(TypeId, usize)>,
     /// Entered roots, with the declaration whose `lowest` entry each pushed.
-    active: Vec<(TypeId, usize, bool, Option<DefPath>)>,
+    active: Vec<(TypeId, usize, bool, Option<DefId>)>,
     /// Per declaration, the least height of its active instantiations at
     /// each nesting: only an instantiation no taller than a new root can
     /// embed in it, so a shrinking path is checked without a scan.
-    lowest: HashMap<DefPath, Vec<usize>>,
+    lowest: HashMap<DefId, Vec<usize>>,
     growing: usize,
 }
 impl NominalExpansions {
     /// False assumes an already visited instantiation coinductively. The proof
     /// must still check every other owned component before publishing success.
-    pub fn enter<'s>(
+    pub fn enter(
         &mut self,
         root: TypeId,
         context: usize,
-        store: impl Fn(TypeId) -> &'s TypeStore,
+        t: &TypeInterner,
     ) -> Result<bool, QueryError> {
-        if let Some(class) = self.shapes.shape(root, &store).class
+        if let Some(class) = self.shapes.class(t, root)
             && !self.memo.insert((class, context))
         {
             return Ok(false);
         }
-        let height = self.shapes.shape(root, &store).height;
-        let definition = match store(root).get(root).map(|r| &r.kind) {
-            Some(TypeKind::Named { definition, .. }) => Some(definition.clone()),
+        let height = self.shapes.height(t, root);
+        let definition = match t.get(root).map(|r| &r.kind) {
+            Some(TypeKind::Named { definition, .. }) => Some(*definition),
             _ => None,
         };
         let candidates = match (&definition, height) {
@@ -315,14 +249,14 @@ impl NominalExpansions {
         let growth = candidates
             && (0..self.active.len())
                 .rev()
-                .any(|i| self.shapes.arguments_grow(self.active[i].0, root, &store));
+                .any(|i| self.shapes.arguments_grow(t, self.active[i].0, root));
         if growth && self.growing == MAX_POLYMORPHIC_EXPANSIONS {
             return Err(type_proof_limit());
         }
         self.growing += usize::from(growth);
         let pushed = match (definition, height) {
             (Some(d), Some(h)) => {
-                let lowest = self.lowest.entry(d.clone()).or_default();
+                let lowest = self.lowest.entry(d).or_default();
                 lowest.push(lowest.last().map_or(h, |l| h.min(*l)));
                 Some(d)
             }
@@ -330,6 +264,26 @@ impl NominalExpansions {
         };
         self.active.push((root, context, growth, pushed));
         Ok(true)
+    }
+    /// The equality class `enter` memoizes `root` under.
+    pub(crate) fn class_of(&self, t: &TypeInterner, root: TypeId) -> Option<TypeId> {
+        self.shapes.class(t, root)
+    }
+    /// `root`'s height, which bounds what can embed in it.
+    pub(crate) fn height_of(&mut self, t: &TypeInterner, root: TypeId) -> Option<usize> {
+        self.shapes.height(t, root)
+    }
+    /// Whether the last entered root spent the polymorphic expansion budget.
+    pub(crate) fn last_grew(&self) -> bool {
+        self.active.last().is_some_and(|a| a.2)
+    }
+    /// Whether an active instantiation of `definition` is no taller than
+    /// `height`: only then can an instantiation of that height grow from it.
+    pub(crate) fn may_grow_into(&self, definition: DefId, height: usize) -> bool {
+        self.lowest
+            .get(&definition)
+            .and_then(|l| l.last())
+            .is_some_and(|lowest| *lowest <= height)
     }
     pub fn leave(&mut self, root: TypeId, context: usize) {
         let (t, c, growth, definition) =
@@ -349,21 +303,21 @@ mod tests {
 
     #[test]
     fn only_strict_active_argument_growth_spends_the_operational_budget() {
-        let mut store = TypeStore::default();
-        let mut actual = store.push(row(TypeKind::Primitive(Primitive::U8)));
+        let store = TypeInterner::new(None);
+        let mut actual = store.intern(row(TypeKind::Primitive(Primitive::U8)));
         let mut proof = NominalExpansions::default();
         for growing in 0..=MAX_POLYMORPHIC_EXPANSIONS + 1 {
-            let root = store.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            let root = store.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(actual)].into(),
             }));
-            let result = proof.enter(root, 0, |_| &store);
+            let result = proof.enter(root, 0, &store);
             if growing <= MAX_POLYMORPHIC_EXPANSIONS {
                 assert_eq!(result, Ok(true));
             } else {
                 assert_eq!(result, Err(type_proof_limit()));
             }
-            actual = store.push(row(TypeKind::Builtin {
+            actual = store.intern(row(TypeKind::Builtin {
                 kind: BuiltinType::List,
                 arguments: vec![GenericArgument::Type(actual)].into(),
             }));
@@ -374,28 +328,28 @@ mod tests {
     fn regular_recursive_properties_check_every_component_and_nonregular_recursion_is_operational()
     {
         for growing in [false, true] {
-            let mut declaration = TypeStore::default();
-            let parameter = declaration.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+            let declaration = TypeInterner::new(None);
+            let parameter = declaration.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
                 TypeParamId(0),
             ))));
             let actual = if growing {
-                declaration.push(row(TypeKind::Builtin {
+                declaration.intern(row(TypeKind::Builtin {
                     kind: BuiltinType::List,
                     arguments: vec![GenericArgument::Type(parameter)].into(),
                 }))
             } else {
                 parameter
             };
-            let next = declaration.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            let next = declaration.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(actual)].into(),
             }));
-            let representation = declaration.push(row(TypeKind::Box(next)));
-            let signature = nominal(declaration, Some(representation), vec![]);
-            let mut store = TypeStore::default();
-            let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-            let root = store.push(row(TypeKind::Named {
-                definition: path("Wrap"),
+            let representation = declaration.intern(row(TypeKind::Box(next)));
+            let signature = nominal(Some(representation), vec![]);
+            let store = std::sync::Arc::clone(&declaration);
+            let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+            let root = store.intern(row(TypeKind::Named {
+                definition: DefId::intern(&path("Wrap")),
                 arguments: vec![GenericArgument::Type(scalar)].into(),
             }));
             let generics = GenericDeclarations::default();
@@ -442,34 +396,34 @@ mod tests {
 
     #[test]
     fn growth_inside_a_fixed_constructor_is_detected_and_shrinking_is_not() {
-        let mut store = TypeStore::default();
-        let scalar = store.push(row(TypeKind::Primitive(Primitive::U8)));
-        let boxed = store.push(row(TypeKind::Box(scalar)));
-        let old_actual = store.push(row(TypeKind::Builtin {
+        let store = TypeInterner::new(None);
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let boxed = store.intern(row(TypeKind::Box(scalar)));
+        let old_actual = store.intern(row(TypeKind::Builtin {
             kind: BuiltinType::List,
             arguments: vec![GenericArgument::Type(scalar)].into(),
         }));
-        let new_actual = store.push(row(TypeKind::Builtin {
+        let new_actual = store.intern(row(TypeKind::Builtin {
             kind: BuiltinType::List,
             arguments: vec![GenericArgument::Type(boxed)].into(),
         }));
-        let old = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let old = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(old_actual)].into(),
         }));
-        let new = store.push(row(TypeKind::Named {
-            definition: path("Wrap"),
+        let new = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
             arguments: vec![GenericArgument::Type(new_actual)].into(),
         }));
         let mut shapes = Shapes::default();
-        assert!(shapes.arguments_grow(old, new, &|_| &store));
-        assert!(!shapes.arguments_grow(new, old, &|_| &store));
+        assert!(shapes.arguments_grow(&store, old, new));
+        assert!(!shapes.arguments_grow(&store, new, old));
     }
 
     /// A small random graph over one store, with shared children, repeated
     /// rows, a non-edge mode difference, an erased-capture normalization case
     /// and recovery rows, so equal and unequal pairs both occur often.
-    fn random_graph(seed: &mut u64, store: &mut TypeStore, depth: u32) -> TypeId {
+    fn random_graph(seed: &mut u64, store: &TypeInterner, depth: u32) -> TypeId {
         let below = |seed: &mut u64, n: u64| {
             // xorshift64*, as in the property tests.
             *seed ^= *seed >> 12;
@@ -496,7 +450,7 @@ mod tests {
                 TypeKind::Tuple(vec![a, b].into())
             }
             6 => TypeKind::Named {
-                definition: path(["Wrap", "Pair"][below(seed, 2) as usize]),
+                definition: DefId::intern(&path(["Wrap", "Pair"][below(seed, 2) as usize])),
                 arguments: vec![GenericArgument::Type(random_graph(seed, store, depth - 1))].into(),
             },
             _ => TypeKind::Builtin {
@@ -513,42 +467,30 @@ mod tests {
             0 => Some(ErasedCaptures::Known(AuthoritySummary::Unknown)),
             _ => None,
         };
-        store.push(row)
+        store.intern(row)
     }
 
     #[test]
     fn structural_classes_agree_with_semantic_equality_on_random_graphs() {
         for case in 0..64u64 {
             let mut seed = 0x9e37_79b9_7f4a_7c15 ^ case;
-            let mut left = TypeStore::default();
-            let mut right = TypeStore::default();
-            let a: Vec<_> = (0..8)
-                .map(|_| random_graph(&mut seed, &mut left, 3))
-                .collect();
-            let b: Vec<_> = (0..8)
-                .map(|_| random_graph(&mut seed, &mut right, 3))
-                .collect();
+            let left = TypeInterner::new(None);
+            let right = std::sync::Arc::clone(&left);
+            let a: Vec<_> = (0..8).map(|_| random_graph(&mut seed, &left, 3)).collect();
+            let b: Vec<_> = (0..8).map(|_| random_graph(&mut seed, &right, 3)).collect();
             // Copies of one store's roots guarantee equal pairs; a graph
             // holding a recovery row cannot be imported.
             let copies: Vec<_> = a
                 .iter()
-                .filter_map(|t| import_type(&left, *t, &mut right).ok())
+                .filter_map(|t| Ok::<TypeId, GraphError>(*t).ok())
                 .collect();
             let mut shapes = Shapes::default();
-            let resolve = |id: TypeId| {
-                if left.id(id.index()) == Some(id) {
-                    &left
-                } else {
-                    &right
-                }
-            };
             let mut equal_pairs = 0;
             for x in &a {
                 for y in b.iter().chain(&copies).chain(&a) {
-                    let expected =
-                        semantic_equal(resolve(*x), *x, resolve(*y), *y).unwrap_or(false);
+                    let expected = semantic_equal(&left, *x, *y).unwrap_or(false);
                     assert_eq!(
-                        shapes.equal(*x, *y, &resolve),
+                        shapes.equal(&left, *x, *y),
                         expected,
                         "case {case}: {x:?} {y:?}"
                     );
@@ -566,23 +508,22 @@ mod tests {
         // every entered instantiation with every earlier one and recomputed
         // heights for each active pair. Its work is now linear in depth.
         let work = |depth: usize| {
-            let mut store = TypeStore::default();
-            let mut roots = vec![store.push(row(TypeKind::Primitive(Primitive::U8)))];
+            let store = TypeInterner::new(None);
+            let mut roots = vec![store.intern(row(TypeKind::Primitive(Primitive::U8)))];
             for _ in 0..depth {
                 let inner = *roots.last().unwrap();
-                roots.push(store.push(row(TypeKind::Named {
-                    definition: path("Wrap"),
+                roots.push(store.intern(row(TypeKind::Named {
+                    definition: DefId::intern(&path("Wrap")),
                     arguments: vec![GenericArgument::Type(inner)].into(),
                 })));
             }
-            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows);
             let mut proof = NominalExpansions::default();
             for root in roots.iter().rev() {
-                assert_eq!(proof.enter(*root, 0, |_| &store), Ok(true));
+                assert_eq!(proof.enter(*root, 0, &store), Ok(true));
             }
             // Re-entering any instantiation is the coinductive assumption.
-            assert_eq!(proof.enter(roots[depth / 2], 0, |_| &store), Ok(false));
-            hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows) - before
+            assert_eq!(proof.enter(roots[depth / 2], 0, &store), Ok(false));
+            proof.shapes.heights.len()
         };
         let (half, full) = (work(256), work(512));
         assert!(

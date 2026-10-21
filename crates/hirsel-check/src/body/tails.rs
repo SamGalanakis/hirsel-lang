@@ -67,7 +67,7 @@ impl Checker<'_, '_> {
         {
             return Ok(());
         }
-        if !self.body.calls.iter().any(|c|matches!(&c.target,CallTarget::Definition(p) if p == &self.input.signature.definition)) {return Ok(());}
+        if !self.body.calls.iter().any(|c|matches!(&c.target,CallTarget::Definition(p) if p == self.input.signature.definition.path())) {return Ok(());}
         let owner = NameSite::Item;
         let initial = State {
             live: self
@@ -355,7 +355,7 @@ impl Checker<'_, '_> {
                     if tail
                         && !barrier
                         && call.state == CallState::Complete
-                        && matches!(&call.target,CallTarget::Definition(p) if p == &self.input.signature.definition)
+                        && matches!(&call.target,CallTarget::Definition(p) if p == self.input.signature.definition.path())
                     {
                         let mut eligible = true;
                         let mut owned_loop_arguments = vec![];

@@ -37,14 +37,14 @@ fn copying(bounds: &[Bound]) -> bool {
 /// signature's own generics, which it names often.
 fn signature_type(
     r: &mut Random,
-    store: &mut TypeStore,
+    store: &TypeInterner,
     depth: u32,
     binder: u32,
     generics: usize,
     world: &World,
 ) -> TypeId {
     let choice = if depth == 0 { r.below(6) } else { r.below(16) };
-    let child = |r: &mut Random, store: &mut TypeStore| {
+    let child = |r: &mut Random, store: &TypeInterner| {
         signature_type(r, store, depth - 1, binder, generics, world)
     };
     let builtin = |kind, arguments: Vec<TypeId>| TypeKind::Builtin {
@@ -85,7 +85,7 @@ fn signature_type(
             (0..1 + r.below(2))
                 .map(|f| Field {
                     growable: false,
-                    name: format!("f{f}"),
+                    name: format!("f{f}").as_str().into(),
                     ty: child(r, store),
                 })
                 .collect::<Vec<_>>()
@@ -115,7 +115,7 @@ fn signature_type(
         _ => {
             let i = r.below(world.0.len() as u64) as usize;
             TypeKind::Named {
-                definition: World::path(i),
+                definition: DefId::intern(&World::path(i)),
                 arguments: (0..world.0[i].generics)
                     .map(|_| GenericArgument::Type(child(r, store)))
                     .collect::<Vec<_>>()
@@ -127,13 +127,13 @@ fn signature_type(
     if r.below(4) == 0 {
         row.modes.uniqueness = Uniqueness::Unique;
     }
-    store.push(row)
+    store.intern(row)
 }
 
 const PASSING: [PassingMode; 3] = [PassingMode::Take, PassingMode::Borrow, PassingMode::Mut];
 
 /// A callback parameter: what it receives, what it returns, and its `uses`.
-fn callback(r: &mut Random, store: &mut TypeStore, generics: usize, world: &World) -> TypeId {
+fn callback(r: &mut Random, store: &TypeInterner, generics: usize, world: &World) -> TypeId {
     let parameters = (0..r.below(3))
         .map(|_| Parameter {
             name: None,
@@ -148,7 +148,7 @@ fn callback(r: &mut Random, store: &mut TypeStore, generics: usize, world: &Worl
     let depth = r.below(3) as u32;
     let result = signature_type(r, store, depth, 1, generics, world);
     let error = (r.below(4) == 0).then(|| signature_type(r, store, 0, 1, generics, world));
-    store.push(Type::with_kind(TypeKind::Function(FunctionType {
+    store.intern(Type::with_kind(TypeKind::Function(FunctionType {
         state_promises: Default::default(),
         generics: vec![].into(),
         parameters: parameters.into(),
@@ -167,7 +167,7 @@ fn callback(r: &mut Random, store: &mut TypeStore, generics: usize, world: &Worl
     })))
 }
 
-fn signature(r: &mut Random, store: &mut TypeStore, world: &World) -> FunctionType {
+fn signature(r: &mut Random, store: &TypeInterner, world: &World) -> FunctionType {
     let generics = 1 + r.below(3) as usize;
     let parameters = (0..1 + r.below(4))
         .map(|_| Parameter {
@@ -188,12 +188,12 @@ fn signature(r: &mut Random, store: &mut TypeStore, world: &World) -> FunctionTy
     if r.below(8) == 0 {
         result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
     }
-    let result = store.push(result);
+    let result = store.intern(result);
     FunctionType {
         state_promises: Default::default(),
         generics: (0..generics)
             .map(|i| GenericParameter::Type {
-                name: format!("T{i}"),
+                name: format!("T{i}").as_str().into(),
                 bounds: BOUND_SETS[r.below(BOUND_SETS.len() as u64) as usize]
                     .to_vec()
                     .into(),
@@ -217,7 +217,7 @@ fn signature(r: &mut Random, store: &mut TypeStore, world: &World) -> FunctionTy
 /// binders between the row and the signature's generics.
 #[derive(Clone)]
 struct Place<'a> {
-    store: &'a TypeStore,
+    store: &'a TypeInterner,
     id: TypeId,
     binder: u32,
     actuals: Option<Rc<Vec<Place<'a>>>>,
@@ -262,7 +262,7 @@ impl<'a> Place<'a> {
                 },
                 _,
             ) => {
-                let declaration = world.get(definition).unwrap();
+                let declaration = world.get(*definition).unwrap();
                 let actuals = arguments
                     .iter()
                     .filter_map(|a| match a {
@@ -273,7 +273,7 @@ impl<'a> Place<'a> {
                 Seen::Nominal(
                     declaration.declared,
                     Place {
-                        store: &declaration.signature.types,
+                        store: &declaration.types,
                         id: declaration.representation,
                         binder: 0,
                         actuals: Some(Rc::new(actuals)),
@@ -443,7 +443,7 @@ fn mentions_inner<'a>(world: &'a World, place: &Place<'a>) -> bool {
 /// MODE-2's parametric rule, read off the signature.
 fn reference_inputs(
     world: &World,
-    store: &TypeStore,
+    store: &TypeInterner,
     function: &FunctionType,
     checked: bool,
 ) -> Option<Vec<ParametricInput>> {
@@ -541,12 +541,12 @@ fn parametric_inputs_agree_with_a_spec_reference() {
     let mut total = 0;
     for seed in 1..=8000u64 {
         let mut r = Random(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
-        let world = World::generate(&mut r);
-        let mut store = TypeStore::default();
-        let function = signature(&mut r, &mut store, &world);
+        let store = TypeInterner::new(None);
+        let world = World::generate(&mut r, &store);
+        let function = signature(&mut r, &store, &world);
         let checked = r.below(2) == 0;
         let mut lookup =
-            |path: &DefPath| Ok::<_, QueryError>(world.get(path).map(|d| d.signature.clone()));
+            |path: DefId| Ok::<_, QueryError>(world.get(path).map(|d| d.signature.clone()));
         let actual = parametric_inputs(&store, &function, checked, &mut lookup);
         let expected = reference_inputs(&world, &store, &function, checked);
         match &expected {
@@ -580,14 +580,14 @@ fn parametric_inputs_agree_with_a_spec_reference() {
 /// written `unique`, or a tuple each of whose parts does or is plain.
 #[test]
 fn unique_rows_agree_with_a_spec_reference() {
-    fn reference(store: &TypeStore, id: TypeId) -> bool {
+    fn reference(store: &TypeInterner, id: TypeId) -> bool {
         let t = store.get(id).unwrap();
         t.modes.uniqueness == Uniqueness::Unique
             || matches!(&t.kind, TypeKind::Tuple(parts) if parts.iter().all(|p| {
                 reference(store, *p) || plain(store, *p)
             }))
     }
-    fn plain(store: &TypeStore, id: TypeId) -> bool {
+    fn plain(store: &TypeInterner, id: TypeId) -> bool {
         let t = store.get(id).unwrap();
         match &t.kind {
             TypeKind::Primitive(p) => !matches!(p, Primitive::String | Primitive::Bytes),
@@ -623,8 +623,8 @@ fn unique_rows_agree_with_a_spec_reference() {
     let mut counts = [0usize; 2];
     for seed in 1..=4000u64 {
         let mut r = Random(seed.wrapping_mul(0xd1b5_4a32_d192_ed03) | 1);
-        let mut store = TypeStore::default();
-        let root = signature_type(&mut r, &mut store, 1 + (seed % 3) as u32, 0, 2, &world);
+        let store = TypeInterner::new(None);
+        let root = signature_type(&mut r, &store, 1 + (seed % 3) as u32, 0, 2, &world);
         let expected = reference(&store, root);
         counts[usize::from(expected)] += 1;
         assert_eq!(
@@ -637,8 +637,8 @@ fn unique_rows_agree_with_a_spec_reference() {
     assert!(counts.iter().all(|n| *n > 500), "{counts:?}");
 }
 
-fn describe(world: &World, store: &TypeStore, function: &FunctionType) -> String {
-    fn spell(store: &TypeStore, id: TypeId) -> String {
+fn describe(world: &World, store: &TypeInterner, function: &FunctionType) -> String {
+    fn spell(store: &TypeInterner, id: TypeId) -> String {
         let t = store.get(id).unwrap();
         let mut out = String::new();
         if !t.modes.relation.is_global() {
@@ -697,7 +697,7 @@ fn describe(world: &World, store: &TypeStore, function: &FunctionType) -> String
             TypeKind::Named {
                 definition,
                 arguments: a,
-            } => format!("{}[{}]", definition.0.name, arguments(a)),
+            } => format!("{}[{}]", definition.path().0.name, arguments(a)),
             TypeKind::Error => "error".into(),
         };
         out
@@ -726,7 +726,7 @@ fn describe(world: &World, store: &TypeStore, function: &FunctionType) -> String
             "\n  D{i}[{}] {:?} = {}",
             d.generics,
             d.declared,
-            spell(&d.signature.types, d.representation)
+            spell(&d.types, d.representation)
         );
     }
     out

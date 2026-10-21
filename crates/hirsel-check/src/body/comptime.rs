@@ -191,13 +191,13 @@ impl Checker<'_, '_> {
                 GenericBinder::Bound(_) => false,
             };
             let mut pending = vec![ty];
-            let mut seen = BTreeSet::new();
+            let mut seen = std::collections::HashSet::new();
             let mut parameter = None;
             while let Some(ty) = pending.pop() {
                 if !seen.insert(ty) {
                     continue;
                 }
-                let row = self.body.types.get(ty).unwrap();
+                let row = self.types.get(ty).unwrap();
                 parameter = match &row.kind {
                     TypeKind::Parameter(parameter) if unknown(parameter.binder()) => {
                         Some(ResolvedName::TypeParameter(*parameter))
@@ -211,7 +211,7 @@ impl Checker<'_, '_> {
             }
             let Some(parameter) = parameter else {
                 if !matches!(
-                    self.body.types.get(ty).unwrap().kind,
+                    self.types.get(ty).unwrap().kind,
                     TypeKind::Error | TypeKind::Primitive(hirsel_types::Primitive::Never)
                 ) && !self.bound(ty, ast::Bound::Data)?
                 {

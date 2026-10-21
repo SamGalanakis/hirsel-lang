@@ -6,11 +6,11 @@ its own `tools/capped` slot, released between commands. Never wrap the runner in
 another capped call. Do not run your own compiler builds during a measurement.
 
 ```sh
-# Distribution measurements: fat LTO, one codegen unit, PGO and std precheck.
+# Distribution measurements: fat LTO, one codegen unit, PGO and std image.
 tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist
 # Developer release bundle (keeps its existing profile):
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-full-output
-# The bundle contains hirsel and its sibling hirsel-std.precheck.
+# The bundle contains hirsel and its sibling hirsel-std.image.
 tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json
 tools/compiler-bench/report quick.json --scoreboard > scoreboard.md
 ```
@@ -42,7 +42,7 @@ multiplex percentages remain in the raw JSON.
 | debug | `build --debug --timings=json` | `cargo build --offline` |
 | release | `build --release --timings=json` | `cargo build --release --offline` |
 | native | `run --native --timings=json` until first output/listening | `cargo build --release --offline` (compile only) |
-| precheck | `precheck stdlib/std@1/hirsel.json` | none |
+| image | `image stdlib/std@1/hirsel.json` | none |
 
 The older explicit modes `clif`, `llvm-o0`, `llvm-o2` and the `edit-*` selectors
 remain accepted. `--groups`, `--select`, `--modes`, `--jobs`, `--repeat` and
@@ -53,7 +53,7 @@ resident engine; unchanged warm is not an edit benchmark.
 
 Cold deletes the runner-owned native/cache directory and removes the Rust
 package's own artifacts and incremental state. It retains the published std
-precheck and builds Rust dependencies beforehand (the pinned Cargo manifest and
+image and builds Rust dependencies beforehand (the pinned Cargo manifest and
 lockfile under `rust/`, offline). Warm runs the exact command again without
 cleaning. Neither flushes the host page cache or deletes shared host caches.
 The existing `HIRSEL_PROGRAM_CACHE=off` policy is retained so compiler work is
@@ -69,7 +69,7 @@ sizes explicitly. Every scale module is reachable. Tasks reuses the existing `be
 compiling only its app binary (not its load-generator binaries). Hello-web, std,
 tour and conformance have no paired Rust port; their ratios are unavailable.
 Tour/conformance programs without an executable entry run check only; std has no
-native entry, so it runs precheck only. `precheck` accepts no timing flag.
+native entry, so it runs image only. `image` accepts no timing flag.
 
 Native wall time is measured by `startup.py` inside the counted command, from
 launch to the first stdout byte. Tasks stops at its listening announcement and
@@ -150,3 +150,31 @@ campaign must not be repeated.
   `15c1044`; `/tmp/ref-rustc`). The harness owns disposable per-input/mode
   directories and never cleans a shared published compiler cache. It measures
   existing compiler caches; it does not implement an artifact cache.
+
+## Resident edit loop
+
+`resident oracle` compares the stdout, stderr and exit code of a resident
+check, a fresh process loading disk results and a cache-free process after
+each unchanged, body, signature, insertion, movement, deletion, syntax-error
+and recovery edit, in both human and JSON modes. It uses the corpus generators
+above and edits private copies of the programs.
+
+```sh
+tools/compiler-bench/resident oracle \
+  --toolchain <bundle> --work /tmp/hirsel-resident-oracle --output oracle.json
+tools/compiler-bench/resident measure \
+  --toolchain <bundle> --native --work /tmp/hirsel-resident-measure --output edit-loop.json
+```
+
+Each program holds one capped slot for its resident session and releases it
+before the next program. Scale sizes stop at a resource limit. The std image
+command is outside the resident protocol and is reported as excluded.
+
+`measure --native` runs ten seeded interleaved rounds on tasks and syn10k.
+Set `LLVM_SYS_211_PREFIX`, `HIRSEL_LINK_KIT`, and `HIRSEL_RUNTIME_ARCHIVES`
+to this tree's Buck2 native tool inputs, as the main compiler suite does. The server
+uses CPU31 and the client CPU7. `perf stat` counts cycles and instructions in
+both processes, and a control/ack pipe enables the server counters only for
+the request. The report retains each sample and medians; compare times only
+as ratios inside that session. `--select` filters oracle programs, and
+`--scale` supplies comma-separated generated scale sizes.

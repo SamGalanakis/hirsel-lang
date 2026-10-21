@@ -4,13 +4,17 @@ use hirsel_intern::Symbol;
 use hirsel_syntax::PackageId;
 use hirsel_types::core_roles::{intrinsic_roles, loop_protocols};
 use std::collections::BTreeSet;
+/// The interner the shared registry's rows live in.
+fn types() -> &'static TypeInterner {
+    shared_types()
+}
 #[test]
 fn registry_has_canonical_signatures() {
     let r = BuiltinRegistry::new();
     for s in r.signatures() {
         assert_eq!(
             s.fingerprint,
-            hirsel_types::encoding::fingerprint(s, &[]).unwrap()
+            hirsel_types::encoding::fingerprint(types(), s, &[]).unwrap()
         );
         assert_ne!(s.fingerprint, ContentHash::default());
     }
@@ -20,11 +24,11 @@ fn registry_has_canonical_signatures() {
 fn every_declared_signature_matches_the_review_table_and_canonical_hash() {
     let registry = BuiltinRegistry::new();
     let table=registry.signatures().map(|s|{
-        let path=format!("core@1/{}{}",if s.definition.0.modules.is_empty(){String::new()}else{format!("{}.",s.definition.0.modules.join("."))},s.definition.0.name);
+        let path=format!("core@1/{}{}",if s.definition.path().0.modules.is_empty(){String::new()}else{format!("{}.",s.definition.path().0.modules.join("."))},s.definition.path().0.name);
         let declaration=match &s.kind{
-            SignatureKind::Function(f)=>format!("{:?} {}",f.generics,describe_function(s,f)),
-            SignatureKind::Const { ty: id, .. }=>format!("const {}",describe_type(s,*id)),
-            SignatureKind::Type(t)=>format!("type {:?} {} ; bounds={:?} ; authority={:?} ; capability={:?} ; resource={} ; drop={:?}",t.generics,t.representation.map(|id|describe_type(s,id)).unwrap_or_else(||"opaque".into()),t.bounds,t.authority,t.capability,t.resource,t.destructor_allocation),
+            SignatureKind::Function(f)=>format!("{:?} {}",f.generics,describe_function(types(),f)),
+            SignatureKind::Const { ty: id, .. }=>format!("const {}",describe_type(types(),*id)),
+            SignatureKind::Type(t)=>format!("type {:?} {} ; bounds={:?} ; authority={:?} ; capability={:?} ; resource={} ; drop={:?}",t.generics,t.representation.map(|id|describe_type(types(),id)).unwrap_or_else(||"opaque".into()),t.bounds,t.authority,t.capability,t.resource,t.destructor_allocation),
         };
         let hash=s.fingerprint.0.iter().map(|b|format!("{b:02x}")).collect::<String>();format!("{path} | {declaration} | {hash}\n")
     }).collect::<String>();
@@ -96,12 +100,13 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
             matches!(signature.kind, SignatureKind::Function(_))
                 && !signature
                     .definition
+                    .path()
                     .0
                     .modules
                     .iter()
                     .any(|module| module.starts_with('$'))
         })
-        .map(|signature| signature.definition.clone())
+        .map(|signature| signature.definition.path().clone())
         .collect();
     assert_eq!(
         expected, declared,
@@ -213,7 +218,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
                 .into()
             )
         );
-        let result = open.types.get(f.result).unwrap();
+        let result = types().get(f.result).unwrap();
         // An owning cursor is as local as the collection it takes.
         assert_eq!(
             result.modes.relation,
@@ -227,7 +232,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
             _ => "$intrinsic.Cursor",
         };
         assert!(
-            matches!(&result.kind,TypeKind::Named {definition,arguments} if *definition==hirsel_syntax::DefPath::core(cursor_name) && arguments.len()==if map {2} else {1})
+            matches!(&result.kind,TypeKind::Named {definition,arguments} if *definition.path()==hirsel_syntax::DefPath::core(cursor_name) && arguments.len()==if map {2} else {1})
         );
         let next = r.get(&next).unwrap();
         let SignatureKind::Function(f) = &next.kind else {
@@ -237,7 +242,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
         assert_eq!(f.parameters[0].passing, PassingMode::Mut);
         assert_eq!(f.allocation, Allocation::NoAlloc);
         assert!(
-            matches!(&next.types.get(f.result).unwrap().kind,TypeKind::Named {definition,arguments} if *definition==hirsel_syntax::DefPath::core("Option") && arguments.len()==1)
+            matches!(&types().get(f.result).unwrap().kind,TypeKind::Named {definition,arguments} if *definition.path()==hirsel_syntax::DefPath::core("Option") && arguments.len()==1)
         );
     }
     // Signature-selected view protocols supplement the compiler's protocol list.
@@ -252,11 +257,11 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let declared: BTreeSet<_> = r
         .signatures()
         .filter(|signature| {
-            signature.definition.0.modules == ["$intrinsic"]
-                && (signature.definition.0.name.ends_with("_open")
-                    || signature.definition.0.name.ends_with("_next"))
+            signature.definition.path().0.modules == ["$intrinsic"]
+                && (signature.definition.path().0.name.ends_with("_open")
+                    || signature.definition.path().0.name.ends_with("_next"))
         })
-        .map(|signature| signature.definition.clone())
+        .map(|signature| signature.definition.path().clone())
         .collect();
     assert_eq!(operations, declared, "loop protocol operation coverage");
     let cursor = r
@@ -276,8 +281,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     assert!(owner.resource);
     assert!(owner.bounds.is_empty());
     assert_eq!(
-        owned
-            .types
+        types()
             .get(owner.representation.unwrap())
             .unwrap()
             .drop_allocation,
@@ -303,7 +307,7 @@ fn generic_variant_cleanup_retains_conditional_owned_payload_obligations() {
             panic!()
         };
         assert_eq!(
-            s.types
+            types()
                 .get(t.representation.unwrap())
                 .unwrap()
                 .drop_allocation,
@@ -321,7 +325,7 @@ fn slot_id_results_are_plain_even_with_an_unbounded_payload_parameter() {
     let SignatureKind::Function(function) = &signature.kind else {
         panic!()
     };
-    let result = signature.types.get(function.result).unwrap();
+    let result = types().get(function.result).unwrap();
     assert!(matches!(
         result.kind,
         TypeKind::Builtin {
@@ -343,12 +347,7 @@ fn generic_option_results_derive_sendability_after_substitution() {
         panic!()
     };
     assert_eq!(
-        signature
-            .types
-            .get(function.result)
-            .unwrap()
-            .modes
-            .sendability,
+        types().get(function.result).unwrap().modes.sendability,
         // The unbounded Local declaration has no proof.
         Sendability::NotSendable
     );
@@ -356,19 +355,20 @@ fn generic_option_results_derive_sendability_after_substitution() {
         (Primitive::U64, Sendability::Sendable),
         (Primitive::Bytes, Sendability::NotSendable),
     ] {
-        let mut target = TypeStore::default();
-        let actual = target.push(Type {
+        let target = crate::registry::session_types();
+        let memo = hirsel_types::TypeMemo::new();
+        let actual = target.intern(Type {
             modes: Modes {
                 sendability: sendability.clone(),
                 ..Modes::global()
             },
             ..Type::with_kind(TypeKind::Primitive(kind))
         });
-        let result = substitute_type(
-            &signature.types,
+        let result = hirsel_types::substitute(
+            &target,
+            &memo,
             function.result,
-            &mut target,
-            Substitution {
+            &Substitution {
                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                 roles: &Default::default(),
                 arguments: &[GenericArgument::Type(actual)],
@@ -376,13 +376,11 @@ fn generic_option_results_derive_sendability_after_substitution() {
             },
         )
         .unwrap();
-        let result = canonical_current_type(
-            &mut target,
-            result,
-            &GenericDeclarations::default(),
-            &mut |path| Ok::<_, QueryError>(registry.get(path)),
-        )
-        .unwrap();
+        let result =
+            canonical_current_type(&target, result, &GenericDeclarations::default(), &mut |d| {
+                Ok::<_, QueryError>(registry.get(d))
+            })
+            .unwrap();
         assert_eq!(target.get(result).unwrap().modes.sendability, sendability);
     }
 }
@@ -409,11 +407,11 @@ fn forget_is_the_declared_noalloc_consuming_resource_intrinsic() {
         hirsel_syntax::PassingMode::Take
     );
     assert_eq!(
-        signature.types.get(function.parameters[0].ty).unwrap().kind,
+        types().get(function.parameters[0].ty).unwrap().kind,
         TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0)))
     );
     assert!(
-        matches!(signature.types.get(function.result).unwrap().kind, TypeKind::Tuple(ref fields) if fields.is_empty())
+        matches!(types().get(function.result).unwrap().kind, TypeKind::Tuple(ref fields) if fields.is_empty())
     );
     assert_eq!(function.allocation, Allocation::NoAlloc);
 }
@@ -433,7 +431,7 @@ fn set_cursor_open_preserves_the_core_key_bound() {
         matches!(function.generics.as_slice(), [GenericParameter::Type { bounds, .. }] if bounds == &[Bound::Key])
     );
     assert!(matches!(
-        signature.types.get(function.parameters[0].ty).unwrap().kind,
+        types().get(function.parameters[0].ty).unwrap().kind,
         TypeKind::Builtin {
             kind: BuiltinType::Set,
             ..
@@ -454,7 +452,7 @@ fn heap_operation_declares_the_canonical_ambient_allocator() {
     assert_eq!(f.allocation, Allocation::NoAlloc);
     assert_eq!(f.authority, AuthoritySummary::inert());
     assert!(
-        s.types
+        types()
             .get(f.result)
             .unwrap()
             .is_heap_target(&nominal_roles())
@@ -472,7 +470,8 @@ fn schema_cleanup_uses_declared_ordinals_instead_of_metavariable_spelling() {
         ("I,J", "I", "J"),
         ("Source,Destination", "Source", "Destination"),
     ] {
-        let mut builder = build::Builder::new(generics).with_schema(schema("int.widen"));
+        let mut builder = build::Builder::new(&crate::registry::session_types(), generics)
+            .with_schema(schema("int.widen"));
         let function = builder.function(&format!("value:{input}"), output, true);
         assert_eq!(
             builder.types.get(function.result).unwrap().drop_allocation,
@@ -487,7 +486,7 @@ fn schema_cleanup_uses_declared_ordinals_instead_of_metavariable_spelling() {
             DropAllocation::NoAlloc
         );
     }
-    let mut ordinary = build::Builder::new("I");
+    let mut ordinary = build::Builder::new(&crate::registry::session_types(), "I");
     let function = ordinary.function("value:I", "I", true);
     assert_eq!(
         ordinary.types.get(function.result).unwrap().drop_allocation,
@@ -504,14 +503,14 @@ fn schema_constraints_participate_in_signature_fingerprints() {
     changed.metadata.schema.clear();
     assert_ne!(
         signature.fingerprint,
-        hirsel_types::encoding::fingerprint(&changed, &[]).unwrap()
+        hirsel_types::encoding::fingerprint(types(), &changed, &[]).unwrap()
     );
     for index in 0..signature.metadata.schema.len() {
         let mut changed = signature.as_ref().clone();
         changed.metadata.schema.remove(index);
         assert_ne!(
             signature.fingerprint,
-            hirsel_types::encoding::fingerprint(&changed, &[]).unwrap()
+            hirsel_types::encoding::fingerprint(types(), &changed, &[]).unwrap()
         );
     }
 }
@@ -530,7 +529,7 @@ fn a_schema_domain_diagnostic_identity_changes_its_fingerprint() {
         panic!("missing domain");
     }
     assert_ne!(
-        hirsel_types::encoding::fingerprint(&signature, &[]).unwrap(),
+        hirsel_types::encoding::fingerprint(types(), &signature, &[]).unwrap(),
         signature.fingerprint
     );
 }
@@ -574,14 +573,14 @@ fn library_declarations_obey_the_named_source_and_part_locality_rules() {
         let parts: Vec<TypeId> = match &s.kind {
             SignatureKind::Function(f) => {
                 assert_ne!(
-                    s.types.get(f.result).unwrap().modes.relation,
+                    types().get(f.result).unwrap().modes.relation,
                     Relation::environment(),
                     "{:?}",
                     s.definition
                 );
                 continue;
             }
-            SignatureKind::Type(t) => match t.representation.map(|r| &s.types.get(r).unwrap().kind)
+            SignatureKind::Type(t) => match t.representation.map(|r| &types().get(r).unwrap().kind)
             {
                 Some(TypeKind::Record(fields)) => fields.iter().map(|f| f.ty).collect(),
                 Some(TypeKind::Variant(variants)) => variants
@@ -594,7 +593,7 @@ fn library_declarations_obey_the_named_source_and_part_locality_rules() {
         };
         for part in parts {
             assert_eq!(
-                s.types.get(part).unwrap().modes.relation,
+                types().get(part).unwrap().modes.relation,
                 Relation::global(),
                 "{:?}",
                 s.definition
@@ -659,7 +658,7 @@ fn clocks_have_independent_nominal_authority_and_instant_has_no_public_represent
     let SignatureKind::Function(function) = &sample.kind else {
         panic!()
     };
-    let result = sample.types.get(function.result).unwrap();
+    let result = types().get(function.result).unwrap();
     assert!(result.brand.alternatives.is_empty());
     let TypeKind::Named { arguments, .. } = &result.kind else {
         panic!()
@@ -668,7 +667,7 @@ fn clocks_have_independent_nominal_authority_and_instant_has_no_public_represent
         panic!()
     };
     assert_eq!(
-        sample.types.get(payload).unwrap().brand.alternatives,
+        types().get(payload).unwrap().brand.alternatives,
         [Origin {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
             fields: Default::default()
@@ -687,14 +686,15 @@ fn ledger_never_is_the_primitive_and_core_names_have_providers() {
         panic!()
     };
     assert_eq!(
-        signature.types.get(function.result).unwrap().kind,
+        types().get(function.result).unwrap().kind,
         TypeKind::Primitive(Primitive::Never)
     );
     for signature in registry.signatures() {
-        for (_, t) in signature.types.iter() {
-            if let TypeKind::Named { definition, .. } = &t.kind {
-                if definition.0.package.name_is("core") {
-                    assert!(registry.get(definition).is_some(), "{definition:?}");
+        let roots = hirsel_types::encoding::signature_types(types(), signature);
+        for id in hirsel_types::closure(types(), roots).iter() {
+            if let TypeKind::Named { definition, .. } = &types().row(*id).kind {
+                if definition.path().0.package.name_is("core") {
+                    assert!(registry.get(*definition).is_some(), "{definition:?}");
                 }
             }
         }
@@ -773,7 +773,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
             panic!("{name}")
         };
         assert_eq!(
-            describe_type(&signature, declaration.representation.unwrap()),
+            describe_type(types(), declaration.representation.unwrap()),
             expected,
             "{name}"
         );
@@ -856,15 +856,14 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
             panic!("{name}")
         };
         // A split returns its two halves, both branded by the Net; the others a Result.
-        let payloads = match &signature.types.get(function.result).unwrap().kind {
+        let payloads = match &types().get(function.result).unwrap().kind {
             TypeKind::Tuple(fields) if name == "net.split" => fields.to_vec(),
             TypeKind::Named { arguments, .. } => {
                 let GenericArgument::Type(payload) = arguments[0] else {
                     panic!("{name}")
                 };
                 if name == "net.accept" {
-                    let TypeKind::Tuple(fields) = &signature.types.get(payload).unwrap().kind
-                    else {
+                    let TypeKind::Tuple(fields) = &types().get(payload).unwrap().kind else {
                         panic!("{name}")
                     };
                     vec![fields[0]]
@@ -876,7 +875,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         };
         for payload in payloads {
             assert_eq!(
-                signature.types.get(payload).unwrap().brand.alternatives,
+                types().get(payload).unwrap().brand.alternatives,
                 [Origin {
                     root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
                     fields: Default::default()
@@ -904,8 +903,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         };
         assert_eq!(function.parameters[1].passing, PassingMode::Take);
         assert_eq!(
-            signature
-                .types
+            types()
                 .get(function.parameters[1].ty)
                 .unwrap()
                 .drop_allocation,
@@ -930,6 +928,7 @@ fn core_generics_hand_back_borrowed_content_only_related_to_it() {
             continue;
         };
         if s.definition
+            .path()
             .0
             .modules
             .iter()
@@ -937,12 +936,12 @@ fn core_generics_hand_back_borrowed_content_only_related_to_it() {
         {
             continue;
         }
-        let (count, found) = borrowed_content(&s.types, f, &s.metadata.schema);
+        let (count, found) = borrowed_content(types(), f, &s.metadata.schema);
         checked += count;
         unrelated.extend(
             found
                 .into_iter()
-                .map(|ordinal| format!("{:?} parameter {ordinal}", s.definition.0)),
+                .map(|ordinal| format!("{:?} parameter {ordinal}", s.definition.path().0)),
         );
     }
     assert!(checked > 0);
@@ -952,7 +951,7 @@ fn core_generics_hand_back_borrowed_content_only_related_to_it() {
     );
     // A declaration handing back a borrowed list's element unrelated to it is
     // what the test exists to catch.
-    let mut builder = build::Builder::new("T");
+    let mut builder = build::Builder::new(&crate::registry::session_types(), "T");
     let function = builder.function("xs:List[T]", "T", true);
     assert_eq!(
         borrowed_content(&builder.types, &function, &[]),
@@ -963,7 +962,7 @@ fn core_generics_hand_back_borrowed_content_only_related_to_it() {
 /// How many borrowed parameters of `f` hold values of a parameter its result
 /// can hold and cannot copy, and which of them its result does not relate to.
 fn borrowed_content(
-    types: &TypeStore,
+    types: &TypeInterner,
     f: &FunctionType,
     schema: &[SchemaConstraint],
 ) -> (usize, Vec<usize>) {
@@ -1019,10 +1018,10 @@ fn copies(bound: &Bound) -> bool {
 
 /// The type parameters whose values a value of `root` may hold. A Sender or a
 /// SlotId names its payload type but holds none of its values.
-fn content_parameters(store: &TypeStore, root: TypeId) -> BTreeSet<TypeParamId> {
+fn content_parameters(store: &TypeInterner, root: TypeId) -> BTreeSet<TypeParamId> {
     let mut found = BTreeSet::new();
     let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;

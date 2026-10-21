@@ -29,7 +29,7 @@ impl Checker<'_> {
             });
             let own = match field {
                 Some(held) => held,
-                None => &self.out.body.types.get(binding.ty).unwrap().modes.relation,
+                None => &self.t.get(binding.ty).unwrap().modes.relation,
             };
             admitted = admitted
                 .union(&own.retain(|r| matches!(r, Reach::Place(o) if self.arena_place(o))));
@@ -116,7 +116,7 @@ impl Checker<'_> {
             .roles
             .heap
             .as_ref()
-            .is_some_and(|heap| is_arena_type(&self.out.body.types, ty, &heap.arena))
+            .is_some_and(|heap| is_arena_type(self.t, ty, &heap.arena))
     }
     /// A body row's lifetime sources: every reach except arena places.
     pub(super) fn lifetime(&self, relation: &Relation) -> Relation {
@@ -138,7 +138,7 @@ impl Checker<'_> {
     /// scoped content `value` holds at the same position (PROV-4). The content
     /// is then bounded by the frame that made the join, as its placement was.
     fn unplaced_scoped(&self, holder: TypeId, value: TypeId) -> bool {
-        let types = &self.out.body.types;
+        let types = self.t;
         let (Some(h), Some(v)) = (types.get(holder), types.get(value)) else {
             return false;
         };
@@ -172,7 +172,7 @@ impl Checker<'_> {
         relation.retain(|r| {
             !matches!(r, Reach::Place(o)
                 if self.arena_place(o)
-                    || arena.is_some_and(|arena| arena_parameter(&self.out.body.types, function, o, 0, arena)))
+                    || arena.is_some_and(|arena| arena_parameter(self.t, function, o, 0, arena)))
         })
     }
     pub(super) fn source_place(&self, e: ExprId) -> &SourcePlace {
@@ -265,7 +265,7 @@ impl Checker<'_> {
         actuals: &BTreeMap<ParameterRef, TypeId>,
         partitions: &BTreeMap<ParameterRef, Identity>,
     ) -> TypeId {
-        let root = map_brand_origins(&mut self.out.body.types, root, |origin, depth| {
+        let root = map_brand_origins(self.t, root, |origin, depth| {
             let OriginRoot::Parameter(ParameterRef::Bound {
                 depth: d,
                 parameter,
@@ -285,7 +285,7 @@ impl Checker<'_> {
                 .unwrap_or_else(|| origin.clone()))
         })
         .expect("checked field-prefix selectors");
-        super::facts::origins(&mut self.out.body.types, root, arguments, actuals)
+        super::facts::origins(self.t, root, arguments, actuals)
     }
     /// Mutating any element ends evidence on its enclosing sequence. Value
     /// identities still distinguish indexed reads from their storage owner.
@@ -330,9 +330,7 @@ impl Checker<'_> {
     pub(super) fn arena_construction(&mut self, expression: ExprId) {
         let Some(t) = self.ty(expression) else { return };
         if self
-            .out
-            .body
-            .types
+            .t
             .get(t)
             .unwrap()
             .modes
@@ -343,7 +341,7 @@ impl Checker<'_> {
             && self.contains_resource(t)
         {
             let arena = self
-                .named_arena(&self.out.body.types.get(t).unwrap().modes.relation)
+                .named_arena(&self.t.get(t).unwrap().modes.relation)
                 .and_then(|origin| self.origin_site(&origin).1)
                 .unwrap_or(self.span(expression));
             self.explained(
@@ -371,7 +369,7 @@ impl Checker<'_> {
         expected: TypeId,
     ) -> Option<ExprId> {
         if !matches!(
-            self.out.body.types.get(expected)?.kind,
+            self.t.get(expected)?.kind,
             TypeKind::Named { .. } | TypeKind::Variant(_)
         ) {
             return None;
@@ -420,12 +418,12 @@ impl Checker<'_> {
         }
         let fields = self.constructor_fields(leaf, expected)?;
         let mut pending: Vec<_> = fields.iter().map(|field| field.ty).collect();
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let row = self.out.body.types.get(ty)?;
+            let row = self.t.get(ty)?;
             if !row.brand.alternatives.is_empty() {
                 return None;
             }
@@ -478,10 +476,10 @@ impl Checker<'_> {
         if ids.is_empty() {
             return base;
         }
-        let mut t = self.out.body.types.get(base).unwrap().clone();
+        let mut t = self.t.get(base).unwrap().clone();
         let ts: Vec<_> = ids
             .iter()
-            .filter_map(|id| self.out.body.types.get(*id))
+            .filter_map(|id| self.t.get(*id))
             .cloned()
             .collect();
         // A branch joins the environments actually produced on its continuing
@@ -592,18 +590,18 @@ impl Checker<'_> {
             }
             _ => (),
         }
-        let mut result = self.out.body.types.push(t);
+        let mut result = self.intern(t);
         // The rule holds at every depth: an aggregate holding a part that lost
         // its scoped placement is as local as that part.
         if !self
-            .lifetime(&self.out.body.types.get(result).unwrap().modes.relation)
+            .lifetime(&self.t.get(result).unwrap().modes.relation)
             .has_environment()
             && ids.iter().any(|id| self.unplaced_scoped(result, *id))
         {
-            let mut row = self.out.body.types.get(result).unwrap().clone();
+            let mut row = self.t.get(result).unwrap().clone();
             row.modes.relation =
                 Relation::environment().union(&self.placement(&row.modes.relation));
-            result = self.out.body.types.push(row);
+            result = self.intern(row);
         }
         if let Some(span) = ids.iter().find_map(|id| self.invalid.get(id)).copied() {
             self.invalid.insert(result, span);
@@ -716,8 +714,7 @@ impl Checker<'_> {
                                 (FieldId(ordinal as u32), partition.at(&p))
                             })
                             .collect();
-                        let part =
-                            super::facts::siblings(&mut self.out.body.types, part.ty, &siblings);
+                        let part = super::facts::siblings(self.t, part.ty, &siblings);
                         // I places the declared part under the binding's final row.
                         ty = self.projected_item(ty, part);
                         prefix.push(*field);
@@ -748,16 +745,22 @@ impl Checker<'_> {
     }
     /// Where an origin named anywhere in this value's type ended.
     pub(super) fn ended(&self, root: TypeId) -> Option<Span> {
+        self.ended_in(root, &self.invalid)
+    }
+    pub(super) fn ended_in(&self, root: TypeId, invalid: &HashMap<TypeId, Span>) -> Option<Span> {
+        if invalid.is_empty() {
+            return None;
+        }
         let mut todo = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            if let Some(span) = self.invalid.get(&ty) {
+            if let Some(span) = invalid.get(&ty) {
                 return Some(*span);
             }
-            if let Some(row) = self.out.body.types.get(ty) {
+            if let Some(row) = self.t.get(ty) {
                 todo.extend(row.kind.value_parts());
             }
         }
@@ -766,10 +769,8 @@ impl Checker<'_> {
     /// `actual` with the brands of `expected`'s parts at every depth where
     /// the two have the same shape; the root brand stays `actual`'s.
     pub(super) fn part_brands(&mut self, actual: TypeId, expected: TypeId) -> TypeId {
-        let (Some(a), Some(b)) = (
-            self.out.body.types.get(actual).cloned(),
-            self.out.body.types.get(expected).cloned(),
-        ) else {
+        let (Some(a), Some(b)) = (self.t.get(actual).cloned(), self.t.get(expected).cloned())
+        else {
             return actual;
         };
         if std::mem::discriminant(&a.kind) != std::mem::discriminant(&b.kind) {
@@ -780,15 +781,15 @@ impl Checker<'_> {
             return actual;
         }
         let mut changed = false;
-        let mut map = BTreeMap::new();
+        let mut map = HashMap::default();
         for (part, contract) in ap.iter().zip(&bp) {
             let mut branded = self.part_brands(*part, *contract);
-            let row = self.out.body.types.get(branded).unwrap();
-            let brand = &self.out.body.types.get(*contract).unwrap().brand;
+            let row = self.t.get(branded).unwrap();
+            let brand = &self.t.get(*contract).unwrap().brand;
             if row.brand != *brand {
                 let mut row = row.clone();
                 row.brand = brand.clone();
-                branded = self.out.body.types.push(row);
+                branded = self.intern(row);
             }
             changed |= branded != *part;
             map.insert(*part, branded);
@@ -816,15 +817,13 @@ impl Checker<'_> {
             TypeKind::Box(part) => swap(part),
             _ => return actual,
         }
-        self.out.body.types.push(row)
+        self.intern(row)
     }
     /// `instance` with `source`'s single brands wherever it has none yet, at
     /// every depth where the two have the same shape.
     pub(super) fn adopt_brands(&mut self, instance: TypeId, source: TypeId) -> TypeId {
-        let (Some(a), Some(b)) = (
-            self.out.body.types.get(instance).cloned(),
-            self.out.body.types.get(source).cloned(),
-        ) else {
+        let (Some(a), Some(b)) = (self.t.get(instance).cloned(), self.t.get(source).cloned())
+        else {
             return instance;
         };
         if std::mem::discriminant(&a.kind) != std::mem::discriminant(&b.kind) {
@@ -836,7 +835,7 @@ impl Checker<'_> {
         }
         let (ap, bp) = (a.kind.value_parts(), b.kind.value_parts());
         if ap.len() == bp.len() && !ap.is_empty() {
-            let mut map = BTreeMap::new();
+            let mut map = HashMap::default();
             for (part, source) in ap.iter().zip(&bp) {
                 map.insert(*part, self.adopt_brands(*part, *source));
             }
@@ -860,41 +859,30 @@ impl Checker<'_> {
                 _ => {}
             }
         }
-        if row == a {
-            instance
-        } else {
-            self.out.body.types.push(row)
-        }
+        if row == a { instance } else { self.intern(row) }
     }
     pub(super) fn placed_item(&mut self, owner: TypeId, part: TypeId) -> TypeId {
-        let mut store = std::mem::take(&mut self.out.body.types);
+        let store = self.t;
         let generics = self.declarations();
-        let part = placed_part_type(&mut store, owner, part, &generics, &mut |path| {
+        let part = placed_part_type(store, owner, part, &generics, &mut |path| {
             Ok::<_, hirsel_types::QueryError>(self.read(path))
         })
         .expect("checked projection graph");
-        self.out.body.types = store;
 
         part
     }
     pub(super) fn projected_item(&mut self, owner: TypeId, part: TypeId) -> TypeId {
         let part = self.placed_item(owner, part);
-        let mut store = std::mem::take(&mut self.out.body.types);
-        let generics = self.declarations();
-        let part = projected_type(&mut store, owner, part, &generics, &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(self.read(path))
-        })
-        .expect("checked projection graph");
-        self.out.body.types = store;
-        part
+        let m = self.m;
+        self.proof(part, |memo| memo.projected(m, owner, part))
     }
     /// Whether a row is an erased carrier (CAP-2, CLO-4).
     pub(super) fn erased_carrier(&mut self, ty: TypeId) -> bool {
-        let TypeKind::Named { definition, .. } = &self.out.body.types.get(ty).unwrap().kind else {
+        let TypeKind::Named { definition, .. } = &self.t.get(ty).unwrap().kind else {
             return false;
         };
-        let definition = definition.clone();
-        self.read(&definition)
+        let definition = *definition;
+        self.read(definition)
             .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()))
     }
     /// CLO-4: a part of an erased carrier holds no more than the carrier's
@@ -934,9 +922,9 @@ impl Checker<'_> {
         if authority == AuthoritySummary::Unknown {
             return;
         }
-        let mut row = self.out.body.types.get(root).unwrap().clone();
+        let mut row = self.t.get(root).unwrap().clone();
         row.erased_captures = Some(ErasedCaptures::Known(authority));
-        let root = self.out.body.types.push(row);
+        let root = self.intern(row);
         self.set_ty(e, root);
     }
     /// A projection used as another field's declared brand is an indivisible owner.
@@ -966,7 +954,7 @@ impl Checker<'_> {
             return false;
         };
         fields.iter().any(|f| {
-            self.out.body.types.get(f.ty).is_some_and(|t| {
+            self.t.get(f.ty).is_some_and(|t| {
                 t.brand
                     .alternatives
                     .iter()
@@ -992,7 +980,7 @@ impl Checker<'_> {
         if mutation
             && self.ty(e).is_some_and(|t| {
                 matches!(
-                    self.out.body.types.get(t).unwrap().kind,
+                    self.t.get(t).unwrap().kind,
                     TypeKind::Builtin {
                         kind: BuiltinType::Slots,
                         ..
@@ -1133,9 +1121,17 @@ impl Checker<'_> {
         }
     }
     fn index_brand_inputs(&mut self) {
-        // Immutable published rows retain their prefix through every append-only
-        // working graph replacement. Index each new row exactly once.
-        for (id, row) in self.out.body.types.iter().skip(self.indexed_brand_rows) {
+        // The body's rows are its tables' graphs and the rows this pass
+        // produced, including those a shared transformation interned for a
+        // binding or expression. Index each new row exactly once.
+        for (_, &ty) in self.binding_types.iter() {
+            self.rows.note(self.t, ty);
+        }
+        for expression in &self.out.body.expressions {
+            self.rows.note(self.t, expression.ty);
+        }
+        for &id in &self.rows.ids()[self.indexed_brand_rows..] {
+            let row = self.t.row(id);
             work::count(Counter::AuthorityInvalidationRows);
             let roots: BTreeSet<_> = row
                 .brand
@@ -1147,7 +1143,7 @@ impl Checker<'_> {
                 self.brand_inputs.entry(root).or_default().push(id);
             }
         }
-        self.indexed_brand_rows = self.out.body.types.len();
+        self.indexed_brand_rows = self.rows.len();
     }
     pub(super) fn invalidate_origin(&mut self, origin: &Origin, span: Span) {
         self.index_brand_inputs();
@@ -1157,7 +1153,7 @@ impl Checker<'_> {
             .cloned()
             .unwrap_or_default();
         for id in candidates {
-            let ty = self.out.body.types.get(id).unwrap();
+            let ty = self.t.get(id).unwrap();
             work::count(Counter::AuthorityInvalidationRows);
             if ty.brand.alternatives.iter().any(|o| {
                 o.root == origin.root
@@ -1217,23 +1213,23 @@ impl Checker<'_> {
         };
         if !view
             || self
-                .lifetime(&self.out.body.types.get(ty).unwrap().modes.relation)
+                .lifetime(&self.t.get(ty).unwrap().modes.relation)
                 .is_environment()
             || self.property(ty, Bound::Plain)
         {
             return;
         }
-        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        let mut row = self.t.get(ty).unwrap().clone();
         row.modes.relation = Relation::environment().union(&self.placement(&row.modes.relation));
-        let local = self.out.body.types.push(row);
+        let local = self.intern(row);
         self.set_ty(expression, local);
     }
     pub(super) fn refine_projection(&mut self, expression: ExprId, declared: TypeId) {
         let Some(actual) = self.ty(expression) else {
             return;
         };
-        let mut row = self.out.body.types.get(actual).unwrap().clone();
-        let provenance = self.out.body.types.get(declared).unwrap();
+        let mut row = self.t.get(actual).unwrap().clone();
+        let provenance = self.t.get(declared).unwrap();
         if !provenance.brand.alternatives.is_empty() {
             row.brand = provenance.brand.clone();
         }
@@ -1259,8 +1255,8 @@ impl Checker<'_> {
         row.modes.relation = lifetime.union(&placement);
         // Retain the projected kind, other modes and cleanup evidence while
         // applying flow-sensitive provenance from the selected checked field.
-        if self.out.body.types.get(actual) != Some(&row) {
-            let refined = self.out.body.types.push(row);
+        if self.t.get(actual) != Some(&row) {
+            let refined = self.intern(row);
             self.set_ty(expression, refined);
         }
     }
@@ -1272,7 +1268,7 @@ impl Checker<'_> {
         match projection {
             SourceProjectionKind::Field(field) => Some((self.fields(root)?, field.0 as usize)),
             SourceProjectionKind::VariantField { variant, field } => {
-                let payload = match &self.out.body.types.get(root)?.kind {
+                let payload = match &self.t.get(root)?.kind {
                     TypeKind::Builtin {
                         kind: BuiltinType::Packed,
                         arguments,
@@ -1290,7 +1286,7 @@ impl Checker<'_> {
                     .fields
                     .iter()
                     .map(|(name, ty)| Field {
-                        name: name.clone().unwrap_or_default(),
+                        name: name.unwrap_or_else(|| Symbol::intern("")),
                         ty: self.placed_item(root, *ty),
                         growable: false,
                     })
@@ -1315,7 +1311,7 @@ impl Checker<'_> {
                 ts.into_iter()
                     .enumerate()
                     .map(|(i, ty)| Field {
-                        name: i.to_string(),
+                        name: Symbol::intern(&i.to_string()),
                         ty,
                         growable: false,
                     })
@@ -1329,11 +1325,10 @@ impl Checker<'_> {
         if let Some(kind) = self.layouts.get(&root) {
             return Some(kind.clone());
         }
-        // Expansion appends to the body's store itself: a clone left behind
-        // in the body would make the first append copy every row.
-        let mut store = std::mem::take(&mut self.out.body.types);
+        let store = self.t;
         let result = expand_representation(
-            &mut store,
+            store,
+            self.m,
             root,
             &mut |store, path, arguments| {
                 let Some(signature) = self.read(path) else {
@@ -1357,7 +1352,7 @@ impl Checker<'_> {
         // Plain actual. Resolve that declaration before comparing field
         // callback headers, including Plain bounds in the caller's scope.
         let result = result.and_then(|root| {
-            canonical_plain_type_in(&mut store, root, &self.declarations(), &mut |path| {
+            canonical_plain_type_in(store, root, &self.declarations(), &mut |path| {
                 Ok(self.read(path))
             })
             .map_err(|error| RepresentationError {
@@ -1365,10 +1360,9 @@ impl Checker<'_> {
                 failure: RepresentationFailure::Query(error),
             })
         });
-        self.out.body.types = store;
         match result {
             Ok(expanded) => {
-                let kind = self.out.body.types.get(expanded)?.kind.clone();
+                let kind = self.t.get(expanded)?.kind.clone();
                 self.layouts.insert(root, kind.clone());
                 Some(kind)
             }
@@ -1511,7 +1505,7 @@ impl Checker<'_> {
         for field in path.segments.iter().skip(1) {
             let name = field.as_str().to_owned();
             let fields = self.fields(ty?)?;
-            let ordinal = fields.iter().position(|f| f.name == name)?;
+            let ordinal = fields.iter().position(|f| f.name.as_str() == name)?;
             path_fields.push(FieldId(ordinal as u32));
             ty = Some(fields[ordinal].ty);
         }
@@ -1520,7 +1514,7 @@ impl Checker<'_> {
     }
     pub(super) fn annotation(&mut self, ty: TypeId, syntax: hirsel_syntax::TypeExprId) -> TypeId {
         let node = self.tree.types[syntax.0 as usize].kind.clone();
-        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        let mut row = self.t.get(ty).unwrap().clone();
         row.sendability_requirement = SendabilityRequirement::None;
         let mut alias = None;
         if matches!(node, hirsel_syntax::TypeExprKind::Named { .. }) {
@@ -1535,12 +1529,12 @@ impl Checker<'_> {
                     ResolvedName::Definition(path) => Some(path.clone()),
                     _ => None,
                 });
-            if let Some(signature) = declaration.and_then(|path| self.read(&path)) {
+            if let Some(signature) = declaration.and_then(|path| self.read(DefId::intern(&path))) {
                 if signature.metadata.alias {
                     if let SignatureKind::Type(declaration) = &signature.kind {
                         row.sendability_requirement = declaration
                             .representation
-                            .and_then(|root| signature.types.get(root))
+                            .and_then(|root| self.t.get(root))
                             .map_or(SendabilityRequirement::None, |row| {
                                 row.sendability_requirement
                             });
@@ -1551,14 +1545,14 @@ impl Checker<'_> {
                 }
             }
         }
-        let ty = self.out.body.types.push(row);
+        let ty = self.intern(row);
         match node {
             hirsel_syntax::TypeExprKind::Function(signature) => {
                 // #58: a written function type is preserved exactly, at any
                 // depth. The row it refines is the initializer's, which may
                 // carry derived evidence (`uses {}`, `@noalloc`) the
                 // annotation does not promise, or lack what it does.
-                let mut row = self.out.body.types.get(ty).unwrap().clone();
+                let mut row = self.t.get(ty).unwrap().clone();
                 let TypeKind::Function(function) = &mut row.kind else {
                     return ty;
                 };
@@ -1607,20 +1601,20 @@ impl Checker<'_> {
                 // `sendable`, which the qualifier around it restores.
                 row.modes.sendability = Sendability::NotSendable;
                 row.kind = TypeKind::Function(function);
-                self.out.body.types.push(row)
+                self.intern(row)
             }
             hirsel_syntax::TypeExprKind::Named {
                 arguments: syntax_arguments,
                 ..
             } if alias.is_some() => {
-                let (representation, signature) = alias.unwrap();
-                self.alias_annotation(ty, representation, &signature.types, &syntax_arguments)
+                let (representation, _) = alias.unwrap();
+                self.alias_annotation(ty, representation, self.t, &syntax_arguments)
             }
             hirsel_syntax::TypeExprKind::Named {
                 arguments: syntax_arguments,
                 ..
             } => {
-                let mut row = self.out.body.types.get(ty).unwrap().clone();
+                let mut row = self.t.get(ty).unwrap().clone();
                 // MODE-4: a written erased-state type, like a written callable,
                 // keeps its declared environment promise rather than the
                 // initializer's stronger summary; only `sendable` restores it.
@@ -1649,10 +1643,10 @@ impl Checker<'_> {
                     }
                     _ => (),
                 }
-                self.out.body.types.push(row)
+                self.intern(row)
             }
             hirsel_syntax::TypeExprKind::Tuple(syntax) => {
-                let mut row = self.out.body.types.get(ty).unwrap().clone();
+                let mut row = self.t.get(ty).unwrap().clone();
                 if let TypeKind::Tuple(parts) = &mut row.kind {
                     *parts = parts
                         .iter()
@@ -1662,14 +1656,14 @@ impl Checker<'_> {
                         .collect::<Vec<_>>()
                         .into();
                 }
-                self.out.body.types.push(row)
+                self.intern(row)
             }
             hirsel_syntax::TypeExprKind::Box(syntax) => {
-                let mut row = self.out.body.types.get(ty).unwrap().clone();
+                let mut row = self.t.get(ty).unwrap().clone();
                 if let TypeKind::Box(part) = &mut row.kind {
                     *part = self.annotation(*part, syntax);
                 }
-                self.out.body.types.push(row)
+                self.intern(row)
             }
             hirsel_syntax::TypeExprKind::Qualified {
                 base,
@@ -1678,7 +1672,7 @@ impl Checker<'_> {
                 relation,
             } => {
                 let ty = self.annotation(ty, base);
-                let mut row = self.out.body.types.get(ty).unwrap().clone();
+                let mut row = self.t.get(ty).unwrap().clone();
                 let site = NameSite::Type(syntax);
                 let mut index = 0;
                 if let Some(b) = brand.as_ref().filter(|b| !b.sibling) {
@@ -1703,9 +1697,9 @@ impl Checker<'_> {
                         if let Some((o, Some(ty))) = named {
                             if o.fields.is_empty()
                                 && matches!(
-                                    &self.out.body.types.get(ty).unwrap().kind,
+                                    &self.t.get(ty).unwrap().kind,
                                     TypeKind::Named { definition, .. }
-                                        if arena.is_some_and(|h| &h.arena == definition)
+                                        if arena.is_some_and(|h| &h.arena == definition.path())
                                 )
                             {
                                 placed.push(o);
@@ -1728,7 +1722,7 @@ impl Checker<'_> {
                 if modifiers.contains(&hirsel_syntax::TypeModifier::Sendable) {
                     row.sendability_requirement = SendabilityRequirement::Sendable;
                 }
-                self.out.body.types.push(row)
+                self.intern(row)
             }
             _ => ty,
         }
@@ -1743,7 +1737,7 @@ impl Checker<'_> {
         &mut self,
         ty: TypeId,
         declared: TypeId,
-        types: &TypeStore,
+        types: &TypeInterner,
         arguments: &[hirsel_syntax::TypeArgument],
     ) -> TypeId {
         let Some(written) = types.get(declared) else {
@@ -1759,7 +1753,7 @@ impl Checker<'_> {
                 _ => ty,
             };
         }
-        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        let mut row = self.t.get(ty).unwrap().clone();
         if !written.brand.alternatives.is_empty()
             && written
                 .brand
@@ -1797,7 +1791,7 @@ impl Checker<'_> {
                 _ => (),
             }
         }
-        self.out.body.types.push(row)
+        self.intern(row)
     }
     /// A let annotation's row with the binding places its relation names,
     /// which bound what the binding receives (v22 R3, "within S"). Body rows
@@ -1838,7 +1832,7 @@ impl Checker<'_> {
                         for segment in path.segments.iter().skip(1) {
                             let name = segment.as_str().to_owned();
                             let declared = self.fields(ty)?;
-                            let ordinal = declared.iter().position(|f| f.name == name)?;
+                            let ordinal = declared.iter().position(|f| f.name.as_str() == name)?;
                             fields.push(FieldId(ordinal as u32));
                             ty = declared[ordinal].ty;
                         }
@@ -1859,9 +1853,9 @@ impl Checker<'_> {
             return ty;
         }
         // The value is within S alone, not the initializer's placement.
-        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        let mut row = self.t.get(ty).unwrap().clone();
         row.modes.relation = self.lifetime(&row.modes.relation).union(&places);
-        self.out.body.types.push(row)
+        self.intern(row)
     }
     /// The binding the `index`th path written at `site` names, as a place.
     fn relation_binding(&self, site: &NameSite, index: usize) -> Option<Origin> {

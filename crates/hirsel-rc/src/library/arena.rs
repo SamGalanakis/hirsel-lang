@@ -20,7 +20,7 @@ pub static WITH: LibraryBody = LibraryBody {
 };
 
 fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
-    let callback = match cx.store.get(cx.callable).map(|t| &t.kind) {
+    let callback = match cx.types.get(cx.callable).map(|t| &t.kind) {
         Some(TypeKind::Function(f)) if f.parameters.len() == 1 => f.parameters[0].ty,
         _ => {
             return Err(PassError::Malformed("arena.with takes one callback".into()));
@@ -28,7 +28,7 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     };
     let abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let shape = cx.layouts.table().fn_abis[abi.0 as usize].clone();
     let [token_parameter] = shape.parameters.as_slice() else {
@@ -75,7 +75,7 @@ pub(super) const RESULT_ERROR: u32 = 1;
 /// then recovers exactly that arena's own `OutOfSpace` as `Error(OutOfSpace())`
 /// and propagates every other failure.
 fn bounded(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
-    let callback = match cx.store.get(cx.callable).map(|t| &t.kind) {
+    let callback = match cx.types.get(cx.callable).map(|t| &t.kind) {
         Some(TypeKind::Function(f)) if f.parameters.len() == 2 => f.parameters[1].ty,
         _ => {
             return Err(PassError::Malformed(
@@ -85,7 +85,7 @@ fn bounded(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     };
     let abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let shape = cx.layouts.table().fn_abis[abi.0 as usize].clone();
     let [token_parameter] = shape.parameters.as_slice() else {
@@ -248,7 +248,7 @@ fn copy_to(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let tracked = matches!(
         b.cx.arguments.first(),
         Some(hirsel_types::GenericArgument::Type(t))
-            if super::tracked_block(&b.cx.store, *t, b.cx.layouts.table(), layout)
+            if super::tracked_block(b.cx.types, *t, b.cx.layouts.table(), layout)
     );
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {

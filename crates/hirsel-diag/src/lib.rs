@@ -79,6 +79,14 @@ impl RuleId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+    /// Owned buffer bytes retained by a decoded rule ID. Fixed rules borrow
+    /// static strings and retain no allocation.
+    pub fn retained_bytes(&self) -> usize {
+        match &self.0 {
+            Cow::Borrowed(_) => 0,
+            Cow::Owned(value) => value.capacity(),
+        }
+    }
     pub fn prefix(&self) -> &str {
         self.0.split_once('-').unwrap().0
     }
@@ -101,7 +109,7 @@ impl fmt::Display for InvalidRuleId {
 impl std::error::Error for InvalidRuleId {}
 
 /// Diagnostic level; errors prevent execution (FAIL-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Severity {
     Error,
     Warning,
@@ -117,13 +125,13 @@ impl Severity {
     }
 }
 /// A related source site with an explanation (OWN-3, PROV-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Label {
     pub span: Span,
     pub message: String,
 }
 /// One optional replacement; consumers must verify the source revision first (LANG-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Fix {
     pub span: Span,
     pub replacement: String,
@@ -131,7 +139,7 @@ pub struct Fix {
 }
 /// What a diagnostic reports, beyond its rule, for section 23 selection and
 /// cause folding. Producers set it; renderers and JSON v1 do not show it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Obligation {
     /// A required multiplicity: a once function where a many one is required (MODE-3).
     Multiplicity,
@@ -144,7 +152,7 @@ pub enum Obligation {
     ParameterMode { argument: Span },
 }
 /// Every language diagnostic cites exactly one rule (spec introduction, FAIL-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
     pub rule: RuleId,
     pub severity: Severity,
@@ -238,7 +246,7 @@ fn span_json(span: Span, sources: &SourceMap) -> serde_json::Value {
     let end = sources
         .file_slice(span)
         .and_then(|_| file?.location(span.end));
-    json!({"file_id": span.file.0, "file": file.map(|f| f.path.to_string_lossy()),
+    json!({"file_id": file.map_or(span.file.0, |f| f.ordinal()), "file": file.map(|f| f.path.to_string_lossy()),
         "start": span.start, "end": span.end,
         "line": location.map(|l| l.line), "column": location.map(|l| l.column),
         "end_line": end.map(|l| l.line), "end_column": end.map(|l| l.column)})

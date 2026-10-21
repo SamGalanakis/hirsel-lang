@@ -61,7 +61,7 @@ fn captures(b: &mut Body<'_, '_>) -> Result<[Parameter; 2], PassError> {
 fn callback_abi(b: &mut Body<'_, '_>, ordinal: usize) -> Result<FnAbiId, PassError> {
     let ty = b.cx.type_actual(ordinal)?;
     b.cx.layouts
-        .fn_abi(&b.cx.store, ty, CallableShape::Closure)
+        .fn_abi(b.cx.types, ty, CallableShape::Closure)
         .map_err(|e| PassError::Layout(b.cx.path.clone(), e))
 }
 
@@ -175,7 +175,11 @@ pub(crate) fn drop_local(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId)
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     b.push(Inst::Drop {
         address,

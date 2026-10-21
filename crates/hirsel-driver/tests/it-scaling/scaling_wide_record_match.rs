@@ -35,7 +35,7 @@ fn fill(count: u64) -> Result[R, String] uses {{}} {{
 #[test]
 fn wide_record_match_arms_check_in_linear_work() {
     const COUNTERS: [Counter; 3] = [
-        Counter::CopiedTypeRows,
+        Counter::InternedTypeRows,
         Counter::ValidateFlowSteps,
         Counter::OwnershipValueJoins,
     ];

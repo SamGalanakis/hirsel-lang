@@ -67,12 +67,11 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
     }
     let mut pending = vec![Work::Visit(&data.root)];
     let mut values = Vec::new();
-    let mut reference_types = None;
     while let Some(work) = pending.pop() {
         match work {
             Work::Visit(node) => match &node.kind {
                 ValueKind::Constant(value) => {
-                    let row = data
+                    let row = runtime
                         .types
                         .get(node.ty)
                         .ok_or_else(|| invalid("materialized type"))?;
@@ -85,9 +84,7 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                     Box::new(crate::value::NamedFunction {
                         definition: definition.clone(),
                         arguments: vec![],
-                        types: reference_types
-                            .get_or_insert_with(|| std::sync::Arc::new(data.types.clone()))
-                            .clone(),
+                        types: runtime.types.clone(),
                         ty: node.ty,
                     }),
                 )),
@@ -105,7 +102,7 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                     .into_iter()
                     .map(Some)
                     .collect();
-                let row = data
+                let row = runtime
                     .types
                     .get(node.ty)
                     .ok_or_else(|| invalid("materialized constructor type"))?;

@@ -33,7 +33,8 @@ pub(super) fn context() -> ast::FileContext {
     }
 }
 impl SignatureProvider for Registry {
-    fn signature(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, definition: ast::DefId) -> Result<SignatureRef, QueryError> {
+        let path = definition.path();
         self.reads.push(path.clone());
         self.signatures
             .get(path)
@@ -98,14 +99,32 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     let builtins = BuiltinRegistry::new();
     let mut signatures: BTreeMap<_, _> = builtins
         .signatures()
-        .map(|s| (s.definition.clone(), s.clone()))
+        .map(|s| (s.definition.path().clone(), s.clone()))
         .collect();
-    static STD: std::sync::OnceLock<Vec<SignatureRef>> = std::sync::OnceLock::new();
-    for signature in STD.get_or_init(|| {
+    for signature in &std_sources().signatures {
+        signatures.insert(signature.definition.path().clone(), signature.clone());
+    }
+    Registry {
+        signatures,
+        index,
+        reads: vec![],
+        builtins,
+    }
+}
+/// The std declarations these sources read, with the interner they live in:
+/// the source corpus's session interner.
+struct StdSources {
+    types: Arc<TypeInterner>,
+    memo: TypeMemo,
+    signatures: Vec<SignatureRef>,
+}
+fn std_sources() -> &'static StdSources {
+    static STD: std::sync::OnceLock<StdSources> = std::sync::OnceLock::new();
+    STD.get_or_init(|| {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../hirsel-driver/tests/fixtures/std_source/main.hir");
         let mut loaded = hirsel_driver::load_program(&fixture).unwrap();
-        [
+        let signatures = [
             "bytes.replace",
             "iter.map",
             "map.same_entries",
@@ -141,16 +160,20 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             });
             loaded.engine.item_signature(&path).unwrap().value
         })
-        .collect()
-    }) {
-        signatures.insert(signature.definition.clone(), signature.clone());
-    }
-    Registry {
-        signatures,
-        index,
-        reads: vec![],
-        builtins,
-    }
+        .collect();
+        StdSources {
+            types: loaded.engine.types().clone(),
+            memo: TypeMemo::new(),
+            signatures,
+        }
+    })
+}
+/// The source corpus's session interner.
+pub(super) fn session() -> &'static TypeInterner {
+    &std_sources().types
+}
+pub(super) fn session_memo() -> &'static TypeMemo {
+    &std_sources().memo
 }
 pub(super) fn normalize_file(
     file: &ast::SyntaxFile,
@@ -195,7 +218,13 @@ pub(super) fn normalize_file(
     for _ in 0..file.items.len() + 1 {
         let mut next = vec![];
         for syntax in pending {
-            let r = hirsel_resolve::resolve_item(file, syntax, &registry.index.clone(), registry);
+            let r = hirsel_resolve::resolve_item(
+                file,
+                syntax,
+                &registry.index.clone(),
+                session(),
+                registry,
+            );
             let item = &syntax.item;
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
@@ -203,6 +232,8 @@ pub(super) fn normalize_file(
             };
             match hirsel_signature::normalize(
                 hirsel_check_protocol::header::Input {
+                    types: session(),
+                    memo: session_memo(),
                     syntax,
                     context: &ctx,
                     resolution: &r,

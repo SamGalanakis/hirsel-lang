@@ -101,21 +101,20 @@ fn dependency_card_verifies_signed_code_store_objects() {
 }
 
 #[test]
-fn dependency_cards_preserve_facts_when_a_matching_precheck_saves_body_work() {
+fn dependency_cards_preserve_facts_when_a_matching_image_saves_body_work() {
     with_compiler_stack(|| {
-        use hirsel_engine::{PackageCache, Precheck};
-        use std::sync::Arc;
+        use hirsel_engine::{StdImage, StdImages};
         let manifest = manifest();
         let leaf = manifest.parent().unwrap().join("../leaf/hirsel.json");
         let path =
-            std::env::temp_dir().join(format!("hirsel-card-precheck-{}.bin", std::process::id()));
-        COMPILER.precheck_package(&leaf, &path).unwrap();
-        let cache = PackageCache::prechecked(vec![Arc::new(Precheck::read(&path).unwrap())]);
+            std::env::temp_dir().join(format!("hirsel-card-image-{}.bin", std::process::id()));
+        COMPILER.image_package(&leaf, &path).unwrap();
+        let images = StdImages::of(vec![StdImage::open(&path).unwrap()]);
         let mut source = COMPILER
-            .load_program_source_with_cache(&manifest, None, &PackageCache::disabled())
+            .load_program_source_with_images(&manifest, None, &StdImages::none())
             .unwrap();
         let mut cached = COMPILER
-            .load_program_source_with_cache(&manifest, None, &cache)
+            .load_program_source_with_images(&manifest, None, &images)
             .unwrap();
         let mut a = source.dependency_cards(&manifest, Some("leaf@1")).unwrap();
         let mut b = cached.dependency_cards(&manifest, Some("leaf@1")).unwrap();

@@ -43,7 +43,7 @@
 mod inline_format;
 
 use crate::instance::Program;
-use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PassingMode, UnaryOp};
+use hirsel_syntax::{BinaryOp, ContentHash, DefId, DefPath, ItemPath, PassingMode, UnaryOp};
 use hirsel_tir::{
     self as tir, Body, CallArgument, CallReturn, Callee, CleanupAction, CleanupId, CleanupNodeId,
     Constant, Definition, Instruction, InstructionKind as K, LoanId, Local, LocalId, Operand,
@@ -51,7 +51,8 @@ use hirsel_tir::{
 };
 use hirsel_types::{
     BinderRef, BuiltinType, GenericArgument, Origin, OriginRoot, ParamId, Parameter, ParameterRef,
-    Primitive, Signature, SignatureKind, StatePromise, Type, TypeId, TypeKind, TypeStore, UseKind,
+    Primitive, Signature, SignatureKind, StatePromise, Type, TypeId, TypeInterner, TypeKind,
+    UseKind,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -71,6 +72,7 @@ type StatementOrigins = Vec<Vec<Vec<Option<(u32, u32)>>>>;
 
 #[derive(Clone)]
 pub(crate) struct SourceMap {
+    pub anchors: Vec<hirsel_span::Anchor>,
     pub definition: DefPath,
     pub sites: StatementOrigins,
     pub places: Vec<Vec<u32>>,
@@ -79,7 +81,8 @@ pub(crate) struct SourceMap {
 impl SourceMap {
     fn new(def: &Definition) -> Self {
         Self {
-            definition: def.path.clone(),
+            definition: def.path.path().clone(),
+            anchors: hirsel_tir::source_anchors(def),
             sites: def
                 .bodies
                 .iter()
@@ -133,7 +136,11 @@ impl SourceMap {
 pub(crate) fn fuse_with_origins(
     program: &Program,
     discharge: &hirsel_lir::discharge::Discharge,
-) -> (Program, BTreeMap<DefPath, SourceMap>) {
+) -> (
+    Program,
+    BTreeMap<DefPath, SourceMap>,
+    BTreeMap<DefPath, DefPath>,
+) {
     let mut p = program.clone();
     let mut fuser = Fuser {
         origins: program
@@ -159,7 +166,24 @@ pub(crate) fn fuse_with_origins(
         fuser.builders.clear();
         fuser.totals.clear();
     }
-    (p, fuser.origins)
+    let derived: BTreeMap<_, _> = fuser
+        .derived
+        .iter()
+        .map(|(source, generated)| (generated.clone(), source.clone()))
+        .collect();
+    let mut owners: BTreeMap<_, _> = program
+        .definitions
+        .keys()
+        .map(|p| (p.clone(), p.clone()))
+        .collect();
+    for (generated, source) in &derived {
+        let mut source = source;
+        while let Some(parent) = derived.get(source) {
+            source = parent;
+        }
+        owners.insert(generated.clone(), source.clone());
+    }
+    (p, fuser.origins, owners)
 }
 
 #[derive(Default)]
@@ -204,19 +228,19 @@ fn into_path(path: &DefPath) -> DefPath {
     })
 }
 
-fn kind(types: &TypeStore, ty: TypeId) -> Option<&TypeKind> {
+fn kind(types: &TypeInterner, ty: TypeId) -> Option<&TypeKind> {
     types.get(ty).map(|t| &t.kind)
 }
 
-fn is_primitive(types: &TypeStore, ty: TypeId, want: Primitive) -> bool {
+fn is_primitive(types: &TypeInterner, ty: TypeId, want: Primitive) -> bool {
     matches!(kind(types, ty), Some(TypeKind::Primitive(p)) if *p == want)
 }
 
-fn is_unit(types: &TypeStore, ty: TypeId) -> bool {
+fn is_unit(types: &TypeInterner, ty: TypeId) -> bool {
     matches!(kind(types, ty), Some(TypeKind::Tuple(items)) if items.is_empty())
 }
 
-fn is_byte_list(types: &TypeStore, ty: TypeId) -> bool {
+fn is_byte_list(types: &TypeInterner, ty: TypeId) -> bool {
     match kind(types, ty) {
         Some(TypeKind::Builtin {
             kind: BuiltinType::List,
@@ -229,7 +253,7 @@ fn is_byte_list(types: &TypeStore, ty: TypeId) -> bool {
 }
 
 /// A value whose destruction runs no user code.
-fn silent(types: &TypeStore, ty: TypeId) -> bool {
+fn silent(types: &TypeInterner, ty: TypeId) -> bool {
     match kind(types, ty) {
         Some(TypeKind::Primitive(_)) => true,
         Some(TypeKind::Tuple(items)) => items.iter().all(|t| silent(types, *t)),
@@ -919,7 +943,7 @@ fn rvalue_fails(body: &Body, rvalue: &Rvalue) -> bool {
     }
 }
 
-fn cleanup_fails(body: &Body, types: &TypeStore, c: CleanupId) -> bool {
+fn cleanup_fails(body: &Body, types: &TypeInterner, c: CleanupId) -> bool {
     body.cleanup_actions(c).any(|a| match a {
         CleanupAction::Drop { place: p, .. } => !silent(types, place(body, *p).ty),
         CleanupAction::EndLoan { .. } => false,
@@ -927,7 +951,7 @@ fn cleanup_fails(body: &Body, types: &TypeStore, c: CleanupId) -> bool {
     })
 }
 
-fn instruction_fails(body: &Body, types: &TypeStore, inst: &Instruction) -> bool {
+fn instruction_fails(body: &Body, types: &TypeInterner, inst: &Instruction) -> bool {
     match &inst.kind {
         K::Assign { value, .. } => rvalue_fails(body, &body.rvalues[value.0 as usize]),
         K::Replace { value, .. } => rvalue_fails(body, &Rvalue::Use(value.clone())),
@@ -973,7 +997,7 @@ impl Fuser {
         let total = match program.definitions.get(path) {
             Some(def) if def.bodies.len() == 1 && def.contracts.is_empty() => {
                 let body = &def.bodies[def.entry.0 as usize];
-                body.tail_sites.is_empty() && self.body_total(program, &def.types, body)
+                body.tail_sites.is_empty() && self.body_total(program, &program.types, body)
             }
             _ => false,
         };
@@ -981,7 +1005,7 @@ impl Fuser {
         total
     }
 
-    fn body_total(&mut self, program: &Program, types: &TypeStore, body: &Body) -> bool {
+    fn body_total(&mut self, program: &Program, types: &TypeInterner, body: &Body) -> bool {
         let refs = Refs::new(body);
         let loops = copy_loops(body, &refs);
         let skipped: HashSet<usize> = loops.values().flat_map(|l| l.blocks).collect();
@@ -1026,7 +1050,8 @@ impl Fuser {
     /// Rewrite `path`'s fusable sites; true when it changed.
     fn fuse_definition(&mut self, program: &mut Program, path: &DefPath) -> bool {
         let def = program.definitions[path].clone();
-        if let Some(fused) = inline_format::fuse(program, &def, self) {
+        if let Some(mut fused) = inline_format::fuse(program, &def, self) {
+            fused.types = tir::definition_types(&program.types, &fused);
             program.definitions.insert(path.clone(), Arc::new(fused));
             return true;
         }
@@ -1059,9 +1084,15 @@ impl Fuser {
                 } else {
                     continue;
                 };
-                if let Some(site) =
-                    self.site(program, &def.types, body, &mut refs, &loops, b, producer)
-                {
+                if let Some(site) = self.site(
+                    program,
+                    &program.types,
+                    body,
+                    &mut refs,
+                    &loops,
+                    b,
+                    producer,
+                ) {
                     sites.push(site);
                 }
             }
@@ -1079,13 +1110,14 @@ impl Fuser {
                     None => continue,
                 },
             };
-            rewrite_site(&mut def, &site, into);
+            rewrite_site(&program.types, &mut def, &site, into);
             if let Some(origin) = self.origins.get_mut(path) {
                 origin.appended(&def);
             }
             changed = true;
         }
         if changed {
+            def.types = tir::definition_types(&program.types, &def);
             program.definitions.insert(path.clone(), Arc::new(def));
         }
         changed
@@ -1105,7 +1137,7 @@ impl Fuser {
     fn site(
         &mut self,
         program: &Program,
-        types: &TypeStore,
+        types: &TypeInterner,
         body: &Body,
         refs: &mut Refs,
         loops: &BTreeMap<usize, CopyLoop>,
@@ -1332,15 +1364,17 @@ impl Fuser {
         let into = into_path(f);
         let def = &program.definitions[f];
         let mut origin = self.origins.get(f).cloned();
-        let derived = derive_body(def, &into, &shape, origin.as_mut());
+        let derived = derive_body(&program.types, def, &into, &shape, origin.as_mut());
         if let Some(origin) = origin {
             self.origins.insert(into.clone(), origin);
         }
         let signature = &program.signatures[f];
         let derived_signature = derive_signature(signature, &into, &derived);
+        let types = tir::definition_types(&program.types, &derived);
         let tag =
             |h: &ContentHash| ContentHash::of_parts("hirsel-rc.append-into.v1", [h.0.as_slice()]);
         let mut derived = derived;
+        derived.types = types;
         derived.signature_hash = derived_signature.fingerprint;
         program
             .signatures
@@ -1469,7 +1503,7 @@ fn copy_function(program: &Program, path: &DefPath) -> Option<(u32, u32)> {
         return None;
     }
     let body = &def.bodies[def.entry.0 as usize];
-    let types = &def.types;
+    let types = &*program.types;
     if !body.tail_sites.is_empty() || !is_unit(types, body.result) {
         return None;
     }
@@ -1550,7 +1584,7 @@ fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape
         return None;
     }
     let body = &def.bodies[def.entry.0 as usize];
-    let types = &def.types;
+    let types = &*program.types;
     if !body.tail_sites.is_empty() || !is_primitive(types, body.result, Primitive::Bytes) {
         return None;
     }
@@ -1800,15 +1834,6 @@ fn operand_places(body: &Body, inst: &Instruction) -> Vec<PlaceId> {
     }
 }
 
-/// A unit type row in `types`.
-fn unit_type(types: &mut TypeStore) -> TypeId {
-    let found = types
-        .iter()
-        .find(|(_, t)| matches!(&t.kind, TypeKind::Tuple(items) if items.is_empty()))
-        .map(|(id, _)| id);
-    found.unwrap_or_else(|| types.push(Type::unit()))
-}
-
 fn next_loan(body: &Body) -> LoanId {
     let mut max = 0;
     for b in &body.blocks {
@@ -1851,8 +1876,8 @@ fn with_loan_end(body: &mut Body, loan: LoanId, rest: CleanupId) -> CleanupId {
 /// Replace the site's call by its appending form: a fresh mutable loan of the
 /// list is passed last, the unit result retired, and the original result slot
 /// receives the static empty value its copy then skips.
-fn rewrite_site(def: &mut Definition, site: &Site, into: DefPath) {
-    let unit = unit_type(&mut def.types);
+fn rewrite_site(types: &TypeInterner, def: &mut Definition, site: &Site, into: DefPath) {
+    let unit = types.intern(Type::unit());
     let body = &mut def.bodies[def.entry.0 as usize];
     let Terminator::Call {
         arguments,
@@ -1866,7 +1891,7 @@ fn rewrite_site(def: &mut Definition, site: &Site, into: DefPath) {
     let span = body.blocks[site.block].span;
     let result = root(body, ret.destination);
     let string = matches!(
-        def.types
+        types
             .get(body.locals[result.0 as usize].ty)
             .map(|t| &t.kind),
         Some(TypeKind::Primitive(Primitive::String))
@@ -2001,22 +2026,23 @@ fn rewrite_site(def: &mut Definition, site: &Site, into: DefPath) {
 /// `f$into`: `f`'s body with its list replaced by a trailing `mut`
 /// parameter, its freeze removed and its result unit.
 fn derive_body(
+    types: &TypeInterner,
     def: &Definition,
     into: &DefPath,
     shape: &Shape,
     mut origin: Option<&mut SourceMap>,
 ) -> Definition {
     let mut def = def.clone();
-    def.path = into.clone();
-    let unit = unit_type(&mut def.types);
+    def.path = DefId::intern(into);
+    let unit = types.intern(Type::unit());
     // A declared `mut` parameter's list reaches the caller's environment.
     let local_ty = def.bodies[def.entry.0 as usize].locals[shape.list[0].0 as usize].ty;
-    let mut row = def.types.get(local_ty).expect("the list's type").clone();
+    let mut row = types.get(local_ty).expect("the list's type").clone();
     row.modes = hirsel_types::Modes {
         relation: hirsel_types::Relation::new([hirsel_types::Reach::Environment]),
         ..hirsel_types::Modes::global()
     };
-    let list_ty = def.types.push(row);
+    let list_ty = types.intern(row);
     let body = &mut def.bodies[def.entry.0 as usize];
     let parameter = LocalId(body.locals.len() as u32);
     let ordinal = body.parameters.len() as u32;
@@ -2182,49 +2208,18 @@ fn compact_rvalues(body: &mut Body) {
     }
 }
 
-/// A copy of `from`'s row `id` (a primitive, tuple or builtin of them) in `to`.
-fn copy_type(from: &TypeStore, id: TypeId, to: &mut TypeStore) -> TypeId {
-    let mut row = from.get(id).expect("a type row").clone();
-    row.kind = match row.kind {
-        TypeKind::Tuple(items) => TypeKind::Tuple(
-            items
-                .iter()
-                .map(|t| copy_type(from, *t, to))
-                .collect::<Vec<_>>()
-                .into(),
-        ),
-        TypeKind::Builtin { kind, arguments } => TypeKind::Builtin {
-            kind,
-            arguments: arguments
-                .iter()
-                .map(|a| match a {
-                    GenericArgument::Type(t) => GenericArgument::Type(copy_type(from, *t, to)),
-                    size => size.clone(),
-                })
-                .collect::<Vec<_>>()
-                .into(),
-        },
-        kind => kind,
-    };
-    to.push(row)
-}
-
 /// `f`'s signature with a trailing `mut out: List[u8]` and a unit result,
 /// whose types are the derived body's own parameter and result rows.
 fn derive_signature(signature: &Signature, into: &DefPath, derived: &Definition) -> Signature {
     let mut s = signature.clone();
-    s.definition = into.clone();
+    s.definition = DefId::intern(into);
     let SignatureKind::Function(f) = &mut s.kind else {
         unreachable!("a builder is a function")
     };
     let body = &derived.bodies[derived.entry.0 as usize];
     let parameter = *body.parameters.last().expect("the appended parameter");
-    let list = copy_type(
-        &derived.types,
-        body.locals[parameter.0 as usize].ty,
-        &mut s.types,
-    );
-    let unit = copy_type(&derived.types, body.result, &mut s.types);
+    let list = body.locals[parameter.0 as usize].ty;
+    let unit = body.result;
     let mut parameters: Vec<Parameter> = f.parameters.iter().cloned().collect();
     parameters.push(Parameter {
         name: Some("out".into()),

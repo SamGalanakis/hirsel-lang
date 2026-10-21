@@ -40,9 +40,9 @@ list pretending to prove safety.
   cards retain the enclosing package's dependency list.
 - **Cost:** `source_token_work_estimate` counts significant source tokens in
   reached declarations. `check_source_tokens` and `lower_source_tokens` estimate
-  body work remaining after matching prechecks; `native_build_source_tokens`
+  body work remaining after matching std images; `native_build_source_tokens`
   estimates the reached source weight still presented to native compilation.
-  A precheck saves checking/lowering, not native code generation. These are work
+  A std image saves checking/lowering, not native code generation. These are work
   proxies, not milliseconds or instruction predictions. The cache stores no
   per-unit check/build timings, so `check_ms` and `build_ms` are null. No native
   build, benchmark or test run is started to fill them in.
@@ -63,8 +63,8 @@ list pretending to prove safety.
   as package-owned cases. Counts do not assert that tests passed. `last_gate` is
   null: the build cache has no content-bound per-package test receipt.
 
-The normal loader, shared query cache and matching toolchain prechecks are reused.
-Without a matching precheck, the normal compiler checks from source. Whole-API
+The normal loader, shared query cache and matching toolchain std images are reused.
+Without a matching std image, the normal compiler checks from source. Whole-API
 inspection can select bodies that the importing program alone never needed;
 existing checked/lowered products are reused. Changing comments or source order
 does not invent provenance, test passes, timings or stronger authority claims.

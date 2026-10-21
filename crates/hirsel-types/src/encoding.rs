@@ -1,4 +1,5 @@
 use crate::*;
+use hirsel_intern::Symbol;
 use hirsel_syntax::{Bound, ContentHash, ContractKind, DefPath, PassingMode};
 use std::collections::BTreeSet;
 
@@ -19,15 +20,41 @@ pub enum EncodingError {
 /// Every atom is u64-little-endian length framed; lists start with a framed count.
 /// Sets are sorted and deduplicated; ordered declaration lists retain their order.
 pub fn canonical_encoding(
+    types: &TypeInterner,
     signature: &Signature,
     dependencies: &[SignatureDependency],
 ) -> Result<Vec<u8>, EncodingError> {
+    let mut e = Encoder::default();
+    encode_signature(&mut e, types, signature, dependencies)?;
+    if let Some(error) = e.error {
+        return Err(error);
+    }
+    Ok(e.bytes)
+}
+
+/// Every TypeId `signature` names directly, metadata included, in the order
+/// `canonical_encoding` reaches them; repeats are kept. A walk that stops at
+/// a malformed row returns the roots before it.
+pub fn signature_types(types: &TypeInterner, signature: &Signature) -> Vec<TypeId> {
+    let mut e = Encoder {
+        roots: Some(vec![]),
+        ..Encoder::default()
+    };
+    let _ = encode_signature(&mut e, types, signature, &[]);
+    e.roots.unwrap_or_default()
+}
+
+fn encode_signature(
+    e: &mut Encoder,
+    types: &TypeInterner,
+    signature: &Signature,
+    dependencies: &[SignatureDependency],
+) -> Result<(), EncodingError> {
     // No `..`: a new field must be encoded here or excluded with a reason,
     // or a changed declaration would keep its dependents' fingerprint.
     let Signature {
         metadata,
         definition,
-        types,
         kind,
         // The fingerprint is this encoding's own output.
         fingerprint: _,
@@ -49,9 +76,8 @@ pub fn canonical_encoding(
         scope_capability,
         heap,
     } = roles;
-    let mut e = Encoder::default();
     e.atom(b"hirsel.signature.encoding.v16");
-    e.path(definition);
+    e.path(definition.path());
     e.tag(match visibility {
         hirsel_syntax::Visibility::Private => "private",
         hirsel_syntax::Visibility::Public => "public",
@@ -249,32 +275,30 @@ pub fn canonical_encoding(
         }
     }
     let mut deps = dependencies.to_vec();
-    deps.sort_by(|a, b| a.definition.cmp(&b.definition));
+    deps.sort_by_key(|a| a.definition);
     for pair in deps.windows(2) {
         if pair[0].definition == pair[1].definition && pair[0].fingerprint != pair[1].fingerprint {
             return Err(EncodingError::ConflictingDependency(
-                pair[0].definition.clone(),
+                pair[0].definition.path().clone(),
             ));
         }
     }
     deps.dedup();
     e.number(deps.len() as u64);
     for d in deps {
-        e.path(&d.definition);
+        e.path(d.definition.path());
         e.atom(&d.fingerprint.0);
     }
-    if let Some(error) = e.error {
-        return Err(error);
-    }
-    Ok(e.bytes)
+    Ok(())
 }
 
 /// SHA-256 with its own domain, using the shared length-framed hash primitive.
 pub fn fingerprint(
+    types: &TypeInterner,
     signature: &Signature,
     dependencies: &[SignatureDependency],
 ) -> Result<ContentHash, EncodingError> {
-    let bytes = canonical_encoding(signature, dependencies)?;
+    let bytes = canonical_encoding(types, signature, dependencies)?;
     Ok(ContentHash::of_parts(
         "hirsel.signature.sha256.v12",
         [bytes.as_slice()],
@@ -282,28 +306,24 @@ pub fn fingerprint(
 }
 
 /// An opaque type's owner view (PROG-2): its public signature with the owner
-/// package's representation graph and declaration. The view is the same
-/// entity seen by its own package, so it keeps the public fingerprint;
-/// [`sealed`] is its inverse.
-pub fn owner_view(public: &Signature, types: TypeStore, declaration: TypeDefinition) -> Signature {
+/// package's declaration, whose representation rows are interned like every
+/// other row. The view is the same entity seen by its own package, so it keeps
+/// the public fingerprint; [`sealed`] is its inverse.
+pub fn owner_view(public: &Signature, declaration: TypeDefinition) -> Signature {
     Signature {
-        types,
         kind: SignatureKind::Type(declaration),
         ..public.clone()
     }
 }
 
-/// The public signature an owner view seals to: no representation graph (but a
-/// checked serializable opt-in's, its published wire contract), no representation,
-/// no carrier field ordinals and no CAP-5 implementation ceiling. The carrier
+/// The public signature an owner view seals to: no representation (a checked
+/// serializable opt-in keeps its published wire contract), no carrier field
+/// ordinals and no CAP-5 implementation ceiling. The carrier
 /// marker remains public. A view is consistent exactly when it seals to its
 /// public signature.
 pub fn sealed(view: &Signature) -> Signature {
     let mut public = view.clone();
     if let SignatureKind::Type(declaration) = &mut public.kind {
-        if declaration.serializable_check.is_none() {
-            public.types = TypeStore::default();
-        }
         declaration.representation = None;
         declaration.implementation_authority = None;
         declaration.captures = declaration.captures.as_ref().map(|_| Default::default());
@@ -315,7 +335,9 @@ pub fn sealed(view: &Signature) -> Signature {
 pub struct Encoder {
     error: Option<EncodingError>,
     pub bytes: Vec<u8>,
-    active: BTreeSet<TypeId>,
+    active: std::collections::HashSet<TypeId>,
+    /// When recording, the ids `ty` is called with outside any row.
+    roots: Option<Vec<TypeId>>,
 }
 impl Encoder {
     pub fn atom(&mut self, b: &[u8]) {
@@ -391,7 +413,7 @@ impl Encoder {
             }
         }
     }
-    fn authority(&mut self, a: &AuthoritySummary) {
+    pub(crate) fn authority(&mut self, a: &AuthoritySummary) {
         match a {
             AuthoritySummary::Unknown => self.tag("unknown"),
             AuthoritySummary::Known(a) => {
@@ -461,7 +483,12 @@ impl Encoder {
             }
         }
     }
-    pub fn ty(&mut self, id: TypeId, s: &TypeStore) -> Result<(), EncodingError> {
+    pub fn ty(&mut self, id: TypeId, s: &TypeInterner) -> Result<(), EncodingError> {
+        if self.active.is_empty()
+            && let Some(roots) = &mut self.roots
+        {
+            roots.push(id);
+        }
         let t = s.get(id).ok_or(EncodingError::MissingType(id))?;
         if !self.active.insert(id) {
             return Err(EncodingError::StructuralCycle(id));
@@ -521,7 +548,7 @@ impl Encoder {
                 arguments,
             } => {
                 self.tag("named");
-                self.path(definition);
+                self.path(definition.path());
                 self.arguments(arguments, s)?;
             }
             TypeKind::Builtin { kind, arguments } => {
@@ -559,7 +586,7 @@ impl Encoder {
                 self.tag("record");
                 self.number(fs.len() as u64);
                 for f in fs {
-                    self.tag(&f.name);
+                    self.tag(f.name.as_str());
                     self.boolean(f.growable);
                     self.ty(f.ty, s)?;
                 }
@@ -568,10 +595,10 @@ impl Encoder {
                 self.tag("variant");
                 self.number(vs.len() as u64);
                 for v in vs {
-                    self.tag(&v.name);
+                    self.tag(v.name.as_str());
                     self.number(v.fields.len() as u64);
                     for (n, t) in &v.fields {
-                        self.option(n.as_deref(), |e, n| e.tag(n));
+                        self.option(n.map(Symbol::as_str), |e, n| e.tag(n));
                         self.ty(*t, s)?;
                     }
                 }
@@ -663,7 +690,7 @@ impl Encoder {
         self.active.remove(&id);
         Ok(())
     }
-    fn arguments(&mut self, a: &[GenericArgument], s: &TypeStore) -> Result<(), EncodingError> {
+    fn arguments(&mut self, a: &[GenericArgument], s: &TypeInterner) -> Result<(), EncodingError> {
         self.number(a.len() as u64);
         for a in a {
             match a {
@@ -683,7 +710,7 @@ impl Encoder {
         }
         Ok(())
     }
-    fn optional_type(&mut self, t: Option<TypeId>, s: &TypeStore) -> Result<(), EncodingError> {
+    fn optional_type(&mut self, t: Option<TypeId>, s: &TypeInterner) -> Result<(), EncodingError> {
         self.boolean(t.is_some());
         if let Some(t) = t {
             self.ty(t, s)?;
@@ -698,7 +725,7 @@ impl Encoder {
         self.number(c.ordinal as u64);
         self.atom(&c.code_hash.0);
     }
-    pub fn function(&mut self, f: &FunctionType, s: &TypeStore) -> Result<(), EncodingError> {
+    pub fn function(&mut self, f: &FunctionType, s: &TypeInterner) -> Result<(), EncodingError> {
         // No `..`: a new field must be encoded here or excluded with a reason.
         let FunctionType {
             state_promises,
@@ -788,7 +815,10 @@ impl Encoder {
 }
 
 /// Canonical rooted type bytes, independent of its arena and declaration wrapper.
-pub fn canonical_type_encoding(store: &TypeStore, root: TypeId) -> Result<Vec<u8>, EncodingError> {
+pub fn canonical_type_encoding(
+    store: &TypeInterner,
+    root: TypeId,
+) -> Result<Vec<u8>, EncodingError> {
     let mut encoder = Encoder::default();
     encoder.tag("hirsel.type.encoding.v2");
     encoder.ty(root, store)?;
@@ -800,7 +830,7 @@ pub fn canonical_type_encoding(store: &TypeStore, root: TypeId) -> Result<Vec<u8
 
 /// Canonical specialization arguments use the same rooted type renderer.
 pub fn canonical_argument_encoding(
-    store: &TypeStore,
+    store: &TypeInterner,
     argument: &GenericArgument,
 ) -> Result<Vec<u8>, EncodingError> {
     let mut encoder = Encoder::default();

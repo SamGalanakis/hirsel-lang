@@ -1,8 +1,10 @@
 //! Compile-time execution uses the runtime interpreter; lowering receives plain values.
+use crate::memo::{DepthEvidence, Entered};
 use crate::*;
+use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
-use hirsel_syntax::{ExprId, ExprKind};
+use hirsel_syntax::{DefId, ExprId, ExprKind, ItemKind};
 use hirsel_tir::{Constant, DefinitionRef, TirProvider};
 use hirsel_tir::{Materialized, ValueKind};
 use hirsel_types::{
@@ -16,7 +18,10 @@ use std::sync::Arc;
 pub(crate) struct EvaluatedConstant {
     pub value: Materialized,
     pub substitutions: Vec<(ExprId, Materialized)>,
-    pub executed: crate::queries::ExecutionReads,
+    /// The complete reads of everything the evaluation executed or materialized.
+    pub executed: crate::memo::Reads,
+    /// Its dependency height and overflow table under the comptime limits.
+    pub depth: DepthEvidence<Span>,
 }
 fn operational(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
@@ -31,47 +36,579 @@ pub(crate) struct StagedConstant {
     pub inputs: Vec<SizeParameterRef>,
     pub signature: hirsel_types::SignatureRef,
 }
+/// One size-generic constant declaration's immutable construction input.
+/// Workers return its registration; the owning engine publishes registrations
+/// only after the task's dependencies settle.
+pub(crate) struct StagedDeclarationInput<'a> {
+    pub(crate) analyzed: &'a AnalyzedBody,
+    pub(crate) expression: ExprId,
+    pub(crate) ty: TypeId,
+    pub(crate) inputs: Vec<SizeParameterRef>,
+}
+
+#[derive(Clone)]
+pub(crate) struct StagedRegistration {
+    pub(crate) path: DefPath,
+    pub(crate) constant: StagedConstant,
+}
+
+impl StagedDeclarationInput<'_> {
+    pub(crate) fn prepare(
+        self,
+        types: &hirsel_types::TypeInterner,
+        memo: &hirsel_types::TypeMemo,
+        owner_signature: &Signature,
+    ) -> Result<StagedRegistration, QueryError> {
+        let owner = self.analyzed.typed.syntax.item.definition.clone();
+        let path = hirsel_check_protocol::body::comptime_path(
+            &owner,
+            &self.analyzed.typed.checked,
+            self.expression,
+        );
+        let mut signature = owner_signature.clone();
+        signature.definition = DefId::intern(&path);
+        signature.metadata = hirsel_types::SignatureMetadata {
+            roles: signature.metadata.roles.clone(),
+            unsafe_ffi: signature.metadata.unsafe_ffi,
+            ..Default::default()
+        };
+        let replacements: Vec<_> = self
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    *p,
+                    Size::Parameter(SizeParameterRef::bound(hirsel_types::SizeParamId(i as u32))),
+                )
+            })
+            .collect();
+        let ty = substitute_sizes_type(types, memo, self.ty, &replacements)?;
+        signature.kind = SignatureKind::Const {
+            ty,
+            generics: self
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(i, _)| hirsel_types::GenericParameter::Size {
+                    name: format!("size{i}"),
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        };
+        signature.fingerprint = hirsel_types::encoding::fingerprint(types, &signature, &[])
+            .map_err(|e| operational(format!("staged signature: {e:?}")))?;
+        Ok(StagedRegistration {
+            path,
+            constant: StagedConstant {
+                owner,
+                expression: self.expression,
+                inputs: self.inputs,
+                signature: Arc::new(signature),
+            },
+        })
+    }
+}
+
 pub(crate) fn has_staged_reads(definition: &hirsel_tir::Definition) -> bool {
     definition.bodies.iter().flat_map(|body| &body.rvalues).any(|value| {
         matches!(value, hirsel_tir::Rvalue::ReadConstant { arguments, .. } if !arguments.is_empty())
     })
 }
-struct Evaluation<'a> {
-    root: DefinitionRef,
-    engine: &'a mut QueryEngine,
+/// The definition-local inputs to lowering an evaluation. Its phase handle,
+/// interner and memo may be shared, while the lowered artifact is task-owned.
+/// It reads no QueryEngine state and publishes no registration.
+pub(crate) struct EvaluationInput<'a> {
+    pub(crate) analyzed: &'a AnalyzedBody,
+    pub(crate) staged: &'a [(ExprId, TypeId)],
+    pub(crate) signature: &'a Signature,
+    pub(crate) expression: ExprId,
+    pub(crate) child: ExprId,
+    pub(crate) ty: TypeId,
+    pub(crate) constants: &'a [(ExprId, Materialized)],
+    pub(crate) sizes: &'a [(SizeParameterRef, u64)],
 }
-impl TirProvider for Evaluation<'_> {
-    fn constant(&mut self, path: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
-        self.engine.materialize_value(path).map(Arc::new)
+
+pub(crate) struct PreparedEvaluation {
+    pub(crate) definition: hirsel_tir::Definition,
+    pub(crate) signature: Signature,
+    pub(crate) ty: TypeId,
+}
+
+impl EvaluationInput<'_> {
+    pub(crate) fn lower(
+        self,
+        types: &hirsel_types::TypeInterner,
+        memo: &hirsel_types::TypeMemo,
+        lowering: &dyn LoweringPhase,
+    ) -> Result<PreparedEvaluation, QueryError> {
+        let mut definition = lowering.lower_evaluation(
+            types,
+            memo,
+            self.analyzed,
+            self.staged,
+            self.signature,
+            self.child,
+            self.ty,
+            self.constants,
+        )?;
+        // This private initializer is a zero-input artifact, not the enclosing
+        // definition's exported body. Its result is H/J's checked expression type.
+        definition.path = DefId::intern(&hirsel_check_protocol::body::comptime_path(
+            self.signature.definition.path(),
+            &self.analyzed.typed.checked,
+            self.expression,
+        ));
+        specialize_sizes(types, memo, &mut definition, self.sizes)?;
+        let ty = definition.bodies[definition.entry.0 as usize].result;
+        let mut artifact = self.signature.clone();
+        artifact.definition = definition.path;
+        artifact.metadata = hirsel_types::SignatureMetadata {
+            roles: self.signature.metadata.roles.clone(),
+            unsafe_ffi: self.signature.metadata.unsafe_ffi,
+            ..Default::default()
+        };
+        artifact.kind = hirsel_types::SignatureKind::Const {
+            ty,
+            generics: Default::default(),
+        };
+
+        Ok(PreparedEvaluation {
+            definition,
+            signature: artifact,
+            ty,
+        })
+    }
+}
+
+/// V over an evaluation's private artifact and the frozen signature universe.
+/// Both the serial caller and S1 workers use this immutable entry point.
+pub(crate) fn validate_evaluation(
+    snapshot: &SignatureSnapshot,
+    definition: &hirsel_tir::Definition,
+    artifact: Signature,
+    verify: Verify,
+) -> Result<(), QueryError> {
+    let report = match verify {
+        Verify::On => {
+            let views =
+                snapshot.validation_with(&definition.path.path().0.package, Arc::new(artifact));
+            let _timing = timings::phase(Phase::Verify);
+            timings::count(Count::VRuns);
+            hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
+        }
+        Verify::Off => hirsel_validate::Validation::default(),
+    };
+    if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
+        return Err(error);
+    }
+    if report.violations.is_empty() {
+        Ok(())
+    } else {
+        Err(QueryError::Operational(hirsel_types::OperationalFailure {
+            operation: "compile-time TIR validation".into(),
+            message: format!("{:?}", report.violations),
+        }))
+    }
+}
+
+/// One checked, validated compile-time artifact's interpreter task. All inputs
+/// are immutable; `provider` owns its dependency requests and read recording.
+/// `runtime` belongs to this worker: nested tasks reuse its recording stack,
+/// while different workers clone RuntimeTypes (sharing only immutable views).
+/// This is the same task at jobs=1 and on a worker; it never borrows an engine.
+/// Like rustc's body-owner tasks (rustc_hir_analysis/src/lib.rs:166-220),
+/// execution returns products for publication by the caller.
+pub(crate) struct EvaluationTask<'a> {
+    pub(crate) sources: &'a hirsel_span::SourceMap,
+    pub(crate) configuration: RunConfiguration,
+    pub(crate) limits: hirsel_interp::Limits,
+    pub(crate) runtime: &'a hirsel_interp::aggregate::RuntimeTypes,
+    pub(crate) site: Span,
+    pub(crate) ty: TypeId,
+}
+
+/// Execution evidence survives failure as well as success. The caller merges
+/// `reflected` with all reads made by the dependency provider before deciding
+/// whether to cache the result; a context-dependent failure stays local.
+pub(crate) struct EvaluationProduct {
+    pub(crate) result: Result<(hirsel_interp::Value, TypeId), QueryError>,
+    pub(crate) reflected: std::collections::BTreeMap<DefPath, ContentHash>,
+    pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
+}
+
+impl EvaluationTask<'_> {
+    pub(crate) fn run(self, provider: &mut dyn TirProvider) -> EvaluationProduct {
+        let mut library =
+            match hirsel_interp::library::Library::new(&self.configuration, Default::default()) {
+                Ok(library) => library,
+                Err(error) => {
+                    return EvaluationProduct {
+                        result: Err(operational(format!("{error:?}"))),
+                        reflected: Default::default(),
+                        limit: None,
+                    };
+                }
+            };
+        self.runtime.serialization.record();
+        let execution = hirsel_interp::run_with_runtime(
+            provider,
+            self.sources,
+            &self.configuration,
+            vec![],
+            self.limits,
+            &mut library,
+            self.runtime,
+        );
+        let reflected = self.runtime.serialization.finish();
+        let mut limit_reached = None;
+        let result = (|| {
+            let execution = execution.map_err(|e| match e.error {
+                hirsel_interp::Error::Query(e) => e,
+                other => operational(format!("{other:?}")),
+            })?;
+            match execution.outcome {
+                Outcome::Returned { value, .. } => Ok((value, self.ty)),
+                Outcome::Failed(failure) => {
+                    let mut diagnostic = Diagnostic::error(
+                        const { hirsel_diag::RuleId::of("CT-1") },
+                        self.site,
+                        "compile-time evaluation failed",
+                    );
+                    diagnostic.secondary.push(hirsel_diag::Label {
+                        span: failure.site,
+                        message: format!("{}: {}", failure.rule, failure.kind),
+                    });
+                    diagnostic.notes.push(format!(
+                        "underlying failure {}: {}",
+                        failure.rule, failure.kind
+                    ));
+                    Err(QueryError::Diagnostics(vec![diagnostic]))
+                }
+                // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
+                // configured budget until #7 specifies source-event accounting.
+                Outcome::ToolingLimit(limit)
+                    if limit.kind == hirsel_tir::ToolingLimitKind::Steps =>
+                {
+                    let mut diagnostic = Diagnostic::error(
+                        const { hirsel_diag::RuleId::of("CT-1") },
+                        self.site,
+                        "compile-time evaluation exhausted its step limit",
+                    );
+                    if let Some(site) = limit.site {
+                        diagnostic.secondary.push(hirsel_diag::Label {
+                            span: site,
+                            message: "evaluation stopped here".into(),
+                        });
+                    }
+                    diagnostic
+                        .notes
+                        .push(format!("evaluation step limit: {} (spec #7)", limit.limit));
+                    limit_reached = Some(limit);
+                    Err(QueryError::Diagnostics(vec![diagnostic]))
+                }
+                Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
+                Outcome::Signaled(kind) => Err(operational(format!(
+                    "compile-time evaluation ended by {}",
+                    kind.name()
+                ))),
+                Outcome::BudgetExceeded(kind) => Err(operational(format!(
+                    "compile-time evaluation exceeded its {} budget",
+                    kind.name()
+                ))),
+                Outcome::ToolingLimit(limit) => {
+                    let error = operational_limit(&limit);
+                    limit_reached = Some(limit);
+                    Err(error)
+                }
+                Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
+                Outcome::Trapped(trap) => Err(operational(trap.to_string())),
+                Outcome::Environmental(cause) => {
+                    Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "codec-budget".into(),
+                        message: cause.to_string(),
+                    }))
+                }
+            }
+        })();
+        EvaluationProduct {
+            result,
+            reflected,
+            limit: limit_reached,
+        }
+    }
+}
+
+/// Dependency requests made while preparing one body's compile-time values.
+/// Implementations own their request stack, reads and local registrations;
+/// this algorithm never accesses a QueryEngine or publishes a shared memo.
+pub(crate) trait ComptimeValueSource {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError>;
+    fn constant(&mut self, path: &DefPath, site: Span) -> Result<Materialized, QueryError>;
+    fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError>;
+}
+
+struct EngineComptimeValues<'a>(&'a mut QueryEngine);
+impl ComptimeValueSource for EngineComptimeValues<'_> {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.0.item_signature(path).map(|output| output.value)
+    }
+    fn constant(&mut self, path: &DefPath, site: Span) -> Result<Materialized, QueryError> {
+        self.0.constant_at(path, site).map(|output| output.value)
+    }
+    fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError> {
+        self.0.evaluate_sized_value(
+            input.analyzed,
+            input.staged,
+            input.signature,
+            input.expression,
+            input.child,
+            input.ty,
+            input.constants,
+            input.sizes,
+        )
+    }
+}
+
+/// Prepare in deterministic request order: constant references first, then
+/// innermost compile-time expressions. The caller installs this body's staged
+/// declarations in its local source before entering. Serial and frozen task
+/// sources use the same repeat validation and dependency-selection algorithm.
+pub(crate) fn prepare_values(
+    types: &hirsel_types::TypeInterner,
+    analyzed: &AnalyzedBody,
+    staged: &[(ExprId, TypeId)],
+    signature: &Signature,
+    source: &mut impl ComptimeValueSource,
+) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
+    let file = &analyzed.typed.syntax;
+    let checked = &analyzed.typed.checked;
+    let mut constants = vec![];
+    for (expression, name) in &checked.resolution.expressions {
+        if let ResolvedName::Definition(path) = name {
+            if matches!(
+                source.signature(path)?.kind,
+                hirsel_types::SignatureKind::Const { ty: _, .. }
+            ) {
+                let mut value = source.constant(
+                    path,
+                    file.tree.expressions[expression.0 as usize].origin.span,
+                )?;
+                let ty = checked
+                    .expressions
+                    .iter()
+                    .find(|r| r.expression == *expression)
+                    .ok_or_else(|| operational("missing constant reference type"))?
+                    .ty;
+                // One session interner: the reference has the checked type.
+                value.root.ty = ty;
+                constants.push((*expression, value));
+            }
+        }
+    }
+    let mut expressions: Vec<_> = checked
+        .expressions
+        .iter()
+        .filter_map(|row| {
+            if let ExprKind::Comptime(child) = file.tree.expressions[row.expression.0 as usize].kind
+            {
+                Some((row.expression, child, row.ty))
+            } else {
+                None
+            }
+        })
+        .collect();
+    expressions.sort_by_key(|(id, _, _)| {
+        let s = file.tree.expressions[id.0 as usize].origin.span;
+        (s.end - s.start, s.start)
+    });
+    for (expression, child, ty) in expressions {
+        if !hirsel_check_protocol::body::comptime_inputs(types, file, checked, expression)
+            .is_empty()
+        {
+            continue;
+        }
+        let value = source.evaluate(EvaluationInput {
+            analyzed,
+            staged,
+            signature,
+            expression,
+            child,
+            ty,
+            constants: &constants,
+            sizes: &[],
+        })?;
+        constants.push((expression, value));
+    }
+    for repeat in &file.tree.repeats {
+        let Some(row) = checked
+            .expressions
+            .iter()
+            .find(|r| r.expression == repeat.sequence)
+        else {
+            continue;
+        };
+        let Some((_, value)) = constants
+            .iter()
+            .find(|(id, _)| *id == repeat.evaluated_count)
+        else {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { hirsel_diag::RuleId::of("CT-2") },
+                file.tree.expressions[repeat.count.0 as usize].origin.span,
+                "repeat length must be known at definition time",
+            )]));
+        };
+        let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
+            return Err(operational("repeat count is not an evaluated u64"));
+        };
+        let valid = match &types.row(row.ty).kind {
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Array,
+                ..
+            } => true,
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Inline,
+                arguments,
+            } => {
+                matches!(arguments.get(1), Some(GenericArgument::Size(Size::Constant(n))) if u128::from(*n) == length)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { hirsel_diag::RuleId::of("LANG-7") },
+                file.tree.expressions[repeat.expression.0 as usize]
+                    .origin
+                    .span,
+                "repeat literal requires Array or an Inline of the same length",
+            )]));
+        }
+    }
+    Ok(constants)
+}
+
+/// Reception types for hidden size-generic constants, using only immutable
+/// checked input, structural type operations and a task-local signature reader.
+pub(crate) fn prepare_staged_types(
+    types: &hirsel_types::TypeInterner,
+    analyzed: &AnalyzedBody,
+    provider: &mut dyn SignatureProvider,
+) -> Result<Vec<(ExprId, TypeId)>, QueryError> {
+    let checked = &analyzed.typed.checked;
+    let mut staged = vec![];
+    let expressions: Vec<_> = checked
+        .expressions
+        .iter()
+        .filter(|row| {
+            matches!(
+                analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
+                ExprKind::Comptime(_)
+            ) && !hirsel_check_protocol::body::comptime_inputs(
+                types,
+                &analyzed.typed.syntax,
+                checked,
+                row.expression,
+            )
+            .is_empty()
+        })
+        .map(|row| (row.expression, row.ty))
+        .collect();
+    for (expression, ty) in expressions {
+        let generics = &checked.resolution.generic_declarations;
+        let mut lookup = |d: DefId| provider.signature(d).map(Some);
+        let plain = hirsel_types::structural_property(
+            types,
+            ty,
+            hirsel_types::StructuralProperty::Plain,
+            generics,
+            &mut lookup,
+        )?;
+        let flat = hirsel_types::structural_flat(types, ty, generics, &mut lookup)?;
+        let protected = matches!(
+            types.row(ty).kind,
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Shared,
+                ..
+            }
+        );
+        let shared = if plain || flat || protected {
+            ty
+        } else {
+            let mut row = types.row(ty).clone();
+            row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+            let root = types.intern(row.clone());
+            row.modes.sendability =
+                hirsel_types::sendability_after_sharing(types, root, generics, &mut lookup)?;
+            types.intern(row)
+        };
+        staged.push((expression, shared));
+    }
+    Ok(staged)
+}
+
+fn operational_limit(limit: &hirsel_tir::ToolingLimit) -> QueryError {
+    QueryError::Operational(hirsel_types::OperationalFailure {
+        operation: "compile-time tooling limit".into(),
+        message: format!("{limit:?}"),
+    })
+}
+
+/// Serial request adapter for the same read/product bridge S1 workers use.
+/// Only this adapter borrows an engine; evaluation itself sees immutable TIR
+/// plus a task-local dependency source.
+struct EngineDependencies<'a>(&'a mut QueryEngine);
+impl EngineDependencies<'_> {
+    fn recorded<T>(
+        &mut self,
+        request: impl FnOnce(&mut QueryEngine) -> Result<T, QueryError>,
+    ) -> crate::queries::s1::DependencyProduct<T> {
+        self.0.execution_stack.push(ReadsBuilder::new());
+        let result = request(self.0);
+        let reads = self
+            .0
+            .execution_stack
+            .pop()
+            .expect("dependency read frame")
+            .finish();
+        match reads {
+            Ok(reads) => crate::queries::s1::DependencyProduct { result, reads },
+            Err(_) => crate::queries::s1::DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            },
+        }
+    }
+}
+impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
+    fn constant(
+        &mut self,
+        path: &DefPath,
+    ) -> crate::queries::s1::DependencyProduct<hirsel_tir::MaterializedRef> {
+        self.recorded(|engine| engine.materialize_value(path).map(Arc::new))
     }
     fn constant_instance(
         &mut self,
         path: &DefPath,
         arguments: &[u64],
-    ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
-        self.engine.constant_instance(path, arguments)
-    }
-    // CT-1 evaluates only the explicitly requested dependency closure.
-    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
-        Ok(vec![])
+    ) -> crate::queries::s1::DependencyProduct<hirsel_tir::MaterializedRef> {
+        self.recorded(|engine| engine.constant_instance(path, arguments))
     }
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
-    ) -> Result<Option<DefPath>, QueryError> {
-        self.engine.resolve_instance(path, types, arguments)
+    ) -> crate::queries::s1::DependencyProduct<Option<DefPath>> {
+        self.recorded(|engine| engine.resolve_instance(path, arguments))
     }
-
-    fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        self.engine.read_implementation(path);
-        if *path == self.root.path {
-            Ok(self.root.clone())
-        } else {
-            let definition = self.engine.definition(path)?;
-            let signature = self.engine.item_signature(path)?.value;
-            let entry = match &self.engine.adapters.lowering {
+    fn definition(
+        &mut self,
+        path: &DefPath,
+    ) -> crate::queries::s1::DependencyProduct<DefinitionRef> {
+        self.recorded(|engine| {
+            engine.read_implementation(path);
+            let definition = engine.definition(path)?;
+            let signature = engine.item_signature(path)?.value;
+            let entry = match &engine.adapters.lowering {
                 Some(lowering) => lowering.entry_body(),
                 None => return Err(QueryError::NotImplemented),
             };
@@ -83,10 +620,33 @@ impl TirProvider for Evaluation<'_> {
                 ));
             }
             Ok(definition)
-        }
+        })
     }
 }
 impl QueryEngine {
+    /// Complete execution evidence of a retained constant materialization.
+    /// This includes lookup, citation, private-view and transitive body reads;
+    /// graph memo counters alone cannot establish that closure.
+    pub fn materialization_reads(&self, constant: &DefPath) -> Option<&crate::Reads> {
+        self.constant_values
+            .get(constant)
+            .map(|value| &value.executed)
+    }
+    /// The views `constant`'s retained evaluation reflected or decoded
+    /// (`Representation(d)`), each with the digest it saw.
+    pub fn representation_reads(&self, constant: &DefPath) -> Option<Vec<(DefPath, ContentHash)>> {
+        let value = self.constant_values.get(constant)?;
+        Some(
+            value
+                .executed
+                .iter()
+                .filter_map(|(read, digest)| match read {
+                    crate::memo::ReadKey::Representation(d) => Some((d.path().clone(), *digest)),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
     /// Evaluate a declared constant in this source snapshot. Implementation changes
     /// invalidate materializations, even when every exported signature is unchanged.
     pub fn materialize_constant(&mut self, path: &DefPath) -> Result<Constant, QueryError> {
@@ -105,10 +665,10 @@ impl QueryEngine {
         path: &DefPath,
     ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(value) = self.prechecked_constant(path)? {
+        if let Some(value) = self.image_constant(path) {
             return Ok(value);
         }
-        if self.comptime_stack.is_empty() {
+        if self.s1.is_empty() {
             self.last_comptime_limit = None;
         }
         if let Some(value) = self.registry_dictionary_value(path)? {
@@ -116,6 +676,7 @@ impl QueryEngine {
                 value,
                 substitutions: vec![],
                 executed: Default::default(),
+                depth: DepthEvidence::leaf(self.depth_limit()),
             });
         }
         let syntax = self.parse_definition(path)?.value;
@@ -126,7 +687,19 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
-        if let Some(value) = self.prechecked_constant(path)? {
+        let result = self.constant_query(path, reference);
+        let released = self.release_batch_front(path);
+        result.and_then(|output| released.map(|()| output))
+    }
+    fn constant_query(
+        &mut self,
+        path: &DefPath,
+        reference: Span,
+    ) -> Result<EvaluatedConstant, QueryError> {
+        if let Some(value) = self.image_constant(path) {
+            self.depth_admit(&value.depth, reference)?;
+            self.merge_execution(&value.executed);
+            self.depth_requested(&value.depth, reference);
             return Ok(value);
         }
         if let Some(value) = self.registry_dictionary_value(path)? {
@@ -134,26 +707,24 @@ impl QueryEngine {
                 value,
                 substitutions: vec![],
                 executed: Default::default(),
+                depth: DepthEvidence::leaf(self.depth_limit()),
             });
         }
-        let state = self
-            .adapters
-            .compiler_state
-            .clone()
-            .ok_or(QueryError::NotImplemented)?;
-        let cached = state.borrow().constant_values.get(path).cloned();
+        let cached = self.constant_values.get(path).cloned();
         if let Some(value) = cached {
-            if self.executions_valid(&value.executed) {
-                self.inherit_execution(&value.executed);
+            if self.execution_valid(path, &value.executed) {
+                self.depth_admit(&value.depth, reference)?;
+                self.merge_execution(&value.executed);
+                self.depth_requested(&value.depth, reference);
                 return Ok(value);
             }
-            state.borrow_mut().constant_values.remove(path);
+            self.constant_values.remove(path);
         }
-        if let Some(start) = self.comptime_stack.iter().position(|(p, _)| p == path) {
-            let mut diagnostics: Vec<_> = self.comptime_stack[start + 1..]
-                .iter()
-                .map(|(_, s)| *s)
-                .chain([reference])
+        if let Some(start) = self.s1.on_stack(path) {
+            self.s1.fail_cycle();
+            let mut diagnostics: Vec<_> = self
+                .s1
+                .cycle_sites(start, reference)
                 .map(|site| {
                     Diagnostic::error(
                         const { hirsel_diag::RuleId::of("CT-4") },
@@ -166,16 +737,12 @@ impl QueryEngine {
             return Err(QueryError::Diagnostics(vec![diagnostics.remove(0)]));
         }
         // Keep recursive compiler queries bounded separately from the interpreter's guard.
-        let dependency_depth = self.comptime_limits.call_depth.min(32);
-        if self.comptime_stack.len() >= dependency_depth {
-            let limit = hirsel_tir::ToolingLimit {
-                kind: hirsel_tir::ToolingLimitKind::CallDepth,
-                limit: dependency_depth as u64,
-                site: Some(reference),
-            };
-            return Err(self.comptime_limit(limit));
+        self.depth_admit(&DepthEvidence::leaf(self.depth_limit()), reference)?;
+        if self.s1.enter(path.clone(), reference) == Entered::Settled {
+            // Another worker finished it: its success is in the memo, or this
+            // stack evaluates it again.
+            return self.constant_at(path, reference);
         }
-        self.comptime_stack.push((path.clone(), reference));
         self.execution_stack.push(Default::default());
         self.read_implementation(path);
         let result = (|| {
@@ -190,7 +757,7 @@ impl QueryEngine {
             let hirsel_syntax::ItemKind::Const { value, .. } = body.typed.syntax.item.kind else {
                 return Err(operational("constant artifact has a non-constant owner"));
             };
-            let constants = self.prepare_values(body, &signature)?;
+            let constants = self.prepare_values(body, &[], &signature)?;
             let constant = if let Some((_, constant)) = constants.iter().find(|(e, _)| *e == value)
             {
                 constant.clone()
@@ -203,167 +770,149 @@ impl QueryEngine {
                     .find(|r| r.expression == value)
                     .ok_or_else(|| operational("missing constant expression type"))?
                     .ty;
-                self.evaluate_value(body, &signature, value, value, ty, &constants)?
+                self.evaluate_value(body, &[], &signature, value, value, ty, &constants)?
             };
-            let evaluated = EvaluatedConstant {
+            let executed = self
+                .execution_stack
+                .last()
+                .expect("constant execution frame")
+                .clone()
+                .finish()
+                .map_err(|_| QueryError::NotImplemented)?;
+            Ok(EvaluatedConstant {
                 value: constant,
                 substitutions: constants,
-                executed: self
-                    .execution_stack
-                    .last()
-                    .expect("constant execution frame")
-                    .clone(),
-            };
-            state
-                .borrow_mut()
-                .constant_values
-                .insert(path.clone(), evaluated.clone());
-            Ok(evaluated)
+                executed,
+                depth: self.depth_composed(true),
+            })
         })();
-        self.comptime_stack.pop();
         self.execution_stack.pop();
+        if let Ok(evaluated) = &result {
+            self.constant_values.insert(path.clone(), evaluated.clone());
+        }
+        self.s1.leave();
+        if let Ok(evaluated) = &result {
+            self.depth_requested(&evaluated.depth, reference);
+        }
         result
     }
-    pub(crate) fn prepare_comptime(
+    /// The compile-time dependency limit L.
+    pub(crate) fn depth_limit(&self) -> u32 {
+        crate::memo::dependency_limit(self.comptime_limits.call_depth)
+    }
+    /// Requests a result with `evidence` at `site` from the current stack
+    /// length: the cache-free evaluation's verdict, whether the result was
+    /// computed, stored or came from another worker. A leaf's evidence decides
+    /// only the zero-budget case, before computing.
+    pub(crate) fn depth_admit(
         &mut self,
-        analyzed: &mut AnalyzedBody,
-        signature: &Signature,
+        evidence: &DepthEvidence<Span>,
+        site: Span,
     ) -> Result<(), QueryError> {
+        self.s1.admit(evidence, site).map_err(|site| {
+            self.comptime_limit(hirsel_tir::ToolingLimit {
+                kind: hirsel_tir::ToolingLimitKind::CallDepth,
+                limit: evidence.limit() as u64,
+                site: Some(site),
+            })
+        })
+    }
+    /// Replay a lowering's requests at this caller's depth. Lowering itself
+    /// adds no S1 frame; its cached substitutions still consume dependency
+    /// budget exactly where their source evaluation would have done so.
+    pub(crate) fn depth_replay_requests(
+        &mut self,
+        evidence: &DepthEvidence<Span>,
+    ) -> Result<(), QueryError> {
+        self.s1.replay_requests(evidence).map_err(|site| {
+            self.comptime_limit(hirsel_tir::ToolingLimit {
+                kind: hirsel_tir::ToolingLimitKind::CallDepth,
+                limit: evidence.limit() as u64,
+                site: Some(site),
+            })
+        })
+    }
+    /// Records a completed request in the requester's frame, in request order.
+    pub(crate) fn depth_requested(&mut self, evidence: &DepthEvidence<Span>, site: Span) {
+        self.s1.requested(evidence, site);
+    }
+    /// The evidence of the evaluation whose frame is on top; `bounded` for a
+    /// constant or staged evaluation, not for a generator.
+    pub(crate) fn depth_composed(&self, bounded: bool) -> DepthEvidence<Span> {
+        self.s1.composed(self.depth_limit(), bounded)
+    }
+    /// The compile-time products lowering `analyzed` reads.
+    pub fn prepare_comptime(
+        &mut self,
+        analyzed: &AnalyzedBody,
+        signature: &Signature,
+    ) -> Result<Comptime, QueryError> {
         self.prepare_materialization_environment();
-        self.prepare_staged_types(analyzed)?;
-        if self.adapters.compiler_state.is_none() {
-            return Ok(());
+        let staged = self.prepare_staged_types(analyzed)?;
+        if self.adapters.phases.is_none() {
+            return Ok(Comptime {
+                materialized: vec![],
+                staged,
+            });
         }
-        if matches!(
+        let materialized = if matches!(
             signature.kind,
             hirsel_types::SignatureKind::Const { ty: _, .. }
         ) {
-            analyzed.materialized = self.evaluate_constant(&signature.definition)?.substitutions;
-            Ok(())
+            self.evaluate_constant(signature.definition.path())?
+                .substitutions
         } else {
-            analyzed.materialized = self.prepare_values(analyzed, signature)?;
-            Ok(())
-        }
+            self.prepare_values(analyzed, &staged, signature)?
+        };
+        Ok(Comptime {
+            materialized,
+            staged,
+        })
     }
     pub(crate) fn prepare_values(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
     ) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
-        let file = &analyzed.typed.syntax;
-        let checked = &analyzed.typed.checked;
-        let mut constants = vec![];
         self.register_staged(analyzed)?;
-        for (expression, name) in &checked.resolution.expressions {
-            if let ResolvedName::Definition(path) = name {
-                if matches!(
-                    self.item_signature(path)?.value.kind,
-                    hirsel_types::SignatureKind::Const { ty: _, .. }
-                ) {
-                    let mut value = self
-                        .constant_at(
-                            path,
-                            file.tree.expressions[expression.0 as usize].origin.span,
-                        )?
-                        .value;
-                    let ty = checked
-                        .expressions
-                        .iter()
-                        .find(|r| r.expression == *expression)
-                        .ok_or_else(|| operational("missing constant reference type"))?
-                        .ty;
-                    value.root.ty = hirsel_types::import_type(&checked.types, ty, &mut value.types)
-                        .map_err(|e| operational(format!("constant reference import: {e:?}")))?;
-                    constants.push((*expression, value));
-                }
-            }
-        }
-        let mut expressions: Vec<_> = checked
-            .expressions
-            .iter()
-            .filter_map(|row| {
-                if let ExprKind::Comptime(child) =
-                    file.tree.expressions[row.expression.0 as usize].kind
-                {
-                    Some((row.expression, child, row.ty))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        expressions.sort_by_key(|(id, _, _)| {
-            let s = file.tree.expressions[id.0 as usize].origin.span;
-            (s.end - s.start, s.start)
-        });
-        for (expression, child, ty) in expressions {
-            if !hirsel_check_protocol::body::comptime_inputs(file, checked, expression).is_empty() {
-                continue;
-            }
-            let value =
-                self.evaluate_value(analyzed, signature, expression, child, ty, &constants)?;
-            constants.push((expression, value));
-        }
-        for repeat in &file.tree.repeats {
-            let Some(row) = checked
-                .expressions
-                .iter()
-                .find(|r| r.expression == repeat.sequence)
-            else {
-                continue;
-            };
-            let Some((_, value)) = constants
-                .iter()
-                .find(|(id, _)| *id == repeat.evaluated_count)
-            else {
-                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-2") },
-                    file.tree.expressions[repeat.count.0 as usize].origin.span,
-                    "repeat length must be known at definition time",
-                )]));
-            };
-            let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
-                return Err(operational("repeat count is not an evaluated u64"));
-            };
-            let valid = match &checked.types.get(row.ty).unwrap().kind {
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Array,
-                    ..
-                } => true,
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Inline,
-                    arguments,
-                } => {
-                    matches!(arguments.get(1), Some(GenericArgument::Size(Size::Constant(n))) if u128::from(*n) == length)
-                }
-                _ => false,
-            };
-            if !valid {
-                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("LANG-7") },
-                    file.tree.expressions[repeat.expression.0 as usize]
-                        .origin
-                        .span,
-                    "repeat literal requires Array or an Inline of the same length",
-                )]));
-            }
-        }
-        Ok(constants)
+        let types = self.types.clone();
+        prepare_values(
+            &types,
+            analyzed,
+            staged,
+            signature,
+            &mut EngineComptimeValues(self),
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_value(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
         ty: TypeId,
         constants: &[(ExprId, Materialized)],
     ) -> Result<Materialized, QueryError> {
-        self.evaluate_sized_value(analyzed, signature, expression, child, ty, constants, &[])
+        self.evaluate_sized_value(
+            analyzed,
+            staged,
+            signature,
+            expression,
+            child,
+            ty,
+            constants,
+            &[],
+        )
     }
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_sized_value(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
@@ -371,215 +920,81 @@ impl QueryEngine {
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
     ) -> Result<Materialized, QueryError> {
-        let (value, types, ty) =
-            self.run_evaluation(analyzed, signature, expression, child, ty, constants, sizes)?;
+        let (value, ty) = self.run_evaluation(
+            analyzed, staged, signature, expression, child, ty, constants, sizes,
+        )?;
         self.reify_value(
-            &signature.definition.0.package,
+            &signature.definition.path().0.package,
             value,
-            &types,
             ty,
             analyzed.typed.syntax.tree.expressions[expression.0 as usize]
                 .origin
                 .span,
         )
     }
-    /// Run one checked compile-time expression to its interpreter value, with
-    /// its TIR type store and result type; evaluation failures are CT-1.
+    /// Run one checked compile-time expression to its interpreter value and
+    /// result type; evaluation failures are CT-1.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_evaluation(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
         ty: TypeId,
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
-    ) -> Result<(hirsel_interp::Value, hirsel_types::TypeStore, TypeId), QueryError> {
+    ) -> Result<(hirsel_interp::Value, TypeId), QueryError> {
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Comptime);
-        self.adapters
-            .compiler_state
-            .as_ref()
-            .ok_or(QueryError::NotImplemented)?;
         let file = &analyzed.typed.syntax;
         let lowering = self
             .adapters
             .lowering
             .clone()
             .ok_or(QueryError::NotImplemented)?;
-        let mut definition =
-            lowering.lower_evaluation(analyzed, signature, child, ty, constants)?;
-        // This private initializer is a zero-input artifact, not the enclosing
-        // definition's exported body. Its result is H/J's checked expression type.
-        definition.path = hirsel_check_protocol::body::comptime_path(
-            &signature.definition,
-            &analyzed.typed.checked,
+        let prepared = EvaluationInput {
+            analyzed,
+            staged,
+            signature,
             expression,
-        );
-        specialize_sizes(&mut definition, sizes)?;
-        let ty = definition.bodies[definition.entry.0 as usize].result;
-        let types = definition.types.clone();
-        let mut artifact = signature.clone();
-        artifact.definition = definition.path.clone();
-        artifact.metadata = hirsel_types::SignatureMetadata {
-            roles: signature.metadata.roles.clone(),
-            unsafe_ffi: signature.metadata.unsafe_ffi,
-            ..Default::default()
-        };
-        artifact.types = types.clone();
-        artifact.kind = hirsel_types::SignatureKind::Const {
-            ty: ty,
-            generics: Default::default(),
-        };
-        self.validate_comptime(&definition, artifact)?;
+            child,
+            ty,
+            constants,
+            sizes,
+        }
+        .lower(&self.types, &self.memo, &*lowering)?;
+        let snapshot = (self.verify == Verify::On).then(|| self.signature_snapshot());
+        let validated = crate::queries::s1::ValidatedEvaluation::new(
+            prepared,
+            snapshot.as_deref(),
+            self.verify,
+            file.tree.expressions[expression.0 as usize].origin.span,
+        )?;
         let sources = self.sources.clone();
-        let configuration = RunConfiguration {
-            entry: definition.path.clone(),
-            hash_seed: 0,
-            inputs: vec![],
-        };
         let limits = self.comptime_limits;
         let runtime = self.comptime_runtime_types()?;
-        let mut library = hirsel_interp::library::Library::new(&configuration, Default::default())
-            .map_err(|e| operational(format!("{e:?}")))?;
-        let execution = hirsel_interp::run_with_runtime(
-            &mut Evaluation {
-                root: Arc::new(definition),
-                engine: self,
-            },
-            &sources,
-            &configuration,
-            vec![],
-            limits,
-            &mut library,
-            &runtime,
-        )
-        .map_err(|e| match e.error {
-            hirsel_interp::Error::Query(e) => e,
-            other => operational(format!("{other:?}")),
-        })?;
-        match execution.outcome {
-            Outcome::Returned { value, .. } => Ok((value, types, ty)),
-            Outcome::Failed(failure) => {
-                let mut diagnostic = Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-1") },
-                    file.tree.expressions[expression.0 as usize].origin.span,
-                    "compile-time evaluation failed",
-                );
-                diagnostic.secondary.push(hirsel_diag::Label {
-                    span: failure.site,
-                    message: format!("{}: {}", failure.rule, failure.kind),
-                });
-                diagnostic.notes.push(format!(
-                    "underlying failure {}: {}",
-                    failure.rule, failure.kind
-                ));
-                Err(QueryError::Diagnostics(vec![diagnostic]))
-            }
-            // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
-            // configured budget until #7 specifies source-event accounting.
-            Outcome::ToolingLimit(limit) if limit.kind == hirsel_tir::ToolingLimitKind::Steps => {
-                let mut diagnostic = Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-1") },
-                    file.tree.expressions[expression.0 as usize].origin.span,
-                    "compile-time evaluation exhausted its step limit",
-                );
-                if let Some(site) = limit.site {
-                    diagnostic.secondary.push(hirsel_diag::Label {
-                        span: site,
-                        message: "evaluation stopped here".into(),
-                    });
-                }
-                diagnostic
-                    .notes
-                    .push(format!("evaluation step limit: {} (spec #7)", limit.limit));
-                self.last_comptime_limit = Some(limit);
-                Err(QueryError::Diagnostics(vec![diagnostic]))
-            }
-            Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
-            Outcome::Signaled(kind) => Err(operational(format!(
-                "compile-time evaluation ended by {}",
-                kind.name()
-            ))),
-            Outcome::BudgetExceeded(kind) => Err(operational(format!(
-                "compile-time evaluation exceeded its {} budget",
-                kind.name()
-            ))),
-            Outcome::ToolingLimit(limit) => Err(self.comptime_limit(limit)),
-            Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
-            Outcome::Trapped(trap) => Err(operational(trap.to_string())),
-            Outcome::Environmental(cause) => {
-                Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "codec-budget".into(),
-                    message: cause.to_string(),
-                }))
-            }
+        let product = validated.run(&sources, limits, &runtime, &mut EngineDependencies(self));
+        self.merge_execution(&product.value.reads);
+        if let Some(limit) = product.limit {
+            self.last_comptime_limit = Some(limit);
         }
+        product.value.result
     }
     pub(crate) fn comptime_limit(&mut self, limit: hirsel_tir::ToolingLimit) -> QueryError {
         self.last_comptime_limit = Some(limit.clone());
-        QueryError::Operational(hirsel_types::OperationalFailure {
-            operation: "compile-time tooling limit".into(),
-            message: format!("{limit:?}"),
-        })
+        operational_limit(&limit)
     }
 }
 
 impl QueryEngine {
-    fn prepare_staged_types(&mut self, analyzed: &mut AnalyzedBody) -> Result<(), QueryError> {
-        let checked = &mut analyzed.typed.checked;
-        analyzed.staged.clear();
-        let expressions: Vec<_> = checked
-            .expressions
-            .iter()
-            .filter(|row| {
-                matches!(
-                    analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
-                    ExprKind::Comptime(_)
-                ) && !hirsel_check_protocol::body::comptime_inputs(
-                    &analyzed.typed.syntax,
-                    checked,
-                    row.expression,
-                )
-                .is_empty()
-            })
-            .map(|row| (row.expression, row.ty))
-            .collect();
-        for (expression, ty) in expressions {
-            let generics = &checked.resolution.generic_declarations;
-            let mut lookup = |path: &DefPath| self.signature(path).map(Some);
-            let plain = hirsel_types::structural_property(
-                &checked.types,
-                ty,
-                hirsel_types::StructuralProperty::Plain,
-                generics,
-                &mut lookup,
-            )?;
-            let flat = hirsel_types::structural_flat(&checked.types, ty, generics, &mut lookup)?;
-            let protected = matches!(
-                checked.types.get(ty).unwrap().kind,
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Shared,
-                    ..
-                }
-            );
-            let shared = if plain || flat || protected {
-                ty
-            } else {
-                let mut row = checked.types.get(ty).unwrap().clone();
-                row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-                let root = checked.types.push(row.clone());
-                row.modes.sendability = hirsel_types::sendability_after_sharing(
-                    &checked.types,
-                    root,
-                    generics,
-                    &mut lookup,
-                )?;
-                checked.types.push(row)
-            };
-            analyzed.staged.push((expression, shared));
-        }
-        Ok(())
+    /// The shared reception type of each hidden size-generic constant in `analyzed`.
+    fn prepare_staged_types(
+        &mut self,
+        analyzed: &AnalyzedBody,
+    ) -> Result<Vec<(ExprId, TypeId)>, QueryError> {
+        let types = self.types.clone();
+        prepare_staged_types(&types, analyzed, self)
     }
     pub(crate) fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let typed = &analyzed.typed;
@@ -591,6 +1006,7 @@ impl QueryEngine {
                 continue;
             }
             let inputs = hirsel_check_protocol::body::comptime_inputs(
+                &self.types,
                 &typed.syntax,
                 &typed.checked,
                 row.expression,
@@ -598,113 +1014,110 @@ impl QueryEngine {
             if inputs.is_empty() {
                 continue;
             }
-            let owner = typed.syntax.item.definition.clone();
-            let path =
-                hirsel_check_protocol::body::comptime_path(&owner, &typed.checked, row.expression);
-            let mut signature = self.item_signature(&owner)?.value.as_ref().clone();
-            signature.definition = path.clone();
-            signature.metadata = hirsel_types::SignatureMetadata {
-                roles: signature.metadata.roles.clone(),
-                unsafe_ffi: signature.metadata.unsafe_ffi,
-                ..Default::default()
-            };
-            signature.types = typed.checked.types.clone();
-            let replacements: Vec<_> = inputs
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    (
-                        *p,
-                        Size::Parameter(SizeParameterRef::bound(hirsel_types::SizeParamId(
-                            i as u32,
-                        ))),
-                    )
-                })
-                .collect();
-            let ty = substitute_sizes_type(&mut signature.types, row.ty, &replacements)?;
-            signature.kind = SignatureKind::Const {
-                ty,
-                generics: inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| hirsel_types::GenericParameter::Size {
-                        name: format!("size{i}"),
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
-            };
-            signature.fingerprint = hirsel_types::encoding::fingerprint(&signature, &[])
-                .map_err(|e| operational(format!("staged signature: {e:?}")))?;
-            if self.staged_constants.get(&path).is_some_and(|old| {
-                old.signature.fingerprint == signature.fingerprint && old.inputs == inputs
-            }) {
-                continue;
+            let signature = self.item_signature(&typed.syntax.item.definition)?.value;
+            let registration = StagedDeclarationInput {
+                analyzed,
+                expression: row.expression,
+                ty: row.ty,
+                inputs,
             }
-            self.invalidate_signature_input();
-            self.staged_constants.insert(
-                path,
-                StagedConstant {
-                    owner,
-                    expression: row.expression,
-                    inputs,
-                    signature: Arc::new(signature),
-                },
-            );
+            .prepare(&self.types, &self.memo, &signature)?;
+            self.install_staged(registration);
         }
         Ok(())
+    }
+    pub(crate) fn install_staged(&mut self, registration: StagedRegistration) {
+        let StagedRegistration { path, constant } = registration;
+        if self.staged_constants.get(&path).is_some_and(|old| {
+            old.signature.fingerprint == constant.signature.fingerprint
+                && old.inputs == constant.inputs
+        }) {
+            return;
+        }
+        self.retire_snapshot();
+        self.staged_constants.insert(path, constant);
     }
     pub(crate) fn materialize_staged(
         &mut self,
         path: &DefPath,
         arguments: &[u64],
     ) -> Result<EvaluatedConstant, QueryError> {
+        let owner = self
+            .staged_constants
+            .get(path)
+            .map(|constant| constant.owner.clone());
+        let result = self.materialize_staged_query(path, arguments);
+        let released = owner
+            .as_ref()
+            .map_or(Ok(()), |owner| self.release_batch_front(owner));
+        result.and_then(|output| released.map(|()| output))
+    }
+    fn materialize_staged_query(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
-        if self.comptime_stack.is_empty() {
+        if self.s1.is_empty() {
             self.last_comptime_limit = None;
         }
         let key = (path.clone(), arguments.to_vec());
-        if let Some(value) = self.staged_values.get(&key).cloned() {
-            if self.executions_valid(&value.executed) {
-                self.inherit_execution(&value.executed);
-                return Ok(value);
-            }
-        }
+        let cached = self.staged_values.get(&key).cloned();
         let constant = self
             .staged_constants
             .get(path)
             .cloned()
             .ok_or_else(|| operational("missing staged constant declaration"))?;
+        // The staged declaration is part of execution, even on a value hit.
+        // If indexing retires it, enclosing cached constants/lowerings must
+        // miss and reconstruct the declaration and its selected instances.
+        self.merge_execution(
+            &crate::memo::Reads::from_vec(vec![(
+                crate::memo::ReadKey::Signature(DefId::intern(path)),
+                crate::queries::memos::signature_value(Some(constant.signature.fingerprint)),
+            )])
+            .expect("one staged declaration"),
+        );
         if constant.inputs.len() != arguments.len() {
             return Err(operational("staged constant arity"));
         }
-        let mut body = (*self.mode_query(&constant.owner)?).clone();
-        self.prepare_staged_types(&mut body.value)?;
-        let file = &body.value.typed.syntax;
-        let site = file.tree.expressions[constant.expression.0 as usize]
+        let site = self
+            .parse_definition(&constant.owner)?
+            .value
+            .tree
+            .expressions[constant.expression.0 as usize]
             .origin
             .span;
+        if let Some(value) = cached {
+            if self.execution_valid(&constant.owner, &value.executed) {
+                self.depth_admit(&value.depth, site)?;
+                self.merge_execution(&value.executed);
+                self.depth_requested(&value.depth, site);
+                return Ok(value);
+            }
+        }
+        let body = self.mode_query(&constant.owner)?;
+        let staged = self.prepare_staged_types(&body.value)?;
+        let file = &body.value.typed.syntax;
         let instance = hirsel_tir::constant_instance_path(path, arguments);
-        if self.comptime_stack.iter().any(|(p, _)| *p == instance) {
+        if self.s1.on_stack(&instance).is_some() {
+            self.s1.fail_cycle();
             return Err(QueryError::Diagnostics(vec![Diagnostic::error(
                 const { hirsel_diag::RuleId::of("CT-4") },
                 site,
                 "compile-time dependency cycle",
             )]));
         }
-        if self.comptime_stack.len() >= self.comptime_limits.call_depth.min(32) {
-            return Err(self.comptime_limit(hirsel_tir::ToolingLimit {
-                kind: hirsel_tir::ToolingLimitKind::CallDepth,
-                limit: self.comptime_limits.call_depth.min(32) as u64,
-                site: Some(site),
-            }));
+        self.depth_admit(&DepthEvidence::leaf(self.depth_limit()), site)?;
+        if self.s1.enter(instance, site) == Entered::Settled {
+            return self.materialize_staged(path, arguments);
         }
-        self.comptime_stack.push((instance, site));
         self.execution_stack.push(Default::default());
         self.read_implementation(&constant.owner);
         self.read_execution_signatures(&body.dependencies);
         let result = (|| {
             let signature = self.item_signature(&constant.owner)?.value;
-            let constants = self.prepare_values(&body.value, &signature)?;
+            let constants = self.prepare_values(&body.value, &staged, &signature)?;
             let ExprKind::Comptime(child) =
                 file.tree.expressions[constant.expression.0 as usize].kind
             else {
@@ -727,6 +1140,7 @@ impl QueryEngine {
                 .collect();
             let value = self.evaluate_sized_value(
                 &body.value,
+                &staged,
                 &signature,
                 constant.expression,
                 child,
@@ -737,21 +1151,32 @@ impl QueryEngine {
             Ok(EvaluatedConstant {
                 value,
                 substitutions: constants,
-                executed: self.execution_stack.last().unwrap().clone(),
+                executed: self
+                    .execution_stack
+                    .last()
+                    .unwrap()
+                    .clone()
+                    .finish()
+                    .map_err(|_| QueryError::NotImplemented)?,
+                depth: self.depth_composed(true),
             })
         })();
-        self.comptime_stack.pop();
-        let executed = self.execution_stack.pop().unwrap();
-        self.inherit_execution(&executed);
+        self.execution_stack.pop();
         if let Ok(value) = &result {
             self.staged_values.insert(key, value.clone());
+        }
+        self.s1.leave();
+        if let Ok(value) = &result {
+            self.merge_execution(&value.executed);
+            self.depth_requested(&value.depth, site);
         }
         result
     }
 }
 
 fn substitute_sizes_type(
-    store: &mut hirsel_types::TypeStore,
+    t: &hirsel_types::TypeInterner,
+    m: &hirsel_types::TypeMemo,
     mut ty: TypeId,
     replacements: &[(SizeParameterRef, Size)],
 ) -> Result<TypeId, QueryError> {
@@ -786,10 +1211,11 @@ fn substitute_sizes_type(
                 )
             })
             .collect();
-        ty = hirsel_types::substitute_type_in_place(
-            store,
+        ty = hirsel_types::substitute(
+            t,
+            m,
             ty,
-            hirsel_types::Substitution {
+            &hirsel_types::Substitution {
                 binder: Some(scope),
                 arguments: &arguments,
                 ..Default::default()
@@ -803,6 +1229,8 @@ fn substitute_sizes_type(
 /// Specialize the private evaluation artifact, leaving published generic TIR
 /// shared. Only its selected size inputs change; ordinary calls still execute.
 fn specialize_sizes(
+    t: &hirsel_types::TypeInterner,
+    m: &hirsel_types::TypeMemo,
     definition: &mut hirsel_tir::Definition,
     sizes: &[(SizeParameterRef, u64)],
 ) -> Result<(), QueryError> {
@@ -813,12 +1241,12 @@ fn specialize_sizes(
         .iter()
         .map(|(p, n)| (*p, Size::Constant(*n)))
         .collect();
-    let mut memo = std::collections::BTreeMap::new();
+    let mut memo = std::collections::HashMap::new();
     let mut ty = |root: &mut TypeId| -> Result<(), QueryError> {
         *root = match memo.get(root) {
             Some(mapped) => *mapped,
             None => {
-                let mapped = substitute_sizes_type(&mut definition.types, *root, &replacements)?;
+                let mapped = substitute_sizes_type(t, m, *root, &replacements)?;
                 memo.insert(*root, mapped);
                 mapped
             }
@@ -841,7 +1269,7 @@ fn specialize_sizes(
         }
         Ok(())
     };
-    // Keep one memo for every rooted graph transported into the private store.
+    // Keep one memo for every rooted graph.
     for body in &mut definition.bodies {
         // These roots use the same substitution as call/type-directed operands.
         for root in body
@@ -891,46 +1319,47 @@ fn specialize_sizes(
             }
         }
     }
+    // The private artifact's persisted table is the closure of its new roots.
+    definition.types = hirsel_tir::definition_types(t, definition);
     Ok(())
 }
 
-fn source_site(syntax: &hirsel_syntax::ItemSyntax, site: NameSite) -> Span {
-    let tree = &syntax.tree;
-    match site {
-        NameSite::Item => syntax.item.origin.span,
-        NameSite::Statement(id) => tree.statements[id.0 as usize].origin.span,
-        NameSite::Expression(id) => tree.expressions[id.0 as usize].origin.span,
-        NameSite::Pattern(id) => tree.patterns[id.0 as usize].origin.span,
-        NameSite::Type(id) => tree.types[id.0 as usize].origin.span,
-    }
-}
-
 impl QueryEngine {
-    /// Select staged constants from checked call actuals, after signatures and
-    /// GEN-5. Local generic frames retain their enclosing lexical size bindings.
-    /// Calls inside comptime are selected by execution, preserving dead branches.
+    /// Select staged constants from final-mode call actuals, after signatures and
+    /// GEN-5, reading each body's definition summary. Local generic frames
+    /// retain their enclosing lexical size bindings. Calls inside comptime are
+    /// selected by execution, preserving dead branches.
     pub(crate) fn prepare_staged_instances(&mut self) -> Result<(), QueryError> {
         use std::collections::{BTreeMap, BTreeSet, VecDeque};
         if self.staged_constants.is_empty() {
             return Ok(());
         }
-        let bodies = self.instantiation_bodies()?;
+        let roots: Vec<_> = self
+            .items
+            .iter()
+            .filter(|(path, _)| !self.imaged(&path.0.package))
+            .filter_map(|(path, items)| {
+                items
+                    .first()
+                    .filter(|syntax| !matches!(syntax.item.kind, ItemKind::Const { .. }))
+                    .map(|syntax| (path.clone(), syntax.item.origin.span))
+            })
+            .collect();
         let mut pending = VecDeque::new();
-        for (path, body) in &bodies {
-            let signature = self.item_signature(path)?.value;
-            if signature.generics().is_empty()
-                && !matches!(signature.kind, SignatureKind::Const { .. })
-            {
+        for (path, site) in roots {
+            let published = self.front_summary(DefId::intern(&path))?;
+            if !published.summary.frames[0].generic {
                 let scope = NameSite::Item;
                 pending.push_back((
                     path.clone(),
                     scope,
                     BTreeMap::<SizeParameterRef, u64>::new(),
-                    source_site(&body.value.syntax, scope),
+                    site,
                 ));
             }
         }
         let mut seen = BTreeSet::new();
+        let mut registered = BTreeSet::new();
         while let Some((path, scope, bindings, site)) = pending.pop_front() {
             if !seen.insert((path.clone(), scope, bindings.clone())) {
                 continue;
@@ -938,70 +1367,70 @@ impl QueryEngine {
             if seen.len() > 65536 {
                 return Err(operational("compile-time instance expansion limit"));
             }
-            let analyzed = self.mode_query(&path)?;
-            let typed = &analyzed.value.typed;
-            self.register_staged(&analyzed.value)?;
-            let tree = &typed.syntax.tree;
-            let syntax = &*typed.syntax;
-            let checked = &typed.checked;
-            let frames: BTreeSet<_> = typed
-                .plans
-                .functions
-                .iter()
-                .map(|frame| frame.owner)
-                .chain([NameSite::Item])
-                .collect();
-            let contains =
-                |outer: Span, inner: Span| outer.start <= inner.start && outer.end >= inner.end;
-            let frame_at = |at: Span, exclude: Option<NameSite>| {
+            let published = self.front_summary(DefId::intern(&path))?;
+            let summary = &published.summary;
+            // Registration needs the analyzed body; traversal retains only the
+            // published summary, including on repeated size instantiations.
+            if !summary.staged.is_empty() && registered.insert(path.clone()) {
+                let analyzed = self.mode_query(&path)?;
+                let registered = self.register_staged(&analyzed.value);
+                let released = self.release_batch_front(&path);
+                registered?;
+                released?;
+            }
+            let frames = &summary.frames;
+            let frame_of = |site: NameSite| {
                 frames
                     .iter()
-                    .copied()
-                    .filter(|frame| {
-                        Some(*frame) != exclude && contains(source_site(syntax, *frame), at)
-                    })
-                    .min_by_key(|frame| {
-                        let span = source_site(syntax, *frame);
-                        span.end - span.start
-                    })
+                    .position(|frame| frame.site == site)
+                    .map(|i| i as u32)
             };
-            let staged_regions: Vec<_> = checked
-                .expressions
+            // The function frame a frame belongs to, and whether a comptime
+            // region encloses it.
+            let function = |mut frame: u32| {
+                while frames[frame as usize].kind == FrameKind::ComptimeRegion {
+                    frame = frames[frame as usize].parent.expect("region parent");
+                }
+                frame
+            };
+            let staged = |mut frame: u32| loop {
+                if frames[frame as usize].kind == FrameKind::ComptimeRegion {
+                    return true;
+                }
+                match frames[frame as usize].parent {
+                    Some(parent) => frame = parent,
+                    None => return false,
+                }
+            };
+            let Some(current) = frame_of(scope) else {
+                continue;
+            };
+            let mut nested: Vec<NameSite> = frames
                 .iter()
-                .filter(|row| {
-                    matches!(
-                        tree.expressions[row.expression.0 as usize].kind,
-                        ExprKind::Comptime(_)
-                    )
+                .enumerate()
+                .filter(|(i, frame)| {
+                    let i = *i as u32;
+                    frame.kind != FrameKind::ComptimeRegion
+                        && i != current
+                        && frame.parent.map(function) == Some(current)
+                        && !staged(i)
+                        && !frame.generic
                 })
-                .map(|row| source_site(syntax, NameSite::Expression(row.expression)))
+                .map(|(_, frame)| frame.site)
                 .collect();
-            let staged_at = |at| staged_regions.iter().any(|region| contains(*region, at));
-            for frame in &frames {
-                if *frame == scope {
-                    continue;
-                }
-                let at = source_site(syntax, *frame);
-                if frame_at(at, Some(*frame)) == Some(scope)
-                    && !staged_at(at)
-                    && !checked
-                        .resolution
-                        .generics
-                        .iter()
-                        .any(|generic| generic.owner == *frame)
-                {
-                    pending.push_back((path.clone(), *frame, bindings.clone(), site));
-                }
+            nested.sort();
+            for frame in nested {
+                pending.push_back((path.clone(), frame, bindings.clone(), site));
             }
             let constants: Vec<_> = self
                 .staged_constants
                 .iter()
                 .filter(|(_, constant)| {
                     constant.owner == path
-                        && frame_at(
-                            source_site(syntax, NameSite::Expression(constant.expression)),
-                            None,
-                        ) == Some(scope)
+                        && frame_of(NameSite::Expression(constant.expression))
+                            .and_then(|region| frames[region as usize].parent)
+                            .map(function)
+                            == Some(current)
                 })
                 .map(|(path, constant)| (path.clone(), constant.inputs.clone()))
                 .collect();
@@ -1023,39 +1452,23 @@ impl QueryEngine {
                     return Err(error);
                 }
             }
-            let mut calls: Vec<_> = checked
-                .instantiations
-                .iter()
-                .map(|call| {
-                    (
-                        call.expression,
-                        hirsel_types::CallTarget::Definition(call.callee.clone()),
-                        call.arguments.clone(),
-                    )
-                })
-                .collect();
-            calls.extend(checked.calls.iter().map(|call| {
-                (
-                    call.expression,
-                    call.target.clone(),
-                    call.generic_arguments.clone(),
-                )
-            }));
-            for (expression, target, arguments) in calls {
-                let at = source_site(syntax, NameSite::Expression(expression));
-                if frame_at(at, None) != Some(scope) || staged_at(at) {
+            for call in summary.calls.iter() {
+                if function(call.owning_frame) != current
+                    || call.class == CallClass::ComptimeExecuted
+                {
                     continue;
                 }
                 // The binder's owner: the callee's item, or this body's for
                 // a local function.
-                let (callee, owner, binder, mut actuals) = match target {
-                    hirsel_types::CallTarget::Definition(callee) => {
-                        if self.definition_items(&callee).is_err() {
+                let (callee, binder, mut actuals) = match call.target_frame {
+                    None => {
+                        let callee = call.callee.path().clone();
+                        if !self.declared(&callee) {
                             continue;
                         }
-                        // A precheck is closed over its own package graph. Without
+                        // An image is closed over its own package graph. Without
                         // staged declarations there, its calls need no new walk.
-                        if self.prechecked(&callee.0.package)
+                        if self.imaged(&callee.0.package)
                             && !self
                                 .staged_constants
                                 .values()
@@ -1063,50 +1476,11 @@ impl QueryEngine {
                         {
                             continue;
                         }
-                        let body = self.mode_query(&callee)?;
-                        (
-                            callee,
-                            body.value.typed.syntax.owner(),
-                            NameSite::Item,
-                            BTreeMap::new(),
-                        )
+                        (callee, NameSite::Item, BTreeMap::new())
                     }
-                    hirsel_types::CallTarget::Value(value) => {
-                        let local = checked
-                            .resolution
-                            .expressions
-                            .iter()
-                            .find_map(|(id, name)| {
-                                if *id == value {
-                                    if let ResolvedName::Local(id) = name {
-                                        Some(*id)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            });
-                        let binder = local
-                            .and_then(|local| {
-                                checked
-                                    .resolution
-                                    .local_functions
-                                    .iter()
-                                    .find(|(_, id)| *id == local)
-                                    .map(|(statement, _)| NameSite::Statement(*statement))
-                            })
-                            .or_else(|| {
-                                frames
-                                    .contains(&NameSite::Expression(value))
-                                    .then_some(NameSite::Expression(value))
-                            });
-                        let Some(binder) = binder else { continue };
-                        (path.clone(), syntax.owner(), binder, bindings.clone())
-                    }
-                    _ => continue,
+                    Some(_) => (path.clone(), call.binder.site, bindings.clone()),
                 };
-                for (ordinal, argument) in arguments.iter().enumerate() {
+                for (ordinal, argument) in call.arguments.iter().enumerate() {
                     if let GenericArgument::Size(size) = argument {
                         let value = match size {
                             Size::Constant(n) => Some(*n),
@@ -1115,16 +1489,115 @@ impl QueryEngine {
                         .ok_or_else(|| operational("selected call has an unbound size"))?;
                         actuals.insert(
                             SizeParameterRef::body(
-                                owner.site(binder),
+                                call.binder,
                                 hirsel_types::SizeParamId(ordinal as u32),
                             ),
                             value,
                         );
                     }
                 }
-                pending.push_back((callee, binder, actuals, at));
+                pending.push_back((callee, binder, actuals, call.site));
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+    use hirsel_interp::aggregate::RuntimeTypes;
+    use std::sync::Barrier;
+
+    /// Fail after a view read, before the entry body exists. Evidence must
+    /// survive provider errors too, and must not consume an outer recording.
+    struct Missing<'a> {
+        runtime: &'a RuntimeTypes,
+        path: DefPath,
+        together: Option<&'a Barrier>,
+    }
+    impl TirProvider for Missing<'_> {
+        fn definition(&mut self, _: &DefPath) -> Result<DefinitionRef, QueryError> {
+            self.runtime.serialization.get(&self.path);
+            if let Some(together) = self.together {
+                together.wait();
+            }
+            Err(QueryError::NotImplemented)
+        }
+        fn constant(&mut self, _: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+            Ok(vec![])
+        }
+    }
+    fn task(runtime: &RuntimeTypes, together: Option<&Barrier>, name: &str) -> EvaluationProduct {
+        let path = DefPath::core(name);
+        let sources = SourceMap::default();
+        let ty = runtime.types.intern(hirsel_types::Type::unit());
+        EvaluationTask {
+            sources: &sources,
+            configuration: RunConfiguration {
+                entry: path.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            limits: Default::default(),
+            runtime,
+            site: Span::default(),
+            ty,
+        }
+        .run(&mut Missing {
+            runtime,
+            path,
+            together,
+        })
+    }
+    #[test]
+    fn failed_evaluation_returns_reads_and_preserves_the_outer_recording() {
+        let runtime = RuntimeTypes::new(hirsel_types::TypeInterner::new(None));
+        let outer = DefPath::core("outer");
+        let inner = DefPath::core("inner");
+        runtime.serialization.record();
+        runtime.serialization.get(&outer);
+        let product = task(&runtime, None, "inner");
+        assert!(matches!(product.result, Err(QueryError::NotImplemented)));
+        assert_eq!(
+            product.reflected.keys().cloned().collect::<Vec<_>>(),
+            [inner.clone()]
+        );
+        assert!(product.limit.is_none());
+        let enclosing = runtime.serialization.finish();
+        assert_eq!(enclosing.len(), 2);
+        assert!(enclosing.contains_key(&outer));
+        assert!(enclosing.contains_key(&inner));
+        assert!(runtime.serialization.finish().is_empty());
+    }
+    #[test]
+    fn simultaneous_workers_keep_their_reflection_reads_separate() {
+        let runtime = RuntimeTypes::new(hirsel_types::TypeInterner::new(None));
+        let together = Barrier::new(2);
+        let products = std::thread::scope(|scope| {
+            let workers: Vec<_> = ["left", "right"]
+                .into_iter()
+                .map(|name| {
+                    let runtime = runtime.clone();
+                    let together = &together;
+                    scope.spawn(move || (name, task(&runtime, Some(together), name)))
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for (name, product) in products {
+            assert!(matches!(product.result, Err(QueryError::NotImplemented)));
+            assert_eq!(
+                product.reflected.keys().cloned().collect::<Vec<_>>(),
+                [DefPath::core(name)]
+            );
+        }
+        assert!(runtime.serialization.finish().is_empty());
     }
 }

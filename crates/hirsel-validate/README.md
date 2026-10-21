@@ -28,8 +28,9 @@ tests can read it.
 
 ## Static validation
 
-`hirsel_validate::validate(&Definition, &Signatures) -> Validation` is pure: signatures
-are an explicit `BTreeMap<DefPath, Signature>` owning complete type snapshots. It
+`hirsel_validate::validate(&Definition, &dyn SignatureLookup, &mut Vec<VRead>) -> Validation`
+is pure: it reads signature views only through the `SignatureLookup` it is given
+and records every read. It
 never queries a provider or executes code. Include the owner's signature when it
 has parameters, plus called and constructed nominal signatures. Missing facts
 fail closed. Call and owner origins are proved from scoped identities and
@@ -45,13 +46,25 @@ The report contains only `violations`. `hirsel_validate::assert_valid`
 panics for violations and returns unit; it is the helper for lowering's tests.
 The driver's mode-before-lowering and publication guards remain its responsibility.
 
-`ValidatedSignatures::new(Signatures)` owns and independently checks a complete
-immutable signature input once. Its `validate` method retains structural/type-graph
-error precedence and the same signature violations as `validate`. Its
-`validate_with_signature` method shadows one materialized owner through a borrowed
-view, checking that replacement and retaining all other signature errors in path
-order. `work::read(Counter::ValidateSignatureRows)` counts actual signature checks for
-scaling regressions.
+## Input (`src/input.rs`)
+
+V never trusts the producer's fingerprint. Each view V reads is identified by
+a `ValidationDigest` that V's own encoder computes over every field of the
+view, private shape and malformed rows included (`digest`). Every lookup is
+recorded as a `VRead`: `View(d, digest)`, `Missing(d)`, `FirstHeap(selection)`
+(and the view that supplies the role) and `UniverseErrors(digest)`;
+`read_holds` says whether one still observes the same value.
+`SignatureLookup` is one universe as one package's bodies see it, with the
+universe's signature errors and their aggregate digest; `validate` reports
+those errors after a definition's own, so no body passes while any signature is
+malformed. `ValidatedSignatures` keeps per-view verdicts (`check_view`) keyed by
+digest and reuses one while its reads hold, taking reusable verdicts from the
+previous revision's store (`verdict_from`). `SignatureMap` is an owned
+universe for tools and tests. `work::read(Counter::ValidateSignatureRows)`
+counts actual signature checks for scaling regressions. `successful` exports
+successful view receipts for images/stores; `seed_success` restores candidates,
+which `verdict_from` accepts only under the independently computed current view
+digest and while every recorded read still holds.
 
 `Violation` identifies an optional body, block and instruction; a block with no
 instruction identifies its terminator. `ViolationKind` contains compiler-invariant
@@ -63,11 +76,11 @@ resulting leaked slot, are retained.
 
 | Check | Violations |
 |---|---|
-| Definition/body/place/local/scope/rvalue/cleanup/loan references and type provenance; capture storage only in closure bodies | `InvalidId`, `InvalidType`, `Duplicate`, `WrongKind`, `ScopeCycle` |
+| Definition/body/place/local/scope/rvalue/cleanup/loan references and type-table membership; capture storage only in closure bodies | `InvalidId`, `InvalidType`, `Duplicate`, `WrongKind`, `ScopeCycle` |
 | Type graph integrity, builtin type/size argument arity, recovery rows and cycles | `InvalidTypeGraph`, `InvalidSignature` |
 | CFG reachability, closure/contract body roots and dangling rvalues | `UnreachableBlock`, `UnreferencedBody`, `UnreferencedRvalue`, `ReachableUnreachable` |
 | Every constant, assignment, snapshot, unary/binary operator, construction, closure, shape, condition, return and call | `TypeMismatch`, `InvalidOperator`, `InvalidConstructor`, `InvalidProjection`, `Arity`, `MissingSignature` |
-| Call/constructor ordinals, generic kind/arity, independent type stores | `Duplicate`, `InvalidId`, `TypeMismatch`; calls use shared `import_type`/`substitute_type` and `semantic_equal` |
+| Call/constructor ordinals, generic kind/arity | `Duplicate`, `InvalidId`, `TypeMismatch`; calls instantiate through V's own `TypeMemo` and compare with the interner's `semantic_eq` |
 | Variant/bool CFG switches | `MatchCoverage`; unique in-range arms plus an explicit default cover remaining cases, or every case must have an arm before an `Unreachable` default |
 | Definite initialization, fields/partial moves, replacements and borrowed storage | `ReadBeforeInit`, `UseAfterMove`, `DoubleMove`, `WriteToLive`, `BorrowedMove`, `InvalidUse` |
 | Loan lifetime, derived borrowed temporaries/captures, source access, mutable exclusivity and aliased mutable call arguments | `MissingLoan`, `LoanConflict`, `LoanOutlivesSource`, `InactiveLoan`, `ExpiredLoan`, `LiveLoanAtExit`, `AliasedArguments` |
@@ -100,8 +113,10 @@ belong in cleanup while preparing a later argument, and must be absent from the 
 callee entry. Listed conditional drops of proven-dead storage are legal skips. Return extracts its operand before cleanup. Cleanup continues in
 listed order; validation never invokes a destructor.
 
-Limits: raw in-range arena IDs from another owner cannot be identified; TypeIds
-are the exception because their provenance is checked before the shared accessor.
+Limits: raw in-range arena IDs from another owner cannot be identified. TypeIds
+carry no provenance: a row belongs to a definition exactly when its closure table
+(`Definition.types`) lists it, and every body root and table edge is checked
+against that table before any shared helper reads a row.
 TIR cannot prove omitted source effects or preservation of the source's original
 evaluation order; lowering tests own that obligation. The structural type walk uses an explicit DFS stack and colors;
 acyclic graphs have no separate depth limit, while recovery/cyclic graphs fail
@@ -402,14 +417,15 @@ the parent's counted owned graph. Plain bits and Shared boundaries preserve that
 evidence; an aliased counted replacement cannot establish a unique whole read.
 Independent fixtures cover all three, separately from permanent storage modes.
 
-Independent validation uses reusable private working type stores for graph
-transport, receiving relations and flow mode proofs. Each operation owns a
-marked region; leaving it truncates temporary rows and returns capacity for the
-next operation. Nested operations obtain another region instead of copying an
-active store. No working rows are assigned back into published IR. Scoped
-parameter authority inputs are derived once per body and receiving relations
-append directly into the caller's region. The copied-row scaling regression
-validates many real copy assignments against an owner-size work bound.
+V runs on the session `TypeInterner`: the definition's rows, signature rows and
+V's own temporaries (graph transport, receiving relations, flow mode proofs) are
+interned rows, so nothing is imported or copied. Substitution and instantiation
+go through a `TypeMemo` that V owns (one per `validate` call and per signature
+verdict); contextual proofs and directional compatibility through a
+`ContextMemo` over V's recorded signature reads. V shares no memo or verdict with
+inference. The graph check walks the definition's closure table, not the
+interner. No working row is assigned back into published IR. Scoped parameter
+authority inputs are derived once per body.
 
 `Body.tail_sites` is additive normalization input, transported from
 `CheckedBody.tails`. Validation independently checks self identity, exact result
@@ -865,3 +881,10 @@ STORE-6 independently walks declared, substituted key representations at typed
 store calls and specialized function references. Map, Set and Simd are refused
 at every represented depth. `table_controls.rs` contains source-free call and
 function-value controls with scalar and sequence twins.
+
+Set `HIRSEL_VALIDATE_PROFILE=1` to print one tab-separated stderr row per
+validation: `hirsel-validate-profile`, definition path, elapsed nanoseconds,
+type-closure rows and violation count. This includes import and compile-time
+validation. Use a profiling build and `perf record --call-graph fp` for stacks;
+use `--timings=json` for aggregate thread CPU time. The opt-in wall clock rows
+identify heavy definitions; compare times only in an interleaved session.

@@ -413,6 +413,7 @@ pub(super) fn place(
 }
 
 pub(super) fn build(
+    t: &TypeInterner,
     syntax: &ItemSyntax,
     own: &Signature,
     body: &mut CheckedBody,
@@ -435,16 +436,16 @@ pub(super) fn build(
     };
     let capture_modes = std::sync::Arc::new(super::source_rows::CaptureRows::new(capture_modes));
     // Flow tracks lifetimes: a result's own Arena parameters place it (PROV-4).
-    let arenas = crate::arenas::Arenas::new(body, own);
+    let arenas = crate::arenas::Arenas::new(t, body, own);
     let root_modes = match &own.kind {
         SignatureKind::Function(f) => {
-            let row = own.types.get(f.result).unwrap();
+            let row = t.get(f.result).unwrap();
             let mut modes = row.modes.clone();
             modes.sendability = crossing_requirement(row);
             if let Some(arena) = &arenas.definition {
-                modes.relation = modes.relation.retain(|r| {
-                    !matches!(r, Reach::Place(o) if arena_parameter(&own.types, f, o, 0, arena))
-                });
+                modes.relation = modes.relation.retain(
+                    |r| !matches!(r, Reach::Place(o) if arena_parameter(t, f, o, 0, arena)),
+                );
             }
             modes
         }
@@ -478,21 +479,15 @@ pub(super) fn build(
                     SignatureKind::Const { ty: root, .. } if owner == NameSite::Item => *root,
                     _ => return None,
                 };
-                import_type(&own.types, root, &mut body.types)
-                    .ok()
-                    .and_then(|root| {
-                        bind_parameter_scopes(&mut body.types, root, &[lexical.site(owner)]).ok()
-                    })
+                bind_parameter_scopes(t, root, &[lexical.site(owner)]).ok()
             });
         let result_shareable = if owner == NameSite::Item {
             match &own.kind {
-                SignatureKind::Function(f) => {
-                    local_result_permissions(&own.types, f, lexical.site(owner))
-                }
+                SignatureKind::Function(f) => local_result_permissions(t, f, lexical.site(owner)),
                 _ => BTreeSet::new(),
             }
         } else {
-            callable_result_permissions(body, owner, rows)
+            callable_result_permissions(t, body, owner, rows)
         };
         let mut expressions = vec![];
         let mut lifetimes = LifetimeScopes::new();
@@ -1346,13 +1341,13 @@ pub(super) fn build(
                             let frame = results
                                 .iter()
                                 .find(|(site, _)| *site == NameSite::Expression(expression))
-                                .and_then(|(_, ty)| body.types.get(*ty));
+                                .and_then(|(_, ty)| t.get(*ty));
                             let result = frame
                                 .or_else(|| {
                                     expression_type(body, expression, rows)
-                                        .and_then(|ty| body.types.get(ty))
+                                        .and_then(|ty| t.get(ty))
                                         .and_then(|ty| match &ty.kind {
-                                            TypeKind::Function(f) => body.types.get(f.result),
+                                            TypeKind::Function(f) => t.get(f.result),
                                             _ => None,
                                         })
                                 })
@@ -1429,9 +1424,10 @@ pub(super) fn build(
                                 .iter()
                                 .filter_map(|a| a.parameter.as_ref())
                                 .filter(|(_, p)| {
-                                    arenas.definition.as_ref().is_some_and(|arena| {
-                                        is_arena_type(&body.types, p.ty, arena)
-                                    })
+                                    arenas
+                                        .definition
+                                        .as_ref()
+                                        .is_some_and(|arena| is_arena_type(t, p.ty, arena))
                                 })
                                 .map(|(ordinal, _)| *ordinal)
                                 .collect();
@@ -1443,7 +1439,7 @@ pub(super) fn build(
                                     }) if fields.is_empty() && arena_parameters.contains(&parameter.0))
                                 })
                             };
-                            let mut result = body.types.get(call.result).unwrap().modes.clone();
+                            let mut result = t.get(call.result).unwrap().modes.clone();
                             result.relation = lifetime(&result.relation);
                             let requirements: Vec<_> = call
                                 .arguments
@@ -1457,15 +1453,14 @@ pub(super) fn build(
                                         parameter: *ordinal as usize,
                                         passing: p.passing,
                                         modes: {
-                                            let mut modes =
-                                                body.types.get(p.ty).unwrap().modes.clone();
+                                            let mut modes = t.get(p.ty).unwrap().modes.clone();
                                             modes.sendability =
-                                                crossing_requirement(body.types.get(p.ty).unwrap());
+                                                crossing_requirement(t.get(p.ty).unwrap());
                                             modes.relation = lifetime(&modes.relation);
                                             modes
                                         },
                                         sendable_bound: sendable_parameter(
-                                            body, *callee, *ordinal, rows,
+                                            t, body, *callee, *ordinal, rows,
                                         ),
                                     })
                                 })
@@ -1475,8 +1470,7 @@ pub(super) fn build(
                             // declaration alone cannot recover that evidence;
                             // flow derives it again from `captures`.
                             if let Some(ty) = expression_type(body, expression, rows) {
-                                result.sendability =
-                                    body.types.get(ty).unwrap().modes.sendability.clone();
+                                result.sendability = t.get(ty).unwrap().modes.sendability.clone();
                             }
                             children.push((*callee, Context::Invoke, false, false));
                             for (index, arg) in arguments.iter().enumerate() {
@@ -1508,30 +1502,29 @@ pub(super) fn build(
                             } else {
                                 vec![]
                             };
-                            let captures =
-                                match &body.types.get(call.result).unwrap().erased_captures {
-                                    Some(ErasedCaptures::FromArguments(parameters))
-                                        if call.state == CallState::Complete && !constructor =>
-                                    {
-                                        parameters
-                                            .iter()
-                                            .map(|p| match p.parameter {
-                                                ParameterRef::Bound {
-                                                    depth: 0,
-                                                    parameter,
-                                                } if p.fields.is_empty() => {
-                                                    call.arguments.iter().position(|a| {
-                                                        a.parameter
-                                                            .as_ref()
-                                                            .is_some_and(|(o, _)| *o == parameter.0)
-                                                    })
-                                                }
-                                                _ => None,
-                                            })
-                                            .collect()
-                                    }
-                                    _ => None,
-                                };
+                            let captures = match &t.get(call.result).unwrap().erased_captures {
+                                Some(ErasedCaptures::FromArguments(parameters))
+                                    if call.state == CallState::Complete && !constructor =>
+                                {
+                                    parameters
+                                        .iter()
+                                        .map(|p| match p.parameter {
+                                            ParameterRef::Bound {
+                                                depth: 0,
+                                                parameter,
+                                            } if p.fields.is_empty() => {
+                                                call.arguments.iter().position(|a| {
+                                                    a.parameter
+                                                        .as_ref()
+                                                        .is_some_and(|(o, _)| *o == parameter.0)
+                                                })
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect()
+                                }
+                                _ => None,
+                            };
                             Op::Call {
                                 expression,
                                 callee: *callee,
@@ -1558,7 +1551,7 @@ pub(super) fn build(
                     let successors = if matches!(op, Op::Call { .. })
                         && expression_type(body, expression, rows).is_some_and(|ty| {
                             matches!(
-                                body.types.get(ty).unwrap().kind,
+                                t.get(ty).unwrap().kind,
                                 TypeKind::Primitive(Primitive::Never)
                             )
                         }) {
@@ -1787,7 +1780,7 @@ pub(super) fn build(
                                     .find(|e| e.expression == *source)
                                     .is_some_and(|e| {
                                         !matches!(
-                                            body.types.get(e.ty).unwrap().kind,
+                                            t.get(e.ty).unwrap().kind,
                                             TypeKind::Builtin {
                                                 kind: BuiltinType::Iter,
                                                 ..
@@ -1870,9 +1863,9 @@ pub(super) fn build(
                         StmtKind::Function { body: fn_body, .. } => {
                             let closure = rows.closure(*fn_body).map(|i| &body.closures[i]);
                             let result = closure
-                                .and_then(|c| body.types.get(c.ty))
-                                .and_then(|t| match &t.kind {
-                                    TypeKind::Function(f) => body.types.get(f.result),
+                                .and_then(|c| t.get(c.ty))
+                                .and_then(|row| match &row.kind {
+                                    TypeKind::Function(f) => t.get(f.result),
                                     _ => None,
                                 })
                                 .map_or_else(Modes::global, |t| {
@@ -2023,13 +2016,14 @@ fn entry_snapshots(syntax: &ItemSyntax, owner: NameSite) -> Vec<ExprId> {
 // J proves structural bounds before I discovers sharing. A bare sendable
 // parameter also needs the argument's current root evidence at the call.
 fn sendable_parameter(
+    t: &TypeInterner,
     body: &CheckedBody,
     callee: ExprId,
     ordinal: u32,
     rows: &super::source_rows::SourceRows,
 ) -> bool {
     let Some(TypeKind::Function(function)) = expression_type(body, callee, rows)
-        .and_then(|ty| body.types.get(ty))
+        .and_then(|ty| t.get(ty))
         .map(|ty| &ty.kind)
     else {
         return false;
@@ -2040,7 +2034,7 @@ fn sendable_parameter(
     })) = function
         .parameters
         .get(ordinal as usize)
-        .and_then(|parameter| body.types.get(parameter.ty))
+        .and_then(|parameter| t.get(parameter.ty))
         .map(|ty| &ty.kind)
     else {
         return false;
@@ -2050,6 +2044,7 @@ fn sendable_parameter(
 }
 
 fn callable_result_permissions(
+    t: &TypeInterner,
     body: &CheckedBody,
     owner: NameSite,
     rows: &super::source_rows::SourceRows,
@@ -2062,10 +2057,8 @@ fn callable_result_permissions(
             .find(|b| matches!(b.binding, ResolvedName::Local(_)))
             .map(|b| b.ty),
     };
-    match ty.and_then(|ty| body.types.get(ty)).map(|ty| &ty.kind) {
-        Some(TypeKind::Function(f)) => {
-            local_result_permissions(&body.types, f, body.lexical.site(owner))
-        }
+    match ty.and_then(|ty| t.get(ty)).map(|ty| &ty.kind) {
+        Some(TypeKind::Function(f)) => local_result_permissions(t, f, body.lexical.site(owner)),
         _ => BTreeSet::new(),
     }
 }
@@ -2079,9 +2072,29 @@ pub(super) fn expression_type(
 }
 
 /// All checked ordinary operands, including contracts and finalizers outside the CFG.
+/// The rows the graphs name: frame results, call requirements and the
+/// declared parts constructors write.
+pub(super) fn graph_types(graphs: &[Graph]) -> Vec<TypeId> {
+    let mut out = vec![];
+    for graph in graphs {
+        out.extend(graph.result_ty);
+        for node in &graph.nodes {
+            if let Op::Call {
+                requirements,
+                parts,
+                ..
+            } = &node.op
+            {
+                out.extend(requirements.iter().flatten().map(|r| r.ty));
+                out.extend(parts.iter().flatten().copied());
+            }
+        }
+    }
+    out
+}
 pub(super) fn call_arguments(
     body: &CheckedBody,
-    properties: &[super::properties::Properties],
+    properties: &super::properties::PropertyTable,
     rows: &super::source_rows::SourceRows,
 ) -> Vec<(ExprId, ExprId, UseKind)> {
     body.calls
@@ -2093,7 +2106,7 @@ pub(super) fn call_arguments(
             call.arguments.iter().filter_map(|argument| {
                 let (_, parameter) = argument.parameter.as_ref()?;
                 let plain = expression_type(body, argument.expression, rows)
-                    .and_then(|ty| properties.get(ty.index()))
+                    .and_then(|ty| properties.get(ty))
                     .is_some_and(|p| p.plain);
                 let usage = match parameter.passing {
                     PassingMode::Borrow if plain => UseKind::Copy,

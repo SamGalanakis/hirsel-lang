@@ -19,7 +19,7 @@ use cranelift_module::{DataId, FuncId, Module};
 use hirsel_core_contract::{Disposition, Engine, Passing};
 use hirsel_lir::abi::abi_digest;
 use hirsel_lir::abi_types::{CallableShape, FnAbi, ParameterPassing};
-use hirsel_lir::emission::{FailureCode, register_result, site_code, symbol_name};
+use hirsel_lir::emission::{register_result, site_code, symbol_name};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{align_up, payload_offset};
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutRecord, ScalarKind, TagForm};
@@ -103,7 +103,7 @@ enum Deferred {
     /// A failing runtime call whose operation records its own failure rule.
     Record {
         block: Block,
-        code: FailureCode,
+        rule: String,
         site: u64,
         forward_caller: bool,
         then: Block,
@@ -112,7 +112,6 @@ enum Deferred {
     /// and its cleanup.
     Exhausted {
         block: Block,
-        code: FailureCode,
         region: Value,
         site: u64,
         failure: FailureId,
@@ -144,6 +143,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     params: Vec<Vec<Param>>,
     failures: BTreeMap<FailureId, Block>,
     deferred: Vec<(ir::SourceLoc, Deferred)>,
+    debug_sites: Option<hirsel_lir::debug::SiteTable>,
     /// Per compiler-local region instance, its `hirsel_rt_v2_region` record in the frame.
     pub(crate) regions: Vec<Value>,
     funcs: HashMap<FuncId, FuncRef>,
@@ -185,13 +185,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         mut b: FunctionBuilder<'f>,
         sig: Sig<'a>,
     ) -> Self {
-        if em
-            .sources
-            .is_some_and(|s| s.contains_key(&unit.header.definition))
-        {
+        let debug_sites = em.debug.then(|| hirsel_lir::debug::SiteTable::new(unit));
+        if let Some(sites) = &debug_sites {
             let site =
                 unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-            b.set_srcloc(ir::SourceLoc::new(site.start));
+            b.set_srcloc(ir::SourceLoc::new(sites.code(site).unwrap_or(u32::MAX)));
         }
         let prologue = b.create_block();
         b.append_block_params_for_function_params(prologue);
@@ -201,13 +199,14 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let environment = sig
             .hidden_index(Hidden::Environment)
             .map(|index| entry_params[index]);
-        let constant_slots = hirsel_lir::statics::constant_slots(unit, em.inputs.statics);
-        let fuel_points = if em.inputs.fuel {
+        let constant_slots = hirsel_lir::statics::constant_slots(unit, em.inputs.unit().statics);
+        let fuel_points = if em.inputs.unit().fuel {
             hirsel_lir::fuel::fuel_points(unit)
         } else {
             Vec::new()
         };
         Self {
+            debug_sites,
             em,
             unit,
             b,
@@ -1185,12 +1184,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn source_location(&mut self, site: SiteRange) {
-        if self
-            .em
-            .sources
-            .is_some_and(|s| s.contains_key(self.definition()))
-        {
-            self.b.set_srcloc(ir::SourceLoc::new(site.start));
+        if let Some(sites) = &self.debug_sites {
+            self.b
+                .set_srcloc(ir::SourceLoc::new(sites.code(site).unwrap_or(u32::MAX)));
         }
     }
 
@@ -1313,9 +1309,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     return Ok(());
                 }
                 if let Some(rule) = &edge.rule {
-                    let code = self.failure_code(rule)?;
                     let site = self.anchor_code(edge.anchor)?;
-                    self.failure_begin(code, site)?;
+                    self.failure_begin(rule, site)?;
                 }
                 if edge.rule.is_none() {
                     let code = self.anchor_code(edge.anchor)?;
@@ -1336,26 +1331,24 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             Deferred::Record {
                 block,
-                code,
+                rule,
                 site,
                 forward_caller,
                 then,
             } => {
                 self.b.switch_to_block(block);
-                self.failure_begin_for(code, site, forward_caller)?;
+                self.failure_begin_for(&rule, site, forward_caller)?;
                 self.b.ins().jump(then, &[]);
                 Ok(())
             }
             Deferred::Exhausted {
                 block,
-                code,
                 region,
                 site,
                 failure,
             } => {
                 self.b.switch_to_block(block);
-                let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
-                let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
+                let (kind, rule) = self.failure_code(hirsel_lir::emission::BOUNDED_RULE)?;
                 let (site, operation_site) = self.failure_sites(site);
                 let context = self.context;
                 self.rt(
@@ -1369,22 +1362,25 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         }
     }
 
-    pub(crate) fn failure_code(&self, rule: &str) -> Emitted<FailureCode> {
-        match self.em.inputs.failures.codes.get(rule).copied() {
-            Some(code) => Ok(code),
-            None => Err(CodegenError::UnknownRule {
-                definition: self.definition().clone(),
-                rule: rule.to_owned(),
-            }),
-        }
+    /// A failure's `(kind, rule)` codes for `hirsel_rt_v2_failure_begin`: the category,
+    /// and the rule's code loaded from its glue cell (`hirsel_lir::glue`).
+    pub(crate) fn failure_code(&mut self, rule: &str) -> Emitted<(Value, Value)> {
+        let cell = self
+            .em
+            .glue_data(&hirsel_lir::glue::failure_code_symbol(rule))?;
+        let address = self.data_addr(cell, 0);
+        let kind = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(hirsel_lir::emission::KIND_BUG));
+        Ok((kind, self.load_ty(types::I32, address, 0)))
     }
 
-    fn failure_begin(&mut self, code: FailureCode, site: u64) -> Emitted {
-        self.failure_begin_for(code, site, true)
+    fn failure_begin(&mut self, rule: &str, site: u64) -> Emitted {
+        self.failure_begin_for(rule, site, true)
     }
-    fn failure_begin_for(&mut self, code: FailureCode, site: u64, forward: bool) -> Emitted {
-        let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
-        let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
+    fn failure_begin_for(&mut self, rule: &str, site: u64, forward: bool) -> Emitted {
+        let (kind, rule) = self.failure_code(rule)?;
         let (site, operation) = self.failure_sites_for(site, forward);
         let context = self.context;
         self.rt(
@@ -1408,7 +1404,6 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     /// `failure`, filled after the body.
     pub(crate) fn exhausted_block(
         &mut self,
-        code: FailureCode,
         region: Value,
         anchor: SourceAnchorId,
         failure: FailureId,
@@ -1419,7 +1414,6 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.b.set_cold_block(block);
         self.defer(Deferred::Exhausted {
             block,
-            code,
             region,
             site,
             failure,
@@ -1768,7 +1762,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 let Some(id) = unit.tables.operations.get(op.index()) else {
                     return self.invalid("an operation outside the operation table");
                 };
-                let Some(row) = self.em.inputs.manifest.row(id) else {
+                let Some(row) = self.em.inputs.unit().manifest.row(id) else {
                     return self.invalid("an operation the manifest does not list");
                 };
                 match row.dispositions.get(Engine::Native) {
@@ -1950,11 +1944,12 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             && let Some(rule) = self
                 .em
                 .inputs
+                .unit()
                 .manifest
                 .row(&unit.tables.operations[op.index()])
                 .and_then(|row| row.failure.as_ref())
         {
-            let code = self.failure_code(&rule.0)?;
+            let rule = rule.0.clone();
             if self.failure_edge(failure)?.rule.is_some() {
                 return self.invalid("a runtime call failure rule must be recorded exactly once");
             }
@@ -1964,7 +1959,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let site = self.anchor_code(site.anchor)?;
             self.defer(Deferred::Record {
                 block,
-                code,
+                rule,
                 site,
                 forward_caller: site_forward_caller,
                 then: fail,

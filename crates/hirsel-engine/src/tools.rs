@@ -1,4 +1,6 @@
 use crate::*;
+mod front;
+pub(crate) use front::{DeadArmUse, FrontProducts};
 use hirsel_syntax::PackageId;
 use std::{io, path::Path};
 
@@ -193,7 +195,7 @@ pub fn default_environment() -> QueryEnvironment {
     }
 }
 
-pub(crate) fn read_source(path: &Path) -> Result<String, ToolError> {
+pub fn read_source(path: &Path) -> Result<String, ToolError> {
     let bytes = std::fs::read(path)?;
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
@@ -240,6 +242,7 @@ pub(crate) fn association_diagnostics(
         return Ok(diagnostics);
     }
     for syntax in &parsed.value.items {
+        engine.work.association_visits += 1;
         let source = &syntax.item;
         for attribute in &source.attributes {
             let name = attribute.name.as_str();
@@ -257,15 +260,22 @@ pub(crate) fn association_diagnostics(
                 .clone()
                 .ok_or(QueryError::NotImplemented)?;
             let span = attribute.origin.span;
+            let (types, memo) = (engine.types.clone(), engine.memo.clone());
             let result = engine
                 .item_signature(&source.definition)
                 .and_then(|signature| {
                     if name == "format" {
-                        phases.validate_format(&signature.value, span, engine)
+                        phases.validate_format(&types, &memo, &signature.value, span, engine)
                     } else if name == "serializable" {
-                        phases.validate_serializable_check(&signature.value, span, engine)
+                        phases.validate_serializable_check(
+                            &types,
+                            &memo,
+                            &signature.value,
+                            span,
+                            engine,
+                        )
                     } else {
-                        phases.validate_loop_source(&signature.value, span, engine)
+                        phases.validate_loop_source(&types, &memo, &signature.value, span, engine)
                     }
                 });
             match result {
@@ -293,44 +303,210 @@ pub(crate) fn check_file_lowering(
     context: &FileContext,
     lowering: LoweringPolicy,
 ) -> Result<CheckOutput, QueryError> {
-    let mut diagnostics = vec![];
-    let result = (|| -> Result<(), QueryError> {
-        let parsed = engine.parse_file(file, context)?;
-        diagnostics.extend(association_diagnostics(engine, file, context)?);
-        if crate::queries::has_errors(&diagnostics) {
-            return Ok(());
+    let mut outputs = check_files(engine, &[(file, context, lowering)])?;
+    let output = outputs.pop().expect("one file's check").1;
+    Ok(CheckOutput {
+        sources: engine.sources.clone(),
+        diagnostics: output.diagnostics,
+        completion: output.completion,
+        unsafe_ffi: vec![],
+    })
+}
+
+/// A file's verdict, sharing the program's source map until final output.
+pub(crate) struct FileCheckOutput {
+    pub diagnostics: Vec<Diagnostic>,
+    pub completion: CheckCompletion,
+}
+
+/// One file's state through `check_files`.
+struct FileCheck {
+    parsed: Option<SyntaxFile>,
+    diagnostics: Vec<Diagnostic>,
+    /// The first error that stopped the file's steps.
+    stopped: Option<QueryError>,
+    missing_phase: Option<QueryKind>,
+}
+impl FileCheck {
+    /// The file goes on to the next step: nothing stopped it and it has no error.
+    fn clean(&self) -> bool {
+        self.stopped.is_none() && !crate::queries::has_errors(&self.diagnostics)
+    }
+    /// Runs one step of the file unless it is no longer clean; a step's
+    /// diagnostics error is its diagnostics, any other error stops the file.
+    fn step(
+        &mut self,
+        engine: &mut QueryEngine,
+        step: impl FnOnce(&mut QueryEngine, &SyntaxFile, &mut Vec<Diagnostic>) -> Result<(), QueryError>,
+    ) -> bool {
+        if !self.clean() {
+            return false;
         }
-        for syntax in &parsed.value.items {
-            let source = &syntax.item;
-            match engine.mode_definition(&source.definition) {
-                Ok(mode) => diagnostics.extend(mode.diagnostics),
-                Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
-                Err(error) => return Err(error),
+        let Some(parsed) = &self.parsed else {
+            return false;
+        };
+        match step(engine, parsed, &mut self.diagnostics) {
+            Ok(()) => return true,
+            Err(QueryError::Diagnostics(errors)) => self.diagnostics.extend(errors),
+            Err(error) => {
+                self.missing_phase = engine.unavailable.or(engine.last_phase);
+                self.stopped = Some(error);
             }
+        }
+        false
+    }
+}
+
+/// Publish one ordinary frontier's input-ordered outcomes into its files.
+/// Source diagnostics accumulate throughout P; an operational failure stops
+/// that file before any later generator request is admitted.
+fn mode_frontier(
+    engine: &mut QueryEngine,
+    checks: &mut [FileCheck],
+    pending: &mut Vec<(usize, DefPath)>,
+    jobs: hirsel_intern::jobs::Jobs,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let (owners, definitions): (Vec<_>, Vec<_>) = std::mem::take(pending).into_iter().unzip();
+    for (owner, mode) in owners
+        .into_iter()
+        .zip(engine.front_definitions(definitions, jobs))
+    {
+        let check = &mut checks[owner];
+        if check.stopped.is_some() {
+            continue;
+        }
+        match mode.result {
+            Ok(output) => check.diagnostics.extend(output.diagnostics.iter().cloned()),
+            Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
+            Err(error) => {
+                check.missing_phase = mode.phase;
+                check.stopped = Some(error);
+            }
+        }
+    }
+}
+
+/// A program check's schedule over `files` (design §1c): S0 parses every
+/// file and checks its associations; P checks and mode-checks every item of
+/// every clean file; GEN-5 runs once, over the summaries P published; S1
+/// lowers each clean file's compile-time bodies and selects its CT-5
+/// instances; P2 lowers the rest under `Reachable`. A file with an error
+/// after a step takes no later step. Each file's diagnostics and completion
+/// are its own, in `files` order.
+///
+/// GEN-5 runs after every body is checked, as Go's checker runs `monomorph`
+/// once after `processDelayed` (types2/check.go:446-465, mono.go:82) and
+/// rustc type-checks every body owner before crate-wide passes
+/// (rustc_hir_analysis/src/lib.rs:146-220). Before, GEN-5 ran in the first
+/// clean file's step and forced every other definition's check from there.
+pub(crate) fn check_files(
+    engine: &mut QueryEngine,
+    files: &[(FileId, &FileContext, LoweringPolicy)],
+) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
+    use hirsel_intern::timings::{Interval, interval};
+    let s0 = interval(Interval::S0);
+    let mut checks: Vec<FileCheck> = files
+        .iter()
+        .map(|&(file, context, _)| {
+            let mut check = FileCheck {
+                parsed: None,
+                diagnostics: vec![],
+                stopped: None,
+                missing_phase: None,
+            };
+            match engine.parse_file(file, context) {
+                Ok(parsed) => check.parsed = Some(parsed.value),
+                Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
+                Err(error) => {
+                    check.missing_phase = engine.unavailable.or(engine.last_phase);
+                    check.stopped = Some(error);
+                }
+            }
+            check.step(engine, |engine, _, diagnostics| {
+                diagnostics.extend(association_diagnostics(engine, file, context)?);
+                Ok(())
+            });
+            check
+        })
+        .collect();
+    drop(s0);
+    let p = interval(Interval::Parallel);
+    // Keep source order for per-file diagnostics, while the engine publishes
+    // worker products in DefPath order. Every clean file contributes its body
+    // tasks and distinct-type fact helpers to P, draining before generators.
+    let mut planned = vec![];
+    for (owner, check) in checks.iter().enumerate().filter(|(_, check)| check.clean()) {
+        let Some(parsed) = &check.parsed else {
+            continue;
+        };
+        for syntax in &parsed.items {
+            engine.work.planning_visits += 1;
+            planned.push((
+                owner,
+                syntax.item.definition.clone(),
+                crate::queries::generation::generator(syntax).is_some(),
+            ));
             if matches!(
-                &source.kind,
+                &syntax.item.kind,
                 hirsel_syntax::ItemKind::Type {
                     body: hirsel_syntax::TypeBody::Distinct { fact: Some(_), .. },
                     ..
                 }
             ) {
-                let predicate = hirsel_check_protocol::fact::fact_path(&source.definition);
-                match engine.mode_definition(&predicate) {
-                    Ok(mode) => diagnostics.extend(mode.diagnostics),
-                    Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
-                    Err(error) => return Err(error),
+                planned.push((
+                    owner,
+                    hirsel_check_protocol::fact::fact_path(&syntax.item.definition),
+                    false,
+                ));
+            }
+        }
+    }
+    let jobs = engine.jobs();
+    let mut pending = vec![];
+    for (owner, definition, generates) in planned {
+        if generates {
+            // A generator executes S1. Publish earlier ordinary outcomes first
+            // so an unavailable phase in this file can withhold that execution.
+            mode_frontier(engine, &mut checks, &mut pending, jobs);
+            if checks[owner].stopped.is_none() {
+                pending.push((owner, definition));
+                mode_frontier(engine, &mut checks, &mut pending, jobs);
+            }
+        } else if checks[owner].stopped.is_none() {
+            pending.push((owner, definition));
+        }
+    }
+    mode_frontier(engine, &mut checks, &mut pending, jobs);
+    drop(p);
+    // GEN-5 is the program's: every clean file reports its verdict.
+    if checks.iter().any(FileCheck::clean) {
+        let verdict = crate::generic_graph::check(engine);
+        for check in checks.iter_mut().filter(|c| c.clean()) {
+            match &verdict {
+                Ok(errors) => check.diagnostics.extend(errors.iter().cloned()),
+                Err(QueryError::Diagnostics(errors)) => {
+                    check.diagnostics.extend(errors.iter().cloned())
+                }
+                Err(error) => {
+                    check.missing_phase = engine.unavailable.or(engine.last_phase);
+                    check.stopped = Some(error.clone());
                 }
             }
         }
-        if !crate::queries::has_errors(&diagnostics) {
-            diagnostics.extend(crate::generic_graph::check(engine)?);
-        }
-        if !crate::queries::has_errors(&diagnostics) {
+    }
+    let s1 = interval(Interval::S1);
+    let mut rests = vec![vec![]; files.len()];
+    let mut prepare = vec![false; files.len()];
+    for ((check, rest), prepare) in checks.iter_mut().zip(&mut rests).zip(&mut prepare) {
+        *prepare = check.step(engine, |engine, parsed, diagnostics| {
             // Every policy reports the diagnostics of the compile-time bodies
             // and CT-5 selection first; only then, and only for an accepted
             // file, does `Reachable` lower the rest, which reports none.
-            let (comptime, rest): (Vec<_>, Vec<_>) = parsed
-                .value
+            let comptime: Vec<_>;
+            (comptime, *rest) = parsed
                 .items
                 .iter()
                 .filter(|syntax| crate::queries::generation::executable(syntax))
@@ -338,33 +514,50 @@ pub(crate) fn check_file_lowering(
                 .partition(|definition| {
                     engine.lowers_at_check(definition, LoweringPolicy::Comptime)
                 });
-            for definition in comptime {
-                diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
-            }
+            engine.front_lowerings(comptime, jobs, diagnostics)?;
             // CT-5: each instance a body selects is generated and checked here.
             let roots = parsed
-                .value
                 .items
                 .iter()
                 .map(|syntax| syntax.item.definition.clone());
             match engine.select_generated_instances(roots) {
                 Ok(instances) => {
-                    for instance in instances {
-                        diagnostics.extend(engine.lower_to_tir(&instance)?.diagnostics);
-                    }
+                    engine.front_lowerings(instances.into_iter().collect(), jobs, diagnostics)?;
                 }
                 Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
                 Err(error) => return Err(error),
             }
-            if lowering == LoweringPolicy::Reachable && !crate::queries::has_errors(&diagnostics) {
+            Ok(())
+        });
+    }
+    drop(s1);
+    let p2 = interval(Interval::Parallel2);
+    for (((check, rest), &(_, _, lowering)), prepare) in
+        checks.iter_mut().zip(rests).zip(files).zip(prepare)
+    {
+        let lower_rest = check.clean();
+        let completed = check.step(engine, |engine, _, diagnostics| {
+            if lowering == LoweringPolicy::Reachable {
                 for definition in rest {
-                    diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
+                    diagnostics.extend(engine.front_lower(&definition)?);
                 }
             }
-            engine.prepare_staged_instances()?;
+            Ok(())
+        });
+        if prepare
+            && (!lower_rest || completed)
+            && let Err(error) = engine.prepare_staged_instances()
+        {
+            match error {
+                QueryError::Diagnostics(errors) => check.diagnostics.extend(errors),
+                error => {
+                    check.missing_phase = engine.unavailable.or(engine.last_phase);
+                    check.stopped = Some(error);
+                }
+            }
         }
-        Ok(())
-    })();
+    }
+    drop(p2);
     let absent = if engine.adapters.checker.is_none() {
         Some(QueryKind::Check)
     } else if engine.adapters.modes.is_none() {
@@ -374,32 +567,30 @@ pub(crate) fn check_file_lowering(
     } else {
         None
     };
-    let incomplete = match result {
-        Ok(()) => absent,
-        Err(QueryError::Diagnostics(errors)) => {
-            diagnostics.extend(errors);
-            absent
-        }
-        Err(QueryError::NotImplemented) => Some(
-            engine
-                .unavailable
-                .or(engine.last_phase)
-                .unwrap_or(QueryKind::Check),
-        ),
-        Err(error) => return Err(error),
-    };
-    let completion = if let Some(phase) = incomplete {
-        engine.unavailable = Some(phase);
-        CheckCompletion::Incomplete { phase }
-    } else {
-        CheckCompletion::Complete
-    };
-    Ok(CheckOutput {
-        sources: engine.sources.clone(),
-        diagnostics: select_diagnostics(diagnostics, Some(&engine.sources)),
-        completion,
-        unsafe_ffi: vec![],
-    })
+    let mut outputs = Vec::with_capacity(files.len());
+    for (check, &(file, _, _)) in checks.into_iter().zip(files) {
+        let incomplete = match check.stopped {
+            None => absent,
+            Some(QueryError::NotImplemented) => {
+                Some(check.missing_phase.unwrap_or(QueryKind::Check))
+            }
+            Some(error) => return Err(error),
+        };
+        let completion = if let Some(phase) = incomplete {
+            engine.unavailable = Some(phase);
+            CheckCompletion::Incomplete { phase }
+        } else {
+            CheckCompletion::Complete
+        };
+        outputs.push((
+            file,
+            FileCheckOutput {
+                diagnostics: select_diagnostics(check.diagnostics, Some(&engine.sources)),
+                completion,
+            },
+        ));
+    }
+    Ok(outputs)
 }
 /// Compatibility helper for execution: only a complete, error-free check may run.
 pub fn check_snapshot(
@@ -489,10 +680,9 @@ impl<P: TirProvider> TirProvider for Closed<'_, P> {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        TirProvider::instance_body(self.engine, path, types, arguments)
+        TirProvider::instance_body(self.engine, path, arguments)
     }
 }
 /// Execute a checked program with explicitly simulated capabilities.

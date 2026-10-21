@@ -9,12 +9,12 @@
 use crate::aggregate::RuntimeTypes;
 use crate::value::ArenaStorage;
 use crate::{Error, Value, invalid};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::DefId;
 use hirsel_tir::Constructor;
 use hirsel_type_analysis::logical::{
     Logical, LogicalError, LogicalNominal, Resolved, Scope, type_arguments,
 };
-use hirsel_types::{BuiltinType, Primitive, TypeId, TypeKind, TypeStore};
+use hirsel_types::{BuiltinType, Primitive, TypeId, TypeKind};
 use std::collections::BTreeMap;
 
 /// The open bounded arenas, by arena handle id, and the run's own budgets.
@@ -92,15 +92,14 @@ impl Budgets {
     }
 }
 
-fn resolver<'a>(runtime: &'a RuntimeTypes) -> impl Fn(&DefPath) -> Option<LogicalNominal<'a>> {
-    move |path: &DefPath| {
-        runtime.get(path).map(|n| match &n.representation {
-            Some((types, shape)) => LogicalNominal::Representation {
-                types,
-                shape: *shape,
-            },
-            None => LogicalNominal::Opaque,
-        })
+fn resolver(runtime: &RuntimeTypes) -> impl Fn(DefId) -> Option<LogicalNominal> + '_ {
+    move |definition: DefId| {
+        runtime
+            .get(definition.path())
+            .map(|n| match n.representation {
+                Some(shape) => LogicalNominal::Representation { shape },
+                None => LogicalNominal::Opaque,
+            })
     }
 }
 
@@ -122,14 +121,13 @@ fn logical_error(error: LogicalError) -> Error {
 /// occupy no arena block.
 pub(crate) fn construction<'a>(
     runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
     ty: TypeId,
     constructor: &Constructor,
     count: usize,
 ) -> Result<u64, Error> {
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
-    let scope = Scope::root(store);
+    let scope = Scope::root(&runtime.types);
     let charge = || -> Result<u64, LogicalError> {
         let Resolved::Structural(row, scope) = logical.resolve(ty, &scope)? else {
             return Ok(0);
@@ -137,7 +135,7 @@ pub(crate) fn construction<'a>(
         Ok(match (constructor, &row.kind) {
             (Constructor::Box, TypeKind::Box(payload)) => logical.size(*payload, &scope)?,
             (Constructor::Sequence | Constructor::Map | Constructor::Set, _) => {
-                match logical.element(ty, &Scope::root(store))? {
+                match logical.element(ty, &Scope::root(&runtime.types))? {
                     Some(element) => element.saturating_mul(count as u64),
                     None => 0,
                 }
@@ -151,15 +149,11 @@ pub(crate) fn construction<'a>(
 /// The logical bytes of one element of the List or Array type `ty`, or one
 /// entry of the Map or Set type `ty`: what a push or an insert of a new key
 /// charges, and per element what a copy-on-write copy charges (MEM-6).
-pub(crate) fn element<'a>(
-    runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
-    ty: TypeId,
-) -> Result<u64, Error> {
+pub(crate) fn element<'a>(runtime: &'a RuntimeTypes, ty: TypeId) -> Result<u64, Error> {
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
     let element = logical
-        .element(ty, &Scope::root(store))
+        .element(ty, &Scope::root(&runtime.types))
         .map_err(logical_error)?;
     Ok(element.unwrap_or(0))
 }
@@ -169,7 +163,6 @@ pub(crate) fn element<'a>(
 /// `ty` only when the arena is bounded: an unbounded arena is never charged.
 pub(crate) fn storage<'a>(
     runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
     ty: TypeId,
     kind: BuiltinType,
     arena: u64,
@@ -185,11 +178,7 @@ pub(crate) fn storage<'a>(
     ) {
         return Ok(None);
     }
-    let element = if bounded {
-        element(runtime, store, ty)?
-    } else {
-        0
-    };
+    let element = if bounded { element(runtime, ty)? } else { 0 };
     Ok(Some(ArenaStorage::fresh(arena, element)))
 }
 
@@ -199,7 +188,6 @@ pub(crate) fn storage<'a>(
 /// read from `ty` only for a bounded arena.
 pub(crate) fn retag<'a>(
     runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
     ty: TypeId,
     value: &mut Value,
     arena: Option<(u64, bool)>,
@@ -237,7 +225,7 @@ pub(crate) fn retag<'a>(
     }
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
-    let mut work = vec![(value, ty, Scope::root(store))];
+    let mut work = vec![(value, ty, Scope::root(&runtime.types))];
     while let Some((value, ty, scope)) = work.pop() {
         let Resolved::Structural(row, scope) =
             logical.resolve(ty, &scope).map_err(logical_error)?
@@ -377,12 +365,11 @@ pub(crate) fn retag<'a>(
 /// The charge of a closure environment of these capture types.
 pub(crate) fn environment<'a>(
     runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
     captures: &[TypeId],
 ) -> Result<u64, Error> {
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
-    let scope = Scope::root(store);
+    let scope = Scope::root(&runtime.types);
     let mut total = 0u64;
     for capture in captures {
         total = total.saturating_add(logical.size(*capture, &scope).map_err(logical_error)?);
@@ -393,13 +380,12 @@ pub(crate) fn environment<'a>(
 /// The charge of deep-copying `value` of type `ty`: every block of its tree.
 pub(crate) fn copy<'a>(
     runtime: &'a RuntimeTypes,
-    store: &'a TypeStore,
     ty: TypeId,
     value: &'a Value,
 ) -> Result<u64, Error> {
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
-    let mut work = vec![(value, ty, Scope::root(store))];
+    let mut work = vec![(value, ty, Scope::root(&runtime.types))];
     let mut total = 0u64;
     while let Some((value, ty, scope)) = work.pop() {
         let Resolved::Structural(row, scope) =

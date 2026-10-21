@@ -10,7 +10,7 @@ struct Harness {
     sources: SourceMap,
     stdout: Vec<u8>,
     trace: Vec<TraceEvent>,
-    types: TypeStore,
+    types: std::sync::Arc<TypeInterner>,
 }
 impl Harness {
     fn new() -> Self {
@@ -32,15 +32,15 @@ impl Harness {
             sources: sources(),
             stdout: vec![],
             trace: vec![],
-            types: TypeStore::default(),
+            types: crate::support::session(),
         }
     }
     fn call(&mut self, name: &str, args: &[Value]) -> OperationResult {
-        let result_type = self.types.push(ty(TypeKind::Tuple(vec![].into())));
+        let result_type = self.types.intern(ty(TypeKind::Tuple(vec![].into())));
         self.library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &hirsel_syntax::DefPath::core(name),
                     arguments: &mut args.to_vec(),
                     generics: &[],

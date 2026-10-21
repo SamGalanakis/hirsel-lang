@@ -53,6 +53,16 @@ impl QueryEngine {
         self.semantic_program([entry.clone()])?.revision(entry)
     }
 
+    /// Read-only, batched graph product used by diagnostic shadow tools.
+    /// This is the existing semantic revision graph, not a certificate that all
+    /// execution dependency classes or host inputs have been established.
+    pub fn semantic_program_nodes(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<Vec<ProgramNode>, QueryError> {
+        Ok(self.semantic_program(roots)?.nodes)
+    }
+
     pub(crate) fn semantic_program(
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
@@ -94,15 +104,18 @@ impl QueryEngine {
             if !visited.insert(path.clone()) {
                 continue;
             }
-            let (content, dependencies) = match self.prechecked_node(&path)? {
-                Some(node) => {
-                    // Closed materializations are already in the precheck. Only
+            let (content, dependencies) = match self.image_node(&path) {
+                Some(record) => {
+                    // Closed materializations are already in the image. Only
                     // size-generic reads need declarations for client selection.
-                    if node.has_staged_reads() {
+                    if record.has_staged_reads() {
                         let body = self.mode_query(&path)?;
                         self.register_staged(&body.value)?;
                     }
-                    (node.content.clone(), node.dependencies.clone())
+                    (
+                        record.node.content.clone(),
+                        record.node.dependencies.clone(),
+                    )
                 }
                 None => self.semantic_node(&path)?,
             };
@@ -132,23 +145,36 @@ impl QueryEngine {
         let mut dependencies: BTreeSet<_> = signature
             .dependencies
             .iter()
-            .map(|d| d.definition.clone())
+            .map(|d| d.definition.path().clone())
             .collect();
         let mut content = vec![
-            hirsel_types::encoding::canonical_encoding(&signature.value, &signature.dependencies)
-                .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
+            hirsel_types::encoding::canonical_encoding(
+                &self.types,
+                &signature.value,
+                &signature.dependencies,
+            )
+            .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
         ];
+        self.materialize(path)?;
         if self.items.contains_key(path) {
-            let analyzed = self.mode_query(path)?;
-            if has_errors(&analyzed.diagnostics) {
-                return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
-            }
-            let syntax = &analyzed.value.typed.syntax;
-            content.extend(self.semantic_tokens(syntax)?);
-            if generation::executable(syntax) {
-                let lowered = self.lower_to_tir(path)?;
-                if has_errors(&lowered.diagnostics) {
-                    return Err(QueryError::Diagnostics(lowered.diagnostics));
+            if self.semantic_lower_ready(path)? {
+                let syntax = self.items[path]
+                    .first()
+                    .expect("indexed source item")
+                    .clone();
+                content.extend(self.semantic_tokens(&syntax)?);
+            } else {
+                let analyzed = self.mode_query(path)?;
+                if has_errors(&analyzed.diagnostics) {
+                    return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
+                }
+                let syntax = &analyzed.value.typed.syntax;
+                content.extend(self.semantic_tokens(syntax)?);
+                if generation::executable(syntax) {
+                    let lowered = self.lower_to_tir(path)?;
+                    if has_errors(&lowered.diagnostics) {
+                        return Err(QueryError::Diagnostics(lowered.diagnostics));
+                    }
                 }
             }
             for kind in [
@@ -159,11 +185,12 @@ impl QueryEngine {
                 QueryKind::Lower,
             ] {
                 if let Some(reads) = self.dependency_reads(path, kind) {
-                    dependencies.extend(reads.signatures.iter().map(|d| d.definition.clone()));
+                    dependencies
+                        .extend(reads.signatures.iter().map(|d| d.definition.path().clone()));
                     for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
                         match read {
                             DependencyRead::Signature { definition, .. } => {
-                                dependencies.insert(definition.clone());
+                                dependencies.insert(definition.path().clone());
                             }
                             DependencyRead::Lookup {
                                 result: Ok(definition),
@@ -181,18 +208,16 @@ impl QueryEngine {
                     }
                 }
             }
-            // A generated body (CT-5) depends on what its generator executed.
-            if let Some(cache) = self.checked.get(path) {
-                dependencies.extend(cache.executed.bodies.keys().cloned());
-                dependencies.extend(cache.executed.signatures.keys().cloned());
-            }
-            if let Some(cache) = self.modes.get(path) {
-                dependencies.extend(cache.representations.keys().cloned());
-            }
-            if let Some(cache) = self.lowered.get(path) {
-                dependencies.extend(cache.representations.keys().cloned());
-                dependencies.extend(cache.executed.bodies.keys().cloned());
-                dependencies.extend(cache.executed.signatures.keys().cloned());
+            // A generated body (CT-5) depends on what its generator executed,
+            // and every body on the private representations it read.
+            let id = hirsel_syntax::DefId::intern(path);
+            let reads = [
+                self.checked.get(&id).map(|e| e.memo.reads.clone()),
+                self.modes.get(&id).map(|e| e.memo.reads.clone()),
+                self.shared_memo_reads(path, QueryKind::Lower),
+            ];
+            for reads in reads.into_iter().flatten() {
+                dependencies.extend(executed_definitions(&reads));
             }
         }
         for ((constant, _), value) in &self.staged_values {
@@ -201,8 +226,7 @@ impl QueryEngine {
                 .get(constant)
                 .is_some_and(|c| c.owner == *path)
             {
-                dependencies.extend(value.executed.bodies.keys().cloned());
-                dependencies.extend(value.executed.signatures.keys().cloned());
+                dependencies.extend(executed_definitions(&value.executed));
             }
         }
         if let SignatureKind::Type(declaration) = &signature.value.kind {
@@ -301,4 +325,20 @@ impl QueryEngine {
         }
         Ok(content)
     }
+}
+
+/// The definitions a memo executed or whose private representation it read.
+fn executed_definitions(reads: &crate::memo::Reads) -> Vec<DefPath> {
+    reads
+        .iter()
+        .filter(|(read, _)| {
+            matches!(
+                read,
+                ReadKey::ExecutedBody(_)
+                    | ReadKey::ExecutedSignature(_)
+                    | ReadKey::Representation(_)
+            )
+        })
+        .map(|(read, _)| read.definition().unwrap().path().clone())
+        .collect()
 }

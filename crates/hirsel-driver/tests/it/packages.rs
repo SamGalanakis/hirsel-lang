@@ -24,10 +24,11 @@ fn explicit_launch_selects_source_std_without_registry_status() {
                 name: "identity".into(),
             }))
             .unwrap();
-        assert_eq!(std.value.path.0.package.name, "std");
+        assert_eq!(std.value.path.path().0.package.name, "std");
         assert!(
             !registry::BuiltinRegistry::new().signatures().any(|s| s
                 .definition
+                .path()
                 .0
                 .package
                 .name_is("std"))

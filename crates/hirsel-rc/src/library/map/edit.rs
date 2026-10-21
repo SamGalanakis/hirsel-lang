@@ -14,13 +14,13 @@ fn callback(
     parameter: usize,
     value: Option<AddressId>,
 ) -> R<Option<ValueId>> {
-    let TypeKind::Function(f) = &b.cx.store.get(b.cx.callable).unwrap().kind else {
+    let TypeKind::Function(f) = &b.cx.types.get(b.cx.callable).unwrap().kind else {
         unreachable!()
     };
     let ty = f.parameters[parameter].ty;
     let abi =
         b.cx.layouts
-            .fn_abi(&b.cx.store, ty, CallableShape::Closure)
+            .fn_abi(b.cx.types, ty, CallableShape::Closure)
             .map_err(|e| PassError::Layout(b.cx.path.clone(), e))?;
     let (callee, loan) = b.borrow(b.parameters[parameter].address, false)?;
     let arguments = if let Some(value) = value {

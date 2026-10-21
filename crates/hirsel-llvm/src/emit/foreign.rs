@@ -165,12 +165,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.invalidate_uniqueness();
         // The runtime dispatches the call to its effective thread (S-13), where a callback C
         // makes during the call finds the run context.
-        let dispatch = self
-            .inputs
-            .foreign
-            .get(&symbol.definition)
-            .copied()
-            .unwrap_or(0);
+        let word = self.module.int_type(64);
+        let cell = self.glue_cell(
+            &hirsel_lir::glue::foreign_dispatch_symbol(&symbol.definition),
+            word,
+        );
+        let dispatch = self.builder.load(word, cell, 8);
         let enter = self.runtime(RuntimeEntry::ForeignEnter)?;
         let call_site = self.anchor_code(site.anchor)?;
         let previous = self.prologue.alloca(
@@ -182,12 +182,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         );
         self.builder.call(
             enter,
-            &[
-                self.context,
-                self.const_u64(call_site),
-                previous,
-                self.const_u64(dispatch),
-            ],
+            &[self.context, self.const_u64(call_site), previous, dispatch],
         );
         let returned = self.builder.call(function, &args);
         self.module

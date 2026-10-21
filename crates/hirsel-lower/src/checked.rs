@@ -6,9 +6,10 @@ use hirsel_tir::Constructor;
 use hirsel_types::{CallTarget, ContextualName, GenericArgument, TypeKind};
 impl Plans {
     /// Convert H's plans after I/J have enriched the body. The declared function
-    /// result belongs to checked.types. Unsupported protocols need additional
+    /// result is a session row. Unsupported protocols need additional
     /// producer details; no registry identities are guessed here.
     pub fn from_body(
+        types: &hirsel_types::TypeInterner,
         tree: &SyntaxTree,
         checked: &CheckedBody,
         source: &hirsel_check_protocol::body::Plans,
@@ -44,11 +45,11 @@ impl Plans {
             let TypeKind::Named {
                 definition,
                 arguments: source_arguments,
-            } = &checked.types.get(row(value)?.ty).unwrap().kind
+            } = &types.get(row(value)?.ty).unwrap().kind
             else {
                 return Err(fail(id, "H Result source is not nominal"));
             };
-            if definition != &propagation.result {
+            if *definition.path() != propagation.result {
                 return Err(fail(id, "H Result identity changed"));
             }
             let [
@@ -62,7 +63,7 @@ impl Plans {
             let TypeKind::Named {
                 definition: target,
                 arguments,
-            } = &checked.types.get(own_result).unwrap().kind
+            } = &types.get(own_result).unwrap().kind
             else {
                 return Err(fail(id, "enclosing result is not nominal"));
             };
@@ -96,7 +97,7 @@ impl Plans {
                     success_type: *source_success,
                     error_type: *source_error,
                     result_constructor: Constructor::Variant {
-                        definition: target.clone(),
+                        definition: target.path().clone(),
                         variant: propagation.propagated_error_variant.0,
                     },
                     mapper,
@@ -151,7 +152,7 @@ impl Plans {
                         let Some(item) = patterns.next() else {
                             return Err(fail(source, "indexed loop lacks a checked pattern type"));
                         };
-                        if patterns.next().is_some() || checked.types.get(item.ty).is_none() {
+                        if patterns.next().is_some() || types.get(item.ty).is_none() {
                             return Err(fail(
                                 source,
                                 "indexed loop has an invalid checked pattern type",

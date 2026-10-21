@@ -100,7 +100,7 @@ impl Builder<'_, '_> {
         }
         let capture_binding =
             source.and_then(|source| self.body.places[source.0 as usize].binding.clone());
-        let mut child = Builder::new(self.input, self.decisions, owner, result, self.types)?;
+        let mut child = Builder::new(self.input, self.decisions, owner, result)?;
         let mut parameters = vec![];
         for (ordinal, parameter) in function.parameters.iter().enumerate() {
             let ty = hirsel_types::bind_parameter_scopes(
@@ -287,7 +287,7 @@ impl Builder<'_, '_> {
 /// and fresh parameter namespaces for each copied body.
 fn clone_static(
     bodies: &mut Vec<Option<Body>>,
-    types: &mut hirsel_types::TypeStore,
+    types: &hirsel_types::TypeInterner,
     root: BodyId,
     root_ty: TypeId,
     span: Span,
@@ -350,7 +350,7 @@ fn clone_static(
             *p = parameter(*p);
         }
     };
-    let mut cache = BTreeMap::new();
+    let mut cache = std::collections::HashMap::new();
     let mut graph = |ty: &mut TypeId| -> Result<()> {
         if let Some(mapped) = cache.get(ty) {
             *ty = *mapped;

@@ -5,7 +5,7 @@
 //! each counted holder releasing one credit. `Inst::Release` of an inline value uses it
 //! directly. A counted block whose payload layout is [`covered`] is released through
 //! `hirsel.release.<key>(ctx, block, anchor, site, budget) -> i8`, one private function per
-//! layout and module, named by the layout's `LayoutKey`: it consumes one credit, and when that
+//! layout and module, named by the layout's `LayoutIdentity`: it consumes one credit, and when that
 //! was the last (the count is 1, T04 DropLast) it walks the payload and then returns the
 //! storage through `hirsel_rt_v2_free`, so a parent is freed after its children, except for the
 //! release that ends its program (the runtime's `STEP_RELEASE_LAST`, the order the runtime's
@@ -72,7 +72,7 @@ pub(crate) struct Runtime<'m> {
 /// A release function whose body is still to be generated, with its entry block.
 pub(crate) type Pending<'m> = (LayoutId, Function<'m>, BasicBlock<'m>);
 
-/// A release function's name: keyed on its payload's `LayoutKey`, so it names no number the
+/// A release function's name: keyed on its payload's `LayoutIdentity`, so it names no number the
 /// program assigns.
 fn name(record: &LayoutRecord) -> String {
     let digest = hirsel_lir::snapshot::digest("drop-glue", &record.key);

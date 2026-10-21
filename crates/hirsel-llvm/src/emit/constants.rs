@@ -57,7 +57,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 // The owner is the sequence block of the slice's element the table derived
                 // with it.
-                let Some(payload) = slice_storage(self.inputs.layouts, element) else {
+                let Some(payload) =
+                    slice_storage_with_index(self.inputs.layouts, self.inputs.index, element)
+                else {
                     return self.invalid("a slice without its element's sequence layout");
                 };
                 let block = self.literal_block(payload, bytes)?;
@@ -122,41 +124,27 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return self.invalid("static data without a block");
         };
         let held = root.layout;
-        let name = format!(
-            "hirsel.static.{}",
-            symbol_name(&symbol.definition, symbol.instance.as_ref())
-        );
-        // A block names only blocks after it, so each is emitted after its targets.
-        let mut emitted: Vec<Option<Value<'m>>> = vec![None; data.blocks.len()];
+        // Glue defines the blocks: their prefixes hold the program's descriptor indices. A
+        // block names only blocks after it, so each is declared after its targets.
+        let name = hirsel_lir::glue::static_symbol(symbol);
+        let mut headers: Vec<Option<Value<'m>>> = vec![None; data.blocks.len()];
         for (index, block) in data.blocks.iter().enumerate().rev() {
-            if let SizeSpec::Fixed(size) = self.layout(block.layout)?.size
-                && size != block.bytes.len() as u64
-            {
-                return self.invalid("static data of another size than its layout");
-            }
             let mut references = Vec::with_capacity(block.references.len());
             for r in &block.references {
                 let target = r.target as usize;
-                let Some(Some(target)) = emitted.get(target).filter(|_| target > index) else {
+                let Some(Some(target)) = headers.get(target).filter(|_| target > index) else {
                     return self.invalid("a static reference to no later block");
                 };
                 references.push((r.offset, *target));
             }
-            let descriptor = self.descriptor(block.layout)?;
-            let align = self.layout(block.layout)?.align;
             let block_name = match index {
                 0 => name.clone(),
                 _ => format!("{name}.{index}"),
             };
-            emitted[index] = Some(self.static_block(
-                &block_name,
-                descriptor,
-                align,
-                &block.bytes,
-                &references,
-            )?);
+            headers[index] =
+                Some(self.glue_block(&block_name, block.layout, &block.bytes, &references)?);
         }
-        let Some(block) = emitted[0] else {
+        let Some(block) = headers[0] else {
             return self.invalid("static data without a block");
         };
         let ty = self.value_type(result)?;

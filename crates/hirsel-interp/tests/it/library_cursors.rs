@@ -9,7 +9,7 @@ use support::ty;
 struct Harness {
     library: Library,
     run: RunConfiguration,
-    types: TypeStore,
+    types: std::sync::Arc<TypeInterner>,
     sources: hirsel_span::SourceMap,
     stdout: Vec<u8>,
     trace: Vec<TraceEvent>,
@@ -24,18 +24,18 @@ impl Harness {
         Self {
             library: Library::new(&run, Default::default()).unwrap(),
             run,
-            types: TypeStore::default(),
+            types: crate::support::session(),
             sources: support::sources(),
             stdout: vec![],
             trace: vec![],
         }
     }
     fn call(&mut self, name: &str, args: &[Value]) -> Result<OperationResult, Error> {
-        let result_type = self.types.push(ty(TypeKind::Tuple(vec![].into())));
+        let result_type = self.types.intern(ty(TypeKind::Tuple(vec![].into())));
         self.library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &crate::support::runtime(),
                     path: &hirsel_syntax::DefPath::core(name),
                     arguments: &mut args.to_vec(),
                     generics: &[],

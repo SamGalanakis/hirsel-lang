@@ -116,6 +116,46 @@ fn site(sources: Option<&SourceMap>, d: &Diagnostic) -> hirsel_span::FileSpan {
         |s| s.resolve(d.primary),
     )
 }
+/// Equal current sites can have different retained anchors after a declaration
+/// is removed and introduced again. Compare every diagnostic field, locating
+/// its spans for deduplication just as ordering already locates the primary.
+fn located(
+    mut diagnostic: Diagnostic,
+    sources: &SourceMap,
+    files: &mut std::collections::BTreeMap<std::path::PathBuf, hirsel_span::Anchor>,
+) -> Diagnostic {
+    let mut span = |span| {
+        let at = sources.resolve(span);
+        if let Some(file) = sources.file(at.file) {
+            hirsel_span::Span {
+                anchor: *files.entry(file.path.clone()).or_insert(file.anchor),
+                start: at.start,
+                end: at.end,
+            }
+        } else {
+            span
+        }
+    };
+    diagnostic.primary = span(diagnostic.primary);
+    for label in &mut diagnostic.secondary {
+        label.span = span(label.span);
+    }
+    if let Some(fix) = &mut diagnostic.fix {
+        fix.span = span(fix.span);
+    }
+    for obligation in &mut diagnostic.obligations {
+        match obligation {
+            Obligation::GenericBound { arguments } => {
+                for argument in arguments {
+                    *argument = span(*argument);
+                }
+            }
+            Obligation::ParameterMode { argument } => *argument = span(*argument),
+            Obligation::Multiplicity | Obligation::CopyProof => {}
+        }
+    }
+    diagnostic
+}
 pub fn select_diagnostics(
     mut diagnostics: Vec<Diagnostic>,
     sources: Option<&SourceMap>,
@@ -194,7 +234,13 @@ pub fn select_diagnostics(
                     )
             })
     });
-    diagnostics.dedup();
+    diagnostics.dedup_by(|a, b| {
+        a == b
+            || sources.is_some_and(|sources| {
+                let mut files = std::collections::BTreeMap::new();
+                located(a.clone(), sources, &mut files) == located(b.clone(), sources, &mut files)
+            })
+    });
     fold_root_causes(diagnostics)
 }
 #[cfg(test)]
@@ -214,6 +260,24 @@ mod tests {
             obligations: vec![],
             root_cause: None,
         }
+    }
+    #[test]
+    fn duplicate_current_sites_ignore_retained_anchor_identity() {
+        let mut sources = SourceMap::default();
+        let file = sources.add("main.hir", "abc\n".into()).unwrap();
+        let first = sources.item_anchor(file, 0);
+        let snapshot = sources.add_snapshot(file, "abc\n".into()).unwrap();
+        let second = sources.item_anchor(snapshot, 0);
+        let mut a = diag("LANG-7", 0);
+        a.primary.anchor = first;
+        let mut b = a.clone();
+        b.primary.anchor = second;
+        assert_eq!(
+            select_diagnostics(vec![a.clone(), b.clone()], Some(&sources)).len(),
+            1
+        );
+        sources.move_anchor(second, file, 1);
+        assert_eq!(select_diagnostics(vec![a, b], Some(&sources)).len(), 2);
     }
     #[test]
     fn section_23_specialized_owners_override_restatements() {

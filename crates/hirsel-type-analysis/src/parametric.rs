@@ -25,10 +25,10 @@ pub enum ParametricInput {
 /// body; a bodyless core or foreign declaration may keep or hand back a share
 /// of a borrowed argument.
 pub fn parametric_inputs(
-    store: &TypeStore,
+    store: &TypeInterner,
     function: &FunctionType,
     checked: bool,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Option<Vec<ParametricInput>> {
     if function.foreign.is_some() || !store.get(function.result)?.modes.relation.is_global() {
         return None;
@@ -153,10 +153,10 @@ pub fn parametric_inputs(
 /// written `unique`, or when it is a tuple, an inline aggregate with no block
 /// of its own, whose every part does so or is plain.
 pub fn unique_rows(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> bool {
     let Some(row) = store.get(root) else {
         return false;
@@ -177,9 +177,9 @@ pub fn unique_rows(
 /// `root` names no type parameter and is plain, so a value of it holds no
 /// counted content, whatever the instantiation.
 fn closed_plain(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> bool {
     !names_parameter(store, root)
         && structural_property(
@@ -198,9 +198,9 @@ fn no_authority(function: &FunctionType) -> bool {
 }
 
 /// Whether any type parameter, of any binder, occurs in `root`.
-fn names_parameter(store: &TypeStore, root: TypeId) -> bool {
+fn names_parameter(store: &TypeInterner, root: TypeId) -> bool {
     let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;
@@ -235,11 +235,11 @@ fn names_parameter(store: &TypeStore, root: TypeId) -> bool {
 /// Every part of `root` that names a held parameter is data: no function,
 /// handle, iterator or other builtin that could lend or hand over a held value.
 fn data_shape(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     depth: u32,
     held: &BTreeSet<TypeParamId>,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> bool {
     data_shape_within(store, root, depth, held, lookup, &mut BTreeSet::new())
 }
@@ -247,15 +247,15 @@ fn data_shape(
 /// `data_shape`, entering each nominal declaration once per set of held
 /// parameters: a recursive occurrence is data when the rest of it is.
 fn data_shape_within(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     depth: u32,
     held: &BTreeSet<TypeParamId>,
-    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
-    entered: &mut BTreeSet<(hirsel_syntax::DefPath, BTreeSet<TypeParamId>)>,
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<Option<SignatureRef>, QueryError>,
+    entered: &mut BTreeSet<(hirsel_syntax::DefId, BTreeSet<TypeParamId>)>,
 ) -> bool {
     let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) || !mentions(store, id, depth, held) {
             continue;
@@ -286,7 +286,7 @@ fn data_shape_within(
                 // with a held one must be data too; other parts cannot hold,
                 // lend or hand over a held value. An opaque declaration hides
                 // its parts.
-                let Ok(Some(signature)) = lookup(definition) else {
+                let Ok(Some(signature)) = lookup(*definition) else {
                     return false;
                 };
                 let SignatureKind::Type(declaration) = &signature.kind else {
@@ -305,15 +305,8 @@ fn data_shape_within(
                         _ => None,
                     })
                     .collect();
-                if entered.insert((definition.clone(), inner.clone()))
-                    && !data_shape_within(
-                        &signature.types,
-                        representation,
-                        0,
-                        &inner,
-                        lookup,
-                        entered,
-                    )
+                if entered.insert((*definition, inner.clone()))
+                    && !data_shape_within(store, representation, 0, &inner, lookup, entered)
                 {
                     return false;
                 }
@@ -329,7 +322,7 @@ fn data_shape_within(
 }
 
 fn collect_parameters(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     depth: u32,
     found: &mut BTreeSet<TypeParamId>,
@@ -339,16 +332,16 @@ fn collect_parameters(
     });
 }
 
-fn mentions(store: &TypeStore, root: TypeId, depth: u32, held: &BTreeSet<TypeParamId>) -> bool {
+fn mentions(store: &TypeInterner, root: TypeId, depth: u32, held: &BTreeSet<TypeParamId>) -> bool {
     let mut any = false;
     walk(store, root, depth, &mut |p| any |= held.contains(&p));
     any
 }
 
 /// Every parameter of the binder `depth` levels above `root`.
-fn walk(store: &TypeStore, root: TypeId, depth: u32, visit: &mut impl FnMut(TypeParamId)) {
+fn walk(store: &TypeInterner, root: TypeId, depth: u32, visit: &mut impl FnMut(TypeParamId)) {
     let mut pending = vec![(root, depth)];
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some((id, depth)) = pending.pop() {
         if !seen.insert((id, depth)) {
             continue;

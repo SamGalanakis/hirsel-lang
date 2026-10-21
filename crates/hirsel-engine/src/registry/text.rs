@@ -1,8 +1,8 @@
 //! Compiler-created text builders whose every append preserves UTF-8.
 use super::{build::Builder, *};
 
-pub(super) fn signatures() -> Vec<Signature> {
-    let mut b = Builder::new("");
+pub(super) fn signatures(types: &std::sync::Arc<TypeInterner>) -> Vec<Signature> {
+    let mut b = Builder::new(types, "");
     let mut f = b.function("take builder: List[u8]", "String uses {}", false);
     f.state_promises = vec![StatePromise {
         selector: ParameterRef::bound(ParamId(0)).into(),

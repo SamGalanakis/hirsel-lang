@@ -1965,7 +1965,7 @@ pub(super) struct NetworkWait {
     path: hirsel_syntax::DefPath,
     arguments: Vec<Value>,
     generics: Vec<hirsel_types::GenericArgument>,
-    types: hirsel_types::TypeStore,
+    types: std::sync::Arc<hirsel_types::TypeInterner>,
     result_type: hirsel_types::TypeId,
     site: hirsel_span::Span,
 }
@@ -1992,7 +1992,7 @@ impl super::Library {
                         path: call.path.clone(),
                         arguments: call.arguments.to_vec(),
                         generics: call.generics.to_vec(),
-                        types: call.types.clone(),
+                        types: call.runtime.types.clone(),
                         result_type: call.result_type,
                         site: call.site,
                     },
@@ -2029,7 +2029,7 @@ impl super::Library {
         let result = self.simulation.waiting_call(
             &wait.name,
             &OperationCall {
-                runtime: &Default::default(),
+                runtime: &crate::aggregate::RuntimeTypes::new(wait.types.clone()),
                 path: &wait.path,
                 arguments: &mut wait.arguments.clone(),
                 generics: &wait.generics,

@@ -66,7 +66,7 @@ impl Checker<'_, '_> {
         let SignatureKind::Function(open_function) = &open_signature.kind else {
             return Err(protocol_error("cursor open operation is not a function"));
         };
-        let open_function = self.import_function(open_function, &open_signature.types)?;
+        let open_function = self.import_function(open_function)?;
         let consuming = matches!(
             protocol,
             ForProtocol::ConsumingSequence(_) | ForProtocol::Map(_)
@@ -84,7 +84,7 @@ impl Checker<'_, '_> {
         let SignatureKind::Function(next_function) = &next_signature.kind else {
             return Err(protocol_error("cursor next operation is not a function"));
         };
-        let next_function = self.import_function(next_function, &next_signature.types)?;
+        let next_function = self.import_function(next_function)?;
         let (result, next_arguments) =
             self.specialize_cursor_call(&next_function, cursor, ast::PassingMode::Mut)?;
         let TypeKind::Named { arguments, .. } = self.kind(result) else {
@@ -152,8 +152,8 @@ impl Checker<'_, '_> {
         else {
             return Err(protocol_error("invalid published association"));
         };
-        let open_f = self.import_function(open_f, &open.types)?;
-        let next_f = self.import_function(next_f, &next.types)?;
+        let open_f = self.import_function(open_f)?;
+        let next_f = self.import_function(next_f)?;
         let (cursor, _) =
             self.specialize_cursor_call(&open_f, source_type, ast::PassingMode::Borrow)?;
         let (result, _) = self.specialize_cursor_call(&next_f, cursor, ast::PassingMode::Mut)?;
@@ -164,7 +164,7 @@ impl Checker<'_, '_> {
         else {
             return Err(protocol_error("invalid published next result"));
         };
-        if definition != association.option {
+        if *definition.path() != association.option {
             return Err(protocol_error("invalid published Option identity"));
         }
         let [GenericArgument::Type(item)] = arguments.as_slice() else {
@@ -346,7 +346,7 @@ impl Checker<'_, '_> {
         let SignatureKind::Function(function) = &signature.kind else {
             return Err(protocol_error("loop operation is not a declared function"));
         };
-        let function = self.import_function(function, &signature.types)?;
+        let function = self.import_function(function)?;
         if function.generics.len() != arguments.len() {
             return Err(protocol_error(
                 "loop operation generic arity does not match its protocol",
@@ -381,7 +381,7 @@ impl Checker<'_, '_> {
                 "loop advance does not return a nominal Option",
             ));
         };
-        if definition != ast::DefPath::core("Option")
+        if *definition.path() != ast::DefPath::core("Option")
             || !matches!(arguments.as_slice(),[GenericArgument::Type(t)] if self.compatible(*t,item))
         {
             return Err(protocol_error(
@@ -394,9 +394,9 @@ impl Checker<'_, '_> {
         };
         let none = variants
             .iter()
-            .position(|v| v.name == "None" && v.fields.is_empty());
+            .position(|v| v.name.as_str() == "None" && v.fields.is_empty());
         let some = variants.iter().position(|v| {
-            v.name == "Some" && v.fields.len() == 1 && self.compatible(v.fields[0].1, item)
+            v.name.as_str() == "Some" && v.fields.len() == 1 && self.compatible(v.fields[0].1, item)
         });
         let (Some(none), Some(some)) = (none, some) else {
             return Err(protocol_error(
@@ -406,7 +406,7 @@ impl Checker<'_, '_> {
         Ok(OptionLayout {
             result,
             item,
-            definition,
+            definition: definition.path().clone(),
             none_variant: VariantId(none as u32),
             some_variant: VariantId(some as u32),
         })

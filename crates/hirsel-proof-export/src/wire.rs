@@ -1,8 +1,11 @@
 //! Canonical `hirsel-codec` encodings of TIR, its type graphs and signatures.
 //! Every impl is under the export context [`Cx`],
 //! which owns the per-definition interned tables; nothing session-local
-//! (anchors, byte offsets, `TypeId` provenance, raw syntax ids, `DefId`s)
+//! (anchors, byte offsets, interner `TypeId`s, raw syntax ids, `DefId`s)
 //! reaches the text; lexical owners are written as (DefPath, occurrence).
+//! A definition, signature or materialized value writes its canonical type
+//! table first: the closure of the TypeIds it names, in the order its fields
+//! name them, each TypeId after it written as a position in that table.
 use crate::Location;
 use hirsel_codec::{DecodeError, Reader, Snapshot, Writer, snapshot_enum, snapshot_struct};
 use hirsel_diag::RuleId;
@@ -27,11 +30,12 @@ use hirsel_types::{
     ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
     ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SerializableCheck,
     SharedPath, SharedSlice, Signature, SignatureDependency, SignatureKind, SignatureMetadata,
-    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeKind, TypeParamId,
-    TypeStore, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
+    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeInterner, TypeKind,
+    TypeParamId, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Maps a session span to its portable source site.
 pub type Locator = Rc<dyn Fn(Span) -> Location>;
@@ -47,8 +51,14 @@ pub struct Cx {
     /// Per syntax-id kind: file-arena id -> order-preserving per-section rank.
     syntax_seen: [BTreeSet<u32>; SYNTAX_KINDS],
     syntax_rank: [BTreeMap<u32, u32>; SYNTAX_KINDS],
-    /// Ids of the type store being decoded.
+    /// The session interner: rows are read from and decoded into it.
+    pub(crate) types: Arc<TypeInterner>,
+    /// Encode: the current type table's position of each TypeId.
+    type_index: HashMap<TypeId, u32>,
+    /// Decode: the session id of each position of the current type table.
     type_ids: Vec<TypeId>,
+    /// A probe pass: the TypeIds written, in order, instead of positions.
+    probe: Option<Vec<TypeId>>,
     /// Decode: the definition section ordinal, carried as the decoded span file.
     pub(crate) section: u32,
     /// Collect: every definition path the section names (PS-6 references).
@@ -65,7 +75,7 @@ const TYPE_EXPR: usize = 2;
 const STMT: usize = 3;
 
 impl Cx {
-    pub fn new(locator: Locator) -> Self {
+    pub fn new(locator: Locator, types: Arc<TypeInterner>) -> Self {
         Self {
             locator,
             collecting: false,
@@ -73,7 +83,10 @@ impl Cx {
             location_ids: HashMap::new(),
             syntax_seen: Default::default(),
             syntax_rank: Default::default(),
+            types,
+            type_index: HashMap::new(),
             type_ids: vec![],
+            probe: None,
             section: 0,
             references: BTreeSet::new(),
             content: None,
@@ -261,9 +274,18 @@ syntax_index!(
     StmtId => STMT,
 );
 
+/// A TypeId no table row has, as written; reading it is refused.
+const MISSING: u32 = u32::MAX;
+
 impl Snapshot<Cx> for TypeId {
     fn write(&self, w: &mut Writer<Cx>) {
-        w.uint(self.index() as u128);
+        if let Some(probe) = &mut w.context.probe {
+            probe.push(*self);
+            w.uint(0);
+            return;
+        }
+        let position = w.context.type_index.get(self).copied().unwrap_or(MISSING);
+        w.uint(position as u128);
     }
     fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
         let index = u32::read(r)?;
@@ -275,44 +297,101 @@ impl Snapshot<Cx> for TypeId {
     }
 }
 
-impl Snapshot<Cx> for TypeStore {
-    fn write(&self, w: &mut Writer<Cx>) {
-        w.open("TypeStore");
-        w.uint(self.len() as u128);
-        for (_, row) in self.iter() {
-            row.write(w);
-        }
-        w.close();
+/// The TypeIds `write` names, in the order it names them: a scratch pass
+/// in the same (content or wire) mode that leaves `w` untouched.
+fn probe(w: &Writer<Cx>, write: impl FnOnce(&mut Writer<Cx>)) -> Vec<TypeId> {
+    let mut cx = Cx::new(w.context.locator.clone(), w.context.types.clone());
+    cx.collecting = true;
+    cx.probe = Some(vec![]);
+    if w.context.content.is_some() {
+        cx.content = Some(Default::default());
     }
-    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
-        r.open("TypeStore")?;
-        let count = u32::read(r)? as usize;
-        // Every row takes at least six bytes of text: refuse forged counts
-        // before allocating.
-        if count > r.remaining() / 6 {
-            return Err(r.error("type table is longer than its input"));
-        }
-        let mut failure = None;
-        let store = TypeStore::from_graph(count, |ids| {
-            r.context.type_ids = ids.to_vec();
-            let mut rows = Vec::with_capacity(count);
-            for _ in 0..count {
-                match Type::read(r) {
-                    Ok(row) => rows.push(row),
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
+    let mut scratch = Writer::with_context(cx);
+    write(&mut scratch);
+    scratch.finish().1.probe.unwrap_or_default()
+}
+
+/// Write the canonical table of everything `write` names, then `write` with
+/// its TypeIds as positions in that table. The table stays current for the
+/// rest of the section.
+pub(crate) fn tabled(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
+    let types = w.context.types.clone();
+    let order = hirsel_types::closure(&types, probe(w, &write));
+    w.context.type_index = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i as u32))
+        .collect();
+    w.open("TypeTable");
+    w.uint(order.len() as u128);
+    for id in order.iter() {
+        types.row(*id).write(w);
+    }
+    w.close();
+    write(w);
+}
+
+/// Read a canonical type table into the session interner; later positions
+/// read as its rows' session ids. Rows equal to existing rows get their ids.
+pub(crate) fn read_table(r: &mut Reader<'_, Cx>) -> Result<(), DecodeError> {
+    r.open("TypeTable")?;
+    let count = u32::read(r)? as usize;
+    // Every row takes at least six bytes of text: refuse forged counts
+    // before allocating.
+    if count > r.remaining() / 6 {
+        return Err(r.error("type table is longer than its input"));
+    }
+    let scratch = TypeInterner::new(None);
+    let mut failure = None;
+    let ids = scratch.intern_graph(count, |ids| {
+        r.context.type_ids = ids.to_vec();
+        let mut rows = Vec::with_capacity(count);
+        for _ in 0..count {
+            match Type::read(r) {
+                Ok(row) => rows.push(row),
+                Err(error) => {
+                    failure = Some(error);
+                    break;
                 }
             }
-            rows.resize_with(count, Type::unit);
-            rows
-        });
-        if let Some(error) = failure {
-            return Err(error);
         }
-        r.close()?;
-        Ok(store)
+        rows.resize_with(count, Type::unit);
+        rows
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    r.close()?;
+    let (table, positions) = hirsel_types::encode_table(&scratch, &ids);
+    let decoded = hirsel_types::decode_table(&r.context.types, &table);
+    r.context.type_ids = positions
+        .iter()
+        .map(|p| {
+            decoded
+                .get(*p as usize)
+                .copied()
+                .unwrap_or(TypeId::DANGLING)
+        })
+        .collect();
+    Ok(())
+}
+
+/// A definition is written as its DefPath, never its session id.
+impl Snapshot<Cx> for hirsel_syntax::DefId {
+    fn write(&self, w: &mut Writer<Cx>) {
+        self.path().write(w);
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        Ok(hirsel_syntax::DefId::intern(&DefPath::read(r)?))
+    }
+}
+/// A name is written as its text.
+impl Snapshot<Cx> for hirsel_intern::Symbol {
+    fn write(&self, w: &mut Writer<Cx>) {
+        self.as_str().to_owned().write(w);
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        Ok(hirsel_intern::Symbol::intern(&String::read(r)?))
     }
 }
 
@@ -742,14 +821,35 @@ impl Snapshot<Cx> for SignatureMetadata {
         Ok(value)
     }
 }
-erasing_struct!(Signature {
-    metadata,
-    definition,
-    types,
-    kind,
-    // Name-sensitive; the content hash covers the signature itself.
-    fingerprint => ContentHash::default()
-});
+impl Snapshot<Cx> for Signature {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("Signature");
+        tabled(w, |w| {
+            self.metadata.write(w);
+            self.definition.write(w);
+            self.kind.write(w);
+            // Name-sensitive; the content hash covers the signature itself.
+            if w.context.content.is_some() {
+                ContentHash::default().write(w);
+            } else {
+                self.fingerprint.write(w);
+            }
+        });
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("Signature")?;
+        read_table(r)?;
+        let value = Signature {
+            metadata: Snapshot::read(r)?,
+            definition: Snapshot::read(r)?,
+            kind: Snapshot::read(r)?,
+            fingerprint: Snapshot::read(r)?,
+        };
+        r.close()?;
+        Ok(value)
+    }
+}
 snapshot_struct!(SignatureDependency { definition, fingerprint } in Cx);
 snapshot_enum!(UseKind { Borrow, Take, Copy, Mut } in Cx);
 snapshot_enum!(Destination {
@@ -928,20 +1028,135 @@ snapshot_struct!(ProtocolAssociationReceipt {
     open,
     next
 } in Cx);
-erasing_struct!(Definition {
-    caller_bodies,
-    protocol_associations,
-    types,
-    path,
-    signature_hash => ContentHash::default(),
-    bodies,
-    entry,
-    contracts
-});
-snapshot_struct!(Materialized { types, root } in Cx);
+/// `types` is not written: it is the definition's closure, recomputed on read.
+impl Snapshot<Cx> for Definition {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("Definition");
+        tabled(w, |w| {
+            self.caller_bodies.write(w);
+            self.protocol_associations.write(w);
+            self.path.write(w);
+            if w.context.content.is_some() {
+                ContentHash::default().write(w);
+            } else {
+                self.signature_hash.write(w);
+            }
+            self.bodies.write(w);
+            self.entry.write(w);
+            self.contracts.write(w);
+        });
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("Definition")?;
+        read_table(r)?;
+        let mut value = Definition {
+            caller_bodies: Snapshot::read(r)?,
+            protocol_associations: Snapshot::read(r)?,
+            types: Arc::from([]),
+            path: Snapshot::read(r)?,
+            signature_hash: Snapshot::read(r)?,
+            bodies: Snapshot::read(r)?,
+            entry: Snapshot::read(r)?,
+            contracts: Snapshot::read(r)?,
+        };
+        r.close()?;
+        value.types = hirsel_tir::definition_types(&r.context.types, &value);
+        Ok(value)
+    }
+}
+impl Snapshot<Cx> for Materialized {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("Materialized");
+        tabled(w, |w| self.root.write(w));
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("Materialized")?;
+        read_table(r)?;
+        let root = Snapshot::read(r)?;
+        r.close()?;
+        Ok(Materialized { root })
+    }
+}
 snapshot_struct!(ValueNode { ty, kind } in Cx);
 snapshot_enum!(ValueKind {
     Constant(c),
     FunctionReference(path),
     Construct { constructor, fields }
 } in Cx);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_types::{GenericArgument, Primitive, TypeKind, Variant};
+
+    /// A type table's text for a recursive group, a named instance and
+    /// repeated roots, after a round trip through a second interner.
+    fn tables() -> String {
+        let locator: Locator = Rc::new(|_: Span| -> Location { unreachable!("no spans") });
+        let t = TypeInterner::new(None);
+        let u64 = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let list = t.intern_graph(2, |ids| {
+            let field = |name: &str, ty| (Some(hirsel_intern::Symbol::intern(name)), ty);
+            vec![
+                Type::with_kind(TypeKind::Variant(
+                    vec![
+                        Variant {
+                            name: hirsel_intern::Symbol::intern("Nil"),
+                            fields: vec![].into(),
+                        },
+                        Variant {
+                            name: hirsel_intern::Symbol::intern("Cons"),
+                            fields: vec![field("head", u64), field("tail", ids[1])].into(),
+                        },
+                    ]
+                    .into(),
+                )),
+                Type::with_kind(TypeKind::Box(ids[0])),
+            ]
+        })[0];
+        let named = t.intern(Type::with_kind(TypeKind::Named {
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("Option")),
+            arguments: vec![GenericArgument::Type(list)].into(),
+        }));
+        let boolean = t.intern(Type::boolean());
+        let tuple = t.intern(Type::with_kind(TypeKind::Tuple(
+            vec![named, boolean, u64].into(),
+        )));
+        let roots = [tuple, list, u64, named, tuple];
+        let write = |cx: Cx, roots: &[TypeId]| {
+            let mut w = Writer::with_context(cx);
+            tabled(&mut w, |w| {
+                w.uint(roots.len() as u128);
+                for root in roots {
+                    root.write(w);
+                }
+            });
+            w.finish().0
+        };
+        let text = write(Cx::new(locator.clone(), t), &roots);
+        let other = TypeInterner::new(None);
+        let mut r = Reader::with_context(&text, Cx::new(locator.clone(), other.clone()));
+        read_table(&mut r).unwrap();
+        let count = u32::read(&mut r).unwrap();
+        let read: Vec<TypeId> = (0..count).map(|_| TypeId::read(&mut r).unwrap()).collect();
+        r.finish().unwrap();
+        assert_eq!(read[0], read[4], "a repeated root reads as one id");
+        assert_eq!(write(Cx::new(locator, other), &read), text);
+        text
+    }
+
+    #[test]
+    fn type_tables_do_not_depend_on_id_assignment() {
+        let Some(runs) = hirsel_intern::under_salts(
+            "wire::tests::type_tables_do_not_depend_on_id_assignment",
+            &[1, 2, 0x5eed],
+            tables,
+        ) else {
+            return;
+        };
+        assert!(runs.iter().all(|run| *run == runs[0]), "{runs:#?}");
+        assert_eq!(runs[0], tables(), "salted runs agree with the unsalted one");
+    }
+}

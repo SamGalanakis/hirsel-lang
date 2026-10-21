@@ -5,7 +5,7 @@ use hirsel_run_config::{
 };
 use hirsel_run_schema::{CalleeFacts, CodeReach, LaunchKind, ProgramRevision, RunRefusal};
 use hirsel_syntax::Visibility;
-use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
+use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeInterner, TypeKind};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -14,10 +14,15 @@ pub fn read_run_record(path: &Path) -> Result<ValidatedRun, RunRefusal> {
     RunConfig::read_path(path)
 }
 
-/// The exact nominal roots, in parameter order, of an eligible entry.
-pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root>, RunRefusal> {
+/// The exact nominal roots, in parameter order, of an eligible entry whose
+/// rows live in `t`.
+pub fn entry_roots(
+    t: &TypeInterner,
+    signature: &Signature,
+    launch: LaunchKind,
+) -> Result<Vec<Root>, RunRefusal> {
     if launch == LaunchKind::Call {
-        return callee_roots(signature);
+        return callee_roots(t, signature);
     }
     let invalid = |detail: &str| RunRefusal::Invalid {
         field: "entry".into(),
@@ -38,15 +43,15 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
     let TypeKind::Named {
         definition,
         arguments,
-    } = &signature
-        .types
+    } = &t
         .get(function.result)
         .ok_or_else(|| invalid("missing result type"))?
         .kind
     else {
         return Err(invalid("expected core@1/Result[(), E]"));
     };
-    let nominal = |definition: &hirsel_syntax::DefPath, name: &str| {
+    let nominal = |definition: &hirsel_syntax::DefId, name: &str| {
+        let definition = definition.path();
         definition.package_is("core", "1")
             && definition.0.modules.is_empty()
             && definition.0.name == name
@@ -55,7 +60,7 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
         return Err(invalid("expected core@1/Result[(), E]"));
     };
     if !nominal(definition, "Result")
-        || !matches!(signature.types.get(*ok).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty())
+        || !matches!(t.get(*ok).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty())
     {
         return Err(invalid("expected core@1/Result[(), E]"));
     }
@@ -66,18 +71,18 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
             let TypeKind::Named {
                 definition,
                 arguments,
-            } = &signature
-                .types
+            } = &t
                 .get(parameter.ty)
                 .ok_or_else(|| invalid("missing parameter type"))?
                 .kind
             else {
                 return Err(invalid("expected nominal root capabilities"));
             };
-            if !arguments.is_empty() || !nominal(definition, &definition.0.name) {
+            let name = &definition.path().0.name;
+            if !arguments.is_empty() || !nominal(definition, name) {
                 return Err(invalid("expected nominal root capabilities"));
             }
-            match definition.0.name.as_str() {
+            match name.as_str() {
                 "Io" => Ok(Root::Io),
                 "Args" => Ok(Root::Args),
                 "Env" => Ok(Root::Env),
@@ -98,7 +103,7 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
 /// The roots of a callee run's entry (RUN-3, RUN-10): a complete, monomorphic Hirsel
 /// function of any visibility taking its argument, after the place's `Io` for the call
 /// form, and returning a `Result`.
-fn callee_roots(signature: &Signature) -> Result<Vec<Root>, RunRefusal> {
+fn callee_roots(t: &TypeInterner, signature: &Signature) -> Result<Vec<Root>, RunRefusal> {
     let invalid = || RunRefusal::Invalid {
         field: "entry".into(),
         detail: "expected a runner entry: fn(a: A) or fn(rt: Io, a: A), returning a Result".into(),
@@ -111,11 +116,11 @@ fn callee_roots(signature: &Signature) -> Result<Vec<Root>, RunRefusal> {
     }
     let named = |ty, name: &str| {
         matches!(
-            signature.types.get(ty).map(|t| &t.kind),
+            t.get(ty).map(|t| &t.kind),
             Some(TypeKind::Named { definition, .. })
-                if definition.package_is("core", "1")
-                    && definition.0.modules.is_empty()
-                    && definition.0.name == name
+                if definition.path().package_is("core", "1")
+                    && definition.path().0.modules.is_empty()
+                    && definition.path().0.name == name
         )
     };
     if !named(function.result, "Result") {
@@ -145,7 +150,7 @@ pub fn callee_facts(
             continue;
         }
         let signature = engine.item_signature(&site.callee)?.value;
-        if callee_roots(&signature).is_err() {
+        if callee_roots(engine.types(), &signature).is_err() {
             continue;
         }
         let program = engine.semantic_program_revision(&site.callee)?.digest();
@@ -173,7 +178,7 @@ pub fn entry_facts(
     path: &hirsel_syntax::DefPath,
 ) -> Result<Option<(CalleeFacts, hirsel_run_schema::CallForm)>, hirsel_types::QueryError> {
     let signature = engine.item_signature(path)?.value;
-    let Ok(roots) = callee_roots(&signature) else {
+    let Ok(roots) = callee_roots(engine.types(), &signature) else {
         return Ok(None);
     };
     let hashes = engine.definition_hashes([path.clone()])?;
@@ -221,16 +226,21 @@ pub fn served_entries(
 }
 
 /// Select the admission kind from the entry's checked nominal signature.
-pub fn entry_launch_kind(signature: &Signature) -> Result<LaunchKind, RunRefusal> {
-    if entry_roots(signature, LaunchKind::Test).is_ok() {
+pub fn entry_launch_kind(
+    t: &TypeInterner,
+    signature: &Signature,
+) -> Result<LaunchKind, RunRefusal> {
+    if entry_roots(t, signature, LaunchKind::Test).is_ok() {
         Ok(LaunchKind::Test)
     } else {
-        entry_roots(signature, LaunchKind::Main).map(|_| LaunchKind::Main)
+        entry_roots(t, signature, LaunchKind::Main).map(|_| LaunchKind::Main)
     }
 }
 
 /// Code selection defaults to denial. Check every binding and root before host admission.
+#[allow(clippy::too_many_arguments)]
 pub fn admit_run(
+    t: &TypeInterner,
     signature: &Signature,
     revision: &ProgramRevision,
     launch: LaunchKind,
@@ -239,21 +249,22 @@ pub fn admit_run(
     host: &mut dyn HostAuthority,
     now: i64,
 ) -> Result<AdmittedRun, RunRefusal> {
-    bind_run(signature, revision, launch, requested, code)?.admit(host, now)
+    bind_run(t, signature, revision, launch, requested, code)?.admit(host, now)
 }
 
 /// Bind the requested run (or the program's default record) to the checked code it would
 /// execute, with no host consulted: the entry's signature, binding, roots and code policy. A
 /// launcher that admits the run elsewhere (a native executable) binds here only.
 pub fn bind_run(
+    t: &TypeInterner,
     signature: &Signature,
     revision: &ProgramRevision,
     launch: LaunchKind,
     requested: Option<&ValidatedRun>,
     code: CodeReach,
 ) -> Result<BoundRun, RunRefusal> {
-    let roots = entry_roots(signature, launch)?;
-    if signature.definition.to_string() != revision.entry() {
+    let roots = entry_roots(t, signature, launch)?;
+    if signature.definition.path().to_string() != revision.entry() {
         return Err(RunRefusal::Binding {
             field: "entry.signature".into(),
         });

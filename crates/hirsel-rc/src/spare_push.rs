@@ -783,6 +783,7 @@ pub fn commit(
     u: &mut LirUnit<Value>,
     proven: &[Proven],
     requests: &mut Vec<crate::library::Request>,
+    types: &hirsel_types::TypeInterner,
     layouts: &dyn crate::library::builder::Layouts,
 ) -> Result<(), crate::instance::InstanceError> {
     let spare = spare_path();
@@ -794,7 +795,7 @@ pub fn commit(
         let instance = u.tables.symbols[symbol.index()].instance;
         let mut request = None;
         for r in requests.iter() {
-            if Some(r.key(layouts)?.digest()) == instance {
+            if Some(r.key(types, layouts)?.digest()) == instance {
                 request = Some(r.clone());
                 break;
             }
@@ -803,14 +804,13 @@ pub fn commit(
         let request = crate::library::Request::native(
             body,
             &spare,
-            push.actuals.store.clone(),
             push.actuals.arguments.clone(),
             push.callable,
         );
         let target = Symbol {
             kind: SymbolKind::Function,
             definition: spare.clone(),
-            instance: Some(request.key(layouts)?.digest()),
+            instance: Some(request.key(types, layouts)?.digest()),
         };
         let id = match u.tables.symbols.iter().position(|s| *s == target) {
             Some(i) => SymbolId(i as u32),
@@ -833,7 +833,7 @@ pub fn commit(
         if !named {
             let mut kept = Vec::with_capacity(requests.len());
             for r in requests.drain(..) {
-                if Some(r.key(layouts)?.digest()) != instance {
+                if Some(r.key(types, layouts)?.digest()) != instance {
                     kept.push(r);
                 }
             }

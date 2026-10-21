@@ -5,7 +5,7 @@ use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::Origin;
 use hirsel_syntax::*;
 use hirsel_types::*;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::{Arc, Mutex};
 
 fn out<T>(value: T) -> QueryOutput<T> {
     QueryOutput {
@@ -30,16 +30,23 @@ fn error(span: Span) -> QueryError {
 }
 #[derive(Clone)]
 struct Fake {
-    events: Rc<RefCell<Vec<String>>>,
+    events: Arc<Mutex<Vec<String>>>,
     reject: Option<&'static str>,
     missing_lookup: bool,
 }
 impl Fake {
     fn event(&self, phase: &str) {
-        self.events.borrow_mut().push(phase.into());
+        self.events.lock().unwrap().push(phase.into());
     }
     fn fail(&self, phase: &str, span: Span) -> Result<(), QueryError> {
         self.event(phase);
+        if self.reject == Some("resolve+signature") && matches!(phase, "resolve" | "signature") {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { RuleId::of("LANG-1") },
+                span,
+                format!("{phase} fixture rejection"),
+            )]));
+        }
         if self.reject == Some(phase) {
             Err(error(span))
         } else {
@@ -147,13 +154,17 @@ impl ParserPhase for Fake {
 impl ResolverPhase for Fake {
     fn resolve(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
         self.fail("resolve", item.origin.span)?;
         if item.definition == path("b") {
-            provider.signature(&path("a"))?;
+            provider.signature(DefId::intern(&path("a")))?;
         }
         if self.missing_lookup {
             let name = Symbol::intern("missing");
@@ -164,7 +175,7 @@ impl ResolverPhase for Fake {
                     segments: vec![name],
                 },
             );
-            let _ = provider.signature(&path("missing"));
+            let _ = provider.signature(DefId::intern(&path("missing")));
             return Err(error(item.origin.span));
         }
         Ok(out(Resolution::default()))
@@ -173,7 +184,11 @@ impl ResolverPhase for Fake {
 impl SignaturePhase for Fake {
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &syntax.item;
@@ -185,12 +200,10 @@ impl SignaturePhase for Fake {
             } => ContentHash::of_bytes(header.literal.as_bytes()),
             _ => unreachable!(),
         };
-        let mut types = TypeStore::default();
-        let unit = types.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
+        let unit = t.intern(Type::with_kind(TypeKind::Tuple(vec![].into())));
         Ok(out(Signature {
             metadata: Default::default(),
-            definition: item.definition.clone(),
-            types,
+            definition: DefId::intern(&item.definition),
             kind: SignatureKind::Const {
                 ty: unit,
                 generics: Default::default(),
@@ -202,21 +215,22 @@ impl SignaturePhase for Fake {
 impl CheckerPhase for Fake {
     fn check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         resolution: Resolution,
         _signature: &Signature,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         self.fail("check", syntax.item.origin.span)?;
-        let mut types = _signature.types.clone();
         let unit = match _signature.kind {
             SignatureKind::Const { ty: unit, .. } => unit,
             SignatureKind::Function(ref f) => f.result,
             _ => unreachable!(),
         };
-        let boolean = types.push(Type {
+        let boolean = t.intern(Type {
             kind: TypeKind::Primitive(hirsel_types::Primitive::Bool),
-            ..types.get(unit).unwrap().clone()
+            ..t.row(unit).clone()
         });
         Ok(out(TypedBody {
             checked: CheckedBody {
@@ -226,8 +240,6 @@ impl CheckerPhase for Fake {
                 calls: vec![],
                 bindings: vec![],
                 patterns: vec![],
-
-                types,
                 resolution,
                 expressions: vec![],
                 instantiations: vec![],
@@ -243,8 +255,11 @@ impl CheckerPhase for Fake {
 impl ModesPhase for Fake {
     fn check_modes(
         &self,
-        body: TypedBody,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
+        body: Arc<TypedBody>,
         _signature: &Signature,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
         self.fail("modes", body.syntax.item.origin.span)?;
@@ -253,24 +268,25 @@ impl ModesPhase for Fake {
             ownership: Default::default(),
             results: vec![],
             call_allocations: vec![],
-            materialized: vec![],
-            staged: vec![],
         }))
     }
 }
 impl LoweringPhase for Fake {
     fn lower(
         &self,
-        body: AnalyzedBody,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        _comptime: &Comptime,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
         let syntax = &body.typed.syntax;
         self.fail("lower", syntax.item.origin.span)?;
-        Ok(out(hirsel_tir::Definition {
+        let mut definition = hirsel_tir::Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            types: signature.types.clone(),
-            path: signature.definition.clone(),
+            types: Arc::from([]),
+            path: signature.definition,
             signature_hash: signature.fingerprint,
             bodies: if self.reject == Some("invalid-tir") {
                 vec![]
@@ -279,11 +295,16 @@ impl LoweringPhase for Fake {
             },
             entry: hirsel_tir::BodyId(0),
             contracts: vec![],
-        }))
+        };
+        definition.types = hirsel_tir::definition_types(t, &definition);
+        Ok(out(definition))
     }
     fn lower_evaluation(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _: &AnalyzedBody,
+        _staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
         _: &Signature,
         _: ExprId,
         _: TypeId,
@@ -352,9 +373,9 @@ fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_t
 fn make_engine(
     reject: Option<&'static str>,
     missing_lookup: bool,
-) -> (QueryEngine, Rc<RefCell<Vec<String>>>) {
-    let events = Rc::new(RefCell::new(vec![]));
-    let fake = Rc::new(Fake {
+) -> (QueryEngine, Arc<Mutex<Vec<String>>>) {
+    let events = Arc::new(Mutex::new(vec![]));
+    let fake = Arc::new(Fake {
         events: events.clone(),
         reject,
         missing_lookup,
@@ -395,7 +416,8 @@ fn invalid_tir_is_never_published_and_operational_failures_retry_on_compiler_thr
     }
     assert_eq!(
         events
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .filter(|phase| phase.as_str() == "lower")
             .count(),
@@ -438,7 +460,22 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             check_snapshot(&mut engine, file, &default_context()),
             Err(QueryError::Diagnostics(_))
         ));
-        assert_eq!(*events.borrow(), phases[..=stop]);
+        let expected = match stop {
+            0 => vec!["lex"],
+            1 => vec!["lex", "parse"],
+            2 | 3 => vec!["lex", "parse", "signature", "resolve"],
+            _ => [
+                vec!["lex", "parse", "signature", "resolve"],
+                phases[4..=stop].to_vec(),
+            ]
+            .concat(),
+        };
+        assert_eq!(
+            *events.lock().unwrap(),
+            expected,
+            "program rejects at {}",
+            phases[stop]
+        );
     }
     let (mut engine, events) = make_engine(None, false);
     let file = engine
@@ -450,7 +487,76 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(*events.borrow(), phases);
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "lex",
+            "parse",
+            "signature",
+            "resolve",
+            "check",
+            "modes",
+            "lower"
+        ]
+    );
+}
+/// Direct body queries still demand resolution before the owner signature;
+/// program checks freeze signatures in S0 before running the same body stages.
+#[test]
+fn scalar_queries_preserve_phase_order_and_stop_at_every_error_boundary() {
+    with_compiler_stack(|| {
+        let phases = [
+            "lex",
+            "parse",
+            "resolve",
+            "signature",
+            "check",
+            "modes",
+            "lower",
+        ];
+        for stop in 0..phases.len() {
+            let (mut engine, events) = make_engine(Some(phases[stop]), false);
+            let file = engine
+                .sources
+                .add("fixture.hir", "fn a () { 1 }\n".into())
+                .unwrap();
+            let result = engine
+                .parse_file(file, &default_context())
+                .and_then(|parsed| {
+                    if !parsed.diagnostics.is_empty() {
+                        return Err(QueryError::Diagnostics(parsed.diagnostics));
+                    }
+                    engine.lower_to_tir(&path("a"))
+                });
+            assert!(matches!(result, Err(QueryError::Diagnostics(_))));
+            assert_eq!(*events.lock().unwrap(), phases[..=stop]);
+        }
+        let (mut engine, events) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        engine.lower_to_tir(&path("a")).unwrap();
+        assert_eq!(*events.lock().unwrap(), phases);
+    });
+}
+#[test]
+fn frozen_signature_preflight_preserves_resolution_rejection_precedence() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let (mut engine, events) = make_engine(Some("resolve+signature"), false);
+            parse(&mut engine, "fn a () { 1 }\n");
+            let outcomes =
+                engine.mode_definitions(vec![path("a")], hirsel_intern::jobs::Jobs::new(jobs));
+            assert_eq!(outcomes[0].phase, Some(QueryKind::Resolve));
+            let Err(QueryError::Diagnostics(diagnostics)) = &outcomes[0].result else {
+                panic!("expected resolution rejection");
+            };
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].message, "resolve fixture rejection");
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["lex", "parse", "signature", "resolve"]
+            );
+        }
+    });
 }
 #[test]
 fn changing_one_body_recomputes_only_that_definition() {
@@ -525,7 +631,7 @@ fn failed_provider_reads_survive_rejection_and_manifest_changes_invalidate_on_co
         .dependency_reads(&path("a"), QueryKind::Resolve)
         .unwrap();
     assert_eq!(reads.lookups, vec![(path("missing"), true)]);
-    assert_eq!(reads.signatures[0].definition, path("missing"));
+    assert_eq!(*reads.signatures[0].definition.path(), path("missing"));
 }
 #[test]
 fn missing_stages_remain_unavailable_and_diagnostic_sources_survive_edits() {
@@ -586,7 +692,11 @@ struct ContractSignatures;
 impl SignaturePhase for ContractSignatures {
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &syntax.item;
@@ -599,7 +709,7 @@ impl SignaturePhase for ContractSignatures {
         let mut fingerprint = ContentHash::of_bytes(header.literal.as_bytes());
         let mut contracts = vec![];
         if item.definition == path("a") {
-            let used = provider.signature(&path("contract"))?;
+            let used = provider.signature(DefId::intern(&path("contract")))?;
             fingerprint = ContentHash::of_parts(
                 "fixture.contract.signature",
                 [fingerprint.0.as_slice(), used.fingerprint.0.as_slice()],
@@ -610,16 +720,13 @@ impl SignaturePhase for ContractSignatures {
                 code_hash: fingerprint,
             });
         }
-        let mut types = TypeStore::default();
-        let result = types.push(hirsel_types::Type {
+        let result = t.intern(hirsel_types::Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
             ..hirsel_types::Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
         Ok(out(Signature {
             metadata: Default::default(),
-
-            definition: item.definition.clone(),
-            types,
+            definition: DefId::intern(&item.definition),
             fingerprint,
             kind: SignatureKind::Function(FunctionType {
                 state_promises: Default::default(),
@@ -645,7 +752,7 @@ fn contract_signature_reads_invalidate_the_owner_and_its_users() {
 }
 fn contract_signature_reads_invalidate_the_owner_and_its_users_on_compiler_thread() {
     let (mut engine, _) = make_engine(None, false);
-    engine.adapters.signature = Some(Rc::new(ContractSignatures));
+    engine.adapters.signature = Some(Arc::new(ContractSignatures));
     parse(
         &mut engine,
         "fn a () { 1 }\nfn b () { 2 }\nfn contract () { 3 }\n",
@@ -654,7 +761,7 @@ fn contract_signature_reads_invalidate_the_owner_and_its_users_on_compiler_threa
     let reads = engine
         .dependency_reads(&path("a"), QueryKind::Signature)
         .unwrap();
-    assert_eq!(reads.signatures[0].definition, path("contract"));
+    assert_eq!(*reads.signatures[0].definition.path(), path("contract"));
     let previous = engine.item_signature(&path("a")).unwrap().value.fingerprint;
     parse(
         &mut engine,
@@ -699,14 +806,22 @@ struct ObserveDuplicates;
 impl SignaturePhase for ObserveDuplicates {
     fn signature(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _syntax: Arc<ItemSyntax>,
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         unreachable!("candidate-aware entry point must be used")
     }
     fn signature_items(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         assert_eq!(candidates.len(), 2);
@@ -741,7 +856,7 @@ fn duplicate_items_keep_one_identity_and_reach_the_signature_phase_on_compiler_t
         assert_eq!(syntax.item.definition, path("a"));
         assert_eq!(syntax.occurrence, occurrence as u32);
     }
-    engine.adapters.signature = Some(Rc::new(ObserveDuplicates));
+    engine.adapters.signature = Some(Arc::new(ObserveDuplicates));
     let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
         panic!("signature phase owns overloading");
     };
@@ -782,8 +897,8 @@ fn provider_results_share_graphs_and_manifest_misses_have_revisions() {
 fn provider_results_share_graphs_and_manifest_misses_have_revisions_on_compiler_thread() {
     let (mut engine, _) = make_engine(None, false);
     parse(&mut engine, "fn a {}\n");
-    let a = engine.signature(&path("a")).unwrap();
-    let b = engine.signature(&path("a")).unwrap();
+    let a = engine.signature(DefId::intern(&path("a"))).unwrap();
+    let b = engine.signature(DefId::intern(&path("a"))).unwrap();
     assert!(std::sync::Arc::ptr_eq(&a, &b));
     let a = engine.definition(&path("a")).unwrap();
     let b = engine.definition(&path("a")).unwrap();
@@ -807,39 +922,47 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries() {
 }
 fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_compiler_thread() {
     struct Flaky {
-        original: Rc<dyn SignaturePhase>,
-        calls: std::cell::Cell<u32>,
+        original: Arc<dyn SignaturePhase>,
+        calls: std::sync::atomic::AtomicU32,
     }
     impl SignaturePhase for Flaky {
         fn signature(
             &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
             syntax: Arc<ItemSyntax>,
+            _declarations: &Declarations,
+            _products: &mut PhaseProducts,
             provider: &mut dyn SignatureProvider,
         ) -> Result<QueryOutput<Signature>, QueryError> {
-            self.calls.set(self.calls.get() + 1);
-            if self.calls.get() == 1 {
+            if self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
                 return Err(QueryError::Operational(OperationalFailure {
                     operation: "signature provider".into(),
                     message: "temporarily offline".into(),
                 }));
             }
-            self.original.signature(syntax, provider)
+            self.original
+                .signature(t, m, syntax, _declarations, _products, provider)
         }
     }
     let (mut engine, _) = make_engine(None, false);
-    let adapter = Rc::new(Flaky {
+    let adapter = Arc::new(Flaky {
         original: engine.adapters.signature.take().unwrap(),
-        calls: std::cell::Cell::new(0),
+        calls: std::sync::atomic::AtomicU32::new(0),
     });
     engine.adapters.signature = Some(adapter.clone());
     parse(&mut engine, "fn a {}\n");
     assert!(matches!(
-        engine.signature(&path("a")),
+        engine.signature(DefId::intern(&path("a"))),
         Err(QueryError::Operational(_))
     ));
-    assert!(engine.signature(&path("a")).is_ok());
-    assert!(engine.signature(&path("a")).is_ok());
-    assert_eq!(adapter.calls.get(), 2);
+    assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
+    assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
+    assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
 #[test]
 fn partial_check_preserves_diagnostics_and_reports_the_missing_phase() {
@@ -865,4 +988,311 @@ fn partial_check_preserves_diagnostics_and_reports_the_missing_phase_on_compiler
             .location(output.diagnostics[0].primary)
             .is_some()
     );
+}
+
+#[test]
+fn signature_hits_track_later_duplicate_headers_and_positions() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        let duplicate = engine
+            .sources
+            .add("other.hir", "fn a () { 2 }\n".into())
+            .unwrap();
+        engine.parse_file(duplicate, &default_context()).unwrap();
+        engine.adapters.signature = Some(Arc::new(ObserveDuplicates));
+        let diagnose = |engine: &mut QueryEngine| {
+            let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
+                panic!("duplicate signature must reject");
+            };
+            assert_eq!(errors[0].rule.as_str(), "LANG-7");
+            errors[0].primary
+        };
+        let old = diagnose(&mut engine);
+        assert_eq!(diagnose(&mut engine), old);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 1);
+        assert!(
+            engine
+                .memo_reads(&path("a"), QueryKind::Signature)
+                .unwrap()
+                .iter()
+                .any(|(key, _)| *key
+                    == hirsel_engine::memo::ReadKey::DeclarationCandidates(DefId::intern(&path(
+                        "a"
+                    ))))
+        );
+        // The first candidate is byte-identical. Only the later candidate's
+        // header changes and its position moves behind an unrelated item.
+        let duplicate = engine
+            .sources
+            .add(
+                "other.hir",
+                "fn unrelated () { 3 }\nfn a (changed) { 2 }\n".into(),
+            )
+            .unwrap();
+        engine.parse_file(duplicate, &default_context()).unwrap();
+        let current = diagnose(&mut engine);
+        assert_ne!(current, old);
+        let expected = engine.definition_items(&path("a")).unwrap()[1]
+            .item
+            .origin
+            .span;
+        assert_eq!(current, expected);
+        assert_eq!(engine.sources.location(current).unwrap().line, 2);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 2);
+        assert_eq!(diagnose(&mut engine), current);
+        engine.environment.interface_version += 1;
+        assert_eq!(diagnose(&mut engine), current);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 3);
+    });
+}
+
+/// The batch API is the same memo computation at every worker count, including
+/// per-input failures, typed receipts, reversed publication/input order and hits.
+#[test]
+fn frozen_frontier_preserves_reads_failures_and_warm_hits() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for jobs in [1, 2, 8] {
+            for reject in [
+                None,
+                Some("resolve"),
+                Some("signature"),
+                Some("check"),
+                Some("modes"),
+            ] {
+                let (mut serial, _) = make_engine(reject, false);
+                let (mut parallel, _) = make_engine(reject, false);
+                let text = "fn a () { 1 }\nfn b () { 2 }\n";
+                parse(&mut serial, text);
+                parse(&mut parallel, text);
+                let paths = vec![path("b"), path("a"), path("b")];
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|path| serial.mode_definition(path))
+                    .collect();
+                let results = parallel.mode_definitions(paths.clone(), Jobs::new(jobs));
+                for ((path, expected), actual) in paths.iter().zip(expected).zip(results) {
+                    assert_eq!(&actual.definition, path);
+                    let phase = match reject {
+                        Some("resolve") => QueryKind::Resolve,
+                        Some("signature") if path.0.name == "b" => QueryKind::Resolve,
+                        Some("signature") => QueryKind::Signature,
+                        Some("check") => QueryKind::Check,
+                        _ => QueryKind::Modes,
+                    };
+                    assert_eq!(actual.phase, Some(phase));
+                    match (expected, actual.result) {
+                        (Ok(a), Ok(b)) => {
+                            assert_eq!(a.dependencies, b.dependencies);
+                            assert_eq!(a.diagnostics.len(), b.diagnostics.len());
+                            assert_eq!(
+                                a.value.typed.checked.resolution,
+                                b.value.typed.checked.resolution
+                            );
+                        }
+                        (Err(QueryError::Diagnostics(a)), Err(QueryError::Diagnostics(b))) => {
+                            assert_eq!(a.len(), b.len());
+                            for (a, b) in a.iter().zip(&b) {
+                                assert_eq!((&a.rule, &a.message), (&b.rule, &b.message));
+                                let a = serial.sources.resolve(a.primary);
+                                let b = parallel.sources.resolve(b.primary);
+                                assert_eq!((a.start, a.end), (b.start, b.end));
+                            }
+                        }
+                        (a, b) => panic!("jobs {jobs}, reject {reject:?}: {a:?} != {b:?}"),
+                    }
+                    for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                        assert_eq!(
+                            serial.memo_reads(path, kind),
+                            parallel.memo_reads(path, kind),
+                            "jobs {jobs}, reject {reject:?}, {kind:?}, {path:?}"
+                        );
+                    }
+                }
+                let before: Vec<_> = paths
+                    .iter()
+                    .flat_map(|p| {
+                        [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                            .map(|k| parallel.recompute_count(p, k))
+                    })
+                    .collect();
+                let _ = parallel.mode_definitions(paths.clone(), Jobs::new(jobs));
+                let after: Vec<_> = paths
+                    .iter()
+                    .flat_map(|p| {
+                        [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                            .map(|k| parallel.recompute_count(p, k))
+                    })
+                    .collect();
+                assert_eq!(before, after, "warm jobs {jobs}, reject {reject:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_reports_each_missing_phase_and_retries_it() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for jobs in [1, 2, 8] {
+            for missing in [
+                QueryKind::Resolve,
+                QueryKind::Signature,
+                QueryKind::Check,
+                QueryKind::Modes,
+            ] {
+                let (mut engine, _) = make_engine(None, false);
+                match missing {
+                    QueryKind::Resolve => engine.adapters.resolver = None,
+                    QueryKind::Signature => engine.adapters.signature = None,
+                    QueryKind::Check => engine.adapters.checker = None,
+                    QueryKind::Modes => engine.adapters.modes = None,
+                    _ => unreachable!(),
+                }
+                parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+                let paths = vec![path("b"), path("a")];
+                for _ in 0..2 {
+                    for result in engine.mode_definitions(paths.clone(), Jobs::new(jobs)) {
+                        assert_eq!(result.phase, Some(missing));
+                        assert!(matches!(result.result, Err(QueryError::NotImplemented)));
+                        assert!(engine.memo_reads(&result.definition, missing).is_none());
+                    }
+                }
+                for p in paths {
+                    assert!(engine.recompute_count(&p, missing) >= 2);
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_runs_independent_checkers_concurrently() {
+    struct Together {
+        fake: Arc<dyn CheckerPhase>,
+        barrier: std::sync::Barrier,
+    }
+    impl CheckerPhase for Together {
+        fn check(
+            &self,
+            t: &TypeInterner,
+            m: &TypeMemo,
+            syntax: Arc<ItemSyntax>,
+            resolution: Resolution,
+            signature: &Signature,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, QueryError> {
+            // Exactly two tasks/workers: a serialized implementation cannot
+            // satisfy this rendezvous. No wall-clock threshold is involved.
+            self.barrier.wait();
+            self.fake
+                .check(t, m, syntax, resolution, signature, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        let fake = engine.adapters.checker.take().unwrap();
+        engine.adapters.checker = Some(Arc::new(Together {
+            fake,
+            barrier: std::sync::Barrier::new(2),
+        }));
+        parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+        let results = engine.mode_definitions(
+            vec![path("b"), path("a")],
+            hirsel_intern::jobs::Jobs::new(2),
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.result.is_ok()));
+    });
+}
+
+#[test]
+fn frozen_frontier_retries_operational_headers_only_in_the_next_snapshot() {
+    struct Flaky {
+        original: Arc<dyn SignaturePhase>,
+        calls: std::sync::atomic::AtomicU32,
+    }
+    impl SignaturePhase for Flaky {
+        fn signature(
+            &self,
+            t: &TypeInterner,
+            m: &TypeMemo,
+            syntax: Arc<ItemSyntax>,
+            d: &Declarations,
+            p: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<Signature>, QueryError> {
+            if syntax.item.definition.0.name == "a"
+                && self
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    == 0
+            {
+                return Err(QueryError::Operational(OperationalFailure {
+                    operation: "snapshot signature".into(),
+                    message: "temporarily unavailable".into(),
+                }));
+            }
+            self.original.signature(t, m, syntax, d, p, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let (mut engine, _) = make_engine(None, false);
+            let adapter = Arc::new(Flaky {
+                original: engine.adapters.signature.take().unwrap(),
+                calls: std::sync::atomic::AtomicU32::new(0),
+            });
+            engine.adapters.signature = Some(adapter.clone());
+            parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+            let results = engine.mode_definitions(
+                vec![path("b"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(
+                results
+                    .iter()
+                    .all(|r| matches!(r.result, Err(QueryError::Operational(_))))
+            );
+            assert_eq!(
+                adapter.calls.load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "no post-freeze retry"
+            );
+            for p in [path("a"), path("b")] {
+                assert!(engine.memo_reads(&p, QueryKind::Modes).is_none());
+            }
+            let results = engine.mode_definitions(
+                vec![path("b"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(results.iter().all(|r| r.result.is_ok()));
+            assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+        }
+    });
+}
+
+#[test]
+fn compact_release_does_not_retry_an_unavailable_phase_through_an_old_checked_body() {
+    with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        engine.mode_definition(&path("a")).unwrap();
+        engine.adapters.resolver = None;
+        parse(&mut engine, "fn a () { 2 }\n");
+        let before = engine.recompute_count(&path("a"), QueryKind::Resolve);
+        let outputs = engine.publish_definitions(
+            vec![path("a")],
+            hirsel_intern::jobs::Jobs::new(2),
+            memo::Retention::Batch,
+        );
+        assert!(matches!(outputs[0].result, Err(QueryError::NotImplemented)));
+        assert_eq!(outputs[0].phase, Some(QueryKind::Resolve));
+        assert_eq!(
+            engine.recompute_count(&path("a"), QueryKind::Resolve) - before,
+            1,
+            "retention must not reenter a stopped body query"
+        );
+    });
 }

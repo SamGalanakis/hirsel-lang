@@ -3,7 +3,7 @@
 use crate::support;
 
 use hirsel_lir::emission::{EmitInputs, OptLevel, symbol_name};
-use hirsel_lir::{descriptor_registry::DescriptorRegistry, ir::*, layout_types::TargetSpec};
+use hirsel_lir::{ir::*, layout_types::TargetSpec};
 use hirsel_llvm::emit_ir;
 use hirsel_types::Primitive;
 use support::{programs::Program, *};
@@ -44,21 +44,20 @@ fn a_diverging_call_branches_on_status_without_noreturn() {
     let program = program(&target);
     assert!(program.table.table.fn_abis[program.table.abi("stop").0 as usize].diverges);
     let input = input();
-    let failures = failure_codes();
     let inputs = EmitInputs {
+        index: None,
         verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,
+        keys: &program.table.keys,
         manifest: &program.manifest,
-        failures: &failures,
         statics: &program.statics,
-        finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
+        tracking: false,
         opt: OptLevel::None,
         measurement: false,
         fuel: false,

@@ -39,7 +39,12 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
         );
         let caller = caller.finish("main", result);
         let definitions = vec![caller, reader.clone()];
-        let mut signatures = fixture_signatures(&definitions, &Default::default());
+        let mut signatures = hirsel_validate::SignatureMap::new(session());
+        signatures.extend(
+            fixture_signatures(&definitions, &runtime())
+                .into_iter()
+                .map(|(path, s)| (hirsel_syntax::DefId::intern(&path), s)),
+        );
         let SignatureKind::Function(f) = &mut signatures.get_mut(&path("read_size")).unwrap().kind
         else {
             unreachable!()
@@ -53,13 +58,14 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
         ]
         .into();
         for definition in &definitions {
-            hirsel_validate::assert_valid(definition, &signatures);
+            hirsel_validate::assert_valid(definition, &session(), &signatures);
         }
         let execution = run(
             &mut Provider {
                 definitions,
                 queries: vec![],
             },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),
@@ -84,6 +90,7 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
                 definitions: vec![reader],
                 queries: vec![],
             },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("read_size"),

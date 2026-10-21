@@ -7,10 +7,9 @@ fn declaration(
     opaque: bool,
     flat: bool,
 ) -> Signature {
-    let mut types = TypeStore::default();
-    let root = types.push(ty(kind));
+    let root = interner().intern(ty(kind));
     Signature {
-        definition: path(name),
+        definition: id(name),
         metadata: SignatureMetadata {
             visibility: if opaque {
                 hirsel_syntax::Visibility::PublicOpaque
@@ -19,7 +18,6 @@ fn declaration(
             },
             ..Default::default()
         },
-        types,
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
             format: None,
@@ -68,41 +66,26 @@ fn verdict(s: Signature, accepted: bool) {
 /// [`verdict`] with `extras` (a check's function) beside the declaration.
 fn verdict_with(s: Signature, extras: Vec<Signature>, accepted: bool) {
     let mut f = Fixture::unit();
-    f.signatures.insert(path("Gate"), capability());
+    f.signatures.insert(id("Gate"), capability());
     for extra in extras {
         f.signatures.insert(extra.definition.clone(), extra);
     }
-    let mut base = f.signatures.clone();
     f.signatures.insert(s.definition.clone(), s.clone());
     let expected = if accepted {
         vec![]
     } else {
-        vec![ViolationKind::InvalidSignature(s.definition.clone())]
+        vec![ViolationKind::InvalidSignature(s.definition.path().clone())]
     };
     f.broken(expected.clone());
-    let cached = ValidatedSignatures::new(f.signatures.clone()).validate(&f.definition);
-    assert_eq!(
-        cached
-            .violations
-            .iter()
-            .map(|v| v.kind.clone())
-            .collect::<Vec<_>>(),
-        expected
+    let mut verdicts = ValidatedSignatures::default();
+    let universe = verdicts.universe(
+        interner(),
+        f.signatures.keys().collect::<Vec<_>>(),
+        &f.signatures,
     );
-    base.insert(
-        s.definition.clone(),
-        declaration(
-            &s.definition.0.name,
-            TypeKind::Primitive(Primitive::U32),
-            vec![],
-            true,
-            false,
-        ),
-    );
-    let overlay = ValidatedSignatures::new(base).validate_with_signature(&f.definition, &s);
     assert_eq!(
-        overlay
-            .violations
+        universe
+            .errors
             .iter()
             .map(|v| v.kind.clone())
             .collect::<Vec<_>>(),
@@ -139,7 +122,7 @@ fn opaque_owner_authority_has_an_independent_ir_control() {
     let mut s = declaration(
         "Hidden",
         TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         },
         vec![Bound::Plain],
@@ -170,7 +153,7 @@ fn flat_storage_has_an_independent_ir_control() {
     let mut s = declaration(
         "Flat",
         TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         },
         vec![Bound::Flat],
@@ -203,15 +186,15 @@ fn flat_storage_inspects_handles_inside_plain_nominal_fields() {
         false,
         false,
     );
-    let u32_type = wrapper.types.id(0).unwrap();
-    let id = wrapper.types.push(ty(TypeKind::Builtin {
+    let u32_type = interner().intern(ty(TypeKind::Primitive(Primitive::U32)));
+    let slot = interner().intern(ty(TypeKind::Builtin {
         kind: BuiltinType::SlotId,
         arguments: vec![GenericArgument::Type(u32_type)].into(),
     }));
-    let root = wrapper.types.push(ty(TypeKind::Record(
+    let root = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "id".into(),
-            ty: id,
+            ty: slot,
             growable: false,
         }]
         .into(),
@@ -223,7 +206,7 @@ fn flat_storage_inspects_handles_inside_plain_nominal_fields() {
     let flat = declaration(
         "Flat",
         TypeKind::Named {
-            definition: path("Holder"),
+            definition: id("Holder"),
             arguments: vec![].into(),
         },
         vec![Bound::Flat],
@@ -231,12 +214,12 @@ fn flat_storage_inspects_handles_inside_plain_nominal_fields() {
         true,
     );
     let mut f = Fixture::unit();
-    f.signatures.insert(path("Holder"), wrapper.clone());
-    f.signatures.insert(path("Flat"), flat);
+    f.signatures.insert(id("Holder"), wrapper.clone());
+    f.signatures.insert(id("Flat"), flat);
     // MEM-12 rejects a handle even when a Plain nominal wraps its scalar bits.
     // With declaration::valid disabled, this unused owner passes validation.
     f.broken(vec![ViolationKind::InvalidSignature(path("Flat"))]);
-    let root = wrapper.types.push(ty(TypeKind::Record(
+    let root = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "id".into(),
             ty: u32_type,
@@ -248,7 +231,7 @@ fn flat_storage_inspects_handles_inside_plain_nominal_fields() {
         unreachable!()
     };
     d.representation = Some(root);
-    f.signatures.insert(path("Holder"), wrapper);
+    f.signatures.insert(id("Holder"), wrapper);
     f.valid();
 }
 
@@ -269,7 +252,7 @@ fn seal(kind: TypeKind, bounds: Vec<Bound>) -> Signature {
 fn seal_ceiling_has_independent_ir_controls() {
     let good = seal(
         TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         },
         vec![Bound::Plain],
@@ -323,9 +306,8 @@ fn seal_structural_bounds_have_independent_ir_controls() {
         let SignatureKind::Function(mut callback) = signature.kind else {
             unreachable!()
         };
-        callback.result = import_type(&signature.types, callback.result, &mut good.types).unwrap();
         callback.authority = AuthoritySummary::inert();
-        let root = good.types.push(ty(TypeKind::Function(callback)));
+        let root = interner().intern(ty(TypeKind::Function(callback)));
         let SignatureKind::Type(d) = &mut good.kind else {
             unreachable!()
         };
@@ -399,7 +381,7 @@ fn seal_scope_retention_has_independent_ir_controls() {
     let mut bad = good;
     let mut row = ty(TypeKind::Primitive(Primitive::U32));
     row.modes.relation = Relation::environment();
-    let root = bad.types.push(row);
+    let root = interner().intern(row);
     let SignatureKind::Type(d) = &mut bad.kind else {
         unreachable!()
     };
@@ -421,12 +403,12 @@ fn seal_scoped_authority_has_independent_ir_controls() {
             CapabilityKind::Global
         });
         d.bounds.clear();
-        f.signatures.insert(path("Gate"), gate);
+        f.signatures.insert(id("Gate"), gate);
         f.signatures.insert(
-            path("Seal"),
+            id("Seal"),
             seal(
                 TypeKind::Named {
-                    definition: path("Gate"),
+                    definition: id("Gate"),
                     arguments: vec![].into(),
                 },
                 vec![],
@@ -456,9 +438,9 @@ fn scoped_seal_returns_have_independent_ir_controls() {
         if scoped {
             d.bounds.clear();
         }
-        f.signatures.insert(path("Gate"), signature);
+        f.signatures.insert(id("Gate"), signature);
         let kind = TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         };
         let source = f.slot(kind.clone(), Storage::Parameter);
@@ -472,10 +454,10 @@ fn scoped_seal_returns_have_independent_ir_controls() {
         let SignatureKind::Function(fun) = &mut owner.kind else {
             unreachable!()
         };
-        let mut row = owner.types.get(fun.parameters[0].ty).unwrap().clone();
+        let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
         row.modes.relation = Relation::global();
-        fun.parameters[0].ty = owner.types.push(row);
-        f.signatures.insert(path("main"), owner);
+        fun.parameters[0].ty = interner().intern(row);
+        f.signatures.insert(id("main"), owner);
         if scoped {
             f.broken(vec![ViolationKind::TypeMismatch {
                 entity: "scoped capability escape",
@@ -490,13 +472,15 @@ fn scoped_seal_returns_have_independent_ir_controls() {
 fn seal_projection_privacy_has_independent_ir_controls() {
     for (version, module) in [("1", "sibling"), ("2", "sibling")] {
         let mut f = Fixture::unit();
-        f.definition.path.0.package.version = version.into();
-        f.definition.path.0.modules = vec![module.into()];
+        {
+            let mut path = f.definition.path.path().clone();
+            path.0.package.version = version.into();
+            path.0.modules = vec![module.into()];
+            f.definition.path = DefId::intern(&path);
+        }
         let mut signature = seal(TypeKind::Primitive(Primitive::U32), vec![Bound::Plain]);
-        let scalar = signature
-            .types
-            .push(ty(TypeKind::Primitive(Primitive::U32)));
-        let root = signature.types.push(ty(TypeKind::Record(
+        let scalar = interner().intern(ty(TypeKind::Primitive(Primitive::U32)));
+        let root = interner().intern(ty(TypeKind::Record(
             vec![Field {
                 name: "private".into(),
                 ty: scalar,
@@ -508,10 +492,10 @@ fn seal_projection_privacy_has_independent_ir_controls() {
             unreachable!()
         };
         d.representation = Some(root);
-        f.signatures.insert(path("Seal"), signature);
-        f.signatures.insert(path("Gate"), capability());
+        f.signatures.insert(id("Seal"), signature);
+        f.signatures.insert(id("Gate"), capability());
         let kind = TypeKind::Named {
-            definition: path("Seal"),
+            definition: id("Seal"),
             arguments: vec![].into(),
         };
         let parameter = f.slot(kind.clone(), Storage::Parameter);
@@ -577,14 +561,16 @@ fn seal_generic_ceiling_has_independent_ir_controls() {
 fn seal_constructor_privacy_has_independent_ir_controls() {
     for package in [("validate", "1"), ("validate", "2"), ("client", "1")] {
         let mut f = Fixture::unit();
-        f.definition.path.0.package.name = package.0.into();
-        f.definition.path.0.package.version = package.1.into();
-        f.definition.path.0.modules = vec!["sibling".into()];
+        {
+            let mut path = f.definition.path.path().clone();
+            path.0.package.name = package.0.into();
+            path.0.package.version = package.1.into();
+            path.0.modules = vec!["sibling".into()];
+            f.definition.path = DefId::intern(&path);
+        }
         let mut signature = seal(TypeKind::Primitive(Primitive::U32), vec![Bound::Plain]);
-        let scalar = signature
-            .types
-            .push(ty(TypeKind::Primitive(Primitive::U32)));
-        let root = signature.types.push(ty(TypeKind::Record(
+        let scalar = interner().intern(ty(TypeKind::Primitive(Primitive::U32)));
+        let root = interner().intern(ty(TypeKind::Record(
             vec![Field {
                 name: "private".into(),
                 ty: scalar,
@@ -596,13 +582,13 @@ fn seal_constructor_privacy_has_independent_ir_controls() {
             unreachable!()
         };
         d.representation = Some(root);
-        f.signatures.insert(path("Seal"), signature);
-        f.signatures.insert(path("Gate"), capability());
+        f.signatures.insert(id("Seal"), signature);
+        f.signatures.insert(id("Gate"), capability());
         let scalar = f.slot(TypeKind::Primitive(Primitive::U32), Storage::Temporary);
         f.assign(scalar, Rvalue::Constant(Constant::Integer(0)), 0);
         let result = f.slot(
             TypeKind::Named {
-                definition: path("Seal"),
+                definition: id("Seal"),
                 arguments: vec![].into(),
             },
             Storage::Temporary,
@@ -665,10 +651,10 @@ fn seal_finalizer_effects_have_independent_ir_controls() {
         (true, Allocation::NoAlloc),
     ] {
         let mut f = Fixture::unit();
-        f.definition.path = path("Seal");
+        f.definition.path = id("Seal");
         let self_place = f.slot(
             TypeKind::Named {
-                definition: path("Seal"),
+                definition: id("Seal"),
                 arguments: vec![].into(),
             },
             Storage::Parameter,
@@ -684,8 +670,8 @@ fn seal_finalizer_effects_have_independent_ir_controls() {
         if !allowed {
             d.implementation_authority = Some(AuthoritySummary::inert());
         }
-        f.signatures.insert(path("Seal"), owner);
-        f.signatures.insert(path("Gate"), capability());
+        f.signatures.insert(id("Seal"), owner);
+        f.signatures.insert(id("Gate"), capability());
         let mut operation = function_signature("operation", vec![], TypeKind::Tuple(vec![].into()));
         let SignatureKind::Function(fun) = &mut operation.kind else {
             unreachable!()
@@ -694,7 +680,7 @@ fn seal_finalizer_effects_have_independent_ir_controls() {
             AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Gate"))].into());
         fun.uses = Uses::Only(fun.authority.clone());
         fun.allocation = Allocation::MayAllocate;
-        f.signatures.insert(path("operation"), operation);
+        f.signatures.insert(id("operation"), operation);
         let destination = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Definition {
@@ -797,14 +783,14 @@ fn serializable_authority_and_branded_ir_payloads_have_data_twins() {
         SignatureKind::Type(d) => d.representation.unwrap(),
         _ => unreachable!(),
     };
-    let mut branded = s.types.get(root).unwrap().clone();
+    let mut branded = interner().get(root).unwrap().clone();
     branded.brand.alternatives = vec![Origin {
         root: OriginRoot::Sibling(FieldId(0)),
         fields: Default::default(),
     }]
     .into();
-    let branded = s.types.push(branded);
-    let box_type = s.types.push(ty(TypeKind::Box(branded)));
+    let branded = interner().intern(branded);
+    let box_type = interner().intern(ty(TypeKind::Box(branded)));
     let SignatureKind::Type(d) = &mut s.kind else {
         unreachable!()
     };
@@ -837,7 +823,7 @@ fn serializable_ir_rejects_hidden_authority_and_unsupported_runtime_containers()
             SignatureKind::Type(d) => d.representation.unwrap(),
             _ => unreachable!(),
         };
-        let r = s.types.push(ty(TypeKind::Builtin {
+        let r = interner().intern(ty(TypeKind::Builtin {
             kind,
             arguments: vec![GenericArgument::Type(n)].into(),
         }));
@@ -849,7 +835,7 @@ fn serializable_ir_rejects_hidden_authority_and_unsupported_runtime_containers()
     }
     verdict(
         serializable_declaration(TypeKind::Named {
-            definition: path("Gate"),
+            definition: id("Gate"),
             arguments: vec![].into(),
         }),
         false,
@@ -902,7 +888,7 @@ fn unbounded_ir_parameters_are_conditional_never_a_published_bound() {
     for core in [false, true] {
         let mut s = conditional.clone();
         if core {
-            s.definition = hirsel_syntax::DefPath::core("Data");
+            s.definition = DefId::intern(&hirsel_syntax::DefPath::core("Data"));
         }
         verdict(s.clone(), true);
         let SignatureKind::Type(d) = &mut s.kind else {
@@ -920,7 +906,7 @@ fn a_checked_opaque_opt_in_names_an_exact_check_of_its_module() {
     // check, the other module's and every bad header below are accepted; without the
     // rest of serialization::checked so are the transparent and bounded twins.
     let named = |name: &str| TypeKind::Named {
-        definition: path(name),
+        definition: id(name),
         arguments: vec![].into(),
     };
     let mut s = serializable_declaration(TypeKind::Primitive(Primitive::U8));
@@ -930,7 +916,7 @@ fn a_checked_opaque_opt_in_names_an_exact_check_of_its_module() {
     };
     d.bounds.clear();
     let number = d.representation.take().unwrap();
-    let representation = s.types.push(ty(TypeKind::Record(
+    let representation = interner().intern(ty(TypeKind::Record(
         vec![Field {
             name: "number".into(),
             ty: number,
@@ -956,12 +942,16 @@ fn a_checked_opaque_opt_in_names_an_exact_check_of_its_module() {
     // A missing check, or one of another module.
     verdict(s.clone(), false);
     let mut elsewhere = good();
-    elsewhere.definition.0.modules = vec!["other".into()];
+    {
+        let mut path = elsewhere.definition.path().clone();
+        path.0.modules = vec!["other".into()];
+        elsewhere.definition = DefId::intern(&path);
+    }
     let mut moved = s.clone();
     let SignatureKind::Type(d) = &mut moved.kind else {
         unreachable!()
     };
-    d.serializable_check.as_mut().unwrap().function = elsewhere.definition.clone();
+    d.serializable_check.as_mut().unwrap().function = elsewhere.definition.path().clone();
     verdict_with(moved, vec![elsewhere], false);
     // Headers that are no check: allocating, with authority, a non-bool result, a
     // mut value, another type's value.
@@ -1011,14 +1001,14 @@ fn only_the_core_path_is_serializable_as_opaque_text() {
     // check in serialization::text_path the same-spelled user twin is accepted, and without
     // its authority check so is the core twin that holds a capability.
     let mut user = serializable_declaration(TypeKind::Primitive(Primitive::U64));
-    user.definition = path("Path");
+    user.definition = id("Path");
     user.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
     let SignatureKind::Type(d) = &mut user.kind else {
         unreachable!()
     };
     d.representation = None;
     let mut core = user.clone();
-    core.definition = hirsel_syntax::DefPath::core("Path");
+    core.definition = DefId::intern(&hirsel_syntax::DefPath::core("Path"));
     verdict(core.clone(), true);
     verdict(user, false);
     let SignatureKind::Type(d) = &mut core.kind else {
@@ -1054,7 +1044,7 @@ fn serializable_inert_callable_ir_still_has_no_codec() {
         SignatureKind::Type(d) => d.representation.unwrap(),
         _ => unreachable!(),
     };
-    let callable = s.types.push(ty(TypeKind::Function(FunctionType {
+    let callable = interner().intern(ty(TypeKind::Function(FunctionType {
         state_promises: Default::default(),
         generics: vec![].into(),
         parameters: vec![].into(),
@@ -1086,12 +1076,12 @@ fn growing_schema_limits_remain_operational_and_owner_replacement_clears_them() 
         SignatureKind::Type(d) => d.representation.unwrap(),
         _ => unreachable!(),
     };
-    let list = s.types.push(ty(TypeKind::Builtin {
+    let list = interner().intern(ty(TypeKind::Builtin {
         kind: BuiltinType::List,
         arguments: vec![GenericArgument::Type(parameter)].into(),
     }));
-    let recur = s.types.push(ty(TypeKind::Named {
-        definition: path("Data"),
+    let recur = interner().intern(ty(TypeKind::Named {
+        definition: id("Data"),
         arguments: vec![GenericArgument::Type(list)].into(),
     }));
     let SignatureKind::Type(d) = &mut s.kind else {
@@ -1104,27 +1094,28 @@ fn growing_schema_limits_remain_operational_and_owner_replacement_clears_them() 
     d.representation = Some(recur);
     let mut f = Fixture::unit();
     f.signatures.insert(s.definition.clone(), s);
-    let checked = ValidatedSignatures::new(f.signatures.clone());
     let expected = ViolationKind::TypeProofToolingLimit {
         limit: MAX_POLYMORPHIC_EXPANSIONS,
     };
-    assert_eq!(
-        checked
-            .validate(&f.definition)
-            .violations
-            .iter()
-            .map(|v| v.kind.clone())
-            .collect::<Vec<_>>(),
-        vec![expected.clone()]
-    );
+    let mut verdicts = ValidatedSignatures::default();
+    let universe = |verdicts: &mut ValidatedSignatures, f: &Fixture| {
+        verdicts
+            .universe(
+                interner(),
+                f.signatures.keys().collect::<Vec<_>>(),
+                &f.signatures,
+            )
+            .errors
+            .into_iter()
+            .map(|v| v.kind)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(universe(&mut verdicts, &f), vec![expected.clone()]);
     assert_eq!(f.kinds(), vec![expected]);
     let replacement = serializable_declaration(TypeKind::Primitive(Primitive::U64));
-    assert!(
-        checked
-            .validate_with_signature(&f.definition, &replacement)
-            .violations
-            .is_empty()
-    );
+    f.signatures
+        .insert(replacement.definition.clone(), replacement);
+    assert!(universe(&mut verdicts, &f).is_empty());
 }
 
 #[test]
@@ -1178,12 +1169,12 @@ fn caller_tracking_requires_an_ordinary_function() {
 #[test]
 fn caller_body_ids_are_checked_at_the_structural_boundary() {
     let mut f = Fixture::unit();
-    assert!(validate_structure(&f.definition).is_empty());
+    assert!(validate_structure(&f.definition, interner()).is_empty());
     f.definition.caller_bodies = vec![f.definition.entry];
-    assert!(validate_structure(&f.definition).is_empty());
+    assert!(validate_structure(&f.definition, interner()).is_empty());
     f.definition.caller_bodies = vec![BodyId(99)];
     assert_eq!(
-        validate_structure(&f.definition),
+        validate_structure(&f.definition, interner()),
         vec![Violation {
             body: None,
             block: None,
@@ -1193,5 +1184,279 @@ fn caller_body_ids_are_checked_at_the_structural_boundary() {
                 index: 99
             },
         }]
+    );
+}
+
+// V's input: each view is identified by V's own digest, and every verdict is
+// reused only while the reads it made still hold.
+fn id(name: &str) -> DefId {
+    DefId::intern(&path(name))
+}
+fn reads_view(verdict: &ViewVerdict, name: &str) -> bool {
+    verdict
+        .reads
+        .iter()
+        .any(|read| matches!(read, VRead::View(d, _) if *d == id(name)))
+}
+fn holds(verdict: &ViewVerdict, signatures: &SignatureMap) -> bool {
+    verdict
+        .reads
+        .iter()
+        .all(|read| read_holds(read, signatures))
+}
+fn represent(signatures: &mut SignatureMap, name: &str, kind: TypeKind) {
+    let signature = signatures.get_mut(&path(name)).unwrap();
+    let root = interner().intern(ty(kind));
+    let SignatureKind::Type(d) = &mut signature.kind else {
+        unreachable!()
+    };
+    d.representation = Some(root);
+}
+
+#[test]
+fn a_private_shape_edit_under_an_unchanged_fingerprint_rechecks_exactly_its_readers() {
+    let mut signatures = SignatureMap::new(session());
+    let named = |name: &str| TypeKind::Named {
+        definition: id(name),
+        arguments: vec![].into(),
+    };
+    for (name, kind) in [
+        ("Inner", TypeKind::Primitive(Primitive::U32)),
+        ("Hidden", named("Inner")),
+        ("Other", TypeKind::Primitive(Primitive::U64)),
+    ] {
+        signatures.insert(
+            id(name),
+            declaration(name, kind, vec![Bound::Plain], true, false),
+        );
+    }
+    let mut verdicts = ValidatedSignatures::default();
+    let hidden = verdicts.verdict(interner(), id("Hidden"), &signatures);
+    let other = verdicts.verdict(interner(), id("Other"), &signatures);
+    assert_eq!((&hidden.error, &other.error), (&None, &None));
+    assert!(reads_view(&hidden, "Inner") && !reads_view(&other, "Inner"));
+    let original = signatures.get(&path("Inner")).unwrap().clone();
+    let before = original.fingerprint;
+    let digest = signatures.view(id("Inner")).unwrap().1;
+    // A private field edit the producer's fingerprint does not cover.
+    represent(
+        &mut signatures,
+        "Inner",
+        TypeKind::Primitive(Primitive::String),
+    );
+    assert_eq!(signatures.get(&path("Inner")).unwrap().fingerprint, before);
+    assert_ne!(signatures.view(id("Inner")).unwrap().1, digest);
+    assert!(!holds(&hidden, &signatures) && holds(&other, &signatures));
+    let again = verdicts.verdict(interner(), id("Hidden"), &signatures);
+    assert!(!std::sync::Arc::ptr_eq(&hidden, &again) && reads_view(&again, "Inner"));
+    assert!(std::sync::Arc::ptr_eq(
+        &other,
+        &verdicts.verdict(interner(), id("Other"), &signatures)
+    ));
+    // Back to the old shape: the first verdict holds again and is reused.
+    signatures.insert(id("Inner"), original);
+    assert!(std::sync::Arc::ptr_eq(
+        &hidden,
+        &verdicts.verdict(interner(), id("Hidden"), &signatures)
+    ));
+}
+
+#[test]
+fn malformed_rows_under_an_unchanged_producer_fingerprint_are_checked_again() {
+    let mut signatures = SignatureMap::new(session());
+    signatures.insert(
+        id("Data"),
+        declaration(
+            "Data",
+            TypeKind::Primitive(Primitive::U32),
+            vec![],
+            false,
+            false,
+        ),
+    );
+    let mut verdicts = ValidatedSignatures::default();
+    assert_eq!(
+        verdicts.verdict(interner(), id("Data"), &signatures).error,
+        None
+    );
+    let fingerprint = signatures.get(&path("Data")).unwrap().fingerprint;
+    // The view's rows change under the same producer fingerprint.
+    let SignatureKind::Type(d) = &mut signatures.get_mut(&path("Data")).unwrap().kind else {
+        unreachable!()
+    };
+    d.representation = Some(interner().intern(ty(TypeKind::Error)));
+    assert_eq!(
+        signatures.get(&path("Data")).unwrap().fingerprint,
+        fingerprint
+    );
+    assert_eq!(
+        verdicts
+            .verdict(interner(), id("Data"), &signatures)
+            .error
+            .as_ref()
+            .map(|v| v.kind.clone()),
+        Some(ViolationKind::InvalidSignature(path("Data")))
+    );
+    // Every body reads the universe's errors, so none of them reuses a pass.
+    let f = Fixture::unit();
+    let mut universe = f.signatures.clone();
+    let mut reads = vec![];
+    assert!(
+        validate(&tabled(&f.definition), interner(), &universe, &mut reads)
+            .violations
+            .is_empty()
+    );
+    universe.insert(id("Data"), signatures.get(&path("Data")).unwrap().clone());
+    assert!(!reads.iter().all(|read| read_holds(read, &universe)));
+    assert_eq!(
+        validate(&tabled(&f.definition), interner(), &universe, &mut vec![])
+            .violations
+            .iter()
+            .map(|v| v.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![ViolationKind::InvalidSignature(path("Data"))]
+    );
+}
+
+#[test]
+fn a_lookup_going_from_missing_to_present_invalidates() {
+    let mut s = declaration(
+        "Hidden",
+        TypeKind::Named {
+            definition: id("Gate"),
+            arguments: vec![].into(),
+        },
+        vec![Bound::Plain],
+        true,
+        false,
+    );
+    let SignatureKind::Type(d) = &mut s.kind else {
+        unreachable!()
+    };
+    d.authority = AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Gate"))].into());
+    let mut signatures = SignatureMap::new(session());
+    signatures.insert(id("Hidden"), s);
+    let mut verdicts = ValidatedSignatures::default();
+    let missing = verdicts.verdict(interner(), id("Hidden"), &signatures);
+    assert!(missing.reads.contains(&VRead::Missing(id("Gate"))));
+    assert!(missing.error.is_some());
+    signatures.insert(id("Gate"), capability());
+    assert!(!holds(&missing, &signatures));
+    let present = verdicts.verdict(interner(), id("Hidden"), &signatures);
+    assert!(reads_view(&present, "Gate"));
+    assert_eq!(present.error, None);
+}
+
+#[test]
+fn a_change_in_heap_role_selection_invalidates() {
+    let heap = |arena: &str| {
+        let mut s = function_signature(arena, vec![], TypeKind::Tuple(vec![].into()));
+        s.metadata.roles.heap = Some(HeapRole {
+            arena: path(arena),
+            operation: path("heap"),
+        });
+        s
+    };
+    let mut f = Fixture::unit();
+    let mut reads = vec![];
+    let _ = arena_slot(&mut f, Storage::Local);
+    let _ = validate(
+        &tabled(&f.definition),
+        interner(),
+        &f.signatures,
+        &mut reads,
+    );
+    assert!(reads.contains(&VRead::FirstHeap(Some(id("Arena")))));
+    assert!(reads_view(
+        &ViewVerdict {
+            error: None,
+            reads: reads.clone()
+        },
+        "Arena"
+    ));
+    // A role earlier in path order is selected instead.
+    f.signatures.insert(id("Aaa"), heap("Aaa"));
+    assert!(!reads.iter().all(|read| read_holds(read, &f.signatures)));
+    // Without any role, the selection is a read of absence.
+    let mut none = SignatureMap::new(session());
+    assert!(read_holds(&VRead::FirstHeap(None), &none));
+    none.insert(id("Zzz"), heap("Zzz"));
+    assert!(!read_holds(&VRead::FirstHeap(None), &none));
+}
+
+#[test]
+fn restored_success_rechecks_private_shape_reads_under_unchanged_fingerprints() {
+    use hirsel_intern::work::{self, Counter};
+    let mut signatures = SignatureMap::new(session());
+    signatures.insert(
+        id("Inner"),
+        declaration(
+            "Inner",
+            TypeKind::Primitive(Primitive::U32),
+            vec![Bound::Plain],
+            true,
+            false,
+        ),
+    );
+    signatures.insert(
+        id("Hidden"),
+        declaration(
+            "Hidden",
+            TypeKind::Named {
+                definition: id("Inner"),
+                arguments: vec![].into(),
+            },
+            vec![Bound::Plain],
+            true,
+            false,
+        ),
+    );
+    let mut original = ValidatedSignatures::default();
+    let verdict = original.verdict(interner(), id("Hidden"), &signatures);
+    assert!(verdict.error.is_none() && reads_view(&verdict, "Inner"));
+    let mut restored = ValidatedSignatures::default();
+    for (digest, reads) in original.successful() {
+        restored.seed_success(digest, reads.to_vec());
+    }
+    let before = work::read(Counter::ValidateSignatureRows);
+    let mut next = ValidatedSignatures::default();
+    let reused = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    assert_eq!(*reused, *verdict);
+    assert_eq!(work::read(Counter::ValidateSignatureRows), before);
+    let fingerprint = signatures.get(&path("Inner")).unwrap().fingerprint;
+    represent(
+        &mut signatures,
+        "Inner",
+        TypeKind::Primitive(Primitive::String),
+    );
+    assert_eq!(
+        signatures.get(&path("Inner")).unwrap().fingerprint,
+        fingerprint
+    );
+    let recomputed = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    assert!(!std::sync::Arc::ptr_eq(&reused, &recomputed));
+    assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+    // Hidden's own declared nominal bounds can still hold. Its newly recorded
+    // view receipt must match a fresh check, and the malformed Inner must make
+    // the enclosing universe fail independently.
+    assert_eq!(
+        *recomputed,
+        check_view(
+            interner(),
+            id("Hidden"),
+            signatures.get(id("Hidden")).unwrap(),
+            &signatures
+        )
+    );
+    let universe = next.universe(
+        interner(),
+        signatures.keys().collect::<Vec<_>>(),
+        &signatures,
+    );
+    assert!(
+        universe
+            .errors
+            .iter()
+            .any(|v| v.kind == ViolationKind::InvalidSignature(path("Inner")))
     );
 }

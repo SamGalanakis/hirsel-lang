@@ -35,10 +35,10 @@ pub(crate) fn derive(
     let SignatureKind::Function(function) = &signature.kind else {
         return Err(error("not a function".into()));
     };
-    let nominal = |path: &DefPath| {
+    let nominal = |definition: hirsel_syntax::DefId| {
+        let path = definition.path();
         if let Some(Some(r)) = input.representations.get(path) {
             return Some(LogicalNominal::Representation {
-                types: &r.types,
                 shape: r.private_shape,
             });
         }
@@ -47,15 +47,12 @@ pub(crate) fn derive(
             return None;
         };
         Some(match t.representation {
-            Some(shape) => LogicalNominal::Representation {
-                types: &s.types,
-                shape,
-            },
+            Some(shape) => LogicalNominal::Representation { shape },
             None => LogicalNominal::Opaque,
         })
     };
     let logical = Logical::new(&nominal);
-    let TypeKind::Named { arguments, .. } = &signature
+    let TypeKind::Named { arguments, .. } = &input
         .types
         .get(function.result)
         .ok_or_else(|| error("missing entry result type".into()))?
@@ -67,15 +64,14 @@ pub(crate) fn derive(
         return Err(error("missing Error type".into()));
     };
     let ty = *ty;
-    let scope = Scope::root(&signature.types);
+    let scope = Scope::root(&input.types);
     let instance = program.functions[entry];
     let unit = program
-        .units
+        .summaries
         .iter()
-        .map(|u| u.unit())
-        .find(|u| u.header.definition == *entry && u.header.instance == instance)
+        .find(|s| s.definition == *entry && s.instance == instance)
         .ok_or_else(|| error("no entry unit".into()))?;
-    let result = program.table.fn_abis[unit.header.abi.0 as usize]
+    let result = program.table.fn_abis[unit.abi.0 as usize]
         .result
         .as_ref()
         .ok_or_else(|| error("no entry result".into()))?
@@ -117,7 +113,7 @@ pub(crate) fn derive(
                         .signatures
                         .values()
                         .find(|s| s.fingerprint == revision)
-                        .map(|s| s.definition.0.name.as_str())
+                        .map(|s| s.definition.path().0.name.as_str())
                 })
                 .unwrap_or("opaque");
             nodes[index].text = format!("<{name}>");
@@ -183,7 +179,7 @@ pub(crate) fn derive(
                 node.text = "{ ".into();
                 for (f, field) in fs.iter().zip(&record.fields) {
                     node.fields
-                        .push((field.offset, part!(f.ty, field.layout), f.name.clone()));
+                        .push((field.offset, part!(f.ty, field.layout), f.name.to_string()));
                 }
             }
             TypeKind::Variant(vs) if record.tag.is_some() => {
@@ -229,7 +225,7 @@ pub(crate) fn derive(
                         branch.fields.push((
                             field.offset,
                             part!(*ty, field.layout),
-                            label.clone().unwrap_or_default(),
+                            label.map(|l| l.to_string()).unwrap_or_default(),
                         ));
                     }
                     let branch_id = nodes.len();

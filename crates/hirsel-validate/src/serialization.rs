@@ -4,8 +4,10 @@ use super::*;
 use hirsel_types::*;
 
 pub(super) fn declaration(
+    t: &TypeInterner,
+    memo: &TypeMemo,
     s: &Signature,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
     let SignatureKind::Type(d) = &s.kind else {
         return Ok(true);
@@ -17,7 +19,7 @@ pub(super) fn declaration(
         return Ok(text_path(d, &[]));
     }
     if let Some(check) = &d.serializable_check {
-        return checked(s, d, check, signatures);
+        return checked(t, memo, s, d, check, signatures);
     }
     let parametric = matches!(&d.authority, AuthoritySummary::Known(terms)
         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
@@ -39,7 +41,8 @@ pub(super) fn declaration(
     if d.bounds.contains(&Bound::Serializable) {
         return Ok(d.authority == AuthoritySummary::inert()
             && eligible(
-                &s.types,
+                t,
+                memo,
                 root,
                 &GenericDeclarations::signature(&d.generics),
                 signatures,
@@ -63,7 +66,8 @@ pub(super) fn declaration(
         })
         .collect();
     eligible(
-        &s.types,
+        t,
+        memo,
         root,
         &GenericDeclarations::signature(&generics),
         signatures,
@@ -74,10 +78,12 @@ pub(super) fn declaration(
 /// declaration with no structural Serializable bound, whose published representation
 /// qualifies, and whose check is `@noalloc fn(value: T) -> bool uses {}` in its module.
 fn checked(
+    t: &TypeInterner,
+    memo: &TypeMemo,
     s: &Signature,
     d: &TypeDefinition,
     check: &SerializableCheck,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
     if !d.serializable
         || s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
@@ -88,12 +94,13 @@ fn checked(
         || d.resource
         || d.drop.is_some()
         || d.fact.is_some()
-        || !check_function(&s.definition, &check.function, signatures)
+        || !check_function(t, s.definition.path(), &check.function, signatures)
     {
         return Ok(false);
     }
     eligible(
-        &s.types,
+        t,
+        memo,
         check.representation,
         &GenericDeclarations::default(),
         signatures,
@@ -101,7 +108,12 @@ fn checked(
 }
 
 /// The exact check header for the opaque `owner`, declared in `owner`'s module.
-fn check_function(owner: &DefPath, function: &DefPath, signatures: &dyn SignatureLookup) -> bool {
+fn check_function(
+    t: &TypeInterner,
+    owner: &DefPath,
+    function: &DefPath,
+    signatures: &Reader<'_>,
+) -> bool {
     if function.0.package != owner.0.package || function.0.modules != owner.0.modules {
         return false;
     }
@@ -117,10 +129,10 @@ fn check_function(owner: &DefPath, function: &DefPath, signatures: &dyn Signatur
     header.generics.is_empty()
         && value.passing == hirsel_syntax::PassingMode::Borrow
         && value.label.is_none()
-        && matches!(f.types.get(value.ty).map(|t| &t.kind),
-            Some(TypeKind::Named { definition, arguments }) if definition == owner && arguments.is_empty())
+        && matches!(t.get(value.ty).map(|t| &t.kind),
+            Some(TypeKind::Named { definition, arguments }) if definition.path() == owner && arguments.is_empty())
         && matches!(
-            f.types.get(header.result).map(|t| &t.kind),
+            t.get(header.result).map(|t| &t.kind),
             Some(TypeKind::Primitive(Primitive::Bool))
         )
         && header.error.is_none()
@@ -145,34 +157,36 @@ fn text_path(d: &TypeDefinition, arguments: &[GenericArgument]) -> bool {
 }
 
 pub(super) fn eligible(
-    source: &TypeStore,
+    t: &TypeInterner,
+    memo: &TypeMemo,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
-    eligible_with_key_order(source, root, generics, signatures, false)
+    eligible_with_key_order(t, memo, root, generics, signatures, false)
 }
 
 /// STORE-6 proof over declared representations, independent of H's descriptor.
 pub(super) fn ordered_key(
-    source: &TypeStore,
+    t: &TypeInterner,
+    memo: &TypeMemo,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
-    eligible_with_key_order(source, root, generics, signatures, true)
+    eligible_with_key_order(t, memo, root, generics, signatures, true)
 }
 
 fn eligible_with_key_order(
-    source: &TypeStore,
+    t: &TypeInterner,
+    memo: &TypeMemo,
     root: TypeId,
     generics: &GenericDeclarations,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
     ordered: bool,
 ) -> Result<bool, QueryError> {
-    let mut store = source.clone();
     let mut pending = vec![(root, false)];
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::default();
     let mut expansions = NominalExpansions::default();
     while let Some((id, exit)) = pending.pop() {
         if exit {
@@ -182,7 +196,7 @@ fn eligible_with_key_order(
         if !seen.insert(id) {
             continue;
         }
-        let Some(row) = store.get(id).cloned() else {
+        let Some(row) = t.get(id).cloned() else {
             return Ok(false);
         };
         if !row.brand.alternatives.is_empty() || row.erased_captures.is_some() {
@@ -202,7 +216,7 @@ fn eligible_with_key_order(
                 definition,
                 arguments,
             } => {
-                let Some(s) = signatures.get(&definition) else {
+                let Some(s) = signatures.get(definition) else {
                     return Ok(false);
                 };
                 let SignatureKind::Type(d) = &s.kind else {
@@ -233,7 +247,7 @@ fn eligible_with_key_order(
                     || check.is_some_and(|c| {
                         !d.generics.is_empty()
                             || d.authority != AuthoritySummary::inert()
-                            || !check_function(&definition, &c.function, signatures)
+                            || !check_function(t, definition.path(), &c.function, signatures)
                     })
                     || !data_authority
                     || (!s.metadata.alias && !d.serializable)
@@ -248,18 +262,18 @@ fn eligible_with_key_order(
                 {
                     return Ok(false);
                 }
-                if !expansions.enter(id, 0, |_| &store)? {
+                if !expansions.enter(id, 0, t)? {
                     continue;
                 }
                 pending.push((id, true));
                 let Some(root) = check.map(|c| c.representation).or(d.representation) else {
                     return Ok(false);
                 };
-                let Ok(root) = substitute_type(
-                    &s.types,
+                let Ok(root) = hirsel_types::substitute(
+                    t,
+                    memo,
                     root,
-                    &mut store,
-                    Substitution {
+                    &Substitution {
                         binder: Some(GenericBinder::Bound(0)),
                         arguments: &arguments,
                         authorities: &vec![AuthoritySummary::Unknown; arguments.len()],

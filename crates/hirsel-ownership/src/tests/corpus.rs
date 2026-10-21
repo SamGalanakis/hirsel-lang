@@ -69,8 +69,13 @@ fn run_with_authority(
     let mut diagnostics = vec![];
     let mut authority_diagnostics = vec![];
     for syntax in &file.items {
-        let resolution =
-            hirsel_resolve::resolve_item(&file, syntax, &registry.index.clone(), &mut registry);
+        let resolution = hirsel_resolve::resolve_item(
+            &file,
+            syntax,
+            &registry.index.clone(),
+            support::session(),
+            &mut registry,
+        );
         if let Some(d) = resolution.query.diagnostics.first() {
             return Err(format!(
                 "dependency-owned resolver: {} line {}",
@@ -82,6 +87,8 @@ fn run_with_authority(
         let output = hirsel_check::body::check_with_loop_protocols(
             hirsel_check::body::LoopInput {
                 body: hirsel_check::body::Input {
+                    types: support::session(),
+                    memo: support::session_memo(),
                     syntax,
                     context: &support::context(),
                     resolution: &resolution,
@@ -117,6 +124,8 @@ fn run_with_authority(
             .into_iter()
             .collect::<hirsel_authority::Intrinsics>();
         let mut authority = hirsel_authority::check_file_with_clauses(
+            support::session(),
+            support::session_memo(),
             syntax,
             &signature,
             output.checked.value,
@@ -175,6 +184,8 @@ fn run_with_authority(
         authority_diagnostics.extend(authority.diagnostics);
         let mut checked = authority.body;
         let output = check_ownership_with_clauses(
+            support::session(),
+            support::session_memo(),
             syntax,
             &signature,
             &mut checked,
@@ -597,4 +608,24 @@ fn an_invalid_unique_annotation_does_not_cascade_to_its_binding_use() {
     let (diagnostics, _) = run(source, &base).unwrap();
     let rules: Vec<_> = diagnostics.iter().map(|d| d.rule.as_str()).collect();
     assert_eq!(rules, vec!["MODE-2"]);
+}
+
+#[test]
+fn constant_table_elements_are_not_carried_through_every_flow_state() {
+    // Each element of a table literal is live until the literal consumes it,
+    // so states and live sets that carried them grew quadratically in its length.
+    let rows = |count: usize| {
+        let elements: Vec<_> = (0..count).map(|i| format!("{}u64", i * 7 % 1000)).collect();
+        let source = format!(
+            "const TABLE: Inline[u64, {count}] = [{}]\nfn first() -> u64 {{ TABLE[0] }}\n",
+            elements.join(", ")
+        );
+        let before = work::read(Counter::OwnershipStateRows);
+        let diagnostics = source_diagnostics(&source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        work::read(Counter::OwnershipStateRows) - before
+    };
+    let small = rows(1024);
+    let large = rows(4096);
+    assert!(large <= 8 * small + 1024, "small {small}, large {large}");
 }

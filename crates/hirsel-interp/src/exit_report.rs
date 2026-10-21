@@ -22,24 +22,23 @@ pub fn returned_error(
     let SignatureKind::Function(function) = &signature.kind else {
         return None;
     };
-    let nominal = |path: &hirsel_syntax::DefPath| {
-        runtime.get(path).map(|n| match &n.representation {
-            Some((types, shape)) => LogicalNominal::Representation {
-                types,
-                shape: *shape,
-            },
-            None => LogicalNominal::Opaque,
-        })
+    let nominal = |definition: hirsel_syntax::DefId| {
+        runtime
+            .get(definition.path())
+            .map(|n| match n.representation {
+                Some(shape) => LogicalNominal::Representation { shape },
+                None => LogicalNominal::Opaque,
+            })
     };
     let logical = Logical::new(&nominal);
-    let TypeKind::Named { arguments, .. } = &signature.types.get(function.result)?.kind else {
+    let TypeKind::Named { arguments, .. } = &runtime.types.get(function.result)?.kind else {
         return None;
     };
     let hirsel_types::GenericArgument::Type(ty) = arguments.get(1)? else {
         return None;
     };
     let ty = *ty;
-    let scope = Scope::root(&signature.types);
+    let scope = Scope::root(&runtime.types);
     let Value::Variant { variant: 1, fields } = value else {
         return None;
     };
@@ -107,7 +106,9 @@ pub fn returned_error(
                     Some(TypeKind::Record(fs)) => (
                         "{ ".into(),
                         " }",
-                        fs.iter().map(|f| (Some(f.name.clone()), f.ty)).collect(),
+                        fs.iter()
+                            .map(|f| (Some(f.name.as_str().to_owned()), f.ty))
+                            .collect(),
                     ),
                     Some(TypeKind::Variant(vs)) => {
                         let ordinal = match value {
@@ -118,12 +119,15 @@ pub fn returned_error(
                         let v = &vs[ordinal as usize];
                         let named = v.fields.first().is_some_and(|(n, _)| n.is_some());
                         if v.fields.is_empty() {
-                            (v.name.clone(), "", vec![])
+                            (v.name.as_str().to_owned(), "", vec![])
                         } else {
                             (
                                 format!("{}{}", v.name, if named { " { " } else { "(" }),
                                 if named { " }" } else { ")" },
-                                v.fields.to_vec(),
+                                v.fields
+                                    .iter()
+                                    .map(|(n, t)| (n.map(|n| n.as_str().to_owned()), *t))
+                                    .collect(),
                             )
                         }
                     }

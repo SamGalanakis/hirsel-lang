@@ -13,13 +13,14 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use hirsel_lir::abi::abi_digest;
 use hirsel_lir::abi_types::{CallableShape, FnAbi, PhysicalType, ScalarExtension};
 use hirsel_lir::emission::{
-    EmitInputs, Manifested, OptLevel, artifact, function_thunk_name, register_result, symbol_name,
+    EmitInputs, GlueInputs, Manifested, OptLevel, artifact, function_thunk_name, register_result,
+    symbol_name,
 };
 use hirsel_lir::ir::UnitOrigin;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, ScalarKind, TargetSpec};
 use hirsel_lir::object::ObjectFile;
 use hirsel_lir::runtime_abi::{CName, CType, RuntimeEntry};
-use hirsel_lir::stage::{ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
+use hirsel_lir::stage::{ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
 use hirsel_syntax::DefPath;
 
 use crate::CodegenError;
@@ -159,9 +160,9 @@ fn c_type(ty: CType) -> Option<(ir::Type, bool)> {
 
 /// A helper function a body asked for, defined once the units are.
 pub(crate) enum Helper {
-    /// `hirsel.compare.<layout>[.eq]`.
+    /// `hirsel.compare.<layout key>[.eq]`.
     Compare { layout: LayoutId, equality: bool },
-    /// `hirsel.hash.<layout>`.
+    /// `hirsel.hash.<layout key>`.
     Hash { layout: LayoutId },
     /// `hirsel.drop.<layout>`, calling the drop body `body`.
     Drop { body: FuncId, caller_site: bool },
@@ -179,11 +180,56 @@ pub(crate) struct CheckThunk {
     pub(crate) register: bool,
 }
 
+/// What one object is emitted from: the target, the layout table and its keys, and either
+/// a unit object's `EmitInputs` or the program glue's `GlueInputs`.
+#[derive(Clone, Copy)]
+pub(crate) struct Inputs<'a> {
+    pub(crate) target: &'a TargetSpec,
+    pub(crate) layouts: &'a LayoutTable,
+    pub(crate) keys: &'a hirsel_lir::LayoutKeys,
+    pub(crate) opt: OptLevel,
+    pub(crate) unit: Option<&'a EmitInputs<'a>>,
+    pub(crate) glue: Option<&'a GlueInputs<'a>>,
+}
+
+impl<'a> Inputs<'a> {
+    /// The inputs of a unit object.
+    pub(crate) fn units(inputs: &'a EmitInputs<'a>) -> Self {
+        Self {
+            target: inputs.target,
+            layouts: inputs.layouts,
+            keys: inputs.keys,
+            opt: inputs.opt,
+            unit: Some(inputs),
+            glue: None,
+        }
+    }
+    /// The inputs of the program's glue object, which is compiled without optimization.
+    pub(crate) fn program(glue: &'a GlueInputs<'a>) -> Self {
+        Self {
+            target: glue.target,
+            layouts: glue.layouts,
+            keys: glue.keys,
+            opt: OptLevel::None,
+            unit: None,
+            glue: Some(glue),
+        }
+    }
+    /// A unit object's inputs; only unit emission reads them.
+    pub(crate) fn unit(&self) -> &'a EmitInputs<'a> {
+        self.unit.expect("unit inputs in unit emission")
+    }
+    /// The glue object's inputs; only glue emission reads them.
+    pub(crate) fn glue(&self) -> &'a GlueInputs<'a> {
+        self.glue.expect("glue inputs in glue emission")
+    }
+}
+
 /// The object being emitted: its Cranelift module, the declarations made so far and the
 /// manifest the finished object must match.
 pub(crate) struct Emitter<'a> {
     pub(crate) module: ObjectModule,
-    pub(crate) inputs: &'a EmitInputs<'a>,
+    pub(crate) inputs: Inputs<'a>,
     pub(crate) call_conv: CallConv,
     pub(crate) manifested: Manifested,
     pub(crate) functions: BTreeMap<String, FuncId>,
@@ -194,8 +240,9 @@ pub(crate) struct Emitter<'a> {
     pub(crate) anonymous: u64,
     /// With `Some`, each function's Cranelift IR as it is defined (`crate::emit_clif`).
     pub(crate) clif: Option<String>,
-    pub(crate) sources: Option<&'a hirsel_lir::profile::ProfileSources>,
-    debug_functions: Vec<crate::dwarf::DebugFunction>,
+    /// Whether functions get source locations and debug intervals (`debug::Profile`).
+    pub(crate) debug: bool,
+    debug_functions: Vec<hirsel_lir::debug::DebugFunction>,
 }
 
 pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
@@ -248,24 +295,30 @@ pub(crate) fn emit(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     clif: bool,
-    sources: Option<&hirsel_lir::profile::ProfileSources>,
+    profile: hirsel_lir::debug::Profile<'_>,
 ) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
-    let digests = hirsel_lir::emission::InputDigests::of(inputs);
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = hirsel_lir::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let inputs = &EmitInputs {
+        index: Some(index),
+        ..inputs.clone()
+    };
     for unit in units {
-        hirsel_lir::emission::check_receipt_against(unit, inputs, &digests).map_err(|problem| {
+        hirsel_lir::emission::check_receipt(unit, inputs).map_err(|problem| {
             CodegenError::Receipt {
                 definition: unit.unit().header.definition.clone(),
                 problem,
             }
         })?;
     }
-    if !inputs.registry.validates(inputs.layouts, inputs.finalizers) {
-        return Err(CodegenError::Manifest {
-            problem: "foreign or noncanonical descriptor registry".into(),
-        });
-    }
-    let mut emitter = Emitter::new(inputs, clif)?;
-    emitter.sources = sources;
+    let mut emitter = Emitter::new(Inputs::units(inputs), clif)?;
+    emitter.debug = profile.debug;
     let emitted: Vec<&ValidatedUnit<Ready>> = units
         .iter()
         .copied()
@@ -319,17 +372,6 @@ pub(crate) fn emit(
             let thunk_id = emitter.declare_function(&thunk, linkage, &thunk_sig)?;
             emitter.define_thunk(&thunk, thunk_id, id, &thunk_sig, &sig.ir)?;
         }
-        if inputs.callbacks.contains(&header.definition) {
-            let callback = hirsel_lir::emission::callback_thunk_name(
-                &header.definition,
-                Some(&header.instance),
-            );
-            emitter
-                .manifested
-                .exports
-                .insert(callback.clone(), record(&callback));
-            emitter.define_callback(&callback, id, &sig, linkage, &header.definition)?;
-        }
         bodies.push((unit, id, sig));
     }
     let mut context = Context::new();
@@ -342,24 +384,17 @@ pub(crate) fn emit(
             crate::function::FnEmitter::new(&mut emitter, unit, builder, sig).emit()?;
         }
         emitter.compile(&name, id, &mut context)?;
-        if let Some(source) = sources.and_then(|s| s.get(&unit.header.definition)) {
-            emitter
-                .debug_functions
-                .push(crate::dwarf::DebugFunction::new(
-                    id,
-                    unit,
-                    source,
-                    context.compiled_code().expect("defined function"),
-                )?);
+        if emitter.debug {
+            emitter.debug_functions.push(crate::dwarf::intervals(
+                &name,
+                unit,
+                context.compiled_code().expect("defined function"),
+            ));
         }
         emitter.module.clear_context(&mut context);
     }
-    // The registry names every descriptor of the program, and a descriptor its finalizer's
-    // drop wrapper.
     if let Some(first) = emitted.first() {
-        let definition = &first.unit().header.definition;
-        emitter.registry_table(definition)?;
-        emitter.drain_helpers(definition)?;
+        emitter.drain_helpers(&first.unit().header.definition)?;
     }
     emitter.manifested.settle_imports();
     let Emitter {
@@ -369,13 +404,20 @@ pub(crate) fn emit(
         debug_functions,
         ..
     } = emitter;
-    let mut product = module.finish();
-    crate::dwarf::write(&mut product, debug_functions)?;
+    let product = module.finish();
     let bytes = crate::object::finish(product)?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
-    artifact(file, manifested, units, inputs, crate::TOOLCHAIN)
-        .map(|artifact| (artifact, clif))
+    artifact(file, manifested, inputs, crate::TOOLCHAIN)
+        .map(|artifact| {
+            (
+                ObjectArtifact {
+                    debug: debug_functions,
+                    ..artifact
+                },
+                clif,
+            )
+        })
         .map_err(|problem| CodegenError::Manifest { problem })
 }
 
@@ -425,8 +467,11 @@ pub(crate) fn colocate_hirsel_symbols(
 }
 
 impl<'a> Emitter<'a> {
-    pub(crate) fn new(inputs: &'a EmitInputs<'a>, clif: bool) -> Emitted<Self> {
-        let isa = isa_with_verifier(inputs.target, inputs.opt, inputs.verify_backend)?;
+    pub(crate) fn new(inputs: Inputs<'a>, clif: bool) -> Emitted<Self> {
+        let verify = inputs
+            .unit
+            .map_or_else(hirsel_lir::emission::validate_stages, |i| i.verify_backend);
+        let isa = isa_with_verifier(inputs.target, inputs.opt, verify)?;
         let call_conv = isa.default_call_conv();
         let builder = ObjectBuilder::new(isa, "hirsel", cranelift_module::default_libcall_names())
             .map_err(|e| CodegenError::Target {
@@ -443,7 +488,7 @@ impl<'a> Emitter<'a> {
             pending: Vec::new(),
             anonymous: 0,
             clif: clif.then(String::new),
-            sources: None,
+            debug: false,
             debug_functions: Vec::new(),
         })
     }

@@ -4,8 +4,8 @@ use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
 use hirsel_types::*;
 
 /// How a place receives a value, which decides what its nested rows may forget.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Reception {
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(super) enum Reception {
     /// A readonly argument or a whole taken value: nothing writes it back.
     View,
     /// A copy whose source stays live beside the receiving place.
@@ -14,9 +14,15 @@ enum Reception {
     HandBack,
 }
 
+pub(super) type Relations = crate::hashed::HashMap<
+    (TypeId, TypeId, TypeRelation, Reception),
+    Result<bool, hirsel_types::QueryError>,
+>;
+
 pub(super) fn declaration_tables(
+    t: &TypeInterner,
     definition: &Definition,
-    signatures: &dyn SignatureLookup,
+    signatures: &Reader<'_>,
 ) -> Option<Vec<GenericDeclarations>> {
     let empty: std::sync::Arc<[GenericParameter]> = [].into();
     let mut scopes: Vec<_> = definition
@@ -24,7 +30,7 @@ pub(super) fn declaration_tables(
         .iter()
         .map(|b| (b.parameter_scope, None, empty.clone()))
         .collect();
-    if let Some(signature) = signatures.get(&definition.path) {
+    if let Some(signature) = signatures.get(definition.path) {
         let parameters: std::sync::Arc<[GenericParameter]> = signature.generics().into();
         scopes[definition.entry.0 as usize].2 = parameters.clone();
         for (_, id) in &definition.contracts {
@@ -40,10 +46,8 @@ pub(super) fn declaration_tables(
             let Rvalue::Closure { body: child, .. } = parent.rvalues[value.0 as usize] else {
                 continue;
             };
-            if let TypeKind::Function(function) = &definition
-                .types
-                .get(parent.places[destination.0 as usize].ty)?
-                .kind
+            if let TypeKind::Function(function) =
+                &t.get(parent.places[destination.0 as usize].ty)?.kind
             {
                 scopes[child.0 as usize].1 = Some(parent_id);
                 scopes[child.0 as usize].2 = function.generics.clone().into();
@@ -72,7 +76,7 @@ pub(super) fn operands(r: &Rvalue) -> Vec<&Operand> {
     }
 }
 
-pub(super) fn signature_valid(s: &Signature) -> bool {
+pub(super) fn signature_valid(t: &TypeInterner, s: &Signature) -> bool {
     if let SignatureKind::Const { generics, .. } = &s.kind {
         if generics
             .iter()
@@ -81,15 +85,17 @@ pub(super) fn signature_valid(s: &Signature) -> bool {
             return false;
         }
     }
-    if !graph_valid(&s.types)
-        || s.types
+    let rows = hirsel_types::closure(t, hirsel_types::signature_types(t, s));
+    if !graph_valid(t, &rows)
+        || rows
             .iter()
-            .any(|(_, t)| t.allocation_target.is_some() && !t.is_heap_target(&s.metadata.roles))
+            .map(|&id| t.row(id))
+            .any(|row| row.allocation_target.is_some() && !row.is_heap_target(&s.metadata.roles))
     {
         return false;
     }
     if let SignatureKind::Function(f) = &s.kind {
-        if !value_parameters_valid(&s.types, f) {
+        if !value_parameters_valid(t, f) {
             return false;
         }
     }
@@ -139,10 +145,10 @@ pub(super) fn signature_valid(s: &Signature) -> bool {
     };
     roots
         .into_iter()
-        .all(|t| owned_type(&s.types, t) && generic_references_valid(&s.types, t, &declarations))
+        .all(|root| t.contains(root) && generic_references_valid(t, root, &declarations))
 }
 
-fn value_parameters_valid(store: &TypeStore, f: &FunctionType) -> bool {
+fn value_parameters_valid(store: &TypeInterner, f: &FunctionType) -> bool {
     let promises_valid = |f: &FunctionType| {
         let mut seen = BTreeSet::new();
         f.state_promises.iter().all(|p| {
@@ -186,15 +192,14 @@ fn value_parameters_valid(store: &TypeStore, f: &FunctionType) -> bool {
         .chain(f.error)
         .map(|t| (t, vec![f.parameters.len()]))
         .collect();
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::default();
     while let Some((t, mut scopes)) = pending.pop() {
         if !seen.insert((t, scopes.clone())) {
             continue;
         }
-        if !owned_type(store, t) {
+        let Some(row) = store.get(t) else {
             return false;
-        }
-        let row = store.get(t).unwrap();
+        };
         let origin_valid = |o: &Origin| match o.root {
             OriginRoot::Parameter(p) | OriginRoot::ArgumentBrand(p) => valid(p, &scopes),
             _ => true,
@@ -290,7 +295,7 @@ impl<'a> Checker<'a> {
             .map(|l| l.ty)
             .chain(self.body.places.iter().map(|p| p.ty))
             .chain([self.body.result])
-            .any(|t| !generic_references_valid(&self.definition.types, t, &declarations))
+            .any(|t| !generic_references_valid(self.t, t, &declarations))
         {
             self.error(ViolationKind::InvalidTypeGraph);
             return;
@@ -300,8 +305,8 @@ impl<'a> Checker<'a> {
         self.nominal_bounds();
         self.prepare_content_inputs();
         for (i, p) in self.body.places.iter().enumerate() {
-            let mut store = self.working_store();
-            let expected = self.projection_type(&mut store, p, |depth, field| {
+            let store = self.t;
+            let expected = self.projection_type(store, p, |depth, field| {
                 let binding = p.binding.as_ref()?;
                 let base = p.projection.len().checked_sub(binding.fields.len())?;
                 let relative = depth.checked_sub(base)?;
@@ -310,30 +315,22 @@ impl<'a> Checker<'a> {
                 parent.fields.push(field);
                 Some(parent)
             });
-            let expected = expected.map(|root| {
-                canonical_plain_type(&mut store, root, &mut |path| {
-                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                })
-                .unwrap_or(root)
-            });
-            let current = self.global_root_projection(&mut store, p);
+            let expected = expected.map(|root| self.canonical_plain(store, root));
+            let current = self.global_root_projection(store, p);
             let current = self.receiving_root(p.root).then_some(current).flatten();
-            let actual = import_type(&self.definition.types, p.ty, &mut store).unwrap_or(p.ty);
+            let actual = p.ty;
             let physical = store.get(actual).unwrap().modes.clone();
-            let actual = canonical_plain_type(&mut store, actual, &mut |path| {
-                Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-            })
-            .unwrap_or(actual);
+            let actual = self.canonical_plain(store, actual);
             let actual = if !p.projection.is_empty() {
                 let mut row = store.get(actual).unwrap().clone();
                 row.modes.relation = physical.relation;
                 row.modes.uniqueness = physical.uniqueness;
-                store.push(row)
+                store.intern(row)
             } else {
                 actual
             };
             let valid = expected.is_some_and(|expected| {
-                let actual = self.comparison_evidence(&mut store, expected, actual);
+                let actual = self.comparison_evidence(store, expected, actual);
                 let mut row = store.get(actual).unwrap().clone();
                 if !matches!(
                     row.kind,
@@ -345,15 +342,11 @@ impl<'a> Checker<'a> {
                 ) {
                     row.modes.sendability = store.get(expected).unwrap().modes.sendability.clone();
                 }
-                let actual = store.push(row);
-                semantic_equal(&store, expected, &store, actual).unwrap_or(false)
-                    || current.is_some_and(|current| {
-                        semantic_equal(&store, current, &self.definition.types, p.ty)
-                            .unwrap_or(false)
-                    })
+                let actual = store.intern(row);
+                self.t.semantic_eq(expected, actual)
+                    || current.is_some_and(|current| self.t.semantic_eq(current, p.ty))
                     || (!p.projection.is_empty()
-                        && (Self::has_origins(&store, expected)
-                            || Self::has_origins(&self.definition.types, p.ty)))
+                        && (Self::has_origins(&store, expected) || Self::has_origins(self.t, p.ty)))
             });
             if !valid {
                 self.error(ViolationKind::InvalidProjection(PlaceId(i as u32)));
@@ -373,11 +366,7 @@ impl<'a> Checker<'a> {
                             self.place_type(value.place),
                             "snapshot",
                         );
-                        if super::flow::needs_release(
-                            self,
-                            self.place_type(*destination),
-                            &self.definition.types,
-                        ) {
+                        if super::flow::needs_release(self, self.place_type(*destination), self.t) {
                             self.error(ViolationKind::TypeMismatch {
                                 entity: "nonplain snapshot",
                             });
@@ -398,8 +387,8 @@ impl<'a> Checker<'a> {
                     arms,
                     otherwise,
                 } => {
-                    let mut store = self.working_store();
-                    let kind = self.layout(&mut store, self.place_type(value.place));
+                    let store = self.t;
+                    let kind = self.layout(store, self.place_type(value.place));
                     match kind {
                         Some(TypeKind::Variant(vs)) => {
                             if arms.iter().any(|a| a.0 as usize >= vs.len())
@@ -440,18 +429,17 @@ impl<'a> Checker<'a> {
                             entity: "scoped capability escape",
                         });
                     }
-                    let mut store = self.working_store();
-                    let (expected, unknown_join) = self.return_type(&mut store);
+                    let store = self.t;
+                    let (expected, unknown_join) = self.return_type(store);
                     // A conservative source join accepts a more precise borrowed
                     // placement. CFG source inclusion independently proves that
                     // it cannot outlive any selected source; owned returns still
                     // use Value compatibility and cannot erase arena placement.
                     if unknown_join {
-                        let expected = receiving_storage(&mut store, expected);
-                        let actual =
-                            self.copied_type(&mut store, value, self.place_type(value.place));
+                        let expected = receiving_storage(store, expected);
+                        let actual = self.copied_type(store, value, self.place_type(value.place));
                         if !self.compatible_with_context(
-                            &mut store,
+                            store,
                             expected,
                             actual,
                             TypeRelation::Parameter,
@@ -461,7 +449,7 @@ impl<'a> Checker<'a> {
                         }
                     } else {
                         self.storage_value_type_in(
-                            &mut store,
+                            store,
                             expected,
                             self.place_type(value.place),
                             value,
@@ -586,7 +574,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub(super) fn return_type(&self, store: &mut TypeStore) -> (TypeId, bool) {
+    pub(super) fn return_type(&self, store: &TypeInterner) -> (TypeId, bool) {
         let declared = store.get(self.body.result).unwrap().modes.relation.clone();
         // The body's own Arena parameters are where its result's blocks live
         // (PROV-4); the remaining parameters are its lifetime sources.
@@ -669,7 +657,7 @@ impl<'a> Checker<'a> {
                 Relation::environment().union(&placement)
             };
         }
-        let expected = store.push(expected);
+        let expected = store.intern(expected);
         let expected = if dependent {
             self.derive_sendability(store, expected)
         } else {
@@ -682,10 +670,10 @@ impl<'a> Checker<'a> {
         if self.site.body != self.definition.entry {
             return;
         }
-        let Some(signature) = self.signatures.get(&self.definition.path) else {
+        let Some(signature) = self.signatures.get(self.definition.path) else {
             if !self.body.parameters.is_empty() {
                 self.error(ViolationKind::MissingSignature(
-                    self.definition.path.clone(),
+                    self.definition.path.path().clone(),
                 ));
             }
             return;
@@ -693,7 +681,7 @@ impl<'a> Checker<'a> {
         if let SignatureKind::Type(t) = &signature.kind {
             if !t.resource {
                 self.error(ViolationKind::InvalidSignature(
-                    signature.definition.clone(),
+                    signature.definition.path().clone(),
                 ));
             } else if self.body.parameters.len() != 1 {
                 self.error(ViolationKind::Arity {
@@ -703,12 +691,12 @@ impl<'a> Checker<'a> {
                 });
             } else {
                 let self_ty = self.body.locals[self.body.parameters[0].0 as usize].ty;
-                let valid = match &self.definition.types.get(self_ty).unwrap().kind {
-                    TypeKind::Named { definition, arguments } => definition == &signature.definition
+                let valid = match &self.t.get(self_ty).unwrap().kind {
+                    TypeKind::Named { definition, arguments } => *definition == signature.definition
                         && arguments.len() == t.generics.len()
                         && arguments.iter().zip(&t.generics).enumerate().all(|(i, (a, p))| match (a, p) {
                             (GenericArgument::Type(id), GenericParameter::Type { .. }) => matches!(
-                                self.definition.types.get(*id).unwrap().kind, TypeKind::Parameter(p) if p.binder() == GenericBinder::Body(self.body.parameter_scope) && p.parameter().0 == i as u32),
+                                self.t.get(*id).unwrap().kind, TypeKind::Parameter(p) if p.binder() == GenericBinder::Body(self.body.parameter_scope) && p.parameter().0 == i as u32),
                             (GenericArgument::Size(Size::Parameter(p)), GenericParameter::Size { .. }) => p.binder() == GenericBinder::Body(self.body.parameter_scope) && p.parameter().0 == i as u32,
                             _ => false,
                         }),
@@ -720,7 +708,7 @@ impl<'a> Checker<'a> {
                     });
                 }
             }
-            if !matches!(&self.definition.types.get(self.body.result).unwrap().kind, TypeKind::Tuple(ts) if ts.is_empty())
+            if !matches!(&self.t.get(self.body.result).unwrap().kind, TypeKind::Tuple(ts) if ts.is_empty())
             {
                 self.error(ViolationKind::TypeMismatch {
                     entity: "finalizer result",
@@ -736,18 +724,12 @@ impl<'a> Checker<'a> {
                     actual: self.body.parameters.len(),
                 });
             }
-            self.cross_type(
-                &signature.types,
-                *result,
-                self.body.result,
-                &[],
-                "constant result",
-            );
+            self.cross_type(self.t, *result, self.body.result, &[], "constant result");
             return;
         }
         let SignatureKind::Function(f) = &signature.kind else {
             self.error(ViolationKind::InvalidSignature(
-                signature.definition.clone(),
+                signature.definition.path().clone(),
             ));
             return;
         };
@@ -765,46 +747,40 @@ impl<'a> Checker<'a> {
         }
         for (p, local) in f.parameters.iter().zip(&self.body.parameters) {
             self.cross_type(
-                &signature.types,
+                self.t,
                 p.ty,
                 self.body.locals[local.0 as usize].ty,
                 &[],
                 "body parameter",
             );
         }
-        self.cross_type(
-            &signature.types,
-            f.result,
-            self.body.result,
-            &[],
-            "body result",
-        );
+        self.cross_type(self.t, f.result, self.body.result, &[], "body result");
     }
 
     pub(super) fn place_type(&self, place: PlaceId) -> TypeId {
         self.body.places[place.0 as usize].ty
     }
     fn same(&mut self, a: TypeId, b: TypeId, entity: &'static str) {
-        if !semantic_equal(&self.definition.types, a, &self.definition.types, b).unwrap_or(false) {
+        if !self.t.semantic_eq(a, b) {
             self.error(ViolationKind::TypeMismatch { entity });
         }
     }
     /// Arithmetic reads scalar bits without requiring an operand's identity.
     /// Its result must independently have the same complete type with no brand.
     fn arithmetic_type(&mut self, left: TypeId, right: TypeId, result: TypeId) {
-        let mut store = self.working_store();
+        let store = self.t;
         let mut left_row = store.get(left).unwrap().clone();
         let mut right_row = store.get(right).unwrap().clone();
         left_row.brand = Brand::default();
         right_row.brand = Brand::default();
-        let left = store.push(left_row);
-        let right = store.push(right_row);
-        if !semantic_equal(&store, left, &store, right).unwrap_or(false) {
+        let left = store.intern(left_row);
+        let right = store.intern(right_row);
+        if !self.t.semantic_eq(left, right) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "binary operands",
             });
         }
-        if !semantic_equal(&store, result, &store, left).unwrap_or(false) {
+        if !self.t.semantic_eq(result, left) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "binary result",
             });
@@ -819,7 +795,7 @@ impl<'a> Checker<'a> {
     /// nested qualifier remain exact. Sendability is derived again for a row
     /// whose holder evidence changed, never for one compared as published.
     fn comparison_type(&mut self, left: TypeId, right: TypeId) {
-        let mut store = self.working_store();
+        let store = self.t;
         let rows = [left, right].map(|t| store.get(t).unwrap().clone());
         let relations = rows[0].modes.relation != rows[1].modes.relation;
         let [left, right] = rows.map(|mut row| {
@@ -829,20 +805,20 @@ impl<'a> Checker<'a> {
             if relations {
                 row.modes.relation = Relation::environment();
             }
-            let root = store.push(row);
+            let root = store.intern(row);
             // A graph that cannot be rewritten is compared as published.
-            let root = hirsel_types::erase_brands(&mut store, root).unwrap_or(root);
-            let aliased = hirsel_types::erase_uniqueness(&mut store, root).unwrap_or(root);
+            let root = hirsel_types::erase_brands(store, root).unwrap_or(root);
+            let aliased = hirsel_types::erase_uniqueness(store, root).unwrap_or(root);
             let derive = derive || aliased != root;
             let root = aliased;
             let root = if derive {
-                self.derive_sendability(&mut store, root)
+                self.derive_sendability(store, root)
             } else {
                 root
             };
-            hirsel_types::erase_comparison_crossing(&mut store, root).unwrap_or(root)
+            hirsel_types::erase_comparison_crossing(store, root).unwrap_or(root)
         });
-        if !semantic_equal(&store, left, &store, right).unwrap_or(false) {
+        if !self.t.semantic_eq(left, right) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "binary operands",
             });
@@ -853,7 +829,7 @@ impl<'a> Checker<'a> {
     /// promises in reading positions do (CLO-2).
     fn value_type_in(
         &mut self,
-        source: &mut TypeStore,
+        source: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         entity: &'static str,
@@ -883,7 +859,7 @@ impl<'a> Checker<'a> {
             .enumerate()
             .filter(|(_, local)| local.storage == Storage::Capture)
             .position(|(index, _)| index == root.0 as usize)?;
-        let inputs = self.scratch.definition_inputs(self.definition);
+        let inputs = self.scratch.definition_inputs(self.t, self.definition);
         let sites = &inputs.producers[body_id.0 as usize].captures;
         if sites.is_empty() {
             return None;
@@ -945,7 +921,7 @@ impl<'a> Checker<'a> {
 
     pub(super) fn brandless_variant_operand(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         place: PlaceId,
         expected: TypeId,
     ) -> bool {
@@ -954,7 +930,7 @@ impl<'a> Checker<'a> {
 
     pub(super) fn brandless_variant_from(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         body: BodyId,
         place: PlaceId,
         expected: TypeId,
@@ -1014,7 +990,7 @@ impl<'a> Checker<'a> {
                         ordinal: variant,
                         fields,
                     } => {
-                        if !matches!(&store.get(expected).unwrap().kind, TypeKind::Named { definition: owner, .. } if *owner == definition)
+                        if !matches!(&store.get(expected).unwrap().kind, TypeKind::Named { definition: owner, .. } if *owner.path() == definition)
                         {
                             return false;
                         }
@@ -1028,7 +1004,7 @@ impl<'a> Checker<'a> {
                             return false;
                         }
                         let mut todo: Vec<_> = selected.fields.iter().map(|f| f.1).collect();
-                        let mut types = BTreeSet::new();
+                        let mut types = HashSet::default();
                         while let Some(ty) = todo.pop() {
                             if !types.insert(ty) {
                                 continue;
@@ -1049,7 +1025,7 @@ impl<'a> Checker<'a> {
     }
     fn operand_value_type_in(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         value: &Operand,
@@ -1058,7 +1034,7 @@ impl<'a> Checker<'a> {
         // Matching written contracts need no second proof in this shape
         // comparison. Executable transfers check current owned-part evidence.
         let (expected, actual) =
-            matching_crossing_contracts(store, expected, actual, &mut BTreeMap::new());
+            matching_crossing_contracts(store, expected, actual, &mut HashMap::default());
         let actual = self.comparison_evidence(store, expected, actual);
         let mut receiving = store.get(expected).unwrap().clone();
         receiving.sendability_requirement = hirsel_types::SendabilityRequirement::None;
@@ -1074,7 +1050,7 @@ impl<'a> Checker<'a> {
             // construction/extraction. Static typing checks the remaining shape.
             receiving.modes.sendability = Sendability::NotSendable;
         }
-        let expected = store.push(receiving);
+        let expected = store.intern(receiving);
         let actual = self.copied_type(store, value, actual);
         if self.received_type(store, expected, actual, value.usage) {
             return;
@@ -1100,8 +1076,10 @@ impl<'a> Checker<'a> {
             let acquired = self.acquired_global_type(store, actual);
             let mut acquired = store.get(acquired).unwrap().clone();
             acquired.modes = store.get(actual).unwrap().modes.clone();
-            let acquired = store.push(acquired);
-            if !semantic_equal(store, acquired, store, actual).unwrap_or(true)
+            let acquired = store.intern(acquired);
+            if !(self.t.semantic_eq(acquired, actual)
+                || !self.t.valid(acquired)
+                || !self.t.valid(actual))
                 && self.received_type(store, expected, acquired, value.usage)
             {
                 self.scratch.acquisitions[self.site.body.0 as usize]
@@ -1116,7 +1094,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn received_type(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         usage: UseKind,
@@ -1153,7 +1131,7 @@ impl<'a> Checker<'a> {
             && self.unplaced_parts(place.ty, self.place_type(value.place))
     }
     fn unplaced_row(&self, holder: TypeId, value: TypeId) -> bool {
-        let types = &self.definition.types;
+        let types = self.t;
         matches!((types.get(holder), types.get(value)), (Some(h), Some(v))
             if !self.placed(&h.modes.relation)
                 && self.lifetime(&h.modes.relation).has_environment()
@@ -1163,7 +1141,7 @@ impl<'a> Checker<'a> {
         if self.unplaced_row(holder, value) {
             return true;
         }
-        let types = &self.definition.types;
+        let types = self.t;
         let (Some(h), Some(v)) = (types.get(holder), types.get(value)) else {
             return false;
         };
@@ -1182,14 +1160,14 @@ impl<'a> Checker<'a> {
     }
     fn storage_value_type_in(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         value: &Operand,
         entity: &'static str,
     ) {
         let (expected, actual) =
-            matching_crossing_contracts(store, expected, actual, &mut BTreeMap::new());
+            matching_crossing_contracts(store, expected, actual, &mut HashMap::default());
         let actual = self.comparison_evidence(store, expected, actual);
         let receiving = receiving_storage(store, expected);
         let mut receiving = store.get(receiving).unwrap().clone();
@@ -1221,18 +1199,18 @@ impl<'a> Checker<'a> {
             receiving.modes.relation =
                 Relation::environment().union(&self.placement(&receiving.modes.relation));
         }
-        let expected = store.push(receiving);
+        let expected = store.intern(receiving);
         self.operand_value_type_in(store, expected, actual, value, entity);
     }
     /// A deep content proof permits acquisition through Global receiving storage.
     /// Traverse data payloads, never callable contracts or Shared contents.
-    fn acquired_global_type(&self, store: &mut TypeStore, root: TypeId) -> TypeId {
+    fn acquired_global_type(&self, store: &TypeInterner, root: TypeId) -> TypeId {
         fn visit(
             checker: &Checker<'_>,
-            store: &mut TypeStore,
+            store: &TypeInterner,
             ty: TypeId,
-            seen: &mut BTreeMap<TypeId, TypeId>,
-            active: &mut BTreeSet<TypeId>,
+            seen: &mut HashMap<TypeId, TypeId>,
+            active: &mut HashSet<TypeId>,
         ) -> TypeId {
             if let Some(&result) = seen.get(&ty) {
                 return result;
@@ -1309,7 +1287,7 @@ impl<'a> Checker<'a> {
             let result = if row == *store.get(ty).unwrap() {
                 ty
             } else {
-                store.push(row)
+                store.intern(row)
             };
             let result = if relocalized {
                 checker.derive_sendability(store, result)
@@ -1324,14 +1302,14 @@ impl<'a> Checker<'a> {
             self,
             store,
             root,
-            &mut BTreeMap::new(),
-            &mut BTreeSet::new(),
+            &mut HashMap::default(),
+            &mut HashSet::default(),
         )
     }
 
     pub(super) fn compatible(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         relation: TypeRelation,
@@ -1346,7 +1324,7 @@ impl<'a> Checker<'a> {
     }
     fn compatible_with_context(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         relation: TypeRelation,
@@ -1367,13 +1345,43 @@ impl<'a> Checker<'a> {
     /// subsumed by `hirsel_types` wherever the value is not handed back.
     fn related(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         relation: TypeRelation,
         reception: Reception,
         context: &hirsel_types::GenericDeclarations,
     ) -> bool {
+        // A relation is a pure proof over this body's declarations: asked
+        // once per body, its tooling limit reported at every site that asks.
+        let memoized =
+            std::ptr::eq(store, self.t) && std::ptr::eq(context, self.generic_declarations());
+        let key = (expected, actual, relation, reception);
+        let relations = &self.scratch.relations[self.site.body.0 as usize];
+        let known = memoized
+            .then(|| relations.borrow().get(&key).cloned())
+            .flatten();
+        let answer = match known {
+            Some(answer) => answer,
+            None => {
+                let answer = self.relate(store, expected, actual, relation, reception, context);
+                if memoized {
+                    relations.borrow_mut().insert(key, answer.clone());
+                }
+                answer
+            }
+        };
+        answer.unwrap_or_else(|error| self.proof_failure(error, false))
+    }
+    fn relate(
+        &self,
+        store: &TypeInterner,
+        expected: TypeId,
+        actual: TypeId,
+        relation: TypeRelation,
+        reception: Reception,
+        context: &hirsel_types::GenericDeclarations,
+    ) -> Result<bool, hirsel_types::QueryError> {
         let authorities = self.scratch.parameter_authorities[self.site.body.0 as usize]
             .get_or_init(|| {
                 let mut authorities = BTreeMap::new();
@@ -1383,7 +1391,7 @@ impl<'a> Checker<'a> {
                             return None;
                         };
                         let authority = self.authority_with_generics(
-                            &self.definition.types,
+                            self.t,
                             local.ty,
                             &self.generic_declarations(),
                         );
@@ -1399,37 +1407,31 @@ impl<'a> Checker<'a> {
                 Some(authorities)
             });
         let Some(authorities) = authorities else {
-            return false;
+            return Ok(false);
         };
         let Ok(expected) = instantiate_parameter_authorities(store, expected, authorities) else {
-            return false;
+            return Ok(false);
         };
         let Ok(actual) = instantiate_parameter_authorities(store, actual, authorities) else {
-            return false;
+            return Ok(false);
         };
-        let mut lookup = |path: &DefPath| {
+        let mut lookup = |path: DefId| {
             Ok::<_, hirsel_types::QueryError>(
                 self.signatures.get(path).cloned().map(std::sync::Arc::new),
             )
         };
-        let expected = canonical_plain_type(store, expected, &mut lookup).unwrap_or(expected);
-        let actual = canonical_plain_type(store, actual, &mut lookup).unwrap_or(actual);
+        let expected = self.canonical_plain(store, expected);
+        let actual = self.canonical_plain(store, actual);
+        let mut memo = hirsel_types::ContextMemo::new(store, context, &mut lookup);
         match reception {
-            Reception::View => {
-                compatible_view_type_in(store, expected, actual, relation, context, &mut lookup)
-            }
-            Reception::Holder => {
-                compatible_type(store, expected, actual, relation, context, &mut lookup)
-            }
-            Reception::HandBack => {
-                compatible_handback_type(store, expected, actual, context, &mut lookup)
-            }
+            Reception::View => memo.view(expected, actual, relation),
+            Reception::Holder => memo.compatible_type(expected, actual, relation),
+            Reception::HandBack => memo.handback(expected, actual),
         }
-        .unwrap_or_else(|error| self.proof_failure(error, false))
     }
     pub(super) fn comparison_evidence(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
     ) -> TypeId {
@@ -1437,20 +1439,20 @@ impl<'a> Checker<'a> {
             store,
             expected,
             actual,
-            &mut BTreeMap::new(),
+            &mut HashMap::default(),
             &mut |store, root| {
-                hirsel_types::sendability_after_sharing(
+                self.proof(
                     store,
                     root,
+                    super::proofs::Proof::AfterSharing,
                     &self.generic_declarations(),
-                    &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
                 )
                 .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                     == Sendability::Sendable
             },
         )
     }
-    pub(super) fn derive_sendability(&self, store: &mut TypeStore, root: TypeId) -> TypeId {
+    pub(super) fn derive_sendability(&self, store: &TypeInterner, root: TypeId) -> TypeId {
         let mut row = store.get(root).unwrap().clone();
         row.modes.sendability =
             structural_sendability(store, root, &self.generic_declarations(), &mut |path| {
@@ -1461,15 +1463,11 @@ impl<'a> Checker<'a> {
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-        store.push(row)
+        store.intern(row)
     }
     fn boolean(&mut self, o: &Operand, entity: &'static str) {
         if !matches!(
-            self.definition
-                .types
-                .get(self.place_type(o.place))
-                .unwrap()
-                .kind,
+            self.t.get(self.place_type(o.place)).unwrap().kind,
             TypeKind::Primitive(Primitive::Bool)
         ) {
             self.error(ViolationKind::TypeMismatch { entity });
@@ -1485,20 +1483,20 @@ impl<'a> Checker<'a> {
             .collect()
     }
     pub(super) fn authority(&self, t: TypeId) -> AuthoritySummary {
-        self.authority_in(&self.definition.types, t)
+        self.authority_in(self.t, t)
     }
-    fn authority_in(&self, store: &TypeStore, t: TypeId) -> AuthoritySummary {
+    fn authority_in(&self, store: &TypeInterner, t: TypeId) -> AuthoritySummary {
         self.authority_with_generics(store, t, &self.generic_declarations())
     }
     pub(super) fn authority_with_generics(
         &self,
-        store: &TypeStore,
+        store: &TypeInterner,
         t: TypeId,
         generics: &hirsel_types::GenericDeclarations,
     ) -> AuthoritySummary {
         let mut roles = self
             .signatures
-            .get(&self.definition.path)
+            .get(self.definition.path)
             .map(|s| s.metadata.roles.clone())
             .unwrap_or_default();
         // Canonical heap identity can also be supplied by a referenced snapshot.
@@ -1515,41 +1513,27 @@ impl<'a> Checker<'a> {
         })
         .unwrap()
     }
-    fn imported(
-        &self,
-        source: &TypeStore,
-        root: TypeId,
-        target: &mut TypeStore,
-        arguments: &[GenericArgument],
-    ) -> Option<TypeId> {
-        self.imported_in(
-            source,
-            root,
-            target,
-            arguments,
-            &self.generic_declarations(),
-        )
+    fn imported(&self, root: TypeId, arguments: &[GenericArgument]) -> Option<TypeId> {
+        self.imported_in(root, arguments, &self.generic_declarations())
     }
     pub(super) fn imported_in(
         &self,
-        source: &TypeStore,
         root: TypeId,
-        target: &mut TypeStore,
         arguments: &[GenericArgument],
         generics: &GenericDeclarations,
     ) -> Option<TypeId> {
         if arguments.is_empty() {
-            import_type(source, root, target).ok()
+            Some(root)
         } else {
-            substitute_type(
-                source,
+            hirsel_types::substitute(
+                self.t,
+                self.memo,
                 root,
-                target,
-                Substitution {
+                &Substitution {
                     binder: Some(hirsel_types::GenericBinder::Bound(0)),
                     roles: &self
                         .signatures
-                        .get(&self.definition.path)
+                        .get(self.definition.path)
                         .map(|s| s.metadata.roles.clone())
                         .unwrap_or_default(),
                     arguments,
@@ -1558,10 +1542,10 @@ impl<'a> Checker<'a> {
             )
             .ok()
             .map(|imported| {
-                if semantic_equal(source, root, target, imported).unwrap_or(false) {
+                if self.t.semantic_eq(root, imported) {
                     imported
                 } else {
-                    hirsel_types::canonical_current_type(target, imported, generics, &mut |path| {
+                    hirsel_types::canonical_current_type(self.t, imported, generics, &mut |path| {
                         Ok::<_, hirsel_types::QueryError>(
                             self.signatures.get(path).cloned().map(std::sync::Arc::new),
                         )
@@ -1573,20 +1557,21 @@ impl<'a> Checker<'a> {
     }
     fn imported_in_place(
         &self,
-        target: &mut TypeStore,
+        target: &TypeInterner,
         root: TypeId,
         arguments: &[GenericArgument],
         generics: &GenericDeclarations,
     ) -> Option<TypeId> {
         let roles = self
             .signatures
-            .get(&self.definition.path)
+            .get(self.definition.path)
             .map(|s| s.metadata.roles.clone())
             .unwrap_or_default();
-        let imported = substitute_type_in_place(
-            target,
+        let imported = hirsel_types::substitute(
+            self.t,
+            self.memo,
             root,
-            Substitution {
+            &Substitution {
                 binder: (!arguments.is_empty()).then_some(GenericBinder::Bound(0)),
                 roles: &roles,
                 arguments,
@@ -1594,7 +1579,7 @@ impl<'a> Checker<'a> {
             },
         )
         .ok()?;
-        if arguments.is_empty() || semantic_equal(target, root, target, imported).unwrap_or(false) {
+        if arguments.is_empty() || self.t.semantic_eq(root, imported) {
             Some(imported)
         } else {
             Some(
@@ -1610,16 +1595,16 @@ impl<'a> Checker<'a> {
 
     fn cross_type(
         &mut self,
-        source: &TypeStore,
+        _source: &TypeInterner,
         root: TypeId,
         actual: TypeId,
         args: &[GenericArgument],
         entity: &'static str,
     ) {
-        let mut target = self.working_store();
-        let matches = if let Some(expected) = self.imported(source, root, &mut target, args) {
+        let target = self.t;
+        let matches = if let Some(expected) = self.imported(root, args) {
             let expected = if matches!(entity, "body parameter" | "body result") {
-                match bind_parameter_scopes(&mut target, expected, &[self.body.parameter_scope]) {
+                match bind_parameter_scopes(target, expected, &[self.body.parameter_scope]) {
                     Ok(t) => t,
                     Err(_) => {
                         self.error(ViolationKind::TypeMismatch { entity });
@@ -1643,11 +1628,11 @@ impl<'a> Checker<'a> {
                 {
                     row.modes.sendability = declared.modes.sendability.clone();
                 }
-                target.push(row)
+                target.intern(row)
             } else {
                 actual
             };
-            self.compatible(&mut target, expected, actual, TypeRelation::Exact)
+            self.compatible(target, expected, actual, TypeRelation::Exact)
         } else {
             false
         };
@@ -1661,7 +1646,7 @@ impl<'a> Checker<'a> {
     /// content is global, which the environment specialisation needs.
     pub(super) fn current_content_source(&self, operand: &Operand) -> bool {
         let access = &self.body.places[operand.place.0 as usize];
-        let types = &self.definition.types;
+        let types = self.t;
         operand.usage == UseKind::Borrow
             && access.projection.is_empty()
             && self.receiving_root(access.root)
@@ -1693,7 +1678,7 @@ impl<'a> Checker<'a> {
         body: BodyId,
         captures: &[Operand],
     ) -> bool {
-        let types = &self.definition.types;
+        let types = self.t;
         let TypeKind::Function(f) = &types.get(ty).unwrap().kind else {
             return false;
         };
@@ -1727,7 +1712,7 @@ impl<'a> Checker<'a> {
     /// does for `let t = take s`. The rest of the row stays exact.
     fn taken_current_content(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         operand: &Operand,
@@ -1756,20 +1741,14 @@ impl<'a> Checker<'a> {
         {
             row.modes.sendability = Sendability::Sendable;
         }
-        store.push(row)
+        store.intern(row)
     }
-    fn capture_type(&mut self, source: &TypeStore, root: TypeId, operand: &Operand) {
+    fn capture_type(&mut self, _source: &TypeInterner, root: TypeId, operand: &Operand) {
         let actual = self.place_type(operand.place);
         if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
-            let mut store = self.working_store();
-            if let Some(expected) = self.imported(source, root, &mut store, &[]) {
-                self.storage_value_type_in(
-                    &mut store,
-                    expected,
-                    actual,
-                    operand,
-                    "closure capture",
-                );
+            let store = self.t;
+            if let Some(expected) = self.imported(root, &[]) {
+                self.storage_value_type_in(store, expected, actual, operand, "closure capture");
             } else {
                 self.error(ViolationKind::TypeMismatch {
                     entity: "closure capture",
@@ -1778,13 +1757,11 @@ impl<'a> Checker<'a> {
             return;
         }
         if operand.usage != UseKind::Copy {
-            let mut target = self.working_store();
-            let matches = self
-                .imported(source, root, &mut target, &[])
-                .is_some_and(|expected| {
-                    let actual = self.taken_current_content(&mut target, expected, actual, operand);
-                    self.compatible(&mut target, expected, actual, TypeRelation::Exact)
-                });
+            let target = self.t;
+            let matches = self.imported(root, &[]).is_some_and(|expected| {
+                let actual = self.taken_current_content(target, expected, actual, operand);
+                self.compatible(target, expected, actual, TypeRelation::Exact)
+            });
             if !matches {
                 self.error(ViolationKind::TypeMismatch {
                     entity: "closure capture",
@@ -1792,34 +1769,32 @@ impl<'a> Checker<'a> {
             }
             return;
         }
-        let mut target = self.working_store();
-        let matches = self
-            .imported(source, root, &mut target, &[])
-            .is_some_and(|expected| {
-                // A flat copy owns independent bytes. Counted copies share
-                // storage, so derive both uniqueness and sendability before
-                // comparing the independently declared capture type.
-                let actual = if self.copy_detaches(&target, actual) {
-                    let mut row = target.get(actual).unwrap().clone();
-                    row.modes.relation = Relation::global();
-                    row.modes.sendability = target.get(expected).unwrap().modes.sendability.clone();
-                    target.push(row)
-                } else {
-                    actual
-                };
-                let adjusted = if self.flat_value(operand.place) {
-                    let mut row = target.get(actual).unwrap().clone();
-                    row.modes.uniqueness = target.get(expected).unwrap().modes.uniqueness;
-                    target.push(row)
-                } else {
-                    self.weakened_type(&mut target, actual, &self.generic_declarations())
-                };
-                let mut row = target.get(adjusted).unwrap().clone();
-                row.sendability_requirement = hirsel_types::SendabilityRequirement::None;
-                let adjusted = target.push(row);
-                let valid = self.compatible(&mut target, expected, adjusted, TypeRelation::Exact);
-                valid
-            });
+        let target = self.t;
+        let matches = self.imported(root, &[]).is_some_and(|expected| {
+            // A flat copy owns independent bytes. Counted copies share
+            // storage, so derive both uniqueness and sendability before
+            // comparing the independently declared capture type.
+            let actual = if self.copy_detaches(&target, actual) {
+                let mut row = target.get(actual).unwrap().clone();
+                row.modes.relation = Relation::global();
+                row.modes.sendability = target.get(expected).unwrap().modes.sendability.clone();
+                target.intern(row)
+            } else {
+                actual
+            };
+            let adjusted = if self.flat_value(operand.place) {
+                let mut row = target.get(actual).unwrap().clone();
+                row.modes.uniqueness = target.get(expected).unwrap().modes.uniqueness;
+                target.intern(row)
+            } else {
+                self.weakened_type(target, actual, &self.generic_declarations())
+            };
+            let mut row = target.get(adjusted).unwrap().clone();
+            row.sendability_requirement = hirsel_types::SendabilityRequirement::None;
+            let adjusted = target.intern(row);
+            let valid = self.compatible(target, expected, adjusted, TypeRelation::Exact);
+            valid
+        });
         if !matches {
             self.error(ViolationKind::TypeMismatch {
                 entity: "closure capture",
@@ -1829,7 +1804,6 @@ impl<'a> Checker<'a> {
 
     fn parameter_type(
         &mut self,
-        source: &TypeStore,
         root: TypeId,
         actual: TypeId,
         args: &[GenericArgument],
@@ -1842,34 +1816,29 @@ impl<'a> Checker<'a> {
         preserves_state: bool,
     ) {
         let place = value.place;
-        let mut target = self.working_store();
-        let expected = import_type(source, root, &mut target)
-            .ok()
-            .and_then(|t| instantiate_allocation_targets(&mut target, t, allocation_targets).ok())
-            .and_then(|t| super::flow_origins::sources(&mut target, t, origins, actuals).ok())
-            .and_then(|t| instantiate_parameter_authorities(&mut target, t, authorities).ok())
-            .and_then(|t| instantiate_parameter_captures(&mut target, t, captures).ok())
+        let target = self.t;
+        let expected = Some(root)
+            .and_then(|t| instantiate_allocation_targets(target, t, allocation_targets).ok())
+            .and_then(|t| super::flow_origins::sources(target, t, origins, actuals).ok())
+            .and_then(|t| instantiate_parameter_authorities(target, t, authorities).ok())
+            .and_then(|t| instantiate_parameter_captures(target, t, captures).ok())
             .and_then(|t| {
-                super::flow_origins::canonical(&mut target, t, &origins.names, &|o| {
-                    self.arena_place(o)
-                })
-                .ok()
+                super::flow_origins::canonical(target, t, &origins.names, &|o| self.arena_place(o))
+                    .ok()
             });
-        let expected = expected.and_then(|t| {
-            self.imported_in_place(&mut target, t, args, &self.generic_declarations())
-        });
+        let expected = expected
+            .and_then(|t| self.imported_in_place(target, t, args, &self.generic_declarations()));
         let actual = origins.proofs.get(&place.0).and_then(|proof| {
-            super::flow_origins::canonical(&mut target, actual, proof, &|o| self.arena_place(o))
-                .ok()
+            super::flow_origins::canonical(target, actual, proof, &|o| self.arena_place(o)).ok()
         });
         let (Some(expected), Some(actual)) = (expected, actual) else {
             self.error(ViolationKind::InvalidOrigin(place));
             return;
         };
         let declarations = self.generic_declarations();
-        let expected = instantiate_cleanup_bounds(&mut target, expected, &declarations)
+        let expected = instantiate_cleanup_bounds(target, expected, &declarations)
             .unwrap_or_else(|error| self.proof_failure(error, expected));
-        let actual = instantiate_cleanup_bounds(&mut target, actual, &declarations)
+        let actual = instantiate_cleanup_bounds(target, actual, &declarations)
             .unwrap_or_else(|error| self.proof_failure(error, actual));
         let mut row = target.get(actual).unwrap().clone();
         if !matches!(
@@ -1886,24 +1855,24 @@ impl<'a> Checker<'a> {
                 Sendability::NotSendable
             };
         }
-        let actual = target.push(row);
-        let actual = self.copied_type(&mut target, value, actual);
+        let actual = target.intern(row);
+        let actual = self.copied_type(target, value, actual);
         let actual = if origins.current_unique.contains(&place.0)
             && target.get(actual).unwrap().modes.uniqueness != Uniqueness::Unique
         {
-            self.unique_type(&mut target, actual)
+            self.unique_type(target, actual)
         } else {
             actual
         };
         let actual = if origins.weakened.contains(&place.0) {
-            self.weakened_type(&mut target, actual, &self.generic_declarations())
+            self.weakened_type(target, actual, &self.generic_declarations())
         } else {
             actual
         };
         let actual = if origins.currently_sendable(value, target.get(actual).unwrap()) {
             let mut row = target.get(actual).unwrap().clone();
             row.modes.sendability = Sendability::Sendable;
-            target.push(row)
+            target.intern(row)
         } else {
             actual
         };
@@ -1911,7 +1880,7 @@ impl<'a> Checker<'a> {
         // environment; a narrowed formal never discards stronger actual facts.
         let incoming_valid = !preserves_state
             || self.related(
-                &mut target,
+                target,
                 expected,
                 actual,
                 TypeRelation::Parameter,
@@ -1944,7 +1913,7 @@ impl<'a> Checker<'a> {
             if !matches!(row.kind, TypeKind::Named { .. }) {
                 row.drop_allocation = incoming.drop_allocation.clone();
             }
-            target.push(row)
+            target.intern(row)
         } else {
             expected
         };
@@ -1966,7 +1935,7 @@ impl<'a> Checker<'a> {
         // eagerly strengthening an already matching T changes its identity.
         let mut matches = incoming_valid
             && self.related(
-                &mut target,
+                target,
                 expected,
                 actual,
                 relation,
@@ -1974,9 +1943,9 @@ impl<'a> Checker<'a> {
                 &self.generic_declarations(),
             );
         if !matches && incoming_valid && origins.acquired_global.contains(&place.0) {
-            let acquired = self.acquired_global_type(&mut target, actual);
+            let acquired = self.acquired_global_type(target, actual);
             matches = self.related(
-                &mut target,
+                target,
                 expected,
                 acquired,
                 relation,
@@ -1984,9 +1953,9 @@ impl<'a> Checker<'a> {
                 &self.generic_declarations(),
             );
             if !matches && value.usage == UseKind::Take {
-                let receiving = self.acquired_global_type(&mut target, expected);
+                let receiving = self.acquired_global_type(target, expected);
                 matches = self.related(
-                    &mut target,
+                    target,
                     receiving,
                     acquired,
                     relation,
@@ -2003,7 +1972,22 @@ impl<'a> Checker<'a> {
     }
 
     /// Expand only the required nominal root, importing all representation edges.
-    pub(super) fn layout(&mut self, store: &mut TypeStore, ty: TypeId) -> Option<TypeKind> {
+    /// The structural kind `ty` is laid out as, through nominal representations.
+    /// A layout is found once per body: only `None` reports anything, so a
+    /// found one is memoized and an absent one recomputed, reporting again.
+    pub(super) fn layout(&mut self, store: &TypeInterner, ty: TypeId) -> Option<TypeKind> {
+        if !std::ptr::eq(store, self.t) {
+            return self.find_layout(store, ty);
+        }
+        let layouts = &self.scratch.layouts[self.site.body.0 as usize];
+        if let Some(kind) = layouts.borrow().get(&ty) {
+            return Some(kind.clone());
+        }
+        let kind = self.find_layout(store, ty)?;
+        layouts.borrow_mut().insert(ty, kind.clone());
+        Some(kind)
+    }
+    fn find_layout(&mut self, store: &TypeInterner, ty: TypeId) -> Option<TypeKind> {
         let mut ty = ty;
         let mut expansions = hirsel_types::NominalExpansions::default();
         let mut packed = false;
@@ -2038,7 +2022,7 @@ impl<'a> Checker<'a> {
                 return Some(kind);
             };
             if !expansions
-                .enter(ty, 0, |_| &store)
+                .enter(ty, 0, store)
                 .unwrap_or_else(|error| self.proof_failure(error, false))
             {
                 if self.proof_errors.borrow().is_empty() {
@@ -2046,17 +2030,17 @@ impl<'a> Checker<'a> {
                 }
                 return None;
             }
-            let Some(s) = self.signatures.get(&definition) else {
-                self.error(ViolationKind::MissingSignature(definition));
+            let Some(s) = self.signatures.get(definition) else {
+                self.error(ViolationKind::MissingSignature(definition.path().clone()));
                 return None;
             };
             let SignatureKind::Type(t) = &s.kind else {
-                self.error(ViolationKind::InvalidSignature(definition));
+                self.error(ViolationKind::InvalidSignature(definition.path().clone()));
                 return None;
             };
             if (t.capability.is_some()
                 || s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
-                && s.definition.0.package != self.definition.path.0.package
+                && s.definition.path().0.package != self.definition.path.path().0.package
             {
                 // A forged input can retain an owner's private graph. Its mere
                 // presence does not authorize a client to inspect it (PROG-2).
@@ -2066,15 +2050,14 @@ impl<'a> Checker<'a> {
                 self.error(ViolationKind::InvalidConstructor);
                 return None;
             };
-            // Arguments here already belong to `store`, not the signature store.
             ty = if arguments.is_empty() {
-                import_type(&s.types, rep, store).ok()?
+                rep
             } else {
-                substitute_type(
-                    &s.types,
+                hirsel_types::substitute(
+                    self.t,
+                    self.memo,
                     rep,
-                    store,
-                    Substitution {
+                    &Substitution {
                         binder: Some(hirsel_types::GenericBinder::Bound(0)),
                         roles: &s.metadata.roles,
                         arguments: &arguments,
@@ -2109,17 +2092,10 @@ impl<'a> Checker<'a> {
                     return;
                 };
                 if hirsel_types::schema_failure(
-                    &self.definition.types,
+                    self.t,
                     arguments,
                     &s.metadata.schema,
-                    |ty, bound| {
-                        self.bound(
-                            &self.definition.types,
-                            ty,
-                            bound,
-                            &self.generic_declarations(),
-                        )
-                    },
+                    |ty, bound| self.bound(self.t, ty, bound, &self.generic_declarations()),
                 )
                 .is_some()
                 {
@@ -2132,7 +2108,7 @@ impl<'a> Checker<'a> {
                     self.error(ViolationKind::InvalidSignature(path.clone()));
                     return;
                 };
-                (&s.types, f, arguments.as_slice())
+                (self.t, f, arguments.as_slice())
             }
             Callee::Indirect {
                 forward_caller,
@@ -2157,12 +2133,12 @@ impl<'a> Checker<'a> {
                         entity: "caller forwarding",
                     });
                 }
-                let row = self.definition.types.get(self.place_type(o.place)).unwrap();
+                let row = self.t.get(self.place_type(o.place)).unwrap();
                 if row.modes.multiplicity == Multiplicity::Once && o.usage != UseKind::Take {
                     self.error(ViolationKind::InvalidUse(o.place));
                 }
                 match &row.kind {
-                    TypeKind::Function(f) => (&self.definition.types, f, generics.as_slice()),
+                    TypeKind::Function(f) => (self.t, f, generics.as_slice()),
                     _ => {
                         self.error(ViolationKind::TypeMismatch {
                             entity: "indirect callee",
@@ -2185,11 +2161,7 @@ impl<'a> Checker<'a> {
         }
         for (p, a) in f.generics.iter().zip(generics) {
             if let GenericArgument::Type(t) = a {
-                if !generic_references_valid(
-                    &self.definition.types,
-                    *t,
-                    &self.generic_declarations(),
-                ) {
+                if !generic_references_valid(self.t, *t, &self.generic_declarations()) {
                     self.error(ViolationKind::InvalidTypeGraph);
                 }
             }
@@ -2209,11 +2181,10 @@ impl<'a> Checker<'a> {
         if origins.is_none() {
             // A call diverges exactly when its instantiated callee result is
             // Never: no result slot and no normal successor (TIR v3).
-            let mut target = self.working_store();
-            let never = import_type(store, f.result, &mut target)
-                .ok()
+            let target = self.t;
+            let never = Some(f.result)
                 .and_then(|t| {
-                    self.imported_in_place(&mut target, t, generics, &self.generic_declarations())
+                    self.imported_in_place(target, t, generics, &self.generic_declarations())
                 })
                 .is_some_and(|t| {
                     matches!(
@@ -2307,14 +2278,14 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|a| {
                 let t = self.place_type(a.value.place);
-                let mut types = self.working_store();
+                let types = self.t;
                 // Flow checks the occurrence independently. Retaining an
                 // opaque carrier must not erase that checked crossing proof.
                 let derived =
                     if self.bound(&types, t, Bound::Sendable, &self.generic_declarations()) {
                         t
                     } else {
-                        self.derive_sendability(&mut types, t)
+                        self.derive_sendability(types, t)
                     };
                 let row = types.get(derived).unwrap();
                 let sendability = if origins.is_some_and(|o| o.currently_sendable(&a.value, row)) {
@@ -2334,7 +2305,7 @@ impl<'a> Checker<'a> {
                 .find(|a| a.parameter.0 as usize == callback)
             {
                 let proof = mutable_capture_state_sendability(
-                    &self.definition.types,
+                    self.t,
                     self.place_type(argument.value.place),
                     slot,
                     &self.generic_declarations(),
@@ -2353,8 +2324,7 @@ impl<'a> Checker<'a> {
         let allocation_targets: BTreeMap<_, _> = arguments
             .iter()
             .filter_map(|a| {
-                self.definition
-                    .types
+                self.t
                     .get(self.place_type(a.value.place))
                     .unwrap()
                     .allocation_target
@@ -2385,7 +2355,6 @@ impl<'a> Checker<'a> {
             };
             if let Some(origins) = origins {
                 self.parameter_type(
-                    store,
                     p.ty,
                     self.place_type(a.value.place),
                     generics,
@@ -2404,11 +2373,7 @@ impl<'a> Checker<'a> {
             }
             let plain_take_borrow = p.passing == PassingMode::Borrow
                 && a.value.usage == UseKind::Take
-                && !super::flow::needs_release(
-                    self,
-                    self.place_type(a.value.place),
-                    &self.definition.types,
-                );
+                && !super::flow::needs_release(self, self.place_type(a.value.place), self.t);
             if !plain_take_borrow
                 && !matches!(
                     (p.passing, a.value.usage),
@@ -2425,23 +2390,21 @@ impl<'a> Checker<'a> {
         let (Some(origins), Some(destination)) = (origins, destination) else {
             return;
         };
-        let mut target = self.working_store();
+        let target = self.t;
         // Substitute the value's type contract before its dependent source
         // evidence. A generic actual can carry Local access modes; those
         // cannot overwrite the lifetime supplied by local(x).
-        let imported_result = import_type(store, f.result, &mut target)
-            .ok()
-            .and_then(|t| {
-                self.imported_in_place(&mut target, t, generics, &self.generic_declarations())
-            });
+        let imported_result = Some(f.result).and_then(|t| {
+            self.imported_in_place(target, t, generics, &self.generic_declarations())
+        });
         let actual_result = self.place_type(destination);
         let inactive = imported_result.is_some_and(|expected| {
             target.get(expected).unwrap().brand.alternatives.is_empty()
                 && target.get(actual_result).unwrap().brand.alternatives.is_empty()
                 && matches!((&target.get(expected).unwrap().kind, &target.get(actual_result).unwrap().kind),
                     (TypeKind::Named { definition: a, .. }, TypeKind::Named { definition: b, .. }) if a == b)
-                && self.brandless_variant_operand(&mut target, destination, expected)
-                && self.brandless_variant_operand(&mut target, destination, actual_result)
+                && self.brandless_variant_operand(target, destination, expected)
+                && self.brandless_variant_operand(target, destination, actual_result)
         });
         // An absent payload needs no owner-name replay for its phantom brand.
         // Both declaration and receiving contracts must independently prove it;
@@ -2449,42 +2412,40 @@ impl<'a> Checker<'a> {
         let expected = imported_result
             .and_then(|t| {
                 if inactive {
-                    hirsel_types::erase_brands(&mut target, t).ok()
+                    hirsel_types::erase_brands(target, t).ok()
                 } else {
                     Some(t)
                 }
             })
-            .and_then(|t| instantiate_allocation_targets(&mut target, t, &allocation_targets).ok())
+            .and_then(|t| instantiate_allocation_targets(target, t, &allocation_targets).ok())
             .map(|t| {
                 hirsel_types::canonical_current_type(
-                    &mut target,
+                    target,
                     t,
                     &self.generic_declarations(),
                     &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
                 )
                 .unwrap_or_else(|error| self.proof_failure(error, t))
             })
-            .and_then(|t| super::flow_origins::sources(&mut target, t, origins, &actuals).ok())
-            .and_then(|t| instantiate_parameter_authorities(&mut target, t, &authorities).ok())
-            .and_then(|t| instantiate_parameter_captures(&mut target, t, &captures).ok())
+            .and_then(|t| super::flow_origins::sources(target, t, origins, &actuals).ok())
+            .and_then(|t| instantiate_parameter_authorities(target, t, &authorities).ok())
+            .and_then(|t| instantiate_parameter_captures(target, t, &captures).ok())
             .and_then(|t| {
-                super::flow_origins::canonical(&mut target, t, &origins.names, &|o| {
-                    self.arena_place(o)
-                })
-                .ok()
+                super::flow_origins::canonical(target, t, &origins.names, &|o| self.arena_place(o))
+                    .ok()
             });
         let expected = expected.map(|root| {
             // Actual result sources can discharge a declaration's dependent
             // placement. Rebuild an underclaim after that substitution while
             // retaining stronger validated current-content promises.
             if target.get(root).unwrap().modes.sendability == Sendability::NotSendable {
-                self.derive_sendability(&mut target, root)
+                self.derive_sendability(target, root)
             } else {
                 root
             }
         });
-        let expected = expected
-            .and_then(|root| hirsel_types::declared_receipt_evidence(&mut target, root).ok());
+        let expected =
+            expected.and_then(|root| hirsel_types::declared_receipt_evidence(target, root).ok());
         let sharing_result = match &store.get(f.result).unwrap().kind {
             TypeKind::Parameter(TypeParameterRef::Bound {
                 depth: 0,
@@ -2513,15 +2474,16 @@ impl<'a> Checker<'a> {
                 && row.modes.uniqueness == Uniqueness::Aliased
                 && matches!(row.kind, TypeKind::Parameter(_))
             {
-                row.modes.sendability = hirsel_types::sendability_after_sharing(
-                    &target,
-                    root,
-                    &self.generic_declarations(),
-                    &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-                )
-                .unwrap_or(Sendability::NotSendable);
+                row.modes.sendability = self
+                    .proof(
+                        &target,
+                        root,
+                        super::proofs::Proof::AfterSharing,
+                        &self.generic_declarations(),
+                    )
+                    .unwrap_or(Sendability::NotSendable);
             }
-            target.push(row)
+            target.intern(row)
         });
         // PROV-4, caller side: content moved in through any relation-free
         // `mut` parameter may come back out as the result, so the arenas and
@@ -2541,7 +2503,8 @@ impl<'a> Checker<'a> {
                             .any(|r| matches!(r, Reach::Place(_)))
                     })
                     && hirsel_type_analysis::representation::may_hold_content(
-                        &mut target,
+                        target,
+                        self.memo,
                         holder,
                         self.place_type(a.value.place),
                         &mut |path| self.signatures.get(path).cloned().map(std::sync::Arc::new),
@@ -2570,25 +2533,24 @@ impl<'a> Checker<'a> {
             }
             let mut row = target.get(root).unwrap().clone();
             row.modes.relation = row.modes.relation.union(&placement);
-            target.push(row)
+            target.intern(row)
         });
         let actual_result = if inactive {
-            hirsel_types::erase_brands(&mut target, actual_result).unwrap_or(actual_result)
+            hirsel_types::erase_brands(target, actual_result).unwrap_or(actual_result)
         } else {
             actual_result
         };
-        let actual =
-            super::flow_origins::canonical(&mut target, actual_result, &origins.names, &|o| {
-                self.arena_place(o)
-            })
-            .ok();
+        let actual = super::flow_origins::canonical(target, actual_result, &origins.names, &|o| {
+            self.arena_place(o)
+        })
+        .ok();
         // Both sides as this frame sees them: the source checker joins
         // distinct argument lifetimes into the frame, and a borrowed
         // parameter's relation adds to its own root (S2).
         let mut frame = |ty: TypeId| {
             let mut row = target.get(ty).unwrap().clone();
             row.modes.relation = self.frame_relation(&row.modes.relation);
-            target.push(row)
+            target.intern(row)
         };
         let (expected, actual) = (expected.map(&mut frame), actual.map(&mut frame));
         let expected = expected.map(|expected| {
@@ -2600,14 +2562,14 @@ impl<'a> Checker<'a> {
                 // storage. Nested contracts still match exactly below.
                 row.sendability_requirement = SendabilityRequirement::None;
             }
-            target.push(row)
+            target.intern(row)
         });
         let actual = actual.map(|actual| {
             expected.map_or(actual, |expected| {
-                self.comparison_evidence(&mut target, expected, actual)
+                self.comparison_evidence(target, expected, actual)
             })
         });
-        let valid = matches!((expected, actual), (Some(expected), Some(actual)) if self.compatible(&mut target, expected, actual, TypeRelation::Exact));
+        let valid = matches!((expected, actual), (Some(expected), Some(actual)) if self.compatible(target, expected, actual, TypeRelation::Exact));
         if !valid {
             self.error(ViolationKind::TypeMismatch {
                 entity: "call result",
@@ -2620,9 +2582,9 @@ impl<'a> Checker<'a> {
     /// the captured value may be placed in one. Callable headers describe
     /// what a function receives, not what it holds, and are not entered.
     fn retains_scoped_placement(&self, root: TypeId) -> bool {
-        let types = &self.definition.types;
+        let types = self.t;
         let mut pending = vec![root];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -2647,9 +2609,9 @@ impl<'a> Checker<'a> {
     fn retains_scoped_capability(&self, root: TypeId) -> bool {
         fn visit(
             checker: &Checker<'_>,
-            store: &TypeStore,
+            store: &TypeInterner,
             root: TypeId,
-            seen: &mut BTreeSet<TypeId>,
+            seen: &mut HashSet<TypeId>,
         ) -> bool {
             if !seen.insert(root) {
                 return false;
@@ -2677,33 +2639,27 @@ impl<'a> Checker<'a> {
                 return true;
             }
             if let TypeKind::Named { definition, .. } = &row.kind {
-                if let Some(signature) = checker.signatures.get(definition) {
+                if let Some(signature) = checker.signatures.get(*definition) {
                     if let SignatureKind::Type(d) = &signature.kind {
                         return d
                             .representation
-                            .is_some_and(|r| visit(checker, &signature.types, r, seen));
+                            .is_some_and(|r| visit(checker, store, r, seen));
                     }
                 }
             }
             false
         }
-        visit(self, &self.definition.types, root, &mut BTreeSet::new())
+        visit(self, self.t, root, &mut HashSet::default())
     }
     fn data(&self, root: TypeId) -> bool {
-        self.bound(
-            &self.definition.types,
-            root,
-            Bound::Data,
-            &self.generic_declarations(),
-        )
+        self.bound(self.t, root, Bound::Data, &self.generic_declarations())
     }
     /// A row's own destination: the arena or region its relation names, else
     /// unknown. Sources shared with the caller place nothing for a row.
     pub(super) fn row_destination(&self, ty: TypeId) -> Destination {
-        match destination(
-            &self.definition.types.get(ty).unwrap().modes.relation,
-            |o| self.arena_place(o),
-        ) {
+        match destination(&self.t.get(ty).unwrap().modes.relation, |o| {
+            self.arena_place(o)
+        }) {
             Destination::Caller(_) => Destination::Inferred,
             d => d,
         }
@@ -2728,7 +2684,7 @@ impl<'a> Checker<'a> {
     fn rvalue_type(&mut self, destination: PlaceId, r: &Rvalue) {
         self.construction_effects(destination, r);
         let ty = self.place_type(destination);
-        let kind = &self.definition.types.get(ty).unwrap().kind;
+        let kind = &self.t.get(ty).unwrap().kind;
         let computed = matches!(
             r,
             Rvalue::Constant(_)
@@ -2748,20 +2704,13 @@ impl<'a> Checker<'a> {
                     ..
                 }
             )
-            && !self
-                .definition
-                .types
-                .get(ty)
-                .unwrap()
-                .brand
-                .alternatives
-                .is_empty()
+            && !self.t.get(ty).unwrap().brand.alternatives.is_empty()
         {
             self.error(ViolationKind::InvalidOrigin(destination));
         }
         match r {
             Rvalue::Constant(c) => {
-                let valid = constant_valid(c, kind);
+                let valid = constant_valid(c, &kind);
                 if !valid {
                     self.error(ViolationKind::TypeMismatch { entity: "constant" });
                 }
@@ -2780,7 +2729,7 @@ impl<'a> Checker<'a> {
                     return;
                 };
                 let mut function = declared.clone();
-                function.generics = local_result_generics(&signature.types, declared).into();
+                function.generics = local_result_generics(self.t, declared).into();
                 if !arguments.is_empty() {
                     if arguments.len() != function.generics.len() {
                         self.error(ViolationKind::Arity {
@@ -2794,12 +2743,8 @@ impl<'a> Checker<'a> {
                         match (parameter, argument) {
                             (GenericParameter::Type { bounds, .. }, GenericArgument::Type(t)) => {
                                 for bound in bounds {
-                                    if !self.bound(
-                                        &self.definition.types,
-                                        *t,
-                                        *bound,
-                                        &self.generic_declarations(),
-                                    ) {
+                                    if !self.bound(self.t, *t, *bound, &self.generic_declarations())
+                                    {
                                         self.error(ViolationKind::TypeMismatch {
                                             entity: "function reference bound",
                                         });
@@ -2817,19 +2762,15 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                let mut store = self.working_store();
+                let store = self.t;
                 for parameter in &mut function.parameters {
-                    let Some(imported) =
-                        self.imported(&signature.types, parameter.ty, &mut store, arguments)
-                    else {
+                    let Some(imported) = self.imported(parameter.ty, arguments) else {
                         self.error(ViolationKind::InvalidTypeGraph);
                         return;
                     };
                     parameter.ty = imported;
                 }
-                let Some(result) =
-                    self.imported(&signature.types, function.result, &mut store, arguments)
-                else {
+                let Some(result) = self.imported(function.result, arguments) else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;
                 };
@@ -2841,7 +2782,7 @@ impl<'a> Checker<'a> {
                         .iter()
                         .map(|argument| match argument {
                             GenericArgument::Type(ty) => self.authority_with_generics(
-                                &self.definition.types,
+                                self.t,
                                 *ty,
                                 &self.generic_declarations(),
                             ),
@@ -2876,7 +2817,7 @@ impl<'a> Checker<'a> {
                     Uses::Unrestricted => function.uses = Uses::Only(function.authority.clone()),
                     Uses::Only(allowed) => function.authority = allowed.clone(),
                 }
-                let derived = store.push(Type {
+                let derived = store.intern(Type {
                     modes: Modes {
                         relation: Relation::global(),
                         uniqueness: Uniqueness::Unique,
@@ -2905,25 +2846,21 @@ impl<'a> Checker<'a> {
                     Some(TypeKind::Named {
                         definition: named,
                         arguments,
-                    }) if *named == DefPath::core("Entry") => match arguments[..] {
+                    }) if *named.path() == DefPath::core("Entry") => match arguments[..] {
                         [GenericArgument::Type(signature)] => Some(signature),
                         _ => None,
                     },
                     _ => None,
                 };
                 let matches = match (callback, entry) {
-                    (Some(signature), _) => {
-                        hirsel_types::shape_equal(&store, signature, &store, derived)
-                            .unwrap_or(false)
-                    }
+                    (Some(signature), _) => store.shape_eq(signature, derived).unwrap_or(false),
                     (None, Some(signature)) => {
                         declared.foreign.is_none()
                             && declared.generics.is_empty()
                             && !declared.incomplete
-                            && hirsel_types::shape_equal(&store, signature, &store, derived)
-                                .unwrap_or(false)
+                            && store.shape_eq(signature, derived).unwrap_or(false)
                     }
-                    (None, None) => self.compatible(&mut store, ty, derived, TypeRelation::Value),
+                    (None, None) => self.compatible(store, ty, derived, TypeRelation::Value),
                 };
                 if !matches {
                     self.error(ViolationKind::TypeMismatch {
@@ -2961,10 +2898,8 @@ impl<'a> Checker<'a> {
                     .cloned()
                     .map(GenericArgument::Size)
                     .collect();
-                let mut store = self.working_store();
-                let Some(mut expected) =
-                    self.imported(&signature.types, *root, &mut store, &actuals)
-                else {
+                let store = self.t;
+                let Some(mut expected) = self.imported(*root, &actuals) else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;
                 };
@@ -2979,9 +2914,9 @@ impl<'a> Checker<'a> {
                         }
                     )
                 {
-                    expected = self.weakened_type(&mut store, expected, &generics);
+                    expected = self.weakened_type(store, expected, &generics);
                 }
-                if !self.compatible(&mut store, expected, ty, TypeRelation::Exact) {
+                if !self.compatible(store, expected, ty, TypeRelation::Exact) {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "constant declaration",
                     });
@@ -2996,13 +2931,13 @@ impl<'a> Checker<'a> {
                 }
             }
             Rvalue::Use(o) => {
-                let mut store = self.working_store();
+                let store = self.t;
                 let actual = self.place_type(o.place);
                 let mut expected = ty;
                 if self.unplaced_holder(destination) {
-                    expected = hirsel_types::adopt_local(&mut store, ty, actual);
+                    expected = hirsel_types::adopt_local(store, ty, actual);
                 }
-                self.storage_value_type_in(&mut store, expected, actual, o, "assignment");
+                self.storage_value_type_in(store, expected, actual, o, "assignment");
             }
             Rvalue::Unary { op, value } => {
                 if *op == U::Unique {
@@ -3016,30 +2951,25 @@ impl<'a> Checker<'a> {
                     // Keep every nested type, origin, placement and other proof.
                     // Counted Rvalue::Use(Copy) cannot strengthen modes;
                     // flat copies independently derive owned bytes.
-                    let mut store = self.working_store();
+                    let store = self.t;
                     let mut result = store.get(self.place_type(value.place)).unwrap().clone();
                     result.modes.uniqueness = Uniqueness::Unique;
                     result.modes.relation = self.placement(&result.modes.relation);
-                    let result = store.push(result);
-                    let result = self.derive_sendability(&mut store, result);
-                    self.value_type_in(&mut store, ty, result, "unique result");
+                    let result = store.intern(result);
+                    let result = self.derive_sendability(store, result);
+                    self.value_type_in(store, ty, result, "unique result");
                     return;
                 }
-                let mut store = self.working_store();
+                let store = self.t;
                 let mut result = store.get(self.place_type(value.place)).unwrap().clone();
                 result.brand = Brand::default();
-                let result = store.push(result);
-                if !semantic_equal(&store, ty, &store, result).unwrap_or(false) {
+                let result = store.intern(result);
+                if !self.t.semantic_eq(ty, result) {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "unary result",
                     });
                 }
-                let k = &self
-                    .definition
-                    .types
-                    .get(self.place_type(value.place))
-                    .unwrap()
-                    .kind;
+                let k = &self.t.get(self.place_type(value.place)).unwrap().kind;
                 let valid = match (op, k) {
                     (U::Not, TypeKind::Primitive(Primitive::Bool)) => true,
                     (U::BitNot, TypeKind::Primitive(p)) => integer(*p),
@@ -3059,7 +2989,7 @@ impl<'a> Checker<'a> {
                 } else {
                     self.arithmetic_type(lt, rt, ty);
                 }
-                let k = &self.definition.types.get(lt).unwrap().kind;
+                let k = &self.t.get(lt).unwrap().kind;
                 let valid = match (op, k) {
                     (B::Add | B::Sub | B::Mul | B::Div, TypeKind::Primitive(p)) => numeric(*p),
                     (
@@ -3111,8 +3041,8 @@ impl<'a> Checker<'a> {
                         self.error(ViolationKind::InvalidConstructor);
                     }
                 }
-                let mut store = self.working_store();
-                let expected = self.constructor_layout(&mut store, ty, constructor, fields.len());
+                let store = self.t;
+                let expected = self.constructor_layout(store, ty, constructor, fields.len());
                 let Some(expected) = expected else {
                     self.error(ViolationKind::InvalidConstructor);
                     return;
@@ -3154,7 +3084,7 @@ impl<'a> Checker<'a> {
                                 .modes
                                 .relation
                                 .union(&self.placement(&store.get(actual).unwrap().modes.relation));
-                            expected_field = store.push(field_row);
+                            expected_field = store.intern(field_row);
                         }
                         let mut receiving = store.get(expected_field).unwrap().clone();
                         receiving.sendability_requirement =
@@ -3163,7 +3093,7 @@ impl<'a> Checker<'a> {
                         // evidence, such as a fresh call receipt's, which only
                         // the flow's `constructor_origin_types` has.
                         receiving.modes.uniqueness = Uniqueness::Aliased;
-                        expected_field = store.push(receiving);
+                        expected_field = store.intern(receiving);
                         // Cleanup summaries remain exact. Placement uses the
                         // shared Value relation: heap values outlive arenas.
                         if store.get(*t).unwrap().drop_allocation
@@ -3174,7 +3104,7 @@ impl<'a> Checker<'a> {
                             });
                         } else {
                             self.operand_value_type_in(
-                                &mut store,
+                                store,
                                 expected_field,
                                 actual,
                                 &field.value,
@@ -3190,7 +3120,7 @@ impl<'a> Checker<'a> {
                 }
                 // CAP-2: a constructed carrier's evidence covers every value
                 // it is built from.
-                let row = self.definition.types.get(ty).unwrap();
+                let row = self.t.get(ty).unwrap();
                 if let (TypeKind::Named { .. }, Some(evidence)) =
                     (&row.kind, row.erased_captures.clone())
                 {
@@ -3243,7 +3173,7 @@ impl<'a> Checker<'a> {
                         });
                     }
                     if !matches!(
-                        self.definition.types.get(f.result).unwrap().kind,
+                        self.t.get(f.result).unwrap().kind,
                         TypeKind::Primitive(Primitive::Bool)
                     ) {
                         self.error(ViolationKind::TypeMismatch {
@@ -3251,13 +3181,13 @@ impl<'a> Checker<'a> {
                         });
                     }
                 }
-                if self.definition.types.get(ty).unwrap().drop_allocation == DropAllocation::NoAlloc
+                if self.t.get(ty).unwrap().drop_allocation == DropAllocation::NoAlloc
                     && captures
                         .iter()
                         .filter(|c| matches!(c.usage, UseKind::Copy | UseKind::Take))
                         .any(|c| {
                             !self.bound(
-                                &self.definition.types,
+                                self.t,
                                 self.place_type(c.place),
                                 Bound::NoallocDrop,
                                 &self.generic_declarations(),
@@ -3273,18 +3203,16 @@ impl<'a> Checker<'a> {
                 let mut once = false;
                 for capture in captures {
                     let source = self.place_type(capture.place);
-                    let mut row = self.definition.types.get(source).unwrap().clone();
+                    let mut row = self.t.get(source).unwrap().clone();
                     // MEM-11, CONC-2: a copied Shared root, Mutex or Atomic,
                     // or an aggregate of them and plain bits, is an
                     // independently counted global value, wherever it was read.
-                    if capture.usage == UseKind::Copy
-                        && self.copy_detaches(&self.definition.types, source)
-                    {
+                    if capture.usage == UseKind::Copy && self.copy_detaches(self.t, source) {
                         row.modes.relation = Relation::global();
                     }
                     let row = &row;
                     let global_closure = self
-                        .lifetime(&self.definition.types.get(ty).unwrap().modes.relation)
+                        .lifetime(&self.t.get(ty).unwrap().modes.relation)
                         .is_global();
                     if !self.lifetime(&row.modes.relation).is_global() && global_closure {
                         self.error(ViolationKind::TypeMismatch {
@@ -3306,7 +3234,7 @@ impl<'a> Checker<'a> {
                         || row.modes.multiplicity == Multiplicity::Once;
                     // Copy captures lose counted uniqueness. Prove crossing
                     // from the captured value, not the stronger source row.
-                    let mut store = self.working_store();
+                    let store = self.t;
                     let mut captured = row.clone();
                     if capture.usage == UseKind::Copy {
                         captured.modes.uniqueness = if self.flat_value(capture.place) {
@@ -3315,9 +3243,9 @@ impl<'a> Checker<'a> {
                             Uniqueness::Aliased
                         };
                     }
-                    let captured = store.push(captured);
+                    let captured = store.intern(captured);
                     let generics = self.generic_declarations();
-                    let mut lookup = |path: &DefPath| {
+                    let mut lookup = |path: DefId| {
                         Ok::<_, hirsel_types::QueryError>(
                             self.signatures.get(path).cloned().map(std::sync::Arc::new),
                         )
@@ -3360,13 +3288,13 @@ impl<'a> Checker<'a> {
                     };
                 }
                 let uses = authority.clone();
-                let mut store = self.working_store();
+                let store = self.t;
                 let mut derived = store.get(ty).unwrap().clone();
                 if let TypeKind::Function(function) = &mut derived.kind {
                     function.uses = Uses::Only(uses);
                 }
-                let derived = store.push(derived);
-                if !self.compatible(&mut store, ty, derived, TypeRelation::Value) {
+                let derived = store.intern(derived);
+                if !self.compatible(store, ty, derived, TypeRelation::Value) {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "closure uses",
                     });
@@ -3376,15 +3304,12 @@ impl<'a> Checker<'a> {
                         entity: "closure authority",
                     });
                 }
-                if once
-                    && self.definition.types.get(ty).unwrap().modes.multiplicity
-                        != Multiplicity::Once
-                {
+                if once && self.t.get(ty).unwrap().modes.multiplicity != Multiplicity::Once {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "closure multiplicity",
                     });
                 }
-                let claimed = &self.definition.types.get(ty).unwrap().modes.sendability;
+                let claimed = &self.t.get(ty).unwrap().modes.sendability;
                 // Current unconditional evidence is checked against live
                 // capture operands during flow replay. A physical storage row
                 // can underclaim a freshly replaced referent's proof.
@@ -3407,7 +3332,7 @@ impl<'a> Checker<'a> {
                     });
                 }
                 for (l, o) in slots.iter().zip(captures) {
-                    self.capture_type(&self.definition.types, l.ty, o);
+                    self.capture_type(self.t, l.ty, o);
                 }
                 for ((index, _), operand) in nested
                     .locals
@@ -3435,8 +3360,7 @@ impl<'a> Checker<'a> {
                 }
                 let specialised = self.environment_specialised(ty, *body, captures);
                 let sendable_environment = captures.iter().all(|c| {
-                    self.definition
-                        .types
+                    self.t
                         .get(self.place_type(c.place))
                         .unwrap()
                         .modes
@@ -3447,20 +3371,16 @@ impl<'a> Checker<'a> {
                 // environment itself may not, being local or aliased; a
                 // callable shared from it carries that evidence.
                 let sendable_content = captures.iter().all(|c| {
-                    let mut store = self.working_store();
-                    let Ok(ty) =
-                        import_type(&self.definition.types, self.place_type(c.place), &mut store)
-                    else {
-                        return false;
-                    };
+                    let store = self.t;
+                    let ty = self.place_type(c.place);
                     let mut row = store.get(ty).unwrap().clone();
                     row.modes.relation = self.placement(&row.modes.relation);
                     row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
-                    let root = store.push(row);
-                    let derived = self.derive_sendability(&mut store, root);
+                    let root = store.intern(row);
+                    let derived = self.derive_sendability(store, root);
                     store.get(derived).unwrap().modes.sendability == Sendability::Sendable
                 });
-                let mut target = self.working_store();
+                let target = self.t;
                 for (actual, expected, entity) in nested
                     .parameters
                     .iter()
@@ -3468,15 +3388,14 @@ impl<'a> Checker<'a> {
                     .map(|(l, p)| (nested.locals[l.0 as usize].ty, p.ty, "closure parameter"))
                     .chain([(nested.result, f.result, "closure result")])
                 {
-                    let actual = import_type(&self.definition.types, actual, &mut target);
-                    let actual = match actual {
-                        Ok(actual) if specialised && entity == "closure result" => {
+                    let actual = if specialised && entity == "closure result" {
+                        {
                             // A global result's sendability is structural again;
                             // a share of a sendable environment is sendable, as a
                             // function value's sendability is its environment's.
                             let mut row = target.get(actual).unwrap().clone();
                             row.modes.relation = self.placement(&row.modes.relation);
-                            let root = target.push(row.clone());
+                            let root = target.intern(row.clone());
                             row.modes.sendability = if sendable_environment {
                                 Sendability::Sendable
                             } else if matches!(row.kind, TypeKind::Function(_)) && !sendable_content
@@ -3507,12 +3426,13 @@ impl<'a> Checker<'a> {
                                     )
                                 })
                             };
-                            Ok(target.push(row))
+                            target.intern(row)
                         }
-                        actual => actual,
+                    } else {
+                        actual
                     };
                     let expected =
-                        bind_parameter_scopes(&mut target, expected, &[nested.parameter_scope]);
+                        bind_parameter_scopes(target, expected, &[nested.parameter_scope]);
                     let expected = expected.map(|expected| {
                         if entity != "closure parameter" {
                             return expected;
@@ -3526,29 +3446,26 @@ impl<'a> Checker<'a> {
                                     ..
                                 }
                         ) {
-                            row.modes.sendability = hirsel_types::content_sendability(
-                                &target,
-                                expected,
-                                &self.declarations[body.0 as usize],
-                                &mut |path| {
-                                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                                },
-                            )
-                            .unwrap_or_else(|error| {
-                                self.proof_failure(error, Sendability::NotSendable)
-                            });
+                            row.modes.sendability = self
+                                .proof(
+                                    &target,
+                                    expected,
+                                    super::proofs::Proof::Content,
+                                    &self.declarations[body.0 as usize],
+                                )
+                                .unwrap_or_else(|error| {
+                                    self.proof_failure(error, Sendability::NotSendable)
+                                });
                         }
-                        target.push(row)
+                        target.intern(row)
                     });
-                    let actual = actual.map(|actual| {
-                        if entity == "closure parameter" {
-                            expected.as_ref().ok().map_or(actual, |expected| {
-                                self.comparison_evidence(&mut target, *expected, actual)
-                            })
-                        } else {
-                            actual
-                        }
-                    });
+                    let actual = if entity == "closure parameter" {
+                        expected.as_ref().ok().map_or(actual, |expected| {
+                            self.comparison_evidence(target, *expected, actual)
+                        })
+                    } else {
+                        actual
+                    };
                     // Parameters stay exact. A literal's executable result may
                     // provide stronger evidence than its chosen result promise.
                     let (relation, reception) = if entity == "closure result" {
@@ -3556,21 +3473,21 @@ impl<'a> Checker<'a> {
                     } else {
                         (TypeRelation::Exact, Reception::Holder)
                     };
-                    if !matches!((expected,actual),(Ok(expected),Ok(actual)) if self.related(&mut target,expected,actual,relation,reception,&self.declarations[body.0 as usize]))
+                    if !matches!(expected, Ok(expected) if self.related(target,expected,actual,relation,reception,&self.declarations[body.0 as usize]))
                     {
                         self.error(ViolationKind::TypeMismatch { entity });
                     }
                 }
             }
             Rvalue::Shape(t) => {
-                if !matches!(kind, TypeKind::Builtin { kind: BuiltinType::TypeShape, arguments } if arguments.len() == 1 && matches!(arguments[0], GenericArgument::Type(id) if semantic_equal(&self.definition.types, id, &self.definition.types, *t).unwrap_or(false)))
+                if !matches!(kind, TypeKind::Builtin { kind: BuiltinType::TypeShape, arguments } if arguments.len() == 1 && matches!(arguments[0], GenericArgument::Type(id) if self.t.semantic_eq(id, *t)))
                 {
                     self.error(ViolationKind::TypeMismatch { entity: "shape" });
                 }
             }
         }
     }
-    pub(super) fn has_origins(store: &TypeStore, ty: TypeId) -> bool {
+    pub(super) fn has_origins(store: &TypeInterner, ty: TypeId) -> bool {
         let mut found = false;
         let _ = visit_type_origins(store, ty, |_, _| {
             found = true;
@@ -3582,17 +3499,17 @@ impl<'a> Checker<'a> {
     /// through; a write or `mut` hand-back there must stay within it.
     pub(super) fn carrier_bound(&mut self, place: PlaceId) -> Option<AuthoritySummary> {
         let place = self.body.places.get(place.0 as usize)?.clone();
-        let mut store = self.working_store();
+        let store = self.t;
         let mut bound = None;
         for depth in 0..place.projection.len() {
             let mut prefix = place.clone();
             prefix.projection.truncate(depth);
             prefix.binding = None;
-            let ty = self.projection_type(&mut store, &prefix, |_, _| None)?;
+            let ty = self.projection_type(store, &prefix, |_, _| None)?;
             let row = store.get(ty).unwrap();
             if let (TypeKind::Named { definition, .. }, Some(ErasedCaptures::Known(_))) =
                 (&row.kind, &row.erased_captures)
-                && self.signatures.get(definition).is_some_and(
+                && self.signatures.get(*definition).is_some_and(
                     |s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()),
                 )
             {
@@ -3603,7 +3520,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn projection_type(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         p: &Place,
         sibling: impl FnMut(usize, FieldId) -> Option<Origin>,
     ) -> Option<TypeId> {
@@ -3611,7 +3528,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn projection_type_at(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         p: &Place,
         mut ty: TypeId,
         mut sibling: impl FnMut(usize, FieldId) -> Option<Origin>,
@@ -3628,7 +3545,7 @@ impl<'a> Checker<'a> {
                     .and_then(|v| v.fields.get(*field as usize))
                     .map(|f| f.1),
                 (Projection::Index(index), kind) if kind.map_entry_fields().is_some() => {
-                    if !matches!(self.definition.types.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
+                    if !matches!(self.t.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
                     {
                         return None;
                     }
@@ -3636,14 +3553,14 @@ impl<'a> Checker<'a> {
                     Some(self.map_entry_type(store, fields, &generics))
                 }
                 (Projection::Index(index), TypeKind::Primitive(Primitive::Bytes)) => {
-                    if !matches!(self.definition.types.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
+                    if !matches!(self.t.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
                     {
                         return None;
                     }
                     {
                         let mut byte = Type::boolean();
                         byte.kind = TypeKind::Primitive(Primitive::U8);
-                        Some(store.push(byte))
+                        Some(store.intern(byte))
                     }
                 }
                 (Projection::Index(index), TypeKind::Builtin { kind, arguments })
@@ -3655,7 +3572,7 @@ impl<'a> Checker<'a> {
                             | BuiltinType::Simd
                     ) =>
                 {
-                    if !matches!(self.definition.types.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
+                    if !matches!(self.t.get(self.body.locals[index.0 as usize].ty).unwrap().kind, TypeKind::Primitive(p) if integer(p))
                     {
                         return None;
                     }
@@ -3691,14 +3608,11 @@ impl<'a> Checker<'a> {
                 {
                     projected.modes.sendability = evidence;
                 }
-                let next = store.push(projected);
-                ty = projected_type(store, ty, next, &generics, &mut |path| {
-                    Ok::<_, hirsel_types::QueryError>(
-                        self.signatures.get(path).cloned().map(std::sync::Arc::new),
-                    )
-                })
-                .map_err(|error| self.proof_failure(error, ()))
-                .ok()?;
+                let next = store.intern(projected);
+                ty = self
+                    .context(&generics, |memo| memo.projected(self.memo, ty, next))
+                    .map_err(|error| self.proof_failure(error, ()))
+                    .ok()?;
             } else {
                 return None;
             }
@@ -3714,18 +3628,18 @@ impl<'a> Checker<'a> {
         {
             return false;
         }
-        let mut store = self.working_store();
+        let store = self.t;
         for (depth, projection) in access.projection.iter().enumerate() {
             if !matches!(projection, Projection::Index(_)) {
                 continue;
             }
             let mut prefix = access.clone();
             prefix.projection.truncate(depth);
-            let Some(owner) = self.projection_type(&mut store, &prefix, |_, _| None) else {
+            let Some(owner) = self.projection_type(store, &prefix, |_, _| None) else {
                 continue;
             };
             if self
-                .layout(&mut store, owner)
+                .layout(store, owner)
                 .is_some_and(|kind| kind.map_entry_fields().is_some())
                 && !matches!(access.projection.get(depth + 1), Some(Projection::Field(1)))
             {
@@ -3736,7 +3650,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn readonly_byte_index(&mut self, place: PlaceId) -> bool {
         let access = self.body.places[place.0 as usize].clone();
-        let mut store = self.working_store();
+        let store = self.t;
         for (depth, projection) in access.projection.iter().enumerate() {
             if !matches!(projection, Projection::Index(_)) {
                 continue;
@@ -3744,8 +3658,8 @@ impl<'a> Checker<'a> {
             let mut prefix = access.clone();
             prefix.projection.truncate(depth);
             if self
-                .projection_type(&mut store, &prefix, |_, _| None)
-                .and_then(|owner| self.layout(&mut store, owner))
+                .projection_type(store, &prefix, |_, _| None)
+                .and_then(|owner| self.layout(store, owner))
                 .is_some_and(|kind| matches!(kind, TypeKind::Primitive(Primitive::Bytes)))
             {
                 return true;
@@ -3753,7 +3667,7 @@ impl<'a> Checker<'a> {
         }
         false
     }
-    fn has_siblings(store: &TypeStore, ty: TypeId) -> bool {
+    fn has_siblings(store: &TypeInterner, ty: TypeId) -> bool {
         let mut found = false;
         let _ = visit_type_origins(store, ty, |origin, _| {
             found |= matches!(origin.root, OriginRoot::Sibling(_));
@@ -3763,7 +3677,7 @@ impl<'a> Checker<'a> {
     }
     fn placed_part(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         owner: TypeId,
         part: TypeId,
         generics: &hirsel_types::GenericDeclarations,
@@ -3777,7 +3691,7 @@ impl<'a> Checker<'a> {
     }
     fn map_entry_type(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         fields: [TypeId; 2],
         generics: &hirsel_types::GenericDeclarations,
     ) -> TypeId {
@@ -3786,7 +3700,7 @@ impl<'a> Checker<'a> {
             CleanupLeaf::Component(t) => store.get(t).unwrap().drop_allocation.clone(),
             _ => unreachable!("tuple cleanup contains only components"),
         });
-        let tuple = store.push(Type {
+        let tuple = store.intern(Type {
             drop_allocation,
             ..Type::with_kind(kind)
         });
@@ -3799,7 +3713,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn constructor_layout(
         &mut self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         ty: TypeId,
         constructor: &Constructor,
         field_count: usize,
@@ -3817,22 +3731,23 @@ impl<'a> Checker<'a> {
                 else {
                     return None;
                 };
+                let order_path = DefId::intern(&DefPath::core("Order"));
                 let mut order = Type::with_kind(TypeKind::Named {
-                    definition: DefPath::core("Order"),
+                    definition: order_path,
                     arguments: vec![GenericArgument::Type(*key)].into(),
                 });
                 order.modes.relation = Relation::environment();
-                let declaration = self.signatures.get(&DefPath::core("Order"))?;
+                let declaration = self.signatures.get(order_path)?;
                 let SignatureKind::Type(declared) = &declaration.kind else {
                     return None;
                 };
                 order.drop_allocation = hirsel_type_analysis::cleanup::declared_cleanup(
                     declared,
-                    &declaration.types,
+                    self.t,
                     &[GenericArgument::Type(*key)],
                     |ty| store.get(ty).unwrap().drop_allocation.clone(),
                 );
-                let order = store.push(order);
+                let order = store.intern(order);
                 let order = normalize_type_properties(
                     store,
                     order,
@@ -3986,12 +3901,9 @@ impl<'a> Checker<'a> {
             fields
                 .into_iter()
                 .map(|part| {
-                    let part = projected_type(store, ty, part, &generics, &mut |path| {
-                        Ok::<_, hirsel_types::QueryError>(
-                            self.signatures.get(path).cloned().map(std::sync::Arc::new),
-                        )
-                    })
-                    .expect("validated field graph");
+                    let part = self
+                        .context(&generics, |memo| memo.projected(self.memo, ty, part))
+                        .expect("validated field graph");
                     self.placed_part(store, ty, part, &generics)
                 })
                 .collect(),
@@ -4014,9 +3926,9 @@ impl<'a> Checker<'a> {
         } else {
             fields
         };
-        let mut store = self.working_store();
+        let store = self.t;
         let Some(expected) = self.constructor_layout(
-            &mut store,
+            store,
             self.place_type(destination),
             constructor,
             fields.len(),
@@ -4025,7 +3937,7 @@ impl<'a> Checker<'a> {
         };
         if matches!(constructor, Constructor::SortedMap { .. }) {
             let result = super::flow_origins::canonical(
-                &mut store,
+                store,
                 self.place_type(destination),
                 &origins.names,
                 &|o| self.arena_place(o),
@@ -4062,17 +3974,17 @@ impl<'a> Checker<'a> {
             let Some(ty) = expected.get(field.field as usize).copied() else {
                 continue;
             };
-            let expected = instantiate_sibling_origins(&mut store, ty, &siblings)
+            let expected = instantiate_sibling_origins(store, ty, &siblings)
                 .ok()
                 .and_then(|ty| {
-                    super::flow_origins::canonical(&mut store, ty, &origins.names, &|o| {
+                    super::flow_origins::canonical(store, ty, &origins.names, &|o| {
                         self.arena_place(o)
                     })
                     .ok()
                 });
             let actual = origins.proofs.get(&field.value.place.0).and_then(|proof| {
                 super::flow_origins::canonical(
-                    &mut store,
+                    store,
                     self.place_type(field.value.place),
                     proof,
                     &|o| self.arena_place(o),
@@ -4098,11 +4010,11 @@ impl<'a> Checker<'a> {
                     Sendability::NotSendable
                 };
             }
-            let actual = store.push(row);
+            let actual = store.intern(row);
             let actual = if origins.current_unique.contains(&field.value.place.0) {
-                self.unique_type(&mut store, actual)
+                self.unique_type(store, actual)
             } else if origins.weakened.contains(&field.value.place.0) {
-                self.weakened_type(&mut store, actual, &self.generic_declarations())
+                self.weakened_type(store, actual, &self.generic_declarations())
             } else {
                 actual
             };
@@ -4114,7 +4026,7 @@ impl<'a> Checker<'a> {
                 });
             } else {
                 self.operand_value_type_in(
-                    &mut store,
+                    store,
                     expected,
                     actual,
                     &field.value,
@@ -4124,7 +4036,7 @@ impl<'a> Checker<'a> {
         }
     }
     fn constructor_owner(&mut self, path: &DefPath, ty: TypeId) -> bool {
-        let ty = match &self.definition.types.get(ty).unwrap().kind {
+        let ty = match &self.t.get(ty).unwrap().kind {
             TypeKind::Builtin {
                 kind: BuiltinType::Packed,
                 arguments,
@@ -4134,8 +4046,8 @@ impl<'a> Checker<'a> {
             },
             _ => ty,
         };
-        if let TypeKind::Named { definition, .. } = &self.definition.types.get(ty).unwrap().kind {
-            return definition == path;
+        if let TypeKind::Named { definition, .. } = &self.t.get(ty).unwrap().kind {
+            return definition.path() == path;
         }
         let Some(s) = self.signatures.get(path) else {
             self.error(ViolationKind::MissingSignature(path.clone()));
@@ -4143,7 +4055,7 @@ impl<'a> Checker<'a> {
         };
         if let SignatureKind::Type(t) = &s.kind {
             if let Some(rep) = t.representation {
-                return semantic_equal(&s.types, rep, &self.definition.types, ty).unwrap_or(false);
+                return self.t.semantic_eq(rep, ty);
             }
         }
         false
@@ -4156,11 +4068,11 @@ impl<'a> Checker<'a> {
 // qualified erased contract can underclaim its redundant summary. Requirements
 // and callable promises stay intact, and no scratch row becomes flow evidence.
 fn conservative_result_evidence(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     expected: TypeId,
     actual: TypeId,
-    memo: &mut BTreeMap<(TypeId, TypeId), TypeId>,
-    stable: &mut impl FnMut(&TypeStore, TypeId) -> bool,
+    memo: &mut HashMap<(TypeId, TypeId), TypeId>,
+    stable: &mut impl FnMut(&TypeInterner, TypeId) -> bool,
 ) -> TypeId {
     if let Some(known) = memo.get(&(expected, actual)) {
         return *known;
@@ -4241,7 +4153,7 @@ fn conservative_result_evidence(
         }
         _ => (),
     }
-    let result = store.push(row);
+    let result = store.intern(row);
     memo.insert((expected, actual), result);
     result
 }
@@ -4251,10 +4163,10 @@ fn conservative_result_evidence(
 // Remove their common requirement (including its duplicate erased promise)
 // from scratch rows, without supplying either value any current proof.
 pub(super) fn matching_crossing_contracts(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     expected: TypeId,
     actual: TypeId,
-    memo: &mut BTreeMap<(TypeId, TypeId), (TypeId, TypeId)>,
+    memo: &mut HashMap<(TypeId, TypeId), (TypeId, TypeId)>,
 ) -> (TypeId, TypeId) {
     if let Some(pair) = memo.get(&(expected, actual)) {
         return *pair;
@@ -4325,7 +4237,7 @@ pub(super) fn matching_crossing_contracts(
         install(&mut a.kind, children.iter().map(|p| p.0));
         install(&mut b.kind, children.iter().map(|p| p.1));
     }
-    let result = (store.push(a), store.push(b));
+    let result = (store.intern(a), store.intern(b));
     memo.insert((expected, actual), result);
     result
 }
@@ -4333,10 +4245,10 @@ pub(super) fn matching_crossing_contracts(
 /// Assign/Return flow independently proves a received value's content
 /// properties (uniqueness and crossing evidence), on every return path.
 /// Storage and current value evidence have distinct lifetimes.
-fn receiving_storage(store: &mut TypeStore, expected: TypeId) -> TypeId {
+fn receiving_storage(store: &TypeInterner, expected: TypeId) -> TypeId {
     let mut receiving = store.get(expected).unwrap().clone();
     receiving.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
     receiving.modes.sendability = hirsel_types::Sendability::NotSendable;
     receiving.sendability_requirement = hirsel_types::SendabilityRequirement::None;
-    store.push(receiving)
+    store.intern(receiving)
 }

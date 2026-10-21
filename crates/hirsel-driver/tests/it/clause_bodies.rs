@@ -38,8 +38,8 @@ fn executable_clauses_have_one_capture_free_borrowed_producer_across_early_retur
                             if target == *clause {
                                 producers += 1;
                                 assert!(captures.is_empty());
-                                let hirsel_types::TypeKind::Function(f) = &definition
-                                    .types
+                                let hirsel_types::TypeKind::Function(f) = &engine
+                                    .types()
                                     .get(parent.places[destination.0 as usize].ty)
                                     .unwrap()
                                     .kind

@@ -32,3 +32,38 @@ fn headers_compose_module_declarations_once() {
         }
     });
 }
+
+/// Indexing a file updates the rows of its own declarations; the module input
+/// is composed once, when resolution first reads it. Publishing every row
+/// again for each file made loading a package quadratic in its files.
+#[test]
+fn files_index_their_own_declarations_once() {
+    with_compiler_stack(|| {
+        for files in [8, 32, 128] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let before =
+                hirsel_intern::work::read(hirsel_intern::work::Counter::ModuleDeclarationRows);
+            for f in 0..files {
+                let source = (0..4)
+                    .map(|i| format!("fn f{f}_{i}(a: u8) -> u8 {{ a }}\n"))
+                    .collect::<String>();
+                let file = engine.sources.add(format!("m{f}.hir"), source).unwrap();
+                engine.parse_file(file, &default_context()).unwrap();
+            }
+            let path = |name: &str| {
+                let mut path = entry_path(&default_context());
+                path.0.name = name.into();
+                path
+            };
+            assert!(engine.resolve_definition(&path("f0_0")).is_ok());
+            let rows =
+                hirsel_intern::work::read(hirsel_intern::work::Counter::ModuleDeclarationRows)
+                    - before;
+            let items = 4 * files;
+            assert!(
+                rows <= 3 * items,
+                "{files} files of {items} items composed {rows} declaration rows"
+            );
+        }
+    });
+}

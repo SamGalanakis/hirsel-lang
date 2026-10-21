@@ -173,8 +173,9 @@ fn share_the_builder(program: &mut ReadyProgram) {
         manifest: &program.manifest,
         operations: &program.operations,
     };
-    program.units[index] = hirsel_lir::validate::validate(unit, &inputs)
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
         .unwrap_or_else(|r| panic!("C rejects the shared builder: {:#?}", r.violations));
+    program.replace_unit(index, unit).unwrap();
 }
 
 /// `failure` enters a new cleanup block that runs `release` (its own failure continuing to

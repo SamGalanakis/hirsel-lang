@@ -36,4 +36,5 @@ mod scaling_signatures;
 mod scaling_source_rows;
 mod scaling_successful_depth;
 mod scaling_v_roots;
+mod scaling_validate_joins;
 mod scaling_wide_record_match;

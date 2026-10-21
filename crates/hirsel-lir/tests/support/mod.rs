@@ -19,6 +19,32 @@ use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 
 pub use hirsel_lir::validate::ViolationKind as K;
 
+thread_local! {
+    /// A test's session interner: every type row a test builds, owner shapes
+    /// and operation signatures included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<hirsel_types::TypeInterner> =
+        hirsel_types::TypeInterner::new(None);
+}
+
+/// This test thread's session interner.
+pub fn session() -> std::sync::Arc<hirsel_types::TypeInterner> {
+    SESSION.with(|s| s.clone())
+}
+
+/// A type builder over this test thread's session interner.
+pub fn ty() -> hirsel_types::testing::Types {
+    hirsel_types::testing::Types { store: session() }
+}
+
+/// An operation registry over this test thread's session interner.
+pub fn registry() -> hirsel_layout::operation::OperationRegistry {
+    hirsel_layout::operation::OperationRegistry {
+        types: session(),
+        signatures: Default::default(),
+        owners: Default::default(),
+    }
+}
+
 /// The outermost scope every fixture unit has.
 pub const ROOT: ScopeId = ScopeId(0);
 
@@ -132,7 +158,7 @@ pub mod l {
 
 fn record(table: &LayoutTable, kind: LayoutKind, size: u64, align: u32) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: table.target,
@@ -546,19 +572,16 @@ impl<S: Stage> Lir<S> {
     pub fn new(params: &[(Passing, LayoutId)], result: Option<LayoutId>) -> Self {
         let table = table();
         let mut unit = LirUnit::<S>::new(UnitHeader {
+            source_count: 1,
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: S::KIND,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
-            input: InputIdentity {
-                interface_version: hirsel_lir::INTERFACE_VERSION,
-                digest: hash("validator fixture input"),
-            },
             definition: path("f"),
             implementation_revision: hash("f source"),
             instance: hash("f instance"),
             target: table.target,
-            layouts: table.digest(),
             abi: FnAbiId(0),
         });
         unit.tables.task_domains = 1;
@@ -567,13 +590,17 @@ impl<S: Stage> Lir<S> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start: 0, end: 1 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 1,
+            },
         });
         unit.tables.operations.push(operation());
         let mut lir = Self {
             builder: UnitBuilder::new(unit),
             table,
-            operations: Default::default(),
+            operations: registry(),
             manifest: manifest(Disposition::RuntimePrimitive("hirsel_rt_op".into())),
             types: Vec::new(),
             own: (params.to_vec(), result),
@@ -598,10 +625,11 @@ impl<S: Stage> Lir<S> {
         abi: FnAbiId,
     ) {
         let operation = OperationId {
-            definition: signature.definition.clone(),
+            definition: signature.definition.path().clone(),
             declaration_digest: signature.fingerprint,
         };
         self.operations = hirsel_layout::operation::OperationRegistry {
+            types: session(),
             signatures: [(operation.clone(), signature)].into(),
             owners,
         };
@@ -936,7 +964,11 @@ impl<S: Stage> Lir<S> {
                 body: 0,
                 cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
                 action: 0,
-                site: SiteRange { start: 0, end: 1 },
+                site: SiteRange {
+                    source: 0,
+                    start: 0,
+                    end: 1,
+                },
             });
         CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }
@@ -949,7 +981,11 @@ impl<S: Stage> Lir<S> {
             body: 0,
             cleanup: INSTRUCTION_DROP,
             action: anchors.len() as u32,
-            site: SiteRange { start: 0, end: 1 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 1,
+            },
         });
         CleanupAnchorId(anchors.len() as u32 - 1)
     }
@@ -1437,8 +1473,7 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn finish(self) -> (LirUnit<S>, LayoutTable, Manifest) {
-        let mut unit = self.builder.finish();
-        unit.header.layouts = self.table.digest();
+        let unit = self.builder.finish();
         let _ = &self.own;
         (unit, self.table, self.manifest)
     }
@@ -1447,20 +1482,22 @@ impl<S: Stage> Lir<S> {
     pub fn check(self) -> Vec<ViolationKind> {
         let operations = self.operations.clone();
         let (unit, table, manifest) = self.finish();
-        validate::check(
-            &unit,
-            &Inputs {
-                memo: Default::default(),
-                discharge: None,
-                operations: &operations,
-                target: &TargetSpec::x86_64_unknown_linux_gnu(),
-                layouts: &table,
-                manifest: &manifest,
-            },
-        )
-        .into_iter()
-        .map(|v| v.kind)
-        .collect()
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let inputs = Inputs {
+            memo: Default::default(),
+            discharge: None,
+            operations: &operations,
+            target: &target,
+            layouts: &table,
+            manifest: &manifest,
+        };
+        let ordinary = validate::check(&unit, &inputs);
+        let context = validate::ValidationContext::new(&inputs);
+        // Every mutation and its accepted twin must agree when program checks
+        // are first computed, then reused by a later stage/unit check.
+        assert_eq!(context.check(&unit, &inputs), ordinary);
+        assert_eq!(context.check(&unit, &inputs), ordinary);
+        ordinary.into_iter().map(|v| v.kind).collect()
     }
 }
 

@@ -93,8 +93,8 @@ fn readonly_iterator_state_proves_both_flags() {
 fn call(advance: bool, callee_advance: bool, callee_preserves: bool) -> Fixture {
     let mut f = entry();
     promise(&mut f, advance);
-    let mut callee = f.signatures[&path("main")].clone();
-    callee.definition = path("callee");
+    let mut callee = f.signatures.get(id("main")).unwrap().clone();
+    callee.definition = id("callee");
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
@@ -156,14 +156,14 @@ fn preserving_calls_keep_stronger_cleanup_but_cannot_weaken_receiving_requiremen
     let SignatureKind::Function(fun) = &mut signature.kind else {
         panic!()
     };
-    let mut row = signature.types.get(fun.parameters[0].ty).unwrap().clone();
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
     row.drop_allocation = DropAllocation::MayAllocate;
-    fun.parameters[0].ty = signature.types.push(row);
+    fun.parameters[0].ty = interner().intern(row);
     f.valid();
 
     let mut f = call(false, false, true);
     let old = f.body().locals[1].ty;
-    let mut row = f.definition.types.get(old).unwrap().clone();
+    let mut row = interner().get(old).unwrap().clone();
     row.drop_allocation = DropAllocation::MayAllocate;
     let actual = f.definition.types.push(row);
     f.body().locals[1].ty = actual;
@@ -182,15 +182,15 @@ fn preserving_calls_keep_stronger_cleanup_but_cannot_weaken_receiving_requiremen
 fn indirect_calls_require_the_same_declared_promise() {
     for promised in [true, false] {
         let mut f = call(true, true, true);
-        let mut signature = f.signatures[&path("callee")].clone();
+        let mut signature = f.signatures.get(id("callee")).unwrap().clone();
         let SignatureKind::Function(mut fun) = signature.kind else {
             panic!()
         };
         if !promised {
             fun.state_promises = vec![].into();
         }
-        let row = signature.types.push(ty(TypeKind::Function(fun)));
-        let imported = import_type(&signature.types, row, &mut f.definition.types).unwrap();
+        let row = interner().intern(ty(TypeKind::Function(fun)));
+        let imported = row;
         let slot = f.body().locals.len() as u32;
         f.body().locals.push(Local {
             ty: imported,
@@ -241,7 +241,7 @@ fn captured_state(mutable: bool) -> Fixture {
     nested.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
     nested.parameters.clear();
     nested.locals[1].storage = Storage::Capture;
-    let mut captured = f.definition.types.get(nested.locals[1].ty).unwrap().clone();
+    let mut captured = interner().get(nested.locals[1].ty).unwrap().clone();
     captured.modes.relation = Relation::environment();
     let captured = f.definition.types.push(captured);
     nested.locals[1].ty = captured;
@@ -293,9 +293,7 @@ fn captured_state(mutable: bool) -> Fixture {
     fun.uses = Uses::Unrestricted;
     fun.authority = AuthoritySummary::Unknown;
     let closure = f.slot(TypeKind::Function(fun), Storage::Temporary);
-    let mut row = f
-        .definition
-        .types
+    let mut row = interner()
         .get(f.definition.bodies[0].places[closure as usize].ty)
         .unwrap()
         .clone();
@@ -383,7 +381,7 @@ fn creation_return(hidden: bool) -> Fixture {
     let other = iterator(&mut f, Storage::Parameter);
     f.body().parameters = vec![LocalId(selected), LocalId(other)];
     let incoming = f.body().locals[selected as usize].ty;
-    let mut result = f.definition.types.get(incoming).unwrap().clone();
+    let mut result = interner().get(incoming).unwrap().clone();
     result.erased_captures = Some(ErasedCaptures::FromArguments(
         vec![ParameterRef::body(f.body().parameter_scope, ParamId(0)).into()].into(),
     ));
@@ -395,17 +393,16 @@ fn creation_return(hidden: bool) -> Fixture {
     let SignatureKind::Function(function) = &mut signature.kind else {
         panic!()
     };
-    function.result =
-        map_parameter_references(&mut signature.types, function.result, |parameter, depth| {
-            Ok(match parameter {
-                ParameterRef::Body {
-                    scope: owner,
-                    parameter,
-                } if owner == scope => ParameterRef::Bound { depth, parameter },
-                parameter => parameter,
-            })
+    function.result = map_parameter_references(interner(), function.result, |parameter, depth| {
+        Ok(match parameter {
+            ParameterRef::Body {
+                scope: owner,
+                parameter,
+            } if owner == scope => ParameterRef::Bound { depth, parameter },
+            parameter => parameter,
         })
-        .unwrap();
+    })
+    .unwrap();
     let (returned, discarded) = if hidden {
         (other, selected)
     } else {
@@ -432,7 +429,7 @@ fn creation_relay(hidden: bool) -> Fixture {
     let input = if hidden { 2 } else { 1 };
     let discarded = if hidden { 1 } else { 2 };
     let payload = f.body().locals[input].ty;
-    let mut types = TypeStore::default();
+    let types = interner();
     let parameter = types.push(ty(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
@@ -445,11 +442,10 @@ fn creation_relay(hidden: bool) -> Fixture {
         .into(),
     )));
     f.signatures.insert(
-        path("Relay"),
+        id("Relay"),
         Signature {
-            definition: path("Relay"),
+            definition: id("Relay"),
             metadata: Default::default(),
-            types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -482,7 +478,7 @@ fn creation_relay(hidden: bool) -> Fixture {
     );
     let relay = f.slot(
         TypeKind::Named {
-            definition: path("Relay"),
+            definition: id("Relay"),
             arguments: vec![GenericArgument::Type(payload)].into(),
         },
         Storage::Temporary,
@@ -537,7 +533,7 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
         iterator(&mut f, Storage::Parameter)
     };
     let initial = f.body().locals[selected as usize].ty;
-    let mut row = f.definition.types.get(initial).unwrap().clone();
+    let mut row = interner().get(initial).unwrap().clone();
     adjust(&mut row);
     let selected_ty = f.definition.types.push(row);
     f.body().locals[selected as usize].ty = selected_ty;
@@ -559,7 +555,7 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
     f.body().parameters = vec![LocalId(selected), LocalId(next)];
     let destination = iterator(&mut f, Storage::Temporary);
     let current = f.body().locals[destination as usize].ty;
-    let mut result = f.definition.types.get(current).unwrap().clone();
+    let mut result = interner().get(current).unwrap().clone();
     result.erased_captures = Some(ErasedCaptures::Known(if scalar {
         AuthoritySummary::inert()
     } else {
@@ -581,10 +577,8 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
     let SignatureKind::Function(owner_function) = &mut owner.kind else {
         panic!()
     };
-    owner_function.result = map_parameter_references(
-        &mut owner.types,
-        owner_function.result,
-        |parameter, depth| {
+    owner_function.result =
+        map_parameter_references(interner(), owner_function.result, |parameter, depth| {
             Ok(match parameter {
                 ParameterRef::Body {
                     scope: from,
@@ -592,29 +586,24 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
                 } if from == scope => ParameterRef::Bound { depth, parameter },
                 parameter => parameter,
             })
-        },
-    )
-    .unwrap();
+        })
+        .unwrap();
 
     let mut factory = function_signature("factory", vec![], TypeKind::Tuple(vec![].into()));
     let SignatureKind::Function(mut function) = factory.kind else {
         panic!()
     };
     let unit = function.result;
-    let state = factory
-        .types
-        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
-            TypeParamId(0),
-        ))));
-    let inner = factory
-        .types
-        .push(ty(TypeKind::Parameter(TypeParameterRef::Bound {
-            depth: 1,
-            parameter: TypeParamId(0),
-        })));
+    let state = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    let inner = interner().intern(ty(TypeKind::Parameter(TypeParameterRef::Bound {
+        depth: 1,
+        parameter: TypeParamId(0),
+    })));
     callback.result = unit;
     callback.parameters[0].ty = inner;
-    let next = factory.types.push(ty(TypeKind::Function(callback)));
+    let next = interner().intern(ty(TypeKind::Function(callback)));
     let mut result = ty(TypeKind::Builtin {
         kind: BuiltinType::Iter,
         arguments: vec![GenericArgument::Type(unit)].into(),
@@ -624,7 +613,7 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
             .map(|ordinal| ParameterRef::bound(ParamId(ordinal)).into())
             .collect(),
     ));
-    function.result = factory.types.push(result);
+    function.result = interner().intern(result);
     function.generics = vec![GenericParameter::Type {
         name: "S".into(),
         bounds: vec![].into(),
@@ -640,7 +629,7 @@ fn mutable_creation_with(scalar: bool, adjust: impl FnOnce(&mut Type)) -> Fixtur
         })
         .collect();
     factory.kind = SignatureKind::Function(function);
-    f.signatures.insert(path("factory"), factory);
+    f.signatures.insert(id("factory"), factory);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Definition {
             path: path("factory"),
@@ -687,14 +676,13 @@ fn creation_retains_callback_mutable_receipts_instead_of_initial_crossing_eviden
 /// it is implemented, keeps the state's snapshot on future invocations.
 fn referenced_callback(promised: bool) -> Fixture {
     let mut f = mutable_creation(false);
-    let SignatureKind::Function(owner) = &f.signatures[&path("main")].kind else {
+    let SignatureKind::Function(owner) = &f.signatures.get(id("main")).unwrap().kind else {
         panic!()
     };
     let callback_ty = owner.parameters[1].ty;
-    let types = f.signatures[&path("main")].types.clone();
     let mut stepper = function_signature("stepper", vec![], TypeKind::Tuple(vec![].into()));
-    let imported = hirsel_types::import_type(&types, callback_ty, &mut stepper.types).unwrap();
-    let TypeKind::Function(mut header) = stepper.types.get(imported).unwrap().kind.clone() else {
+    let imported = callback_ty;
+    let TypeKind::Function(mut header) = interner().get(imported).unwrap().kind.clone() else {
         panic!()
     };
     if promised {
@@ -708,9 +696,9 @@ fn referenced_callback(promised: bool) -> Fixture {
         .into();
     }
     stepper.kind = SignatureKind::Function(header.clone());
-    f.signatures.insert(path("stepper"), stepper);
+    f.signatures.insert(id("stepper"), stepper);
     let local_ty = f.body().locals[2].ty;
-    let mut row = f.definition.types.get(local_ty).unwrap().clone();
+    let mut row = interner().get(local_ty).unwrap().clone();
     let TypeKind::Function(mut local) = row.kind.clone() else {
         panic!()
     };
@@ -767,7 +755,7 @@ fn bounded_creation_with(bounds: Vec<Bound>) -> Fixture {
         // The created iterator retains the state's generic authority.
         let destination = f.body().locals[3].ty;
         let scope = f.body().parameter_scope;
-        let mut row = f.definition.types.get(destination).unwrap().clone();
+        let mut row = interner().get(destination).unwrap().clone();
         row.erased_captures = Some(ErasedCaptures::Known(AuthoritySummary::Known(
             vec![AuthorityTerm::TypeParameter(TypeParameterRef::body(
                 scope,
@@ -783,14 +771,13 @@ fn bounded_creation_with(bounds: Vec<Bound>) -> Fixture {
     let SignatureKind::Function(factory_function) = &mut factory.kind else {
         panic!()
     };
-    let mut row = factory
-        .types
+    let mut row = interner()
         .get(factory_function.parameters[0].ty)
         .unwrap()
         .clone();
     row.drop_allocation =
         DropAllocation::DependsOn(vec![TypeParameterRef::bound(TypeParamId(0))].into());
-    factory_function.parameters[0].ty = factory.types.push(row);
+    factory_function.parameters[0].ty = interner().intern(row);
     let scope = f.body().parameter_scope;
     let mut state = ty(TypeKind::Parameter(TypeParameterRef::body(
         scope,
@@ -803,7 +790,7 @@ fn bounded_creation_with(bounds: Vec<Bound>) -> Fixture {
     f.body().locals[1].ty = state;
     f.body().places[1].ty = state;
     let next = f.body().locals[2].ty;
-    let mut next = f.definition.types.get(next).unwrap().clone();
+    let mut next = interner().get(next).unwrap().clone();
     let TypeKind::Function(callback) = &mut next.kind else {
         panic!()
     };
@@ -811,7 +798,7 @@ fn bounded_creation_with(bounds: Vec<Bound>) -> Fixture {
     let next = f.definition.types.push(next);
     f.body().locals[2].ty = next;
     f.body().places[2].ty = next;
-    let mut argument = f.definition.types.get(state).unwrap().clone();
+    let mut argument = interner().get(state).unwrap().clone();
     argument.drop_allocation =
         DropAllocation::DependsOn(vec![TypeParameterRef::body(scope, TypeParamId(0))].into());
     let argument = f.definition.types.push(argument);
@@ -833,17 +820,16 @@ fn bounded_creation_with(bounds: Vec<Bound>) -> Fixture {
         bounds: bounds.into(),
     }]
     .into();
-    function.result =
-        map_parameter_references(&mut owner.types, function.result, |parameter, depth| {
-            Ok(match parameter {
-                ParameterRef::Body {
-                    scope: from,
-                    parameter,
-                } if from == scope => ParameterRef::Bound { depth, parameter },
-                parameter => parameter,
-            })
+    function.result = map_parameter_references(interner(), function.result, |parameter, depth| {
+        Ok(match parameter {
+            ParameterRef::Body {
+                scope: from,
+                parameter,
+            } if from == scope => ParameterRef::Bound { depth, parameter },
+            parameter => parameter,
         })
-        .unwrap();
+    })
+    .unwrap();
     f
 }
 
@@ -959,8 +945,8 @@ fn field_call(callee_fields: Vec<FieldId>) -> Fixture {
     let state = f.slot(TypeKind::Record(fields.into()), Storage::Parameter);
     f.body().parameters = vec![LocalId(state)];
     owner_signature(&mut f, PassingMode::Mut);
-    let mut callee = f.signatures[&path("main")].clone();
-    callee.definition = path("callee");
+    let mut callee = f.signatures.get(id("main")).unwrap().clone();
+    callee.definition = id("callee");
     let SignatureKind::Function(fun) = &mut callee.kind else {
         panic!()
     };
@@ -1032,7 +1018,7 @@ fn closure_creation(hidden: bool) -> Fixture {
     let item = nested.parameter_scope;
     let scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
     nested.parameter_scope = scope;
-    nested.result = map_parameter_references(&mut f.definition.types, nested.result, |p, _| {
+    nested.result = map_parameter_references(interner(), nested.result, |p, _| {
         Ok(match p {
             ParameterRef::Body {
                 scope: s,
@@ -1042,7 +1028,7 @@ fn closure_creation(hidden: bool) -> Fixture {
         })
     })
     .unwrap();
-    let result = map_parameter_references(&mut f.definition.types, nested.result, |p, depth| {
+    let result = map_parameter_references(interner(), nested.result, |p, depth| {
         Ok(match p {
             ParameterRef::Body {
                 scope: s,
@@ -1111,14 +1097,14 @@ fn select_only_callback(f: &mut Fixture) {
     let SignatureKind::Function(function) = &mut owner.kind else {
         panic!()
     };
-    let mut row = owner.types.get(function.result).unwrap().clone();
+    let mut row = interner().get(function.result).unwrap().clone();
     row.erased_captures = Some(ErasedCaptures::FromArguments(
         vec![ParameterRef::bound(ParamId(1)).into()].into(),
     ));
-    function.result = owner.types.push(row);
+    function.result = interner().intern(row);
     let scope = f.body().parameter_scope;
     let result = f.body().result;
-    let mut row = f.definition.types.get(result).unwrap().clone();
+    let mut row = interner().get(result).unwrap().clone();
     row.erased_captures = Some(ErasedCaptures::FromArguments(
         vec![ParameterRef::body(scope, ParamId(1)).into()].into(),
     ));
@@ -1201,7 +1187,7 @@ fn counted_field_replacement(shared: bool, advance: bool) -> Fixture {
         Storage::Parameter,
     );
     let old_state = f.body().locals[state as usize].ty;
-    let mut state_row = f.definition.types.get(old_state).unwrap().clone();
+    let mut state_row = interner().get(old_state).unwrap().clone();
     state_row.modes.relation = Relation::environment();
     let state_ty = f.definition.types.push(state_row);
     f.body().locals[state as usize].ty = state_ty;

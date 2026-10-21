@@ -23,7 +23,7 @@ fn program(target: &TargetSpec) -> Program {
     let mut arena_path = path("Arena");
     arena_path.0.package.name = "core".into();
     schema.owners.nominals.insert(
-        arena_path.clone(),
+        hirsel_syntax::DefId::intern(&arena_path),
         OwnerRepresentation::Handle {
             revision: hash("arena"),
             resource: false,
@@ -79,25 +79,24 @@ fn program(target: &TargetSpec) -> Program {
 fn inputs<'a>(
     p: &'a Program,
     input: &'a hirsel_lir::stage::InputIdentity,
-    failures: &'a hirsel_lir::emission::FailureCodes,
     opt: OptLevel,
 ) -> EmitInputs<'a> {
     static INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        index: None,
         verify_backend: true,
         input,
         target: &p.table.target,
         layouts: &p.table.table,
+        keys: &p.table.keys,
         manifest: &p.manifest,
-        failures,
         statics: &p.statics,
-        finalizers: &p.finalizers,
         inline_instances: &INLINE,
         available_externally: &INLINE,
-        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
+        callbacks: false,
         foreign: &hirsel_lir::emission::NO_FOREIGN,
-        registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
+        tracking: false,
         opt,
         measurement: false,
         fuel: false,
@@ -108,8 +107,8 @@ fn inputs<'a>(
 fn arena_fast_path_has_no_call_on_either_target() {
     for target in TargetSpec::executed() {
         let p = program(&target);
-        let (input, failures) = (input(), failure_codes());
-        let inputs = inputs(&p, &input, &failures, OptLevel::None);
+        let input = input();
+        let inputs = inputs(&p, &input, OptLevel::None);
         let ir = emit_optimized_ir(&p.units(), &inputs).unwrap();
         // Each constructor's block which installs the immortal count must also
         // advance the cursor, with no call on that path. A fixed layout's block has
@@ -199,9 +198,14 @@ int main(void) {{
             let dir = scratch(&format!("arena-bump-{}-{opt:?}", target.triple));
             let source = dir.join("arena.c");
             std::fs::write(&source, &c).unwrap();
-            let (input, failures) = (input(), failure_codes());
-            let object = emit_object(&p.units(), &inputs(&p, &input, &failures, opt)).unwrap();
-            let executable = link(&target, &dir, &[("arena.o", &object.bytes)], &[source]);
+            let input = input();
+            let object = emit_object(&p.units(), &inputs(&p, &input, opt)).unwrap();
+            let executable = link(
+                &target,
+                &dir,
+                &[("arena.o", &object.bytes), ("program-glue.o", &p.glue())],
+                &[source],
+            );
             assert_eq!(run(&target, &executable), "arena bump ok\n");
         }
     }
@@ -212,7 +216,7 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
     let mut arena_path = path("Arena");
     arena_path.0.package.name = "core".into();
     schema.owners.nominals.insert(
-        arena_path.clone(),
+        hirsel_syntax::DefId::intern(&arena_path),
         OwnerRepresentation::Handle {
             revision: hash("arena"),
             resource: false,
@@ -277,8 +281,8 @@ fn proved_arena_children_emit_neither_count_loads_nor_scheduling() {
     for target in TargetSpec::executed() {
         for (elided, heap_child) in [(false, false), (false, true), (true, false)] {
             let p = credit_program(&target, elided, heap_child);
-            let (input, failures) = (input(), failure_codes());
-            let inputs = inputs(&p, &input, &failures, OptLevel::None);
+            let input = input();
+            let inputs = inputs(&p, &input, OptLevel::None);
             let ir = emit_optimized_ir(&p.units(), &inputs).unwrap();
             assert_eq!(
                 ir.contains("call i8 @hirsel_rt_v2_region_schedule"),

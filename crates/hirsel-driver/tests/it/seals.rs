@@ -29,7 +29,7 @@ fn seals_keep_public_nominal_authority_and_private_ceilings_in_separate_graphs()
         let SignatureKind::Type(d) = &public.kind else {
             panic!("type")
         };
-        assert!(public.types.is_empty());
+        assert!(hirsel_types::encoding::signature_types(engine.types(), &public).is_empty());
         assert!(d.representation.is_none());
         assert!(d.implementation_authority.is_none());
         assert_eq!(
@@ -39,7 +39,7 @@ fn seals_keep_public_nominal_authority_and_private_ceilings_in_separate_graphs()
         let owner = engine
             .owner_representation(&path("ReadDir"), &path("ReadDir"))
             .unwrap();
-        assert!(!owner.types.is_empty());
+        assert!(engine.types().contains(owner.private_shape));
     });
 }
 
@@ -67,7 +67,10 @@ fn private_ceiling_edits_change_owner_revisions_but_preserve_public_fingerprints
             .owner_representation(&path("ReadDir"), &path("ReadDir"))
             .unwrap();
         assert_eq!(public.fingerprint, new_public.fingerprint);
-        assert_eq!(public.types, new_public.types);
+        assert_eq!(
+            hirsel_types::encoding::signature_types(engine.types(), &public),
+            hirsel_types::encoding::signature_types(engine.types(), &new_public)
+        );
         assert_ne!(
             owner.representation_revision,
             new_owner.representation_revision

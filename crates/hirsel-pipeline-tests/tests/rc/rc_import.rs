@@ -748,10 +748,11 @@ fn box_payload_projection_imports_a_whole_scalar_payload_replacement() {
     use hirsel_tir::{InstructionKind, Projection};
     use hirsel_types::{SharedPath, TypeKind, UseKind};
     let mut program = compile("fn replace(mut x: box u64) -> () { x = box 2u64 }");
+    let types = program.types.clone();
     let definition = program
         .definitions
         .values_mut()
-        .find(|d| d.path.0.name == "replace")
+        .find(|d| d.path.path().0.name == "replace")
         .unwrap();
     let definition = std::sync::Arc::make_mut(definition);
     let body = &mut definition.bodies[definition.entry.0 as usize];
@@ -773,8 +774,7 @@ fn box_payload_projection_imports_a_whole_scalar_payload_replacement() {
             }
         })
         .unwrap();
-    let TypeKind::Box(payload) = definition
-        .types
+    let TypeKind::Box(payload) = types
         .get(body.places[destination.0 as usize].ty)
         .unwrap()
         .kind

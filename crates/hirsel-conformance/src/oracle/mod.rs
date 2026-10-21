@@ -12,7 +12,8 @@ pub mod o5;
 pub mod switches;
 
 use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};
-use hirsel_engine::{CheckCompletion, PackageCache, Precheck, ToolError};
+use hirsel_engine::store::{DirStore, NoneStore, ResultStore, VerifyStore};
+use hirsel_engine::{CheckCompletion, StdImage, StdImages, ToolError};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -65,6 +66,33 @@ impl Default for Config {
 }
 
 impl Config {
+    fn compile(&self, store: Arc<dyn ResultStore>) -> hirsel_engine::CompileConfig {
+        hirsel_engine::CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(self.jobs),
+            verify: if self.verify {
+                hirsel_engine::Verify::On
+            } else {
+                hirsel_engine::Verify::Off
+            },
+            retention: hirsel_engine::memo::Retention::Resident,
+            lowering: hirsel_engine::LoweringPolicy::Reachable,
+            store,
+            verify_store: if self.verify_store {
+                VerifyStore::Recompute
+            } else {
+                VerifyStore::Off
+            },
+            ..Default::default()
+        }
+    }
+
+    fn result_store(&self) -> Arc<dyn ResultStore> {
+        match &self.store {
+            Some(path) => Arc::new(DirStore::new(path.clone())),
+            None => Arc::new(NoneStore),
+        }
+    }
+
     /// The switches this run needs beyond today's compiler.
     pub fn switches(&self) -> Vec<Switch> {
         let mut wanted = vec![];
@@ -145,46 +173,68 @@ impl std::str::FromStr for Limits {
     }
 }
 
-/// A cold run's storage: a fresh cache that reads only the toolchain's std
-/// precheck (the future std image) and holds nothing checked yet. Today's
-/// stand-in for `none@1`; sharing one across runs is today's `mem@1`.
-pub fn fresh_cache() -> PackageCache {
-    static PRECHECKS: std::sync::OnceLock<Vec<Arc<Precheck>>> = std::sync::OnceLock::new();
-    let prechecks = PRECHECKS.get_or_init(|| {
-        let path = std::env::var_os("HIRSEL_PRECHECK")
+/// A cold run's images: only the toolchain's std image; nothing else checked
+/// is shared between runs.
+pub fn fresh_images() -> StdImages {
+    static IMAGES: std::sync::OnceLock<Vec<Arc<StdImage>>> = std::sync::OnceLock::new();
+    let images = IMAGES.get_or_init(|| {
+        let path = std::env::var_os("HIRSEL_IMAGE")
             .map(PathBuf::from)
             .or_else(|| {
                 std::env::current_exe()
                     .ok()
-                    .map(|exe| exe.with_file_name("hirsel-std.precheck"))
+                    .map(|exe| exe.with_file_name("hirsel-std.image"))
             });
-        path.and_then(|path| Precheck::read(&path).ok())
-            .map(Arc::new)
+        path.and_then(|path| StdImage::open(&path).ok())
             .into_iter()
             .collect()
     });
-    PackageCache::prechecked(prechecks.clone())
+    StdImages::of(images.clone())
 }
 
 /// Compile `program` under `config` with `cache`, as `hirsel check --json`
 /// renders it, then export the entry's TIR and, with `native`, its Ready
 /// receipts and objects. Refuses before compiling when a switch is missing.
-pub fn produce(program: &Path, config: &Config, cache: &PackageCache) -> Result<Artifacts, Switch> {
+pub fn produce(program: &Path, config: &Config, cache: &StdImages) -> Result<Artifacts, Switch> {
+    produce_with_store(program, config, cache, config.result_store())
+}
+
+fn produce_with_store(
+    program: &Path,
+    config: &Config,
+    cache: &StdImages,
+    store: Arc<dyn ResultStore>,
+) -> Result<Artifacts, Switch> {
     switches::missing(config.switches())?;
-    // Each missing switch's use site: the lane that lands it applies it here.
     Ok(hirsel_engine::with_compiler_stack(|| {
-        artifacts(program, config, cache)
+        artifacts(program, config, cache, store)
     }))
 }
 
-fn artifacts(path: &Path, config: &Config, cache: &PackageCache) -> Artifacts {
+fn artifacts(
+    path: &Path,
+    config: &Config,
+    cache: &StdImages,
+    store: Arc<dyn ResultStore>,
+) -> Artifacts {
     let mut out = Artifacts::new();
-    let mut program = match hirsel_driver::load_program_source_with_cache(path, None, cache) {
+    let compiler = hirsel_driver::COMPILER.with_config(config.compile(store));
+    let mut program = match compiler.load_program_source_with_images(path, None, cache) {
         Ok(program) => program,
         Err(error) => {
             out.insert("diagnostics".into(), tool_error(&error).into_bytes());
             return out;
         }
+    };
+    program_artifacts(&mut program, config)
+}
+
+fn program_artifacts(program: &mut hirsel_engine::LoadedProgram, config: &Config) -> Artifacts {
+    let mut out = Artifacts::new();
+    program.engine.verify = if config.verify {
+        hirsel_engine::Verify::On
+    } else {
+        hirsel_engine::Verify::Off
     };
     if let Some(limits) = config.limits {
         program.engine.comptime_limits.steps = limits.steps;
@@ -226,7 +276,7 @@ fn artifacts(path: &Path, config: &Config, cache: &PackageCache) -> Artifacts {
             .into_bytes(),
     );
     if config.native {
-        native(&mut program, &mut out);
+        native(program, &mut out);
     }
     out
 }

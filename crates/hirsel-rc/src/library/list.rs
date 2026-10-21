@@ -54,17 +54,16 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     if sequential(cx) {
         return push_sequential(cx);
     }
-    let mut callable = cx.store.get(cx.callable).unwrap().clone();
+    let mut callable = cx.types.get(cx.callable).unwrap().clone();
     let TypeKind::Function(f) = &mut callable.kind else {
         unreachable!()
     };
     f.parameters = f.parameters[..1].to_vec().into();
-    let callable = cx.store.push(callable);
+    let callable = cx.types.intern(callable);
     let path = native_path("list_grow");
     let grow = cx.require(Request::native(
         super::body_index(&path).unwrap(),
         &path,
-        cx.store.clone(),
         cx.arguments.clone(),
         callable,
     ))?;
@@ -501,7 +500,11 @@ fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     for (head, tail, failing) in [(normal, tail, false), (failed, failure_tail, true)] {
         b.at(head);

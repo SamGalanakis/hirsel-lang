@@ -3,7 +3,6 @@ use crate::support;
 use hirsel_rt::views::*;
 use hirsel_rt::{DOMAIN_HEAP, HEADER_SIZE, Header};
 use support::Ctx;
-use support::schema::Ty;
 
 fn block(ctx: &Ctx, text: &str) -> *mut Header {
     unsafe {
@@ -49,12 +48,12 @@ fn cursor_and_option_records_match_derived_layouts_on_both_targets() {
         TargetSpec::aarch64_unknown_linux_gnu(),
     ] {
         let path = support::schema::path("ViewCursor");
-        let mut ty = Ty::default();
+        let mut ty = support::schema::ty();
         let word = ty.p(Primitive::U64);
         let scalar = ty.p(Primitive::U32);
         let string = ty.p(Primitive::String);
         let cursor = ty.add(TypeKind::Named {
-            definition: path.clone(),
+            definition: hirsel_syntax::DefId::intern(&path.clone()),
             arguments: vec![GenericArgument::Type(string)].into(),
         });
         // StrPos is the library owner's one-field plain u64 representation.
@@ -65,7 +64,7 @@ fn cursor_and_option_records_match_derived_layouts_on_both_targets() {
         ];
         let mut owners = Owners::default();
         owners.nominals.insert(
-            path,
+            hirsel_syntax::DefId::intern(&path),
             OwnerRepresentation::ViewCursor {
                 revision: Default::default(),
             },
@@ -75,11 +74,12 @@ fn cursor_and_option_records_match_derived_layouts_on_both_targets() {
             .iter()
             .map(|name| {
                 let path = support::schema::path(name);
-                owners
-                    .nominals
-                    .insert(path.clone(), OwnerRepresentation::StringView);
+                owners.nominals.insert(
+                    hirsel_syntax::DefId::intern(&path.clone()),
+                    OwnerRepresentation::StringView,
+                );
                 ty.add(TypeKind::Named {
-                    definition: path,
+                    definition: hirsel_syntax::DefId::intern(&path),
                     arguments: vec![].into(),
                 })
             })

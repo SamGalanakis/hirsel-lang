@@ -2,21 +2,27 @@
 //! `u64::MAX` when unbounded. Every arena construction tests its charge against it and
 //! lowers it inline; an excess records the arena's own `OutOfSpace` and takes the
 //! construction's failure edge. A program with no `Recover` opens no bounded arena, so
-//! its failure codes carry no MEM-6 and its constructions are not charged.
+//! its constructions are not charged.
 use super::*;
-use hirsel_lir::emission::{BOUNDED_RULE, FailureCode};
+use hirsel_lir::emission::{BOUNDED_RULE, KIND_BUG};
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
-    /// MEM-6's failure code, present when the program opens a bounded arena.
-    pub(super) fn bounded_code(&self) -> Option<FailureCode> {
-        self.inputs.failures.codes.get(BOUNDED_RULE).copied()
+    /// A failure's `(kind, rule)` codes for `hirsel_rt_v2_failure_begin`: the category, and
+    /// the rule's code loaded from its glue cell (`hirsel_lir::glue`).
+    pub(super) fn failure_code(&mut self, rule: &str) -> (Value<'m>, Value<'m>) {
+        let i32_ty = self.module.int_type(32);
+        let cell = self.glue_cell(&hirsel_lir::glue::failure_code_symbol(rule), i32_ty);
+        (
+            self.module.const_int(i32_ty, u128::from(KIND_BUG)),
+            self.builder.load(i32_ty, cell, 4),
+        )
     }
 
     /// Whether this program builds tracked arena blocks (MEM-6): only charges observe them,
     /// so a program that opens no bounded arena builds none, and its pushes, writability
     /// tests and growth read no tracked count.
     pub(super) fn tracking(&self) -> bool {
-        self.bounded_code().is_some()
+        self.inputs.tracking
     }
 
     /// Whether the construction `site` builds a tracked arena block.
@@ -28,7 +34,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// `failure`'s tokens and enters its cleanup.
     pub(super) fn exhausted_block(
         &mut self,
-        code: FailureCode,
         region: Value<'m>,
         anchor: SourceAnchorId,
         failure: FailureId,
@@ -39,17 +44,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.position(block);
         let (site, operation_site) = self.failure_sites(self.anchor_code(anchor)?);
         let exhausted = self.runtime(RuntimeEntry::ArenaExhausted)?;
-        let i32_ty = self.module.int_type(32);
+        let (kind, rule) = self.failure_code(BOUNDED_RULE);
         self.builder.call(
             exhausted,
-            &[
-                self.context,
-                region,
-                self.module.const_int(i32_ty, u128::from(code.kind)),
-                self.module.const_int(i32_ty, u128::from(code.rule)),
-                site,
-                operation_site,
-            ],
+            &[self.context, region, kind, rule, site, operation_site],
         );
         let dispose = self.pool(edge.dispose, &self.unit.pools.values)?;
         if !dispose.is_empty() {
@@ -72,10 +70,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted {
-        let Some(code) = self.bounded_code() else {
-            return Ok(());
-        };
-        if bytes == 0 {
+        if !self.tracking() || bytes == 0 {
             return Ok(());
         }
         let word = self.module.int_type(64);
@@ -86,7 +81,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let remaining = self.builder.load(word, address, 8);
         let bytes = self.const_u64(bytes);
         let over = self.builder.icmp(IntPredicate::Ugt, bytes, remaining);
-        let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+        let exhausted = self.exhausted_block(region, anchor, failure)?;
         let fits = self.module.append_block(self.function);
         self.builder.cold_cond_br(over, exhausted, fits);
         self.builder.position(fits);
@@ -114,12 +109,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted {
-        let Some(code) = self.bounded_code() else {
+        if !self.tracking() {
             return self.status_guard(status, failure);
-        };
+        }
         let zero = self.module.const_int(self.module.int_type(8), 0);
         let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
-        let exhausted = self.exhausted_block(code, destination, anchor, failure)?;
+        let exhausted = self.exhausted_block(destination, anchor, failure)?;
         let next = self.module.append_block(self.function);
         self.builder.cold_cond_br(failed, exhausted, next);
         self.builder.position(next);
@@ -140,7 +135,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// arena emits nothing; a block a copy reaches through another one becomes shared when
     /// that one is copied on its write, which dups it.
     pub(super) fn share(&mut self, value: ValueId) -> Emitted {
-        if self.bounded_code().is_none() {
+        if !self.tracking() {
             return Ok(());
         }
         let ty = self.value_type(value)?;
@@ -363,7 +358,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.store(no, state.unique, 1);
             self.builder.store(no, state.untracked, 1);
         }
-        if let Some(code) = self.bounded_code() {
+        if self.tracking() {
             let zero = self.module.const_int(self.module.int_type(8), 0);
             let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
             // An exhausted push changes nothing: the block still names its arena.
@@ -372,7 +367,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.position(over);
             let region = self.tracked_region(block);
             let anchor = self.unit.tables.failures[failure.index()].anchor;
-            let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+            let exhausted = self.exhausted_block(region, anchor, failure)?;
             self.builder.br(exhausted);
         } else {
             self.builder.br(done);
