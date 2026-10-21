@@ -94,9 +94,10 @@ Hirsel executes more user instructions. Wall and CPU times are descriptive only.
 
 Each cell states its cache in its `cache` field.
 
-- **Hirsel**: every run is a fresh process. It maps the std image and keeps
-  nothing else between runs, because the query cache is process-local. So a
-  cold run and a warm run are the same command.
+- **Hirsel**: the main suite measures fresh processes with the std image.
+  Set `HIRSEL_DAEMON=off HIRSEL_RESULTS=none@1` for cache-free compiler work.
+  The resident suite below explicitly compares resident, fresh disk-warm and
+  cache-free requests.
 - **Rust, cold**: the dependencies are built beforehand, as Hirsel's std is
   imaged. Before each timed run, `cargo clean -p` removes the package's own
   artifacts and incremental state.
@@ -220,11 +221,15 @@ and recovery edit, in both human and JSON modes. It uses the corpus generators
 above and edits private copies of the programs.
 
 ```sh
-tools/capped --long --timeout 7200 tools/compiler-bench/resident oracle \
+tools/compiler-bench/resident oracle \
   --toolchain <bundle> --work /tmp/hirsel-resident-oracle --output oracle.json
-tools/capped --long --timeout 7200 tools/compiler-bench/resident measure \
-  --toolchain <bundle> --work /tmp/hirsel-resident-measure --output edit-loop.json
+tools/compiler-bench/resident measure \
+  --toolchain <bundle> --native --work /tmp/hirsel-resident-measure --output edit-loop.json
 ```
+
+Each program holds one capped slot for its resident session and releases it
+before the next program. Scale sizes stop at a resource limit. The std image
+command is outside the resident protocol and is reported as excluded.
 
 `measure` runs ten seeded interleaved rounds on tasks and syn10k. The server
 uses CPU31 and the client CPU7. `perf stat` counts cycles and instructions in

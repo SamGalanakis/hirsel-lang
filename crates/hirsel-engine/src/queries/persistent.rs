@@ -110,7 +110,7 @@ impl QueryEngine {
         self.verify_store = verify;
         self
     }
-    fn store_key(&self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
+    fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
         // A generated body's registration must still be replayed by S1; its
         // transient syntax isn't a source-owned record.
         let item = self.items.get(path)?.first()?;
