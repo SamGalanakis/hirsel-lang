@@ -1457,3 +1457,64 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_reply(
     }
     STATUS_OK
 }
+
+#[cfg(test)]
+mod permit_tests {
+    use super::*;
+
+    #[test]
+    fn nested_runs_return_the_last_permit_before_entering_a_callee() {
+        const CHILD: &str = "HIRSEL_K1_NESTED_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "runners::permit_tests::nested_runs_return_the_last_permit_before_entering_a_callee"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(child.status.success(), "{child:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        // Three genuine run contexts exercise the same enter path used by the
+        // runner driver. The caller, callee and nested callee own separate heaps
+        // and executors; only the active run can hold the one process permit.
+        unsafe {
+            let mut contexts = Vec::new();
+            for _ in 0..3 {
+                let mut ctx = std::ptr::null_mut();
+                assert_eq!(
+                    crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                    0
+                );
+                contexts.push(ctx);
+            }
+            let root = contexts[0];
+            let root_run = (*root).run_ptr();
+            let mut execution = Execution::new(Config::default(), root);
+            for &ctx in &contexts[1..] {
+                (*ctx).run().root = root_run;
+                execution.runs.push(Run {
+                    root: ctx,
+                    resume: ctx,
+                    sp: std::ptr::null_mut(),
+                    ended: false,
+                    state: Runners::default(),
+                    callee: None,
+                });
+            }
+            (*root).run().runners = Some(Box::new(execution));
+            crate::pool::enter_root(root).unwrap();
+            let mut active = 0;
+            for target in [1, 2, 1, 0, 2, 0] {
+                enter(contexts[active], target);
+                assert_eq!(crate::pool::compute_permits(), (1, 1, 0));
+                active = target;
+            }
+            crate::pool::leave_root(root);
+            assert_eq!(crate::pool::compute_permits(), (1, 0, 0));
+            for &ctx in contexts.iter().rev() {
+                TaskCtx::attach(ctx, (*ctx).worker_ptr());
+                crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+            }
+            crate::stop::set_running(std::ptr::null_mut());
+        }
+    }
+}
