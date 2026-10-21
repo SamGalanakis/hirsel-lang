@@ -120,7 +120,9 @@ pub(super) fn publish<T>(
     publish_with_replay(ctx, phase, replay.as_ref(), action)
 }
 
-fn publish_with_replay<T>(
+/// Cell owners capture the replay token while holding the scheduler role,
+/// then publish here without looking up the scheduler inside their access.
+pub(super) fn publish_with_replay<T>(
     ctx: *mut TaskCtx,
     phase: Phase,
     replay: Option<&super::replay::Token>,

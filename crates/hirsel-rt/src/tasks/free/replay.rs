@@ -29,9 +29,9 @@ impl Replay {
     /// Admission only, before any task runs. This initial replay slice admits
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
-    /// scopes with settled children, task-set selection and serial gates
-    /// only; no host requests, mutex/channel replay or cancellation-ended
-    /// waits yet.
+    /// scopes with settled children, task-set selection, serial gates and
+    /// scalar mutex create/take/put only; no host requests, mutex destruction,
+    /// channel replay or cancellation-ended waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -209,6 +209,81 @@ pub(super) fn token(ctx: *mut TaskCtx) -> Option<Token> {
         shared,
         path: path(ctx),
     })
+}
+
+/// An object binding captured under the role before independent cell access.
+pub(super) struct Object {
+    token: Token,
+    handle: hirsel_free::session::Handle,
+}
+
+pub(super) fn object(ctx: *mut TaskCtx, handle: hirsel_free::session::Handle) -> Option<Object> {
+    token(ctx).map(|token| Object { token, handle })
+}
+
+/// Version waits own no cell, replay token or session lock across a save.
+pub(super) unsafe fn wait_object(
+    ctx: *mut TaskCtx,
+    handle: hirsel_free::session::Handle,
+) -> Stopped<()> {
+    if !on(ctx) {
+        return Ok(());
+    }
+    let mut entered = false;
+    loop {
+        {
+            let object = object(ctx, handle).expect("an admitted object replay");
+            if object.ready(ctx)? {
+                return Ok(());
+            }
+            if !entered {
+                object.token.publish(ctx, Phase::Entered, || ())?;
+                entered = true;
+            }
+        }
+        let s = scheduler(ctx);
+        let me = s.current;
+        if !s.retrying.contains(&me) {
+            s.retrying.push(me);
+        }
+        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+    }
+}
+
+impl Object {
+    pub(super) fn token(&self) -> &Token {
+        &self.token
+    }
+
+    pub(super) fn create(&self) -> Stopped<()> {
+        self.token
+            .shared
+            .with(|session| session.create(&self.token.path, self.handle))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    fn ready(&self, ctx: *mut TaskCtx) -> Stopped<bool> {
+        self.token.entry(ctx, Phase::Done)?;
+        if !self
+            .token
+            .shared
+            .with(|session| session.admits(&self.token.path, Phase::Done))
+        {
+            self.token.publish(ctx, Phase::Entered, || ())?;
+            return Err(Stop::Requested);
+        }
+        self.token
+            .shared
+            .with(|session| session.enabled(&self.token.path, 0, self.handle))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn touch(&self, outcome: &str) -> Stopped<()> {
+        self.token
+            .shared
+            .with(|session| session.touch(&self.token.path, 0, self.handle, outcome))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
 }
 
 impl Token {

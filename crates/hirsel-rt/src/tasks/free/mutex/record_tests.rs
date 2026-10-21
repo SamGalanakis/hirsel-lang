@@ -1,15 +1,305 @@
 //! A real native waiting take, entered cut, later acquisition and gap replay.
 use super::*;
 use crate::tasks::free::record;
+use crate::tasks::free::replay::Replay;
 use hirsel_free::phase::Progress;
 use hirsel_free::projection::Projection;
 use hirsel_free::session::Session;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[test]
+fn native_mutex_replay_creates_its_identity_and_consumes_scalar_take_put_versions() {
+    let image = super::tests::layout();
+    let wrapper = crate::Layout {
+        size: 8,
+        flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
+        ..super::tests::layout()
+    };
+    let layouts = [&raw const image, &raw const wrapper];
+    for durable in [false, true] {
+        let recording = record::Recording::new(b"native mutex replay", durable);
+        let install = recording.clone();
+        let cutter = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 2;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                let mut handle = 0;
+                let mut payload = [1u64, 7];
+                let none = [0u64; 2];
+                hirsel_rt_v2_mutex_create(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut handle,
+                    payload.as_mut_ptr().cast(),
+                    none.as_ptr().cast(),
+                    2,
+                    3,
+                );
+                assert_eq!(payload, none);
+                cutter.recorder.flush().unwrap().unwrap();
+                let mut status = 99;
+                hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+                assert_eq!(status, 0);
+                assert_eq!(payload, [1, 7]);
+                hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                assert_eq!(payload, none);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        recording.recorder.stop("returned", None).unwrap().unwrap();
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let flush = (1..bytes.len())
+            .find(|&end| {
+                hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                    tape.cut.get(&Vec::new()) == Some(&Progress::new(1, Phase::Done))
+                })
+            })
+            .unwrap();
+        for end in [bytes.len(), flush, flush + 1] {
+            let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+            let full = end == bytes.len();
+            let expected = Projection::new(
+                if full { "returned" } else { "truncated" },
+                &parsed.cut,
+                &trace,
+            );
+            for width in [2, 8] {
+                let replay = Replay::new(&bytes[..end]).unwrap();
+                let install = replay.clone();
+                let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
+                let observed = stage.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 2;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe { install.root(ctx) },
+                    move |ctx| unsafe {
+                        let mut handle = 0;
+                        let mut payload = [1u64, 7];
+                        let none = [0u64; 2];
+                        hirsel_rt_v2_mutex_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut handle,
+                            payload.as_mut_ptr().cast(),
+                            none.as_ptr().cast(),
+                            2,
+                            3,
+                        );
+                        assert_eq!(payload, none);
+                        observed.store(1, Ordering::Release);
+                        let mut status = 99;
+                        hirsel_rt_v2_mutex_take(
+                            ctx,
+                            &mut status,
+                            &handle,
+                            payload.as_mut_ptr().cast(),
+                        );
+                        assert_eq!(status, 0);
+                        assert_eq!(payload, [1, 7]);
+                        observed.store(2, Ordering::Release);
+                        hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                        panic!("mutex replay passed its cut");
+                    },
+                );
+                assert!(
+                    matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                    "{outcome:?}"
+                );
+                assert_eq!(stage.load(Ordering::Acquire), if full { 2 } else { 0 });
+                assert_eq!(replay.finish().unwrap(), expected);
+            }
+        }
+    }
+}
+
 struct Child {
     handle: u64,
     finished: AtomicBool,
+}
+
+unsafe extern "C" fn versioned_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    let (handle, checked) = unsafe {
+        crate::alloc::payload(env)
+            .cast::<(u64, *const AtomicBool)>()
+            .read()
+    };
+    let mut payload = [0u64; 2];
+    let mut status = 99;
+    unsafe {
+        hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+        assert_eq!(status, 0);
+        assert_eq!(payload, [1, 7]);
+        payload[1] = 8;
+        hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+        (*checked).store(true, Ordering::Release);
+    }
+    STATUS_OK
+}
+
+unsafe fn versioned_mutex_body(ctx: *mut TaskCtx, checked: &AtomicBool, replay: bool) {
+    unsafe {
+        let mut handle = 0;
+        let mut payload = [1u64, 7];
+        let none = [0u64; 2];
+        hirsel_rt_v2_mutex_create(
+            ctx,
+            std::ptr::null_mut(),
+            &mut handle,
+            payload.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            2,
+            3,
+        );
+        let mut scope = 0;
+        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+        let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 4, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(env)
+            .cast::<(u64, *const AtomicBool)>()
+            .write((handle, checked));
+        let mut child = 0;
+        hirsel_rt_v2_task_spawn(
+            ctx,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut child,
+            &scope,
+            versioned_child,
+            env,
+            0,
+        );
+        let parks = {
+            let _role = role::Guard::new(ctx);
+            if !replay {
+                let scope = scheduler(ctx).scope_handle(scope);
+                try_block(&mut *ctx, Wait::Exit { scope }, false, 0).unwrap();
+                assert!(checked.load(Ordering::Acquire));
+            } else {
+                assert!(!checked.load(Ordering::Acquire));
+                let cell = scheduler(ctx).sync.mutex(mutex_word(&handle));
+                assert!(
+                    cell.lock().permit.available(),
+                    "the live cell is ready before its recorded predecessors"
+                );
+            }
+            scheduler(ctx).parks
+        };
+        let mut status = 99;
+        hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+        assert_eq!(status, 0);
+        assert_eq!(payload, [1, 8]);
+        assert!(checked.load(Ordering::Acquire));
+        if replay {
+            let _role = role::Guard::new(ctx);
+            assert!(
+                scheduler(ctx).parks > parks,
+                "the version wait saved its stack and released the sole permit"
+            );
+        }
+        hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+    }
+}
+
+#[test]
+fn native_mutex_replay_waits_for_versions_before_taking_an_available_cell() {
+    const CHILD: &str = "HIRSEL_F1_MUTEX_REPLAY_GAPS";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tasks::free::mutex::record_tests::native_mutex_replay_waits_for_versions_before_taking_an_available_cell", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+    crate::pool::set_compute_grant(1);
+    let image = super::tests::layout();
+    let wrapper = crate::Layout {
+        size: 8,
+        flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
+        ..super::tests::layout()
+    };
+    let env = super::tests::layout();
+    let layouts = [&raw const image, &raw const wrapper, &raw const env];
+    for durable in [false, true] {
+        let recording = record::Recording::new(b"native mutex version replay", durable);
+        let install = recording.clone();
+        let checked = Arc::new(AtomicBool::new(false));
+        let observed = checked.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 3;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                versioned_mutex_body(ctx, &observed, false);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let cut = recording
+            .recorder
+            .stop("returned", None)
+            .unwrap()
+            .unwrap()
+            .0;
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        for width in [2, 8] {
+            let replay = Replay::new(&bytes).unwrap();
+            let install = replay.clone();
+            let checked = Arc::new(AtomicBool::new(false));
+            let observed = checked.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 3;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe { install.root(ctx) },
+                move |ctx| unsafe {
+                    versioned_mutex_body(ctx, &observed, true);
+                    panic!("mutex replay passed scope exit cut");
+                },
+            );
+            assert!(
+                matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(
+                replay.finish().unwrap(),
+                Projection::new("returned", &cut.progress, &trace)
+            );
+        }
+    }
 }
 
 unsafe extern "C" fn body(ctx: *mut u8, data: *mut u8) -> ! {
