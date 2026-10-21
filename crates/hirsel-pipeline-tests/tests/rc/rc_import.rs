@@ -5,6 +5,20 @@ use crate::rc_support as support;
 use support::*;
 
 #[test]
+fn decimal_rescale_reuses_disposal_storage_from_an_earlier_block() {
+    lower_valid(
+        "fn main() -> Result[(), ()] { let v = std@1/decimal.new(std@1/bigint.zero(), 1); let _ = std@1/decimal.rescale(v, 0, HalfUp()); Ok(()) }",
+    );
+}
+
+#[test]
+fn markdown_render_reuses_disposal_storage_from_an_earlier_block() {
+    lower_valid(
+        "fn main() -> Result[(), ()] { let rendered = std@1/markdown.to_html(\"# Hello\", std@1/markdown.default_options()); failure.check(string.contains(rendered, \"<h1>Hello</h1>\"), TextInvariant()); Ok(()) }",
+    );
+}
+
+#[test]
 fn a_taken_indexed_callee_releases_before_later_borrowed_arguments() {
     lower_valid(include_str!(
         "../../../../conformance/CLO/CLO-2-nested-uses-annotation-run.hir"

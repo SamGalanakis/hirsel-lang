@@ -948,6 +948,16 @@ fn split<S: Stage>(
     };
     let anchor = ed.unit.blocks[to.index()].anchor;
     let mid = ed.block(kind, &[], anchor);
+    if matches!(ed.unit.terminators[to.index()], Terminator::Unreachable) {
+        // Keep the exhaustive switch directly adjacent to its impossible
+        // default. Tokens still need a scoped disposal there for validation;
+        // a jump through a disposal block would sever the switch's proof.
+        debug_assert!(extra.is_empty());
+        ed.unit.tables.edges[e.index()].target = mid;
+        ed.code[mid.index()] = actions;
+        ed.unit.terminators[mid.index()] = Terminator::Unreachable;
+        return;
+    }
     let mut args = ed.unit.tables.edges[e.index()]
         .arguments
         .get(&ed.unit.pools.values)

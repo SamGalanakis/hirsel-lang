@@ -46,6 +46,15 @@ struct Built {
     table: LayoutTable,
 }
 
+#[test]
+fn decimal_money_keeps_exhaustive_switch_defaults_direct() {
+    let source = include_str!("../../../../conformance/SEM/SEM-1-decimal-money-run.hir")
+        .replace("decimal.", "std@1/decimal.")
+        .replace("bigint.", "std@1/bigint.")
+        .replace("json.", "std@1/json.");
+    build(&source, MODES[0]);
+}
+
 fn check<S: Stage>(
     program: &hirsel_rc::instance::Program,
     manifest: &hirsel_core_contract::Manifest,

@@ -254,14 +254,12 @@ impl Importer<'_> {
                 yes,
                 no,
             });
-            let state = self.state.clone();
-            let versions = self.versions.clone();
+            let saved = self.save();
             let views = self.views.clone();
             let facts = self.facts.clone();
             self.current = done;
             self.removed_call(returns)?;
-            self.state = state;
-            self.versions = versions;
+            self.restore(saved);
             self.views = views;
             self.facts = facts;
             self.current = append;
