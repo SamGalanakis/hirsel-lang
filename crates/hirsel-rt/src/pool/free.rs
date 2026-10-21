@@ -25,6 +25,18 @@ pub(crate) struct Frame {
     saved: AtomicBool,
 }
 
+impl Frame {
+    pub(crate) fn is_saved(&self) -> bool {
+        self.saved.load(Ordering::Acquire)
+    }
+
+    /// The idle callback owns the scheduler role before exposing slots or
+    /// completion. Otherwise a join could retire this row before its callback.
+    pub(crate) fn mark_saved(&self) {
+        self.saved.store(true, Ordering::Release);
+    }
+}
+
 /// Whether the task's parked stack is available to the logical policy for
 /// join delivery, receive slots, shield reads, and retirement. A row becoming
 /// Parked or Holding alone is insufficient: its old worker may still be saving.
@@ -303,20 +315,27 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
     execs.permits.release(exec);
     crate::stop::set_running(std::ptr::null_mut());
     crate::foreign::restore(crate::foreign::ForeignScope::NONE);
-    let _activity = execs.activity.lock().unwrap();
-    exec.busy.store(false, Ordering::SeqCst);
     match leaving {
         Leave::Complete => {
+            let task = running.value().task;
             drop(running);
-            frame.saved.store(true, Ordering::Release);
+            // Keep busy while acquiring the role: a stop must retain this
+            // worker's run, and no activity lock may precede the role lock.
+            unsafe { crate::tasks::after_save(run, task, true) };
+            let _activity = execs.activity.lock().unwrap();
+            exec.busy.store(false, Ordering::SeqCst);
             drop(lease);
         }
         Leave::Suspend { owner, yielded } => {
             let image = running.value_mut();
             image.sp = unsafe { (*image.ctx).task_sp };
             frame.owner.store(owner_word(owner), Ordering::Release);
-            frame.saved.store(true, Ordering::Release);
-            if let Some(queued) = running.save(yielded) {
+            let task = image.task;
+            unsafe { crate::tasks::after_save(run, task, false) };
+            let queued = running.save(yielded);
+            let _activity = execs.activity.lock().unwrap();
+            exec.busy.store(false, Ordering::SeqCst);
+            if let Some(queued) = queued {
                 publish(
                     execs,
                     Saved {

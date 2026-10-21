@@ -44,6 +44,7 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
+pub(crate) mod free;
 pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
 pub(crate) mod profile;
@@ -228,9 +229,18 @@ struct ScopeDeadline {
     expired: bool,
 }
 
+/// Logical scheduling is independent of saved-stack ownership and workers.
+#[derive(Default)]
+enum Logical {
+    #[default]
+    Cooperative,
+    Free(free::Driver),
+}
+
 /// Every task and scope of one run, and the runnable queue.
 #[derive(Default)]
 pub(crate) struct Scheduler {
+    logical: Logical,
     tasks: Vec<Option<Task>>,
     vacant_tasks: Vec<u32>,
     scopes: Vec<Option<Scope>>,
@@ -1181,6 +1191,46 @@ pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
     let s = scheduler(ctx);
     let me = s.current;
     s.task(me).owner
+}
+
+/// A physical stack reached idle, before its dispatch activity reservation
+/// is released. Under the idle role this publishes its saved flag. Policies
+/// may now expose parked slots and settle completion, including vacating a
+/// completed row. Neither the callback nor its guard borrows that context.
+///
+/// # Safety
+/// The calling idle worker retains the run and no role/runtime borrow. A
+/// completed image was invalidated before this call; a suspended image is
+/// still owned by its idle continuation until this callback returns.
+pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, completed: bool) {
+    // SAFETY: the worker stays busy and retains its Lease throughout this
+    // guard; it cannot be reclaimed even if a callback vacates this task.
+    let _role = unsafe { role::IdleGuard::new(run) };
+    let ready = {
+        // SAFETY: IdleGuard exclusively owns role-protected task metadata.
+        let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
+            return;
+        };
+        if let Some(Some(row)) = s.tasks.get(task as usize)
+            && let Some(frame) = &row.dispatch
+        {
+            frame.mark_saved();
+        }
+        // The flag and policy callback share one role acquisition: no join
+        // can observe completion, vacate this row, and reuse its id in between.
+        if unsafe { (*run).control.stopped().is_some() } {
+            return;
+        }
+        match s.logical {
+            Logical::Cooperative => return,
+            Logical::Free(_) => unsafe { free::after_save(s, task, completed) },
+        }
+    };
+    // No Scheduler or Task reference survives a fresh raw table lookup.
+    for (task, owner) in ready {
+        // SAFETY: the idle guard owns the role and the policy retained rows.
+        unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+    }
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
