@@ -587,3 +587,14 @@ fn read(bytes: Bytes, mut s: Request) -> () { s.input = copy bytes }
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn an_invalid_unique_annotation_does_not_cascade_to_its_binding_use() {
+    let (empty, _, _) = support::parse("", &[]);
+    let base = support::registry(&empty);
+    let source =
+        include_str!("../../../../conformance/MODE/MODE-2-annotated-binding-cascade-bad.hir");
+    let (diagnostics, _) = run(source, &base).unwrap();
+    let rules: Vec<_> = diagnostics.iter().map(|d| d.rule.as_str()).collect();
+    assert_eq!(rules, vec!["MODE-2"]);
+}

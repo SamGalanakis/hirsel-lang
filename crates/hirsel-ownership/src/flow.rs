@@ -5191,7 +5191,7 @@ impl Checker<'_> {
                 choice,
             } => {
                 let source = *value;
-                let value = self.value(state, source);
+                let mut value = self.value(state, source);
                 let iteration = self.tree.statements.iter().find_map(|s| match s.kind {
                     hirsel_syntax::StmtKind::For {
                         pattern: p,
@@ -5287,6 +5287,10 @@ impl Checker<'_> {
                         let site = self.tree.expressions[source.0 as usize].origin.span;
                         if self.required(state, &value, &modes, source, site, context) {
                             self.required_shared_parts(&value, annotated, source, site);
+                        } else {
+                            // The failed annotation is the primary site. Values
+                            // derived from its binding carry recovery evidence.
+                            value.invalid = true;
                         }
                     }
                 }

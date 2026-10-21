@@ -6521,3 +6521,5 @@ conformance/MODE/MODE-2-copied-mutex-record-ok.hir
 conformance/MODE/MODE-2-copied-mutex-record-bad.hir
 conformance/MODE/MODE-2-copied-atomic-record-ok.hir
 conformance/MODE/MODE-2-copied-atomic-record-bad.hir
+conformance/MODE/MODE-2-annotated-binding-cascade-ok.hir
+conformance/MODE/MODE-2-annotated-binding-cascade-bad.hir

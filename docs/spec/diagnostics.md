@@ -72,6 +72,10 @@ mismatch. Every other typing failure uses the rule that defines the form; LANG-7
 incompatibility without a narrower rule. Independent failures at the same stage use the
 source and rule ordering above.
 
+A failed binding annotation is the primary site for its mode error. Later uses of
+that binding suppress mode diagnostics that depend on the failed annotation;
+independent availability, access and copying errors remain obligations.
+
 Complete actual generic bounds are prerequisites of the parameter defaults that depend on
 them; a failed instantiation suppresses only those derived checks, never independent
 availability, access, copy, loan or parameter obligations. `sendable` bounds report MODE-4,

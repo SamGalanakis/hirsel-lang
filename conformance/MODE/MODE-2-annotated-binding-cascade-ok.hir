@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+// boundary: One failed annotation suppresses dependent uniqueness diagnostics at later uses.
+fn f(xs: List[u64]) uses {} {
+  let p: unique List[u64] = unique xs
+  let q: unique List[u64] = take p
+}

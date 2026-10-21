@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 5
+// twin: MODE/MODE-2-annotated-binding-cascade-ok.hir
+fn f(xs: List[u64]) uses {} {
+  let p: unique List[u64] = copy xs
+  let q: unique List[u64] = take p
+}
