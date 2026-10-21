@@ -79,15 +79,15 @@ impl Compiler {
     }
     /// A fresh session engine of this compiler.
     pub(crate) fn engine(&self, environment: QueryEnvironment) -> QueryEngine {
-        let mut engine = QueryEngine::new(environment, self.adapters());
+        let hold_bytes = self
+            .hold_bytes
+            .unwrap_or_else(crate::config::configured_hold_bytes);
+        let mut engine = QueryEngine::new_with_hold_bytes(environment, self.adapters(), hold_bytes);
         engine.verify = self.verify;
         engine.set_retention(self.retention);
         engine.configured_jobs = self.jobs;
         engine.configured_lowering = self.lowering;
-        engine.set_hold_bytes(
-            self.hold_bytes
-                .unwrap_or_else(crate::config::configured_hold_bytes),
-        );
+        engine.set_hold_bytes(hold_bytes);
         engine.verify_store = self.verify_store;
         engine.comptime_limits = self.comptime_limits();
         engine.session = !self.owned_engines;
@@ -344,7 +344,7 @@ fn check_diagnostics(error: ToolError) -> Result<CheckOutput, ToolError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use hirsel_span::Span;
     use hirsel_syntax::ItemSyntax;
@@ -456,7 +456,7 @@ mod tests {
             Arc::new(NoBodies)
         }
     }
-    fn phases() -> Arc<dyn Phases> {
+    pub(crate) fn phases() -> Arc<dyn Phases> {
         Arc::new(DeclarationPhases)
     }
 

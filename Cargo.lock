@@ -658,6 +658,7 @@ dependencies = [
  "hirsel-type-analysis",
  "hirsel-types",
  "hirsel-validate",
+ "libc",
  "serde",
  "serde_json",
 ]

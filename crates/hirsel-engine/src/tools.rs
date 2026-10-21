@@ -66,6 +66,9 @@ pub fn toolchain_std_manifest() -> Result<std::path::PathBuf, ToolError> {
 pub(crate) fn toolchain_std_manifest_inputs(
     inputs: &dyn crate::loader_inputs::LoaderInputs,
 ) -> Result<std::path::PathBuf, ToolError> {
+    if let Some(manifest) = inputs.toolchain_std_manifest() {
+        return Ok(manifest?);
+    }
     let executable = std::env::current_exe()?;
     // Buck2 and Cargo executables live below their source tree; installed
     // toolchains put stdlib immediately beside the binary.

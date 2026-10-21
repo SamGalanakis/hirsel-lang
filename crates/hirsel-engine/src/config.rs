@@ -46,7 +46,24 @@ fn configured_memory_cap() -> Option<u64> {
             .unwrap_or(hirsel_guard::DEFAULT_LIMIT),
     )
 }
+#[cfg(test)]
+thread_local! { static FORBID_HOST_DEFAULTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+#[cfg(test)]
+pub(crate) struct HostDefaultsGuard;
+#[cfg(test)]
+impl Drop for HostDefaultsGuard {
+    fn drop(&mut self) {
+        FORBID_HOST_DEFAULTS.with(|v| v.set(false));
+    }
+}
+#[cfg(test)]
+pub(crate) fn forbid_host_defaults() -> HostDefaultsGuard {
+    FORBID_HOST_DEFAULTS.with(|v| assert!(!v.replace(true), "nested host-default trap"));
+    HostDefaultsGuard
+}
 pub(crate) fn configured_hold_bytes() -> u64 {
+    #[cfg(test)]
+    FORBID_HOST_DEFAULTS.with(|v| assert!(!v.get(), "post-capture environment default lookup"));
     crate::memo::default_hold_bytes(configured_memory_cap())
 }
 

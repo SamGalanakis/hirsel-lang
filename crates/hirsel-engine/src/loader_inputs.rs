@@ -7,12 +7,21 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Internal candidate namespace contract. This is not a protocol version.
+#[doc(hidden)]
+pub mod namespace;
+
 /// Loading reads only this surface; adapters preserve ordinary I/O categories.
 pub trait LoaderInputs: Send + Sync {
     fn read(&self, path: &Path) -> io::Result<Arc<[u8]>>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
     fn metadata(&self, path: &Path) -> io::Result<InputKind>;
     fn directory(&self, path: &Path) -> io::Result<Vec<DirectoryEntry>>;
+    /// An explicit frozen adapter overrides this; ordinary/v1 loading keeps
+    /// the toolchain's existing discovery behavior.
+    fn toolchain_std_manifest(&self) -> Option<io::Result<PathBuf>> {
+        None
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputKind {

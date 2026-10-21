@@ -458,7 +458,20 @@ impl QueryEngine {
         let snapshot = self.signature_snapshot();
         crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify)
     }
-    pub fn new(mut environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
+    pub fn new(environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
+        Self::new_with_hold_bytes(
+            environment,
+            adapters,
+            crate::config::configured_hold_bytes(),
+        )
+    }
+    /// Explicit hosts must not consult process defaults even transiently while
+    /// constructing an engine whose policy is already captured.
+    pub(crate) fn new_with_hold_bytes(
+        mut environment: QueryEnvironment,
+        adapters: PhaseAdapters,
+        hold_bytes: u64,
+    ) -> Self {
         let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
         Self {
@@ -472,7 +485,7 @@ impl QueryEngine {
             result_store: None,
             verify: Verify::On,
             retention: crate::memo::Retention::Resident,
-            hold_bytes: crate::config::configured_hold_bytes(),
+            hold_bytes,
             configured_jobs: None,
             configured_lowering: LoweringPolicy::Comptime,
             session: false,
@@ -501,7 +514,7 @@ impl QueryEngine {
             modes: Default::default(),
             lowered: Default::default(),
             lower_receipts: Default::default(),
-            lower_holds: crate::memo::Holds::new(crate::config::configured_hold_bytes()),
+            lower_holds: crate::memo::Holds::new(hold_bytes),
             summaries: Default::default(),
             checked_summaries: Default::default(),
             graph: MemoGraph::default(),
