@@ -2252,7 +2252,7 @@ fn tasks_package_tests() {
     check_interpreted_and_llvm_package_tests(
         "tasks",
         &repository_manifest("examples/tasks/hirsel.json"),
-        22,
+        25,
     );
 }
 

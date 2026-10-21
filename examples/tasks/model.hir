@@ -379,6 +379,44 @@ pub fn select(board: Board, query: Query) -> unique List[Item] uses {} {
   take shown
 }
 
+/// Ephemeral positions for rendering under the same immutable board borrow.
+/// These are not task identities: discard them before mutating/replacing board.
+/// Like the Rust reference's Vec<&Item> (model.rs:168-193), filter first, then
+/// order borrowed projections. list.sort is unstable, so position breaks ties.
+pub fn selected_positions(board: Board, query: Query) -> unique List[u64] uses {} {
+  let folded = string.casefold(string.trim(query.text))
+  let mut positions: List[u64] = []
+  for i in 0u64..list.len(board.tasks) {
+    if matches(board.tasks[i], query, folded) {
+      list.push(mut positions, i)
+    }
+  }
+  let order = parse_sort(query.sort)
+  if order != Manual() {
+    list.sort(
+      mut positions,
+      fn(a: u64, b: u64) -> i32 {
+        let compared: i32 = match order {
+          Manual() => 0,
+          Due() => by_due(board.tasks[a], board.tasks[b]),
+          PriorityFirst() => by_priority(board.tasks[a], board.tasks[b]),
+          Title() => by_title(board.tasks[a], board.tasks[b]),
+        }
+        if compared != 0 {
+          compared
+        } else if a < b {
+          -1
+        } else if a > b {
+          1
+        } else {
+          0
+        }
+      }
+    )
+  }
+  take positions
+}
+
 /// Every tag in use, in first-use order.
 pub fn all_tags(board: Board) -> unique List[String] uses {} {
   let mut tags: List[String] = []

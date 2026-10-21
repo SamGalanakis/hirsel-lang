@@ -170,3 +170,108 @@ fn boards_round_trip_through_json(t: Test) {
   }
   test.check(t, back == board)
 }
+
+fn selected_ids(board: Board, query: Query) -> List[u64] uses {} {
+  let mut ids: List[u64] = []
+  for i in selected_positions(board, query) {
+    list.push(mut ids, board.tasks[i].id)
+  }
+  take ids
+}
+
+fn owned_ids(board: Board, query: Query) -> List[u64] uses {} {
+  list.map(
+    select(board, query),
+    fn(item: Item) -> u64 {
+      item.id
+    }
+  )
+}
+
+@test
+fn rendering_positions_match_owned_selection_and_are_recomputed(t: Test) {
+  let mut board = empty_board()
+  let specs: List[(String, String, String, String)] = [
+    ("Straße", "high", "2026-03-01", "farm,FARM,farm"),
+    ("same", "low", "", "farm"),
+    ("same", "high", "2026-03-01", "work"),
+    ("Élan", "medium", "", "work"),
+    ("same", "high", "2026-02-01", "farm")
+  ]
+  for (title, priority, due, tags) in specs {
+    let Ok(item) = validate(make_draft(title, priority, due, tags)) else {
+      test.fail(t)
+    }
+    let _ = create(mut board, unique item)
+  }
+  let _ = set_status(mut board, 3, Done())
+  let orders: List[String] = ["manual", "due", "priority", "title", "unknown"]
+  let filters: List[(String, String, String)] = [
+    ("", "", ""),
+    ("", "", "STRASSE"),
+    ("", "", " éLAN "),
+    ("", "farm", ""),
+    ("done", "", ""),
+    ("todo", "farm", "same"),
+    ("", "missing", ""),
+    ("missing", "", ""),
+    ("", "", "absent")
+  ]
+  for order in orders {
+    for (status, tag, text) in filters {
+      let q = Query(
+        status: unique status,
+        tag: unique tag,
+        text: unique text,
+        sort: unique order
+      )
+      test.check(t, selected_ids(board, q) == owned_ids(board, q))
+      test.check(t, list.len(selected_ids(empty_board(), q)) == 0)
+    }
+  }
+  let q = Query(status: "", tag: "", text: "same", sort: "title")
+  let owned = select(board, q)
+  test.check(t, selected_ids(board, q) == [2, 3, 5])
+  let Ok(edit) = validate(make_draft("changed", "", "", "")) else {
+    test.fail(t)
+  }
+  test.check(t, update(mut board, 2, unique edit))
+  test.check(t, delete(mut board, 3))
+  test.check(t, selected_ids(board, q) == [5])
+  test.check(t, names_of(owned) == ["same", "same", "same"])
+  test.check(
+    t,
+    list.map(
+      owned,
+      fn(item: Item) -> u64 {
+        item.id
+      }
+    ) == [2, 3, 5]
+  )
+}
+
+@test
+fn rendering_ties_keep_manual_positions_across_quicksort_partitions(t: Test) {
+  let mut board = empty_board()
+  for _ in 0u64..40u64 {
+    let Ok(item) = validate(make_draft("same", "high", "", "")) else {
+      test.fail(t)
+    }
+    let _ = create(mut board, unique item)
+  }
+  let _ = move(mut board, 40, Up())
+  let manual = selected_positions(
+    board,
+    Query(status: "", tag: "", text: "", sort: "manual")
+  )
+  let orders: List[String] = ["due", "priority", "title"]
+  for order in orders {
+    test.check(
+      t,
+      selected_positions(
+        board,
+        Query(status: "", tag: "", text: "", sort: unique order)
+      ) == manual
+    )
+  }
+}

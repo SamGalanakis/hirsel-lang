@@ -279,7 +279,7 @@ pub fn row(mut out: List[u8], item: model.Item, today: Option[time.Date], select
 /// The list of the tasks a screen selects.
 @preserves_unique(out)
 pub fn task_list(mut out: List[u8], board: model.Board, screen: Screen) -> () uses {} {
-  let shown = model.select(board, screen.query)
+  let shown = model.selected_positions(board, screen.query)
   // Each visible row writes at least this much fixed markup. Reserve before
   // rendering the list, then let variable task text grow the same buffer.
   list.reserve(mut out, list.len(out) + list.len(shown) * 1536)
@@ -294,8 +294,8 @@ pub fn task_list(mut out: List[u8], board: model.Board, screen: Screen) -> () us
     text.append(mut out, message)
     text.append(mut out, "</li>")
   }
-  for item in shown {
-    row(mut out, item, screen.today, screen.selected)
+  for i in shown {
+    row(mut out, board.tasks[i], screen.today, screen.selected)
   }
   text.append(mut out, "</ul>")
 }

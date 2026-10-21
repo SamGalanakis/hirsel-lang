@@ -129,3 +129,70 @@ fn the_page_carries_its_signals_and_the_update_stream(t: Test) {
     )
   )
 }
+
+// Keep the owning selection as an independent byte oracle for projection.
+fn owning_task_list(board: model.Board, screen: Screen) -> String uses {} {
+  let shown = model.select(board, screen.query)
+  let mut out: List[u8] = []
+  text.append(mut out, "<ul id=\"list\">")
+  if list.len(shown) == 0 {
+    let message = if list.len(board.tasks) == 0 {
+      "No tasks yet. Add one above."
+    } else {
+      "No tasks match."
+    }
+    text.append(mut out, f"<li class=\"empty\">{message}</li>")
+  }
+  for item in shown {
+    row(mut out, item, screen.today, screen.selected)
+  }
+  text.append(mut out, "</ul>")
+  text.finish_valid(take out)
+}
+
+fn check_selection_bytes(t: Test, board: model.Board) {
+  let orders: List[String] = ["manual", "due", "priority", "title", "unknown"]
+  let queries: List[String] = ["", "STRASSE", "éLAN", "missing"]
+  for order in orders {
+    for text in queries {
+      let mut screen = screen_on(999)
+      screen.query.sort = unique order
+      screen.query.text = unique text
+      let mut out: List[u8] = []
+      task_list(mut out, board, screen)
+      test.check(t, text.finish_valid(take out) == owning_task_list(board, screen))
+    }
+  }
+}
+
+@test
+fn indexed_rows_preserve_bytes_across_requests(t: Test) {
+  let mut board = hostile_board()
+  let titles: List[String] = ["same", "Straße", "same", "Élan"]
+  for title in titles {
+    let item = model.Item(
+      id: 0,
+      title: unique title,
+      description: "<>&é",
+      status: Todo(),
+      priority: High(),
+      due: None(),
+      tags: ["farm", "farm"]
+    )
+    let _ = model.create(mut board, take item)
+  }
+  check_selection_bytes(t, board)
+  let item = model.Item(
+    id: 0,
+    title: "updated",
+    description: "",
+    status: Done(),
+    priority: Low(),
+    due: date.new(2026, 1, 1),
+    tags: []
+  )
+  test.check(t, model.update(mut board, 2, take item))
+  test.check(t, model.delete(mut board, 3))
+  check_selection_bytes(t, board)
+  check_selection_bytes(t, model.empty_board())
+}
