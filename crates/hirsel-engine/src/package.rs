@@ -118,6 +118,10 @@ pub struct LoadedProgram {
     /// its std image, for `--verbose`; an image changes only how long checking
     /// takes.
     pub image_notes: Vec<String>,
+    /// The files other than sources that loading read or probed: each package
+    /// manifest and, for a source, its sidecar path. A change to any of them
+    /// selects another package graph, so a resident session loads again.
+    pub inputs: Vec<std::path::PathBuf>,
     packages: Vec<DependencyPackage>,
     identity: ContentHash,
 }
@@ -353,6 +357,59 @@ impl LoadedProgram {
             None => Ok(()),
         }
     }
+    /// The path of every source the program checks, in check order.
+    pub fn source_paths(&self) -> Vec<PathBuf> {
+        self.files
+            .iter()
+            .map(|(file, _)| self.engine.sources.file(*file).unwrap().path.clone())
+            .collect()
+    }
+    /// Replace the text of the source at `path` with a new snapshot under the
+    /// same logical name, as a resident session does after an edit: the next
+    /// check indexes it in place of the old one, and only the memos whose reads
+    /// it changes are recomputed. False, changing nothing, when `path` is not a
+    /// source of a package checked from source (a prechecked package's sources
+    /// are part of its precheck's key): the caller loads again.
+    pub fn replace_source(&mut self, path: &Path, text: String) -> Result<bool, ToolError> {
+        let Some(index) = self
+            .files
+            .iter()
+            .position(|(file, _)| self.engine.sources.file(*file).unwrap().path == path)
+        else {
+            return Ok(false);
+        };
+        let (old, context) = self.files[index].clone();
+        if self.engine.prechecked(&context.package) {
+            return Ok(false);
+        }
+        let file = self
+            .engine
+            .sources
+            .add_snapshot(old, text)
+            .ok_or(ToolError::SourceTooLarge)?;
+        self.files[index].0 = file;
+        if self.primary == old {
+            self.primary = file;
+        }
+        for package in &mut self.packages {
+            for entry in &mut package.files {
+                if entry.0 == old {
+                    entry.0 = file;
+                }
+            }
+        }
+        Ok(true)
+    }
+    /// Parse every source in check order, as loading does, so a source that no
+    /// longer lexes or parses fails the program the same way a fresh load does.
+    pub fn parse_sources(&mut self) -> Result<(), ToolError> {
+        for (file, context) in self.files.clone() {
+            self.engine
+                .parse_file(file, &context)
+                .map_err(|e| self.error(e))?;
+        }
+        Ok(())
+    }
     pub fn error(&self, error: QueryError) -> ToolError {
         ToolError::Query {
             error,
@@ -417,6 +474,12 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
     }
     Ok(true)
 }
+/// A source's exact sidecar path: `<source>.json`.
+fn sidecar_path(path: &Path) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(".json");
+    PathBuf::from(sidecar)
+}
 /// Load, adopting the matching std `images`.
 pub(crate) fn load_program_source_with_images(
     compiler: &Compiler,
@@ -429,9 +492,7 @@ pub(crate) fn load_program_source_with_images(
     let manifest = if path.extension().is_some_and(|e| e == "json") {
         Some(path.to_path_buf())
     } else {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(".json");
-        let sidecar = PathBuf::from(sidecar);
+        let sidecar = sidecar_path(path);
         match std::fs::metadata(&sidecar) {
             Ok(_) => Some(sidecar),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -453,6 +514,7 @@ pub(crate) fn load_program_source_with_images(
                 primary: file,
                 unsafe_ffi: vec![],
                 image_notes: vec![],
+                inputs: vec![sidecar_path(path)],
                 packages: vec![],
                 identity: compiler.identity(),
             });
@@ -464,6 +526,7 @@ pub(crate) fn load_program_source_with_images(
             primary: file,
             unsafe_ffi: vec![],
             image_notes: vec![],
+            inputs: vec![sidecar_path(path)],
             packages: vec![],
             identity: compiler.identity(),
         });
@@ -617,6 +680,13 @@ pub(crate) fn load_program_source_with_images(
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
         image_notes: vec![],
+        inputs: path
+            .extension()
+            .is_none_or(|e| e != "json")
+            .then(|| sidecar_path(path))
+            .into_iter()
+            .chain(graph.packages.values().map(|p| p.path.clone()))
+            .collect(),
         packages: vec![],
         identity: compiler.identity(),
     };

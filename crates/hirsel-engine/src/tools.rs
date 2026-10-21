@@ -170,7 +170,7 @@ pub fn default_environment() -> QueryEnvironment {
     }
 }
 
-pub(crate) fn read_source(path: &Path) -> Result<String, ToolError> {
+pub fn read_source(path: &Path) -> Result<String, ToolError> {
     let bytes = std::fs::read(path)?;
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,

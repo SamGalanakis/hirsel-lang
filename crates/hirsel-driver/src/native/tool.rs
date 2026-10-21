@@ -98,111 +98,112 @@ pub fn run_path_native_backend_with_validation(
         Output::Inherit { json } => (true, json, &mut host_stdout, &mut host_stderr),
         Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
     };
-    let mut loaded = crate::COMPILER.with_verify(verify).load_program(path)?;
-    loaded.check_for_execution()?;
-    if matches!(
-        launch,
-        crate::HostLaunch::Replay(_)
-            | crate::HostLaunch::Live {
-                record: Some(_),
-                ..
-            }
-    ) {
-        loaded.refuse_unreplayable()?;
-    }
-    // The driver binds only: the executable admits the run, once (design.md).
-    let host = match launch {
-        crate::HostLaunch::Live {
-            config,
-            record,
-            revocations,
-        } => {
-            let live = crate::HostLaunch::Live {
+    crate::session::with_program(path, verify, |loaded| {
+        loaded.check_for_execution()?;
+        if matches!(
+            launch,
+            crate::HostLaunch::Replay(_)
+                | crate::HostLaunch::Live {
+                    record: Some(_),
+                    ..
+                }
+        ) {
+            loaded.refuse_unreplayable()?;
+        }
+        // The driver binds only: the executable admits the run, once (design.md).
+        let host = match launch {
+            crate::HostLaunch::Live {
                 config,
-                record: None,
+                record,
                 revocations,
-            };
-            let crate::BoundHostRun::Live(bound) = crate::bind_launch(&mut loaded, live)? else {
-                unreachable!("a live launch binds live")
-            };
-            // The executable records; the level and the destination must agree here first.
-            hirsel_rt::host_launch::recording_level(bound.run(), record.is_some())
-                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            (
-                bound.into_run(),
-                super::link::Tape::Live {
-                    record,
+            } => {
+                let live = crate::HostLaunch::Live {
+                    config,
+                    record: None,
                     revocations,
-                },
-            )
-        }
-        launch @ crate::HostLaunch::Replay(tape) => {
-            let crate::BoundHostRun::Replay { run, .. } = crate::bind_launch(&mut loaded, launch)?
-            else {
-                unreachable!("a replay binds a recording")
-            };
-            (run, super::link::Tape::Replay(tape))
-        }
-    };
-    let entry = loaded.entry;
-    let mut engine = loaded.engine;
-    let query = |engine: &hirsel_engine::QueryEngine, error| ToolError::Query {
-        error,
-        phase: engine.unavailable,
-        sources: engine.sources.clone(),
-    };
-    let input = match engine.export_native_input() {
-        Ok(input) => input,
-        Err(error) => return Err(query(&engine, error)),
-    };
-    let validated = match engine.import_native_input(input) {
-        Ok(validated) => validated,
-        Err(error) => {
-            return Ok(Err(NativeError::new(
-                StageName::Manifest,
-                format!("the native snapshot: {error:?}"),
-            )));
-        }
-    };
-    let proofs = match evidence
-        .map(|e| super::Proofs::assess(&mut engine, &entry, &validated, e))
-        .transpose()
-    {
-        Ok(proofs) => proofs,
-        Err(error) => return Ok(Err(error)),
-    };
-    let observation = match run(
-        &validated,
-        &entry,
-        (&host.0, host.1),
-        proofs.as_ref(),
-        backend,
-        validation,
-        inherit,
-        stdout,
-        stderr,
-    ) {
-        Ok(super::link::Observed::Ran(observation, waits)) => Ok((observation, waits)),
-        // The executable admitted the run and refused it: the same refusal the interpreter's
-        // admission reports.
-        Ok(super::link::Observed::Refused(reason)) => {
-            return Err(match hirsel_run_schema::RunRefusal::parse(&reason) {
-                Some(refusal) => ToolError::Launch(refusal),
-                None => ToolError::Runtime(format!("launch: {reason}")),
-            });
-        }
-        Ok(super::link::Observed::Stopped(outcome)) => return Ok(Ok(outcome)),
-        Err(error) => Err(error),
-    };
-    Ok(observation.and_then(|(observation, waits)| {
-        let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
+                };
+                let crate::BoundHostRun::Live(bound) = crate::bind_launch(loaded, live)? else {
+                    unreachable!("a live launch binds live")
+                };
+                // The executable records; the level and the destination must agree here first.
+                hirsel_rt::host_launch::recording_level(bound.run(), record.is_some())
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+                (
+                    bound.into_run(),
+                    super::link::Tape::Live {
+                        record,
+                        revocations,
+                    },
+                )
+            }
+            launch @ crate::HostLaunch::Replay(tape) => {
+                let crate::BoundHostRun::Replay { run, .. } = crate::bind_launch(loaded, launch)?
+                else {
+                    unreachable!("a replay binds a recording")
+                };
+                (run, super::link::Tape::Replay(tape))
+            }
+        };
+        let entry = loaded.entry.clone();
+        let engine = &mut loaded.engine;
+        let query = |engine: &hirsel_engine::QueryEngine, error| ToolError::Query {
+            error,
+            phase: engine.unavailable,
+            sources: engine.sources.clone(),
+        };
+        let input = match engine.export_native_input() {
+            Ok(input) => input,
+            Err(error) => return Err(query(engine, error)),
+        };
+        let validated = match engine.import_native_input(input) {
+            Ok(validated) => validated,
+            Err(error) => {
+                return Ok(Err(NativeError::new(
+                    StageName::Manifest,
+                    format!("the native snapshot: {error:?}"),
+                )));
+            }
+        };
+        let proofs = match evidence
+            .map(|e| super::Proofs::assess(engine, &entry, &validated, e))
+            .transpose()
+        {
+            Ok(proofs) => proofs,
+            Err(error) => return Ok(Err(error)),
+        };
+        let observation = match run(
+            &validated,
+            &entry,
+            (&host.0, host.1),
+            proofs.as_ref(),
+            backend,
+            validation,
+            inherit,
+            stdout,
+            stderr,
+        ) {
+            Ok(super::link::Observed::Ran(observation, waits)) => Ok((observation, waits)),
+            // The executable admitted the run and refused it: the same refusal the interpreter's
+            // admission reports.
+            Ok(super::link::Observed::Refused(reason)) => {
+                return Err(match hirsel_run_schema::RunRefusal::parse(&reason) {
+                    Some(refusal) => ToolError::Launch(refusal),
+                    None => ToolError::Runtime(format!("launch: {reason}")),
+                });
+            }
+            Ok(super::link::Observed::Stopped(outcome)) => return Ok(Ok(outcome)),
+            Err(error) => Err(error),
+        };
+        Ok(observation.and_then(|(observation, waits)| {
+            let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
 
-        let sites = Sites::new(validated.snapshot());
-        for failure in &observation.failures {
-            writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
-        }
-        observation.outcome(&sites, waits)
-    }))
+            let sites = Sites::new(validated.snapshot());
+            for failure in &observation.failures {
+                writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
+            }
+            observation.outcome(&sites, waits)
+        }))
+    })
 }
 
 fn run(

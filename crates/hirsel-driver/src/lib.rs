@@ -16,6 +16,7 @@ pub mod native;
 mod network;
 pub mod observation_view;
 mod pipeline;
+pub mod session;
 pub mod testing;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
@@ -49,7 +50,8 @@ pub fn load_program_source_with_images(
 }
 /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {
-    COMPILER.check_path(path)
+    session::with_session(path, hirsel_engine::Verify::On, session::Session::check)
+        .unwrap_or_else(|| COMPILER.check_path(path))
 }
 /// `check_path`, then the escape from capability checking an accepted program's
 /// entry reaches (CAP-6).
@@ -62,7 +64,21 @@ pub fn check_safe_path(
     ),
     ToolError,
 > {
-    COMPILER.check_safe_path(path)
+    if !session::resident() {
+        return COMPILER.check_safe_path(path);
+    }
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        let output = program
+            .check(hirsel_engine::LoweringPolicy::Comptime)
+            .map_err(|error| program.error(error))?;
+        if output.diagnostics.iter().any(|d| d.severity == hirsel_diag::Severity::Error)
+            || output.completion != hirsel_engine::CheckCompletion::Complete
+        {
+            return Ok((output, None));
+        }
+        let reach = program.unsafe_reach()?;
+        Ok((output, Some((program.entry.clone(), reach))))
+    })
 }
 pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
@@ -573,7 +589,17 @@ fn run_path_on_host_observed(
     verify: hirsel_engine::Verify,
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
 ) -> Result<RunOutcome, ToolError> {
-    let mut program = COMPILER.with_verify(verify).load_program(path)?;
+    session::with_program(path, verify, |program| {
+        run_loaded_on_host(program, launch, max_steps, observed)
+    })
+}
+
+fn run_loaded_on_host(
+    program: &mut LoadedProgram,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
+) -> Result<RunOutcome, ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
     let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
@@ -581,7 +607,7 @@ fn run_path_on_host_observed(
         HostLaunch::Live { record, .. } => record.map(Path::to_path_buf),
         HostLaunch::Replay(_) => None,
     };
-    let (run, io, instance) = match bind_host_run(&mut program, launch, host)? {
+    let (run, io, instance) = match bind_host_run(program, launch, host)? {
         HostRun::Live { admitted, io } => (
             admitted.run().clone(),
             network::HostIo::Live(io),
@@ -594,7 +620,7 @@ fn run_path_on_host_observed(
         }
     };
     // A callee run's replay entered its callee entry (`bind_launch`).
-    let signature = launch_signature(&mut program)?;
+    let signature = launch_signature(program)?;
     let call = run.record().call.clone();
     let tir_run = hirsel_tir::RunConfiguration {
         entry: program.entry.clone(),
