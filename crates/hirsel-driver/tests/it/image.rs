@@ -9,14 +9,17 @@ use std::{path::PathBuf, sync::Arc};
 
 impl Fixture {
     fn library(&self, source: &str) -> PathBuf {
+        self.library_named("lib", source)
+    }
+    fn library_named(&self, name: &str, source: &str) -> PathBuf {
         self.write("lib.hir", source);
         let manifest = serde_json::json!({
             "schema": 1,
-            "package": {"name": "lib", "version": "1"},
+            "package": {"name": name, "version": "1"},
             "sources": [{"path": "lib.hir", "module": ["lib"]}],
             "dependencies": [],
         });
-        let path = self.0.join("lib.json");
+        let path = self.0.join(format!("{name}.json"));
         std::fs::write(&path, manifest.to_string()).unwrap();
         path
     }
@@ -319,6 +322,50 @@ fn editing_an_imaged_source_in_a_session_ends_its_image() {
         let entry = program.entry.clone();
         assert_eq!(
             program.engine.semantic_program_revision(&entry).unwrap(),
+            cold.engine.semantic_program_revision(&entry).unwrap()
+        );
+    });
+}
+
+/// O2's std-touching case uses a small std package so it exercises std's
+/// module-head policy and image retirement without rechecking the full library.
+#[test]
+fn editing_an_imaged_std_module_is_warm_equals_cold() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let manifest = f.library_named("std", LIBRARY);
+        let client = f.program("client", CLIENT, &manifest, "std");
+        let bytes = image(&f, &mut load(&client, &StdImages::none()), "std").unwrap();
+        let images = StdImages::of(vec![StdImage::from_bytes(bytes).unwrap()]);
+        let mut warm = load(&client, &images);
+        warm.check_for_execution().unwrap();
+        assert!(warm.engine.imaged(&package("std")));
+        let (file, context) = warm
+            .files
+            .iter()
+            .find(|(_, context)| context.package == package("std"))
+            .cloned()
+            .unwrap();
+        let path = warm.engine.sources.file(file).unwrap().path.clone();
+        let edited = LIBRARY.replace("x + 1", "x + 2");
+        f.library_named("std", &edited);
+        let file = warm.engine.sources.add(path, edited).unwrap();
+        warm.engine.parse_file(file, &context).unwrap();
+        assert!(!warm.engine.imaged(&package("std")));
+        let mut cold = load(&client, &StdImages::none());
+        let checked = |program: &mut LoadedProgram| {
+            let output = program.check(LoweringPolicy::Reachable).unwrap();
+            let diagnostics: Vec<_> = output
+                .diagnostics
+                .iter()
+                .map(|d| d.render_human(&output.sources))
+                .collect();
+            (output.completion, diagnostics)
+        };
+        assert_eq!(checked(&mut warm), checked(&mut cold));
+        let entry = warm.entry.clone();
+        assert_eq!(
+            warm.engine.semantic_program_revision(&entry).unwrap(),
             cold.engine.semantic_program_revision(&entry).unwrap()
         );
     });
