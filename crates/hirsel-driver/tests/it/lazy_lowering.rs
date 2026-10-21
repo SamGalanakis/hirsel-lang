@@ -404,3 +404,128 @@ fn program_growth_is_decided_before_any_files_comptime_lowering() {
         }
     });
 }
+/// Drive the production package schedule in separate processes: a worker count
+/// is process configuration, and changing it in a shared test process races.
+#[test]
+fn package_diagnostics_and_warm_edits_match_at_every_worker_count() {
+    const TEST: &str =
+        "lazy_lowering::package_diagnostics_and_warm_edits_match_at_every_worker_count";
+    const CHILD: &str = "HIRSEL_C1_JOBS_CHILD";
+    const START: &str = "C1_TRANSCRIPT_START\n";
+    const END: &str = "C1_TRANSCRIPT_END\n";
+    if std::env::var_os(CHILD).is_some() {
+        let transcript = with_compiler_stack(|| {
+            let mut transcript = String::new();
+            for files in [
+                &[
+                    (
+                        "a.hir",
+                        "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                    ),
+                    ("b.hir", "pub fn bad() -> u64 { true }\n"),
+                ][..],
+                &[
+                    ("a.hir", "pub fn broken() -> Missing { 1 }\n"),
+                    ("b.hir", "pub fn user() -> u64 { a.broken() }\n"),
+                ],
+                &[
+                    (
+                        "a.hir",
+                        "fn grow[T: copyable](x: T) { grow((copy x,copy x)) }\n",
+                    ),
+                    (
+                        "b.hir",
+                        "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                    ),
+                ],
+                &[(
+                    "a.hir",
+                    "const FIRST: u32 = comptime SECOND\nconst SECOND: u32 = comptime FIRST\n",
+                )],
+                &[(
+                    "a.hir",
+                    "fn body() -> Result[Body[fn() -> u32 uses {}], String] { Ok(codegen.body(\"fn() -> u32 uses {} { 7u32 }\")) }\npub fn made() -> u32 uses {} = comptime body()\n",
+                )],
+            ] {
+                let f = Fixture::new();
+                let diagnostics = library_diagnostics(&f, files, false);
+                transcript.push_str(
+                    &format!("case {diagnostics:?}\n")
+                        .replace(&f.0.to_string_lossy().to_string(), "$CASE"),
+                );
+            }
+            let f = Fixture::new();
+            let library = f.library("pub fn value() -> u64 { 1 }\n");
+            f.app("pub fn main() -> u64 { lib.value() }\n", ("lib", &library));
+            let manifest = f.0.join("app.json");
+            let mut warm =
+                load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            let render = |program: &mut LoadedProgram| {
+                let checked = program.check(LoweringPolicy::Reachable).unwrap();
+                let mut text = format!("{:?}\n", checked.completion);
+                for diagnostic in &checked.diagnostics {
+                    text.push_str(&diagnostic.render_human(&checked.sources));
+                }
+                if checked.diagnostics.is_empty() {
+                    text.push_str(&program.engine.export_tir(&program.entry.clone()).unwrap());
+                }
+                text.replace(&f.0.to_string_lossy().to_string(), "$CASE")
+            };
+            transcript.push_str(&render(&mut warm));
+            assert_eq!(render(&mut warm), render(&mut warm), "unchanged warm check");
+            for source in [
+                "pub fn value() -> u64 { true }\n",
+                "pub fn value() -> u64 { 2 }\n",
+            ] {
+                f.library(source);
+                let file = warm
+                    .engine
+                    .sources
+                    .add(f.0.join("lib.hir"), source.into())
+                    .unwrap();
+                let context = hirsel_syntax::FileContext {
+                    package: PackageId {
+                        name: "lib".into(),
+                        version: "1".into(),
+                    },
+                    modules: vec![],
+                };
+                warm.engine.parse_file(file, &context).unwrap();
+                let mut cold =
+                    load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+                let actual = render(&mut warm);
+                assert_eq!(actual, render(&mut cold), "warm/cold after edit");
+                transcript.push_str(&actual);
+            }
+            transcript
+        });
+        print!("{START}{transcript}{END}");
+        return;
+    }
+    let binary = std::env::current_exe().unwrap();
+    let mut reference = None;
+    for jobs in [1, 2, 8] {
+        let output = std::process::Command::new(&binary)
+            .args([TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HIRSEL_JOBS", jobs.to_string())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "jobs {jobs}:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let begin = stdout.find(START).expect("child transcript") + START.len();
+        let end = stdout[begin..].find(END).expect("child transcript end") + begin;
+        let transcript = stdout[begin..end].to_owned();
+        assert!(transcript.contains("GEN-5"));
+        assert!(transcript.contains("CT-4"));
+        if let Some(reference) = &reference {
+            assert_eq!(&transcript, reference, "jobs {jobs}");
+        } else {
+            reference = Some(transcript);
+        }
+    }
+}
