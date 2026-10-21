@@ -73,6 +73,7 @@ mod tests {
         older: AtomicBool,
         output: Mutex<Vec<u8>>,
         completed: AtomicU64,
+        parked: AtomicU64,
     }
     struct Host {
         home: std::thread::ThreadId,
@@ -123,6 +124,9 @@ mod tests {
         fn finish(&mut self, _: u64) {
             self.probe.completed.fetch_add(1, Ordering::Relaxed);
         }
+        fn parked(&mut self, _: u64) {
+            self.probe.parked.fetch_add(1, Ordering::Release);
+        }
     }
     fn layout() -> crate::Layout {
         crate::Layout {
@@ -159,6 +163,116 @@ mod tests {
         );
         assert_eq!(unsafe { result.assume_init() }.tag, 0);
         STATUS_OK
+    }
+
+    #[test]
+    fn a_runnable_worker_records_host_completion_before_the_retirement_poll_wakes_its_owner() {
+        let environment = layout();
+        let layouts = [&environment as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let probe = Arc::new(Probe::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            run.adapter = Some(Box::new(Host {
+                home: std::thread::current().id(),
+                probe: probe.clone(),
+                cancellation: false,
+            }));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    super::super::events::enable(ctx);
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        24,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(env)
+                        .cast::<[u64; 3]>()
+                        .write([10, 0, 0]);
+                    let mut child = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut child,
+                            &scope,
+                            sleeping_child,
+                            env,
+                            0
+                        ),
+                        STATUS_OK
+                    );
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
+                        let waiting = {
+                            let _guard = role::Guard::new(ctx);
+                            let s = scheduler(ctx);
+                            matches!(s.task(child as u32).wait, Some(Wait::Host { .. }))
+                                && readiness::saved(s, child as u32)
+                        };
+                        if seen.parked.load(Ordering::Acquire) == 1 && waiting {
+                            break;
+                        }
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "child never saved its host wait"
+                        );
+                        let mut cause = 99;
+                        assert_eq!(
+                            hirsel_rt_v2_task_canceled(ctx, &mut cause, &scope),
+                            STATUS_OK
+                        );
+                        assert_eq!(cause, 0);
+                    }
+                    // A runnable root publishes readiness, then retires a
+                    // scheduling point. There is no idle host wait in between.
+                    seen.now.store(100, Ordering::Release);
+                    let mut cause = 99;
+                    assert_eq!(
+                        hirsel_rt_v2_task_canceled(ctx, &mut cause, &scope),
+                        STATUS_OK
+                    );
+                    assert_eq!(cause, 0);
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(log.host_polls.len(), 1);
+                    let poll = &log.host_polls[0];
+                    assert!(
+                        !poll.idle,
+                        "completion must be captured by a retirement poll"
+                    );
+                    assert_eq!(poll.completion.task, vec![0]);
+                    assert_eq!(poll.completion.ordinal, 0);
+                    assert_eq!(poll.completion.result, Ok(Completion::Wait(Ok(()))));
+                    assert_eq!(poll.sequence, 0);
+                    assert_eq!(log.host_completions.len(), 1);
+                    assert_eq!(poll.completion, log.host_completions[0]);
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(probe.completed.load(Ordering::Acquire), 1);
+        }
     }
 
     #[test]
