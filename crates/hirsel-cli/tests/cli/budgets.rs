@@ -390,7 +390,10 @@ fn a_stop_ends_a_fuel_builds_loop_at_its_next_refill_on_both_backends() {
                 .arg(grants(r#""fuel":1000000000000000"#))
                 .output()
                 .unwrap();
-            assert!(started.elapsed() < std::time::Duration::from_secs(60), "{stopped:?}");
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "{stopped:?}"
+            );
             assert_eq!(stopped.stdout, b"start\n", "{stopped:?}");
             assert_eq!(
                 String::from_utf8_lossy(&stopped.stderr),

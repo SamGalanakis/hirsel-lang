@@ -243,6 +243,7 @@ pub(crate) struct RunShared {
     pub(crate) control: std::sync::Arc<crate::stop::Control>,
     /// The Io binding's parked requests and armed deadlines, mirrored where every worker reads
     /// it (`crate::host_waits`).
+    pub(crate) io_facade: Option<Box<crate::io::Binding>>,
     pub(crate) host_waits: std::sync::atomic::AtomicU32,
     /// The root task's entry, words and stack, owned by the run (`crate::stop`).
     pub(crate) launch: Option<Box<crate::stop::LaunchFrame>>,
@@ -376,6 +377,10 @@ impl TaskCtx {
         // SAFETY: caller contract.
         unsafe {
             TaskCtx::attach(ctx, worker);
+            if crate::pool::wide((*ctx).run_ref()) && (*ctx).run_ref().fuel.active() {
+                let chunk = (*ctx).run_ref().fuel.take();
+                (*ctx).heap().set_fuel(chunk as i64);
+            }
             crate::stop::set_running(ctx);
             crate::foreign::restore((*ctx).foreign);
             (*worker).collect();
@@ -410,6 +415,11 @@ impl TaskCtx {
     /// worker, and it keeps the thread's foreign scope until it is switched in again.
     #[inline(never)]
     pub(crate) fn switch_out(&mut self) {
+        if crate::pool::wide(self.run_ref()) && self.run_ref().fuel.active() {
+            let points = self.view.compiled.fuel.max(0) as u64;
+            self.run_ref().fuel.put(points);
+            self.heap().set_fuel(0);
+        }
         self.heap().unbind();
         #[cfg(feature = "measurement")]
         {
@@ -525,25 +535,33 @@ impl TaskCtx {
 
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) fn stats(&mut self) -> Stats {
-        let immortalized = self.worker().immortalized;
-        let heap = self.heap();
-        let (live_blocks, live_bytes) = heap.live();
-        let idle_slabs = heap.view().idle_slabs;
-        Stats {
-            backing_bytes: heap.backing_bytes()
-                + heap.regions.active_bytes
-                + heap.regions.idle_bytes,
-            backing_allocations: heap.backing_allocations + heap.regions.backing_allocations,
-            slab_bytes: heap.slab_count * SLAB_SIZE as u64,
-            idle_slab_bytes: idle_slabs * SLAB_SIZE as u64,
-            large_bytes: heap.large_bytes,
-            live_blocks,
-            live_bytes,
-            region_active_bytes: heap.regions.active_bytes,
-            region_pool_bytes: heap.regions.idle_bytes,
-            active_regions: heap.regions.active_count,
-            immortalized_blocks: immortalized,
+        let mut stats = Stats::default();
+        let heaps: Vec<_> = self.run_ref().heaps.heaps().collect();
+        for heap in heaps {
+            // SAFETY: the caller holds the cooperative run token (or every
+            // worker is idle at teardown). No heap is concurrently mutated.
+            let heap = unsafe { &mut *heap };
+            let (blocks, bytes) = heap.live();
+            stats.backing_bytes +=
+                heap.backing_bytes() + heap.regions.active_bytes + heap.regions.idle_bytes;
+            stats.backing_allocations +=
+                heap.backing_allocations + heap.regions.backing_allocations;
+            stats.slab_bytes += heap.slab_count * SLAB_SIZE as u64;
+            stats.idle_slab_bytes += heap.view().idle_slabs * SLAB_SIZE as u64;
+            stats.large_bytes += heap.large_bytes;
+            stats.live_blocks += blocks;
+            stats.live_bytes += bytes;
+            stats.region_active_bytes += heap.regions.active_bytes;
+            stats.region_pool_bytes += heap.regions.idle_bytes;
+            stats.active_regions = stats.active_regions.wrapping_add(heap.regions.active_count);
         }
+        let mut workers = crate::pool::workers(self.run_ref());
+        workers.push(self.run_ref().home_worker());
+        stats.immortalized_blocks = workers
+            .into_iter()
+            .map(|worker| unsafe { (*worker).immortalized })
+            .sum();
+        stats
     }
 
     /// A trim point: idle slabs and pooled region segments above their caps go back.
@@ -615,7 +633,9 @@ impl TaskCtx {
                 .iter()
                 // SAFETY: as above.
                 .map(|&heap| unsafe {
-                    (*heap).backing_bytes() + (*heap).regions.active_bytes + (*heap).regions.idle_bytes
+                    (*heap).backing_bytes()
+                        + (*heap).regions.active_bytes
+                        + (*heap).regions.idle_bytes
                 })
                 .sum();
             return Audit {
@@ -740,6 +760,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         runners: None,
         root: ptr::null_mut(),
         control: Default::default(),
+        io_facade: None,
         host_waits: Default::default(),
         launch: None,
         root_ctx: ptr::null_mut(),

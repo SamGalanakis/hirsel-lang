@@ -396,12 +396,7 @@ pub(crate) unsafe fn arm(
     armed
 }
 
-unsafe fn arm_here(
-    ctx: *mut TaskCtx,
-    scope: u32,
-    clock: u64,
-    at: u64,
-) -> Stopped<Option<u64>> {
+unsafe fn arm_here(ctx: *mut TaskCtx, scope: u32, clock: u64, at: u64) -> Stopped<Option<u64>> {
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
         let task = crate::tasks::current_path(ctx);
@@ -715,8 +710,13 @@ unsafe fn poll_here(
 /// # Safety
 /// `ctx` is live and its Binding bound.
 pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
-    // SAFETY: caller contract.
-    unsafe { at_home(ctx, || wait_here(ctx)) }?
+    // The code's caller owns this permit. Home must never reacquire it on
+    // behalf of a waiting compute worker: at one process permit that would
+    // prevent the caller from resuming after the home completion.
+    crate::pool::release_permit(ctx);
+    let waited = unsafe { at_home(ctx, || wait_here(ctx)) }??;
+    crate::pool::acquire_permit(ctx);
+    Ok(waited)
 }
 
 unsafe fn wait_here(ctx: *mut TaskCtx) -> Stopped<bool> {

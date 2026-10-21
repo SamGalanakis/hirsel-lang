@@ -31,7 +31,9 @@ use hirsel_run_schema::BudgetKind;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The threads that ran stand-in code, in order.
@@ -104,7 +106,10 @@ fn join(ctx: *mut TaskCtx, scope: u64, mut task: u64) -> [u64; 2] {
 }
 
 fn exit(ctx: *mut TaskCtx, scope: u64) {
-    assert_eq!(unsafe { hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0) }, 0);
+    assert_eq!(
+        unsafe { hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0) },
+        0
+    );
 }
 
 /// Yields `id` times, recording its thread around each, then finishes with `Some(id)`.
@@ -134,7 +139,10 @@ unsafe extern "C" fn yielding(
 /// One fuel point as compiled code charges it (`hirsel-llvm` `charge_fuel`).
 fn charge(ctx: *mut TaskCtx) {
     unsafe {
-        let word = ctx.cast::<u8>().add(hirsel_rt::CTX_FUEL_OFFSET).cast::<i64>();
+        let word = ctx
+            .cast::<u8>()
+            .add(hirsel_rt::CTX_FUEL_OFFSET)
+            .cast::<i64>();
         *word -= 1;
         if *word < 0 {
             hirsel_rt::budget::hirsel_rt_v2_fuel_refill(ctx);
@@ -214,11 +222,20 @@ fn migrated_tasks_run_only_on_compute_workers_and_return_their_results() {
         threads.iter().all(|&t| t != admission),
         "the admission thread ran stand-in code"
     );
-    let distinct: std::collections::BTreeSet<_> = threads.iter().map(|t| format!("{t:?}")).collect();
-    assert!(distinct.len() >= 2, "every suspension migrates: {distinct:?}");
+    let distinct: std::collections::BTreeSet<_> =
+        threads.iter().map(|t| format!("{t:?}")).collect();
+    assert!(
+        distinct.len() >= 2,
+        "every suspension migrates: {distinct:?}"
+    );
     assert!(metrics.migrations() > 0);
     let values = metrics.values();
-    for name in ["switches_per_op", "queue_ops_per_op", "spawn_ns", "migrations_per_s"] {
+    for name in [
+        "switches_per_op",
+        "queue_ops_per_op",
+        "spawn_ns",
+        "migrations_per_s",
+    ] {
         assert!(
             values.iter().any(|(n, _)| *n == name),
             "{name} missing from {values:?}"
@@ -306,7 +323,9 @@ fn budget_exhaustion_inside_cleanup_ends_the_run() {
         }
     }
     fn finalized() -> &'static Layout {
-        cached_layout("workers-finalized", 0, || layout(8, 0, Some(spending), Vec::new()))
+        cached_layout("workers-finalized", 0, || {
+            layout(8, 0, Some(spending), Vec::new())
+        })
     }
     unsafe extern "C" fn cleaning(
         ctx: *mut TaskCtx,
@@ -351,6 +370,14 @@ fn budget_exhaustion_inside_cleanup_ends_the_run() {
 /// frees the run. The admission thread never ran the run's code.
 #[test]
 fn a_stop_during_a_pure_loop_returns_at_once_and_the_root_later_finishes_into_its_frame() {
+    // A fast bounce back to the sender used to erase that worker's new busy
+    // flag. Repeat the real stop/return interaction to exercise that race.
+    for _ in 0..16 {
+        stopped_migrated_loop();
+    }
+}
+
+fn stopped_migrated_loop() {
     let _serial = serial();
     take_threads();
     static LOOPING: AtomicBool = AtomicBool::new(false);
@@ -469,7 +496,10 @@ fn a_stop_while_a_home_extern_is_in_c_waits_for_the_call() {
     control.stop();
     std::thread::sleep(Duration::from_millis(20));
     let status = control.status();
-    assert!(status.stop_requested && status.home_busy && !status.finished, "{status:?}");
+    assert!(
+        status.stop_requested && status.home_busy && !status.finished,
+        "{status:?}"
+    );
     assert_eq!(*dropped.lock().unwrap(), None, "no home destructor ran");
     assert!(!admission.is_finished(), "wait waits for the call");
     RETURN.store(true, SeqCst);
@@ -477,7 +507,11 @@ fn a_stop_while_a_home_extern_is_in_c_waits_for_the_call() {
     assert_eq!(ended, Err(Stop::Requested));
     assert_eq!(pending, 0);
     assert!(!AFTER.load(SeqCst), "the interval's leave ended the run");
-    assert_eq!(take_threads(), [thread], "the home call ran on the admission thread");
+    assert_eq!(
+        take_threads(),
+        [thread],
+        "the home call ran on the admission thread"
+    );
     assert_eq!(*dropped.lock().unwrap(), Some(thread));
     let status = control.status();
     assert!(status.finished && !status.home_busy && status.reclamation_pending == 0);
@@ -597,7 +631,11 @@ fn a_fuel_loop_observes_a_stop_within_one_chunk() {
             },
         );
         stopper.join().unwrap();
-        assert_eq!(ended.ended, Err(Stop::Requested), "width {width}, fuel {fuel:?}");
+        assert_eq!(
+            ended.ended,
+            Err(Stop::Requested),
+            "width {width}, fuel {fuel:?}"
+        );
         // A detached root leaves at its next refill too, before the next run counts.
         eventually("the root to leave", || {
             status.status().reclamation_pending == 0
@@ -676,4 +714,262 @@ fn a_callback_failure_on_a_wide_run_ends_the_process() {
         "a_callback_failure_on_a_wide_run_ends_the_process",
         "a callback failed",
     );
+}
+
+/// A second run cannot replace a stopped divergent worker's process permit.
+/// Isolated in a subprocess because changing the manager's grant affects all tests.
+#[test]
+fn stopped_workers_keep_the_process_grant_across_runs() {
+    const CHILD: &str = "HIRSEL_W1_PERMIT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workers::stopped_workers_keep_the_process_grant_across_runs",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    hirsel_rt::pool::set_compute_grant(1);
+    let looping = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let run = BodyRun::new(2, true);
+    let control = run.control();
+    let stopper = std::thread::spawn({
+        let looping = looping.clone();
+        let control = control.clone();
+        move || {
+            eventually("first root", || looping.load(SeqCst));
+            control.stop();
+        }
+    });
+    let ended = run.run(|_| {}, {
+        let looping = looping.clone();
+        let release = release.clone();
+        move |_| {
+            looping.store(true, SeqCst);
+            while !release.load(SeqCst) {
+                std::hint::spin_loop();
+            }
+            0
+        }
+    });
+    stopper.join().unwrap();
+    assert_eq!(ended.ended, Err(Stop::Requested));
+    assert_eq!(control.status().lost_permits, 1);
+    let entered = Arc::new(AtomicBool::new(false));
+    let second = std::thread::spawn({
+        let entered = entered.clone();
+        move || {
+            BodyRun::new(1, false).run(
+                |_| {},
+                move |_| {
+                    entered.store(true, SeqCst);
+                    0
+                },
+            )
+        }
+    });
+    eventually("second run waiting for the process permit", || {
+        hirsel_rt::pool::compute_permits().2 > 0
+    });
+    assert!(!entered.load(SeqCst));
+    assert_eq!(hirsel_rt::pool::compute_permits().1, 1);
+    release.store(true, SeqCst);
+    assert_eq!(second.join().unwrap().ended, Ok(0));
+    eventually("first root reclamation", || {
+        control.status().reclamation_pending == 0
+    });
+    assert_eq!(control.status().lost_permits, 0);
+    assert_eq!(hirsel_rt::pool::compute_permits().1, 0);
+}
+
+/// An external stop observed at a home callback's operation is a supported
+/// abandonment boundary; it neither returns into C nor aborts the host process.
+#[test]
+fn a_home_callback_observes_a_host_stop_at_its_next_operation() {
+    let _serial = serial();
+    let (home, dropped) = Home::new();
+    let entered = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let mut run = BodyRun::new(2, true);
+    run.adapter = Some(Box::new(home));
+    let control = run.control();
+    let stopper = std::thread::spawn({
+        let entered = entered.clone();
+        let stopping = stopping.clone();
+        move || {
+            eventually("home callback", || entered.load(SeqCst));
+            control.stop();
+            stopping.store(true, SeqCst);
+        }
+    });
+    let ended = run.run(
+        |_| {},
+        move |ctx| {
+            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+            unsafe {
+                hirsel_rt_v2_foreign_enter(
+                    ctx,
+                    0,
+                    interval.as_mut_ptr().cast(),
+                    FOREIGN_THREADS_HOME,
+                );
+            }
+            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+            entered.store(true, SeqCst);
+            while !stopping.load(SeqCst) {
+                std::hint::spin_loop();
+            }
+            unsafe {
+                yield_now(&mut *ctx);
+            }
+            panic!("a stopped callback returned into C")
+        },
+    );
+    stopper.join().unwrap();
+    assert_eq!(ended.ended, Err(Stop::Requested));
+    assert_eq!(*dropped.lock().unwrap(), Some(std::thread::current().id()));
+}
+
+/// A callback remains on its foreign thread, while its non-Send adapter call
+/// and destructor run on admission, at both widths.
+#[test]
+fn pool_callbacks_use_the_home_adapter_without_migrating_c_frames() {
+    let _serial = serial();
+    struct CloseHome {
+        home: ThreadId,
+        calls: Arc<AtomicU64>,
+        _affine: std::rc::Rc<()>,
+    }
+    impl Adapter for CloseHome {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(self.home, std::thread::current().id());
+            assert!(matches!(request, Request::Close { handle: 99 }));
+            self.calls.fetch_add(1, SeqCst);
+            Ok(Completion::Unit(Ok(())))
+        }
+    }
+    impl Drop for CloseHome {
+        fn drop(&mut self) {
+            assert_eq!(self.home, std::thread::current().id());
+        }
+    }
+    for width in [1, 2] {
+        let calls = Arc::new(AtomicU64::new(0));
+        let mut run = BodyRun::new(width, true);
+        run.adapter = Some(Box::new(CloseHome {
+            home: std::thread::current().id(),
+            calls: calls.clone(),
+            _affine: std::rc::Rc::new(()),
+        }));
+        let ended = run.run(
+            |_| {},
+            |ctx| {
+                let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                unsafe {
+                    hirsel_rt_v2_foreign_enter(
+                        ctx,
+                        0,
+                        interval.as_mut_ptr().cast(),
+                        hirsel_rt::foreign::FOREIGN_THREADS_ANY
+                            | hirsel_rt::foreign::FOREIGN_BLOCKING,
+                    );
+                    let thread = std::thread::current().id();
+                    assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                    for _ in 0..32 {
+                        assert_eq!(hirsel_rt::io::hirsel_rt_v2_io_close(ctx, 99, 0, 0), 0);
+                    }
+                    assert_eq!(thread, std::thread::current().id());
+                    hirsel_rt::foreign::hirsel_rt_v2_callback_leave(ctx);
+                    hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                }
+                0
+            },
+        );
+        assert_eq!(ended.ended, Ok(0));
+        assert_eq!(calls.load(SeqCst), 32);
+    }
+}
+
+/// The real CONC-8 wait path must return the process permit to its caller,
+/// rather than keeping it on the home service thread.
+#[test]
+fn an_idle_home_wait_reports_blocked_with_one_process_permit() {
+    const CHILD: &str = "HIRSEL_W1_IDLE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workers::an_idle_home_wait_reports_blocked_with_one_process_permit",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    hirsel_rt::pool::set_compute_grant(1);
+    struct Waiting(ThreadId);
+    impl Adapter for Waiting {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(self.0, std::thread::current().id());
+            assert!(matches!(request, Request::SleepUntil { .. }));
+            Err(AdapterError::Blocked)
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            assert_eq!(self.0, std::thread::current().id());
+            assert_eq!(
+                hirsel_rt::pool::compute_permits().1,
+                0,
+                "waiting on home holds no compute permit"
+            );
+            Ok(false)
+        }
+    }
+    let mut run = BodyRun::new(2, true);
+    run.adapter = Some(Box::new(Waiting(std::thread::current().id())));
+    let outcome = run.run(
+        |_| {},
+        |ctx| {
+            let mut out = std::mem::MaybeUninit::uninit();
+            unsafe {
+                hirsel_rt::io::hirsel_rt_v2_clock_sleep_until(
+                    ctx,
+                    std::ptr::null_mut(),
+                    out.as_mut_ptr(),
+                    &1,
+                    &123,
+                );
+            }
+            panic!("a permanently blocked wait returned")
+        },
+    );
+    assert!(
+        matches!(outcome.ended, Err(Stop::Blocked(_))),
+        "{outcome:?}"
+    );
+    assert_eq!(outcome.pending, 0);
+    assert_eq!(hirsel_rt::pool::compute_permits().1, 0);
 }

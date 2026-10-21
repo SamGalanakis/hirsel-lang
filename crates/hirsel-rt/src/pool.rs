@@ -21,7 +21,7 @@
 //! - **Migrate every suspension.** The test mode that resumes every task on a different
 //!   compute worker than it last ran on at each suspension, which shows that nothing caches a
 //!   thread's state across one (the W1 gate).
-//! - **Permits.** A thread holds one of the run's compute permits while it runs Hirsel code
+//! - **Permits.** A thread holds one of the process's compute permits while it runs Hirsel code
 //!   ([`Permits`]): it gives it back when it goes idle and when a task it runs enters C on it,
 //!   and takes one before it resumes a task into Hirsel code and at a callback's entry. A
 //!   blocking call holds none while it is in C; at width > 1 the home thread holds none
@@ -34,7 +34,9 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, Ordering::Relaxed,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -69,8 +71,9 @@ enum Kind {
 }
 
 /// A closure the home thread runs for a thread that waits for it ([`call_home`]).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Call {
+    claim: Arc<hirsel_free::claim::Request<()>>,
     run: *mut (dyn FnMut() + 'static),
     done: *const Done,
 }
@@ -78,12 +81,12 @@ struct Call {
 /// A [`Call`]'s completion, on its caller's stack.
 #[derive(Default)]
 struct Done {
-    ended: Mutex<bool>,
+    ended: Mutex<Option<bool>>,
     bell: Condvar,
 }
 
 /// What a thread is asked to do next.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Post {
     /// Resume task `task`, taking a compute permit first when `permit` (a task resumed into C
     /// or into the home thread's Io takes none).
@@ -114,7 +117,7 @@ pub(crate) struct Exec {
     idle: Cell<*mut u8>,
     deferred: Cell<Option<(*const Exec, Post)>>,
     worker: Cell<*mut Worker>,
-    held: Cell<bool>,
+    held: AtomicBool,
 }
 
 // SAFETY: the cells are touched only by the exec's own thread (see `Exec`); the inbox is
@@ -136,7 +139,7 @@ impl Exec {
             idle: Cell::new(std::ptr::null_mut()),
             deferred: Cell::new(None),
             worker: Cell::new(worker),
-            held: Cell::new(held),
+            held: AtomicBool::new(held),
         })
     }
 
@@ -183,37 +186,104 @@ impl Exec {
     }
 }
 
-/// A run's compute permits: as many as its width.
+/// One process-wide compute permit pool (§7). Capacity changes do not manufacture
+/// replacements for stopped workers: a worker keeps its permit until it leaves code.
+/// The predicate and notification use the same lock, as in Rust std's Condvar
+/// sync/poison/condvar.rs:182-194 (ea137335b788) wait_while protocol;
+/// Tokio batch_semaphore.rs:334-368 (ce685ee69165) likewise
+/// returns capacity under the wait-list lock before waking waiters. Here waiters
+/// are OS workers rather than futures, so a condition variable replaces wakers.
 pub(crate) struct Permits {
-    available: Mutex<u32>,
+    state: Mutex<PermitState>,
     freed: Condvar,
+}
+struct PermitState {
+    limit: u32,
+    held: u32,
+    waiting: u32,
+}
+
+static PROCESS_PERMITS: std::sync::OnceLock<Arc<Permits>> = std::sync::OnceLock::new();
+fn process_permits() -> Arc<Permits> {
+    Arc::clone(PROCESS_PERMITS.get_or_init(|| {
+        Arc::new(Permits::new(
+            std::thread::available_parallelism()
+                .map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX)),
+        ))
+    }))
+}
+
+/// Set the process's compute grant. Only the embedding manager calls this;
+/// a contraction lets existing holders leave, and admits no replacement meanwhile.
+/// All runs, pool callbacks and nested local runner code use this same pool.
+pub fn set_compute_grant(limit: u32) {
+    assert!(limit > 0, "a compute grant must be positive");
+    let permits = process_permits();
+    permits.state.lock().unwrap().limit = limit;
+    permits.freed.notify_all();
+}
+
+/// Current process permit accounting, available to the embedding manager.
+/// A stopped divergent worker stays in `held` until it leaves code.
+pub fn compute_permits() -> (u32, u32, u32) {
+    let permits = process_permits();
+    let state = permits.state.lock().unwrap();
+    (state.limit, state.held, state.waiting)
+}
+
+/// Wake threads waiting for a permit when their run stops. Keeping the lock
+/// through notification prevents a stop from being lost just before a wait.
+pub(crate) fn wake_permits() {
+    if let Some(permits) = PROCESS_PERMITS.get() {
+        let _state = permits.state.lock().unwrap();
+        permits.freed.notify_all();
+    }
 }
 
 impl Permits {
-    /// Take a permit for `exec`'s thread unless it holds one: whether it took one.
-    fn acquire(&self, exec: &Exec) -> bool {
-        if exec.held.get() {
-            return false;
+    fn new(limit: u32) -> Self {
+        Self {
+            state: Mutex::new(PermitState {
+                limit,
+                held: 0,
+                waiting: 0,
+            }),
+            freed: Condvar::new(),
         }
-        let mut available = self.available.lock().unwrap();
-        while *available == 0 {
-            available = self.freed.wait(available).unwrap();
+    }
+    /// Whether this thread took a permit (nested callbacks keep the existing one).
+    fn acquire(&self, exec: &Exec, control: Option<&crate::stop::Control>) -> Stopped<bool> {
+        if exec.held.load(Ordering::Relaxed) {
+            return Ok(false);
         }
-        *available -= 1;
-        exec.held.set(true);
-        true
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if let Some(stop) = control.and_then(|c| c.stopped()) {
+                return Err(stop);
+            }
+            if state.held < state.limit {
+                break;
+            }
+            state.waiting += 1;
+            state = self.freed.wait(state).unwrap();
+            state.waiting -= 1;
+        }
+        state.held += 1;
+        exec.held.store(true, Ordering::Release);
+        Ok(true)
     }
     fn release(&self, exec: &Exec) {
-        if !exec.held.replace(false) {
+        if !exec.held.swap(false, Ordering::AcqRel) {
             return;
         }
-        *self.available.lock().unwrap() += 1;
+        let mut state = self.state.lock().unwrap();
+        state.held -= 1;
         self.freed.notify_one();
     }
-    /// Permits no thread holds.
     #[cfg(test)]
     fn available(&self) -> u32 {
-        *self.available.lock().unwrap()
+        let state = self.state.lock().unwrap();
+        state.limit.saturating_sub(state.held)
     }
 }
 
@@ -231,10 +301,20 @@ pub(crate) struct Holders {
     count: AtomicU32,
     /// The launcher left the run to its threads (`detach`).
     detached: AtomicBool,
+    workers: Mutex<Vec<std::sync::Weak<Exec>>>,
 }
 
 impl Holders {
     /// The threads still holding a detached run.
+    pub(crate) fn lost_permits(&self) -> u32 {
+        self.workers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .filter(|exec| exec.held.load(Ordering::Acquire))
+            .count() as u32
+    }
     pub(crate) fn left(&self) -> u32 {
         self.count.load(Ordering::SeqCst)
     }
@@ -260,6 +340,9 @@ pub(crate) struct Execs {
     cursor: AtomicUsize,
     /// Migrate every suspension (the W1 test mode).
     migrate: bool,
+    calls: hirsel_free::claim::Requests<()>,
+    next_call: AtomicU64,
+    activity: Mutex<()>,
 }
 
 /// The scheduling row's headroom counters (design §5 Headroom, B1's `switch_queue`,
@@ -484,21 +567,22 @@ fn execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 fault("a run's first dispatch came from a pool thread");
             }
             Box::new(Execs {
-                home: Exec::new(Kind::Home, (*ctx).worker_ptr(), true),
+                home: Exec::new(Kind::Home, (*ctx).worker_ptr(), false),
                 home_idle: None,
                 compute: Vec::new(),
                 compute_threads: Vec::new(),
                 pool: Mutex::new(Vec::new()),
-                permits: Arc::new(Permits {
-                    available: Mutex::new(0),
-                    freed: Condvar::new(),
-                }),
+                permits: process_permits(),
                 holders: Arc::new(Holders {
                     count: AtomicU32::new(1),
                     detached: AtomicBool::new(false),
+                    workers: Mutex::new(Vec::new()),
                 }),
                 cursor: AtomicUsize::new(0),
                 migrate: false,
+                calls: Default::default(),
+                next_call: AtomicU64::new(0),
+                activity: Mutex::new(()),
             })
         })
     }
@@ -644,8 +728,9 @@ pub(crate) unsafe fn abandon(ctx: *mut TaskCtx) -> ! {
 }
 
 /// Make the deferred post of `exec`'s thread, after its idle fiber regained control: it
-/// gives back its permit and goes idle. A task posted makes its receiver busy before this
-/// thread goes idle; a wake goes after, so the home thread sees this thread idle.
+/// gives back its permit and goes idle. Under the activity lock it clears its own
+/// busy flag before posting, so a fast bounce cannot have its new busy flag erased.
+/// The home snapshot uses that lock to exclude the transit gap.
 ///
 /// # Safety
 /// `exec` is the calling thread's.
@@ -658,14 +743,16 @@ unsafe fn post_deferred(run: *mut RunShared, exec: &Exec) {
         if let Some(execs) = (*run).execs.as_deref() {
             execs.permits.release(exec);
         }
+        crate::stop::set_running(std::ptr::null_mut());
+        crate::foreign::restore(crate::foreign::ForeignScope::NONE);
         let queued = (*run).extern_metrics.as_ref().map(|_| Instant::now());
-        if matches!(post, Post::Wake) {
-            exec.busy.store(false, Ordering::SeqCst);
-            (*to).post(post, queued);
-        } else {
-            (*to).post(post, queued);
-            exec.busy.store(false, Ordering::SeqCst);
-        }
+        let execs = (*run).execs.as_deref().unwrap();
+        // Clear before publishing: the receiver can immediately bounce a task
+        // back, whose fresh busy=true must never be erased by this sender.
+        // The snapshot lock prevents the launcher from seeing the transit gap.
+        let _activity = execs.activity.lock().unwrap();
+        exec.busy.store(false, Ordering::SeqCst);
+        (*to).post(post, queued);
     }
 }
 
@@ -677,7 +764,11 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
     // SAFETY: the run is live; its execs and tasks outlive every resume.
     unsafe {
         if permit && let Some(execs) = (*run).execs.as_deref() {
-            execs.permits.acquire(exec);
+            if execs.permits.acquire(exec, Some(&(*run).control)).is_err() {
+                exec.busy.store(false, Ordering::SeqCst);
+                wake(&execs.home);
+                return;
+            }
         }
         let here = match exec.kind {
             Kind::Compute(index) => Some(index),
@@ -697,9 +788,17 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
 unsafe fn run_call(call: Call) {
     // SAFETY: the caller waits for `done`, so its closure and completion are live.
     unsafe {
-        (*call.run)();
+        let claimed = call.claim.claim();
+        if claimed {
+            (*call.run)();
+            call.claim.finish();
+        }
         let done = &*call.done;
-        *done.ended.lock().unwrap() = true;
+        // The caller owns Done on its stack. Keep the predicate locked until
+        // notification returns, so a fast caller cannot destroy the condition
+        // variable while notify_one still accesses its futex word.
+        let mut ended = done.ended.lock().unwrap();
+        *ended = Some(claimed);
         done.bell.notify_one();
     }
 }
@@ -773,8 +872,7 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
     // SAFETY: this is the exec's own thread, idle between posts.
     while unsafe { serve(run, &exec) } {}
     EXEC.with(|e| e.set(std::ptr::null()));
-    if holders.count.fetch_sub(1, Ordering::AcqRel) == 1
-        && holders.detached.load(Ordering::Acquire)
+    if holders.count.fetch_sub(1, Ordering::AcqRel) == 1 && holders.detached.load(Ordering::Acquire)
     {
         // SAFETY: the launcher left the run and this is its last thread.
         unsafe { crate::context::reclaim(run) };
@@ -795,18 +893,24 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
     if !execs.compute.is_empty() || !execs.pool.lock().unwrap().is_empty() {
         fault("a run's workers started twice");
     }
-    execs.home.held.set(false);
-    *execs.permits.available.lock().unwrap() = width;
+    execs.home.held.store(false, Ordering::Release);
     execs.migrate = migrate;
     for index in 0..width as u16 {
         // SAFETY: the run outlives the worker, which only its thread uses from here on.
         let worker = unsafe { Worker::create(run) };
         let exec = Exec::new(Kind::Compute(index), worker, false);
+        execs
+            .holders
+            .workers
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&exec));
         execs.holders.count.fetch_add(1, Ordering::AcqRel);
         let thread = std::thread::Builder::new()
             .name(format!("hirsel-worker-{index}"))
             .spawn({
-                let (exec, holders, run) = (Arc::clone(&exec), Arc::clone(&execs.holders), RunPtr(run));
+                let (exec, holders, run) =
+                    (Arc::clone(&exec), Arc::clone(&execs.holders), RunPtr(run));
                 move || worker_main(run, exec, holders)
             })
             .unwrap_or_else(|_| environmental("a compute worker could not start"));
@@ -823,7 +927,8 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
 /// The run has compute workers and has not started.
 pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
     // SAFETY: caller contract.
-    let execs = unsafe { (*run).execs.as_deref() }.unwrap_or_else(|| fault("a run without workers"));
+    let execs =
+        unsafe { (*run).execs.as_deref() }.unwrap_or_else(|| fault("a run without workers"));
     execs.compute[0].post(Post::Run { task, permit: true }, None);
 }
 
@@ -842,7 +947,9 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         // SAFETY: this is the home thread, idle on its own stack.
         unsafe { post_deferred(run, &home) };
         // SAFETY: the run is live.
-        if unsafe { (*run).control.stopped().is_some() } || finished() {
+        if unsafe { (*run).control.stopped().is_some() }
+            || (finished() && busy(unsafe { &*run }) == 0)
+        {
             break;
         }
         match home.take().0 {
@@ -857,8 +964,12 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         }
     }
     home.close();
-    // A call posted before the close still has its caller waiting: it runs, and the caller
-    // sees the stop at its next runtime entry.
+    // Close uses the same claim/withdraw protocol as R6's request bridge. A
+    // queued call is withdrawn before home state is destroyed; its caller still
+    // owns the borrowed buffers until the completion below wakes it.
+    unsafe {
+        (*run).execs.as_deref().unwrap().calls.sweep();
+    }
     loop {
         let post = home.inbox.lock().unwrap().posts.pop_front();
         match post {
@@ -876,6 +987,7 @@ pub(crate) fn busy(run: &RunShared) -> u32 {
     let Some(execs) = run.execs.as_deref() else {
         return 0;
     };
+    let _activity = execs.activity.lock().unwrap();
     let compute = execs.compute.iter().filter(|exec| exec.busy()).count();
     let pool = execs
         .pool
@@ -894,23 +1006,56 @@ pub(crate) fn busy(run: &RunShared) -> u32 {
 /// # Safety
 /// `ctx` is live; `call` does not suspend and holds nothing of the calling thread's.
 pub(crate) unsafe fn call_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) -> Stopped<()> {
-    // SAFETY: the context is live.
-    let run = unsafe { &*(*ctx).run_ptr() };
-    if !wide(run) || own_exec().is_null() {
+    unsafe { call_home_in((*ctx).run_ptr(), call) }
+}
+
+/// As call_home, with an explicit run for a facade whose caller may be home.
+pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
+    // SAFETY: the facade is owned by this live run.
+    let run = unsafe { &*run };
+    if own_exec().is_null() {
         call();
         return Ok(());
     }
+    if let Some(stop) = run.control.stopped() {
+        return Err(stop);
+    }
     let done = Done::default();
+    let execs = run.execs.as_deref().unwrap();
+    let id = execs.next_call.fetch_add(1, Relaxed);
+    let claim = execs.calls.prepare(id, ());
     // SAFETY: this frame waits until the home thread signals `done`, so the closure outlives
     // its run there.
     let call: *mut (dyn FnMut() + 'static) = unsafe { std::mem::transmute(call) };
     let home = &run.execs.as_deref().unwrap().home;
-    if !home.post(Post::Call(Call { run: call, done: &done }), None) {
+    if !home.post(
+        Post::Call(Call {
+            claim,
+            run: call,
+            done: &done,
+        }),
+        None,
+    ) {
+        execs.calls.retire(id);
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
     let mut ended = done.ended.lock().unwrap();
-    while !*ended {
+    let exec = unsafe { &*current(execs) };
+    let held = exec.held.load(Ordering::Relaxed);
+    if held {
+        execs.permits.release(exec);
+    }
+    while ended.is_none() {
         ended = done.bell.wait(ended).unwrap();
+    }
+    let claimed = ended.unwrap();
+    drop(ended);
+    execs.calls.retire(id);
+    if !claimed {
+        return Err(run.control.stopped().unwrap_or(Stop::Requested));
+    }
+    if held {
+        execs.permits.acquire(exec, Some(&run.control))?;
     }
     Ok(())
 }
@@ -924,6 +1069,9 @@ pub(crate) fn wake(exec: &Exec) {
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all
 /// [`POOL_THREADS`] are busy.
 pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
+    unsafe {
+        crate::io::Binding::bridge(ctx);
+    }
     let run = RunPtr(
         // SAFETY: the context is live.
         unsafe { (*ctx).run_ptr() },
@@ -941,6 +1089,12 @@ pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
     // SAFETY: the run outlives the worker, which only the new thread uses from here on.
     let worker = unsafe { Worker::create(run.0) };
     let exec = Exec::new(Kind::Pool(slot), worker, false);
+    execs
+        .holders
+        .workers
+        .lock()
+        .unwrap()
+        .push(Arc::downgrade(&exec));
     execs.holders.count.fetch_add(1, Ordering::AcqRel);
     let thread = std::thread::Builder::new()
         .name(format!("hirsel-pool-{slot}"))
@@ -981,12 +1135,36 @@ pub(crate) fn release_permit(ctx: *mut TaskCtx) {
 /// begins: whether it took one. Before a width-1 run's first dispatch its one thread holds
 /// the run's one permit.
 pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
-    // SAFETY: the context is live.
-    match unsafe { (*(*ctx).run_ptr()).execs.as_deref() } {
-        // SAFETY: the current exec is this thread's.
-        Some(execs) => execs.permits.acquire(unsafe { &*current(execs) }),
-        None => false,
-    }
+    let execs = execs(ctx);
+    // A callee belongs to its execution root's stop, while using its own
+    // executor and heap on this physical thread.
+    let run = unsafe { (*ctx).run_ptr() };
+    let control = unsafe {
+        &*if (*run).root.is_null() {
+            run
+        } else {
+            (*run).root
+        }
+    };
+    let result = execs
+        .permits
+        .acquire(unsafe { &*current(execs) }, Some(&control.control));
+    // SAFETY: the caller is at a supported code-entry boundary.
+    unsafe { crate::stop::check(ctx, result) }
+}
+
+/// Enter ordinary width-1 code on the admission thread. The launcher's frame
+/// returns the permit even when a stop abandons every program frame.
+pub(crate) fn enter_root(ctx: *mut TaskCtx) -> Stopped<()> {
+    let execs = execs(ctx);
+    execs
+        .permits
+        .acquire(&execs.home, Some(unsafe { &(*(*ctx).run_ptr()).control }))?;
+    Ok(())
+}
+pub(crate) fn leave_root(ctx: *mut TaskCtx) {
+    let execs = execs(ctx);
+    execs.permits.release(&execs.home);
 }
 
 /// The run ended and every one of its threads is idle: each leaves and is joined. Their
@@ -1039,6 +1217,13 @@ pub(crate) fn workers(run: &RunShared) -> Vec<*mut Worker> {
 /// run's registry, and the run's execs go.
 pub(crate) fn retire(run: &mut RunShared) {
     for worker in workers(run) {
+        #[cfg(any(feature = "diagnostic", feature = "measurement"))]
+        // SAFETY: the threads have left; keep run-level immortalization
+        // accounting after their worker-local records go away.
+        unsafe {
+            (*run.home_worker()).immortalized += (*worker).immortalized;
+        }
+
         // SAFETY: the worker's thread left; the task last bound to it was switched out.
         unsafe { Worker::retire(worker) };
     }
@@ -1076,17 +1261,10 @@ pub(crate) fn forget(run: &mut RunShared) {
         .compute
         .iter()
         .map(|exec| exec.worker.get())
-        .chain(
-            execs
-                .pool
-                .get_mut()
-                .unwrap()
-                .iter_mut()
-                .map(|thread| {
-                    thread.thread.take();
-                    thread.exec.worker.get()
-                }),
-        )
+        .chain(execs.pool.get_mut().unwrap().iter_mut().map(|thread| {
+            thread.thread.take();
+            thread.exec.worker.get()
+        }))
         .collect();
     for worker in workers {
         // SAFETY: every thread of the run left.
@@ -1150,13 +1328,10 @@ mod tests {
 
     #[test]
     fn a_thread_holding_a_permit_takes_none_and_gives_back_only_what_it_holds() {
-        let permits = Permits {
-            available: Mutex::new(1),
-            freed: Condvar::new(),
-        };
+        let permits = Permits::new(1);
         let exec = Exec::new(Kind::Pool(0), std::ptr::null_mut(), false);
-        assert!(permits.acquire(&exec));
-        assert!(!permits.acquire(&exec));
+        assert!(permits.acquire(&exec, None).unwrap());
+        assert!(!permits.acquire(&exec, None).unwrap());
         assert_eq!(permits.available(), 0);
         permits.release(&exec);
         permits.release(&exec);
@@ -1169,7 +1344,13 @@ mod tests {
         assert!(!exec.busy());
         assert!(exec.post(Post::Wake, None));
         assert!(!exec.busy());
-        assert!(exec.post(Post::Run { task: 1, permit: true }, None));
+        assert!(exec.post(
+            Post::Run {
+                task: 1,
+                permit: true
+            },
+            None
+        ));
         assert!(exec.busy());
         assert!(matches!(exec.take().0, Post::Wake));
         exec.close();

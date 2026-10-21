@@ -2143,9 +2143,12 @@ pub(crate) unsafe fn execute(
                 &mut (*words).args,
             ),
             Code::Test(entry) => entry(ctx, std::ptr::null_mut(), result, &TEST_HANDLE),
-            Code::Roots(entry, _) => {
-                entry(ctx, std::ptr::null_mut(), result, (*words).roots.as_mut_ptr())
-            }
+            Code::Roots(entry, _) => entry(
+                ctx,
+                std::ptr::null_mut(),
+                result,
+                (*words).roots.as_mut_ptr(),
+            ),
         }
     });
     // SAFETY: `report` outlives the run's root, which reports only while `run_root` runs.
@@ -2440,7 +2443,9 @@ fn stop_after_from_env() -> Result<Option<std::time::Duration>, String> {
             .map(|ms| Some(std::time::Duration::from_millis(ms)))
             .map_err(|_| format!("HIRSEL_RT_STOP_AFTER_MS is not a delay: {text:?}")),
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err("HIRSEL_RT_STOP_AFTER_MS is not UTF-8".into()),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("HIRSEL_RT_STOP_AFTER_MS is not UTF-8".into())
+        }
     }
 }
 

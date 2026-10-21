@@ -30,6 +30,7 @@ pub mod io;
 pub mod io_bridge;
 pub mod io_checks;
 pub mod io_concurrent;
+mod io_home;
 pub mod io_keys;
 pub mod io_metrics;
 pub mod io_net_script;

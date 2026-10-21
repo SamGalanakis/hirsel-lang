@@ -2567,12 +2567,33 @@ impl Binding {
     /// # Safety
     /// ctx is live and holds this adapter's Binding with exclusive access.
     pub(crate) unsafe fn get<'a>(ctx: *mut crate::TaskCtx) -> &'a mut Self {
-        // The binding is home state: at width > 1 the running task moves to the home thread
-        // until its next suspension (`crate::tasks::pin_home`).
-        // SAFETY: caller contract.
+        // SAFETY: a launched run's binding is its run-owned facade; the
+        // actual adapter is accessed only by HomeAdapter on admission.
         unsafe {
-            crate::tasks::pin_home(ctx);
+            crate::stop::check(ctx, crate::stop::observe(ctx));
             Self::raw(ctx)
+        }
+    }
+
+    /// Split off a run-owned facade before root code starts. The original
+    /// binding (and its non-Send adapter) stays on the launcher's stack.
+    pub(crate) unsafe fn bridge(ctx: *mut crate::TaskCtx) {
+        unsafe {
+            let run = (*ctx).run_ptr();
+            if (*ctx).io_data().is_null() || (*run).io_facade.is_some() {
+                return;
+            }
+            let home = Self::raw(ctx);
+            let mut facade = Box::new(Self {
+                adapter: Box::new(crate::io_home::HomeAdapter {
+                    adapter: &mut *home.adapter,
+                    run,
+                }),
+                names: std::sync::Arc::clone(&home.names),
+                waits: std::mem::take(&mut home.waits),
+            });
+            (*ctx).bind_io_data((&mut *facade as *mut Self).cast());
+            (*run).io_facade = Some(facade);
         }
     }
 

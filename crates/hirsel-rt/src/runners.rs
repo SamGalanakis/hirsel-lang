@@ -412,8 +412,13 @@ unsafe fn enter(ctx: *mut TaskCtx, to: usize) {
     let target = run.resume;
     // SAFETY: both contexts are live and each run has a worker of its own.
     unsafe {
+        // A waiting caller cannot retain the last process permit. The callee
+        // executes on this thread under its own executor/heap and returns the
+        // permit again when the execution switches back.
+        crate::pool::release_permit(ctx);
         (*ctx).switch_out();
         TaskCtx::switch_in(target, (*target).worker_ptr());
+        crate::pool::acquire_permit(target);
     }
 }
 

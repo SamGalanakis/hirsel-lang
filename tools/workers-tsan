@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Run W1's real worker tests with instrumented std and TSan fiber annotations.
+
+The regular IT binary installs hirsel-guard's allocator, which is incompatible
+with TSan startup. This harness imports the same test and support sources while
+using the system allocator. Nothing is copied or generated in the checkout.
+Requires nightly Rust with rust-src, on Linux x86-64.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path(__file__).resolve().parents[1]
+key = hashlib.sha256(str(root).encode()).hexdigest()[:12]
+target = Path(tempfile.gettempdir()) / ("hirsel-workers-tsan-build-" + key)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--target-dir", type=Path, default=target)
+args = parser.parse_args()
+target = args.target_dir.resolve()
+with tempfile.TemporaryDirectory(prefix="hirsel-workers-tsan-") as scratch:
+    crate = Path(scratch)
+    (crate / "tests").mkdir()
+    deps = {"hirsel-rt": {"path": str(root / "crates/hirsel-rt"),
+                         "features": ["diagnostic", "tsan"]}}
+    for name in ["hirsel-run-schema", "hirsel-layout", "hirsel-lir",
+                 "hirsel-syntax", "hirsel-tir", "hirsel-types"]:
+        deps[name] = {"path": str(root / "crates" / name)}
+    deps["hirsel-types"]["features"] = ["testing"]
+    deps["libc"] = "0.2"
+    deps["rustls"] = {"version": "=0.23.46", "default-features": False,
+                      "features": ["ring", "std", "tls12"]}
+    (crate / "Cargo.toml").write_text("[package]\nname = \"hirsel-workers-tsan\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n")
+    # JSON is also valid TOML inline-table syntax after its key separators change.
+    def toml(value):
+        if isinstance(value, dict):
+            return "{ " + ", ".join(json.dumps(k) + " = " + toml(v) for k, v in value.items()) + " }"
+        return json.dumps(value)
+    with (crate / "Cargo.toml").open("a") as out:
+        out.write("[dependencies]\n")
+        for name, value in deps.items():
+            out.write(json.dumps(name) + " = " + toml(value) + "\n")
+    (crate / "tests/workers.rs").write_text(
+        "#![allow(dead_code, unused_imports)]\n" +
+        "#[path = " + json.dumps(str(root / "crates/hirsel-rt/tests/support/mod.rs")) + "]\nmod support;\n" +
+        "#[path = " + json.dumps(str(root / "crates/hirsel-rt/tests/it/workers.rs")) + "]\nmod workers;\n")
+    command = ["cargo", "+nightly", "test", "--manifest-path", str(crate / "Cargo.toml"),
+               "--target-dir", str(target), "--target", "x86_64-unknown-linux-gnu",
+               "-Zbuild-std", "--config", 'target.x86_64-unknown-linux-gnu.rustflags=["-Zsanitizer=thread"]',
+               "--test", "workers", "--no-run", "--message-format=json"]
+    built = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    print(built.stderr, end="", flush=True)
+    if built.returncode:
+        print(built.stdout, end="")
+        raise SystemExit(built.returncode)
+    artifacts = [json.loads(line) for line in built.stdout.splitlines() if line.startswith("{")]
+    binary = next(a["executable"] for a in artifacts
+                  if a.get("reason") == "compiler-artifact" and a.get("executable")
+                  and a.get("target", {}).get("name") == "workers")
+    # The grant test spawns a fresh copy of this same binary.
+    # Avoid a blocked external symbolizer hiding a report. Raw PCs can be
+    # symbolized offline against the executable printed here.
+    print("TSan executable:", binary, flush=True)
+    result = subprocess.run([binary, "--test-threads=1"], cwd=root, timeout=60,
+                            env=os.environ | {"TSAN_OPTIONS": "symbolize=0:halt_on_error=1"})
+    raise SystemExit(result.returncode)

@@ -1,4 +1,4 @@
-//! Structured tasks on one thread (CONC-1, CONC-2, CONC-3, FAIL-2).
+//! Structured tasks with a cooperative run token (CONC-1, CONC-2, CONC-3, FAIL-2).
 //!
 //! The scheduler is cooperative and single-threaded: every task is a [`fiber`](crate::fiber)
 //! with a [`TaskCtx`] of its own at the top of its stack (the root's is the run's first
@@ -6,7 +6,7 @@
 //! switch moves the worker from one task's context to the next (`TaskCtx::switch_out`,
 //! `TaskCtx::switch_in`): what is a task's own (its failure chain, finalizer shield, release
 //! worklist, innermost region, isolate scratch and foreign scope) stays in its context. All
-//! tasks share the run's one worker and its heap: no second thread exists, and the checker's
+//! tasks share the scheduler, while the run token may move between workers and heaps. The checker's
 //! sendability rules (MODE-4, OWN-6) already keep every counted value owned by one task, so a
 //! value crossing tasks is moved by copying its root.
 //!
@@ -55,8 +55,8 @@ use hirsel_kernels::schedule::{Algorithm, Schedule};
 
 use crate::context::TaskCtx;
 use crate::failure::Chained;
-use crate::pool::Owner;
 use crate::fiber::{self, Stack};
+use crate::pool::Owner;
 use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
 
@@ -659,6 +659,14 @@ fn wake_in(tasks: &mut [Option<Task>], woken: &mut Vec<u32>, task: u32) {
 /// first.
 #[inline(always)]
 pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
+    // Admission also builds row zero before code starts; only code entries
+    // may abandon a fiber here. Observe a host stop before a synchronizing
+    // entry touches the object, rather than after its effect at yield.
+    if crate::stop::running() == ctx {
+        unsafe {
+            crate::stop::check(ctx, crate::stop::observe(ctx));
+        }
+    }
     // SAFETY: the context and its run are live for the whole run, and the scheduler is only
     // reached through them, by the one running task; no reference is kept across a switch.
     match unsafe { (*(*ctx).run_ptr()).tasks.as_deref_mut() } {
@@ -853,11 +861,7 @@ fn ran_here(ctx: &mut TaskCtx, task: u32) {
     record_worker(scheduler(ctx).task(task), here, metrics.as_deref());
 }
 
-fn record_worker(
-    row: &mut Task,
-    here: Option<u16>,
-    metrics: Option<&crate::pool::WorkerMetrics>,
-) {
+fn record_worker(row: &mut Task, here: Option<u16>, metrics: Option<&crate::pool::WorkerMetrics>) {
     let Some(here) = here else { return };
     if row.last.is_some_and(|last| last != here)
         && let Some(metrics) = metrics

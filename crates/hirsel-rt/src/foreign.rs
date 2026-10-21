@@ -166,6 +166,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
         let slot = unsafe { crate::tasks::to_pool(&mut *ctx, site) };
         word |= POOLED | u64::from(slot) << 48;
     }
+    // C holds no compute permit. Nested calls reacquire on return so a callback's
+    // Hirsel code is accounted even when it makes another synchronous extern call.
+    crate::pool::release_permit(ctx);
     // The thread the call runs on, which may have changed above.
     restore(ForeignScope { context: ctx, site });
     // SAFETY: caller contract.
@@ -207,6 +210,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
             crate::tasks::from_home(&mut *ctx);
         }
     }
+    // The call returned to a supported boundary. A host stop ends it here;
+    // otherwise ordinary Hirsel code takes the process permit again.
+    unsafe {
+        crate::stop::check(ctx, crate::stop::observe(ctx));
+    }
+    crate::pool::acquire_permit(ctx);
     // SAFETY: the context is live.
     if let Some(metrics) = unsafe { &(*ctx).run_ref().extern_metrics } {
         metrics.call(std::time::Duration::from_nanos(
@@ -242,6 +251,9 @@ pub extern "C" fn hirsel_rt_v2_callback_context() -> *mut TaskCtx {
     let ctx = CURRENT.with(|c| c.get().context);
     if ctx.is_null() {
         ended("C called a callback outside the extern call on its thread");
+    }
+    unsafe {
+        crate::stop::check(ctx, crate::stop::observe(ctx));
     }
     let took = crate::pool::acquire_permit(ctx);
     // SAFETY: the context is the interval's task's, running on this thread.

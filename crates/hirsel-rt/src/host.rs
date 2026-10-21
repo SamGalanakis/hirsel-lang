@@ -299,6 +299,9 @@ pub struct RunStatus {
     /// The workers still inside the run's code when `wait` returned; the last to leave frees
     /// the run.
     pub reclamation_pending: u32,
+    /// Compute permits still held by a stopped run's workers. The process pool
+    /// keeps accounting them until those workers leave; a new run cannot replace them.
+    pub lost_permits: u32,
 }
 
 /// A started run; [`RunHandle::wait`] runs it to its outcome.
@@ -448,7 +451,9 @@ impl BodyRun {
                 (*ctx).set_budgets(self.fuel, None);
             }
         }
-        let mut binding = self.adapter.map(|adapter| Box::new(crate::io::Binding::from_box(adapter)));
+        let mut binding = self
+            .adapter
+            .map(|adapter| Box::new(crate::io::Binding::from_box(adapter)));
         if let Some(binding) = &mut binding {
             // SAFETY: the binding outlives the run's code on this thread.
             unsafe { binding.bind(&mut *ctx) };

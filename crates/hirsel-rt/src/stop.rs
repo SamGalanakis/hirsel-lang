@@ -151,6 +151,7 @@ impl Control {
         *won = Some(stop.clone());
         self.stopped.store(true, Ordering::SeqCst);
         drop(won);
+        crate::pool::wake_permits();
         if wake_home && let Some(home) = &*self.home.lock().unwrap() {
             crate::pool::wake(home);
         }
@@ -209,6 +210,12 @@ impl Control {
     }
     /// What a host asks of a run from any thread.
     pub(crate) fn status(&self) -> crate::host::RunStatus {
+        let finished = self.finished.load(Ordering::SeqCst);
+        let holders = self.holders.lock().unwrap();
+        let (pending, lost) = match holders.as_ref() {
+            Some(holders) if finished => (holders.left(), holders.lost_permits()),
+            _ => (self.pending.load(Ordering::SeqCst), 0),
+        };
         crate::host::RunStatus {
             stop_requested: self.stopped.load(Ordering::SeqCst),
             home_busy: self
@@ -217,11 +224,9 @@ impl Control {
                 .unwrap()
                 .as_ref()
                 .is_some_and(|home| home.busy()),
-            finished: self.finished.load(Ordering::SeqCst),
-            reclamation_pending: match &*self.holders.lock().unwrap() {
-                Some(holders) if self.finished.load(Ordering::SeqCst) => holders.left(),
-                _ => self.pending.load(Ordering::SeqCst),
-            },
+            finished,
+            reclamation_pending: pending,
+            lost_permits: lost,
         }
     }
 }
@@ -271,7 +276,7 @@ pub(crate) unsafe fn check<T>(ctx: *mut TaskCtx, result: Stopped<T>) -> T {
 /// As [`check`].
 #[cold]
 pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
-    if crate::foreign::active() {
+    if crate::foreign::active() && stop != Stop::Requested {
         eprintln!("hirsel-rt: a run stopped inside a foreign call ({stop:?}); the process ends");
         std::process::abort();
     }
@@ -399,8 +404,10 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
     let frame = frame.cast::<LaunchFrame>();
     // SAFETY: the run owns the frame until its last thread leaves it.
     unsafe {
+        check(ctx, observe(ctx));
         let words = &raw mut *(*frame).words;
         let mut status = ((*frame).entry)(ctx, words);
+        check(ctx, observe(ctx));
         if status == crate::STATUS_OK {
             crate::free::root_end(ctx);
         }
@@ -453,13 +460,19 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
         if !(*run).driver.sp.is_null() || (*run).launch.is_some() {
             crate::fault("a run context driven twice");
         }
+        if crate::pool::wide(&*run) {
+            crate::io::Binding::bridge(ctx);
+        }
         let frame: *mut LaunchFrame = &raw mut **(*run).launch.insert(frame);
-        let sp = (*frame)
-            .stack
-            .prepare(root_entry, ctx.cast(), frame.cast());
+        let sp = (*frame).stack.prepare(root_entry, ctx.cast(), frame.cast());
         if crate::pool::wide(&*run) {
             crate::tasks::start_root(ctx, sp);
+            let enclosing = crate::foreign::save();
             crate::pool::serve_home(run, &|| (*frame).done.load(Ordering::Acquire));
+            crate::foreign::restore(enclosing);
+            if let Some(stop) = (*run).control.stopped() {
+                return Err(stop);
+            }
             if (*frame).done.load(Ordering::Acquire) {
                 return Ok((*frame).status);
             }
@@ -468,11 +481,15 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
                 .stopped()
                 .unwrap_or_else(|| crate::fault("the home loop returned with no stop")));
         }
+        crate::pool::enter_root(ctx)?;
+        let enclosing_foreign = crate::foreign::save();
         let enclosing = RUNNING.with(|r| r.replace(ctx));
         fiber::switch(&raw mut (*run).driver.sp, sp);
         // A stop may leave any task of the run bound to the worker.
         (*ctx).rebind();
+        crate::pool::leave_root(ctx);
         RUNNING.with(|r| r.set(enclosing));
+        crate::foreign::restore(enclosing_foreign);
         (*run).driver.sp = std::ptr::null_mut();
         if (*frame).done.load(Ordering::Acquire) {
             return Ok((*frame).status);

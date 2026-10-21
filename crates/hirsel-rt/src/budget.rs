@@ -24,7 +24,7 @@
 use crate::TaskCtx;
 use crate::alloc::HEADER_SIZE;
 use hirsel_run_schema::BudgetKind;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub mod stretch;
 
@@ -127,6 +127,7 @@ impl Meter {
 pub(crate) struct FuelPool {
     /// Points left to hand out; `u64::MAX` without a fuel budget, which never decreases.
     left: AtomicU64,
+    active: AtomicBool,
     /// Whether the pool hands out its whole remainder as one chunk: a budgeted run at width 1,
     /// whose exhaustion is then exact.
     whole: bool,
@@ -137,6 +138,7 @@ impl Default for FuelPool {
     fn default() -> Self {
         FuelPool {
             left: AtomicU64::new(u64::MAX),
+            active: AtomicBool::new(false),
             whole: false,
             refills: AtomicU64::new(0),
         }
@@ -147,6 +149,7 @@ impl FuelPool {
     pub(crate) fn new(fuel: Option<u64>, whole: bool) -> FuelPool {
         FuelPool {
             left: AtomicU64::new(fuel.unwrap_or(u64::MAX)),
+            active: AtomicBool::new(true),
             whole: whole && fuel.is_some(),
             refills: AtomicU64::new(0),
         }
@@ -154,7 +157,21 @@ impl FuelPool {
     /// The next chunk, or 0 when the pool is spent. Chunks shrink as the pool empties: none is
     /// larger than [`FUEL_CHUNK`] (unless the pool hands out its whole remainder), and near the
     /// end they shrink to what is left.
+    pub(crate) fn active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+    /// A task that stops running returns only its own unspent points. The
+    /// release/acquire run-token handoff publishes its updated fuel word.
+    pub(crate) fn put(&self, points: u64) {
+        if points == 0 {
+            return;
+        }
+        if self.left.load(Ordering::Relaxed) != u64::MAX {
+            self.left.fetch_add(points, Ordering::Relaxed);
+        }
+    }
     pub(crate) fn take(&self) -> u64 {
+        self.active.store(true, Ordering::Relaxed);
         let mut left = self.left.load(Ordering::Relaxed);
         loop {
             if left == u64::MAX {
@@ -260,6 +277,21 @@ mod tests {
     use crate::stop::{Stop, run_body};
     use std::cell::Cell;
     use std::mem::MaybeUninit;
+
+    #[test]
+    fn a_parked_tasks_unspent_chunk_returns_to_the_pool() {
+        let pool = FuelPool::new(Some(FUEL_CHUNK + 7), false);
+        assert_eq!(pool.take(), FUEL_CHUNK);
+        pool.put(FUEL_CHUNK - 3);
+        assert_eq!(pool.take(), FUEL_CHUNK);
+        assert_eq!(pool.take(), 4);
+        assert_eq!(pool.take(), 0);
+        let unbounded = FuelPool::default();
+        assert!(!unbounded.active());
+        assert_eq!(unbounded.take(), FUEL_CHUNK);
+        unbounded.put(FUEL_CHUNK);
+        assert_eq!(unbounded.take(), FUEL_CHUNK);
+    }
 
     /// A fresh run context with `fuel` and `memory` budgets, or none.
     fn context(fuel: Option<u64>, memory: Option<u64>) -> *mut TaskCtx {
