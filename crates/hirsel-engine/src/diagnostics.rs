@@ -119,12 +119,16 @@ fn site(sources: Option<&SourceMap>, d: &Diagnostic) -> hirsel_span::FileSpan {
 /// Equal current sites can have different retained anchors after a declaration
 /// is removed and introduced again. Compare every diagnostic field, locating
 /// its spans for deduplication just as ordering already locates the primary.
-fn located(mut diagnostic: Diagnostic, sources: &SourceMap) -> Diagnostic {
-    let span = |span| {
+fn located(
+    mut diagnostic: Diagnostic,
+    sources: &SourceMap,
+    files: &mut std::collections::BTreeMap<std::path::PathBuf, hirsel_span::Anchor>,
+) -> Diagnostic {
+    let mut span = |span| {
         let at = sources.resolve(span);
         if let Some(file) = sources.file(at.file) {
             hirsel_span::Span {
-                anchor: file.anchor,
+                anchor: *files.entry(file.path.clone()).or_insert(file.anchor),
                 start: at.start,
                 end: at.end,
             }
@@ -242,7 +246,8 @@ mod tests {
         let mut sources = SourceMap::default();
         let file = sources.add("main.hir", "abc\n".into()).unwrap();
         let first = sources.item_anchor(file, 0);
-        let second = sources.item_anchor(file, 0);
+        let snapshot = sources.add_snapshot(file, "abc\n".into()).unwrap();
+        let second = sources.item_anchor(snapshot, 0);
         let mut a = diag("LANG-7", 0);
         a.primary.anchor = first;
         let mut b = a.clone();
