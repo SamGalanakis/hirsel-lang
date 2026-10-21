@@ -139,6 +139,7 @@ pub enum QueryKind {
     Check,
     Lower,
     Summary,
+    CheckedSummary,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -153,6 +154,7 @@ impl QueryKind {
             Self::Format => "formatting",
             Self::Interpret => "interpretation",
             Self::Summary => "definition summary",
+            Self::CheckedSummary => "checked definition summary",
         }
     }
 }
@@ -197,6 +199,7 @@ impl DefinitionKey {
             QueryKind::Check => 2,
             QueryKind::Lower => 3,
             QueryKind::Summary => 9,
+            QueryKind::CheckedSummary => 10,
         };
         let mut parts = vec![
             vec![kind],

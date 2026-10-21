@@ -301,3 +301,149 @@ fn frozen_frontier_restores_and_verifies_persistent_modes_with_complete_reads() 
         }
     });
 }
+
+#[test]
+fn restored_mode_phases_retire_with_the_edited_or_removed_memo() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let rejected = "fn identity[T](v: T) -> T { v }\n";
+        let accepted = "fn identity[T](take v: T) -> T { v }\n";
+        let owner = path("identity");
+        let mut first = engine(store.clone());
+        let file = first
+            .sources
+            .add("phase-retire.hir", rejected.into())
+            .unwrap();
+        first.parse_file(file, &default_context()).unwrap();
+        let Err(QueryError::Diagnostics(before)) = first.mode_definition(&owner) else {
+            panic!("borrowed result must reject")
+        };
+        let before: Vec<_> = before
+            .into_iter()
+            .map(|d| {
+                let phase = first.diagnostic_phase(&d);
+                (d, phase)
+            })
+            .collect();
+        assert!(before.iter().all(|(_, phase)| phase.is_some()));
+        drop(first);
+        let mut restored = engine(store);
+        let file = restored
+            .sources
+            .add("phase-retire.hir", rejected.into())
+            .unwrap();
+        restored.parse_file(file, &default_context()).unwrap();
+        let mut result =
+            restored.mode_definitions(vec![owner.clone()], hirsel_intern::jobs::Jobs::new(2));
+        let Err(QueryError::Diagnostics(errors)) = result.remove(0).result else {
+            panic!("stored rejection")
+        };
+        assert_eq!(restored.recompute_count(&owner, QueryKind::Modes), 0);
+        for ((_, phase), d) in before.iter().zip(&errors) {
+            assert_eq!(*phase, restored.diagnostic_phase(d));
+        }
+        let file = restored
+            .sources
+            .add("phase-retire.hir", accepted.into())
+            .unwrap();
+        restored.parse_file(file, &default_context()).unwrap();
+        restored.mode_definition(&owner).unwrap();
+        restored.last_phase = None;
+        for diagnostic in &errors {
+            assert_eq!(
+                restored.diagnostic_phase(diagnostic),
+                None,
+                "old disk phase cannot outrank current successful product"
+            );
+        }
+        for _ in 0..2 {
+            let file = restored
+                .sources
+                .add("phase-retire.hir", "fn replacement() {}\n".into())
+                .unwrap();
+            restored.parse_file(file, &default_context()).unwrap();
+        }
+        restored.last_phase = None;
+        for diagnostic in &errors {
+            assert_eq!(restored.diagnostic_phase(diagnostic), None);
+        }
+    });
+}
+
+#[test]
+fn disabled_result_provider_skips_store_work_for_scalar_and_frozen_queries() {
+    struct Off;
+    impl store::ResultStore for Off {
+        fn enabled(&self) -> bool {
+            false
+        }
+        fn get(&self, _: &store::EntryKey) -> Option<Arc<[u8]>> {
+            panic!("off provider read")
+        }
+        fn put(&self, _: &store::EntryKey, _: &[u8]) {
+            panic!("off provider write")
+        }
+        fn name(&self) -> &'static str {
+            "disabled-control@1"
+        }
+    }
+    with_compiler_stack(|| {
+        let source = "fn a(x:u8) -> u8 { x + 1u8 }\nfn main() -> u8 { a(2u8) }\n";
+        let mut scalar = engine(Arc::new(Off));
+        assert!(checked(&mut scalar, source).diagnostics.is_empty());
+        let scalar_tir = scalar.export_tir(&path("main")).unwrap();
+        for jobs in [1, 2, 8] {
+            let mut frozen = engine(Arc::new(Off));
+            let file = frozen.sources.add("resident.hir", source.into()).unwrap();
+            frozen.parse_file(file, &default_context()).unwrap();
+            let results = frozen.mode_definitions(
+                vec![path("main"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(results.iter().all(|r| r.result.is_ok()));
+            assert_eq!(frozen.export_tir(&path("main")).unwrap(), scalar_tir);
+        }
+        assert!(!store::ResultStore::enabled(&store::NoneStore));
+        assert!(store::ResultStore::enabled(&store::MemStore::default()));
+    });
+}
+
+#[test]
+fn fully_restored_frozen_frontier_does_not_validate_a_signature_snapshot() {
+    with_compiler_stack(|| {
+        use hirsel_intern::{
+            jobs::Jobs,
+            work::{self, Counter},
+        };
+        let store = Arc::new(store::MemStore::default());
+        let source = "fn a() -> u64 { 1 }\nfn b() -> u64 { 2 }\n";
+        let mut first = engine(store.clone());
+        assert!(checked(&mut first, source).diagnostics.is_empty());
+        drop(first);
+        for jobs in [1, 2, 8] {
+            let mut restored = engine(store.clone());
+            let file = restored.sources.add("resident.hir", source.into()).unwrap();
+            restored.parse_file(file, &default_context()).unwrap();
+            let paths = vec![path("b"), path("a"), path("b")];
+            let before = work::read(Counter::ValidateSignatureRows);
+            let results = restored.mode_definitions(paths.clone(), Jobs::new(jobs));
+            assert_eq!(results.len(), paths.len());
+            for (result, path) in results.iter().zip(&paths) {
+                assert_eq!(&result.definition, path);
+                assert_eq!(result.phase, Some(QueryKind::Modes));
+                assert!(result.result.as_ref().unwrap().diagnostics.is_empty());
+                for phase in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                    assert_eq!(restored.recompute_count(path, phase), 0, "{path} {phase:?}");
+                }
+            }
+            assert_eq!(
+                work::read(Counter::ValidateSignatureRows) - before,
+                0,
+                "fully restored frontiers have no worker requiring a frozen snapshot"
+            );
+            let before = work::read(Counter::ValidateSignatureRows);
+            restored.mode_definitions(paths, Jobs::new(jobs));
+            assert_eq!(work::read(Counter::ValidateSignatureRows) - before, 0);
+        }
+    });
+}

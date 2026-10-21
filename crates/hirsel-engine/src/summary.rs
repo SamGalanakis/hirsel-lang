@@ -118,6 +118,8 @@ pub struct CheckedSummary {
 /// Durable encodings use the same canonical type table as the other outputs.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PublishedSummary {
+    /// Query identity; generated instances can retain another lexical owner.
+    pub definition: DefId,
     pub summary: DefinitionSummary,
     pub growth: ParameterGrowth,
     #[serde(default)]

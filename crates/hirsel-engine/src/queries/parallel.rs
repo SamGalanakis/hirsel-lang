@@ -493,6 +493,17 @@ impl QueryEngine {
                 text,
             });
         }
+        // Restored and resident hits need no worker inputs. In particular,
+        // freezing here would validate the entire universe for an empty batch.
+        if tasks.is_empty() {
+            for (index, previous) in duplicates {
+                outputs[index] = outputs[previous].clone();
+            }
+            return outputs
+                .into_iter()
+                .map(|result| result.expect("one outcome per input"))
+                .collect();
+        }
         // Validation of dirty predecessors may normalize a signature. Freeze
         // only afterwards, and never retry a failed header after freezing: a
         // transient provider failure must not mix two universes in one task.

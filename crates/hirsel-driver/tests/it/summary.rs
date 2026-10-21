@@ -528,20 +528,26 @@ fn published_summaries_match_mode_refined_selection_inputs() {
         ] {
             let (mut engine, output) = check(&source);
             assert!(output.diagnostics.is_empty(), "{source}\n{:?}", output.diagnostics);
-            let checked = engine.definition_summaries().unwrap();
-            for (checked, growth) in checked {
-                let path = checked.owner.path();
+            let checked = engine.checked_definition_summaries().unwrap();
+            if source.contains("fn width[T]") {
+                assert!(checked.iter().any(|(definition, checked)| *definition != checked.summary.owner),
+                    "generated instances retain source lexical owners but distinct query identities");
+            }
+            for (definition, checked) in checked {
+                let CheckedSummary { summary: checked, growth } = checked;
+                let path = definition.path();
                 let analyzed = engine.mode_definition(path).unwrap();
                 let mode = summarize(engine.types(), &analyzed.value.typed);
                 // Exact equality is stronger than CT-3 selection equivalence:
                 // every frame, call, generic argument, site and growth edge.
-                let published = engine.definition_summary(checked.owner).unwrap();
+                let published = engine.definition_summary(definition).unwrap();
                 assert_eq!((&published.summary, &published.growth), (&mode.0, &mode.1), "{path}\n{source}");
+                assert_eq!(published.definition, definition);
                 let retained=published.checked.as_ref().expect("retain original H input");
                 assert_eq!((&retained.summary,&retained.growth),(&checked,&growth));
-                engine.publish_definition(checked.owner,hirsel_engine::memo::Retention::Batch).unwrap();
+                engine.publish_definition(definition,hirsel_engine::memo::Retention::Batch).unwrap();
                 let before=engine.recompute_count(path,QueryKind::Check);
-                assert_eq!(engine.checked_definition_summary(checked.owner).unwrap(),(checked.clone(),growth.clone()));
+                assert_eq!(engine.checked_definition_summary(definition).unwrap(),(checked.clone(),growth.clone()));
                 assert_eq!(engine.recompute_count(path,QueryKind::Check),before);
             }
         }

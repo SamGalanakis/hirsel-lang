@@ -57,6 +57,7 @@ impl QueryEngine {
             return entry.result().map(|output| output.value.clone());
         }
         if let Some(summary) = self.image_summary(path)
+            && summary.definition == definition
             && self.seed_definition_summary(summary.clone())
         {
             return Ok(summary);
@@ -73,15 +74,17 @@ impl QueryEngine {
         self.start(path, QueryKind::Summary)?;
         let (summary, growth) = summarize(self.types(), &analyzed.value.typed);
         let reads = completed.memo.reads.clone();
-        let checked = self
-            .checked
-            .get(&definition)
-            .and_then(|entry| entry.result().ok())
-            .map(|body| {
-                let (summary, growth) = summarize(self.types(), &body.value);
-                CheckedSummary { summary, growth }
-            });
+        let checked = self.retained_checked_summary(definition).or_else(|| {
+            self.checked
+                .get(&definition)
+                .and_then(|entry| entry.result().ok())
+                .map(|body| {
+                    let (summary, growth) = summarize(self.types(), &body.value);
+                    CheckedSummary { summary, growth }
+                })
+        });
         let published = std::sync::Arc::new(PublishedSummary {
+            definition,
             summary,
             growth,
             checked,
@@ -96,7 +99,7 @@ impl QueryEngine {
     /// Seed an image/store summary only when its complete key and reads still
     /// hold. Inserting through the graph restores reverse subscriptions too.
     pub fn seed_definition_summary(&mut self, summary: std::sync::Arc<PublishedSummary>) -> bool {
-        let owner = summary.summary.owner.path();
+        let owner = summary.definition.path();
         if self.key_text(owner, QueryKind::Summary).ok() != Some(summary.text)
             || !self.execution_valid(owner, &summary.reads)
         {
@@ -112,7 +115,7 @@ impl QueryEngine {
         detail: DependencyReads,
         adopted: bool,
     ) {
-        let definition = summary.summary.owner;
+        let definition = summary.definition;
         let durability = summary
             .reads
             .iter()
@@ -152,17 +155,91 @@ impl QueryEngine {
         &mut self,
         definition: DefId,
     ) -> Result<(DefinitionSummary, ParameterGrowth), QueryError> {
+        if let Some(checked) = self.retained_checked_summary(definition) {
+            return Ok((checked.summary, checked.growth));
+        }
         let path = definition.path();
+        // A durable final summary carries its original pre-mode input. Restore
+        // it under its own query key rather than allowing later mode metadata
+        // to silently replace GEN-5's result.
         if let Some(entry) = self.summaries.get(&definition).cloned()
             && let Ok(text) = self.key_text(path, QueryKind::Summary)
             && self.memo_valid(path, &entry, text)
             && let Ok(output) = entry.result()
             && let Some(checked) = &output.value.checked
         {
-            return Ok((checked.summary.clone(), checked.growth.clone()));
+            let checked = checked.clone();
+            self.record_checked_summary(
+                definition,
+                checked.clone(),
+                text,
+                entry.memo.reads.clone(),
+                entry.detail.clone(),
+                true,
+            );
+            return Ok((checked.summary, checked.growth));
         }
         let checked = self.check_query(path)?;
-        Ok(summarize(self.types(), &checked.value))
+        let (summary, growth) = summarize(self.types(), &checked.value);
+        let product = CheckedSummary { summary, growth };
+        if let Some(entry) = self.checked.get(&definition).cloned() {
+            let text = self.key_text(path, QueryKind::CheckedSummary)?;
+            self.start(path, QueryKind::CheckedSummary)?;
+            self.record_checked_summary(
+                definition,
+                product.clone(),
+                text,
+                entry.memo.reads.clone(),
+                entry.detail.clone(),
+                false,
+            );
+            self.active
+                .remove(&(path.clone(), QueryKind::CheckedSummary));
+        }
+        Ok((product.summary, product.growth))
+    }
+    fn retained_checked_summary(&mut self, definition: DefId) -> Option<CheckedSummary> {
+        let entry = self.checked_summaries.get(&definition)?.clone();
+        let text = self
+            .key_text(definition.path(), QueryKind::CheckedSummary)
+            .ok()?;
+        self.memo_valid(definition.path(), &entry, text)
+            .then(|| entry.result().ok().map(|output| (*output.value).clone()))
+            .flatten()
+    }
+    fn record_checked_summary(
+        &mut self,
+        definition: DefId,
+        summary: CheckedSummary,
+        text: ContentHash,
+        reads: Arc<Reads>,
+        detail: DependencyReads,
+        adopted: bool,
+    ) {
+        let key = MemoKey::new(QueryKind::CheckedSummary, definition);
+        let durability = reads.durability(|read| self.durability_of(read));
+        let value = Ok(Arc::new(QueryOutput {
+            value: Arc::new(summary),
+            diagnostics: vec![],
+            dependencies: detail.signatures.clone(),
+        }));
+        let memo = if adopted {
+            self.graph.adopt_value(key, text, value, reads, durability)
+        } else {
+            self.graph
+                .insert(key, text, value, reads, durability, false)
+        };
+        self.checked_summaries.insert(
+            definition,
+            Arc::new(Entry {
+                memo,
+                detail,
+                products: Default::default(),
+                covered: vec![],
+                depth: None,
+                consistent: true,
+            }),
+        );
     }
 
     /// The summary and growth edges of every program definition, from its
@@ -170,6 +247,20 @@ impl QueryEngine {
     pub fn definition_summaries(
         &mut self,
     ) -> Result<Vec<(DefinitionSummary, ParameterGrowth)>, QueryError> {
+        self.checked_definition_summaries().map(|summaries| {
+            summaries
+                .into_iter()
+                .map(|(_, checked)| (checked.summary, checked.growth))
+                .collect()
+        })
+    }
+
+    /// Checked inputs keyed by the queried definition. Generated bodies may
+    /// retain their source declaration's lexical owner in the symbolic summary;
+    /// that owner is not the instance's memo identity.
+    pub fn checked_definition_summaries(
+        &mut self,
+    ) -> Result<Vec<(DefId, CheckedSummary)>, QueryError> {
         let paths = self
             .item_paths()
             .into_iter()
@@ -177,7 +268,11 @@ impl QueryEngine {
             .collect::<Vec<_>>();
         paths
             .into_iter()
-            .map(|path| self.checked_definition_summary(DefId::intern(&path)))
+            .map(|path| {
+                let definition = DefId::intern(&path);
+                let (summary, growth) = self.checked_definition_summary(definition)?;
+                Ok((definition, CheckedSummary { summary, growth }))
+            })
             .collect()
     }
 }

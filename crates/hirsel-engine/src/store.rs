@@ -45,6 +45,11 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Whether this provider can retain results. An off provider disables
+    /// record capture and encoding as well as I/O; names are only labels.
+    fn enabled(&self) -> bool {
+        true
+    }
     fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>>;
     fn put(&self, key: &EntryKey, value: &[u8]);
     /// The provider name the run config selects it by (`dir@1`, ...).
@@ -138,6 +143,9 @@ impl Entry {
 #[derive(Debug, Default)]
 pub struct NoneStore;
 impl ResultStore for NoneStore {
+    fn enabled(&self) -> bool {
+        false
+    }
     fn get(&self, _: &EntryKey) -> Option<Arc<[u8]>> {
         None
     }

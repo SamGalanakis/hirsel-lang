@@ -53,11 +53,12 @@ impl Compiler {
             if std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0") {
                 engine.verify_store = crate::store::VerifyStore::Recompute;
             }
-            engine.result_store = crate::store::store_by_name(
+            if let Ok(store) = crate::store::store_by_name(
                 &name,
                 std::env::var_os("HIRSEL_RESULTS_DIR").map(Into::into),
-            )
-            .ok();
+            ) {
+                engine = engine.with_result_store(store);
+            }
         }
         engine
     }

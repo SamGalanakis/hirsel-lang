@@ -817,3 +817,19 @@ body-stable signature snapshot. A generator drains the preceding source frontier
 and uses the existing exclusive S1 path before a new frontier is frozen.
 This front API does not yet provide parallel S1 execution, budgeted body holds,
 or incremental program diagnostic aggregation.
+
+Published summaries keep GEN-5's pre-mode checked summary and growth separately
+from the final mode-refined selection input. Batch publication retains both
+before releasing bodies; reading the checked input then needs no TypedBody.
+The optional checked member uses the existing canonical type/anchor encoding.
+Restored diagnostic phases belong to the restored mode memo's phase products,
+so editing or retiring that memo retires its diagnostic provenance too.
+A result provider's `enabled` capability disables record capture and encoding
+for `none@1` and any other off provider; its name is only a label.
+
+Published records carry their queried definition separately from the symbolic
+summary's lexical owner: an instantiated generated body can retain its source
+declaration's lexical identity. `checked_definition_summaries` exposes keyed
+pre-mode inputs for consumers that need query identity. Independent checked
+summary memos retain those inputs before mode publication and body release.
+Fully cached frontiers return before building worker snapshot inputs.

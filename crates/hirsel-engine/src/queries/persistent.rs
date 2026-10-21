@@ -103,7 +103,7 @@ impl QueryEngine {
     /// Select a persistent result store. Library engines default to no store;
     /// CLI engines use dir@1. Injected stores keep integration tests isolated.
     pub fn with_result_store(mut self, store: Arc<dyn crate::store::ResultStore>) -> Self {
-        self.result_store = Some(store);
+        self.result_store = store.enabled().then_some(store);
         self
     }
     /// Recompute store hits and compare their canonical bytes (cache oracle).
@@ -284,7 +284,6 @@ impl QueryEngine {
             diagnostics: o.diagnostics,
             dependencies: o.dependencies,
         });
-        self.persisted_diagnostic_phases.extend(record.phases);
         if let Some(c) = record.checked {
             let checked = QueryOutput {
                 value: TypedBody {
@@ -307,7 +306,14 @@ impl QueryEngine {
             self.checked.insert(DefId::intern(path), entry);
         }
         timings::count(Count::StoreHits);
-        Some(self.adopted(path, QueryKind::Modes, variant, output, record.detail))
+        let mut entry = self.adopted(path, QueryKind::Modes, variant, output, record.detail);
+        Arc::get_mut(&mut entry)
+            .expect("restored mode entry is not yet shared")
+            .products = Arc::new(PhaseProducts {
+            mode_diagnostics: record.phases,
+            ..Default::default()
+        });
+        Some(entry)
     }
     pub(super) fn store_mode(
         &mut self,

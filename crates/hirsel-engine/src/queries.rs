@@ -114,7 +114,6 @@ pub struct QueryEngine {
     pub(crate) store_identity: ContentHash,
     pub(crate) verify_store: crate::store::VerifyStore,
     pending_store_checks: BTreeMap<(DefId, QueryKind), crate::store::Variant>,
-    persisted_diagnostic_phases: Vec<(Diagnostic, String)>,
     pub(crate) lower_verdicts:
         hirsel_syntax::DefMap<(hirsel_tir::DefinitionRef, Vec<hirsel_validate::VRead>)>,
     pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
@@ -153,6 +152,7 @@ pub struct QueryEngine {
     modes: Table<AnalyzedBody>,
     lowered: Table<hirsel_tir::DefinitionRef>,
     pub(crate) summaries: Table<Arc<PublishedSummary>>,
+    pub(crate) checked_summaries: Table<Arc<CheckedSummary>>,
     /// The memo records, the reverse subscriber index and the dirty marks.
     pub(crate) graph: MemoGraph,
     /// Each indexed definition's inputs as last indexed (S0's diff).
@@ -236,6 +236,10 @@ impl Drop for QueryEngine {
         released("engine: modes", take(&mut self.modes));
         released("engine: checked", take(&mut self.checked));
         released("engine: summaries", take(&mut self.summaries));
+        released(
+            "engine: checked summaries",
+            take(&mut self.checked_summaries),
+        );
         released("engine: resolutions", take(&mut self.resolutions));
         released("engine: signatures", take(&mut self.signatures));
         released("engine: memo graph", take(&mut self.graph));
@@ -375,7 +379,6 @@ impl QueryEngine {
             store_identity: ContentHash::default(),
             verify_store: crate::store::VerifyStore::Off,
             pending_store_checks: BTreeMap::new(),
-            persisted_diagnostic_phases: vec![],
             lower_verdicts: Default::default(),
             result_store: None,
             verify: Verify::On,
@@ -404,6 +407,7 @@ impl QueryEngine {
             modes: Default::default(),
             lowered: Default::default(),
             summaries: Default::default(),
+            checked_summaries: Default::default(),
             graph: MemoGraph::default(),
             inputs: Default::default(),
             environment_seen: None,
@@ -469,6 +473,7 @@ impl QueryEngine {
             QueryKind::Modes => self.modes.get(&id).map(|e| &e.detail),
             QueryKind::Lower => self.lowered.get(&id).map(|e| &e.detail),
             QueryKind::Summary => self.summaries.get(&id).map(|e| &e.detail),
+            QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| &e.detail),
             _ => None,
         }
     }
@@ -482,6 +487,7 @@ impl QueryEngine {
             QueryKind::Modes => self.modes.get(&id).map(|e| e.reads()),
             QueryKind::Lower => self.lowered.get(&id).map(|e| e.reads()),
             QueryKind::Summary => self.summaries.get(&id).map(|e| e.reads()),
+            QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| e.reads()),
             _ => None,
         }
     }
@@ -1343,14 +1349,6 @@ impl QueryEngine {
     }
 
     pub fn diagnostic_phase(&self, diagnostic: &Diagnostic) -> Option<String> {
-        if let Some((_, phase)) = self
-            .persisted_diagnostic_phases
-            .iter()
-            .rev()
-            .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
-        {
-            return Some(phase.clone());
-        }
         for entry in self.modes.values() {
             if let Some((_, phase)) = entry
                 .products
