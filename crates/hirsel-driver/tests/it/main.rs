@@ -13,6 +13,7 @@ mod builder_takeover;
 mod byte_compare_ir;
 mod callable_results;
 mod callsite_identity;
+mod candidate_txn;
 mod canonical_tir;
 mod check_lowering;
 mod checked_execution;

@@ -11,6 +11,7 @@ use hirsel_engine::{
     RunOutcome, SimulationConfig, StdImages, ToolError,
 };
 pub mod api_index;
+pub mod candidate;
 pub mod dependency_card;
 pub mod native;
 mod network;
