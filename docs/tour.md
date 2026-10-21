@@ -291,7 +291,9 @@ an error the same way when exactly one arm of the enclosing error type carries
 it, so `parse(text)?` selects `Input` too; with no such arm, or two, it is an
 error. A mapper may also be a named one-argument borrowed or
 taken function; it cannot require `mut`. Every early exit still cleans up owned
-resources. An entry returning `Error` exits 1 and prints nothing implicitly.
+resources. An entry returning `Error` exits 1; the launcher prints `error: <e>` to stderr
+after flushing stdout. That launch report needs no stderr grant and is separate
+from explicit program output ([PROG-3](spec/programs.md#prog-3-entry)).
 
 <!-- tour: conformance/LANG/LANG-8-tour-03-errors-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-03-errors-run.hir)

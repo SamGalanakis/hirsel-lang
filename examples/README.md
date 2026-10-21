@@ -114,3 +114,8 @@ interpreted and native E2Es to exercise capability behavior.
 The six first-contact examples above each include `FRICTION.md` with copied diagnostics,
 minimal reproducers and fixes. Their five-line READMEs show interpreted/native runs and
 record/replay commands; all launch authority lives in the checked-in grants templates.
+
+For a new single-source example, register its tests with `Example::new` and
+explicit `include_str!` inputs for both source and manifest in the Rust harness.
+That carries the files into remote Buck2 tests; a dynamically constructed
+`repository_manifest` path alone does not register test data.
