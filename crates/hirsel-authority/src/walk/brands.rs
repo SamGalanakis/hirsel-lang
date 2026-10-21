@@ -747,6 +747,9 @@ impl Checker<'_> {
     /// of the previous iteration must not poison their newly produced brands.
     /// Rows still held outside the body retain expiry, including at part depth.
     pub(super) fn renew_loop_locals(&mut self, body: ExprId) {
+        if self.invalid.is_empty() {
+            return;
+        }
         let body = self.span(body);
         let inside = |span: Span| {
             span.anchor == body.anchor && span.start >= body.start && span.end <= body.end
@@ -769,7 +772,10 @@ impl Checker<'_> {
                 }
                 let (mut local, mut external) = (false, false);
                 visit_type_origins(self.t, *ty, |origin, _| {
-                    if self.origin_site(origin).1.is_some_and(inside) {
+                    let declared_here = matches!(origin.root,
+                        OriginRoot::Local(owner, _) | OriginRoot::Expression(owner, _)
+                            if owner == self.lexical);
+                    if declared_here && self.origin_site(origin).1.is_some_and(inside) {
                         local = true;
                     } else {
                         external = true;
