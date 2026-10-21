@@ -16,6 +16,8 @@
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
 use std::collections::{BTreeSet, VecDeque};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::fault;
 use crate::release::{LAYOUT_DYNAMIC, Layout};
@@ -179,18 +181,99 @@ impl Drop for Ring {
 }
 
 struct Channel {
-    element: Element,
-    queue: Ring,
-    senders: u32,
-    receivers: u32,
+    payload: Arc<ChannelCell>,
     /// The tasks parked receiving and their places in park order, ascending: a park appends.
     waiting: VecDeque<(u64, u32)>,
     /// A send or a sender's close since the last scheduling point.
     touched: bool,
+}
+
+pub(crate) struct ChannelCell {
+    pub(crate) element: Element,
+    pub(crate) object: std::sync::OnceLock<hirsel_free::record::ObjectId>,
+    sequence: AtomicU64,
+    state: Mutex<ChannelState>,
+}
+
+pub(crate) struct ChannelState {
+    queue: Ring,
+    senders: u32,
+    receivers: u32,
     /// Early sends are invisible to polls until their sender's turn retires.
     pending: BTreeSet<u64>,
     sent: u64,
     received: u64,
+}
+
+impl ChannelCell {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, ChannelState> {
+        self.state.lock().unwrap()
+    }
+
+    /// Called under the object lock: one endpoint-event position is also its
+    /// recording version. Tokio mpsc/list.rs:74-85,100-108 at ce685ee6916549ed
+    /// uses one fetch_add for data and close positions; Hirsel includes dup
+    /// and receiver close because they are replay-visible endpoint events.
+    pub(crate) fn next_event(&self) -> u64 {
+        self.sequence
+            .fetch_add(1, Ordering::Relaxed)
+            .checked_add(1)
+            .expect("channel version overflow")
+    }
+
+    /// Reserve queue growth before opening a phase; the lock keeps capacity
+    /// available until its action and publication finish.
+    pub(crate) fn prepare_send(&self, state: &mut ChannelState) {
+        if state.receivers != 0 && state.queue.len == state.queue.capacity {
+            state.queue.grow();
+        }
+    }
+
+    /// # Safety
+    /// slot is a Some carrier of this cell's element. Its lock is held.
+    pub(crate) unsafe fn send(
+        &self,
+        state: &mut ChannelState,
+        slot: *mut u8,
+        early: bool,
+    ) -> (u32, Option<u64>) {
+        if state.receivers == 0 {
+            return (CLOSED, None);
+        }
+        state.queue.push(slot, self.element.size);
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.element.none.as_ptr(), slot, self.element.size)
+        };
+        let sequence = state.sent;
+        state.sent = state
+            .sent
+            .checked_add(1)
+            .unwrap_or_else(|| fault("a channel send sequence overflowed"));
+        if early {
+            state.pending.insert(sequence);
+        }
+        (DONE, early.then_some(sequence))
+    }
+
+    /// # Safety
+    /// slot is a writable None carrier; the object lock is held.
+    pub(crate) unsafe fn receive(
+        &self,
+        state: &mut ChannelState,
+        slot: *mut u8,
+    ) -> Result<bool, u32> {
+        if state.pending.contains(&state.received) {
+            return Ok(false);
+        }
+        if state.queue.pop(slot, self.element.size) {
+            state.received += 1;
+            Ok(true)
+        } else if state.senders == 0 {
+            Err(CLOSED)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 /// A successful early send, published once by its turn's retirement.
@@ -269,15 +352,21 @@ impl Channels {
             fault("a reserved channel initialized twice");
         }
         self.channels[channel as usize] = Some(Channel {
-            queue: Ring::new(element.size, layout.align as usize),
-            element,
-            senders: 1,
-            receivers: 1,
+            payload: Arc::new(ChannelCell {
+                state: Mutex::new(ChannelState {
+                    queue: Ring::new(element.size, layout.align as usize),
+                    senders: 1,
+                    receivers: 1,
+                    pending: BTreeSet::new(),
+                    sent: 0,
+                    received: 0,
+                }),
+                element,
+                object: Default::default(),
+                sequence: AtomicU64::new(1),
+            }),
             waiting: VecDeque::new(),
             touched: false,
-            pending: BTreeSet::new(),
-            sent: 0,
-            received: 0,
         });
         self.initialize_endpoint(reservation.sender, channel);
         self.initialize_endpoint(reservation.receiver, channel);
@@ -299,7 +388,15 @@ impl Channels {
     /// be provisional while logging, provided its creation commits first.
     pub(crate) fn initialize_dup(&mut self, reservation: ReservedEndpoint, sender: u64) {
         let channel = self.channel(sender, true);
-        self.row(channel).senders += 1;
+        let cell = self.payload(channel);
+        {
+            let mut state = cell.lock();
+            state.senders = state
+                .senders
+                .checked_add(1)
+                .expect("channel sender count overflow");
+            cell.next_event();
+        }
         self.initialize_endpoint(reservation, channel);
     }
 
@@ -370,9 +467,10 @@ impl Channels {
 
     /// Whether a receive on `channel` can act: a message is queued or no sender is left.
     pub(crate) fn ready(&self, channel: u32) -> bool {
-        self.channels[channel as usize]
-            .as_ref()
-            .is_some_and(|row| row.visible() > 0 || (row.queue.is_empty() && row.senders == 0))
+        self.channels[channel as usize].as_ref().is_some_and(|row| {
+            let state = row.payload.lock();
+            state.visible() > 0 || (state.queue.is_empty() && state.senders == 0)
+        })
     }
 
     fn lookup(&self, word: u64) -> Option<(u32, Endpoint)> {
@@ -389,6 +487,14 @@ impl Channels {
         self.channels[channel as usize]
             .as_mut()
             .unwrap_or_else(|| fault("a vacant channel row"))
+    }
+
+    pub(crate) fn payload(&self, channel: u32) -> Arc<ChannelCell> {
+        self.channels[channel as usize]
+            .as_ref()
+            .unwrap_or_else(|| fault("a vacant channel row"))
+            .payload
+            .clone()
     }
 
     /// Queue the `Some` image in `slot` and leave `None` there, unless the channel has no
@@ -421,32 +527,29 @@ impl Channels {
         slot: *mut u8,
         early: bool,
     ) -> (u32, Option<PendingSend>) {
-        let row = self.row(channel);
-        if row.receivers == 0 {
-            return (CLOSED, None);
-        }
-        let element = &row.element;
-        row.queue.push(slot, element.size);
-        // SAFETY: caller contract; the image moved, so the slot now holds `None`.
-        unsafe { std::ptr::copy_nonoverlapping(element.none.as_ptr(), slot, element.size) };
-        let sequence = row.sent;
-        row.sent = row
-            .sent
-            .checked_add(1)
-            .unwrap_or_else(|| fault("a channel send sequence overflowed"));
-        if early {
-            row.pending.insert(sequence);
-            (DONE, Some(PendingSend { channel, sequence }))
-        } else {
+        let cell = self.payload(channel);
+        let mut state = cell.lock();
+        let (status, pending) = unsafe { cell.send(&mut state, slot, early) };
+        cell.next_event();
+        drop(state);
+        if !early && status == DONE {
             self.touch(channel);
-            (DONE, None)
         }
+        (
+            status,
+            pending.map(|sequence| PendingSend { channel, sequence }),
+        )
     }
 
     /// Retirement step 3: clear pending AND touch the channel immediately
     /// before polling. Consuming the ticket twice is an executor fault.
     pub(crate) fn publish(&mut self, send: PendingSend) {
-        if !self.row(send.channel).pending.remove(&send.sequence) {
+        if !self
+            .payload(send.channel)
+            .lock()
+            .pending
+            .remove(&send.sequence)
+        {
             fault("an early send was published twice");
         }
         self.touch(send.channel);
@@ -488,9 +591,10 @@ impl Channels {
     /// receivers in park order.
     pub(crate) fn waiting(&self, channel: u32) -> Option<(usize, bool, &VecDeque<(u64, u32)>)> {
         let row = self.channels.get(channel as usize)?.as_ref()?;
+        let state = row.payload.lock();
         Some((
-            row.visible(),
-            row.queue.is_empty() && row.senders == 0,
+            state.visible(),
+            state.queue.is_empty() && state.senders == 0,
             &row.waiting,
         ))
     }
@@ -502,18 +606,8 @@ impl Channels {
     /// # Safety
     /// `slot` is a `None` image of the channel's element in another frame.
     pub(crate) unsafe fn receive(&mut self, channel: u32, slot: *mut u8) -> Result<bool, u32> {
-        let row = self.row(channel);
-        if row.pending.contains(&row.received) {
-            return Ok(false);
-        }
-        if row.queue.pop(slot, row.element.size) {
-            row.received += 1;
-            Ok(true)
-        } else if row.senders == 0 {
-            Err(CLOSED)
-        } else {
-            Ok(false)
-        }
+        let cell = self.payload(channel);
+        unsafe { cell.receive(&mut cell.lock(), slot) }
     }
 
     /// Close the endpoint `word`. The messages a channel's last receiver leaves are returned
@@ -525,21 +619,24 @@ impl Channels {
         };
         self.endpoints[index as usize] = None;
         self.vacant_endpoints.push(index);
-        let row = self.row(endpoint.channel);
+        let cell = self.payload(endpoint.channel);
+        let mut row = cell.lock();
         let mut left = None;
         if endpoint.sender {
             row.senders -= 1;
         } else {
             row.receivers -= 1;
             if row.receivers == 0 && row.queue.len() > 0 {
-                let empty = Ring::new(row.element.size, row.queue.align);
+                let empty = Ring::new(cell.element.size, row.queue.align);
                 let queue = std::mem::replace(&mut row.queue, empty);
                 row.pending.clear();
                 row.received = row.sent;
-                left = (!row.element.inert).then_some((queue, row.element.descriptor));
+                left = (!cell.element.inert).then_some((queue, cell.element.descriptor));
             }
         }
         let (senders, receivers) = (row.senders, row.receivers);
+        cell.next_event();
+        drop(row);
         if senders == 0 && receivers == 0 {
             self.channels[endpoint.channel as usize] = None;
             self.vacant_channels.push(endpoint.channel);
@@ -551,7 +648,7 @@ impl Channels {
     }
 }
 
-impl Channel {
+impl ChannelState {
     /// Visible FIFO prefix; a younger published message cannot pass a pending
     /// older send, even if retirement is temporarily inside a holding call.
     fn visible(&self) -> usize {
@@ -565,6 +662,70 @@ impl Channel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_cells_keep_fifo_images_across_concurrent_senders_and_registry_growth() {
+        let (mut channels, _, _, index) = channel();
+        let cell = channels.payload(index);
+        let mut threads = Vec::new();
+        for task in 0..8u64 {
+            let cell = cell.clone();
+            threads.push(std::thread::spawn(move || {
+                let mut sent = Vec::new();
+                for op in 0..32u64 {
+                    let value = task * 1000 + op;
+                    let mut image = [1, value];
+                    let mut state = cell.lock();
+                    cell.prepare_send(&mut state);
+                    assert_eq!(
+                        unsafe { cell.send(&mut state, image.as_mut_ptr().cast(), false) }.0,
+                        DONE
+                    );
+                    let version = cell.next_event();
+                    assert_eq!(image, [0, 0]);
+                    sent.push((version, value));
+                }
+                sent
+            }));
+        }
+        for _ in 0..128 {
+            channels.reserve_open();
+        }
+        let mut sent: Vec<_> = threads
+            .into_iter()
+            .flat_map(|t| t.join().unwrap())
+            .collect();
+        sent.sort_unstable();
+        assert_eq!(
+            sent.iter().map(|&(v, _)| v).collect::<Vec<_>>(),
+            (2..=257).collect::<Vec<_>>()
+        );
+        // The registry may disappear while a resolved cell is retained.
+        drop(channels);
+        for (_, value) in sent {
+            let mut out = [0u64; 2];
+            assert_eq!(
+                unsafe { cell.receive(&mut cell.lock(), out.as_mut_ptr().cast()) },
+                Ok(true)
+            );
+            assert_eq!(out, [1, value]);
+        }
+        assert_eq!(cell.lock().queue.len(), 0);
+    }
+
+    #[test]
+    fn a_retained_cell_observes_receiver_close_before_another_send() {
+        let (mut channels, sender, receiver, index) = channel();
+        let cell = channels.payload(index);
+        channels.close(receiver);
+        channels.close(sender);
+        let mut image = [1u64, 99];
+        assert_eq!(
+            unsafe { cell.send(&mut cell.lock(), image.as_mut_ptr().cast(), false) }.0,
+            CLOSED
+        );
+        assert_eq!(image, [1, 99]);
+    }
 
     fn channel() -> (Channels, u64, u64, u32) {
         let mut channels = Channels::default();
