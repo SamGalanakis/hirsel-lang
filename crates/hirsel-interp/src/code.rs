@@ -204,6 +204,18 @@ impl Code {
         &self.ops[self.starts[block.0 as usize] as usize + instruction]
     }
 
+    /// Resolve a block once; scalar dispatch advances inside this slice until
+    /// a control-flow edge selects another block or returns to the scheduler.
+    pub fn block_ops(&self, block: BlockId) -> &[Op] {
+        let index = block.0 as usize;
+        let start = self.starts[index] as usize;
+        let end = self
+            .starts
+            .get(index + 1)
+            .map_or(self.ops.len(), |&end| end as usize);
+        &self.ops[start..end]
+    }
+
     pub fn new(body: &Body, types: &TypeInterner) -> Self {
         let lower = Lowering { body, types };
         let mut starts = Vec::with_capacity(body.blocks.len());

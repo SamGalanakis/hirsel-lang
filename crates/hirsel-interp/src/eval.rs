@@ -2468,11 +2468,17 @@ fn dispatch(
     execution: &mut Execution,
 ) -> bool {
     use crate::code::{CleanupStep, OpKind};
+    // Neither checked state nor a depth failure can change within scalar
+    // dispatch. Both return to the general step before fetching any operation.
+    if frame.depth_failure || frame.check.is_some() {
+        return true;
+    }
+    let mut ops = code.block_ops(frame.block);
     loop {
-        if frame.depth_failure || frame.check.is_some() || limits.steps == Some(execution.steps) {
+        if limits.steps == Some(execution.steps) {
             return true;
         }
-        let op = code.op(frame.block, frame.instruction);
+        let op = &ops[frame.instruction];
         // Each arm decides whether its op completes before changing anything; `step`
         // then counts and traces it exactly as the general step does.
         let step = |frame: &Frame, execution: &mut Execution, terminator: bool| {
@@ -2648,6 +2654,7 @@ fn dispatch(
                 if frame.fuel_due {
                     return false;
                 }
+                ops = code.block_ops(frame.block);
                 continue;
             }
             &OpKind::Branch { condition, yes, no } => {
@@ -2660,6 +2667,7 @@ fn dispatch(
                 if frame.fuel_due {
                     return false;
                 }
+                ops = code.block_ops(frame.block);
                 continue;
             }
         }
