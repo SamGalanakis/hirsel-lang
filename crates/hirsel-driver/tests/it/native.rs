@@ -1285,6 +1285,7 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                         debug: false,
                         fuel: false,
                         jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                        byte_budget: None,
                     });
                     native::build(&checked.validated, &options).unwrap()
                 };
@@ -1380,6 +1381,7 @@ fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
                     debug: false,
                     fuel: false,
                     jobs: hirsel_intern::jobs::Jobs::ONE,
+                    byte_budget: None,
                 });
                 native::build(&input, &options).unwrap()
             };

@@ -5,6 +5,7 @@
 //!
 //! A native failure is a tool outcome (`NativeError`), never a source verdict.
 mod adapt;
+mod admission;
 mod coverage;
 mod differential;
 mod emit;
@@ -28,6 +29,7 @@ pub use std_surface::StdSurface;
 mod testing;
 mod timeout;
 mod tool;
+mod unit_bodies;
 mod units;
 pub use testing::{bench_path, test_path};
 pub use units::UnitObjects;

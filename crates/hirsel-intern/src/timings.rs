@@ -234,11 +234,23 @@ pub enum Count {
     S1RegistrationRounds,
     /// Root outcomes obtained through the scalar compatibility path.
     S1ScalarRoots,
+    /// Maximum sum of Value row lengths at native admission (not capacities).
+    NativeValueBytes,
+    /// Maximum estimated bytes admitted simultaneously, including backend contexts.
+    NativeActiveBytes,
+    /// Maximum native admission allowance selected for a build.
+    NativeBudgetBytes,
+    /// Maximum effective native workers, after byte and stack limits.
+    NativeWorkers,
+    /// Stack virtual reservations of additional native workers, not RSS.
+    NativeStackBytes,
+    /// Maximum Ready row bytes retained for uncompleted native consumers.
+    NativeReadyBytes,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 43] = [
+    pub const ALL: [Count; 49] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -282,6 +294,12 @@ impl Count {
         Count::S1DiscardedRoots,
         Count::S1RegistrationRounds,
         Count::S1ScalarRoots,
+        Count::NativeValueBytes,
+        Count::NativeActiveBytes,
+        Count::NativeBudgetBytes,
+        Count::NativeWorkers,
+        Count::NativeStackBytes,
+        Count::NativeReadyBytes,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -329,6 +347,12 @@ impl Count {
             Count::S1DiscardedRoots => "S1 discarded roots",
             Count::S1RegistrationRounds => "S1 registration rounds",
             Count::S1ScalarRoots => "S1 scalar roots",
+            Count::NativeValueBytes => "native Value structural bytes peak",
+            Count::NativeActiveBytes => "native active estimated bytes peak",
+            Count::NativeBudgetBytes => "native admission budget bytes",
+            Count::NativeWorkers => "native effective workers peak",
+            Count::NativeStackBytes => "native worker stack reservation bytes peak",
+            Count::NativeReadyBytes => "native retained Ready structural bytes peak",
         }
     }
 }
@@ -481,6 +505,15 @@ pub fn count(count: Count) {
 pub fn count_by(count: Count, n: u64) {
     if enabled() && n > 0 {
         TOTALS.counts[count as usize].fetch_add(n, Relaxed);
+    }
+}
+
+/// Retain the maximum observation for a peak counter. Unlike `count_by`,
+/// separate builds in one resident session do not add their byte peaks.
+#[inline]
+pub fn count_peak(count: Count, n: u64) {
+    if enabled() {
+        TOTALS.counts[count as usize].fetch_max(n, Relaxed);
     }
 }
 

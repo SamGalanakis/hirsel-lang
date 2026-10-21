@@ -25,7 +25,7 @@ use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::{InstanceId, Instances};
 use hirsel_syntax::ContentHash;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 /// How a build emits its units itself, one object per unit, through an object store.
 #[derive(Clone)]
@@ -39,6 +39,9 @@ pub struct UnitObjects {
     pub fuel: bool,
     /// How many units lower and emit at once.
     pub jobs: hirsel_intern::jobs::Jobs,
+    /// Estimated active native bytes. None selects a share of the process cap;
+    /// zero serializes work and still admits an oversized body alone.
+    pub byte_budget: Option<u64>,
 }
 
 impl std::fmt::Debug for UnitObjects {
@@ -49,6 +52,7 @@ impl std::fmt::Debug for UnitObjects {
             .field("debug", &self.debug)
             .field("fuel", &self.fuel)
             .field("jobs", &self.jobs.get())
+            .field("byte_budget", &self.byte_budget)
             .finish_non_exhaustive()
     }
 }
@@ -102,6 +106,7 @@ pub(crate) fn selected(
         debug,
         fuel,
         jobs,
+        byte_budget: None,
     }))
 }
 
@@ -195,29 +200,40 @@ pub(crate) fn lower(
         copied.sort_unstable();
         keys.push(key(program, &units[i], i, &copied)?);
     }
-    let lowered: Vec<OnceLock<Result<ValidatedUnit<Ready>, NativeError>>> =
-        units.iter().map(|_| OnceLock::new()).collect();
-    let units: Vec<std::sync::Mutex<Option<LirUnit<Value>>>> = units
+    // Structural Value rows plus room for transformation scratch and the
+    // backend context. These are admission estimates, not allocator/RSS meters.
+    let structural: Vec<u64> = units
+        .iter()
+        .map(|unit| unit.retained_bytes() as u64)
+        .collect();
+    timings::count_peak(Count::NativeValueBytes, structural.iter().sum());
+    let context = match program.objects.backend {
+        Backend::Llvm => 32 << 20,
+        Backend::Cranelift => 16 << 20,
+    };
+    let weights: Vec<u64> = copies
+        .iter()
+        .enumerate()
+        .map(|(i, copied)| {
+            copied
+                .iter()
+                .fold(structural[i], |sum, &j| sum.saturating_add(structural[j]))
+                .saturating_mul(8)
+                .saturating_add(context)
+        })
+        .collect();
+    let units = units
         .into_iter()
         .enumerate()
         .map(|(i, mut unit)| {
             unit.header.key = keys[i];
-            std::sync::Mutex::new(Some(unit))
+            unit
         })
         .collect();
-    let ready = |i: usize| -> Result<&ValidatedUnit<Ready>, NativeError> {
-        lowered[i]
-            .get_or_init(|| {
-                let unit = units[i]
-                    .lock()
-                    .expect("an unpoisoned unit")
-                    .take()
-                    .expect("each unit lowered once");
-                stages(program, unit, program.origins[i])
-            })
-            .as_ref()
-            .map_err(Clone::clone)
-    };
+    let bodies = super::unit_bodies::Bodies::new(units, &copies, |unit: &ValidatedUnit<Ready>| {
+        unit.unit().retained_bytes() as u64
+    });
+    let ready = |i: usize| bodies.ready(i, |unit| stages(program, unit, program.origins[i]));
     let layout_ids: HashMap<hirsel_lir::LayoutKey, LayoutId> = program
         .keys
         .all()
@@ -241,107 +257,125 @@ pub(crate) fn lower(
         .collect();
     let jobs = program.objects.jobs;
     let tasks: Vec<usize> = (0..keys.len()).collect();
-    let results = hirsel_intern::jobs::map(
+    let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+        .ok()
+        .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+        .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+    let budget = program
+        .objects
+        .byte_budget
+        .unwrap_or((cap / 8).min(128 << 20));
+    let (results, admitted_peak) = super::admission::map(
         jobs,
+        budget,
         tasks,
-        |&i| copies[i].len() as u64 + 1,
-        |i| -> Result<LoweredUnit, NativeError> {
-            let key = &keys[i];
-            let stored = timed(Phase::StoreLookup, || program.objects.store.get(key));
-            let cached = stored.as_ref().and_then(|bytes| {
-                UnitFragment::decode(bytes, &|k| layout_ids.get(k).copied(), &|k| {
-                    abi_ids.get(k).copied()
-                })
-                .ok()
-            });
-            let hit = cached.is_some();
-            if hit {
-                timings::count(Count::ObjectHits);
-            } else {
-                timings::count(Count::ObjectMisses);
-            }
-            // Go cache verification (cmd/go/internal/cache/cache.go:144-152,470-490):
-            // harness hits recompute and compare; production keeps the fast hit.
-            if let Some(fragment) = cached
-                && program.options.validation == super::stages::Validation::Ready
-            {
-                return Ok(LoweredUnit {
-                    fragment,
-                    hit: true,
+        |&i| weights[i],
+        |i| {
+            let result = (|| -> Result<LoweredUnit, NativeError> {
+                let key = &keys[i];
+                let stored = timed(Phase::StoreLookup, || program.objects.store.get(key));
+                let cached = stored.as_ref().and_then(|bytes| {
+                    UnitFragment::decode(bytes, &|k| layout_ids.get(k).copied(), &|k| {
+                        abi_ids.get(k).copied()
+                    })
+                    .ok()
                 });
-            }
-            let own = ready(i)?;
-            let definition = &own.unit().header.definition;
-            let mut named: Vec<(String, usize)> = copies[i]
-                .iter()
-                .map(|&j| Ok((symbol_name(ready(j)?.unit()), j)))
-                .collect::<Result<_, NativeError>>()?;
-            named.sort();
-            let mut selected = vec![own];
-            for &(_, j) in &named {
-                selected.push(ready(j)?);
-            }
-            // The native closure: every template the Ready code names is one the key
-            // covers.
-            for unit in &selected {
-                for symbol in references(unit.unit()) {
-                    if let Some(j) = find(&symbol)
-                        && copyable[j]
-                        && j != i
-                        && !copies[i].contains(&j)
-                    {
+                let hit = cached.is_some();
+                if hit {
+                    timings::count(Count::ObjectHits);
+                } else {
+                    timings::count(Count::ObjectMisses);
+                }
+                // Go cache verification (cmd/go/internal/cache/cache.go:144-152,470-490):
+                // harness hits recompute and compare; production keeps the fast hit.
+                if let Some(fragment) = cached
+                    && program.options.validation == super::stages::Validation::Ready
+                {
+                    return Ok(LoweredUnit {
+                        fragment,
+                        hit: true,
+                    });
+                }
+                let own = ready(i)?;
+                let mut named: Vec<(String, usize)> = copies[i]
+                    .iter()
+                    .map(|&j| Ok((symbol_name(ready(j)?.unit()), j)))
+                    .collect::<Result<_, NativeError>>()?;
+                named.sort();
+                let mut retained = vec![own];
+                for &(_, j) in &named {
+                    retained.push(ready(j)?);
+                }
+                let selected: Vec<_> = retained.iter().map(Arc::as_ref).collect();
+                let own = selected[0];
+                let definition = &own.unit().header.definition;
+                // The native closure: every template the Ready code names is one the key
+                // covers.
+                for unit in &selected {
+                    for symbol in references(unit.unit()) {
+                        if let Some(j) = find(&symbol)
+                            && copyable[j]
+                            && j != i
+                            && !copies[i].contains(&j)
+                        {
+                            return Err(NativeError::of(
+                                StageName::Emission,
+                                definition,
+                                format!(
+                                    "the native closure: the object names template {} that its key does not cover",
+                                    symbol.definition
+                                ),
+                            ));
+                        }
+                    }
+                }
+                let object = timed(Phase::Codegen, || emit(program, &selected))?;
+                let summary = |unit: &ValidatedUnit<Ready>| {
+                    UnitSummary::of(
+                        unit.unit(),
+                        program.table,
+                        program.keys,
+                        program.emit.manifest,
+                    )
+                    .map_err(|e| NativeError::of(StageName::Emission, definition, e))
+                };
+                let fragment = UnitFragment {
+                    summary: summary(own)?,
+                    templates: selected[1..]
+                        .iter()
+                        .map(|u| summary(u))
+                        .collect::<Result<_, _>>()?,
+                    object,
+                };
+                if hit || program.objects.store.enabled() {
+                    let bytes = fragment.encode(program.table, program.keys).map_err(|e| {
+                        NativeError::of(
+                            StageName::Emission,
+                            definition,
+                            format!("the unit's fragment: {e}"),
+                        )
+                    })?;
+                    if hit && stored.as_deref() != Some(bytes.as_slice()) {
                         return Err(NativeError::of(
                             StageName::Emission,
                             definition,
                             format!(
-                                "the native closure: the object names template {} that its key does not cover",
-                                symbol.definition
+                                "EveryStage recomputation differs from cached fragment for unit key {}",
+                                key.hex()
                             ),
                         ));
                     }
+                    program.objects.store.put(key, &bytes);
                 }
-            }
-            let object = timed(Phase::Codegen, || emit(program, &selected))?;
-            let summary = |unit: &ValidatedUnit<Ready>| {
-                UnitSummary::of(
-                    unit.unit(),
-                    program.table,
-                    program.keys,
-                    program.emit.manifest,
-                )
-                .map_err(|e| NativeError::of(StageName::Emission, definition, e))
-            };
-            let fragment = UnitFragment {
-                summary: summary(own)?,
-                templates: selected[1..]
-                    .iter()
-                    .map(|u| summary(u))
-                    .collect::<Result<_, _>>()?,
-                object,
-            };
-            if hit || program.objects.store.enabled() {
-                let bytes = fragment.encode(program.table, program.keys).map_err(|e| {
-                    NativeError::of(
-                        StageName::Emission,
-                        definition,
-                        format!("the unit's fragment: {e}"),
-                    )
-                })?;
-                if hit && stored.as_deref() != Some(bytes.as_slice()) {
-                    return Err(NativeError::of(
-                        StageName::Emission,
-                        definition,
-                        format!(
-                            "EveryStage recomputation differs from cached fragment for unit key {}",
-                            key.hex()
-                        ),
-                    ));
-                }
-                program.objects.store.put(key, &bytes);
-            }
-            Ok(LoweredUnit { fragment, hit })
+                Ok(LoweredUnit { fragment, hit })
+            })();
+            bodies.finished(i, &copies[i]);
+            result
         },
     );
+    timings::count_peak(Count::NativeActiveBytes, admitted_peak);
+    timings::count_peak(Count::NativeBudgetBytes, budget);
+    timings::count_peak(Count::NativeReadyBytes, bodies.peak_bytes());
     results.into_iter().collect()
 }
 
@@ -570,6 +604,7 @@ mod cache_tests {
                         debug: false,
                         fuel: false,
                         jobs: hirsel_intern::jobs::Jobs::new(workers),
+                        byte_budget: None,
                     });
                     let before = calls();
                     let cold = super::super::build(&input, &options)
@@ -669,52 +704,56 @@ mod cache_tests {
                 ] {
                     let mut baseline = None;
                     for workers in [1, 2, 8] {
-                        for validation in [
-                            super::super::Validation::Ready,
-                            super::super::Validation::EveryStage,
-                        ] {
-                            let mut options =
-                                Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
-                            options.validation = validation;
-                            options.objects = Some(UnitObjects {
-                                store: Arc::new(hirsel_lir::objects::NoObjects),
-                                backend,
-                                opt,
-                                debug: false,
-                                fuel: false,
-                                jobs: hirsel_intern::jobs::Jobs::new(workers),
-                            });
-                            let ready = super::super::build(&input, &options).unwrap();
-                            let objects = ready.unit_objects.unwrap().objects;
-                            assert_eq!(objects.len(), ready.summaries.len());
-                            assert!(
-                                ready
-                                    .summaries
-                                    .iter()
-                                    .any(|s| s.origin == UnitOrigin::Library)
-                            );
-                            for summary in &ready.summaries {
-                                let symbol = hirsel_lir::emission::symbol_name(
-                                    &summary.definition,
-                                    Some(&summary.instance),
+                        for budget in [0, 1, 128 << 20, u64::MAX] {
+                            for validation in [
+                                super::super::Validation::Ready,
+                                super::super::Validation::EveryStage,
+                            ] {
+                                let mut options = Options::new(
+                                    hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu(),
                                 );
-                                assert_eq!(
-                                    objects
+                                options.validation = validation;
+                                options.objects = Some(UnitObjects {
+                                    store: Arc::new(hirsel_lir::objects::NoObjects),
+                                    backend,
+                                    opt,
+                                    debug: false,
+                                    fuel: false,
+                                    jobs: hirsel_intern::jobs::Jobs::new(workers),
+                                    byte_budget: Some(budget),
+                                });
+                                let ready = super::super::build(&input, &options).unwrap();
+                                let objects = ready.unit_objects.unwrap().objects;
+                                assert_eq!(objects.len(), ready.summaries.len());
+                                assert!(
+                                    ready
+                                        .summaries
                                         .iter()
-                                        .filter(|o| o.exports.iter().any(|e| e.name == symbol))
-                                        .count(),
-                                    1,
-                                    "{backend:?} {opt:?} {workers} {validation:?} {symbol}"
+                                        .any(|s| s.origin == UnitOrigin::Library)
                                 );
-                            }
-                            let actual = (ready.summaries, objects);
-                            if let Some(expected) = &baseline {
-                                assert_eq!(
-                                    &actual, expected,
-                                    "{backend:?} {opt:?} {workers} {validation:?}"
-                                )
-                            } else {
-                                baseline = Some(actual)
+                                for summary in &ready.summaries {
+                                    let symbol = hirsel_lir::emission::symbol_name(
+                                        &summary.definition,
+                                        Some(&summary.instance),
+                                    );
+                                    assert_eq!(
+                                        objects
+                                            .iter()
+                                            .filter(|o| o.exports.iter().any(|e| e.name == symbol))
+                                            .count(),
+                                        1,
+                                        "{backend:?} {opt:?} {workers} {validation:?} {symbol}"
+                                    );
+                                }
+                                let actual = (ready.summaries, objects);
+                                if let Some(expected) = &baseline {
+                                    assert_eq!(
+                                        &actual, expected,
+                                        "{backend:?} {opt:?} {workers} {validation:?}"
+                                    )
+                                } else {
+                                    baseline = Some(actual)
+                                }
                             }
                         }
                     }

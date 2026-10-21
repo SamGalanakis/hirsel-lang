@@ -120,6 +120,7 @@ pub fn build_path_native_backend_with_validation(
     }
     crate::session::with_program(source, verify, |loaded| {
         loaded.check_for_execution()?;
+        hirsel_intern::memory::checkpoint("front complete");
         let engine = &mut loaded.engine;
         let input = engine
             .export_native_input()
@@ -157,6 +158,7 @@ pub fn build_path_native_backend_with_validation(
                 )?;
             }
             let mut program = super::build(&validated, &options)?;
+            hirsel_intern::memory::checkpoint("native workers complete");
             // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
             program.fuel = fuel;
             let scratch = Scratch::new()?;
@@ -180,6 +182,7 @@ pub fn build_path_native_backend_with_validation(
                 &tools,
                 &scratch.0,
             )?;
+            hirsel_intern::memory::checkpoint("link complete");
             let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
             std::fs::copy(&linked.path, output).map_err(io)?;
             // The debug file keeps its build-id name beside the executable, where

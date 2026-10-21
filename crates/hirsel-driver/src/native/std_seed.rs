@@ -130,6 +130,7 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
                     debug: opt == OptLevel::None,
                     fuel: false,
                     jobs: hirsel_intern::jobs::Jobs::ONE,
+                    byte_budget: None,
                 });
                 let ready = super::stages::build_program(&program, operations.clone(), &options)
                     .map_err(|e| e.to_string())?;
@@ -179,6 +180,7 @@ mod tests {
                         debug: opt == OptLevel::None,
                         fuel: false,
                         jobs: hirsel_intern::jobs::Jobs::ONE,
+                        byte_budget: None,
                     });
                     super::super::build(&input, &options)
                         .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
@@ -252,6 +254,7 @@ mod tests {
                         debug: opt == OptLevel::None,
                         fuel: false,
                         jobs: hirsel_intern::jobs::Jobs::new(2),
+                        byte_budget: None,
                     });
                     let seeded = super::super::build(&input, &options).unwrap();
                     let seeded_objects = seeded.unit_objects.unwrap();

@@ -565,6 +565,7 @@ pub fn build_program(
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
     let value_units = std::mem::take(&mut lowered.units);
+    hirsel_intern::memory::checkpoint("global Value complete");
     let table = &lowered.table;
     let operations = program.operation_registry();
     drop(import);
@@ -933,6 +934,7 @@ mod tests {
                 debug: false,
                 fuel: false,
                 jobs: hirsel_intern::jobs::Jobs::ONE,
+                byte_budget: None,
             });
             let mut ready = build(&input, &options).unwrap();
             let mut objects = ready.unit_objects.as_ref().unwrap().objects.clone();

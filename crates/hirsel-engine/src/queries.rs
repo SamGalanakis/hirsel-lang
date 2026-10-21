@@ -130,7 +130,8 @@ pub struct QueryEngine {
     pub(crate) work: crate::WorkStats,
     pub(crate) store_identity: ContentHash,
     pub(crate) verify_store: crate::store::VerifyStore,
-    pending_store_checks: BTreeMap<(DefId, QueryKind), crate::store::Variant>,
+    pending_store_checks: BTreeMap<(DefId, QueryKind), persistent::Expected>,
+    store_check_spool: std::sync::Weak<persistent::Spool>,
     pub(crate) lower_verdicts:
         hirsel_syntax::DefMap<(hirsel_tir::DefinitionRef, Vec<hirsel_validate::VRead>)>,
     pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
@@ -259,6 +260,9 @@ impl Drop for QueryEngine {
     fn drop(&mut self) {
         use hirsel_intern::memory::released;
         use std::mem::take;
+        // Scratch resources must close even when process-exit policy leaves
+        // ordinary query allocations to the operating system.
+        self.pending_store_checks.clear();
         if self.session && !crate::policy::frees_sessions() {
             let vacant = QueryEngine::new(self.environment.clone(), PhaseAdapters::default());
             std::mem::forget(std::mem::replace(self, vacant));
@@ -452,6 +456,7 @@ impl QueryEngine {
             store_identity: ContentHash::default(),
             verify_store: crate::store::VerifyStore::Off,
             pending_store_checks: BTreeMap::new(),
+            store_check_spool: std::sync::Weak::new(),
             lower_verdicts: Default::default(),
             result_store: None,
             verify: Verify::On,

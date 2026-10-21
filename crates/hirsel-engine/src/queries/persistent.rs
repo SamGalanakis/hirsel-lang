@@ -6,6 +6,43 @@ use crate::store::{Entry as StoredEntry, EntryKey, Variant};
 use hirsel_span::{Anchor, AnchorCodec};
 use hirsel_types::{OwnershipFacts, TypeId, TypeTable};
 use serde::{Deserialize, Serialize};
+mod expected;
+pub(crate) use expected::{Expected, Spool};
+
+#[cfg(test)]
+mod expected_tests {
+    use super::*;
+
+    #[test]
+    fn verify_preflight_releases_old_payloads_before_workers_start() {
+        let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default());
+        let mut observed = Vec::new();
+        for i in 0..64 {
+            let path = DefPath(hirsel_syntax::ItemPath {
+                package: crate::default_context().package,
+                modules: vec![],
+                name: format!("p{i}"),
+            });
+            let payload: Arc<[u8]> = vec![i as u8; 128 * 1024].into();
+            observed.push(Arc::downgrade(&payload));
+            let expected = Expected::capture(
+                Variant {
+                    reads: Reads::empty(),
+                    payload,
+                },
+                &mut engine.store_check_spool,
+            );
+            engine
+                .pending_store_checks
+                .insert((DefId::intern(&path), QueryKind::Modes), expected);
+        }
+        assert_eq!(engine.pending_store_checks.len(), 64);
+        assert!(
+            observed.iter().all(|weak| weak.upgrade().is_none()),
+            "preflight retained all old canonical payloads until the frontier drained"
+        );
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct Body {
@@ -185,20 +222,26 @@ pub(super) struct EncodedWriter {
     key: EntryKey,
     path: DefPath,
     kind: QueryKind,
-    expected: Option<Variant>,
+    expected: Option<Expected>,
 }
 impl EncodedWriter {
     pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
-        if let Some(expected) = &self.expected
-            && (expected.payload.as_ref() != payload || expected.reads != *reads)
-        {
-            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "verify-cache".into(),
-                message: format!(
-                    "{}: {:?} differs from its cached result",
-                    self.path, self.kind
-                ),
-            }));
+        if let Some(expected) = &self.expected {
+            let matches = expected.matches(reads, &payload);
+            if !matches.as_ref().is_ok_and(|same| *same) {
+                return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "verify-cache".into(),
+                    message: match matches {
+                        Ok(_) => format!(
+                            "{}: {:?} differs from its cached result",
+                            self.path, self.kind
+                        ),
+                        Err(error) => {
+                            format!("{}: {:?} expected bytes: {error}", self.path, self.kind)
+                        }
+                    },
+                }));
+            }
         }
         let mut entry = StoredEntry::load(&*self.store, &self.key);
         entry.insert(Variant {
@@ -362,8 +405,10 @@ impl QueryEngine {
         let variant = self.stored_variant(path, QueryKind::Modes)?;
         let record: ModeRecord = self.decode_record(&variant.payload)?;
         if self.verify_store == crate::store::VerifyStore::Recompute {
-            self.pending_store_checks
-                .insert((DefId::intern(path), QueryKind::Modes), variant);
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Modes),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
             return None;
         }
         let syntax = self.snapshot(path).ok()?;
@@ -497,8 +542,10 @@ impl QueryEngine {
             return None;
         }
         if self.verify_store == crate::store::VerifyStore::Recompute {
-            self.pending_store_checks
-                .insert((DefId::intern(path), QueryKind::Lower), variant);
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Lower),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
             return None;
         }
         if let Some(reads) = record.verdict.clone() {
