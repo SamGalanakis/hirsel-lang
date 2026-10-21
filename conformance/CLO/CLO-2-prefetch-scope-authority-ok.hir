@@ -1,7 +1,7 @@
 // rule: CLO-2
 // expect: accept
-// The conservative prototype keeps this signature unrestricted.
-fn scoped(tasks: Tasks, action: fn() -> ()) {
+// boundary: A scope callback forwards the enclosing callable's selected authority.
+fn scoped(tasks: Tasks, action: fn() -> ()) uses {tasks, action} {
   task.scope(
     tasks,
     fn(s: Scope) {

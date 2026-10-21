@@ -64,7 +64,10 @@ impl Checker<'_> {
                 .filter(|table| {
                     matches!(
                         table.context,
-                        CaptureContext::Escaping | CaptureContext::Task
+                        CaptureContext::Escaping
+                            | CaptureContext::Task
+                            | CaptureContext::Scoped
+                            | CaptureContext::OwningScoped
                     )
                 })
                 .map(|table| table.captures.clone())

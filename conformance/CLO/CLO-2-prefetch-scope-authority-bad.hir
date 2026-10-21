@@ -1,8 +1,8 @@
 // rule: CLO-2
 // expect: reject CLO-2 at line 6
 // twin: CLO/CLO-2-prefetch-scope-authority-ok.hir
-// Missing contract: task.scope does not forward action's selected authority.
-fn scoped(tasks: Tasks, action: fn() -> ()) uses {tasks, action} {
+// The enclosing callable does not select action, so its scope cannot invoke it.
+fn scoped(tasks: Tasks, action: fn() -> ()) uses {tasks} {
   task.scope(
     tasks,
     fn(s: Scope) {

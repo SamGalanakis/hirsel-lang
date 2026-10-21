@@ -66,6 +66,11 @@ by the enclosing callable's declared `uses`. An unrestricted callback remains un
 outside its explicitly selected parameter receipt; selecting one callback never grants
 another callback's authority.
 
+A scope callback may forward exactly the authority its enclosing callable declares:
+each unknown captured function must derive from a parameter explicitly selected by
+that callable's `uses`. Known captured authority must also fit that limit. Staging
+through the scope callback grants no authority from an unselected parameter.
+
 **Variance of callable promises.** A `mut` hand-back is exact for the whole value type, at
 its root and at every depth: the callable's `uses` and `@noalloc` promise, erased captures
 and cleanup summary. A type argument of a nominal type or a non-sequence builtin (`Option`,

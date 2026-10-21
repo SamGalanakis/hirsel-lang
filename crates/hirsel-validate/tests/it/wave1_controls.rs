@@ -685,3 +685,60 @@ fn an_active_unbranded_call_result_cannot_acquire_a_payload_brand() {
         }
     }
 }
+
+fn scope_forwarding(selected: bool) -> Fixture {
+    let mut f = callback(selected);
+    let action = if let Terminator::Call {
+        callee: Callee::Indirect { value, .. },
+        ..
+    } = &f.body().blocks[0].terminator
+    {
+        value.clone()
+    } else {
+        unreachable!()
+    };
+    let action_type = f.body().places[action.place.0 as usize].ty;
+    let mut scope = f.signatures[&path("main")].clone();
+    scope.definition = path("scoped");
+    scope.types = f.definition.types.clone();
+    let SignatureKind::Function(header) = &mut scope.kind else {
+        unreachable!()
+    };
+    header.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Borrow,
+        ty: action_type,
+    }]
+    .into();
+    header.authority = AuthoritySummary::inert();
+    header.uses = Uses::Unrestricted;
+    f.signatures.insert(scope.definition.clone(), scope);
+    let Terminator::Call {
+        callee, arguments, ..
+    } = &mut f.body().blocks[0].terminator
+    else {
+        unreachable!()
+    };
+    *callee = Callee::Definition {
+        path: path("scoped"),
+        arguments: vec![],
+    };
+    *arguments = vec![CallArgument {
+        parameter: ParamId(0),
+        value: action,
+    }];
+    f
+}
+
+#[test]
+fn a_scope_forwards_only_the_enclosing_declarations_selected_authority() {
+    scope_forwarding(true).valid();
+    assert!(
+        scope_forwarding(false)
+            .kinds()
+            .contains(&ViolationKind::TypeMismatch {
+                entity: "body uses"
+            })
+    );
+}

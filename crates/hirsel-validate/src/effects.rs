@@ -537,6 +537,14 @@ impl Checker<'_> {
             if !seen.insert(place.root.0) {
                 continue;
             }
+            if self.authority_with_generics(
+                &self.definition.types,
+                place.ty,
+                &self.generic_declarations(),
+            ) == AuthoritySummary::inert()
+            {
+                continue;
+            }
             if let Some(ordinal) = self
                 .body
                 .parameters
@@ -557,10 +565,42 @@ impl Checker<'_> {
                 return false;
             }
             for producer in producers {
-                if let super::variant_brands::Producer::Transfer(source) = producer {
-                    pending.push(*source);
-                } else {
-                    return false;
+                match producer {
+                    super::variant_brands::Producer::Transfer(source) => pending.push(*source),
+                    super::variant_brands::Producer::Closure(callback)
+                        if !self
+                            .lifetime(&self.definition.types.get(place.ty).unwrap().modes.relation)
+                            .is_global() =>
+                    {
+                        let mut found = false;
+                        for instruction in self
+                            .body
+                            .blocks
+                            .iter()
+                            .flat_map(|block| &block.instructions)
+                        {
+                            if let InstructionKind::Assign { destination, value } =
+                                &instruction.kind
+                            {
+                                if self.body.places[destination.0 as usize].root == place.root {
+                                    if let Rvalue::Closure { body, captures, .. } =
+                                        &self.body.rvalues[value.0 as usize]
+                                    {
+                                        if body == callback {
+                                            found = true;
+                                            pending.extend(
+                                                captures.iter().map(|capture| capture.place),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !found {
+                            return false;
+                        }
+                    }
+                    _ => return false,
                 }
             }
         }
@@ -578,6 +618,28 @@ impl Checker<'_> {
         if self.invocation_header().is_none() && !seal_finalizer {
             return;
         }
+        // Scoped forwarding is also an entry-body obligation: a scope
+        // callback may capture only the enclosing declaration's selected
+        // unknown parameters, independently of source-created capture rows.
+        let scoped_unknown_callback = arguments.iter().any(|argument| {
+            let ty = self.place_type(argument.value.place);
+            function
+                .parameters
+                .get(argument.parameter.0 as usize)
+                .is_some_and(|parameter| parameter.passing == hirsel_syntax::PassingMode::Borrow)
+                && matches!(
+                    self.definition.types.get(ty).unwrap().kind,
+                    TypeKind::Function(_)
+                )
+                && !self
+                    .lifetime(&self.definition.types.get(ty).unwrap().modes.relation)
+                    .is_global()
+                && self.authority_with_generics(
+                    &self.definition.types,
+                    ty,
+                    &self.generic_declarations(),
+                ) == AuthoritySummary::Unknown
+        });
         // Named-body invocation checks elsewhere retain their existing policy.
         // This additional proof is the exact unrestricted parameter invocation
         // receipt; nested executable callables keep the complete effect audit.
@@ -592,7 +654,7 @@ impl Checker<'_> {
             } else {
                 false
             };
-            if !parameter_invocation {
+            if !parameter_invocation && !scoped_unknown_callback {
                 return;
             }
         }
@@ -717,7 +779,8 @@ impl Checker<'_> {
                 .authority_with_generics(&self.definition.types, ty, &self.generic_declarations())
                 .is_subset_of(&allowed)
         });
-        let provided_unknown = self.site.body != self.definition.entry
+        let provided_unknown = (self.site.body != self.definition.entry
+            || scoped_unknown_callback && selected.is_some())
             && provided_unknown
             && (ambient_required == AuthoritySummary::Unknown
                 || ambient_required.is_subset_of(&allowed))
