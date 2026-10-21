@@ -770,6 +770,44 @@ fn slab_layout() -> HostLayout {
     unsafe { HostLayout::from_size_align_unchecked(SLAB_SIZE, SLAB_SIZE) }
 }
 
+// glibc malloc/malloc.c:2254-2285,4395-4412 (04e750e7): large chunks use
+// page-rounded mmap/munmap, but freeing one raises the process-wide adaptive
+// mmap threshold. A service's transient sequence buffers then enter malloc
+// arenas and can remain resident indefinitely behind unrelated live chunks.
+// Keep the runtime's large buffers out of that policy. mmap guarantees at least
+// 4 KiB alignment on our supported Linux targets; rarer larger alignments keep
+// their existing backing path. No allocation-kind bit or ABI field is needed:
+// the immutable prefix size/alignment determines the matching release.
+#[cfg(all(target_os = "linux", not(feature = "system-allocator")))]
+fn mapped_large(total: u64, align: u64) -> bool {
+    total >= 128 * 1024 && align <= 4096
+}
+
+#[cfg(not(feature = "system-allocator"))]
+unsafe fn allocate_large(host: HostLayout) -> *mut u8 {
+    #[cfg(target_os = "linux")]
+    if mapped_large(host.size() as u64, host.align() as u64) {
+        // SAFETY: nonzero validated size; anonymous private pages belong only to this block.
+        let base = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                host.size(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        return if base == libc::MAP_FAILED {
+            ptr::null_mut()
+        } else {
+            base.cast()
+        };
+    }
+    // SAFETY: caller passes the nonzero validated layout of one large block.
+    unsafe { host_alloc(host) }
+}
+
 /// Offset of a large block's header from its backing allocation.
 #[inline]
 fn large_header_offset(align: u64) -> u64 {
@@ -791,6 +829,45 @@ pub(crate) fn payload(block: *mut Header) -> *mut u8 {
 }
 
 impl Heap {
+    /// Physical backing spans for the opt-in measurement-only RSS sampler. Counts and
+    /// capacities remain the ctx_stats API's logical view; these spans are not additive RSS.
+    #[cfg(feature = "measurement")]
+    pub(crate) fn write_residency(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        writeln!(
+            out,
+            "hirsel-rss metadata heap={} layouts={}",
+            size_of::<Self>(),
+            self.layouts.len() * size_of::<*const crate::Layout>()
+        )?;
+        for (class, state) in self.classes.iter().enumerate() {
+            let mut slab = state.slabs;
+            // SAFETY: this worker owns every slab in these lists and is not executing code.
+            unsafe {
+                while !slab.is_null() {
+                    writeln!(
+                        out,
+                        "hirsel-rss slab {} {} {} {} {} {}",
+                        slab.addr(),
+                        SLAB_SIZE,
+                        class_capacity(class),
+                        pool_align(class),
+                        (*slab).live,
+                        (*slab).slots
+                    )?;
+                    slab = (*slab).next;
+                }
+            }
+        }
+        let mut large = self.large;
+        // SAFETY: this worker owns the large-block list.
+        unsafe {
+            while !large.is_null() {
+                writeln!(out, "hirsel-rss large {} {}", large.addr(), (*large).total)?;
+                large = (*large).next;
+            }
+        }
+        self.regions.write_residency(out)
+    }
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     #[inline(never)]
     fn record_backing_allocation(&mut self) {
@@ -1513,7 +1590,7 @@ impl Heap {
         };
         // SAFETY: nonzero size.
         #[cfg(not(feature = "system-allocator"))]
-        let base = unsafe { host_alloc(host) };
+        let base = unsafe { allocate_large(host) };
         // malloc's alignment is sufficient for the prefix; overallocate to align the payload
         // ourselves, retaining the original allocation for exactly one matching free.
         #[cfg(feature = "system-allocator")]
@@ -1958,6 +2035,13 @@ unsafe fn release_large(prefix: *mut LargePrefix, _total: u64, _align: u64) {
     }
     #[cfg(not(feature = "system-allocator"))]
     unsafe {
+        #[cfg(target_os = "linux")]
+        if mapped_large(_total, _align) {
+            if libc::munmap(prefix.cast(), _total as usize) != 0 {
+                fault("cannot unmap a large block");
+            }
+            return;
+        }
         host_dealloc(
             prefix.cast(),
             HostLayout::from_size_align_unchecked(_total as usize, _align as usize),

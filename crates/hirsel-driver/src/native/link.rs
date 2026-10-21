@@ -1073,6 +1073,18 @@ pub(crate) fn link_standalone(
     link_objects_impl(program, entry, objects, toolchain, dir, None, true)
 }
 
+/// Link already emitted objects as a standalone executable, accepting fresh grants at
+/// launch. Instrumented benchmark companions use the same launcher contract as `build`.
+pub fn link_standalone_objects(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> Result<PathBuf, NativeError> {
+    link_standalone(program, entry, objects, toolchain, dir).map(|linked| linked.path)
+}
+
 /// A compiled program as an image a host process loads ([`link_host`]): the image and the run
 /// record it binds.
 #[derive(Clone, Debug)]

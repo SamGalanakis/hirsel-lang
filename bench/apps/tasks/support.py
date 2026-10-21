@@ -50,7 +50,7 @@ def grants(directory, port):
 
 
 class Server:
-    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None, heap=None, extra_env=None):
+    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None, heap=None, extra_env=None, cpu=31):
         environment = dict(os.environ, TASKS_DATA=str(directory),
                            TASKS_STATIC=str(ROOT / 'examples/tasks/static'),
                            TASKS_WALL_CLOCK='off', TASKS_LOG_LEVEL='error',
@@ -58,7 +58,7 @@ class Server:
                            TASKS_STORE='files', TASKS_DURABILITY='volatile', TASKS_HOST='127.0.0.1',
                            HIRSEL_JOBS='1')
         environment.update(extra_env or {})
-        if kind in ('hirsel', 'hirsel-recorded'):
+        if kind in ('hirsel', 'hirsel-recorded', 'hirsel-before'):
             command = [str(hirsel_binary), '--hirsel-grants', json.dumps(grants(directory, port)), '--port', str(port), '--log-level', 'error']
             if kind == 'hirsel-recorded':
                 command = [command[0], '--hirsel-record', str(directory.parent / (directory.name + '.tape')), *command[1:]]
@@ -68,7 +68,7 @@ class Server:
             command = ['env', 'LD_PRELOAD=/usr/lib/heaptrack/libheaptrack_preload.so',
                        'DUMP_HEAPTRACK_OUTPUT=' + str(heap), *command]
         self.marker = directory.parent / (directory.name + '-launch.json')
-        command = ['taskset', '-c', '31', str(APP / 'rust/target/release/launch'), str(self.marker), *command]
+        command = ['taskset', '-c', str(cpu), str(APP / 'rust/target/release/launch'), str(self.marker), *command]
         if record:
             command = ['perf', 'record', '-e', 'instructions:u', '-c', '10000', '-g', '--call-graph', 'dwarf,8192',
                        '-o', str(record), *command]

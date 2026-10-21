@@ -355,6 +355,67 @@ fn worker_collection_reclaims_idle_slabs_without_a_region_exit() {
 #[cfg(not(feature = "system-allocator"))]
 #[cfg(target_os = "linux")]
 #[test]
+fn large_buffers_return_pages_even_when_libc_would_retain_them() {
+    const NAME: &str = "large_buffers_return_pages_even_when_libc_would_retain_them";
+    if !in_child(NAME) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                format!("alloc::{NAME}"),
+                "--exact".into(),
+                "--nocapture".into(),
+            ])
+            .env("HIRSEL_RT_CHILD", NAME)
+            // Reproduce the arena policy after glibc has seen a large transient buffer,
+            // independently of this process's other tests and their allocation order.
+            .env("MALLOC_MMAP_THRESHOLD_", (32 << 20).to_string())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let ctx = Ctx::production();
+    let empty = leaf(0);
+    let bytes = 512 * 1024;
+    let buffer = alloc(&ctx, empty, bytes, 16);
+    let guard = alloc(&ctx, empty, bytes, 16);
+    unsafe {
+        ptr::write_bytes(payload(buffer), 0x39, bytes as usize);
+        ptr::write_bytes(payload(guard), 0x71, bytes as usize);
+    }
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let base = (buffer.addr() & !(page - 1)) as *mut libc::c_void;
+    release(&ctx, buffer, empty);
+    let mut residency = vec![0u8; bytes as usize / page];
+    let result = unsafe { libc::mincore(base, bytes as usize, residency.as_mut_ptr()) };
+    if result == 0 {
+        assert!(
+            residency
+                .iter()
+                .skip(1)
+                .take(residency.len() - 2)
+                .all(|b| b & 1 == 0),
+            "released large buffer is still resident: {residency:?}"
+        );
+    } else {
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOMEM)
+        );
+    }
+    assert_eq!(unsafe { *payload(guard) }, 0x71);
+    assert_eq!(unsafe { *payload(guard).add(bytes as usize - 1) }, 0x71);
+    assert_eq!(ctx.stats().live_blocks, 1);
+    release(&ctx, guard, empty);
+}
+
+#[cfg(not(feature = "system-allocator"))]
+#[cfg(target_os = "linux")]
+#[test]
 fn retiring_slabs_discards_their_resident_pages_and_preserves_live_ones() {
     let ctx = Ctx::with(Config {
         heap_idle_cap: 1,

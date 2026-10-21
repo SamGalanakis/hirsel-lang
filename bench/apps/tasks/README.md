@@ -52,6 +52,33 @@ corrupt-snapshot recovery, save failure and SIGTERM with stdin open.
 `--heap-only` appends heap evidence to an earlier session without new timings.
 CPU and heap profiles are separate diagnostic runs, not comparison samples.
 
+`--baseline-binary /absolute/path/to/before` adds `hirsel-before` to the seeded
+order and reports candidate/before ratios in the same ten-round session.
+`--samples-only` stops after the comparison samples and report, skipping the
+separate CPU and heap diagnostic runs.
+
+`./bench/apps/tasks/rss --output /tmp/tasks-rss --limit 1.3` is a separate
+Linux RSS diagnostic. It saves smaps, smaps_rollup and mapping totals after
+cold start and after loading 10,000 tasks, listing and creating. A missed ratio
+returns nonzero. `--malloc` builds and preloads the small host-glibc accounting
+helper; its arena allocated/free/mmap counters describe allocator storage,
+not resident pages. Never use that preload for timing measurements.
+`--env RSS_MALLOC_TRIM=1 --malloc` is a separate attribution experiment: it asks
+glibc to release its free pages at blocking waits, identifying reclaimable arena
+retention without changing the production allocator's process-wide policy.
+
+For runtime heap attribution, build the same program using
+`HIRSEL_BENCH_MEASUREMENT=1 HIRSEL_BENCH_STANDALONE=1 hirsel-native-build examples/tasks/hirsel.json
+/absolute/path/tasks-measured regions-on-whole`, then pass that binary to
+`rss --binary /absolute/path/tasks-measured --instrumented --malloc --output
+/tmp/tasks-rss-measured`. At idle boundaries the measurement archive reports
+`hirsel_rt_v2_ctx_stats`, slab classes, large blocks and active/idle region spans.
+`--max-idle-slab-bytes 1048576` checks the 1 MiB cap at each sampled idle boundary.
+The sampler counts their present pages through pagemap (no PFNs required).
+Shared boundary pages count once; logical capacities and metadata sizes remain
+separate from resident totals. This diagnostic covers one worker; it does not
+walk concurrently owned heaps. Its code and calls are absent from regular archives.
+
 The saved session reports a 4 GiB cap failure while Hirsel opens 1000 SSE clients.
 It does not retry that cell or increase the cap; the row stays unavailable and the
 other cells continue. The exact memory-limit evidence is retained in the report.

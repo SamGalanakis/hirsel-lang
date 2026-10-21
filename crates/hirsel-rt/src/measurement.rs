@@ -7,6 +7,30 @@ use std::io::Write;
 
 use crate::{CLASS_COUNT, CLASS_SIZES, TaskCtx};
 
+/// Opt-in, single-worker RSS diagnostic, separate from measurement counters and timings.
+/// Dump at the scheduler's idle boundary so the external sampler sees settled lists. The
+/// regular archive has neither this function nor its call. Addresses let the sampler count
+/// resident pages rather than treating reserved backing bytes as RSS.
+pub(crate) fn idle_snapshot(ctx: &mut TaskCtx) {
+    if std::env::var_os("HIRSEL_RT_HEAP_SNAPSHOT").is_none() {
+        return;
+    }
+    let mut stats = crate::context::Stats::default();
+    // SAFETY: a live context on its own worker, outside a running compiled task.
+    unsafe { crate::context::hirsel_rt_v2_ctx_stats(ctx, &mut stats) };
+    let mut out = std::io::stderr().lock();
+    let _ = writeln!(out, "hirsel-rss begin {stats:?}");
+    let _ = ctx.heap_ref().write_residency(&mut out);
+    let _ = writeln!(
+        out,
+        "hirsel-rss metadata task={} worker={} run={}",
+        size_of::<TaskCtx>(),
+        size_of::<crate::context::Worker>(),
+        size_of::<crate::context::RunShared>(),
+    );
+    let _ = writeln!(out, "hirsel-rss end");
+}
+
 /// The last bin holds capacities outside the small class schedule, regardless of storage kind.
 pub(crate) const BIN_COUNT: usize = CLASS_COUNT + 1;
 

@@ -603,6 +603,28 @@ fn segment_layout(size: u64) -> HostLayout {
 }
 
 impl RegionPool {
+    #[cfg(feature = "measurement")]
+    pub(crate) fn write_residency(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        for (kind, mut segment) in [("region_idle", self.idle), ("region_active", self.lent)] {
+            // SAFETY: this worker owns both lists; a snapshot neither suspends nor mutates them.
+            unsafe {
+                while !segment.is_null() {
+                    writeln!(
+                        out,
+                        "hirsel-rss {kind} {} {}",
+                        segment.addr(),
+                        (*segment).size
+                    )?;
+                    segment = if kind == "region_idle" {
+                        (*segment).prev
+                    } else {
+                        (*segment).lent_next
+                    };
+                }
+            }
+        }
+        Ok(())
+    }
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     #[inline(never)]
     fn record_backing_allocation(&mut self) {

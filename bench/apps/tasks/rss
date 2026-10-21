@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Attribute a fresh cold/seeded tasks service's resident mappings on Linux.
+
+Unlike bench, this is a diagnostic run: no timings from it are comparison data.
+Raw smaps and smaps_rollup accompany every snapshot. --limit makes the requested
+Hirsel/Rust RSS ratio an executable check.
+"""
+import argparse
+import hashlib
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import struct
+import subprocess
+
+from support import APP, Server, free_port
+
+loader = importlib.machinery.SourceFileLoader('tasks_bench', str(APP / 'bench'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+bench = importlib.util.module_from_spec(spec)
+loader.exec_module(bench)
+
+
+def exchange(port, method, target, body=None):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+    connection.request(method, target, body, {'content-type': 'application/json', 'connection': 'close'})
+    # Wait for the server to close its half too, rather than sampling while it
+    # still owns the response body or is noticing our keep-alive disconnect.
+    with connection.sock.dup() as stream:
+        response = connection.getresponse()
+        assert response.status == 200, response.status
+        response.read()
+        assert stream.recv(1) == b'', 'server must close the finished request'
+    connection.close()
+
+
+def mappings(text):
+    rows = []
+    for line in text.splitlines():
+        if re.match(r'^[0-9a-f]+-[0-9a-f]+ ', line):
+            fields = line.split(None, 5)
+            start, end = (int(n, 16) for n in fields[0].split('-'))
+            rows.append(dict(start=start, end=end, permissions=fields[1],
+                             path=fields[5] if len(fields) == 6 else ''))
+        elif ':' in line and rows:
+            key, value = line.split(':', 1)
+            if value.strip().endswith('kB'):
+                rows[-1][key] = int(value.split()[0]) * 1024
+    return rows
+
+
+def snapshot(server, directory, label, binary):
+    pid = json.loads(server.marker.read_text())['pid']
+    smaps = Path(f'/proc/{pid}/smaps').read_text()
+    rollup = Path(f'/proc/{pid}/smaps_rollup').read_text()
+    (directory / f'{label}.smaps').write_text(smaps)
+    (directory / f'{label}.smaps_rollup').write_text(rollup)
+    rows = mappings(smaps)
+    # A malloc arena can also border a PROT_NONE reservation. Only identify a
+    # thread stack when its blocked syscall exposes a stack pointer in that mapping.
+    stack_pointers = []
+    for thread in Path(f'/proc/{pid}/task').iterdir():
+        try:
+            fields = (thread / 'syscall').read_text().split()
+            if len(fields) >= 3 and fields[0] != 'running':
+                stack_pointers.append(int(fields[-2], 16))
+        except (OSError, ValueError):
+            pass
+    groups = {}
+    for index, row in enumerate(rows):
+        path = row['path']
+        if path == str(binary):
+            group = 'binary_text' if 'x' in row['permissions'] else 'binary_data'
+        elif path.startswith('[stack'):
+            group = 'main_stack'
+        elif not path and any(row['start'] <= sp < row['end'] for sp in stack_pointers):
+            group = 'thread_stacks'
+        elif (not path and index and rows[index - 1]['permissions'] == '---p'
+              and rows[index - 1]['end'] == row['start']):
+            group = 'guard_adjacent_anonymous'
+        elif not path or path == '[heap]':
+            group = 'private_heap_and_thread_stacks'
+        elif path.startswith('/'):
+            group = 'libraries'
+        else:
+            group = 'kernel_special'
+        groups[group] = groups.get(group, 0) + row['Rss']
+    result = dict(rss=sum(row['Rss'] for row in rows), components=groups, mappings=rows)
+    log = Path(server.log.name).read_text()
+    malloc = re.findall(rf'^rss-malloc (pid={pid} .+)$', log, re.M)
+    if malloc:
+        result['malloc'] = {k: int(v) for k, v in re.findall(r'(\w+)=(\d+)', malloc[-1])}
+    heaps = re.findall(r'^hirsel-rss begin (.*?)^hirsel-rss end$', log, re.M | re.S)
+    if heaps:
+        heap = heaps[-1]
+        (directory / f'{label}.heap').write_text(heap)
+        result['ctx_stats'] = {k: int(v) for k, v in re.findall(r'(\w+): (\d+)', heap.splitlines()[0])}
+        resident = {}
+        spans = []
+        classes = {}
+        metadata = {}
+        page_size = os.sysconf('SC_PAGE_SIZE')
+        # pagemap's present bit needs no PFN privilege. Assign a shared boundary page
+        # once, so the totals are additive even for libc-backed unaligned spans.
+        assigned = set()
+        with open(f'/proc/{pid}/pagemap', 'rb') as pagemap:
+            for line in heap.splitlines()[1:]:
+                fields = line.split()
+                if len(fields) >= 3 and fields[1] == 'metadata':
+                    metadata.update({k: int(v) for k, v in re.findall(r'(\w+)=(\d+)', line)})
+                    continue
+                if len(fields) < 4:
+                    continue
+                kind, start, size = fields[1], int(fields[2]), int(fields[3])
+                if kind == 'slab':
+                    kind = 'idle_slabs' if int(fields[6]) == 0 else 'occupied_slabs'
+                pages = range(start // page_size, (start + size + page_size - 1) // page_size)
+                present = 0
+                for page in pages:
+                    pagemap.seek(page * 8)
+                    value = struct.unpack('Q', pagemap.read(8))[0]
+                    if value & (1 << 63) and page not in assigned:
+                        assigned.add(page)
+                        present += page_size
+                resident[kind] = resident.get(kind, 0) + present
+                spans.append(dict(kind=kind, start=start, bytes=size, rss=present, detail=fields[4:]))
+                if fields[1] == 'slab':
+                    capacity, alignment, live, slots = map(int, fields[4:])
+                    key = f'{capacity}/{alignment}'
+                    row = classes.setdefault(key, dict(slabs=0, live_blocks=0, free_slots=0,
+                        live_capacity=0, free_capacity=0, rss=0))
+                    for name, amount in [('slabs', 1), ('live_blocks', live), ('free_slots', slots - live),
+                                         ('live_capacity', live * capacity), ('free_capacity', (slots - live) * capacity),
+                                         ('rss', present)]:
+                        row[name] += amount
+        result.update(heap_resident=resident, heap_spans=spans, slab_classes=classes,
+                      runtime_metadata_sizes=metadata,
+                      other_private_heap_rss=sum(groups.get(k, 0) for k in
+                          ('private_heap_and_thread_stacks', 'guard_adjacent_anonymous')) - sum(resident.values()))
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, default=APP / 'build/tasks-hirsel')
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--limit', type=float)
+    parser.add_argument('--max-idle-slab-bytes', type=int, help='assert the idle cap in every instrumented snapshot')
+    parser.add_argument('--cpu', type=int, default=31, help='diagnostic server CPU (no timing conclusions)')
+    parser.add_argument('--instrumented', action='store_true', help='binary is the measurement companion')
+    parser.add_argument('--malloc', action='store_true', help='preload host glibc accounting helper (diagnostic only)')
+    parser.add_argument('--env', action='append', default=[], metavar='NAME=VALUE', help='diagnostic server environment override')
+    args = parser.parse_args()
+    args.binary = args.binary.resolve()
+    args.output.mkdir(parents=True, exist_ok=False)
+    os.sched_setaffinity(0, {7})
+    document = {}
+    environment = {'HIRSEL_RT_HEAP_SNAPSHOT': '1'} if args.instrumented else {}
+    environment.update(item.split('=', 1) for item in args.env)
+    if args.malloc:
+        library = args.output.resolve() / 'rss-malloc.so'
+        subprocess.run(['cc', '-shared', '-fPIC', '-Wall', '-Werror', '-o', str(library),
+                        str(APP / 'rss-malloc.c'), '-ldl'], check=True)
+        environment['LD_PRELOAD'] = str(library.resolve())
+    with bench.timing_lock(args.cpu):
+        for count in (0, 10000):
+            for kind in ('hirsel', 'rust-one-worker'):
+                directory = args.output / f'{count}-{kind}'
+                directory.mkdir()
+                data = directory / 'data'
+                bench.fixture(data, count)
+                server = Server(kind, data, free_port(), args.binary, directory / 'server.log',
+                                extra_env=environment, cpu=args.cpu)
+                try:
+                    exchange(server.port, 'GET', '/?q=Task+9999')
+                    binary = args.binary if kind == 'hirsel' else bench.RUST
+                    key = f'{count}/{kind}'
+                    document[key] = {'ready': snapshot(server, directory, 'ready', binary)}
+                    print(f'{key}/ready: {document[key]["ready"]["rss"] / 2**20:.3f} MiB', flush=True)
+                    if count:
+                        for operation, method, target, body in (
+                            ('list', 'GET', '/', None),
+                            ('create', 'POST', '/tasks', json.dumps({'draft': {
+                                'title': 'RSS probe', 'description': '', 'priority': 'medium',
+                                'due': '', 'tags': ''}})),
+                        ):
+                            exchange(server.port, method, target, body)
+                            document[key][operation] = snapshot(server, directory, operation, binary)
+                            print(f'{key}/{operation}: {document[key][operation]["rss"] / 2**20:.3f} MiB', flush=True)
+                finally:
+                    server.stop()
+    ratios = {}
+    for count in (0, 10000):
+        for operation, row in document[f'{count}/hirsel'].items():
+            ratio = row['rss'] / document[f'{count}/rust-one-worker'][operation]['rss']
+            ratios[f'{count}/{operation}'] = ratio
+            print(f'{count}/{operation}: {row["rss"] / 2**20:.3f} MiB, Hirsel/Rust {ratio:.3f}', flush=True)
+    idle_ok = True
+    if args.max_idle_slab_bytes is not None:
+        for key, snapshots in document.items():
+            if not key.endswith('/hirsel'):
+                continue
+            for operation, row in snapshots.items():
+                count = row.get('ctx_stats', {}).get('idle_slab_bytes')
+                passed = count is not None and count <= args.max_idle_slab_bytes
+                print(f'{key}/{operation}: idle slabs {count}, cap {args.max_idle_slab_bytes}: {"pass" if passed else "FAIL"}')
+                idle_ok &= passed
+    hashes = {kind: hashlib.sha256(binary.read_bytes()).hexdigest()
+              for kind, binary in [('hirsel', args.binary), ('rust-one-worker', bench.RUST)]}
+    (args.output / 'results.json').write_text(json.dumps(dict(snapshots=document, ratios=ratios,
+        binaries=hashes, cpu=args.cpu, instrumented=args.instrumented, malloc_preload=args.malloc,
+        idle_cap_pass=idle_ok, environment=args.env), indent=2) + '\n')
+    return int(not idle_ok or args.limit is not None and any(r > args.limit for r in ratios.values()))
+
+
+if __name__ == '__main__':
+    sys.exit(main())

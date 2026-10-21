@@ -3,7 +3,8 @@
 hirsel_guard::install!();
 
 use hirsel_driver::native::{
-    OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain, build, link,
+    OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain, build, emit_objects, link,
+    link_standalone_objects,
 };
 use std::{path::Path, time::Instant};
 
@@ -130,14 +131,29 @@ fn compile() -> Result<(), Box<dyn std::error::Error>> {
                 "objects"
             });
             std::fs::create_dir_all(&objects)?;
-            let result = link(
-                &ready,
-                &loaded.entry,
-                OptLevel::Speed,
-                partition,
-                &toolchain,
-                &objects,
-            );
+            let standalone = std::env::var_os("HIRSEL_BENCH_STANDALONE").is_some();
+            let result = if standalone {
+                emit_objects(&ready, OptLevel::Speed, partition, measurement, None).and_then(
+                    |emitted| {
+                        link_standalone_objects(
+                            &ready,
+                            &loaded.entry,
+                            &emitted,
+                            &toolchain,
+                            &objects,
+                        )
+                    },
+                )
+            } else {
+                link(
+                    &ready,
+                    &loaded.entry,
+                    OptLevel::Speed,
+                    partition,
+                    &toolchain,
+                    &objects,
+                )
+            };
             let executable = match result {
                 Ok(executable) => executable,
                 Err(error) if all => {
@@ -159,6 +175,7 @@ fn compile() -> Result<(), Box<dyn std::error::Error>> {
                 "hirsel_opt_level": "O3", "hirsel_lto": false,
                 "runtime_archive": toolchain.runtime.get(&(target.triple.clone(), runtime_build)),
                 "runtime_build": { "diagnostic": false, "system_allocator": runtime_build.system_allocator, "measurement": measurement },
+                "standalone": standalone,
                 "matrix_version": hirsel_driver::native::MATRIX_VERSION,
                 "configuration": config, "partition": partition.name(),
                 "regions": options.regions, "reuse": options.reuse, "flat_walk": options.flat_walk,

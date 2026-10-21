@@ -23,7 +23,11 @@ KINDS = ['hirsel', 'hirsel-recorded', 'rust', 'rust-one-worker']
 
 
 def is_hirsel(kind):
-    return kind in ('hirsel', 'hirsel-recorded')
+    return kind in ('hirsel', 'hirsel-recorded', 'hirsel-before')
+
+
+def binary_for(kind, args):
+    return args.baseline_binary if kind == 'hirsel-before' else args.binary if is_hirsel(kind) else RUST
 
 
 def per_request(row, metric):
@@ -126,7 +130,8 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
     port = free_port()
     before = sibling()
     lifetime = directory / 'lifetime.csv' if operation in ('cold', 'restart') else None
-    server = Server(kind, data, port, args.binary, directory / 'server.log', timeout=900, perf=lifetime,
+    binary = binary_for(kind, args)
+    server = Server(kind, data, port, binary, directory / 'server.log', timeout=900, perf=lifetime,
                     record=directory / 'profile.data' if profile and lifetime else None)
     client = None
     perf = None
@@ -140,7 +145,7 @@ def sample(kind, operation, rate, args, directory, round_number, profile=False):
         first_ms = (time.monotonic_ns() - marker['started_ns']) / 1e6
         idle_rss = rss(pid)
         result = {'kind': kind, 'operation': operation, 'rate': rate, 'round': round_number,
-                  'first_ms': first_ms, 'idle_rss': idle_rss, 'binary_bytes': (args.binary if is_hirsel(kind) else RUST).stat().st_size,
+                  'first_ms': first_ms, 'idle_rss': idle_rss, 'binary_bytes': binary.stat().st_size,
                   'sibling_before': before}
         if operation not in ('cold', 'restart'):
             client = subprocess.Popen([str(CAPPED), '--timeout', '600', 'taskset', '-c', '7',
@@ -215,7 +220,7 @@ def startup_profile(kind, operation, args, directory):
     directory.mkdir()
     data = directory / 'data'
     fixture(data, 0 if operation == 'cold' else 10000)
-    server = Server(kind, data, free_port(), args.binary, directory / 'server.log', record=directory / 'profile.data')
+    server = Server(kind, data, free_port(), binary_for(kind, args), directory / 'server.log', record=directory / 'profile.data')
     try:
         request(server.port)
     finally:
@@ -231,7 +236,7 @@ def memory_profile(kind, args, directory):
     data = directory / 'data'
     fixture(data, 10000)
     raw = directory / 'heap.raw'
-    server = Server(kind, data, free_port(), args.binary, directory / 'server.log', heap=raw)
+    server = Server(kind, data, free_port(), binary_for(kind, args), directory / 'server.log', heap=raw)
     try:
         request(server.port)
         connection = http.client.HTTPConnection('127.0.0.1', server.port, timeout=60)
@@ -361,6 +366,23 @@ def report(document, path):
         ipc_right = [b[n]['perf']['instructions'] / b[n]['perf']['cycles'] for n in keys]
         ipc_low, ipc_high = bootstrap_ratio(ipc_left, ipc_right, document['seed'], draws=2000)
         text += [f"| {op} / {rate} | {' | '.join(ratios)} | {ipc_a:.3f} / {ipc_b:.3f}; {ratio(ipc_left, ipc_right):.3f} [{ipc_low:.3f}, {ipc_high:.3f}] |"]
+    if 'hirsel-before' in document.get('binaries', {}):
+        text += ['', 'Candidate / before (same session, paired rounds):', '',
+                 '| Operation / rate | Instructions ratio [95% CI] | Completed req/s ratio | Idle RSS ratio | Load RSS ratio |',
+                 '|---|---:|---:|---:|---:|---:|']
+        for op, rate in cells:
+            groups = [{r['round']: r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, kind)}
+                      for kind in ('hirsel', 'hirsel-before')]
+            keys = sorted(groups[0].keys() & groups[1].keys())
+            if not keys:
+                continue
+            left, right = [[group[n]['instructions_per_request'] for n in keys] for group in groups]
+            low, high = bootstrap_ratio(left, right, document['seed'], draws=2000)
+            values = []
+            for metric in ('requests_per_s', 'idle_rss', 'load_rss'):
+                values.append(f"{ratio([groups[0][n][metric] for n in keys], [groups[1][n][metric] for n in keys]):.3f}"
+                              if metric in groups[0][keys[0]] and metric in groups[1][keys[0]] else '—')
+            text += [f'| {op}/{rate} | {ratio(left, right):.3f} [{low:.3f}, {high:.3f}] | ' + ' | '.join(values) + ' |']
     text += ['', 'Recording overhead (recorded / plain, per-request medians):', '', '| Operation / rate | Instructions | Cycles | Idle RSS |', '|---|---:|---:|---:|']
     for op, rate in cells:
         groups = [[r for r in rows if (r['operation'], r['rate'], r['kind']) == (op, rate, kind)]
@@ -449,13 +471,18 @@ def main():
     parser.add_argument('--rates', default='1,4,16,64,256,1024')
     parser.add_argument('--seed', type=int, default=20261020)
     parser.add_argument('--binary', type=Path, default=APP / 'build/tasks-hirsel')
+    parser.add_argument('--baseline-binary', type=Path, help='add hirsel-before to the same seeded interleaved session')
     parser.add_argument('--skip-build', action='store_true')
+    parser.add_argument('--samples-only', action='store_true', help='finish after comparison samples, without diagnostic profiles')
     parser.add_argument('--report-only', action='store_true', help='regenerate Markdown from saved raw samples')
     parser.add_argument('--startup-profiles-only', action='store_true', help='record startup user instructions without a nested counter profiler')
     parser.add_argument('--heap-only', action='store_true', help='append non-timing heap evidence to a saved session')
     parser.add_argument('--only', default='cold,restart,list,search,create,update,sse')
     args = parser.parse_args()
     selected = args.kinds.split(',')
+    if args.baseline_binary:
+        KINDS.append('hirsel-before')
+        selected.append('hirsel-before')
     if set(selected) - set(KINDS):
         parser.error('unknown participant')
     KINDS[:] = selected
@@ -515,7 +542,7 @@ def main():
     document['client_sha256'] = hashlib.sha256((APP / 'rust/target/release/load').read_bytes()).hexdigest()
     document['rustc'] = subprocess.check_output(['rustc', '--version'], text=True).strip()
     document['perf_version'] = subprocess.check_output(['perf', '--version'], text=True).strip()
-    document['binaries'] = {k: hashlib.sha256((args.binary if is_hirsel(k) else RUST).read_bytes()).hexdigest() for k in KINDS}
+    document['binaries'] = {k: hashlib.sha256(binary_for(k, args).read_bytes()).hexdigest() for k in KINDS}
     operations = args.only.split(',')
     archive = APP / 'build' / session.replace(':', '')
     archive.mkdir(parents=True)
@@ -550,6 +577,10 @@ def main():
                 document['errors'][-1]['server_log'] = server_log.read_text().strip()
             print(f'FAILED: {error}', flush=True)
         (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+    if args.samples_only:
+        report(document, APP / 'RESULTS.md')
+        lock.close()
+        return 1 if document['errors'] else 0
     for op in operations:
         rate = 0 if op in ('cold', 'restart') else 100 if op == 'sse' else min(16, max(args.rates))
         for kind in KINDS:

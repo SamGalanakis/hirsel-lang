@@ -708,6 +708,17 @@ unsafe fn poll_here(
 /// # Safety
 /// `ctx` is live and its Binding bound.
 pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
+    // The last task can free its request/response buffers after its last worker collection.
+    // With no runnable task, nothing else will enforce the idle cap until new work arrives.
+    // SAFETY: the scheduler is idle on this worker; no heap borrow crosses the host wait.
+    let heap = unsafe { &mut *ctx }.heap();
+    // Most waits are unrelated to a completed request. Avoid collecting/scanning the
+    // live board unless already-empty slabs actually exceed the cap.
+    if heap.view().idle_slabs > heap.idle_cap / crate::alloc::SLAB_SIZE as u64 {
+        heap.trim();
+    }
+    #[cfg(feature = "measurement")]
+    crate::measurement::idle_snapshot(unsafe { &mut *ctx });
     // The code's caller owns this permit. Home must never reacquire it on
     // behalf of a waiting compute worker: at one process permit that would
     // prevent the caller from resuming after the home completion.
