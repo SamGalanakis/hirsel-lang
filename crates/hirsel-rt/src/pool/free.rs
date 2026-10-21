@@ -183,17 +183,22 @@ pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner
         }
     };
     if let Some(saved) = saved {
-        publish(execs, saved, false);
+        // A notifier can keep executing indefinitely after this op. Work
+        // cannot remain in its private LIFO slot until its next idle turn.
+        publish(execs, saved, false, false);
     }
 }
 
-fn publish(execs: &Execs, saved: Saved, yielded: bool) {
+fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
     match word_owner(saved.frame.owner.load(Ordering::Acquire)) {
         Owner::Any => {
             let me = own_exec();
             // SAFETY: an exec's local state belongs only to its OS thread.
-            let local = if !me.is_null() {
+            // Tokio's LIFO slot is private until the current poll returns.
+            // A Hirsel pure segment need not return, so only an idle
+            // continuation may use the slot: it searches again immediately.
+            let local = if idle && !me.is_null() {
                 unsafe { (*me).ready.take() }
             } else {
                 None
@@ -320,6 +325,7 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
                         lease,
                     },
                     yielded,
+                    true,
                 );
             }
         }

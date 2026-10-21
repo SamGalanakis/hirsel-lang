@@ -3583,6 +3583,106 @@ mod free_policy_tests {
         assert_eq!(outcome.pending, 0);
     }
 
+    struct ConcurrentSegments {
+        started: std::sync::atomic::AtomicU32,
+        finished: std::sync::atomic::AtomicU32,
+        timed_out: std::sync::atomic::AtomicBool,
+    }
+
+    fn rendezvous(segments: &ConcurrentSegments) {
+        segments.started.fetch_add(1, Ordering::AcqRel);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while segments.started.load(Ordering::Acquire) != 8 {
+            if std::time::Instant::now() >= until {
+                segments.timed_out.store(true, Ordering::Release);
+                break;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    unsafe extern "C" fn concurrent_segment(ctx: *mut u8, data: *mut u8) -> ! {
+        let ctx = ctx.cast::<TaskCtx>();
+        // SAFETY: admission transfers this Box to this prepared stack once.
+        let segments = unsafe { Box::from_raw(data.cast::<std::sync::Arc<ConcurrentSegments>>()) };
+        rendezvous(&segments);
+        segments.finished.fetch_add(1, Ordering::Release);
+        drop(segments);
+        // SAFETY: no task-owned Rust value remains on this abandoned stack.
+        unsafe {
+            role::enter(ctx);
+            crate::pool::free::finish_current(ctx);
+        }
+    }
+
+    #[test]
+    fn newly_published_segments_run_while_the_spawner_keeps_its_worker() {
+        // Process permits are shared by all runs in one test binary. Follow
+        // runners::permit_tests: isolate the manager grant from other tests.
+        const CHILD: &str = "HIRSEL_F1_CONCURRENT_SEGMENTS";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tasks::free_policy_tests::newly_published_segments_run_while_the_spawner_keeps_its_worker",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(8);
+        let mut run = crate::host::BodyRun::new(8, false);
+        // SAFETY: these bodies use only explicit physical dispatch, never a
+        // home service, logical wait, or another task's stack slots.
+        unsafe { run.use_physical_dispatch() };
+        let segments = std::sync::Arc::new(ConcurrentSegments {
+            started: Default::default(),
+            finished: Default::default(),
+            timed_out: Default::default(),
+        });
+        let observed = segments.clone();
+        let outcome = run.run(
+            |_| {},
+            move |ctx| {
+                // Build seven independent, real task stacks under the role.
+                // The root is the eighth segment and deliberately keeps its
+                // worker until all seven have started; hidden local work must
+                // not depend on its next operation or suspension.
+                unsafe {
+                    role::enter(ctx);
+                    for _ in 0..7 {
+                        let stack = Stack::new();
+                        let child = stack.context();
+                        child.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+                        let s = scheduler(ctx);
+                        let index = s.tasks.len() as u32;
+                        (*child).task_id = index;
+                        (*child).task_sp = stack.prepare(
+                            concurrent_segment,
+                            child.cast(),
+                            Box::into_raw(Box::new(segments.clone())).cast(),
+                        );
+                        let mut row = Task::new(1, child, None, vec![index], None);
+                        row.stack = Some(stack);
+                        s.tasks.push(Some(row));
+                        crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any);
+                    }
+                    role::release(ctx);
+                }
+                rendezvous(&segments);
+                crate::STATUS_OK
+            },
+        );
+        assert!(matches!(outcome.ended, Ok(crate::STATUS_OK)), "{outcome:?}");
+        assert_eq!(outcome.pending, 0);
+        assert_eq!(observed.started.load(Ordering::Acquire), 8);
+        assert_eq!(observed.finished.load(Ordering::Acquire), 7);
+        assert!(!observed.timed_out.load(Ordering::Acquire));
+    }
+
     fn scope() -> Scope {
         Scope {
             generation: 1,
