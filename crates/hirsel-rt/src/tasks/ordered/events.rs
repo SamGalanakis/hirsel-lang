@@ -97,6 +97,7 @@ pub(super) struct CanonicalEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum CanonicalOutcome {
     Created(ObjectId),
+    Alias(ObjectId),
     Scalar(Vec<u8>),
     Unit,
 }
@@ -338,7 +339,10 @@ pub(super) fn record(
             return None;
         };
         let outcome = match &op.payload {
-            Command::AtomicCreate { .. } => CanonicalOutcome::Created(item.clone()),
+            Command::AtomicCreate { .. }
+            | Command::MutexCreate { .. }
+            | Command::ChannelOpen { .. } => CanonicalOutcome::Created(item.clone()),
+            Command::SenderDup { .. } => CanonicalOutcome::Alias(item.clone()),
             Command::AtomicLoad { .. } => CanonicalOutcome::Scalar(result.image.clone()),
             Command::AtomicStore { .. } => CanonicalOutcome::Unit,
             _ => return None,
@@ -409,6 +413,180 @@ pub(super) fn record(
 mod tests {
     use super::*;
     use crate::ordered::Policy;
+
+    #[test]
+    fn native_creations_and_sender_aliases_normalize_perturbed_handle_allocations() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let image = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let close = crate::Step {
+            kind: crate::STEP_CLOSE_HANDLE,
+            field: 0,
+            variant: 0,
+            span: 0,
+            offset: 0,
+            stride: 0,
+            count: 0,
+            count_offset: 0,
+            layout: std::ptr::null(),
+        };
+        let wrapper = crate::Layout {
+            size: 8,
+            flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
+            steps: &close,
+            step_count: 1,
+            field_count: 1,
+            ..image
+        };
+        let layouts = [&image as *const crate::Layout, &wrapper];
+        let mut reference = None;
+        let mut native_words = Vec::new();
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let output = Arc::new(Mutex::new(None));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = layouts.len() as u32;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        // Unpublished suffix reservations perturb every table
+                        // word without introducing a language operation.
+                        {
+                            let _guard = role::Guard::new(ctx);
+                            for _ in 0..width {
+                                let _ = scheduler(ctx).channels.reserve_open();
+                                let _ = scheduler(ctx).sync.reserve_mutex();
+                            }
+                        }
+                        let none = [0u64; 2];
+                        let mut first = [0u64; 2];
+                        super::super::engine::channel_open(
+                            ctx,
+                            first.as_mut_ptr(),
+                            none.as_ptr().cast(),
+                            2,
+                        )
+                        .unwrap();
+                        let mut duplicate = 0;
+                        super::super::engine::sender_dup(ctx, first[0], &mut duplicate).unwrap();
+                        let mut second = [0u64; 2];
+                        super::super::engine::channel_open(
+                            ctx,
+                            second.as_mut_ptr(),
+                            none.as_ptr().cast(),
+                            2,
+                        )
+                        .unwrap();
+                        let mut duplicate_again = 0;
+                        super::super::engine::sender_dup(ctx, duplicate, &mut duplicate_again)
+                            .unwrap();
+                        let mut payload = [1u64, 77];
+                        let mut mutex = 0;
+                        super::super::engine::mutex_create(
+                            ctx,
+                            &mut mutex,
+                            payload.as_mut_ptr().cast(),
+                            none.as_ptr().cast(),
+                            2,
+                            3,
+                        )
+                        .unwrap();
+                        assert_eq!(payload, none);
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let events = log.canonical().unwrap().to_vec();
+                        assert_eq!(events.len(), 5);
+                        let object = |ordinal| ObjectId {
+                            creator: Vec::new(),
+                            ordinal,
+                        };
+                        assert_eq!(
+                            events.iter().map(|event| event.version).collect::<Vec<_>>(),
+                            [1, 2, 1, 3, 1]
+                        );
+                        assert_eq!(
+                            events
+                                .iter()
+                                .map(|event| event.outcome.clone())
+                                .collect::<Vec<_>>(),
+                            [
+                                CanonicalOutcome::Created(object(0)),
+                                CanonicalOutcome::Alias(object(0)),
+                                CanonicalOutcome::Created(object(2)),
+                                CanonicalOutcome::Alias(object(0)),
+                                CanonicalOutcome::Created(object(4)),
+                            ]
+                        );
+                        assert!(
+                            events.iter().all(|event| event.subevent == 0
+                                && event.transition == Transition::Yield)
+                        );
+                        *seen.lock().unwrap() = Some((events, first[0]));
+                        // Release live values after inspecting the complete
+                        // creation/alias prefix; drops have separate events.
+                        for endpoint in first
+                            .into_iter()
+                            .chain(second)
+                            .chain([duplicate, duplicate_again])
+                        {
+                            assert_eq!(
+                                crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoint, 0, 0),
+                                crate::STATUS_OK
+                            );
+                        }
+                        assert_eq!(
+                            crate::roots::hirsel_rt_v2_root_drop(
+                                ctx,
+                                mutex as *mut crate::Header,
+                                0,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let (events, native_word) = output.lock().unwrap().take().unwrap();
+                native_words.push(native_word);
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
+        }
+        assert_ne!(
+            native_words[0], native_words[2],
+            "fixture changed native allocation"
+        );
+        assert_ne!(native_words[2], native_words[4]);
+    }
 
     #[test]
     fn cancel_subevents_keep_descendant_causes_in_path_order_across_native_row_orders() {
