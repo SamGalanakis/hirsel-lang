@@ -312,6 +312,9 @@ pub(crate) struct RunShared {
     pub(crate) profile_output: RoleCell<Option<std::fs::File>>,
     /// Trace admission only: concurrent Shared-root provenance, never a role lookup.
     pub(crate) ordered_roots: std::sync::OnceLock<crate::ordered::root_ids::Registry>,
+    /// Explicit Free host admission: owned concurrent requests and driver wake.
+    pub(crate) free_io:
+        std::sync::OnceLock<std::sync::Arc<crate::tasks::free::host::concurrent::Service>>,
 }
 
 impl RunShared {
@@ -864,6 +867,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         #[cfg(feature = "measurement")]
         profile_output: RoleCell::new(None),
         ordered_roots: Default::default(),
+        free_io: Default::default(),
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };

@@ -306,18 +306,7 @@ impl crate::io::Adapter for ParkHome {
         }
     }
     fn parked(&mut self, _: u64) {
-        self.probe.parked.store(true, Ordering::Release);
-        let run = self.probe.run.load(Ordering::Acquire);
-        let _guard = unsafe { role::IdleGuard::new(run) };
-        let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-        for id in std::mem::take(&mut s.retrying) {
-            s.task(id).retried = true;
-            s.wake(id);
-        }
-        unsafe {
-            crate::tasks::readiness::poll_free(s);
-            super::super::publish_ready(s, run);
-        }
+        wake_canceler(&self.probe);
     }
     fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
         assert_eq!(std::thread::current().id(), self.thread);
@@ -331,6 +320,58 @@ impl crate::io::Adapter for ParkHome {
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         Ok(false)
+    }
+    fn cancellable(&self, _: u64) -> bool {
+        self.mode != 2
+    }
+}
+fn wake_canceler(probe: &ParkProbe) {
+    probe.parked.store(true, Ordering::Release);
+    let run = probe.run.load(Ordering::Acquire);
+    let _guard = unsafe { role::IdleGuard::new(run) };
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    for id in std::mem::take(&mut s.retrying) {
+        s.task(id).retried = true;
+        s.wake(id);
+    }
+    unsafe {
+        crate::tasks::readiness::poll_free(s);
+        super::super::publish_ready(s, run);
+    }
+}
+struct ParkConcurrent {
+    probe: Arc<ParkProbe>,
+    mode: u8,
+    token: std::sync::atomic::AtomicU64,
+}
+impl crate::io_concurrent::ConcurrentAdapter for ParkConcurrent {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Ok(None)
+    }
+    fn call(&self, _: Request) -> Result<Completion, AdapterError> {
+        unreachable!()
+    }
+    fn call_at(&self, token: u64, _: Request) -> Result<Completion, AdapterError> {
+        self.token.store(token, Ordering::Release);
+        self.probe.calls.fetch_add(1, Ordering::Release);
+        if self.probe.canceled.load(Ordering::Acquire) {
+            assert_ne!(self.mode, 0, "canceled concurrent wait reissued its effect");
+            Ok(Completion::Wait(Ok(())))
+        } else {
+            Err(AdapterError::Blocked)
+        }
+    }
+    fn parked(&self, _: u64) {
+        wake_canceler(&self.probe);
+    }
+    fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
+        Ok(crate::io::Ready::Tokens(
+            if self.mode != 0 && self.probe.canceled.load(Ordering::Acquire) {
+                vec![self.token.load(Ordering::Acquire)]
+            } else {
+                vec![]
+            },
+        ))
     }
     fn cancellable(&self, _: u64) -> bool {
         self.mode != 2
@@ -416,10 +457,23 @@ unsafe fn spawn_canceler(ctx: *mut TaskCtx, probe: &Arc<ParkProbe>) {
 
 #[test]
 fn saved_native_host_cancellation_wakes_without_readiness_and_respects_shield_and_commit() {
+    parked_cancellation_entries(false);
+}
+
+#[test]
+fn saved_concurrent_host_cancellation_wakes_without_readiness_and_respects_shield_and_commit() {
+    parked_cancellation_entries(true);
+}
+
+fn parked_cancellation_entries(concurrent: bool) {
     const CHILD: &str = "HIRSEL_F1_HOST_PARK_CANCEL";
     if std::env::var_os(CHILD).is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tasks::free::host::cancellation_tests::saved_native_host_cancellation_wakes_without_readiness_and_respects_shield_and_commit", "--nocapture"])
+            .args(["--exact", if concurrent {
+                "tasks::free::host::cancellation_tests::saved_concurrent_host_cancellation_wakes_without_readiness_and_respects_shield_and_commit"
+            } else {
+                "tasks::free::host::cancellation_tests::saved_native_host_cancellation_wakes_without_readiness_and_respects_shield_and_commit"
+            }, "--nocapture"])
             .env(CHILD, "1").output().unwrap();
         assert!(output.status.success(), "{output:?}");
         return;
@@ -440,12 +494,21 @@ fn saved_native_host_cancellation_wakes_without_readiness_and_respects_shield_an
                 let observed = probe.clone();
                 let mut run = crate::host::BodyRun::new(width, false);
                 run.free = true;
-                run.adapter = Some(Box::new(ParkHome {
-                    probe: probe.clone(),
-                    thread: std::thread::current().id(),
-                    mode,
-                    token: None,
-                }));
+                let mut concurrent_io = concurrent.then(|| {
+                    Arc::new(ParkConcurrent {
+                        probe: probe.clone(),
+                        mode,
+                        token: Default::default(),
+                    })
+                });
+                if !concurrent {
+                    run.adapter = Some(Box::new(ParkHome {
+                        probe: probe.clone(),
+                        thread: std::thread::current().id(),
+                        mode,
+                        token: None,
+                    }));
+                }
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
                     move |ctx| unsafe {
@@ -455,13 +518,21 @@ fn saved_native_host_cancellation_wakes_without_readiness_and_respects_shield_an
                     move |ctx| unsafe {
                         let _role = role::Guard::new(ctx);
                         observed.run.store((*ctx).run_ptr(), Ordering::Release);
+                        if let Some(io) = concurrent_io.take() {
+                            let _segment = role::Segment::new(ctx);
+                            super::concurrent::Service::install(ctx, io).unwrap();
+                        }
                         spawn_canceler(ctx, &observed);
                         if mode == 1 {
                             (*ctx).shield = 1;
                         }
                         let result = crate::stop::check(
                             ctx,
-                            request_home(ctx, request(0), KeySet::coupled()),
+                            if concurrent {
+                                super::concurrent::request(ctx, request(0))
+                            } else {
+                                request_home(ctx, request(0), KeySet::coupled())
+                            },
                         );
                         assert_eq!(result, if mode == 0 { expected(0) } else { expected(1) });
                         (*ctx).shield = 0;

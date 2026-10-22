@@ -80,6 +80,7 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
         .host_waits
         .load(std::sync::atomic::Ordering::Acquire)
         != 0
+        || unsafe { host::concurrent::pending(ctx.run_ptr()) }
     {
         unsafe { crate::pool::wake_home(ctx.run_ptr()) };
     }
@@ -199,7 +200,9 @@ pub(super) unsafe fn after_save(
 /// # Safety
 /// The caller holds IdleGuard; no Scheduler borrow survives this call.
 pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
-    if unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0 {
+    if unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0
+        || unsafe { host::concurrent::pending(run) }
+    {
         return;
     }
     unsafe { check_quiet_without_sources(run) };

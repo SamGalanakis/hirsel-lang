@@ -1378,7 +1378,8 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
             .ordered_mode
             .load(std::sync::atomic::Ordering::Acquire)
             || (*run).free_mode)
-            && (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
+            && ((*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
+                || free::host::concurrent::pending(run))
     } {
         unsafe { crate::pool::wake_home(run) };
     }
@@ -2039,8 +2040,16 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         unpin(row);
         s.park(wait);
         if let Wait::Host { token } = wait {
-            let _segment = unsafe { role::Segment::new(ctx) };
-            unsafe { crate::host_waits::park(ctx, token, me) };
+            let generation = scheduler(ctx).task(me).generation;
+            let concurrent = ctx
+                .run_ref()
+                .free_io
+                .get()
+                .is_some_and(|io| io.park(token, me, generation));
+            if !concurrent {
+                let _segment = unsafe { role::Segment::new(ctx) };
+                unsafe { crate::host_waits::park(ctx, token, me) };
+            }
         }
         return unsafe { run_next(ctx) };
     }

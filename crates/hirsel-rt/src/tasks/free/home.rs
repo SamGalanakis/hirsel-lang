@@ -9,6 +9,9 @@ use std::sync::atomic::Ordering;
 /// Only the admission loop calls this, on the binding's home thread. No
 /// adapter or parked TaskCtx borrow is held across a scheduler-role guard.
 pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
+    if unsafe { super::host::concurrent::service(run) } {
+        return true;
+    }
     if !unsafe { (*run).free_mode } || unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0 {
         return false;
     }

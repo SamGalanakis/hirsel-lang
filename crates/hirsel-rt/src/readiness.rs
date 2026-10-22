@@ -140,6 +140,16 @@ impl Drop for PendingGuard<'_> {
     }
 }
 impl Readiness {
+    /// Interrupt an idle driver without readying a request. Create the eventfd
+    /// before publishing the notification, so a notify before the first wait
+    /// cannot disappear. The counter coalesces concurrent notifications.
+    pub(crate) fn notify(&self) -> Result<(), AdapterError> {
+        let mut state = self.0.lock().unwrap();
+        state.driver_wake()?;
+        state.notify_driver();
+        Ok(())
+    }
+
     /// The handle of run `tag` of this execution (the root is 0) on the same readiness.
     pub fn tagged(&self, tag: u64) -> Self {
         self.mark_shared();
@@ -1165,6 +1175,26 @@ mod tests {
 mod concurrent_tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn explicit_driver_notification_survives_before_first_wait_without_readying_a_token() {
+        let readiness = Readiness::default();
+        readiness.enter(10);
+        {
+            let mut pending = readiness.pending();
+            pending.deadline = Some(Instant::now() + Duration::from_secs(5));
+        }
+        readiness.parked(10);
+        readiness.notify().unwrap();
+        let start = Instant::now();
+        assert!(readiness.wait().unwrap());
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(readiness.ready().unwrap().is_empty());
+        readiness.finish(10);
+        assert!(
+            !readiness.wait().unwrap(),
+            "wake-only is not an event source"
+        );
+    }
     #[test]
     fn sleeping_driver_releases_state_and_observes_worker_delivery() {
         let readiness = Readiness::default();

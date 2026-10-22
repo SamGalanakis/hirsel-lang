@@ -9,6 +9,7 @@ use crate::tape_wire::Wire;
 use hirsel_free::claim::Claim;
 use hirsel_free::phase::Progress;
 use std::sync::Arc;
+pub(crate) mod concurrent;
 pub(super) mod handles;
 use handles::{Created, Envelope};
 

@@ -1,0 +1,292 @@
+//! Concurrent readiness keeps only owned requests and runtime row identities.
+//! Like the home service, it latches notifications before physical save; only
+//! the owner executes the next recorded bounded attempt.
+use super::*;
+use crate::context::RunShared;
+use crate::io_concurrent::ConcurrentAdapter;
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const CONCURRENT: u64 = 1 << 63;
+
+pub(crate) struct Service {
+    adapter: Arc<dyn ConcurrentAdapter>,
+    driver: Option<crate::readiness::Readiness>,
+    rows: Mutex<BTreeMap<u64, Row>>,
+    pending: AtomicUsize,
+}
+
+struct Row {
+    request: Request,
+    task: Option<(u32, u32)>,
+    ready: bool,
+    notified: bool,
+}
+
+impl Service {
+    /// Sole-root admission, before requests. No adapter method runs under a role.
+    pub(crate) unsafe fn install(
+        ctx: *mut TaskCtx,
+        adapter: Arc<dyn ConcurrentAdapter>,
+    ) -> Stopped<()> {
+        let run = unsafe { (*ctx).run_ref() };
+        assert!(run.free_mode);
+        let driver = adapter.readiness();
+        if let Some(driver) = &driver {
+            driver.notify().map_err(Stop::refusal)?;
+            let fd = run
+                .control
+                .wake_fd()
+                .ok_or_else(|| Stop::Refused("concurrent host stop descriptor".into()))?;
+            driver.wake_on(fd).map_err(Stop::refusal)?;
+        }
+        assert!(
+            run.free_io
+                .set(Arc::new(Self {
+                    adapter,
+                    driver,
+                    rows: Default::default(),
+                    pending: AtomicUsize::new(0),
+                }))
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    pub(crate) fn notify(&self) {
+        if let Some(driver) = &self.driver {
+            // Admission already created and registered this eventfd.
+            driver
+                .notify()
+                .expect("an admitted concurrent wake descriptor");
+        }
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.pending.load(Ordering::Acquire) != 0
+    }
+
+    fn register(&self, token: u64, request: Request) -> u64 {
+        assert_eq!(token >> 48, 0, "request token below driver tag bits");
+        let wait = token | CONCURRENT;
+        assert!(
+            self.rows
+                .lock()
+                .unwrap()
+                .insert(
+                    wait,
+                    Row {
+                        request,
+                        task: None,
+                        ready: false,
+                        notified: false,
+                    }
+                )
+                .is_none()
+        );
+        self.pending.fetch_add(1, Ordering::Release);
+        wait
+    }
+
+    /// Called under the role, after the logical park and before physical save.
+    pub(crate) fn park(&self, token: u64, task: u32, generation: u32) -> bool {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(row) = rows.get_mut(&token) else {
+            return false;
+        };
+        row.task = Some((task, generation));
+        true
+    }
+
+    fn retry(&self, token: u64) {
+        let mut rows = self.rows.lock().unwrap();
+        let row = rows.get_mut(&token).unwrap();
+        row.task = None;
+        row.ready = false;
+        row.notified = false;
+    }
+
+    fn finish(&self, token: u64) {
+        assert!(self.rows.lock().unwrap().remove(&token).is_some());
+        self.pending.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        // The last physical continuation released the run. No issuer or
+        // home poll can still use these request-owned registrations.
+        for token in self.rows.get_mut().unwrap().keys() {
+            self.adapter.finish(token & !CONCURRENT);
+        }
+    }
+}
+
+/// # Safety
+/// A live run; this query never accesses a context or scheduler.
+pub(crate) unsafe fn pending(run: *mut RunShared) -> bool {
+    unsafe { (*run).free_io.get() }.is_some_and(|io| io.pending())
+}
+
+/// # Safety
+/// Explicit recorded Free owner, admitted concurrent adapter, role held.
+pub(crate) unsafe fn request(
+    ctx: *mut TaskCtx,
+    request: Request,
+) -> Stopped<Result<Completion, AdapterError>> {
+    // The physical continuation retains RunShared, which owns this stable
+    // Service. A terminal cut abandons Rust frames without running Drop, so
+    // never put an owning Arc on a stack that can be saved here.
+    let io = unsafe {
+        &**(*ctx)
+            .run_ref()
+            .free_io
+            .get()
+            .expect("concurrent host admission")
+    };
+    let keys = {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        io.adapter.keys(&request)
+    };
+    unsafe { prepare_with_keys(ctx, request.clone(), keys) }?;
+    let token = unsafe { (*ctx).pending_host.as_ref().unwrap().request.id };
+    let wait = io.register(token, request);
+    if !unsafe { claim(ctx) }? {
+        return Err(Stop::Requested);
+    }
+    unsafe { invoke_concurrent(ctx, &*io.adapter) }?;
+    unsafe { ended(ctx) }?;
+    while matches!(
+        unsafe { &(*ctx).pending_host.as_ref().unwrap().completion },
+        Some(Err(AdapterError::Blocked))
+    ) {
+        {
+            let _segment = unsafe { role::Segment::new(ctx) };
+            io.adapter.parked(token);
+        }
+        unsafe { try_block(&mut *ctx, Wait::Host { token: wait }, false, 0) }?;
+        io.retry(wait);
+        unsafe { attempt(ctx) }?;
+        unsafe { invoke_concurrent(ctx, &*io.adapter) }?;
+        unsafe { ended(ctx) }?;
+    }
+    {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        io.adapter.finish(token);
+    }
+    io.finish(wait);
+    unsafe { complete_result(ctx) }
+}
+
+/// # Safety
+/// Home only. Adapter calls have no role; the merge uses saved row metadata.
+pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
+    let Some(io) = (unsafe { (*run).free_io.get() }) else {
+        return false;
+    };
+    if !io.pending() {
+        return false;
+    }
+    let idle = unsafe { crate::pool::busy(&*run) } == 0;
+    let (idle, canceled) = {
+        let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
+            return false;
+        };
+        let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
+            return false;
+        };
+        let idle = idle
+            && s.runnable.is_empty()
+            && s.tasks.iter().flatten().all(|row| {
+                row.state != State::Ready && row.dispatch.as_ref().is_none_or(|f| f.is_saved())
+            });
+        let rows = io.rows.lock().unwrap();
+        let canceled = rows
+            .iter()
+            .filter_map(|(&token, row)| {
+                let (task, generation) = row.task?;
+                let task_row = s.tasks.get(task as usize)?.as_ref()?;
+                (task_row.generation == generation
+                    && s.canceled_task(task, task_row.shield()).is_some()
+                    && crate::io_checks::cancellation_result(&row.request, 0).is_some())
+                .then_some(token & !CONCURRENT)
+            })
+            .collect::<Vec<_>>();
+        (idle, canceled)
+    };
+    let result = io.adapter.ready();
+    let canceled = canceled
+        .into_iter()
+        .filter(|&t| io.adapter.cancellable(t))
+        .collect::<Vec<_>>();
+    let _guard = unsafe { role::IdleGuard::new(run) };
+    if unsafe { (*run).control.stopped().is_some() } {
+        return true;
+    }
+    let ready = match result {
+        Ok(ready) => ready,
+        Err(error) => {
+            unsafe { (*run).control.request_inside(Stop::refusal(error)) };
+            return true;
+        }
+    };
+    let mut changed = false;
+    let mut waiting = false;
+    {
+        let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+        for (&token, row) in io.rows.lock().unwrap().iter_mut() {
+            row.ready |=
+                ready.contains(token & !CONCURRENT) || canceled.contains(&(token & !CONCURRENT));
+            let Some((task, generation)) = row.task else {
+                continue;
+            };
+            if row.notified {
+                continue;
+            }
+            waiting = true;
+            let valid = s
+                .tasks
+                .get(task as usize)
+                .and_then(Option::as_ref)
+                .is_some_and(|r| {
+                    r.generation == generation
+                        && matches!(r.wait, Some(Wait::Host { token: t }) if t == token)
+                        && super::super::super::readiness::saved(s, task)
+                });
+            if valid && row.ready {
+                row.notified = true;
+                s.unpark(task);
+                changed = true;
+            }
+        }
+        unsafe { super::super::publish_ready(s, run) };
+    }
+    // Independent home and concurrent drivers cannot yet sleep together.
+    // Fail closed rather than strand a source on the other epoll instance.
+    let mixed = unsafe { (*run).host_waits.load(Ordering::Acquire) != 0 };
+    if mixed && waiting {
+        unsafe {
+            (*run).control.request_inside(Stop::Refused(
+                "mixed concurrent and home readiness drivers".into(),
+            ))
+        };
+        return true;
+    }
+    drop(_guard);
+    if changed || !idle || !waiting {
+        return changed;
+    }
+    let sources = io.driver.as_ref().map_or(Ok(false), |d| d.wait());
+    if !matches!(sources, Ok(true)) {
+        let _guard = unsafe { role::IdleGuard::new(run) };
+        match sources {
+            Ok(false) => unsafe { super::super::check_quiet_without_sources(run) },
+            Err(error) => {
+                unsafe { (*run).control.request_inside(Stop::refusal(error)) };
+            }
+            Ok(true) => unreachable!(),
+        }
+    }
+    true
+}
