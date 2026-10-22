@@ -107,8 +107,17 @@ unsafe fn reordered_set_body(ctx: *mut TaskCtx, order: &CompletionOrder) {
             let s = scheduler(ctx);
             if order.early {
                 let second = children[1] as u32;
-                if s.task(second).state == State::Holding && readiness::saved(s, second) {
-                    break;
+                if s.task(second).state == State::Holding {
+                    if readiness::saved(s, second) {
+                        break;
+                    }
+                    // The early wake precedes the child's physical save.
+                    // Retry has no notification for the later save of a
+                    // Holding child. Let its idle callback acquire the role;
+                    // it needs no compute permit to finish this save.
+                    let _segment = role::Segment::new(ctx);
+                    std::thread::yield_now();
+                    continue;
                 }
                 try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0).unwrap();
                 continue;
