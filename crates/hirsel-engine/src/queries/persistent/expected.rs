@@ -146,7 +146,7 @@ mod tests {
             let expected = Expected::capture(
                 Variant {
                     reads: Reads::empty(),
-                    payload,
+                    payload: payload.into(),
                 },
                 &mut backing,
             );
@@ -209,7 +209,7 @@ mod tests {
         let expected = Expected::capture(
             Variant {
                 reads: reads(1),
-                payload: Arc::from(&b"body"[..]),
+                payload: b"body".as_slice().into(),
             },
             &mut backing,
         );

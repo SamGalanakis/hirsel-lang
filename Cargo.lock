@@ -428,6 +428,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-artifact-store"
+version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+ "hirsel-syntax",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "hirsel-authority"
 version = "0.1.0"
 dependencies = [
@@ -640,6 +650,7 @@ name = "hirsel-engine"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "hirsel-artifact-store",
  "hirsel-check-protocol",
  "hirsel-diag",
  "hirsel-fmt",

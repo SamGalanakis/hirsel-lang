@@ -7,6 +7,7 @@
 //! still observes its value, so the store changes only how much is recomputed.
 use crate::memo::{ReadKey, Reads};
 use crate::{LoweringPolicy, QueryKind};
+pub use hirsel_artifact_store::Bytes;
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -50,7 +51,7 @@ pub trait ResultStore: Send + Sync {
     fn enabled(&self) -> bool {
         true
     }
-    fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>>;
+    fn get(&self, key: &EntryKey) -> Option<Bytes>;
     fn put(&self, key: &EntryKey, value: &[u8]);
     /// The provider name the run config selects it by (`dir@1`, ...).
     fn name(&self) -> &'static str;
@@ -77,7 +78,7 @@ pub struct Entry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Variant {
     pub reads: Reads,
-    pub payload: Arc<[u8]>,
+    pub payload: Bytes,
 }
 
 fn payload_reads_hash(reads: &Reads) -> ContentHash {
@@ -108,9 +109,10 @@ impl Variant {
     }
     pub(crate) fn unbind_payload(&mut self) -> Option<()> {
         let bytes = self.payload.strip_prefix(b"HRP1")?;
-        self.payload = bytes
-            .strip_prefix(payload_reads_hash(&self.reads).0.as_slice())?
-            .into();
+        bytes.strip_prefix(payload_reads_hash(&self.reads).0.as_slice())?;
+        self.payload = self
+            .payload
+            .range(36, (self.payload.len() - 36) as u64, 1)?;
         Some(())
     }
 }
@@ -145,6 +147,9 @@ impl Entry {
         out
     }
     pub fn decode(bytes: &[u8]) -> Option<Entry> {
+        Self::decode_bytes(bytes.into())
+    }
+    fn decode_bytes(bytes: Bytes) -> Option<Entry> {
         let mut input = bytes.strip_prefix(ENTRY_MAGIC.as_slice())?;
         let (&count, rest) = input.split_first()?;
         input = rest;
@@ -160,7 +165,11 @@ impl Entry {
             input = rest;
             variants.push(Variant {
                 reads,
-                payload: payload.into(),
+                payload: bytes.range(
+                    (payload.as_ptr() as usize - bytes.as_ptr() as usize) as u64,
+                    payload.len() as u64,
+                    1,
+                )?,
             });
         }
         input.is_empty().then_some(Entry { variants })
@@ -182,7 +191,8 @@ impl Entry {
             .and_then(|bytes| {
                 let payload = unframe(&bytes)?.strip_prefix(b"HRE3")?;
                 let payload = payload.strip_prefix(key.0.0.as_slice())?;
-                Entry::decode(payload)
+                let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
+                Entry::decode_bytes(bytes.range(offset as u64, payload.len() as u64, 1)?)
             })
             .unwrap_or_default()
     }
@@ -195,7 +205,7 @@ impl ResultStore for NoneStore {
     fn enabled(&self) -> bool {
         false
     }
-    fn get(&self, _: &EntryKey) -> Option<Arc<[u8]>> {
+    fn get(&self, _: &EntryKey) -> Option<Bytes> {
         None
     }
     fn put(&self, _: &EntryKey, _: &[u8]) {}
@@ -207,7 +217,7 @@ impl ResultStore for NoneStore {
 /// `mem@1`: one map per process, shared by every session.
 #[derive(Debug, Default)]
 pub struct MemStore {
-    entries: Mutex<HashMap<EntryKey, Arc<[u8]>>>,
+    entries: Mutex<HashMap<EntryKey, Bytes>>,
 }
 impl MemStore {
     /// The process's shared store.
@@ -234,12 +244,12 @@ impl MemStore {
             .sum()
     }
     /// Empties the store, returning what it held.
-    pub fn take(&self) -> HashMap<EntryKey, Arc<[u8]>> {
+    pub fn take(&self) -> HashMap<EntryKey, Bytes> {
         std::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 impl ResultStore for MemStore {
-    fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>> {
+    fn get(&self, key: &EntryKey) -> Option<Bytes> {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -318,7 +328,7 @@ impl SimStore {
     }
 }
 impl ResultStore for SimStore {
-    fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>> {
+    fn get(&self, key: &EntryKey) -> Option<Bytes> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let ordinal = state.gets;
         state.gets += 1;

@@ -28,7 +28,7 @@ mod expected_tests {
             let expected = Expected::capture(
                 Variant {
                     reads: Reads::empty(),
-                    payload,
+                    payload: payload.into(),
                 },
                 &mut engine.store_check_spool,
             );
