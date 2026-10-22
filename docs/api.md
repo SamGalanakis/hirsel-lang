@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2163 exported definitions; 905 variants.
+2169 exported definitions; 907 variants.
 
 ## Types and roots
 
@@ -3732,6 +3732,16 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 
 - `pub fn cli.parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}`
 
+Parse flags until the first positional argument or standalone --.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cli/Flag`](#def-std_401_2fcli_2fFlag), [`std@1/cli/ParseError`](#def-std_401_2fcli_2fParseError), [`std@1/cli/Parsed`](#def-std_401_2fcli_2fParsed)
+
+<a id="def-std_401_2fcli_2fparse_5finterspersed"></a>
+
+- `pub fn cli.parse_interspersed(take args: List[String], specs: List[Flag]) -> Result[ Parsed, ParseError ] uses {}`
+
+Parse flags before and after positionals until a standalone --.
+
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cli/Flag`](#def-std_401_2fcli_2fFlag), [`std@1/cli/ParseError`](#def-std_401_2fcli_2fParseError), [`std@1/cli/Parsed`](#def-std_401_2fcli_2fParsed)
 
 <a id="def-std_401_2fcli_2fusage"></a>
@@ -5702,6 +5712,26 @@ References: [`core@1/f64`](#def-core_401_2ff64)
 
 ## file
 
+<a id="def-std_401_2ffile_2fReadBoundedError"></a>
+
+- `@serializable pub type file.ReadBoundedError = Limit | File(FileError)`
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2ffile_2fReadBoundedError_23File"></a>
+
+- `File(FileError) -> file.ReadBoundedError`
+
+Variant of file.ReadBoundedError.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2ffile_2fReadBoundedError_23Limit"></a>
+
+- `Limit -> file.ReadBoundedError`
+
+Variant of file.ReadBoundedError.
+
 <a id="def-core_401_2ffile_2fappend"></a>
 
 - `fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]`
@@ -5763,6 +5793,14 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fread"></a>
 
 - `@preserves_captures(f, buffer) fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]`
+
+<a id="def-std_401_2ffile_2fread_5fall_5fbounded"></a>
+
+- `pub fn file.read_all_bounded(d: Dir, mut f: File of d, limit: u64) -> Result[ unique Bytes, ReadBoundedError ]`
+
+Reads from the current cursor, leaving the caller's file open and unseeked.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/file/ReadBoundedError`](#def-std_401_2ffile_2fReadBoundedError)
 
 <a id="def-core_401_2ffile_2fread_5fbytes"></a>
 
@@ -9612,6 +9650,16 @@ References: [`core@1/List`](#def-core_401_2fList)
 
 References: [`core@1/List`](#def-core_401_2fList)
 
+<a id="def-std_401_2flist_2ffilled"></a>
+
+- `pub fn list.filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}`
+
+Reserves for the count, then copies the value into each initialized element.
+Packed elements occupy their active variant's width. Reservation uses the
+smallest width, so larger variants can require amortized backing growth.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-std_401_2flist_2ffilter"></a>
 
 - `pub fn list.filter[T](take xs: List[T], predicate: fn(T) -> bool) -> List[T] uses {xs, predicate}`
@@ -9699,16 +9747,31 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_
 
 - `pub fn list.sort_stable_fast[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
 
-Stable driftsort with bounded O(n) scratch. Choose this for throughput;
+Stable driftsort with bounded O(n) scratch, including move-only owners.
+Choose sort_stable_plain for plain elements without index indirection;
 choose sort_stable for its @noalloc guarantee. Equal keys retain order.
 Above 20 elements, comparisons finish before elements move. Smaller inputs
 use stable insertion by swaps; comparator failures propagate immediately.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
 
+<a id="def-std_401_2flist_2fsort_5fstable_5fplain"></a>
+
+- `pub fn list.sort_stable_plain[T: plain](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
+
+Stable driftsort for plain elements, with direct comparisons and O(n)
+scratch. Choose this for plain T; sort_stable_fast also accepts move-only
+and counted copyable elements by sorting indices. Choose sort_stable for its @noalloc guarantee.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
+
 <a id="def-core_401_2flist_2fswap"></a>
 
 - `@noalloc fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()`
+
+<a id="def-core_401_2flist_2ftruncate"></a>
+
+- `@preserves_unique(xs) fn list.truncate[T](mut xs: List[T], len: u64) -> () uses {xs}`
 
 
 ## log
