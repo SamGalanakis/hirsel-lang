@@ -142,6 +142,49 @@ unsafe fn file_program(ctx: *mut TaskCtx) {
     );
     assert_eq!(out.tag, 0);
     let alias = out.value;
+    let mut alias = alias;
+    let mut buffer = unsafe { crate::text::allocate_bytes(ctx, b"prefix/").owner };
+    assert_eq!(
+        unsafe {
+            crate::io::hirsel_rt_v2_file_read(
+                ctx,
+                std::ptr::null_mut(),
+                &mut out,
+                &directory,
+                &mut alias,
+                &mut buffer,
+                100,
+            )
+        },
+        STATUS_OK
+    );
+    assert_eq!(
+        out,
+        HandleResult {
+            tag: 0,
+            padding: 0,
+            value: expected.len() as u64
+        }
+    );
+    let count = unsafe { crate::alloc::payload(buffer).cast::<u64>().read() };
+    assert_eq!(
+        unsafe { crate::io::slice_bytes(buffer, crate::alloc::sequence_slice_start(1), count) },
+        [b"prefix/", &expected[..]].concat()
+    );
+    assert_eq!(
+        unsafe {
+            crate::release::hirsel_rt_v2_release(
+                ctx,
+                buffer,
+                (*buffer).index(),
+                std::ptr::null(),
+                0,
+                0,
+            )
+        },
+        STATUS_OK
+    );
+
     assert_ne!(file, alias);
     assert_eq!(
         unsafe { crate::io::hirsel_rt_v2_io_close(ctx, file, 0, 0) },

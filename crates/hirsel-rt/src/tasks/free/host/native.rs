@@ -66,13 +66,16 @@ pub(super) fn request_keys(
     let keys = match request {
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
+        | R::Stdin { io: 1 }
         | R::Random { io: 1 }
         | R::Stdout { io: 1 }
         | R::Stderr { io: 1 } => vec![(ROOT, Mode::Shared)],
-        R::Print { stdout: word, .. } | R::PrintStderr { stderr: word, .. } => {
+        R::Print { stdout: word, .. }
+        | R::PrintStderr { stderr: word, .. }
+        | R::ReadStdin { stdin: word, .. } => {
             let (key, kind) = identity(*word)?;
             let Kind::Sink { file_backed } = kind else {
-                return Err(Stop::Diverged("native output resource kind differs".into()));
+                return Err(Stop::Diverged("native stream resource kind differs".into()));
             };
             let mut keys = vec![(key, Mode::Exclusive)];
             if file_backed {

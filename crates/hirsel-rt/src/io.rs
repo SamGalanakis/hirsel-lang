@@ -3412,14 +3412,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read(
         file: unsafe { file.read() },
         max,
     };
-    let Ok(Completion::Bytes(value)) = (unsafe { capability_call(ctx, request) }) else {
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let value = value.map(|bytes| {
-        unsafe { append_byte_list(ctx, buffer, &bytes) };
-        bytes.len() as u64
-    });
-    unsafe { out.write(HandleResult::of(value)) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Bytes(value) = completion else {
+                crate::fault("file read completion mismatch");
+            };
+            let result = match value {
+                Ok(bytes) => {
+                    append_byte_list(ctx, buffer, bytes);
+                    Ok(bytes.len() as u64)
+                }
+                Err(error) => Err(error.clone()),
+            };
+            out.write(HandleResult::of(result));
+        })
+    };
     crate::STATUS_OK
 }
 /// # Safety
@@ -4854,33 +4864,40 @@ pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
         stdin: unsafe { stdin.read() },
         max,
     };
-    let Ok(Completion::Input(value)) = (unsafe { capability_call(ctx, request) }) else {
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let result = match value {
-        Ok(bytes) => {
-            unsafe { append_byte_list(ctx, buffer, &bytes) };
-            HandleResult {
-                tag: 0,
-                padding: 0,
-                value: bytes.len() as u64,
-            }
-        }
-        Err(error) => {
-            let (tag, payload) = match error {
-                InputError::Fault(code) => (0u32, code),
-                InputError::Canceled(cause) => (1, cause),
-                InputError::InvalidInput => (2, 0),
-                InputError::InvalidUtf8 => (3, 0),
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Input(value) = completion else {
+                crate::fault("stdin read completion mismatch");
             };
-            HandleResult {
-                tag: 1,
-                padding: 0,
-                value: u64::from(tag) | u64::from(payload) << 32,
-            }
-        }
+            let result = match value {
+                Ok(bytes) => {
+                    append_byte_list(ctx, buffer, bytes);
+                    HandleResult {
+                        tag: 0,
+                        padding: 0,
+                        value: bytes.len() as u64,
+                    }
+                }
+                Err(error) => {
+                    let (tag, payload) = match error {
+                        InputError::Fault(code) => (0u32, *code),
+                        InputError::Canceled(cause) => (1, *cause),
+                        InputError::InvalidInput => (2, 0),
+                        InputError::InvalidUtf8 => (3, 0),
+                    };
+                    HandleResult {
+                        tag: 1,
+                        padding: 0,
+                        value: u64::from(tag) | u64::from(payload) << 32,
+                    }
+                }
+            };
+            out.write(result);
+        })
     };
-    unsafe { out.write(result) };
     crate::STATUS_OK
 }
 

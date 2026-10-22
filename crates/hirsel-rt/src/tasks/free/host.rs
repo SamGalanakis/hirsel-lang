@@ -884,3 +884,6 @@ mod native_output_tests;
 
 #[cfg(test)]
 mod native_random_tests;
+
+#[cfg(test)]
+mod native_input_tests;
