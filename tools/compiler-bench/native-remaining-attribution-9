@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Exclusive instruction attribution and bounded native-only predecessor controls.
+
+Sampling is diagnostic, never a speedup verdict. Unknown stacks stay unknown.
+References and scope adaptations are recorded in RESULTS-native-remaining-attribution-9.md.
+"""
+import argparse
+from collections import Counter, defaultdict
+import difflib
+import importlib.machinery
+import importlib.util
+import json
+import math
+from pathlib import Path
+import random
+import re
+import statistics
+
+ROOT = Path(__file__).resolve().parents[2]
+loader = importlib.machinery.SourceFileLoader('ip9', str(ROOT/'tools/compiler-bench/incremental-profile-9'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+base = importlib.util.module_from_spec(spec)
+loader.exec_module(base)
+HISTORICAL_RESIDUAL_PERCENT = 39.93
+HEADER = re.compile(r'^(.+?)\s+(\d+)/(\d+)\s+(\d+)\s+instructions:\s*$')
+FRAME = re.compile(r'^\s+[0-9a-f]+ (.+) \((.+)\)$')
+
+
+def samples(text):
+    if not text.strip():
+        raise ValueError('missing samples')
+    result = []
+    for block in text.strip().split('\n\n'):
+        lines = block.splitlines()
+        header = HEADER.fullmatch(lines[0])
+        if not header:
+            raise ValueError('missing/malformed sample header')
+        frames = []
+        for line in lines[1:]:
+            match = FRAME.fullmatch(line)
+            if not match:
+                raise ValueError('missing/malformed stack frame')
+            frames.append((match[1], match[2]))
+        if not frames or int(header[4]) <= 0:
+            raise ValueError('empty stack or nonpositive sample period')
+        result.append({'comm': header[1], 'pid': int(header[2]),
+                       'period': int(header[4]), 'frames': frames})
+    return result
+
+
+def cause(sample, historical=False):
+    """One ordered decision per sample; nested callers never add another share.
+
+    Resource leaves win over their semantic callers. Historical exclusions
+    exactly preserve the predecessor's process/SHA/from_image/varint partition.
+    """
+    comm = sample['comm']
+    frames = sample['frames']
+    leaf, dso = frames[0]
+    stack = '\n'.join(name for name, _ in frames)
+    if comm in ('ld.lld', 'llvm-objcopy'):
+        return 'external:'+comm
+    if historical:
+        if 'sha2' in leaf and ('digest_blocks' in leaf or 'compress' in leaf):
+            return 'prior:sha-leaf'
+        if 'StdImage' in leaf and 'from_image' in leaf:
+            return 'prior:std-image-leaf'
+        if 'bincode' in leaf and 'deserialize_varint' in leaf:
+            return 'prior:varint-leaf'
+    if 'kernel' in dso or dso == '[unknown]' and leaf.startswith('0xffffffff'):
+        return 'kernel'
+    if '[unknown]' in dso or leaf in ('[unknown]', 'unknown') or re.fullmatch(r'0x[0-9a-f]+', leaf):
+        return 'unknown-symbol'
+    if any(x in dso for x in ('ld-linux', 'ld.so')) or leaf.startswith(('_dl_', 'do_lookup_', '_dlerror')):
+        return 'loader'
+    if any(x in leaf for x in ('mi_', 'malloc', 'calloc', 'realloc', '___rust_alloc', '__rust_alloc', '__rust_dealloc')):
+        return 'allocator-leaf'
+    # Digest before validation: hashing underneath V is not full V checking.
+    if any(x in stack for x in ('hirsel_validate::input::digest', 'validation_input_digest', '::input_digest')):
+        return 'validation-input-digest'
+    if any(x in stack for x in ('native::kit::', 'native::file_digest::', 'native::plan::link_identity')):
+        return 'link-identity'
+    if any(x in stack for x in ('StdImage', 'hirsel_engine::image::', 'hirsel_image::')):
+        return 'std-image'
+    if 'hirsel_engine::registry::build::' in stack:
+        return 'builtin-registry-startup'
+    if 'hirsel_validate::input::check_view' in stack or '::signature_valid' in stack:
+        return 'signature-view-check'
+    if any(x in stack for x in ('::verdict_from', '::read_holds', '::validation_state', '::remember_lowered_verdict', '::load_lower')):
+        return 'receipt-reconstruction'
+    if any(x in stack for x in ('hirsel_validate::validate', 'hirsel_validate::flow', 'hirsel_validate::Checker')):
+        return 'full-V-check'
+    if any(x in stack for x in ('native::import_cache', 'hirsel_lir::objects::rebound', 'hirsel_rc::import::effects')):
+        return 'native-cached-import'
+    if any(x in stack for x in ('::export_native_paths', '::import_native_against', '::native_builtin_signatures')):
+        return 'native-snapshot'
+    if 'native::adapt::manifest' in stack:
+        return 'native-manifest'
+    if 'hirsel_engine::queries::persistent::ModeRecord' in stack:
+        return 'front-cache-decode'
+    if 'hirsel_rc::import::' in stack or 'hirsel_rc::instance::' in stack:
+        return 'native-import-plan'
+    if 'hirsel_lir::validate::' in stack or 'hirsel_lir::emission::check_receipt' in stack:
+        return 'native-LIR-validation'
+    if any(x in stack for x in ('cranelift_', 'hirsel_cranelift', 'native::emit::', 'native::clif::')):
+        return 'backend'
+    if 'native::link::' in stack:
+        return 'link-output'
+    if any(x in stack for x in ('hirsel_parser::', 'hirsel_check::', 'hirsel_modes::', 'hirsel_lower::')):
+        return 'front-check-modes-lower'
+    if any(x in leaf for x in ('memcpy', 'memmove', 'memset', 'memcmp')):
+        return 'memory-leaf'
+    return 'unknown-other'
+
+
+def validate_record(stderr):
+    if 'Captured and wrote' not in stderr or re.search(r'lost\s+[1-9]\d*\s+(?:chunks|samples)', stderr, re.I):
+        raise ValueError('missing/failed sampling capture or lost samples')
+
+
+def partition(rows, expected_processes, historical=False, total_instructions=None):
+    seen = Counter(row['comm'] for row in rows)
+    if not rows or any(seen[name] < count for name, count in expected_processes.items()):
+        raise ValueError('missing compiler/descendant samples')
+    # Distinct descendant PIDs, not just samples from one of two objcopies.
+    for name, count in expected_processes.items():
+        if len({r['pid'] for r in rows if r['comm'] == name}) < count:
+            raise ValueError('missing distinct descendant process')
+    weights = Counter()
+    process = Counter()
+    leaves = defaultdict(Counter)
+    for row in rows:
+        bucket = cause(row, historical)
+        weights[bucket] += row['period']
+        process[row['comm']] += row['period']
+        leaves[bucket][row['frames'][0][0]] += row['period']
+    total = sum(weights.values())
+    effective_n = total**2 / sum(r['period']**2 for r in rows)
+    residual = sum(v for k, v in weights.items() if not k.startswith(('prior:', 'external:')))
+    if historical and not residual:
+        raise ValueError('missing historical residual samples')
+    result = []
+    for bucket, weight in sorted(weights.items(), key=lambda kv: -kv[1]):
+        p = weight/total
+        # Wilson with Kish effective n: descriptive precision, not independent
+        # repeated experimental confidence; systematic stack bias remains.
+        z = 1.96
+        center = (p+z*z/(2*effective_n))/(1+z*z/effective_n)
+        half = z*math.sqrt(p*(1-p)/effective_n+z*z/(4*effective_n**2))/(1+z*z/effective_n)
+        row = {'cause': bucket, 'period': weight, 'percent': p*100,
+               'precision_95_percent': [100*(center-half), 100*(center+half)],
+               'top_leaves': leaves[bucket].most_common(5)}
+        if historical and not bucket.startswith(('prior:', 'external:')):
+            row['original_denominator_points'] = HISTORICAL_RESIDUAL_PERCENT*weight/residual
+        if total_instructions is not None:
+            row['estimated_instructions'] = total_instructions*p
+        result.append(row)
+    if not math.isclose(sum(row['percent'] for row in result), 100):
+        raise ValueError('partition does not sum to 100')
+    return {'samples': len(rows), 'effective_samples': effective_n,
+            'sampled_period': total, 'process_period': dict(process), 'causes': result,
+            'historical_residual_percent': HISTORICAL_RESIDUAL_PERCENT if historical else None}
+
+
+def validate_session(report, frozen, roots):
+    base.verify(frozen, roots)
+    if report.get('status') != 'pass' or report.get('frozen_verified') is not True:
+        raise ValueError('failed/incomplete session')
+    selected = [r for r in report['attempts'] if r.get('edit') == 'body' and r.get('telemetry')]
+    if not selected or len(selected) != report.get('rounds'):
+        raise ValueError('missing intended body samples')
+    for row in selected:
+        if row.get('status') != 'pass' or not row.get('perf'):
+            raise ValueError('missing/failed PMU sample')
+        if row['perf']['running_percent'].get('instructions', 0) != 100:
+            raise ValueError('incomplete instruction PMU coverage')
+        counts = row.get('timings', {}).get('counts', {})
+        if counts.get('object misses') != 1 or counts.get('V runs') != 1:
+            raise ValueError('body must have exactly one full V and object miss')
+
+
+class Runner(base.Runner):
+    def matrix(self):
+        cells = [(edit, telemetry) for edit in ('unchanged', 'body', 'signature') for telemetry in (False, True)]
+        rng = random.Random(self.args.seed)
+        for n in range(self.args.rounds):
+            order = cells.copy()
+            rng.shuffle(order)
+            for name, telemetry in order:
+                directory = base.namespace(self.work, 'native', n, name+('-timed' if telemetry else '-plain'))
+                source = self.fixture(directory)
+                original = source.read_text()
+                text = base.variants(original)[name]
+                (directory/'edit.patch').write_text(''.join(difflib.unified_diff(original.splitlines(True), text.splitlines(True))))
+                env = self.environment(directory)
+                binary = directory/'program'
+                self.call('prepare-native', self.command('native', source, binary), env)
+                with base.edit(source, text):
+                    row, _ = self.call('sample-native-'+name, self.command('native', source, binary, timed=telemetry), env, counted=True)
+                    row |= {'edit': name, 'telemetry': telemetry, 'round': n, 'source_sha256': base.sha(source)}
+                    if telemetry:
+                        counts = row['timings']['counts']
+                        expected = {'unchanged': (0, 0), 'body': (1, 1), 'signature': (2, 2)}[name]
+                        if (counts['V runs'], counts['object misses']) != expected:
+                            raise RuntimeError('unexpected V/object counters')
+                    self.oracle(source, binary, env, b'6\n' if name == 'body' else b'5\n', True)
+                print(f'pass round={n} edit={name} telemetry={telemetry}', flush=True)
+        self.report['medians'] = [dict(edit=name, telemetry=telemetry,
+            instructions=statistics.median(r['perf']['counts']['instructions'] for r in self.report['attempts']
+                if r.get('edit') == name and r.get('telemetry') == telemetry)) for name, telemetry in cells]
+
+    def profile(self):
+        for kind in self.args.profile_kinds:
+            directory = base.namespace(self.work, 'profile', 0, kind)
+            source = self.fixture(directory)
+            original = source.read_text()
+            env = self.environment(directory)
+            binary = directory/'program'
+            self.call('prepare-'+kind, self.command('native', source, binary), env)
+            with base.edit(source, base.variants(original)['body']):
+                command = self.command('native', source, binary)
+                if kind == 'stacks':
+                    command = ['perf', 'record', '-m', '1024', '-e', 'instructions', '-c', '500003', '--call-graph', 'dwarf,8192', '-o', directory/'perf.data', '--', *command]
+                elif kind == 'callgrind':
+                    runtime = env['HIRSEL_VALGRIND_RUNTIME']
+                    command = [env['HIRSEL_VALGRIND'], '--tool=callgrind', '--trace-children=yes',
+                        '--callgrind-out-file='+str(directory/'callgrind.%p'), runtime+'/ld-linux-x86-64.so.2',
+                        '--library-path', runtime+':'+env['LLVM_SYS_211_PREFIX']+'/lib', *command]
+                else:
+                    command = ['strace', '-f', '-qq', '-s', '4096', '-e', 'trace=process', '-o', directory/'process.trace', *command]
+                row, done = self.call('body-'+kind, command, env)
+                if kind == 'stacks':
+                    validate_record(done.stderr.decode(errors='replace'))
+                if row['timings']['counts']['object misses'] != 1 or row['timings']['counts']['V runs'] != 1:
+                    raise RuntimeError('profile did not observe first real body edit')
+                self.oracle(source, binary, env, b'6\n', True)
+            if kind == 'stacks':
+                self.call('perf-script', ['perf', 'script', '--no-inline', '-i', directory/'perf.data', '-F', 'comm,pid,tid,period,event,ip,sym,dso'], env)
+                self.call('perf-header', ['perf', 'report', '--stdio', '--header-only', '-i', directory/'perf.data'], env)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest='mode', required=True)
+    analyze = sub.add_parser('analyze')
+    analyze.add_argument('script', type=Path, help='demangled perf script with period and complete stacks')
+    analyze.add_argument('--historical', action='store_true')
+    analyze.add_argument('--objcopies', type=int, choices=(0, 2), default=2)
+    analyze.add_argument('--instructions', type=int)
+    analyze.add_argument('--lost-samples', type=int, required=True)
+    analyze.add_argument('--script-sha256', required=True)
+    for mode in ('matrix', 'profile', 'legacy'):
+        run = sub.add_parser(mode)
+        run.add_argument('--cli', type=Path, required=True)
+        run.add_argument('--env', type=Path, required=True)
+        run.add_argument('--work', type=Path, required=True)
+        run.add_argument('--freeze', type=Path, action='append', default=[])
+        run.add_argument('--legacy-root', type=Path)
+        run.add_argument('--rounds', type=int, choices=(1, 10), default=10)
+        run.add_argument('--seed', type=int, default=20261022)
+        run.add_argument('--cpu', type=int, default=6)
+        run.add_argument('--profile-kinds', nargs='+', choices=('stacks', 'callgrind', 'process-tree'),
+                         default=['stacks', 'callgrind', 'process-tree'])
+    args = parser.parse_args()
+    if args.mode == 'analyze':
+        if args.lost_samples != 0 or base.sha(args.script) != args.script_sha256:
+            parser.error('lost samples or changed profile input')
+        if args.instructions is not None and args.instructions <= 0:
+            parser.error('instruction total must be positive')
+        expected = {'hirsel-compiler': 1, 'ld.lld': 1, 'llvm-objcopy': args.objcopies}
+        print(json.dumps(partition(samples(args.script.read_text()), expected, args.historical, args.instructions), indent=2))
+        return
+    if args.cpu == 31:
+        parser.error('CPU31 is reserved')
+    runner = Runner(args)
+    runner.freeze_roots.append(Path(__file__))
+    runner.frozen = base.inventory(runner.freeze_roots)
+    base.dump(runner.work/'inputs.json', runner.frozen)
+    try:
+        getattr(runner, args.mode)()
+        runner.report['status'] = 'pass'
+    except BaseException:
+        runner.report['status'] = 'failed'
+        raise
+    finally:
+        runner.finish()
+
+
+if __name__ == '__main__':
+    main()

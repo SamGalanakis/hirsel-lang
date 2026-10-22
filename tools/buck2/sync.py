@@ -991,6 +991,9 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-incremental-profile-9", script="tools/tests/incremental_profile_9.py", full=False,
                             data=["tools/compiler-bench/incremental-profile-9", "tools/tests/incremental_profile_9.py",
                                   "tools/tests/fixtures/incremental-profile-9/main.hir", "tools/tests/fixtures/incremental-profile-9/main.hir.json"]))
+    out.append("\n" + call("hirsel_script_test", name="test-native-remaining-attribution-9", script="tools/tests/native_remaining_attribution_9.py", full=False,
+                            data=["tools/compiler-bench/native-remaining-attribution-9", "tools/compiler-bench/incremental-profile-9",
+                                  "tools/tests/native_remaining_attribution_9.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-json-hooks", script="tools/tests/test_json_hooks.py", full=False,
                             args=["Unit"], data=["tools/json-hooks", "tools/tests/test_json_hooks.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-json-hooks-integration", script="tools/tests/test_json_hooks.py", full=False,
