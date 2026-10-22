@@ -1,5 +1,5 @@
 // langarena: Etc::Sieve
-// Port: rust/src/benchmarks/sieve.rs:25-60 (3c9f84d).
+// Port: rust/src/benchmarks/sieve.rs:21-57 (3c9f84d).
 type State {
   limit: u64,
   value_out: u32,
@@ -8,6 +8,8 @@ type State {
 fn step(mut state: State, iteration: u64) {
   let limit = state.limit
   let mut primes: List[u8] = []
+  // One backing allocation per step; initialization remains measured byte work.
+  list.reserve(mut primes, limit + 1)
   for _ in 0u64..limit + 1 {
     list.push(mut primes, 1)
   }

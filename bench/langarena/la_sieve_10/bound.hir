@@ -1,0 +1,82 @@
+// langarena: Etc::Sieve
+// Port: rust/src/benchmarks/sieve.rs:25-60 (3c9f84d).
+type State {
+  limit: u64,
+  value_out: u32,
+}
+
+// Integer square root: std list_block.hir:41–62, ported from Zig
+// lib/std/math/sqrt.zig:36–61 (bff490a23889750de7096d9057c0a432efc929a8).
+// See third-party/NOTICES.md. No floating-point rounding at square boundaries.
+@noalloc
+fn marking_bound(n: u64) -> u64 uses {} {
+  let mut op = n
+  let mut res: u64 = 0
+  let mut one: u64 = 1u64 << 62u64
+  while one > op {
+    one >>= 2u64
+  }
+  while one != 0 {
+    let fits = op >= res + one
+    if fits {
+      op -= res + one
+    }
+    res >>= 1u64
+    if fits {
+      res += one
+    }
+    one >>= 2u64
+  }
+  res
+}
+
+fn step(mut state: State, iteration: u64) {
+  let limit = state.limit
+  let mut primes: List[u8] = []
+  list.reserve(mut primes, limit + 1)
+  for _ in 0u64..limit + 1 {
+    list.push(mut primes, 1)
+  }
+  primes[0] = 0
+  primes[1] = 0
+  let bound = marking_bound(limit)
+  let mut p = 2u64
+  while p <= bound {
+    if primes[p] == 1 {
+      let mut multiple = p * p
+      while multiple <= limit {
+        primes[multiple] = 0
+        multiple += p
+      }
+    }
+    p += 1
+  }
+  let mut last = 2u64
+  let mut count = 1u64
+  let mut n = 3u64
+  while n <= limit {
+    if primes[n] == 1 {
+      last = n
+      count += 1
+    }
+    n += 2
+  }
+  state.value_out = u32.wrapping_add(state.value_out, int.truncate(last + count))
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let limit = harness.number(config, "limit")
+  // Upstream uses signed i64 configurations. This bound also keeps limit + 1,
+  // p*p, multiple+p, n+2 and last+count representable in the u64 port.
+  if limit < 2 || limit > 9223372036854775807u64 {
+    return Error("sieve limit must be in 2..=9223372036854775807")
+  }
+  harness.measure(rt, config, State(limit: limit, value_out: 0), step, checksum)
+}
