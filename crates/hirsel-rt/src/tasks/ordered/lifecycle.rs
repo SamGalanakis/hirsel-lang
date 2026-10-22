@@ -613,14 +613,22 @@ pub(crate) unsafe fn receive(
     let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
     unsafe { super::events::prepare_receive(ctx, word, descriptor) };
     let me = scheduler(ctx).current;
-    let (status, progress) = engine::head_effect(ctx, "channel.receive", || {
-        let s = scheduler(ctx);
-        let channel = s.channels.channel(word, false);
-        let shield = unsafe { (*ctx).shield };
-        // SAFETY: this head callback owns the receiving task and its output.
-        let status = unsafe { receive_ready(s, me, shield, channel, message) };
-        (status, Next::Yield)
-    })?;
+    let (status, progress) = engine::head_observed(
+        ctx,
+        "channel.receive",
+        || {
+            let s = scheduler(ctx);
+            let channel = s.channels.channel(word, false);
+            let shield = unsafe { (*ctx).shield };
+            // SAFETY: this head callback owns the receiving task and its output.
+            let status = unsafe { receive_ready(s, me, shield, channel, message) };
+            (status, Next::Yield)
+        },
+        |status| {
+            unsafe { super::events::receive_immediate(ctx, *status, message) };
+            Vec::new()
+        },
+    )?;
     let status = if let Some(status) = status {
         engine::continue_at_head(ctx, progress)?;
         status
@@ -1466,7 +1474,11 @@ mod tests {
         width: u32,
         sender: bool,
         observing: bool,
-    ) -> Option<super::super::events::ReceivePollCompletion> {
+        reorder: hirsel_run_config::Reorder,
+    ) -> Option<(
+        super::super::events::ReceivePollCompletion,
+        Vec<super::super::events::CanonicalEvent>,
+    )> {
         use hirsel_core_contract::handle_scan::*;
         use std::sync::{Arc, Mutex};
         let observed = Arc::new(Mutex::new(None));
@@ -1526,7 +1538,9 @@ mod tests {
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
             |ctx| unsafe {
-                engine::enable(ctx, Policy::admit(&Default::default(), None));
+                let mut policy = Policy::admit(&Default::default(), None);
+                policy.reorder = reorder;
+                engine::enable(ctx, policy);
                 if observing {
                     super::super::events::enable(ctx);
                 }
@@ -1624,7 +1638,33 @@ mod tests {
                     };
                     assert_eq!(*status, poll.status);
                     assert_eq!(payload, &poll.payload);
-                    *seen.lock().unwrap() = Some(poll.clone());
+                    let rows: Vec<_> = log
+                        .canonical()
+                        .expect("supported saved receive prefix")
+                        .iter()
+                        .filter(|row| {
+                            row.op == "channel.receive"
+                                && row.task == poll.task
+                                && row.ordinal == poll.ordinal
+                        })
+                        .cloned()
+                        .collect();
+                    assert_eq!(rows.len(), 5);
+                    for (subevent, row) in rows.iter().enumerate() {
+                        assert_eq!(row.subevent as usize, subevent);
+                    }
+                    assert_eq!(rows[0].transition, super::super::events::Transition::Yield);
+                    assert_eq!(rows[2].transition, super::super::events::Transition::Park);
+                    assert_eq!(rows[4].transition, super::super::events::Transition::Keep);
+                    assert_eq!(rows[4].retirement, poll.retirement);
+                    assert_eq!(
+                        rows[4].outcome,
+                        super::super::events::CanonicalOutcome::Received {
+                            status: poll.status,
+                            payload: poll.payload.clone()
+                        }
+                    );
+                    *seen.lock().unwrap() = Some((poll.clone(), rows));
                 }
                 let mut result = NONE;
                 assert_eq!(
@@ -1687,11 +1727,16 @@ mod tests {
     fn saved_receive_poll_evidence_matches_owner_at_one_and_many_workers() {
         let mut reference = None;
         for width in [1, 2, 4, 8] {
-            let observed = receive_run(width, true, true).unwrap();
-            if let Some(reference) = &reference {
-                assert_eq!(&observed, reference);
-            } else {
-                reference = Some(observed);
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let observed = receive_run(width, true, true, reorder).unwrap();
+                if let Some(reference) = &reference {
+                    assert_eq!(&observed, reference);
+                } else {
+                    reference = Some(observed);
+                }
             }
         }
     }
@@ -1699,14 +1744,14 @@ mod tests {
     #[test]
     fn a_real_ordered_receive_wakes_from_a_retired_send_and_moves_the_saved_slot() {
         for width in [2, 4, 8] {
-            receive_run(width, true, false);
+            receive_run(width, true, false, hirsel_run_config::Reorder::Auto);
         }
     }
 
     #[test]
     fn the_last_ordered_receive_reports_blocked_only_after_idle_save_and_poll() {
         for width in [2, 4, 8] {
-            receive_run(width, false, false);
+            receive_run(width, false, false, hirsel_run_config::Reorder::Auto);
         }
     }
 }

@@ -168,6 +168,11 @@ pub(super) enum CanonicalOutcome {
         member: Option<ObjectId>,
         rank: Option<u64>,
     },
+    Receiving,
+    Received {
+        status: u32,
+        payload: Option<Vec<u8>>,
+    },
     Closed,
     BulkDetaching {
         members: Vec<ObjectId>,
@@ -281,6 +286,9 @@ pub(super) struct Log {
     pub task_results: BTreeMap<Vec<u32>, TaskResult>,
     pub receive_polls: Vec<ReceivePollCompletion>,
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
+    receiving: BTreeSet<Vec<u32>>,
+    receive_entries: BTreeMap<Vec<u32>, Option<Subevents>>,
+    receive_results: BTreeMap<(Vec<u32>, u64), (u32, Option<Vec<u8>>)>,
     joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
     scope_exits: BTreeMap<Vec<u32>, ScopeExitEvidence>,
     bulk_detaches: BTreeMap<Vec<u32>, BulkDetachEvidence>,
@@ -408,6 +416,7 @@ impl Log {
             && self.bulk_detaches.is_empty()
             && self.cancel_all.is_empty()
             && self.awaiting.is_empty()
+            && self.receiving.is_empty()
         {
             Ok(&self.canonical)
         } else {
@@ -510,12 +519,77 @@ pub(super) unsafe fn prepare_receive(ctx: *mut TaskCtx, word: u64, descriptor: u
         .identity(crate::ordered::objects::Kind::Receiver, word)
         .expect("an admitted receiver identity")
         .clone();
+    assert!(log.receiving.insert(path.clone()));
     log.receivers.insert(path, (channel, descriptor));
     if let std::collections::btree_map::Entry::Vacant(entry) = log.values.entry(descriptor)
         && let Ok(program) = unsafe { super::values::Program::linked(ctx, descriptor) }
     {
         entry.insert(program);
     }
+}
+
+/// Snapshot the actual immediate effect before its yield, with the immutable
+/// initialized-field program prepared by the receiving owner before entry.
+/// # Safety
+/// DONE initialized message; every other status leaves it unread.
+pub(super) unsafe fn receive_immediate(ctx: *mut TaskCtx, status: Option<u32>, message: *const u8) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let task = unsafe { (*ctx).task_id };
+    let path = s.task(task).path.clone();
+    let cause = s
+        .canceled_task(task, unsafe { (*ctx).shield })
+        .map_or(0, |cause| cause + 1);
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let (channel, descriptor) = &log.receivers[&path];
+    let channel = channel.clone();
+    let payload = if status == Some(crate::channels::DONE) {
+        log.values.get(descriptor).and_then(|program| unsafe {
+            program
+                .encode(message, |kind, word| {
+                    use crate::ordered::objects::Kind;
+                    match kind {
+                        Kind::Task => log.tasks.get(&word),
+                        Kind::TaskSet => log.sets.get(&word),
+                        _ => driver.objects.identity(kind, word),
+                    }
+                    .cloned()
+                })
+                .ok()
+        })
+    } else {
+        None
+    };
+    let canonical = if let Some(status) = status {
+        let ordinal = log.ordinals.get(&path).copied().unwrap_or(0);
+        assert!(
+            log.receive_results
+                .insert((path.clone(), ordinal), (status, payload.clone()))
+                .is_none()
+        );
+        if status == crate::channels::DONE && payload.is_none() {
+            None
+        } else {
+            Some(CanonicalOutcome::Received { status, payload })
+        }
+    } else {
+        Some(CanonicalOutcome::Receiving)
+    };
+    let events = canonical.map(|outcome| {
+        vec![
+            (
+                CanonicalItem::Cancellation(path.clone()),
+                CanonicalOutcome::Scalar(cause.to_le_bytes().to_vec()),
+            ),
+            (CanonicalItem::Object(channel), outcome),
+        ]
+    });
+    assert!(log.receive_entries.insert(path, events).is_none());
 }
 
 /// # Safety
@@ -531,12 +605,16 @@ pub(crate) unsafe fn record_receive_poll(
         return;
     }
     let path = s.task(task).path.clone();
+    let shield = s.task(task).shield;
+    let cause = s.canceled_task(task, shield).map_or(0, |cause| cause + 1);
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
     let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
     let log = driver.events.as_mut().unwrap();
     let (channel, descriptor) = log.receivers.get(&path).expect("receive entry before poll");
+    let channel = channel.clone();
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
         .expect("receive entry ordinal");
@@ -562,6 +640,46 @@ pub(crate) unsafe fn record_receive_poll(
     } else {
         None
     };
+    assert!(
+        log.receive_results
+            .insert((path.clone(), ordinal), (status, payload.clone()))
+            .is_none()
+    );
+    if status == crate::channels::DONE && payload.is_none() {
+        log.unsupported.push(Unsupported {
+            task: path.clone(),
+            ordinal,
+            op: Some("channel.receive"),
+        });
+    } else {
+        let boundary = Boundary {
+            task: path.clone(),
+            ordinal,
+            op: None,
+            transition: Transition::Keep,
+            retirement,
+            before,
+            credit: 0,
+            native_outcome: None,
+        };
+        log.subevents(
+            &boundary,
+            "channel.receive",
+            vec![
+                (
+                    CanonicalItem::Cancellation(path.clone()),
+                    CanonicalOutcome::Scalar(cause.to_le_bytes().to_vec()),
+                ),
+                (
+                    CanonicalItem::Object(channel.clone()),
+                    CanonicalOutcome::Received {
+                        status,
+                        payload: payload.clone(),
+                    },
+                ),
+            ],
+        );
+    }
     log.receive_polls.push(ReceivePollCompletion {
         task: path,
         ordinal,
@@ -632,11 +750,39 @@ pub(super) unsafe fn complete_receive(
     } else {
         None
     };
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let ordinal = log.ordinals[&path] - 1;
+    let fixed = log.receive_results.get(&(path.clone(), ordinal));
+    if let Some((observed_status, observed_payload)) = fixed {
+        assert_eq!(*observed_status, status);
+        assert_eq!(
+            *observed_payload, payload,
+            "receive completion matches effect before wake/yield"
+        );
+    }
+    let recorded = fixed.is_some();
     complete_owner(ctx, "channel.receive", || OwnerOutcome::Receive {
         status,
         descriptor,
         payload,
     });
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    log.receiving.remove(&path);
+    if !recorded {
+        log.unsupported.push(Unsupported {
+            task: path,
+            ordinal,
+            op: Some("channel.receive"),
+        });
+    }
 }
 
 /// Snapshot while the effect still owns the initialized carrier. A successful
@@ -1572,6 +1718,29 @@ pub(super) fn record(
             then_yield: *then_yield,
         },
     };
+    let receive = {
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        let log = driver.events.as_mut().unwrap();
+        if matches!(
+            operation.map(|(op, _)| &op.payload),
+            Some(Command::Head {
+                name: "channel.receive"
+            })
+        ) {
+            log.receive_entries.remove(&path).flatten()
+        } else if operation.is_none() && log.last_ops.get(&path) == Some(&"channel.receive") {
+            log.receivers.get(&path).map(|(channel, _)| {
+                vec![(
+                    CanonicalItem::Object(channel.clone()),
+                    CanonicalOutcome::Receiving,
+                )]
+            })
+        } else {
+            None
+        }
+    };
     let cancel_all = {
         let Logical::Ordered(driver) = &mut s.logical else {
             unreachable!()
@@ -1590,7 +1759,7 @@ pub(super) fn record(
             None
         }
     };
-    let canonical = cancel_all.or_else(|| {
+    let canonical = receive.or(cancel_all).or_else(|| {
         operation.and_then(|(op, result)| {
             if let Some(events) = &result.canonical {
                 return Some(events.clone());
@@ -4932,10 +5101,41 @@ mod tests {
                     let expected = decoded
                         .then(|| [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat());
                     assert_eq!(payload, &expected);
-                    assert!(
-                        log.canonical().is_err(),
-                        "unsupported carrier cannot become a complete trace"
-                    );
+                    if decoded {
+                        let rows: Vec<_> = log
+                            .canonical()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| row.op == "channel.receive")
+                            .collect();
+                        assert_eq!(rows.len(), 2);
+                        assert_eq!(rows[0].item, CanonicalItem::Cancellation(vec![]));
+                        assert_eq!(
+                            rows[1].item,
+                            CanonicalItem::Object(ObjectId {
+                                creator: vec![],
+                                ordinal: 0
+                            })
+                        );
+                        assert_eq!(
+                            rows[1].outcome,
+                            CanonicalOutcome::Received {
+                                status: crate::channels::DONE,
+                                payload: expected
+                            }
+                        );
+                        assert_eq!(
+                            (rows[1].ordinal, rows[1].subevent, rows[1].version),
+                            (2, 1, 3)
+                        );
+                        assert_eq!(rows[1].transition, Transition::Yield);
+                        assert!(log.receiving.is_empty());
+                    } else {
+                        assert!(
+                            log.canonical().is_err(),
+                            "unsupported carrier cannot become a complete trace"
+                        );
+                    }
                     crate::STATUS_OK
                 },
             );
@@ -5431,8 +5631,30 @@ mod tests {
             let Logical::Ordered(driver) = &s.logical else {
                 unreachable!()
             };
+            let log = driver.events.as_ref().unwrap();
+            let rows: Vec<_> = log
+                .canonical
+                .iter()
+                .filter(|row| row.op == "channel.receive")
+                .collect();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().all(|row| row.task == [7] && row.ordinal == 9));
+            assert_eq!(rows[0].item, CanonicalItem::Cancellation(vec![7]));
+            assert_eq!(
+                rows[0].outcome,
+                CanonicalOutcome::Scalar((if case == 2 { 1u32 } else { 0 }).to_le_bytes().to_vec())
+            );
+            assert_eq!(rows[1].item, CanonicalItem::Object(identity.clone()));
+            assert_eq!(rows[1].transition, Transition::Keep);
             let polls = &driver.events.as_ref().unwrap().receive_polls;
             assert_eq!(polls.len(), 1);
+            assert_eq!(
+                rows[1].outcome,
+                CanonicalOutcome::Received {
+                    status: polls[0].status,
+                    payload: polls[0].payload.clone()
+                }
+            );
             assert_eq!(
                 polls[0],
                 ReceivePollCompletion {
