@@ -3,15 +3,15 @@ source: crates/hirsel-pipeline-tests/tests/front/lower_tests.rs
 expression: "print::definition(&d)"
 ---
 definition main entry b0
-body 0 result t3 parameters []
-  slot 0: t2 Temporary scope 0
-  slot 1: t2 Temporary scope 0
-  slot 2: t3 Temporary scope 0
-  place 0: slot 0 [] t2
-  place 1: slot 0 [] t2
-  place 2: slot 1 [] t2
-  place 3: slot 2 [] t3
-  place 4: slot 2 [] t3
+body 0 result t0 parameters []
+  slot 0: t1 Temporary scope 0
+  slot 1: t1 Temporary scope 0
+  slot 2: t0 Temporary scope 0
+  place 0: slot 0 [] t1
+  place 1: slot 0 [] t1
+  place 2: slot 1 [] t1
+  place 3: slot 2 [] t0
+  place 4: slot 2 [] t0
   rvalue 0: Constant(Integer(3))
   rvalue 1: Use(Operand { place: PlaceId(1), usage: Take })
   rvalue 2: Construct { constructor: Box, fields: [ConstructField { field: 0, value: Operand { place: PlaceId(2), usage: Take } }], destination: Inferred }

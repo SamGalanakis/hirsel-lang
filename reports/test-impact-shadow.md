@@ -90,7 +90,7 @@ counts logical graph/input byte and evidence payload. Duplicated map indexing
 keys are excluded, as are containers, allocator overhead and spare capacity;
 neither metric is a total-memory or peak-RSS claim.
 The index is rebuilt for each explicit pair: update cost equals reconstruction,
-not a claimed engine incremental update. The ignored `shadow_measurement` test
+not a claimed engine incremental update. The ignored `full_gate_shadow_measurement` test
 provides index, interpreter, setup and native modes for capped instruction probes.
 
 ## Recommendation

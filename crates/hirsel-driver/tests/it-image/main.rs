@@ -23,23 +23,9 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 ";
 
-/// `Anchor(n)` in a Debug rendering, replaced by that anchor's file path and base.
-fn placed(sources: &hirsel_span::SourceMap, text: String) -> String {
-    let mut out = String::new();
-    let mut rest = text.as_str();
-    while let Some(at) = rest.find("Anchor(") {
-        out.push_str(&rest[..at]);
-        rest = &rest[at + "Anchor(".len()..];
-        let end = rest.find(')').unwrap();
-        let anchor = hirsel_span::Anchor(rest[..end].parse().unwrap());
-        let place = sources
-            .anchor(anchor)
-            .map(|(file, base)| (sources.file(file).unwrap().path.clone(), base));
-        out.push_str(&format!("Anchor({place:?})"));
-        rest = &rest[end + 1..];
-    }
-    out + rest
-}
+#[path = "../support/canonical_debug.rs"]
+mod canonical_debug;
+use canonical_debug::{canonical_ids, placed};
 
 /// Every prechecked std definition hashes the same (LANG-6), lowers to the same TIR
 /// and has the same revision node as in a fresh check, in a program that places
@@ -113,11 +99,19 @@ fn imaged_std_products_equal_fresh_ones() {
                 reference.engine.source_audit(path).unwrap(),
                 "{path}"
             );
-            // Anchors are process-unique, so each is named by its placement;
-            // TypeId's Debug omits provenance.
+            // Preserve every Debug field, naming anchors by source placement and
+            // session-local TypeIds by the canonical content of their type rows.
+            let render = |program: &LoadedProgram, value: &hirsel_tir::Definition| {
+                let text = canonical_ids(
+                    program.engine.types(),
+                    || serde_json::to_vec(value).unwrap(),
+                    format!("{value:?}"),
+                );
+                placed(&program.engine.sources, text)
+            };
             assert_eq!(
-                placed(&prechecked.engine.sources, format!("{:?}", actual.value)),
-                placed(&reference.engine.sources, format!("{:?}", expected.value)),
+                render(&prechecked, &actual.value),
+                render(&reference, &expected.value),
                 "{path}"
             );
             assert_eq!(actual.dependencies, expected.dependencies, "{path}");
@@ -128,12 +122,28 @@ fn imaged_std_products_equal_fresh_ones() {
         let expected = reference.engine.export_native_input().unwrap();
         assert_eq!(actual.audits, expected.audits);
         assert_eq!(
-            format!("{:?}", actual.materialized),
-            format!("{:?}", expected.materialized)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.materialized)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.materialized)
+            )
         );
         assert_eq!(
-            format!("{:?}", actual.constants),
-            format!("{:?}", expected.constants)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.constants)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.constants)
+            )
         );
         prechecked.engine.import_native_input(actual).unwrap();
         for id in precheck.definitions() {

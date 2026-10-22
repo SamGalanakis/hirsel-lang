@@ -130,6 +130,7 @@ pub(crate) fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHas
 fn manifest_value(
     result: &Result<DefPath, LookupError>,
     namespace: Option<hirsel_resolve::Namespace>,
+    manifest: ContentHash,
 ) -> ContentHash {
     let mut parts: Vec<Vec<u8>> = vec![];
     let paths = |parts: &mut Vec<Vec<u8>>, ps: &[DefPath]| {
@@ -160,6 +161,15 @@ fn manifest_value(
             parts.push(b"provider".to_vec());
             diagnostics_value(&mut parts, ds);
         }
+    }
+    // A missing name's diagnostic also observes accessible near-name candidates.
+    // The negative lookup alone can stay identical while a rename changes its
+    // suggested repair. Keep successful lookups independent of unrelated names.
+    if matches!(
+        result,
+        Err(LookupError::Missing | LookupError::MissingMember(_))
+    ) {
+        parts.push(manifest.0.to_vec());
     }
     ContentHash::of_parts(
         "hirsel.read.manifest-lookup",
@@ -222,7 +232,7 @@ pub(crate) fn complete_reads(
                 package,
                 segments,
                 result,
-                ..
+                manifest,
             } => {
                 let namespace = source.namespace(context, result);
                 reads.record(
@@ -232,7 +242,7 @@ pub(crate) fn complete_reads(
                         package.as_ref(),
                         segments,
                     )),
-                    manifest_value(result, namespace),
+                    manifest_value(result, namespace, *manifest),
                 )
             }
             hirsel_types::DependencyRead::ModuleHead {
@@ -425,7 +435,11 @@ impl QueryEngine {
                     LookupSource::Manifest => {
                         let result = self.lookup_result(&context, &qualifier, &segments);
                         let namespace = self.lookup_namespace(&context, &result);
-                        manifest_value(&result, namespace)
+                        manifest_value(
+                            &result,
+                            namespace,
+                            self.declarations.inputs().manifest_revision,
+                        )
                     }
                     LookupSource::Head => {
                         let exposed = self

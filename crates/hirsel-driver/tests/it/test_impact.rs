@@ -607,8 +607,8 @@ fn source_native_and_interpreter_fresh_observations_agree() {
 /// Ignored measurement entry, run explicitly through tools/capped and perf.
 /// Each mode performs the same 100 batched operations; setup is outside the loop.
 #[test]
-#[ignore = "explicit instruction measurement, not a timing assertion"]
-fn shadow_measurement() {
+#[ignore = "full gate; explicit instruction measurement"]
+fn full_gate_shadow_measurement() {
     use std::hint::black_box;
     with_compiler_stack(|| {
         let mode = std::env::var("HIRSEL_IMPACT_MEASURE").unwrap_or_else(|_| "index".into());
