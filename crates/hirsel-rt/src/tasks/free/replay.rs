@@ -434,6 +434,17 @@ impl Token {
             .map_err(|error| Stop::Diverged(error.0))
     }
 
+    pub(super) fn host_output(
+        &self,
+        positions: &[hirsel_free::recorder::Position],
+        sink: &str,
+        bytes: &[u8],
+    ) -> Stopped<()> {
+        self.shared
+            .with(|session| session.replay_host_output(&self.path, positions, sink, bytes))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
     pub(super) fn host_completion(&self) -> Stopped<Vec<u8>> {
         self.shared
             .with(|session| session.replay_host_completion(&self.path))

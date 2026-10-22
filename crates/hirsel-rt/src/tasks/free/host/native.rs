@@ -64,7 +64,21 @@ pub(super) fn request_keys(
         Ok(key)
     };
     let keys = match request {
-        R::MonotonicClock { io: 1 } | R::WallClock { io: 1 } => vec![(ROOT, Mode::Shared)],
+        R::MonotonicClock { io: 1 }
+        | R::WallClock { io: 1 }
+        | R::Stdout { io: 1 }
+        | R::Stderr { io: 1 } => vec![(ROOT, Mode::Shared)],
+        R::Print { stdout: word, .. } | R::PrintStderr { stderr: word, .. } => {
+            let (key, kind) = identity(*word)?;
+            let Kind::Sink { file_backed } = kind else {
+                return Err(Stop::Diverged("native output resource kind differs".into()));
+            };
+            let mut keys = vec![(key, Mode::Exclusive)];
+            if file_backed {
+                keys.push((NAMESPACE, Mode::Shared));
+            }
+            keys
+        }
         R::Monotonic { clock } | R::Wall { clock } | R::SleepUntil { clock, .. } => {
             let (key, kind) = identity(*clock)?;
             if kind != Kind::Other {

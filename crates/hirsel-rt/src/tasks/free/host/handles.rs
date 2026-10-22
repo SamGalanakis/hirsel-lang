@@ -14,6 +14,7 @@ pub(in crate::tasks::free) struct Created {
 pub(in crate::tasks::free) struct Envelope {
     pub(in crate::tasks::free) result: Result<Completion, AdapterError>,
     pub(in crate::tasks::free) created: Vec<Created>,
+    pub(in crate::tasks::free) output_count: Option<u64>,
 }
 impl Wire for Created {
     fn encode(&self, out: &mut Vec<u8>) {
@@ -54,17 +55,19 @@ impl Wire for Created {
 }
 impl Wire for Envelope {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(b"F1H1");
+        out.extend_from_slice(b"F1H2");
         self.result.encode(out);
         self.created.encode(out);
+        self.output_count.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
-        if input.take(4)? != b"F1H1" {
+        if input.take(4)? != b"F1H2" {
             return Err("unsupported Free host envelope".into());
         }
         Ok(Self {
             result: Wire::decode(input)?,
             created: Wire::decode(input)?,
+            output_count: Wire::decode(input)?,
         })
     }
 }
@@ -90,8 +93,27 @@ pub(in crate::tasks::free) fn encode(
         }
         pending.created.clone()
     };
+    if pending.track_output && pending.output_count.is_none() {
+        pending.output_count = match result {
+            Ok(Completion::Unit(Ok(()))) => {
+                Some(output_bytes(pending.request.buffers()).unwrap().len() as u64)
+            }
+            Ok(Completion::Unit(Err(
+                crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted,
+            ))) => Some(0),
+            _ => {
+                return Err(Stop::Refused(
+                    "failed output needs an observed written prefix".into(),
+                ));
+            }
+        };
+    }
+    if pending.track_output {
+        checked_output(pending.request.buffers(), result, pending.output_count)?;
+    }
     pending.encoded.clear();
     Envelope {
+        output_count: pending.output_count,
         result: canonical,
         created,
     }
@@ -184,6 +206,7 @@ mod tests {
     use super::*;
     fn envelope(path: &[u32], ordinal: u64, resource: u32) -> Envelope {
         Envelope {
+            output_count: None,
             result: Ok(Completion::Handle(Ok(0))),
             created: vec![Created {
                 path: path.to_vec(),
@@ -264,6 +287,7 @@ mod tests {
             );
             let mut bytes = Vec::new();
             Envelope {
+                output_count: None,
                 result: Ok(completion.clone()),
                 created: Vec::new(),
             }
@@ -273,6 +297,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        output_count: None,
                         result: Ok(completion),
                         created: envelope(&[], 1, 17).created
                     })
@@ -291,6 +316,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        output_count: None,
                         result: result.clone(),
                         created: Vec::new()
                     })
@@ -299,6 +325,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        output_count: None,
                         result,
                         created: envelope(&[], 1, 17).created
                     })
@@ -308,6 +335,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    output_count: None,
                     result: Ok(Completion::Halves(Ok((99, 100)))),
                     created: Vec::new()
                 })
@@ -320,6 +348,7 @@ mod tests {
         let mut created = envelope(&[], 1, 17).created;
         created.extend(envelope(&[], second_ordinal, second_resource).created);
         Envelope {
+            output_count: None,
             result: Ok(Completion::Halves(Ok((0, 0)))),
             created,
         }
@@ -379,6 +408,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    output_count: None,
                     result: Ok(Completion::Handle(Ok(99))),
                     created: Vec::new()
                 })
@@ -387,6 +417,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    output_count: None,
                     result: Ok(Completion::Unit(Ok(()))),
                     created: vec![Created {
                         path: vec![],
@@ -480,6 +511,7 @@ mod payload_tests {
             );
             let mut bytes = Vec::new();
             Envelope {
+                output_count: None,
                 result,
                 created: Vec::new(),
             }
@@ -491,6 +523,7 @@ mod payload_tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        output_count: None,
                         result: Ok(completion),
                         created: vec![Created {
                             path: vec![1],
@@ -670,6 +703,7 @@ mod mapping_tests {
         assert!(fields(&mut owned).unwrap().iter().all(Option::is_none));
         let mut tape = Vec::new();
         Envelope {
+            output_count: None,
             result: canonical,
             created: Vec::new(),
         }
@@ -763,6 +797,7 @@ mod error_tests {
         // A crafted envelope cannot inject a native word on the replay side.
         let mut encoded = Vec::new();
         Envelope {
+            output_count: None,
             result: Err(AdapterError::InvalidHandle(WORD)),
             created: Vec::new(),
         }

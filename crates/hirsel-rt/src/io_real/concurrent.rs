@@ -74,6 +74,14 @@ impl ConcurrentIo {
         self.wait_sources()?.wait()
     }
     fn attempt(&self, token: u64, request: Request) -> Result<Completion, AdapterError> {
+        self.attempt_observed(token, request, &mut None)
+    }
+    fn attempt_observed(
+        &self,
+        token: u64,
+        request: Request,
+        observed: &mut Option<u64>,
+    ) -> Result<Completion, AdapterError> {
         // Ready/Schedule are recorder notifications, never host call payloads.
         // Reject them explicitly instead of reaching State's filesystem dispatch.
         if matches!(request, Request::Ready { .. } | Request::Schedule { .. }) {
@@ -141,7 +149,9 @@ impl ConcurrentIo {
         let tls_split = matches!(&request, Request::NetSplit { stream, .. }
             if matches!(core.state.handles.rows.get(stream), Some(crate::handles::Grant::Stream { tls: true, .. })));
         let first_new = core.state.handles.next();
+        core.disk.observed_output = None;
         let result = core.call(request.clone());
+        *observed = core.disk.observed_output.take();
         debug_assert!(core.disk.prefetched.is_none() && core.disk.prefetched_output.is_none());
         let mut registry = self.registry.lock().unwrap();
         if let Request::NetSplit { stream, .. } = &request
@@ -206,6 +216,15 @@ impl ConcurrentAdapter for ConcurrentIo {
     }
     fn call_at(&self, token: u64, request: Request) -> Result<Completion, AdapterError> {
         self.attempt(token, request)
+    }
+    fn call_observed_at(
+        &self,
+        token: u64,
+        request: Request,
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        let mut output = None;
+        let result = self.attempt_observed(token, request, &mut output);
+        (result, output)
     }
     fn finish(&self, token: u64) {
         self.core.lock().unwrap().finish(token);

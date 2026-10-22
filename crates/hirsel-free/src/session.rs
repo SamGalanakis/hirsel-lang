@@ -535,6 +535,20 @@ impl Session {
         Ok(bytes)
     }
 
+    /// Reconstruct external output from an admitted completion's written prefix.
+    pub fn replay_host_output(
+        &mut self,
+        path: &[u32],
+        positions: &[Position],
+        sink: &str,
+        bytes: &[u8],
+    ) -> Result<(), Diverged> {
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged("native output requires replay".into()));
+        };
+        replayer.output_at_position(path, positions, sink, bytes)
+    }
+
     /// Existing blocked/ready markers surrounding an owner-side host retry.
     pub fn replay_host_readiness(&mut self, path: &[u32], ready: bool) -> Result<(), Diverged> {
         let op = self.op(path);

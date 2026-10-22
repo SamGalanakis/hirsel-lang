@@ -14,6 +14,41 @@ pub(super) mod handles;
 pub(crate) mod native;
 use handles::{Created, Envelope};
 
+fn output_bytes(request: &Request) -> Option<&[u8]> {
+    match request {
+        Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => Some(bytes),
+        _ => None,
+    }
+}
+
+fn checked_output(
+    request: &Request,
+    result: &Result<Completion, AdapterError>,
+    count: Option<u64>,
+) -> Stopped<Option<u64>> {
+    match (output_bytes(request), count) {
+        (None, None) => Ok(None),
+        (Some(bytes), Some(count)) if count <= bytes.len() as u64 => match result {
+            Ok(Completion::Unit(Ok(()))) if count == bytes.len() as u64 => Ok(Some(count)),
+            Ok(Completion::Unit(Err(
+                crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted,
+            ))) if count == 0 => Ok(Some(0)),
+            Ok(Completion::Unit(Err(error)))
+                if !matches!(
+                    error,
+                    crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted
+                ) =>
+            {
+                Ok(Some(count))
+            }
+            _ => Err(Stop::Diverged(
+                "output count differs from completion".into(),
+            )),
+        },
+        _ => Err(Stop::Diverged("missing or invalid output prefix".into())),
+    }
+}
+
 pub(crate) struct Pending {
     shared: Arc<super::record::Recording>,
     request: Arc<hirsel_free::claim::Request<Request>>,
@@ -21,6 +56,8 @@ pub(crate) struct Pending {
     entered: Progress,
     completion: Option<Result<Completion, AdapterError>>,
     encoded: Vec<u8>,
+    output_count: Option<u64>,
+    track_output: bool,
     keys: KeySet,
     names: Vec<(u32, String)>,
     positions: Option<Positions>,
@@ -54,6 +91,7 @@ pub(crate) unsafe fn prepare_with_keys(
         })
         .collect();
     assert!(unsafe { (*ctx).pending_host.is_none() });
+    let track_output = native::enabled(ctx) && output_bytes(&request).is_some();
     let request = shared.prepare_request(request);
     // The task owns all buffers before begin can reject a replay cut or
     // another runtime entry can observe an external stop.
@@ -65,6 +103,8 @@ pub(crate) unsafe fn prepare_with_keys(
             entered: Progress::START,
             completion: None,
             encoded: Vec::new(),
+            output_count: None,
+            track_output,
             keys,
             names,
             positions: None,
@@ -342,17 +382,19 @@ pub(crate) unsafe fn invoke_concurrent(
     let pending = unsafe { (*ctx).pending_host.as_ref().unwrap() };
     let (token, cause) = (pending.request.id, pending.canceled);
     unsafe {
-        invoke_discovered(
+        invoke_discovered_observed(
             ctx,
             |request| {
                 if let Some(cause) = cause
                     && adapter.cancellable(token)
-                    && let Some(completion) =
-                        crate::io_checks::cancel_concurrent(adapter, token, request, cause)?
                 {
-                    return Ok(completion);
+                    match crate::io_checks::cancel_concurrent(adapter, token, request, cause) {
+                        Ok(Some(completion)) => return (Ok(completion), None),
+                        Err(error) => return (Err(error), None),
+                        Ok(None) => {}
+                    }
                 }
-                adapter.call_at(token, request.clone())
+                adapter.call_observed_at(token, request.clone())
             },
             |handle| adapter.identity(handle),
         )
@@ -367,6 +409,14 @@ pub(crate) unsafe fn invoke_concurrent(
 pub(crate) unsafe fn invoke_discovered(
     ctx: *mut TaskCtx,
     call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+    identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
+) -> Stopped<()> {
+    unsafe { invoke_discovered_observed(ctx, |request| (call(request), None), identity) }
+}
+
+unsafe fn invoke_discovered_observed(
+    ctx: *mut TaskCtx,
+    call: impl FnOnce(&Request) -> (Result<Completion, AdapterError>, Option<u64>),
     identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
 ) -> Stopped<()> {
     unsafe {
@@ -392,14 +442,14 @@ unsafe fn invoke_result(
     ctx: *mut TaskCtx,
     call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
 ) -> Stopped<()> {
-    unsafe { invoke_resolved(ctx, call, |_| Ok(None)) }
+    unsafe { invoke_resolved(ctx, |request| (call(request), None), |_| Ok(None)) }
 }
 
 type Resources = Vec<(crate::io_keys::Key, crate::io_keys::Kind)>;
 
 unsafe fn invoke_resolved(
     ctx: *mut TaskCtx,
-    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+    call: impl FnOnce(&Request) -> (Result<Completion, AdapterError>, Option<u64>),
     resolve: impl FnOnce(&mut Result<Completion, AdapterError>) -> Stopped<Option<Resources>>,
 ) -> Stopped<()> {
     crate::stop::observe(ctx)?;
@@ -415,14 +465,19 @@ unsafe fn invoke_resolved(
             .expect("an active host transition")
             .ready()
     });
-    let (mut completion, resources) = {
+    let (mut completion, output_count, resources) = {
         // No role, section, writer or session lock crosses either adapter call.
         let _segment = unsafe { role::Segment::new(ctx) };
-        let mut completion = call(unsafe { (*pending).request.buffers() });
+        let (mut completion, output_count) = call(unsafe { (*pending).request.buffers() });
         let resources = resolve(&mut completion);
-        (completion, resources)
+        (completion, output_count, resources)
     };
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
+    pending.output_count = if pending.track_output {
+        output_count
+    } else {
+        None
+    };
     // Keep a refused discovery's result task-owned for stop/quarantine cleanup.
     let resources = match resources {
         Ok(resources) => resources,
@@ -467,6 +522,22 @@ pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
     super::record::publish(ctx, Phase::Ended(index), |writer| unsafe {
         let writer = writer.expect("a recorded host observation");
         writer.observation(&(*pending).encoded);
+        if let Some(count) = (*pending).output_count {
+            let bytes = output_bytes((*pending).request.buffers()).unwrap();
+            let positions = (*pending).positions.as_ref().unwrap();
+            let (_, _, epoch) = positions
+                .epochs()
+                .find(|(_, mode, _)| *mode == Mode::Exclusive)
+                .expect("output has an exclusive sink position");
+            let (_, name) = (*pending)
+                .keys
+                .keys()
+                .iter()
+                .zip(&(*pending).names)
+                .find(|((_, mode), _)| *mode == Mode::Exclusive)
+                .unwrap();
+            writer.output(&name.1, epoch, &bytes[..count as usize]);
+        }
         if matches!(&(*pending).completion, Some(Err(AdapterError::Blocked))) {
             writer.blocked();
         }
@@ -616,6 +687,7 @@ pub(crate) struct ReplayHost {
     positions: Vec<hirsel_free::recorder::Position>,
     attempt: u32,
     observed: Option<Result<Completion, AdapterError>>,
+    output_count: Option<u64>,
 }
 
 /// # Safety
@@ -638,6 +710,7 @@ pub(crate) unsafe fn replay_request(
             positions: Vec::new(),
             attempt: 0,
             observed: None,
+            output_count: None,
         }))
     };
     drop(keys);
@@ -667,8 +740,27 @@ pub(crate) unsafe fn replay_request(
             token.publish(ctx, Phase::Ended(index), || {
                 let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
                 let bytes = token.host_observation(&host.positions)?;
+                let envelope: Envelope =
+                    crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+                let count = if native::enabled(ctx) || envelope.output_count.is_some() {
+                    checked_output(&host._request, &envelope.result, envelope.output_count)?
+                } else {
+                    None
+                };
+                if let Some(count) = count {
+                    let (sink, _) = host
+                        .keys
+                        .iter()
+                        .find(|(_, shared)| !*shared)
+                        .ok_or_else(|| Stop::Diverged("output has no exclusive sink".into()))?;
+                    token.host_output(
+                        &host.positions,
+                        sink,
+                        &output_bytes(&host._request).unwrap()[..count as usize],
+                    )?;
+                }
                 host.positions.clear();
-                let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+                host.output_count = count;
                 let result = token.host_result(envelope)?;
                 if matches!(result, Err(AdapterError::Blocked)) {
                     token.host_readiness(false)?;
@@ -707,10 +799,15 @@ pub(crate) unsafe fn replay_request(
         let token = super::replay::token(ctx).unwrap();
         token.publish(ctx, Phase::Done, || {
             let bytes = token.host_completion()?;
-            let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
-            let result = token.host_result(envelope)?;
+            let envelope: Envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
             let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
-            if host.observed.as_ref() != Some(&result) {
+            let count = if native::enabled(ctx) || envelope.output_count.is_some() {
+                checked_output(&host._request, &envelope.result, envelope.output_count)?
+            } else {
+                None
+            };
+            let result = token.host_result(envelope)?;
+            if host.output_count != count || host.observed.as_ref() != Some(&result) {
                 return Err(Stop::Diverged(
                     "host completion differs from final observation".into(),
                 ));
@@ -781,3 +878,6 @@ mod native_tests;
 
 #[cfg(test)]
 mod native_file_tests;
+
+#[cfg(test)]
+mod native_output_tests;

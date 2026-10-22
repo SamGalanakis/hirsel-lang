@@ -29,6 +29,16 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn call_at(&self, _token: u64, request: Request) -> Result<Completion, AdapterError> {
         self.call(request)
     }
+    /// One bounded attempt and the exact externally written output prefix, when
+    /// available. Non-output calls return None. An unobserved failed print must
+    /// not be represented as either zero bytes or the full requested output.
+    fn call_observed_at(
+        &self,
+        token: u64,
+        request: Request,
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        (self.call_at(token, request), None)
+    }
     fn finish(&self, _token: u64) {}
     fn parked(&self, _token: u64) {}
     fn cancellable(&self, _token: u64) -> bool {

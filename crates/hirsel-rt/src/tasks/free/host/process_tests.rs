@@ -376,6 +376,7 @@ fn owned_process_results_preserve_all_payloads_and_reject_creation_metadata() {
         );
         let mut bytes = Vec::new();
         Envelope {
+            output_count: None,
             result: result.clone(),
             created: vec![],
         }
@@ -386,6 +387,7 @@ fn owned_process_results_preserve_all_payloads_and_reject_creation_metadata() {
         assert!(
             mapping
                 .substitute(Envelope {
+                    output_count: None,
                     result,
                     created: vec![Created {
                         path: vec![],

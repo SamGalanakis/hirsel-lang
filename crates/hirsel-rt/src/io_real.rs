@@ -371,6 +371,7 @@ impl RealIo {
                 files: BTreeMap::new(),
                 prefetched: None,
                 prefetched_output: None,
+                observed_output: None,
                 last_open: None,
                 partial: None,
                 next_write: 1,
@@ -1407,6 +1408,7 @@ impl<S: Streams> RealCore<S> {
                 .prefetched_output
                 .take()
                 .unwrap_or_else(|| write_output(output, bytes));
+            self.disk.observed_output = Some(written as u64);
             if let Err(error) = value {
                 completion = Completion::Unit(Err(error.clone()));
                 fault = Some(Fault {
@@ -1517,6 +1519,7 @@ struct Disk {
     files: BTreeMap<u64, Arc<File>>,
     prefetched: Option<concurrent::FileResult>,
     prefetched_output: Option<(Result<(), IoError>, usize)>,
+    observed_output: Option<u64>,
     last_open: Option<File>,
     partial: Option<(IoError, usize)>,
     next_write: u64,

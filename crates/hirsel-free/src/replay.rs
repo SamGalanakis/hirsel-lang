@@ -483,6 +483,20 @@ impl Replayer {
         Ok(())
     }
 
+    pub fn output_at_position(
+        &mut self,
+        task: &[u32],
+        positions: &[crate::recorder::Position],
+        sink: &str,
+        bytes: &[u8],
+    ) -> Result<(), Diverged> {
+        let position = positions
+            .iter()
+            .find(|p| self.keys.get(p.key as usize).is_some_and(|key| key == sink))
+            .ok_or_else(|| Diverged("output sink is absent from host positions".into()))?;
+        self.output(task, sink, position.epoch, bytes)
+    }
+
     pub fn observation(&mut self, task: &[u32], op: u64) -> Result<Vec<u8>, Diverged> {
         self.substitute(task, op, "host observation", |r| match r {
             Record::Observation { bytes, .. } => Some(bytes.clone()),

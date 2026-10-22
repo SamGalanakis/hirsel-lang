@@ -2862,6 +2862,20 @@ unsafe fn native_print(
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, if stderr { "PrintStderr" } else { "Print" });
+    if crate::tasks::free::host::native::enabled(ctx) {
+        let request = if stderr {
+            Request::PrintStderr {
+                stderr: handle,
+                bytes: bytes.to_vec(),
+            }
+        } else {
+            Request::Print {
+                stdout: handle,
+                bytes: bytes.to_vec(),
+            }
+        };
+        return unsafe { native_call(ctx, request) };
+    }
     if crate::tasks::ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, crate::tasks::ordered::host::begin(ctx, false)) };
     }
