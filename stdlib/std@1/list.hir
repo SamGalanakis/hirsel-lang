@@ -7,8 +7,8 @@
 /// smallest width, so larger variants can require amortized backing growth.
 pub fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value} {
   let mut out: List[T] = []
-  // Exercise the same native storage surface as truncation.
-  core@1/list.truncate(mut out, 0)
+  // Keep reservation directly after construction: the native capacity proof
+  // recognizes the fresh empty list and removes growth checks from the loop.
   if n != 0 {
     core@1/list.reserve(mut out, n)
     for i in 0u64..n {

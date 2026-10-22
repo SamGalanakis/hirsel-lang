@@ -6,6 +6,24 @@ pub fn main() -> Result[(), ()] {
   failure.check(list.filled(1, 1u64) == [1], Bounds())
   failure.check(list.filled(2, 1u64) == [1, 1], Bounds())
   failure.check(list.filled(3, 1u64) == [1, 1, 1], Bounds())
+  failure.check(list.filled(3, 85u8) == [85u8, 85, 85], Bounds())
+  failure.check(list.filled(3, -7i8) == [-7i8, -7, -7], Bounds())
+  failure.check(
+    list.filled(3, 2147483647i32) == [2147483647i32, 2147483647, 2147483647],
+    Bounds()
+  )
+  failure.check(
+    list.filled(3, 4294967295u32) == [4294967295u32, 4294967295, 4294967295],
+    Bounds()
+  )
+  failure.check(
+    list.filled(3, 0x0102030405060708u64) == [
+      0x0102030405060708u64,
+      0x0102030405060708,
+      0x0102030405060708
+    ],
+    Bounds()
+  )
   let mut xs = list.filled(8, 0u8)
   failure.check(list.len(xs) == 8 && xs[7] == 0, Bounds())
   xs[0] = 9

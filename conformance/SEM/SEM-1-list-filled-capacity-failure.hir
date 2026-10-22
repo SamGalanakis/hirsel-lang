@@ -1,5 +1,5 @@
 // rule: SEM-1
-// expect: fail SEM-1 at line 12
+// expect: fail SEM-1 at line 13
 pub fn main() -> Result[(), ()] {
   let value: Inline[u64, 64] = [
     0u64,
