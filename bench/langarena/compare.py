@@ -130,11 +130,14 @@ class Session:
         with log.open('w') as out:
             result = subprocess.run(wrapped, cwd=cwd, env=self.env, stdout=out, stderr=subprocess.STDOUT)
         elapsed = time.monotonic() - started
-        if timing.exists():
-            try:
-                elapsed = float(timing.read_text().splitlines()[-1])
-            except ValueError:
-                pass
+        try:
+            lines = timing.read_text().splitlines()
+            if lines:
+                measured = float(lines[-1])
+                if math.isfinite(measured) and measured >= 0:
+                    elapsed = measured
+        except (OSError, ValueError):
+            pass
         self.commands.append(dict(command=command, cwd=str(cwd), seconds=elapsed,
                                   code=result.returncode, log=str(log)))
         if check and result.returncode:

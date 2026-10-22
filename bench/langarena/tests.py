@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,90 @@ HERE = build.HERE
 
 
 class Comparison(unittest.TestCase):
+    def session(self, directory):
+        session = compare.Session.__new__(compare.Session)
+        session.directory = Path(directory)
+        session.args = SimpleNamespace(timeout=3, cpu=31)
+        session.env = {}
+        session.commands = []
+        session.perf = False
+        return session
+
+    def test_call_retains_result_and_history_with_elapsed_sidecars(self):
+        sidecars = [(None, 2.5), ('', 2.5), ('\n', 2.5), ('garbled\n', 2.5),
+                    ('0.25\nbad final line\n', 2.5), ('nan\n', 2.5),
+                    ('inf\n', 2.5), ('-1\n', 2.5), ('0\n', 0),
+                    ('Command exited with non-zero status 124\n0.25\n', 0.25)]
+        for contents, seconds in sidecars:
+            for code in [0, 1, 124, 137, 152]:
+                for check in [False, True]:
+                    with self.subTest(contents=contents, code=code, check=check), tempfile.TemporaryDirectory() as directory:
+                        session = self.session(directory)
+                        log = Path(directory) / 'capped-command.log'
+                        timing = log.with_suffix('.elapsed')
+                        if contents is not None:
+                            timing.write_text(contents)
+                        command = ['program', Path('input.json')]
+                        output = f'capped: exit {code}\n'
+
+                        def run(wrapped, **kwargs):
+                            self.assertEqual(wrapped, ['nice', '-n', '10', str(ROOT / 'tools/capped'),
+                                '--timeout', '3', '/usr/bin/time', '-f', '%e', '-o', str(timing),
+                                'program', 'input.json'])
+                            self.assertEqual(kwargs['cwd'], Path(directory))
+                            self.assertEqual(kwargs['env'], session.env)
+                            self.assertEqual(kwargs['stderr'], subprocess.STDOUT)
+                            kwargs['stdout'].write(output)
+                            return subprocess.CompletedProcess(wrapped, code)
+
+                        with patch.object(compare.subprocess, 'run', side_effect=run) as mocked, \
+                                patch.object(compare.time, 'monotonic', side_effect=[10, 12.5]):
+                            if check and code:
+                                with self.assertRaisesRegex(RuntimeError, f'capped-command \\(exit {code}\\): capped: exit {code}'):
+                                    session.call(command, Path(directory), 'capped-command', check=check)
+                            else:
+                                self.assertEqual(session.call(command, Path(directory), 'capped-command', check=check),
+                                                 (seconds, code, log))
+                        mocked.assert_called_once()
+                        self.assertEqual(session.commands, [dict(command=['program', 'input.json'],
+                            cwd=directory, seconds=seconds, code=code, log=str(log))])
+                        self.assertEqual(log.read_text(), output)
+
+    def test_capped_samples_never_enter_accepted_ratios(self):
+        for contents in ['', '0.25\n']:
+            for code in [0, 124, 137, 152]:
+                with self.subTest(contents=contents, code=code), tempfile.TemporaryDirectory() as directory:
+                    session = self.session(directory)
+                    log = Path(directory) / '0-X-hirsel.log'
+                    log.with_suffix('.elapsed').write_text(contents)
+                    log.with_suffix('.rss').write_text('1024\n')
+
+                    def run(wrapped, **kwargs):
+                        # Even a successful checksum line must not hide a capped exit.
+                        kwargs['stdout'].write(f'X: OK in 0.1s\ncapped: exit {code}\n')
+                        return subprocess.CompletedProcess(wrapped, code)
+
+                    participant = dict(binary='program', cwd=directory, binary_identity=dict(sha256='binary'))
+                    with patch.object(compare.subprocess, 'run', side_effect=run), \
+                            patch.object(compare.time, 'monotonic', side_effect=[10, 12.5]):
+                        sample = session.sample('hirsel', participant, 'X', ROOT / 'test.js', 0)
+                    self.assertEqual(sample['exit'], code)
+                    self.assertEqual(sample['wall'], 0.25 if contents else 2.5)
+                    self.assertEqual(sample['log'], str(log))
+                    self.assertEqual(session.commands[0]['code'], code)
+                    anchor = dict(samples=[dict(status='OK', seconds=0.1)])
+                    entry = dict(samples=[sample])
+                    row = dict(hirsel=entry, rust=anchor)
+                    if code:
+                        self.assertIn(f'exit {code}', sample['status'])
+                        # A duration cannot make a failed cell eligible.
+                        sample['seconds'] = 0.1
+                        self.assertIsNone(compare.aggregate(entry, 'seconds', 1))
+                        self.assertIsNone(compare.paired_ratio(row, 'seconds', 1))
+                    else:
+                        self.assertEqual(sample['status'], 'OK')
+                        self.assertEqual(compare.paired_ratio(row, 'seconds', 1), 1)
+
     def test_requires_task_specific_checksum_line(self):
         self.assertEqual(compare.parse_result('X: OK in 1.234s\n', 'X'), 1.234)
         for output in ['X: ERR[actual=1, expected=2] in 1.0s', 'Y: OK in 1.0s', 'Summary: 1s']:
