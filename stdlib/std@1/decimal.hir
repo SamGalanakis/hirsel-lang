@@ -1,14 +1,26 @@
-// Count first so capacity failure leaves every byte unchanged.
+// itoa src/lib.rs:264-320: four digits per step from DECIMAL_PAIRS,
+// followed by a pair and a leading digit. Count before writing because this
+// API accepts arbitrary capacities and promises atomic BufferTooSmall failure.
 @noalloc
 pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u8, n]) -> Result[
   u64,
   scalar.FormatError
 ] uses {} {
+  if value <= 18446744073709551615 {
+    return write_word(core@1/int.narrow(value), negative, mut buffer)
+  }
   let mut count: u64 = 1
   let mut remaining = value
-  while remaining >= 10 {
+  while remaining >= 10000 {
+    count += 4
+    remaining /= 10000
+  }
+  if remaining >= 1000 {
+    count += 3
+  } else if remaining >= 100 {
+    count += 2
+  } else if remaining >= 10 {
     count += 1
-    remaining /= 10
   }
   let prefix: u64 = if negative {
     1
@@ -20,11 +32,95 @@ pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u
   }
   remaining = value
   let mut i = count + prefix
-  while i > prefix {
+  while remaining >= 10000 {
+    i -= 4
+    let quad: u64 = core@1/int.narrow(remaining % 10000)
+    remaining /= 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[i] = DECIMAL_PAIRS[high]
+    buffer[i + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[i + 2] = DECIMAL_PAIRS[low]
+    buffer[i + 3] = DECIMAL_PAIRS[low + 1]
+  }
+  if remaining >= 100 {
+    i -= 2
+    let pair: u64 = core@1/int.narrow(remaining % 100 * 2)
+    remaining /= 100
+    buffer[i] = DECIMAL_PAIRS[pair]
+    buffer[i + 1] = DECIMAL_PAIRS[pair + 1]
+  }
+  if remaining >= 10 {
+    i -= 2
+    let pair: u64 = core@1/int.narrow(remaining * 2)
+    buffer[i] = DECIMAL_PAIRS[pair]
+    buffer[i + 1] = DECIMAL_PAIRS[pair + 1]
+  } else {
     i -= 1
-    let digit: u8 = core@1/int.narrow(remaining % 10)
-    buffer[i] = digit + 48
-    remaining /= 10
+    buffer[i] = core@1/int.narrow(remaining) + 48u8
+  }
+  if negative {
+    buffer[0] = 45
+  }
+  Ok(count + prefix)
+}
+
+// Keep the common case word-sized, including the digit count. In particular
+// every binary64 significand in float_decimal.render takes this path.
+@noalloc
+fn write_word[n: size](value: u64, negative: bool, mut buffer: Inline[u8, n]) -> Result[
+  u64,
+  scalar.FormatError
+] uses {} {
+  let mut count: u64 = 1
+  let mut remaining = value
+  while remaining >= 10000 {
+    count += 4
+    remaining /= 10000
+  }
+  if remaining >= 1000 {
+    count += 3
+  } else if remaining >= 100 {
+    count += 2
+  } else if remaining >= 10 {
+    count += 1
+  }
+  let prefix: u64 = if negative {
+    1
+  } else {
+    0
+  }
+  if n < count + prefix {
+    return Error(BufferTooSmall)
+  }
+  remaining = value
+  let mut i = count + prefix
+  while remaining >= 10000 {
+    i -= 4
+    let quad = remaining % 10000
+    remaining /= 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[i] = DECIMAL_PAIRS[high]
+    buffer[i + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[i + 2] = DECIMAL_PAIRS[low]
+    buffer[i + 3] = DECIMAL_PAIRS[low + 1]
+  }
+  if remaining >= 100 {
+    i -= 2
+    let pair = remaining % 100 * 2
+    remaining /= 100
+    buffer[i] = DECIMAL_PAIRS[pair]
+    buffer[i + 1] = DECIMAL_PAIRS[pair + 1]
+  }
+  if remaining >= 10 {
+    i -= 2
+    let pair = remaining * 2
+    buffer[i] = DECIMAL_PAIRS[pair]
+    buffer[i + 1] = DECIMAL_PAIRS[pair + 1]
+  } else {
+    i -= 1
+    buffer[i] = core@1/int.narrow(remaining) + 48u8
   }
   if negative {
     buffer[0] = 45

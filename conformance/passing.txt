@@ -4775,6 +4775,7 @@ conformance/SEM/SEM-1-decimal-divide-zero-fail.hir
 conformance/SEM/SEM-1-decimal-divide-zero-run.hir
 conformance/SEM/SEM-1-decimal-i128-arith-run.hir
 conformance/SEM/SEM-1-decimal-i128-round-run.hir
+conformance/SEM/SEM-1-decimal-inline-pairs-run.hir
 conformance/SEM/SEM-1-decimal-money-run.hir
 conformance/SEM/SEM-1-decimal-mul-run.hir
 conformance/SEM/SEM-1-decimal-round-run.hir
