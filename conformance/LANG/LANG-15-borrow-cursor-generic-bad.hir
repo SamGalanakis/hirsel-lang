@@ -1,0 +1,17 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 12
+// twin: LANG/LANG-15-borrow-cursor-generic-ok.hir
+type Tree[T: copyable] = Leaf(T) | Children(List[Tree[T]])
+
+fn count[T: copyable](root: Tree[T]) -> u64 {
+  let mut node = root
+  match node {
+    Leaf(_) => 1,
+    Children(items) => {
+      if list.len(items) > 0 {
+        node = items[0]
+      }
+      0
+    },
+  }
+}

@@ -1719,6 +1719,8 @@ conformance/LANG/LANG-15-borrow-cursor-call-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-loop-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-match-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-match-write-bad.hir
+conformance/LANG/LANG-15-borrow-cursor-generic-bad.hir
+conformance/LANG/LANG-15-borrow-cursor-generic-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-json-pointer-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-json-pointer-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-nested-field-match-ok.hir

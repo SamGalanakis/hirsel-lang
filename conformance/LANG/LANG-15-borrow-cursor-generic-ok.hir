@@ -1,0 +1,16 @@
+// rule: LANG-15
+// expect: accept
+type Tree[T: copyable] = Leaf(T) | Children(List[Tree[T]])
+
+fn count[T: copyable](root: Tree[T]) -> u64 {
+  let mut node = copy root
+  match node {
+    Leaf(_) => 1,
+    Children(items) => {
+      if list.len(items) > 0 {
+        node = copy items[0]
+      }
+      0
+    },
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "package": {"name": "borrow_cursor_recipes", "version": "0"},
+  "sources": [{"module": [], "path": "main.hir"}],
+  "dependencies": [],
+  "entry": {"module": [], "name": "main"}
+}
