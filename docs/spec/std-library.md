@@ -2968,11 +2968,14 @@ rejects non-ASCII bytes directly, without UTF-8 conversion. Offset overflow
 raises `TextInvariant`, as whole-buffer encode does for size overflow.
 
 ```hirsel
-let mut decoder = std@1/base64.decoder(Standard(), Required())
-let Ok(prefix) = std@1/base64.decode_feed(mut decoder, b"Zm9vY") else { return Error(()) }
-let Ok(middle) = std@1/base64.decode_feed(mut decoder, b"g==") else { return Error(()) }
-let Ok(tail) = std@1/base64.decode_finish(mut decoder) else { return Error(()) }
-// prefix == b"foo", middle == b"", tail == b"b"; only now accept the stream.
+fn decode_chunks() -> Result[(), ()] {
+  let mut decoder = std@1/base64.decoder(Standard(), Required())
+  let Ok(prefix) = std@1/base64.decode_feed(mut decoder, b"Zm9vY") else { return Error(()) }
+  let Ok(middle) = std@1/base64.decode_feed(mut decoder, b"g==") else { return Error(()) }
+  let Ok(tail) = std@1/base64.decode_finish(mut decoder) else { return Error(()) }
+  // prefix == b"foo", middle == b"", tail == b"b"; only now accept the stream.
+  Ok(())
+}
 ```
 
 Streaming structure is ported from Go `golang/go` commit
