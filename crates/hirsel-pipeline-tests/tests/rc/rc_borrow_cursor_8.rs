@@ -714,7 +714,7 @@ fn cursor_native_parity_with_stack(cases: &[(&str, &str)], stack: Option<u64>) {
                 assert_eq!(reference.failures[0].rule, "MEM-14");
                 assert_eq!(
                     (reference.failures[0].line, reference.failures[0].column),
-                    (2, 83)
+                    (3, 4)
                 );
             } else {
                 assert_eq!(reference.exit_code, Some(0), "{name}: {reference:?}");
@@ -1377,12 +1377,10 @@ pub fn main()->Result[(),u64] {let tree=f(box Leaf(n:7)); match tree {Leaf(n:n)=
 #[test]
 #[ignore = "native: bounds failure occurs before cursor transfer"]
 fn borrow_cursor_8_native_bounds_failure_before_transfer() {
+    super::rc_borrow_cursor_evidence_13::bounds_failure_evidence();
     cursor_native_parity(&[(
         "failure-bounds",
-        r#"
-fn f(a:List[u64],rows:List[List[u64]])->u64 {let mut c:List[u64] in {a,rows}=a; c=rows[3]; list.len(c)}
-pub fn main()->Result[(),u64] {let n=f([1],[[2]]); if n==1 {Ok(())}else{Error(1)}}
-"#,
+        super::rc_borrow_cursor_evidence_13::BOUNDS,
     )]);
 }
 

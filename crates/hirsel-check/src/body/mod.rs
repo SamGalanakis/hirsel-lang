@@ -1992,9 +1992,6 @@ impl Checker<'_, '_> {
                 otherwise,
                 ..
             } => {
-                if let Some(t) = ty {
-                    self.environment_relation(t, "a binding");
-                }
                 let e = ty.map(|t| self.syntax_type(t, frame)).transpose()?;
                 self.work.push(Work::AfterChild(After::Let(id, frame)));
                 if let Some(otherwise) = otherwise {
@@ -2122,6 +2119,7 @@ impl Checker<'_, '_> {
                 }
                 // The initializer retains its current modes; written locality
                 // belongs to the receiving binding and its checked storage.
+                let first_binding = self.body.bindings.len();
                 self.pattern(
                     pattern,
                     received,
@@ -2131,6 +2129,17 @@ impl Checker<'_, '_> {
                     written,
                     frame,
                 )?;
+                if let Some(annotation) = annotation {
+                    // Ownership determines whether reads through aliases are
+                    // borrowed-only. Defer potential cursor covers to it, but
+                    // retain MODE-1 for patterns without eligible bindings.
+                    let mutable: Vec<_> = self.body.bindings[first_binding..]
+                        .iter()
+                        .filter(|b| b.mutable)
+                        .map(|b| b.ty)
+                        .collect();
+                    self.environment_relation(annotation, "a binding", &mutable)?;
+                }
                 self.joined_bindings_own(pattern);
                 if let Some(otherwise) = otherwise {
                     self.let_else(pattern, received, otherwise)?;

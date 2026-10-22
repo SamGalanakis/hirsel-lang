@@ -1,0 +1,7 @@
+// rule: LANG-15
+// expect: accept
+fn f(a: List[u64]) -> u64 {
+  let mut c: List[u64] in a = a
+  c = a
+  list.len(c)
+}

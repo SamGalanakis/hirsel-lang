@@ -1085,7 +1085,7 @@ impl Checker<'_, '_> {
         }
         let mut parameters = vec![];
         for p in &s.parameters {
-            self.environment_relation(p.ty, "a parameter");
+            self.environment_relation(p.ty, "a parameter", &[])?;
             let mut ty = self.syntax_type(p.ty, frame)?;
             // Nested headers have the same declared defaults as top-level
             // signatures (MODE-7): a borrowed or mut parameter is a
@@ -1381,7 +1381,14 @@ impl Checker<'_, '_> {
     /// where blocks live (PROV-4).
     /// `env` names a closure or function type's environment, so only that
     /// type's result relation may name it (MODE-1).
-    pub(super) fn environment_relation(&mut self, t: ast::TypeExprId, what: &str) {
+    /// Potential cursor covers are diagnosed by ownership after borrowed-only
+    /// classification; ordinary `env` relations retain MODE-1.
+    pub(super) fn environment_relation(
+        &mut self,
+        t: ast::TypeExprId,
+        what: &str,
+        mutable: &[TypeId],
+    ) -> Result<(), QueryError> {
         if let ast::TypeExprKind::Qualified {
             relation: Some(relation),
             ..
@@ -1389,6 +1396,14 @@ impl Checker<'_, '_> {
             && relation.places.contains(&ast::RelationPlace::Environment)
         {
             let span = relation.origin.span;
+            for &ty in mutable {
+                if !self.bound(ty, ast::Bound::Plain)?
+                    && self.bound(ty, ast::Bound::Data)?
+                    && self.bound(ty, ast::Bound::Copyable)?
+                {
+                    return Ok(());
+                }
+            }
             self.report(
                 const { RuleId::of("MODE-1") },
                 span,
@@ -1397,6 +1412,7 @@ impl Checker<'_, '_> {
                 ),
             );
         }
+        Ok(())
     }
     fn lending_relation(&self, site: ast::TypeExprId, relation: &ast::RelationSyntax) -> bool {
         let heap = self.input.signature.metadata.roles.heap.as_ref();

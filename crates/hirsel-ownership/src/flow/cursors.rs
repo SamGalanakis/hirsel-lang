@@ -191,20 +191,15 @@ impl Checker<'_, '_> {
         if !binding.mutable
             || binding.owner != self.graph.owner
             || !self.let_patterns.contains(&root_pattern)
-            || !part.borrowed_only
-            || part.aliased().is_none()
             || !property.data
             || !property.copyable
             || property.plain
         {
             return None;
         }
-        let mut cover = part.cursor_views.clone();
-        let mut explicit = None;
-        if annotation.is_some_and(|(written, _)| written.relation) {
-            // J erases body-local lending relations to `env`. Recover the
-            // written names, then independently check their live value places.
-            let mut syntax =
+        let written_cover = annotation
+            .filter(|(written, _)| written.relation)
+            .and_then(|_| {
                 self.tree
                     .statements
                     .iter()
@@ -215,7 +210,36 @@ impl Checker<'_, '_> {
                             ty
                         }
                         _ => None,
-                    });
+                    })
+            });
+        if !part.borrowed_only || part.aliased().is_none() {
+            // J defers `env` on potential mutable data cursors until actual
+            // borrowed-only content is known. An owned receipt is still an
+            // ordinary binding, with the original MODE-1 diagnostic.
+            if let Some(site) = written_cover
+                && let hirsel_syntax::TypeExprKind::Qualified {
+                    relation: Some(relation),
+                    ..
+                } = &self.tree.types[site.0 as usize].kind
+                && relation
+                    .places
+                    .contains(&hirsel_syntax::RelationPlace::Environment)
+            {
+                self.diagnostic(
+                    const { RuleId::of("MODE-1") },
+                    relation.origin.span,
+                    "`env` is a closure or function type's environment: a binding is not related to it",
+                );
+                part.invalid = true;
+            }
+            return None;
+        }
+        let mut cover = part.cursor_views.clone();
+        let mut explicit = None;
+        if annotation.is_some_and(|(written, _)| written.relation) {
+            // J erases body-local lending relations to `env`. Recover the
+            // written names, then independently check their live value places.
+            let mut syntax = written_cover;
             let mut paths = vec![];
             let mut valid = true;
             while let Some(site) = syntax {

@@ -1,0 +1,9 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 6
+// twin: LANG/LANG-15-borrow-cursor-env-ok.hir
+// A cursor cover names enclosing value places; env is not one.
+fn f(a: List[u64]) -> u64 {
+  let mut c: List[u64] in env = a
+  c = a
+  list.len(c)
+}
