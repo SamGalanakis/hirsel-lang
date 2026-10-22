@@ -1559,3 +1559,5 @@ adapt Go `src/encoding/base32/base32.go:122-186,312-398` and
 `base32_test.go:21-40,349-393` at
 `ebe2feefc400f813aefdc8a036e66d2619da6649`, under the BSD-3-Clause (Go)
 license reproduced above. See `docs/base32.md` for adaptations.
+
+| Go standard library | `src/net/netip/netip.go:1363-1394,1406-1484` prefix parsing, masking, containment and overlap; `netip_test.go:1526-1618,1673-1739` vectors | `stdlib/std@1/cidr.hir`, driver `cidr_8.rs` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go), full license above |

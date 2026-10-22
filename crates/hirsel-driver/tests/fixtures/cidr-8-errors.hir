@@ -1,0 +1,58 @@
+// Go netip_test.go:1673-1739 at ebe2feefc400; BSD-3-Clause (Go).
+fn invalid(t: Test, text: String, expected: std@1/cidr.PrefixError) -> () {
+  match std@1/cidr.parse(text) {
+    Error(error) => core@1/test.check(t, error == expected),
+    Ok(_) => core@1/test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  invalid(t, "192.168.0.0", InvalidPrefix())
+  invalid(t, "", InvalidPrefix())
+  invalid(t, "1.257.1.1/24", InvalidAddress())
+  invalid(t, "1.1.1.0/q", InvalidWidth())
+  invalid(t, "1.1.1.0/-1", InvalidWidth())
+  invalid(t, "1.1.1.0/33", WidthOutOfRange())
+  invalid(t, "2001::/129", WidthOutOfRange())
+  invalid(t, "1.1.1.0%a/24", InvalidAddress())
+  invalid(t, "2001:db8::%a/32", InvalidAddress())
+  invalid(t, "1.1.1.0/+32", InvalidWidth())
+  invalid(t, "1.1.1.0/-32", InvalidWidth())
+  invalid(t, "1.1.1.0/032", InvalidWidth())
+  invalid(t, "1.1.1.0/0032", InvalidWidth())
+  invalid(t, "::/00", InvalidWidth())
+  invalid(t, "::/", InvalidWidth())
+  invalid(t, "::/ 1", InvalidWidth())
+  invalid(t, "::/1 ", InvalidWidth())
+  invalid(t, "::/1\n", InvalidWidth())
+  invalid(t, "::/1\x00", InvalidWidth())
+  invalid(t, "::/１", InvalidWidth())
+  invalid(t, "::/1/2", InvalidPrefix())
+  invalid(t, ":://", InvalidPrefix())
+  invalid(t, "/32", InvalidAddress())
+  invalid(t, "[::1]/128", InvalidAddress())
+  invalid(t, "[::1]:80/128", InvalidAddress())
+  invalid(t, "192.0.2.1:80/32", InvalidAddress())
+  invalid(t, "example.com/24", InvalidAddress())
+  invalid(t, "localhost/32", InvalidAddress())
+  invalid(t, "::/999999999999999999999999999999999999999999", WidthOutOfRange())
+  invalid(t, "::/999999999999999999999999999999999999999999x", InvalidWidth())
+  let ips: Inline[IpAddr, 2] = [
+    V4([0, 0, 0, 0]),
+    V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+  ]
+  let widths: Inline[i64, 4] = [-1, 129, 9223372036854775807, -9223372036854775808]
+  for ip in ips {
+    for width in widths {
+      match std@1/cidr.from_addr(ip, width) {
+        Error(WidthOutOfRange()) => (),
+        _ => core@1/test.check(t, false),
+      }
+    }
+  }
+  match std@1/cidr.from_addr(V4([0, 0, 0, 0]), 33) {
+    Error(WidthOutOfRange()) => (),
+    _ => core@1/test.check(t, false),
+  }
+  Ok(())
+}

@@ -1,0 +1,154 @@
+// Go net/netip/netip.go:1363-1394,1406-1484 at
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause (Go)).
+// Fixed octets replace Go's packed words; see docs/cidr.md for adaptations.
+
+@serializable
+pub type PrefixError = InvalidPrefix | InvalidAddress | InvalidWidth | WidthOutOfRange
+
+// IpAddr contains only fixed inline octets; both fields copy and drop inertly.
+// The private representation prevents bypassing the family-specific width check.
+pub opaque type Prefix: copyable + inert + noalloc_drop uses {} {
+  ip: IpAddr,
+  width: u64,
+}
+
+@noalloc
+pub fn from_addr(ip: IpAddr, width: i64) -> Result[Prefix, PrefixError] uses {} {
+  let limit: i64 = match ip {
+    V4(_) => 32,
+    V6(_) => 128,
+  }
+  if width < 0 || width > limit {
+    return Error(WidthOutOfRange())
+  }
+  Ok(Prefix(ip: ip, width: core@1/int.narrow(width)))
+}
+
+pub fn parse(text: String) -> Result[Prefix, PrefixError] uses {} {
+  let Some((address, suffix)) = std@1/string.split_once(text, "/") else {
+    return Error(InvalidPrefix())
+  }
+  if std@1/string.contains(suffix, "/") {
+    return Error(InvalidPrefix())
+  }
+  let Ok(ip) = std@1/net.parse_ip(address) else {
+    return Error(InvalidAddress())
+  }
+  let data = core@1/string.as_bytes(suffix)
+  let size = core@1/bytes.len(data)
+  if size == 0 || size > 1 && data[0] == 48 {
+    return Error(InvalidWidth())
+  }
+  // Stop accumulating above 128, but still check every byte, so long widths
+  // cannot overflow and trailing text remains a syntax error.
+  let mut width: i64 = 0
+  let mut i: u64 = 0
+  while i < size {
+    if data[i] < 48 || data[i] > 57 {
+      return Error(InvalidWidth())
+    }
+    if width <= 128 {
+      width = width * 10 + core@1/int.widen(data[i] - 48)
+    }
+    i += 1
+  }
+  from_addr(ip, width)
+}
+
+@noalloc
+pub fn addr(prefix: Prefix) -> IpAddr uses {} {
+  prefix.ip
+}
+
+@noalloc
+pub fn bits(prefix: Prefix) -> u64 uses {} {
+  prefix.width
+}
+
+// Complete bytes never shift; the final partial byte shifts only by 1..7.
+@noalloc
+fn byte_mask(index: u64, width: u64) -> u8 uses {} {
+  if index < width / 8 {
+    255
+  } else if index == width / 8 && width % 8 != 0 {
+    let shift: u8 = core@1/int.narrow(8u64 - width % 8)
+    255u8 << shift
+  } else {
+    0
+  }
+}
+
+@noalloc
+pub fn masked(prefix: Prefix) -> Prefix uses {} {
+  let ip: IpAddr = match prefix.ip {
+    V4(octets) => {
+      let mut out = copy octets
+      let mut i: u64 = 0
+      while i < 4 {
+        out[i] = octets[i] & byte_mask(i, prefix.width)
+        i += 1
+      }
+      V4(out)
+    },
+    V6(octets) => {
+      let mut out = copy octets
+      let mut i: u64 = 0
+      while i < 16 {
+        out[i] = octets[i] & byte_mask(i, prefix.width)
+        i += 1
+      }
+      V6(out)
+    },
+  }
+  Prefix(ip: ip, width: prefix.width)
+}
+
+@noalloc
+fn matches(a: IpAddr, b: IpAddr, width: u64) -> bool uses {} {
+  match (a, b) {
+    (V4(left), V4(right)) => {
+      let mut i: u64 = 0
+      while i < 4 {
+        if (left[i] ^ right[i]) & byte_mask(i, width) != 0 {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    (V6(left), V6(right)) => {
+      let mut i: u64 = 0
+      while i < 16 {
+        if (left[i] ^ right[i]) & byte_mask(i, width) != 0 {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+@noalloc
+pub fn contains(prefix: Prefix, ip: IpAddr) -> bool uses {} {
+  matches(prefix.ip, ip, prefix.width)
+}
+
+@noalloc
+pub fn overlaps(a: Prefix, b: Prefix) -> bool uses {} {
+  let width = if a.width < b.width {
+    a.width
+  } else {
+    b.width
+  }
+  matches(a.ip, b.ip, width)
+}
+
+pub fn format(prefix: Prefix) -> unique String uses {} {
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, std@1/net.ip_to_string(prefix.ip))
+  core@1/list.push(mut out, 47)
+  u64.format_into(prefix.width, mut out)
+  std@1/text.finish_valid(take out)
+}

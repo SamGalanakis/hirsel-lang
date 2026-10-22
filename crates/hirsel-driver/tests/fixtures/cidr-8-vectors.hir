@@ -1,0 +1,78 @@
+// Go netip_test.go:1526-1618 at ebe2feefc400; BSD-3-Clause (Go).
+fn ip(text: String) -> Result[IpAddr, ()] uses {} {
+  match std@1/net.parse_ip(text) {
+    Ok(value) => Ok(value),
+    Error(_) => Error(()),
+  }
+}
+
+fn prefix(text: String) -> Result[std@1/cidr.Prefix, ()] uses {} {
+  match std@1/cidr.parse(text) {
+    Ok(value) => Ok(value),
+    Error(_) => Error(()),
+  }
+}
+
+fn member(t: Test, network: String, address: String, expected: bool) -> Result[(), ()] {
+  core@1/test.check(t, std@1/cidr.contains(prefix(network)?, ip(address)?) == expected)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  member(t, "192.168.0.0/24", "192.168.0.1", true)?
+  member(t, "192.168.0.0/24", "192.168.0.55", true)?
+  member(t, "192.168.0.0/24", "192.168.1.1", false)?
+  member(t, "192.168.0.0/24", "1.1.1.1", false)?
+  member(t, "192.168.1.1/32", "192.168.1.1", true)?
+  member(t, "192.168.1.1/32", "192.168.1.2", false)?
+  member(t, "100.64.0.0/10", "100.64.0.0", true)?
+  member(t, "100.64.0.0/10", "100.64.0.1", true)?
+  member(t, "100.64.0.0/10", "100.81.251.94", true)?
+  member(t, "100.64.0.0/10", "100.100.100.100", true)?
+  member(t, "100.64.0.0/10", "100.127.255.254", true)?
+  member(t, "100.64.0.0/10", "100.127.255.255", true)?
+  member(t, "100.64.0.0/10", "100.63.255.255", false)?
+  member(t, "100.64.0.0/10", "100.128.0.0", false)?
+  member(t, "2001:db8::/96", "2001:db8::aaaa:bbbb", true)?
+  member(t, "2001:db8::/96", "2001:db8::1", true)?
+  member(t, "2001:db8::/96", "2001:db8::1:aaaa:bbbb", false)?
+  member(t, "2001:db8::/96", "2001:db9::", false)?
+  member(t, "0.0.0.0/0", "192.168.0.1", true)?
+  member(t, "0.0.0.0/0", "1.1.1.1", true)?
+  member(t, "0.0.0.0/0", "2001:db8::1", false)?
+  member(t, "::/0", "::1", true)?
+  member(t, "::/0", "2001:db8::1", true)?
+  member(t, "::/0", "192.0.2.1", false)?
+  member(t, "2000::/3", "2001:db8::1", true)?
+  member(t, "2000::/3", "fe80::1", false)?
+  member(t, "2001:db8::1/128", "2001:db8::1", true)?
+  member(t, "2001:db8::1/128", "2001:db8::2", false)?
+  member(t, "0.0.0.0/0", "::ffff:192.0.2.1", false)?
+  member(t, "::ffff:192.0.2.1/120", "192.0.2.1", false)?
+  member(t, "::ffff:192.0.2.1/120", "::ffff:192.0.2.255", true)?
+  member(t, "::/0", "::ffff:192.0.2.1", true)?
+  let p = prefix("192.168.1.99/24")?
+  core@1/test.check(t, std@1/cidr.addr(p) == ip("192.168.1.99")?)
+  core@1/test.check(t, std@1/cidr.bits(p) == 24)
+  core@1/test.check(t, std@1/cidr.format(p) == "192.168.1.99/24")
+  core@1/test.check(t, std@1/cidr.format(std@1/cidr.masked(p)) == "192.168.1.0/24")
+  core@1/test.check(
+    t,
+    std@1/cidr.format(prefix("2001:0DB8:0:0::ABCD/65")?) == "2001:db8::abcd/65"
+  )
+  core@1/test.check(
+    t,
+    std@1/cidr.format(std@1/cidr.masked(prefix("2001:db8:0:0:ffff::1/65")?)) == "2001:db8:0:0:8000::/65"
+  )
+  let mapped = prefix("::ffff:192.0.2.33/120")?
+  core@1/test.check(t, std@1/cidr.format(mapped) == "::ffff:192.0.2.33/120")
+  core@1/test.check(
+    t,
+    std@1/cidr.format(std@1/cidr.masked(mapped)) == "::ffff:192.0.2.0/120"
+  )
+  core@1/test.check(t, std@1/cidr.overlaps(p, prefix("192.168.1.255/32")?))
+  core@1/test.check(t, !std@1/cidr.overlaps(p, prefix("192.168.2.0/24")?))
+  core@1/test.check(t, !std@1/cidr.overlaps(prefix("0.0.0.0/0")?, prefix("::/0")?))
+  core@1/test.check(t, !std@1/cidr.overlaps(prefix("0.0.0.0/0")?, mapped))
+  Ok(())
+}

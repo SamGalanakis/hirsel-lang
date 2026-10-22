@@ -1259,6 +1259,12 @@
       "module": [
         "list"
       ]
+    },
+    {
+      "path": "cidr.hir",
+      "module": [
+        "cidr"
+      ]
     }
   ],
   "dependencies": []
