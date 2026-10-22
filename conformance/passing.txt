@@ -7190,3 +7190,15 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
+conformance/MODE/MODE-2-plain-copy-bytes-run.hir
+conformance/MODE/MODE-2-plain-copy-list-run.hir
+conformance/MODE/MODE-2-plain-copy-map-run.hir
+conformance/MODE/MODE-2-plain-copy-nested-run.hir
+conformance/MODE/MODE-2-plain-copy-outlive-run.hir
+conformance/MODE/MODE-2-plain-copy-string-run.hir
+conformance/MODE/MODE-2-unique-copy-bytes-run.hir
+conformance/MODE/MODE-2-unique-copy-list-run.hir
+conformance/MODE/MODE-2-unique-copy-map-run.hir
+conformance/MODE/MODE-2-unique-copy-nested-run.hir
+conformance/MODE/MODE-2-unique-copy-outlive-run.hir
+conformance/MODE/MODE-2-unique-copy-string-run.hir

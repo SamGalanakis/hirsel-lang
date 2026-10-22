@@ -20,6 +20,26 @@ impl Builder<'_, '_> {
         }
         Ok(row.clone())
     }
+    /// MODE-2: copying ends a local's current uniqueness. The checked
+    /// annotation still constrains initializers and whole assignments, but
+    /// mutable receiving storage must also accept a plain mut hand-back after
+    /// a copy. Per-expression rows retain the current uniqueness evidence.
+    fn pattern_storage_type(&self, id: PatternId, ty: TypeId) -> TypeId {
+        let row = self.types.get(ty).unwrap();
+        if row.modes.uniqueness != hirsel_types::Uniqueness::Unique
+            || !self
+                .decisions
+                .bindings
+                .get(&NameSite::Pattern(id))
+                .iter()
+                .any(|binding| binding.owner == self.owner && binding.mutable)
+        {
+            return ty;
+        }
+        let mut row = row.clone();
+        row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+        self.types.intern(row)
+    }
     fn inspected_pattern_place(&mut self, row: &PatternDecision, mut place: PlaceId) -> PlaceId {
         if matches!(
             row.kind,
@@ -258,7 +278,7 @@ impl Builder<'_, '_> {
                         place,
                         usage,
                     },
-                    binding.ty,
+                    self.pattern_storage_type(id, binding.ty),
                     Storage::Local,
                     span,
                 );
@@ -585,7 +605,12 @@ impl Builder<'_, '_> {
                 let PatternDecisionKind::Binding(local) = row.kind else {
                     continue;
                 };
-                let slot = self.slot(row.ty, Storage::Local, span, false);
+                let slot = self.slot(
+                    self.pattern_storage_type(id, row.ty),
+                    Storage::Local,
+                    span,
+                    false,
+                );
                 self.emit(InstructionKind::StorageLive(self.root(slot)), span);
                 slots.insert(local, slot);
             }

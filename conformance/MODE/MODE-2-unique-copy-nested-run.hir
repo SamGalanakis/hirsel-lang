@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: run
+// Copying ends current uniqueness; later mutation must preserve the saved value.
+pub fn main() -> Result[(), String] {
+  let mut m: unique List[List[u64]] = [[10u64]]
+  let saved = copy m
+  m[0u64][0u64] = 11u64
+  failure.check(saved[0u64][0u64] == 10u64 && m[0u64][0u64] == 11u64, Bounds())
+  Ok(())
+}

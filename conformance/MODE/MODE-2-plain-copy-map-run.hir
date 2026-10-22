@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: run
+pub fn main() -> Result[(), String] {
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 1, 10)
+  let saved = copy m
+  map.insert(mut m, 1, 11)
+  failure.check(map.get(saved, 1) == Some(10u64), Bounds())
+  Ok(())
+}

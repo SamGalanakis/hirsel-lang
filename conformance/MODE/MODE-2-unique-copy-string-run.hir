@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: run
+// Copying ends current uniqueness; later mutation must preserve the saved value.
+fn keep(mut value: String) -> () {}
+
+pub fn main() -> Result[(), String] {
+  let mut m: unique String = unique "old"
+  let saved = copy m
+  keep(mut m)
+  m = unique "new"
+  failure.check(saved == "old" && m == "new", Bounds())
+  Ok(())
+}
