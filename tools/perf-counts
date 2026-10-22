@@ -30,8 +30,10 @@ COMPILER_CASES = {
                      'open: release compiler took 232.56s / 27,528,240,687 Ir; checked exceeded 240s'),
 }
 
-# N=1000, one epoch, verified against the independent Rust micro pairs.
+# N=1000, one epoch; Rust micro pairs except bigint_mul (Python integer
+# derivation and Go byte-schoolbook controls in tools/tests/bigint_oracle_10.py).
 MICRO_OUTPUTS = {
+    'bigint_mul': b'4901293426875656068\n',
     'strbuild': b'12335375983234794207\n',
     'sha': b'10690083119644975683\n',
     'sort': b'7836095613479867608\n',
@@ -197,11 +199,13 @@ def micro_cases(hirsel, scratch, env, selected=None):
         name = 'micro/' + source.stem
         if selected and selected not in name:
             continue
-        binary = build_program(hirsel, source.read_text(), 'micro-' + source.stem, scratch, env)
-        arguments = ['1000'] + ([] if source.stem in ('print', 'channel') else ['1'])
-        command = [binary, '--hirsel-grants', micro / 'grants.json', *arguments]
         if source.stem not in MICRO_OUTPUTS:
             raise ValueError(f'{name}: add an independent small-input output oracle')
+        binary = build_program(hirsel, source.read_text(), 'micro-' + source.stem, scratch, env)
+        arguments = ['1000'] + ([] if source.stem in ('print', 'channel') else ['1'])
+        if source.stem == 'bigint_mul':
+            arguments.append('0')
+        command = [binary, '--hirsel-grants', micro / 'grants.json', *arguments]
         yield name, command, MICRO_OUTPUTS[source.stem]
 
 

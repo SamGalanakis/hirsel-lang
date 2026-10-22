@@ -82,6 +82,43 @@ class PerfCounts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 COUNTS['read_table'](path)
 
+class BigintMicroOracle(unittest.TestCase):
+    def test_exact_independent_oracle_and_invocation_binding(self):
+        reference = runpy.run_path(str(ROOT / 'tools/tests/bigint_oracle_10.py'))
+        expected = b'4901293426875656068\n'
+        self.assertEqual(f"{reference['checksum'](1000, 1, 0)}\n".encode(), expected)
+        cases = COUNTS['micro_cases']
+        build = Mock(return_value=Path('/scratch/bigint'))
+        with patch.dict(cases.__globals__, build_program=build):
+            actual = list(cases('hirsel', Path('/scratch'), {}, 'micro/bigint_mul'))
+        self.assertEqual(actual, [('micro/bigint_mul', [Path('/scratch/bigint'),
+                         '--hirsel-grants', ROOT / 'bench/micro/grants.json', '1000', '1', '0'], expected)])
+        build.assert_called_once_with('hirsel', (ROOT / 'bench/micro/programs/bigint_mul.hir').read_text(),
+                                      'micro-bigint_mul', Path('/scratch'), {})
+
+    def test_missing_oracle_fails_before_build_or_execution(self):
+        cases = COUNTS['micro_cases']
+        outputs = dict(COUNTS['MICRO_OUTPUTS'])
+        del outputs['bigint_mul']
+        build = Mock()
+        with patch.dict(cases.__globals__, MICRO_OUTPUTS=outputs, build_program=build):
+            with self.assertRaisesRegex(ValueError, 'independent small-input output oracle'):
+                list(cases('hirsel', Path('/scratch'), {}, 'micro/bigint_mul'))
+        build.assert_not_called()
+
+    def test_wrong_or_empty_stdout_cannot_produce_a_measurement(self):
+        measure = COUNTS['measure']
+        env = dict(HIRSEL_VALGRIND='/valgrind/bin/valgrind',
+                   HIRSEL_VALGRIND_RUNTIME='/runtime', LLVM_SYS_211_PREFIX='/llvm')
+        for stdout in (b'4901293426875656069\n', b'', b'4901293426875656068'):
+            with self.subTest(stdout=stdout), \
+                    patch.dict(measure.__globals__, run=Mock(return_value=stdout), annotate=Mock()) as scope:
+                with self.assertRaisesRegex(ValueError, 'wrong benchmark checksum'):
+                    measure('micro/bigint_mul', ['/binary', '1000', '1', '0'],
+                            Path('/scratch'), env, COUNTS['MICRO_OUTPUTS']['bigint_mul'])
+                scope['annotate'].assert_not_called()
+
+
 class BlessCounts(unittest.TestCase):
     def test_pool_record_rewrites_table_and_failed_or_missing_records_leave_it_alone(self):
         bless = COUNTS['bless']
