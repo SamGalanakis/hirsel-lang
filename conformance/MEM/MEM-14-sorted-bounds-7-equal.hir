@@ -1,0 +1,45 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 15
+resource type Item {
+  key: u64,
+  id: u64,
+  output: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.output, f"D {x.id}\n")
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.id == 5 {
+    failure.check(false, Bounds())
+  }
+  if a.key < b.key {
+    -1i32
+  } else if a.key > b.key {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("stdout"),
+  }
+  let mut xs: List[Item] = []
+  for i in 0u64..8u64 {
+    let key = if i < 2 {
+      0u64
+    } else if i < 6 {
+      1u64
+    } else {
+      2u64
+    }
+    list.push(mut xs, Item(key: key, id: i, output: output))
+  }
+  let _ = sorted.equal_range(xs, xs[3], compare)
+  failure.check(false, TextInvariant())
+  Ok(())
+}

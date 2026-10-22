@@ -1,0 +1,56 @@
+// rule: SEM-5
+// expect: run
+// stdout: H 2 6
+// stdout: D 7
+// stdout: D 6
+// stdout: D 5
+// stdout: D 4
+// stdout: D 3
+// stdout: D 2
+// stdout: D 1
+// stdout: D 0
+resource type Item {
+  key: u64,
+  id: u64,
+  output: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.output, f"D {x.id}\n")
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.key < b.key {
+    -1i32
+  } else if a.key > b.key {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("stdout"),
+  }
+  let mut xs: List[Item] = []
+  for i in 0u64..8u64 {
+    let key = if i < 2 {
+      0u64
+    } else if i < 6 {
+      1u64
+    } else {
+      2u64
+    }
+    list.push(mut xs, Item(key: key, id: i, output: output))
+  }
+  failure.check(sorted.lower_bound(xs, xs[3], compare) == 2, Bounds())
+  failure.check(sorted.upper_bound(xs, xs[3], compare) == 6, Bounds())
+  failure.check(sorted.equal_range(xs, xs[3], compare) == (2u64, 6u64), Bounds())
+  for i in 0u64..8u64 {
+    failure.check(xs[i].id == i, Bounds())
+  }
+  let _ = out.print(output, "H 2 6\n")
+  Ok(())
+}

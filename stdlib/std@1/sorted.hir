@@ -1,0 +1,66 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Adapted from Go sort/search.go:9-17,58-73 at ebe2feefc400f813aefdc8a036e66d2619da6649.
+// BSD-3-Clause; see third-party/NOTICES.md and docs/sorted-bounds.md.
+
+@noalloc
+fn midpoint(lo: u64, hi: u64) -> u64 uses {} {
+  lo + (hi - lo) / 2
+}
+
+/// First index i with by(xs[i], value) >= 0, or len(xs).
+/// Input must be sorted by the same ordering. Borrows elements; never clones.
+/// Calls by only at actual midpoints. Empty input makes no calls.
+@noalloc
+pub fn lower_bound[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  let mut lo: u64 = 0
+  let mut hi = core@1/list.len(xs)
+  // The predicate is false before lo and true at/after hi (len is a sentinel).
+  while lo < hi {
+    let mid = midpoint(lo, hi)
+    if by(xs[mid], value) < 0 {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  lo
+}
+
+@noalloc
+fn upper_from[T](
+  xs: List[T],
+  value: T,
+  begin: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  let mut lo = begin
+  let mut hi = core@1/list.len(xs)
+  while lo < hi {
+    let mid = midpoint(lo, hi)
+    if by(xs[mid], value) <= 0 {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  lo
+}
+
+/// First index i with by(xs[i], value) > 0, or len(xs).
+/// Same sorted-input, borrowing and comparator restrictions as lower_bound.
+@noalloc
+pub fn upper_bound[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  upper_from(xs, value, 0, by)
+}
+
+/// Half-open equal range (lower_bound, upper_bound); absent values give (i, i).
+/// Searches the lower boundary first, then only its suffix for the upper one.
+/// Failures propagate immediately with ordinary source attribution and cleanup.
+@noalloc
+pub fn equal_range[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> (
+  u64,
+  u64
+) uses {} {
+  let lo = lower_bound(xs, value, by)
+  (lo, upper_from(xs, value, lo, by))
+}

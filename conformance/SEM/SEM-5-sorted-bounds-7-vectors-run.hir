@@ -1,0 +1,68 @@
+// rule: SEM-5
+// expect: run
+// Go sort/search_test.go:15-62 at ebe2feefc400f813aefdc8a036e66d2619da6649.
+@noalloc
+fn compare(a: i32, b: i32) -> i32 uses {} {
+  if a < b {
+    -2147483648i32
+  } else if a > b {
+    2147483647i32
+  } else {
+    0i32
+  }
+}
+
+@noalloc
+fn descending(a: i32, b: i32) -> i32 uses {} {
+  compare(b, a)
+}
+
+fn verify(xs: List[i32], value: i32, by: @noalloc fn(i32, i32) -> i32 uses {}) -> () {
+  // Independent linear oracle: count the strict and non-strict prefixes.
+  let mut lower: u64 = 0
+  let mut upper: u64 = 0
+  for x in xs {
+    if by(x, value) < 0 {
+      lower += 1
+    }
+    if by(x, value) <= 0 {
+      upper += 1
+    }
+  }
+  let snapshot = copy xs
+  failure.check(sorted.lower_bound(xs, value, by) == lower, Bounds())
+  failure.check(sorted.upper_bound(xs, value, by) == upper, Bounds())
+  let range = sorted.equal_range(xs, value, by)
+  failure.check(range == (lower, upper), Bounds())
+  failure.check(lower <= upper && upper <= list.len(xs), Bounds())
+  failure.check(xs == snapshot, Bounds())
+}
+
+@noalloc
+fn forbidden(a: i32, b: i32) -> i32 uses {} {
+  failure.check(false, Bounds())
+  0i32
+}
+
+pub fn main() -> Result[(), ()] {
+  let empty: List[i32] = []
+  failure.check(sorted.lower_bound(empty, 0, forbidden) == 0, Bounds())
+  failure.check(sorted.upper_bound(empty, 0, forbidden) == 0, Bounds())
+  failure.check(sorted.equal_range(empty, 0, forbidden) == (0u64, 0u64), Bounds())
+  for x in -2i32..3i32 {
+    verify([0i32], x, compare)
+  }
+  let go: List[i32] = [-10, -5, 0, 1, 2, 3, 5, 7, 11, 100, 100, 100, 1000, 10000]
+  let targets: List[i32] = [-20, -10, -9, -6, -5, 3, 11, 99, 100, 101, 10000, 10001]
+  for x in targets {
+    verify(go, x, compare)
+  }
+  for x in -1i32..5i32 {
+    verify([0, 0, 0, 2, 2, 4, 4, 4], x, compare)
+    verify([2, 2, 2, 2, 2], x, compare)
+    verify([4, 4, 4, 2, 2, 0, 0, 0], x, descending)
+  }
+  verify([99, 99, 59, 42, 7, 0, -1, -1], 7, descending)
+  verify([-2147483648, -2147483648, 0, 2147483647], 2147483647, compare)
+  Ok(())
+}
