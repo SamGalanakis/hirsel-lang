@@ -1,0 +1,10 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {"path": "manifests", "host": "manifests", "access": "read"},
+      {"path": "assets", "host": "assets", "access": "read"}
+    ]
+  },
+  "args": ["verify", "release.json"]
+}

@@ -1,0 +1,354 @@
+// File hashing structure: Go crypto/sha256/example_test.go:15-41,
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause).
+// Explicit capability reads replace os.Open/io.Copy; std supplies the hash.
+pub const MANIFEST_BYTES: u64 = 16384
+
+pub const ENTRY_COUNT: u64 = 64
+
+pub const FILE_BYTES: u64 = 65536
+
+const CHUNK: u64 = 4096
+
+type Asset {
+  path: String,
+  bytes: u64,
+  sha256: String,
+}
+
+type Manifest {
+  assets: List[Asset],
+}
+
+fn asset_from_json_reader(mut cursor: json.Reader) -> Result[Asset, String] uses {} = comptime derive.from_json_reader(
+  shape(Asset)
+)
+
+fn manifest_from_json_reader(mut cursor: json.Reader) -> Result[Manifest, String] uses {} = comptime derive.from_json_reader(
+  shape(Manifest)
+)
+
+fn manifest_from_json_bytes(data: Bytes) -> Result[Manifest, String] uses {} = comptime derive.from_json_bytes(
+  shape(Manifest)
+)
+
+type Finding {
+  path: String,
+  status: String,
+  bytes: u64,
+  sha256: String,
+}
+
+type Report {
+  ok: bool,
+  findings: List[Finding],
+}
+
+fn finding_json_into(value: Finding, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Finding))
+
+fn report_json_into(value: Report, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Report))
+
+pub type AppError = Grant(GrantError) | File(FileError) | Arguments(ArgError) | Output(
+  OutputError
+) | Encode(json.JsonError) | Usage | ManifestRead | ManifestLimit | InvalidJson | EntryLimit | InvalidPath | DuplicatePath | InvalidHex | ExpectedSizeLimit | Mismatch
+
+// Require one spelling per lexical path: no empty/dot/parent components,
+// absolute paths, Windows separators/drive names, NULs or normalized aliases.
+fn valid_path(name: String) -> bool {
+  if name == "" || string.starts_with(name, "/") || string.ends_with(name, "/") {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == 92 || byte == 58 {
+      return false
+    }
+  }
+  let Ok(normal) = path.normalize(path.of(name)) else {
+    return false
+  }
+  if path.text(normal) != name {
+    return false
+  }
+  for component in path.components(normal) {
+    if component == "." || component == ".." {
+      return false
+    }
+  }
+  true
+}
+
+fn decode(data: Bytes) -> Result[Manifest, AppError] {
+  let Ok(manifest) = manifest_from_json_bytes(data) else {
+    return Error(InvalidJson())
+  }
+  if list.len(manifest.assets) > ENTRY_COUNT {
+    return Error(EntryLimit())
+  }
+  let mut seen: Set[String] = set.empty()
+  for asset in manifest.assets {
+    if !valid_path(asset.path) {
+      return Error(InvalidPath())
+    }
+    if set.contains(seen, asset.path) {
+      return Error(DuplicatePath())
+    }
+    set.insert(mut seen, copy asset.path)
+    if asset.bytes > FILE_BYTES {
+      return Error(ExpectedSizeLimit())
+    }
+    // std.hex accepts either case; reports use the std encoder's lowercase.
+    if string.byte_len(asset.sha256) != 64 {
+      return Error(InvalidHex())
+    }
+    let Ok(digest) = hex.decode(asset.sha256) else {
+      return Error(InvalidHex())
+    }
+    if bytes.len(digest) != 32 {
+      return Error(InvalidHex())
+    }
+  }
+  Ok(take manifest)
+}
+
+fn read_manifest(d: Dir, name: String) -> Result[unique Bytes, AppError] {
+  if !valid_path(name) {
+    return Error(InvalidPath())
+  }
+  let mut f = match file.open(d, path.of(name)) {
+    Ok(opened) => take opened,
+    Error(_) => {
+      return Error(ManifestRead())
+    },
+  }
+  let mut reader = bufio.new(CHUNK)
+  let mut data: List[u8] = []
+  while true {
+    // Probe at most one byte beyond the cap, including the exact-cap EOF case.
+    let remaining = MANIFEST_BYTES - list.len(data) + 1
+    let count = if remaining < CHUNK {
+      remaining
+    } else {
+      CHUNK
+    }
+    let Ok(n) = bufio.file_read_more(d, mut f, mut reader, count) else {
+      return Error(ManifestRead())
+    }
+    if n > MANIFEST_BYTES - list.len(data) {
+      return Error(ManifestLimit())
+    }
+    if n == 0 {
+      break
+    }
+    for byte in bufio.peek(reader, n) {
+      list.push(mut data, byte)
+    }
+    bufio.consume(mut reader, n)
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+fn failed(take asset: Asset, status: String) -> Finding {
+  Finding(path: copy asset.path, status: unique status, bytes: 0, sha256: "")
+}
+
+// Go's open -> incremental Write -> Sum sequence. Reader views end before
+// consume; length is counted from bytes actually read, never file metadata.
+fn inspect(d: Dir, take asset: Asset) -> Finding {
+  let mut f = match file.open(d, path.of(asset.path)) {
+    Ok(f) => take f,
+    Error(NotFound()) => {
+      return failed(take asset, "missing")
+    },
+    Error(_) => {
+      return failed(take asset, "read")
+    },
+  }
+  let mut reader = bufio.new(CHUNK)
+  let mut state = sha256.new()
+  let mut total = 0u64
+  while true {
+    let remaining = FILE_BYTES - total + 1
+    let request = if remaining < CHUNK {
+      remaining
+    } else {
+      CHUNK
+    }
+    let Ok(n) = bufio.file_read_more(d, mut f, mut reader, request) else {
+      return failed(take asset, "read")
+    }
+    if n == 0 {
+      break
+    }
+    if n > FILE_BYTES - total {
+      return failed(take asset, "limit")
+    }
+    let chunk = bufio.peek(reader, n)
+    sha256.update(mut state, chunk)
+    total += n
+    bufio.consume(mut reader, n)
+  }
+  let digest = hex.encode(bytes.from_inline(sha256.finish(take state)))
+  let expected = match hex.decode(asset.sha256) {
+    Ok(raw) => hex.encode(raw),
+    Error(_) => "", // decode has already validated every entry before I/O.
+  }
+  let status = if total != asset.bytes && digest != expected {
+    "length_digest"
+  } else if total != asset.bytes {
+    "length"
+  } else if digest != expected {
+    "digest"
+  } else {
+    "ok"
+  }
+  Finding(path: copy asset.path, status: status, bytes: total, sha256: take digest)
+}
+
+fn verify(d: Dir, take manifest: Manifest) -> Report {
+  let mut findings: List[Finding] = []
+  let mut ok = true
+  let Manifest(assets: assets) = take manifest
+  for asset in take assets {
+    let finding = inspect(d, take asset)
+    if finding.status != "ok" {
+      ok = false
+    }
+    list.push(mut findings, take finding)
+  }
+  Report(ok: ok, findings: take findings)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let Ok(parsed) = cli.parse(take argv, []) else {
+    return Error(Usage())
+  }
+  if list.len(parsed.positional) != 2 || parsed.positional[0] != "verify" {
+    return Error(Usage())
+  }
+  let manifests = io.dir(rt, path.of("manifests"))?
+  let manifest = decode(read_manifest(manifests, parsed.positional[1])?)?
+  let assets = io.dir(rt, path.of("assets"))?
+  let report = verify(assets, take manifest)
+  let mut output: List[u8] = []
+  report_json_into(report, mut output, 0)?
+  list.push(mut output, b'\n')
+  out.write(io.stdout(rt)?, bytes.from_list(take output))?
+  if !report.ok {
+    return Error(Mismatch())
+  }
+  Ok(())
+}
+
+// Independent vectors from Go sha256_test.go:25-35 at the same revision.
+@test
+fn empty_and_short_files(t: Test) {
+  let d = test.dir(t, [(path.of("empty"), b""), (path.of("a"), b"a")])
+  let empty = inspect(
+    d,
+    Asset(
+      path: "empty",
+      bytes: 0,
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+  )
+  let short = inspect(
+    d,
+    Asset(
+      path: "a",
+      bytes: 1,
+      sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+    )
+  )
+  test.check(t, empty.status == "ok" && short.status == "ok")
+}
+
+@test
+fn strict_paths(t: Test) {
+  test.check(t, valid_path("nested/日本.bin"))
+  let bad_paths: List[String] = [
+    "",
+    "/absolute",
+    "../escape",
+    "a/../b",
+    "./a",
+    "a//b",
+    "a/",
+    "a\\b",
+    "C:drive",
+    "a\0b",
+    ".",
+    ".."
+  ]
+  for bad in bad_paths {
+    test.check(t, !valid_path(bad))
+  }
+}
+
+@test
+fn invalid_manifests(t: Test) {
+  test.check(
+    t,
+    match decode(b"{") {
+      Error(InvalidJson()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match decode(b"{\"assets\":[]}") {
+      Ok(_) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match decode(b"{\"assets\":[],\"assets\":[]}") {
+      Error(InvalidJson()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match decode(b"{\"assets\":[{\"path\":\"x\",\"bytes\":0,\"sha256\":\"zz\"}]}") {
+      Error(InvalidHex()) => true,
+      _ => false,
+    }
+  )
+}
+
+@test
+fn mismatch_and_missing_order(t: Test) {
+  let d = test.dir(t, [(path.of("a"), b"a")])
+  let report = verify(
+    d,
+    Manifest(
+      assets: [
+        Asset(
+          path: "a",
+          bytes: 2,
+          sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+        ),
+        Asset(
+          path: "missing",
+          bytes: 0,
+          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        )
+      ]
+    )
+  )
+  test.check(t, !report.ok && list.len(report.findings) == 2)
+  test.check(t, report.findings[0].path == "a" && report.findings[0].status == "length")
+  test.check(
+    t,
+    report.findings[1].path == "missing" && report.findings[1].status == "missing"
+  )
+}
