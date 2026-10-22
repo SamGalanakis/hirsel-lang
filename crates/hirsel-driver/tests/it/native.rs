@@ -384,23 +384,33 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
         );
         assert_eq!(grant.reference.exit_code, Some(0));
         assert!(build(&grant.validated, &Options::new(x86())).is_ok());
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("unavailable.hir", "resource type Token { n: u8 }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let store: Mutex[Token] = mutex.create(tasks, Token(n: 1u8)); Ok(()) }".into()).unwrap();
-        let progress = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(progress.diagnostics.is_empty());
-        assert_eq!(
-            progress.completion,
-            hirsel_engine::CheckCompletion::Complete
+        // Resource mutexes have native support. Keep this former gap as an
+        // accepted control, and make the unavailable disposition explicit so
+        // this boundary test does not depend on an unimplemented feature.
+        let mutex = checked(
+            "resource type Token { n: u8 }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let store: Mutex[Token] = mutex.create(tasks, Token(n: 1u8)); Ok(()) }",
         );
-        let input = engine.export_native_input().unwrap();
-        let input = engine.import_native_input(input).unwrap();
-        let Err(error) = build(&input, &Options::new(x86())) else {
-            panic!("a Mutex of a resource requires the native M2 Mutex")
+        assert_eq!(mutex.reference.exit_code, Some(0));
+        assert!(build(&mutex.validated, &Options::new(x86())).is_ok());
+        let adapted = hirsel_driver::native::program(&grant.validated);
+        let mut manifest = hirsel_driver::native::manifest(grant.validated.snapshot()).unwrap();
+        let mut unavailable = manifest
+            .rows()
+            .find(|row| row.id.definition == DefPath::core("io.net"))
+            .expect("the granted operation")
+            .clone();
+        unavailable.dispositions.native = hirsel_core_contract::Disposition::Unavailable(
+            hirsel_core_contract::Unavailable::NotImplemented,
+        );
+        manifest.replace(unavailable).unwrap();
+        let Err(error) = build_program(&adapted, manifest, &Options::new(x86())) else {
+            panic!("an explicitly unavailable operation reached Ready")
         };
-        assert!(
-            (StageName::Import..=StageName::Ready).contains(&error.stage),
-            "{error}"
-        );
+        assert_eq!(error.stage, StageName::Ready, "{error}");
+        assert!(error.validator, "{error}");
+        assert!(error.message.contains("UnsupportedOperation"), "{error}");
+        assert!(error.message.contains("io.net"), "{error}");
+        assert_eq!(grant.reference.exit_code, Some(0));
         let accepted = checked(
             r#"pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let directory = io.dir(rt, path.of("."))
