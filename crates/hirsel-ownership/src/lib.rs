@@ -17,6 +17,7 @@ use hirsel_span::Span;
 use hirsel_syntax::DefId;
 use hirsel_syntax::{ExprId, ItemSyntax};
 use hirsel_types::*;
+use std::sync::Arc;
 
 /// A binding row is the storage identity; nested parameter ordinals are scoped.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,7 +143,10 @@ pub fn check_ownership_with_clauses(
                 });
             // J reports an unreadable mapper; this read only feeds the check.
             if let Some(path) = mapper {
-                let _ = signatures.read(DefId::intern(&path), &mut body.resolution.reads);
+                let _ = signatures.read(
+                    DefId::intern(&path),
+                    Arc::make_mut(&mut body.resolution.reads),
+                );
             }
         }
     }
@@ -182,7 +186,9 @@ pub fn check_ownership_with_clauses(
                 continue;
             }
             hirsel_type_analysis::representation::may_hold_content(t, m, ty, ty, &mut |path| {
-                signatures.read(path, &mut body.resolution.reads).ok()
+                signatures
+                    .read(path, Arc::make_mut(&mut body.resolution.reads))
+                    .ok()
             });
         }
     }
@@ -263,7 +269,7 @@ pub fn check_ownership_with_clauses(
                 &introductions,
                 Some(parameter),
             );
-            signatures.record(&mut body.resolution.reads);
+            signatures.record(Arc::make_mut(&mut body.resolution.reads));
             checked?;
             diagnostics.extend(
                 proof_diagnostics
@@ -303,7 +309,7 @@ pub fn check_ownership_with_clauses(
             &introductions,
             None,
         );
-        signatures.record(&mut body.resolution.reads);
+        signatures.record(Arc::make_mut(&mut body.resolution.reads));
         let checked = checked?;
         initial_storage.postcondition_inputs(
             t,
@@ -389,7 +395,11 @@ pub fn check_ownership_with_clauses(
                 t,
                 root,
                 &body.resolution.generic_declarations.clone(),
-                &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
+                &mut |d| {
+                    signatures
+                        .read(d, Arc::make_mut(&mut body.resolution.reads))
+                        .map(Some)
+                },
             )?
         };
         let live = replacement_live[&expression];
@@ -445,7 +455,7 @@ pub fn check_ownership_with_clauses(
         let (plain, copyable) = match properties.get(id) {
             Some(property) => (property.plain, property.copyable),
             None => {
-                let reads = &mut body.resolution.reads;
+                let reads = Arc::make_mut(&mut body.resolution.reads);
                 let mut proof = |property| {
                     signatures.prove(reads, |memo| {
                         hirsel_modes::proofs::property(memo, id, property)

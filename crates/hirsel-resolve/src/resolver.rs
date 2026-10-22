@@ -280,7 +280,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             Err(LookupError::Missing | LookupError::MissingMember(_))
         ) {
             let lookup = self.provider.lookup(&self.context, path);
-            self.output.reads.push(DependencyRead::ProviderLookup {
+            std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::ProviderLookup {
                 context: self.context.clone(),
                 package: path.package.clone(),
                 segments: path
@@ -308,7 +308,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 Err(ty::QueryError::Operational(e)) => self.output.operational_failure = Some(e),
             }
         }
-        self.output.reads.push(DependencyRead::Lookup {
+        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::Lookup {
             context: self.context.clone(),
             package: path.package.clone(),
             segments,
@@ -557,7 +557,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 None
             }
         };
-        self.output.reads.push(DependencyRead::Signature {
+        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::Signature {
             definition: id,
             fingerprint: signature.as_ref().map(|s| s.fingerprint),
         });
@@ -2420,7 +2420,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             return false;
         };
         let exposed = self.index.has_head(&self.context, &head);
-        self.output.reads.push(DependencyRead::ModuleHead {
+        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::ModuleHead {
             context: self.context.clone(),
             head,
             manifest: self.index.revision,

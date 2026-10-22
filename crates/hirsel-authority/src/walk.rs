@@ -314,7 +314,7 @@ impl<'a> Checker<'a> {
             })
             .map(binding_key)
             .collect();
-        let reads = body.resolution.reads.clone();
+        let reads = body.resolution.reads.as_ref().clone();
         let mut identity_paths = BTreeSet::new();
         fn add(paths: &mut BTreeSet<Vec<FieldId>>, fields: &[FieldId]) {
             if !fields.is_empty() {
@@ -597,7 +597,7 @@ impl<'a> Checker<'a> {
         self.out.body.closures = self.closures.into_sorted();
         self.out.dependencies.sort_by_key(|a| a.definition);
         self.out.dependencies.dedup();
-        self.out.body.resolution.reads = self.out.reads.clone();
+        self.out.body.resolution.reads = self.out.reads.clone().into();
         let reads = std::mem::take(&mut self.ended_reads);
         self.out.diagnostics.extend(reads);
         // This pass is one source unit. Driver sorts source units by manifest path.

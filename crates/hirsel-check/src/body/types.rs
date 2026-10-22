@@ -9,7 +9,7 @@ impl Checker<'_, '_> {
             return Ok(s.clone());
         }
         let result = self.provider.signature(definition);
-        self.body.resolution.reads.push(DependencyRead::Signature {
+        std::sync::Arc::make_mut(&mut self.body.resolution.reads).push(DependencyRead::Signature {
             definition,
             fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
         });

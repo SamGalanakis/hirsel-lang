@@ -135,7 +135,11 @@ impl ImageWriter {
                 return Err(format!("section {kind} holds {} twice", pair[0].0));
             }
             let mut index = Vec::with_capacity(entries.len());
-            let mut data = vec![];
+            // Reserve the keyed directory in the same buffer as its values.
+            // Copying a whole records section would keep two image-sized
+            // allocations live at once. Omitted entries are compacted below.
+            let reserved = entries.len() * KEYED_ENTRY;
+            let mut data = vec![0; reserved];
             for (d, value) in entries {
                 let start = data.len();
                 let mut value = Some(value);
@@ -153,14 +157,23 @@ impl ImageWriter {
                 }
             }
             let table = index.len() * KEYED_ENTRY;
-            let mut body = Vec::with_capacity(table + data.len());
-            for (number, start, end) in &index {
-                for word in [*number, offset(table + start)?, offset(table + end)?] {
-                    body.extend_from_slice(&word.to_le_bytes());
+            let end = table + data.len() - reserved;
+            data.copy_within(reserved.., table);
+            data.truncate(end);
+            for (i, (number, start, end)) in index.iter().enumerate() {
+                for (j, word) in [
+                    *number,
+                    offset(table + start - reserved)?,
+                    offset(table + end - reserved)?,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let at = i * KEYED_ENTRY + j * 4;
+                    data[at..at + 4].copy_from_slice(&word.to_le_bytes());
                 }
             }
-            body.extend_from_slice(&data);
-            sections.push((kind, index.len() as u32, body));
+            sections.push((kind, index.len() as u32, data));
         }
         // The rows values named and the rows those reach.
         let Tables {
@@ -212,7 +225,7 @@ impl ImageWriter {
         reserved.push((TYPES, rows, types_body));
         reserved.extend(sections);
         Ok(Written {
-            bytes: assemble(self.key, &reserved)?,
+            bytes: assemble(self.key, reserved)?,
             dropped,
         })
     }
@@ -320,24 +333,51 @@ fn def_index_body(defs: &[DefId], slots: usize) -> Vec<u8> {
     table.iter().flat_map(|slot| slot.to_le_bytes()).collect()
 }
 
-fn assemble(key: ContentHash, sections: &[(u32, u32, Vec<u8>)]) -> Result<Vec<u8>, String> {
+pub(crate) fn assemble(
+    key: ContentHash,
+    mut sections: Vec<(u32, u32, Vec<u8>)>,
+) -> Result<Vec<u8>, String> {
     let directory = HEADER + sections.len() * DIRECTORY_ENTRY;
     let total = directory + sections.iter().map(|s| s.2.len()).sum::<usize>();
-    let mut bytes = Vec::with_capacity(total);
+    // Reuse the section with the largest allocation (normally records).
+    // Its geometric growth normally leaves room for the complete image. Keep
+    // its length in the directory while taking ownership of its allocation.
+    let reuse = sections
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, s)| s.2.capacity())
+        .map(|(i, _)| i);
+    let mut bytes = reuse
+        .map(|i| std::mem::take(&mut sections[i].2))
+        .unwrap_or_default();
+    let body_len = bytes.len();
+    bytes.reserve(total - body_len);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&VERSION.to_le_bytes());
     bytes.extend_from_slice(&(sections.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&key.0);
     let mut at = directory as u64;
-    for (kind, count, body) in sections {
+    for (i, (kind, count, body)) in sections.iter().enumerate() {
+        let len = if Some(i) == reuse {
+            body_len
+        } else {
+            body.len()
+        };
         bytes.extend_from_slice(&kind.to_le_bytes());
         bytes.extend_from_slice(&count.to_le_bytes());
         bytes.extend_from_slice(&at.to_le_bytes());
-        bytes.extend_from_slice(&(body.len() as u64).to_le_bytes());
-        at += body.len() as u64;
+        bytes.extend_from_slice(&(len as u64).to_le_bytes());
+        at += len as u64;
     }
-    for (_, _, body) in sections {
+    // Start as [reused body, header, earlier bodies], then rotate to the
+    // canonical file order without a second body-sized allocation.
+    let reuse = reuse.unwrap_or(0);
+    for (_, _, body) in &sections[..reuse] {
         bytes.extend_from_slice(body);
+    }
+    bytes.rotate_left(body_len);
+    for (_, _, body) in sections.into_iter().skip(reuse + 1) {
+        bytes.extend_from_slice(&body);
     }
     debug_assert_eq!(bytes.len(), total);
     Ok(bytes)

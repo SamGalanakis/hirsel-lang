@@ -63,12 +63,12 @@ fn canonical_reads(reads: &mut [hirsel_types::DependencyRead]) {
 }
 fn canonical_checked(checked: &CheckedBody) -> CheckedBody {
     let mut checked = checked.clone();
-    canonical_reads(&mut checked.resolution.reads);
+    canonical_reads(Arc::make_mut(&mut checked.resolution.reads).as_mut_slice());
     checked
 }
 fn canonical_detail(mut detail: DependencyReads) -> DependencyReads {
     canonical_reads(&mut detail.manifest_lookups);
-    canonical_reads(&mut detail.resolver);
+    canonical_reads(Arc::make_mut(&mut detail.resolver).as_mut_slice());
     detail
 }
 

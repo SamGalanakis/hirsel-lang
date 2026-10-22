@@ -271,7 +271,7 @@ pub fn refine_cursor_plan(
         source,
         identity,
     );
-    body.resolution.reads.extend(reads);
+    std::sync::Arc::make_mut(&mut body.resolution.reads).extend(reads);
     outcome?;
     Ok(dependencies
         .values()

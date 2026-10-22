@@ -272,7 +272,13 @@ impl Weight {
         self.vec(failed_signature_keys, |w, (path, _)| w.def_path(path));
         self.vec(lookups, |w, (path, _)| w.def_path(path));
         self.vec(manifest_lookups, Weight::dependency);
-        self.vec(resolver, Weight::dependency);
+        if self
+            .shared
+            .insert(std::sync::Arc::as_ptr(resolver) as usize)
+        {
+            self.add(arc_bytes(&**resolver));
+            self.vec(resolver, Weight::dependency);
+        }
         self.vec(citations, |w, (path, _)| w.def_path(path));
     }
     fn add(&mut self, bytes: usize) {
@@ -802,7 +808,7 @@ mod tests {
             failed > base + 50_000,
             "negative lookup owns both request and failure text"
         );
-        entry.detail.resolver.reserve(256);
+        std::sync::Arc::make_mut(&mut entry.detail.resolver).reserve(256);
         assert!(retained_lower_entry_bytes(&entry, None) > failed);
         let no_depth = retained_lower_entry_bytes(&entry, None);
         entry.depth = Some(DepthEvidence::leaf(32));

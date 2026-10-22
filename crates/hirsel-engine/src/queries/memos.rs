@@ -213,7 +213,7 @@ pub(crate) fn complete_reads(
     for (path, key) in &detail.failed_signature_keys {
         reads.record(ReadKey::FailedSignature(def(path)), optional(*key));
     }
-    for read in detail.manifest_lookups.iter().chain(&detail.resolver) {
+    for read in detail.manifest_lookups.iter().chain(detail.resolver.iter()) {
         match read {
             hirsel_types::DependencyRead::ProviderLookup {
                 context,

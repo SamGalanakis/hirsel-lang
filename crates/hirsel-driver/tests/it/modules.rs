@@ -99,3 +99,4 @@ mod image_restore_17;
 mod image_memory_17;
 mod uniqueness_loss_diagnostics_17;
 mod error_mapper_diagnostics_18;
+mod image_memory_dev_18;

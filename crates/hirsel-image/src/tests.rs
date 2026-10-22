@@ -431,3 +431,80 @@ fn shared_anchor_decoding_refuses_invalid_numbers_and_keeps_later_reads_exact() 
         );
     }
 }
+
+#[test]
+fn assembly_reuses_a_section_buffer_and_preserves_directory_order() {
+    // The records section has room for the image already. Final assembly
+    // must not request another image-sized allocation beside it.
+    for largest in 0..3 {
+        let mut sections = vec![
+            (16, 1, vec![1; 3]),
+            (17, 2, vec![2; 5]),
+            (18, 3, vec![3; 7]),
+        ];
+        sections[largest].2.reserve(1024);
+        let allocation = sections[largest].2.as_ptr();
+        let expected: Vec<u8> = sections.iter().flat_map(|s| s.2.iter().copied()).collect();
+        let metadata: Vec<_> = sections
+            .iter()
+            .map(|(kind, count, body)| (*kind, *count, body.len()))
+            .collect();
+        let bytes = crate::write::assemble(key(), sections).unwrap();
+        assert_eq!(
+            bytes.as_ptr(),
+            allocation,
+            "assembly allocated a second image"
+        );
+        let directory = HEADER + metadata.len() * DIRECTORY_ENTRY;
+        assert_eq!(&bytes[directory..], expected);
+        let mut at = directory;
+        for (i, (kind, count, len)) in metadata.iter().enumerate() {
+            let entry = HEADER + i * DIRECTORY_ENTRY;
+            assert_eq!(&bytes[entry..entry + 4], kind.to_le_bytes());
+            assert_eq!(&bytes[entry + 4..entry + 8], count.to_le_bytes());
+            assert_eq!(&bytes[entry + 8..entry + 16], (at as u64).to_le_bytes());
+            assert_eq!(&bytes[entry + 16..entry + 24], (*len as u64).to_le_bytes());
+            at += len;
+        }
+    }
+}
+
+#[test]
+fn keyed_directory_compacts_omissions_before_between_and_after_values() {
+    let mut writer = ImageWriter::new(key(), TypeInterner::new(None));
+    let defs: Vec<_> = (0..5)
+        .map(|i| DefId::intern(&path(&[], &format!("entry{i}"))))
+        .collect();
+    for (i, &d) in defs.iter().enumerate() {
+        let value: Box<dyn Encode> = if i % 2 == 0 {
+            Box::new(Broken)
+        } else {
+            Box::new(Value {
+                types: vec![],
+                names: vec![],
+                defs: vec![],
+                span: None,
+                text: format!("value{i}"),
+            })
+        };
+        writer.entry(RECORDS, d, value);
+    }
+    let written = writer.finish().unwrap();
+    assert_eq!(written.dropped.len(), 3);
+    let image = Image::from_bytes(written.bytes).unwrap();
+    assert_eq!(image.keys(RECORDS).unwrap(), [defs[1], defs[3]]);
+    for i in [1, 3] {
+        assert_eq!(
+            image
+                .entry::<Value>(RECORDS, defs[i])
+                .unwrap()
+                .unwrap()
+                .text,
+            format!("value{i}")
+        );
+    }
+    let mut writer = ImageWriter::new(key(), TypeInterner::new(None));
+    writer.entry(RECORDS, defs[0], Box::new(Broken));
+    let image = Image::from_bytes(writer.finish().unwrap().bytes).unwrap();
+    assert!(image.keys(RECORDS).unwrap().is_empty());
+}

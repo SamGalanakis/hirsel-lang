@@ -7,6 +7,7 @@ use hirsel_type_analysis::representation::{
 use hirsel_types::*;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 
 /// The signature reads of the ownership query and its contextual memo. Every
@@ -188,7 +189,7 @@ pub(super) fn classify_row(
 ) -> Result<Properties, QueryError> {
     use hirsel_modes::proofs;
     let row = t.row(root);
-    let reads = &mut body.resolution.reads;
+    let reads = Arc::make_mut(&mut body.resolution.reads);
     let plain = signatures.prove(reads, |memo| {
         proofs::property(memo, root, StructuralProperty::Plain)
     })?;
@@ -270,7 +271,11 @@ pub(super) fn result_sharing(
             })
             .collect();
         let declarations = declarations.with_copyable(&graph.result_shareable);
-        let mut lookup = |d| signatures.read(d, &mut body.resolution.reads).map(Some);
+        let mut lookup = |d| {
+            signatures
+                .read(d, Arc::make_mut(&mut body.resolution.reads))
+                .map(Some)
+        };
         let mut memo = ContextMemo::new(t, &declarations, &mut lookup);
         for (expression, ty) in expressions {
             if hirsel_modes::proofs::property(&mut memo, ty, StructuralProperty::Copyable)? {
@@ -341,7 +346,11 @@ pub(super) fn normalize(
         t,
         &mut roots,
         &body.resolution.generic_declarations,
-        &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
+        &mut |d| {
+            signatures
+                .read(d, Arc::make_mut(&mut body.resolution.reads))
+                .map(Some)
+        },
     );
     let mut roots = roots.into_iter();
     visit_roots(body, results, physical, |root| {
@@ -387,10 +396,14 @@ pub(super) fn identity_projections(
         // binding's final row, which flow may have refined since J recorded it.
         let mut parent = root;
         for (_, part) in projections {
-            let mut lookup = |d| signatures.read(d, &mut body.resolution.reads).map(Some);
+            let mut lookup = |d| {
+                signatures
+                    .read(d, Arc::make_mut(&mut body.resolution.reads))
+                    .map(Some)
+            };
             let placed = placed_part_type(t, parent, *part, &declarations, &mut lookup)?;
             let m = signatures.m;
-            *part = signatures.prove(&mut body.resolution.reads, |memo| {
+            *part = signatures.prove(Arc::make_mut(&mut body.resolution.reads), |memo| {
                 memo.projected(m, parent, placed)
             })?;
             parent = *part;
@@ -502,7 +515,7 @@ pub(super) fn pattern_declarations(
             &mut layouts,
             t,
             inspected,
-            &mut body.resolution.reads,
+            Arc::make_mut(&mut body.resolution.reads),
             signatures,
         )?;
         for (field, child) in &row.fields {
@@ -566,8 +579,10 @@ pub(super) fn projection_lifetimes(
                     (ProjectionRoot::Binding(index), body.bindings[index].ty)
                 }
                 SourceRoot::Definition(path) => {
-                    let signature =
-                        signatures.read(DefId::intern(path), &mut body.resolution.reads)?;
+                    let signature = signatures.read(
+                        DefId::intern(path),
+                        Arc::make_mut(&mut body.resolution.reads),
+                    )?;
                     let SignatureKind::Const { ty: root, .. } = signature.kind else {
                         continue;
                     };
@@ -577,8 +592,13 @@ pub(super) fn projection_lifetimes(
             let mut parts = vec![];
             let mut counted_path = false;
             for step in &place.projections {
-                let kind =
-                    physical_layout(&mut layouts, t, ty, &mut body.resolution.reads, signatures)?;
+                let kind = physical_layout(
+                    &mut layouts,
+                    t,
+                    ty,
+                    Arc::make_mut(&mut body.resolution.reads),
+                    signatures,
+                )?;
                 counted_path |= matches!(
                     &kind,
                     TypeKind::Box(_)
@@ -637,7 +657,11 @@ pub(super) fn projection_lifetimes(
                     next,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
-                    &mut |path| signatures.read(path, &mut body.resolution.reads).map(Some),
+                    &mut |path| {
+                        signatures
+                            .read(path, Arc::make_mut(&mut body.resolution.reads))
+                            .map(Some)
+                    },
                 )?;
                 parts.push((t.get(next).unwrap().modes.relation.clone(), plain));
                 ty = next;
@@ -728,8 +752,13 @@ pub(super) fn field_loan_places(
             let mut found = true;
             let mut parts = vec![];
             for field in &path {
-                let kind =
-                    physical_layout(&mut layouts, t, ty, &mut body.resolution.reads, signatures)?;
+                let kind = physical_layout(
+                    &mut layouts,
+                    t,
+                    ty,
+                    Arc::make_mut(&mut body.resolution.reads),
+                    signatures,
+                )?;
                 ty = match kind {
                     TypeKind::Box(payload) if *field == 0 => payload,
                     TypeKind::Record(fields) if (*field as usize) < fields.len() => {
@@ -748,7 +777,11 @@ pub(super) fn field_loan_places(
                     ty,
                     StructuralProperty::Plain,
                     &body.resolution.generic_declarations,
-                    &mut |path| signatures.read(path, &mut body.resolution.reads).map(Some),
+                    &mut |path| {
+                        signatures
+                            .read(path, Arc::make_mut(&mut body.resolution.reads))
+                            .map(Some)
+                    },
                 )?;
                 parts.push((t.get(ty).unwrap().modes.relation.clone(), plain));
             }

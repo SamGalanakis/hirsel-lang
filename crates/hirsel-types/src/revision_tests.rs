@@ -228,7 +228,8 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
                 definition: hirsel_syntax::DefId::intern(&path("absent")),
                 fingerprint: None,
             },
-        ],
+        ]
+        .into(),
         types: vec![
             (
                 TypeExprId(0),
@@ -258,7 +259,31 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         reference_scopes: vec![(NameSite::Type(TypeExprId(0)), owner)],
         ..Default::default()
     };
-    assert_eq!(resolution.clone(), resolution);
+    let cloned = resolution.clone();
+    assert_eq!(cloned, resolution);
+    assert_eq!(
+        cloned.reads.as_ptr(),
+        resolution.reads.as_ptr(),
+        "resolution clone copied dependency evidence"
+    );
+    let mut edited = cloned;
+    std::sync::Arc::make_mut(&mut edited.reads).push(DependencyRead::Signature {
+        definition: hirsel_syntax::DefId::intern(&path("later")),
+        fingerprint: None,
+    });
+    assert_eq!(
+        resolution.reads.len(),
+        2,
+        "later phases must preserve earlier evidence"
+    );
+    assert_eq!(edited.reads.len(), 3);
+    assert_eq!(
+        serde_json::to_vec(&resolution.reads).unwrap(),
+        serde_json::to_vec(resolution.reads.as_ref()).unwrap()
+    );
+    let decoded: std::sync::Arc<Vec<DependencyRead>> =
+        serde_json::from_slice(&serde_json::to_vec(&resolution.reads).unwrap()).unwrap();
+    assert_eq!(decoded, resolution.reads);
     assert!(lookup.result.is_err());
     let metadata = SignatureMetadata {
         roles: NominalRoles {
