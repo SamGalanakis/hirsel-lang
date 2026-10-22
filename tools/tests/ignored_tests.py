@@ -9,6 +9,7 @@ rewrites are not ignored tests: they run under HIRSEL_BLESS (tools/bless.sh).
 """
 from pathlib import Path
 import re
+import shlex
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,9 +22,20 @@ NATIVE = [
     ('crates/hirsel-pipeline-tests/tests/rc/rc_library_', '$(libtest rc_library_ --include-ignored --test-threads=4)'),
     ('crates/hirsel-pipeline-tests/tests/front/llvm_scalar_library.rs', '//:hirsel-pipeline-tests-test-front-shard-1 -- "${timeout[@]}" $(libtest llvm_scalar_library:: --include-ignored)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_maps_native.rs', '$(libtest rc_maps_native:: --include-ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_8.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_field_match_13.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_compose_13.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
 ]
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
 FUNCTION = re.compile(r'\bfn\s+(\w+)')
+
+
+def native_covers(path, name, prefix, selection):
+    """The source home must also select this libtest name, not just its file."""
+    arguments = shlex.split(selection.split('$(libtest ', 1)[1].split(')', 1)[0])
+    filters = [argument for argument in arguments if not argument.startswith('--')]
+    qualified = f'{Path(path).stem}::{name}'
+    return path.startswith(prefix) and (not filters or any(f in qualified for f in filters))
 
 
 def orphans(sources):
@@ -37,7 +49,7 @@ def orphans(sources):
                     continue
             elif attribute[2].strip() == 'debug_assertions':
                 continue
-            if any(path.startswith(prefix) for prefix, _ in NATIVE):
+            if any(native_covers(path, name, prefix, selection) for prefix, selection in NATIVE):
                 continue
             found.append((path, name))
     return found
@@ -53,6 +65,24 @@ class IgnoredTests(unittest.TestCase):
         for prefix, selection in NATIVE:
             self.assertIn(selection, script, prefix)
             self.assertTrue(list(ROOT.glob(prefix + '*')), prefix)
+
+    def test_cursor_home_selects_registered_modules_and_ignored_cases(self):
+        registry = (ROOT / 'crates/hirsel-pipeline-tests/tests/rc/modules.rs').read_text()
+        for prefix, selection in NATIVE:
+            if '/rc_borrow_cursor_' not in prefix:
+                continue
+            path = Path(prefix)
+            self.assertIn(f'mod {path.stem};', registry)
+            self.assertIn('//:hirsel-pipeline-tests-test-rc-shard-1 --', selection)
+            self.assertIn('--ignored', selection)
+            text = (ROOT / path).read_text()
+            names = [FUNCTION.search(text, attribute.end())[1] for attribute in ATTRIBUTE.finditer(text)]
+            self.assertTrue(names, prefix)
+            for name in names:
+                self.assertTrue(native_covers(prefix, name, prefix, selection), name)
+            # A registered source with the wrong libtest filter must still fail closed.
+            wrong = selection.replace('libtest rc_borrow_cursor_', 'libtest unrelated::')
+            self.assertFalse(native_covers(prefix, names[0], prefix, wrong))
 
     def test_orphans_are_named_and_homes_are_not(self):
         sources = {

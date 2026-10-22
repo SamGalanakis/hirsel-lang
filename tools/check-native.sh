@@ -74,6 +74,9 @@ run_stage "native library bodies on both targets" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
 run_stage "native Map and Set laws: hash seeds, structural order and failure sites" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_maps_native:: --include-ignored --test-threads=1)
+# Cursor parity and RC assertions are explicit full/native controls, not fast-tier tests.
+run_stage "borrow cursor projection, parity, deep walks and RC evidence" \
+  buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)
 if (( ${#failed_stages[@]} > 0 )); then
   printf 'check-native.sh: %d failing stages: %s\n' "${#failed_stages[@]}" "$(IFS=';'; echo "${failed_stages[*]}")" >&2
   echo "check-native.sh: failed ($((SECONDS - gate_start)) s)" >&2
