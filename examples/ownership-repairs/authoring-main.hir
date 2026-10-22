@@ -1,0 +1,7 @@
+pub fn main() -> Result[(), ()] {
+  if authoring.records() && authoring.bindings_and_literals() && authoring.errors() {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

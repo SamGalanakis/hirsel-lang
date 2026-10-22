@@ -1,0 +1,5 @@
+type AppError = Grant(GrantError)
+fn directory(rt: Io) -> Result[Dir, AppError] {
+  Ok(io.dir(rt, path.of("data"))?)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

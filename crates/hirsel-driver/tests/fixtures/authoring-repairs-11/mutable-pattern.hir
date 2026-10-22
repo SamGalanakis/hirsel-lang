@@ -1,0 +1,6 @@
+fn read(d: Dir) -> Result[u64, FileError] {
+  let Ok(mut f) = file.open(d, path.of("input")) else { return Error(NotFound()) }
+  let mut data: List[u8] = []
+  file.read(d, mut f, mut data, 3)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

@@ -1,0 +1,5 @@
+type AppError = File(FileError)
+fn output(rt: Io) -> Result[Stdout, AppError] {
+  Ok(io.stdout(rt)?)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

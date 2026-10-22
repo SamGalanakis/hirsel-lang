@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "authoring_repairs_11_unique_take",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "unique-take.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

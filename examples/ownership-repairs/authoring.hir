@@ -1,0 +1,122 @@
+// Rust Cow/equal-payload control structure: see docs/ownership-repairs.md.
+pub type Asset {
+  path: String,
+}
+
+pub fn path_view(asset: Asset) -> String in asset {
+  copy asset.path
+}
+
+pub fn path_taken(take asset: Asset) -> String {
+  let Asset(path: name) = take asset
+  take name
+}
+
+pub fn path_unique(asset: Asset) -> String {
+  unique asset.path
+}
+
+pub type Manifest {
+  assets: List[Asset],
+}
+
+pub fn paths(take manifest: Manifest) -> List[String] {
+  let Manifest(assets: assets) = take manifest
+  let mut names: List[String] = []
+  for asset in take assets {
+    list.push(mut names, path_taken(take asset))
+  }
+  take names
+}
+
+pub type V2 {
+  name: String,
+}
+
+pub fn migrate(take config: V2) -> Result[unique V2, ()] {
+  Ok(unique config)
+}
+
+// Pattern bindings are immutable; rebind the owned file before mutating it.
+pub fn read(d: Dir) -> Result[u64, FileError] {
+  let Ok(f) = file.open(d, path.of("input")) else {
+    return Error(NotFound())
+  }
+  let mut file = take f
+  let mut data: List[u8] = []
+  file.read(d, mut file, mut data, 3)
+}
+
+pub type AppError = File(FileError) | Grant(GrantError)
+
+pub fn directory(rt: Io) -> Result[Dir, AppError] {
+  Ok(io.dir(rt, path.of(".")) ? File)
+}
+
+pub fn output(rt: Io) -> Result[Stdout, AppError] {
+  Ok(io.stdout(rt) ? Grant)
+}
+
+fn file_result(take value: Result[Dir, FileError]) -> Result[(), AppError] {
+  let _ = take value ? File
+  Ok(())
+}
+
+fn grant_result(take value: Result[Stdout, GrantError]) -> Result[(), AppError] {
+  let _ = take value ? Grant
+  Ok(())
+}
+
+pub fn records() -> bool {
+  let Ok(hello) = string.from_bytes(
+    bytes.from_list([104u8, 101u8, 108u8, 108u8, 111u8])
+  ) else {
+    return false
+  }
+  let mut asset = Asset(path: copy hello)
+  let name = path_view(asset)
+  let viewed = name == "hello" // Last use releases the borrow.
+  asset = Asset(path: "changed")
+  let detached = path_unique(asset)
+  asset = Asset(path: "again") // Detached path remains live.
+  let names = paths(Manifest(assets: [Asset(path: copy hello)]))
+  let mut source = V2(name: copy hello)
+  let Ok(config) = migrate(copy source) else {
+    return false
+  }
+  source = V2(name: "replaced")
+  viewed && source.name == "replaced" && detached == "changed" && asset.path == "again" && names[0] == "hello" && config.name == "hello"
+}
+
+pub fn bindings_and_literals() -> bool {
+  let value: Result[u64, ()] = Ok(2)
+  let Ok(n) = take value else {
+    return false
+  }
+  let mut number = take n
+  number += 1
+  let names: List[String] = ["a", "b"]
+  let mut count = 0u64
+  for name in names {
+    if name == "a" || name == "b" {
+      count += 1
+    }
+  }
+  let data: List[u8] = [1, 2, 3]
+  let remaining = 65537u64 - list.len(data)
+  number == 3 && count == 2 && remaining == 65534 && b"\xE9\x9B\xAA" == string.as_bytes(
+    "雪"
+  )
+}
+
+pub fn errors() -> bool {
+  let files = match file_result(Error(NotGranted())) {
+    Error(File(NotGranted())) => true,
+    _ => false,
+  }
+  let grants = match grant_result(Error(NotGranted())) {
+    Error(Grant(NotGranted())) => true,
+    _ => false,
+  }
+  files && grants
+}

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "authoring_repairs_11_record_reuse",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "record-reuse.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

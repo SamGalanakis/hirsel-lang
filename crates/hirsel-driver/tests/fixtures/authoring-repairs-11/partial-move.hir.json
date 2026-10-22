@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "authoring_repairs_11_partial_move",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "partial-move.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

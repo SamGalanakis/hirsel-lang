@@ -1,0 +1,5 @@
+type V2 { name: String }
+fn migrate(take config: V2) -> Result[unique V2, ()] {
+  Ok(take config)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

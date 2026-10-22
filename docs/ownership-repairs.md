@@ -84,3 +84,95 @@ and independent equal-payload controls at
 repairs as separate functions rather than a Cow enum; use Hirsel relations,
 transfer and deep uniqueness rather than Rust references, lifetimes or lazy
 clone-on-write. The numeric `[1, 2, 3]` control is also retained for lifetime twins.
+
+## Record, binding and literal repairs
+
+The [compact executable twins](../examples/ownership-repairs/authoring.hir)
+extend the [NetPeer choices above](#netpeer-ownership-repair-lab). The pure
+[entry](../examples/ownership-repairs/authoring-main.hir) checks payloads,
+last-use borrowing, independent replacements, literal values and typed error
+arms. The [I/O entry](../examples/ownership-repairs/authoring-io.hir) exercises
+an actual file after rebinding and both capability lookups. Neither entry
+compares diagnostic text to decide success.
+
+Each rejected file below is under
+[`tests/fixtures/authoring-repairs-11/`](../crates/hirsel-driver/tests/fixtures/authoring-repairs-11/).
+Run `hirsel check --json` on it: each isolates one error. The harness checks
+its rule and exact primary span, including UTF-8 byte offsets.
+
+| Friction | Rejected file / minimal operation | Accepted twin in `authoring.hir` | Rule |
+| --- | --- | --- | --- |
+| dogfood7 F02: borrowed record path | `path-copy.hir`: `fn name(asset: Asset) -> String { copy asset.path }` | `path_view` returns `String in asset`; `path_unique` returns `unique asset.path` as an independent `String` | MODE-1 |
+| dogfood7 F02: partial record move | `partial-move.hir`: `take value.assets` | `paths` consumes/destructures Manifest, iterates `take assets`, then `path_taken` consumes/destructures each Asset | OWN-8 |
+| dogfood7 F02: later use after consumption | `record-reuse.hir`: `asset.path` after `let Asset(path: name) = take asset`; `field-reuse.hir`: `name` after `take name` | `path_taken` returns the owned field at its last use; `records` reads the returned path | OWN-2 |
+| dogfood7 F03: mutable match binding | `mutable-pattern.hir`: `let Ok(mut f) = ... else { ... }` | `read`: `let Ok(f) = ... else { ... }`, then `let mut file = take f` and `file.read(d, mut file, ...)` | LANG-13 |
+| dogfood7 F04: sequence context | `sequence-context.hir`: `for name in ["a", "b"]` | `bindings_and_literals`: `let names: List[String] = ["a", "b"]`, then iterate `names` | LANG-2 |
+| dogfood7 F05: capability error domains | `file-error.hir`: plain `?` on `io.dir` with only `Grant(GrantError)`; `grant-error.hir`: stdout with only `File(FileError)` | `directory` uses `? File`, `output` uses `? Grant`; `AppError = File(FileError) \| Grant(GrantError)` | LANG-8 |
+| dogfood8 F02: take versus unique | `unique-take.hir`: `Ok(take config)` returned as `Result[unique V2, ()]` | `migrate`: `Ok(unique config)` | MODE-2 |
+| dogfood8 F03: UTF-8 byte spelling | `byte-literal.hir`: `b"雪"` | `bindings_and_literals`: `b"\xE9\x9B\xAA" == string.as_bytes("雪")` | SEM-3 |
+| dogfood8 F04: integer receiver context | `numeric-context.hir`: `65537 - list.len(data)` | `bindings_and_literals`: `65537u64 - list.len(data)` gives `65534` for three bytes | LANG-2 |
+
+`copy asset.path` shares counted path storage and retains the borrowed
+parameter's region. A result relation keeps that borrow explicit; `records`
+replaces the asset only after the view's last use. Consuming the entire owned
+record transfers its fields to bindings that can be moved separately. It does
+not permit a partial `take` from the still-bound record or reuse of the consumed
+record/field. The transfer adds no path deep copy; building output lists can
+still allocate. `unique asset.path` instead pays O(path size) when a deep copy is
+needed. As with NetPeer, uniqueness retains arena/region placement; it is no
+promise to promote an arena value to the heap.
+
+`take` transfers an owned value that may still share storage. It cannot prove
+the stronger result mode `unique V2`. `migrate` explicitly constructs that mode
+with `unique config`; this may deep-copy the DTO and its counted fields,
+O(value size), while preserving placement. Its runtime control supplies a shared
+heap-backed name, then replaces the source while reading the result. Equal
+payloads alone do not prove the borrow or uniqueness rules.
+
+Pattern matching and mutable storage are separate steps. The file repair first
+binds `f`, then moves it into a mutable local. This also works for an owned value
+inside a `Result`; the pure control increments a number after the same rebind.
+A sequence in a `for` receiver has no expected element type, so provide
+`List[String]` first. Similarly, the arithmetic receiver literal needs `u64`
+even though `list.len` returns `u64`. Byte literals contain ASCII and explicit
+byte escapes; `string.as_bytes` supplies a borrowed UTF-8 view of text instead.
+
+`io.dir` returns `FileError`, while `io.stdout` returns `GrantError`.
+`NotGranted()` can occur in both domains without making their types equal.
+The two explicit mappings preserve that distinction in `AppError`; the pure
+controls check both typed `NotGranted` arms, and the I/O entry checks successful
+lookups. These recipes use the current APIs and preserve every existing rule.
+
+Run the pure entry without grants:
+
+```sh
+hirsel run examples/ownership-repairs/authoring.hir.json
+hirsel check --json crates/hirsel-driver/tests/fixtures/authoring-repairs-11/path-copy.hir
+.buck2/bin/buck2 test //:hirsel-driver-test-it-shard-1 -- --test-arg=authoring_repairs_11
+```
+
+The new selection runs two Rust tests: eleven isolated rejects and two accepted
+entries under checked interpretation, H, LLVM and Cranelift (six configuration
+agreements). The I/O harness grants its own private directory and creates
+`input` there. For a manual I/O run, mount a private writable directory at the
+empty virtual root and grant stdout:
+
+```sh
+lab_dir=$(mktemp -d)
+printf '%s\n' '{"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"","host":".","access":"read_write"}]}}' > "$lab_dir/grants.json"
+hirsel run examples/ownership-repairs/authoring-io.hir.json --grants "$lab_dir/grants.json"
+```
+
+The I/O entry writes only `input` in that mount; relative `host` resolves beside
+the grants file. Build each entry once per native backend and reuse it as in the
+[native verification recipe](native-verification.md).
+The original `ownership_repairs_6` selection and all six NetPeer rejects remain.
+
+This extends the Rust `Cow` borrowed/owned and equal-payload control structure
+cited above (Rust Project Contributors, MIT/Apache-2.0; existing notice in
+[third-party notices](../third-party/NOTICES.md)). Adaptations: Asset/Manifest
+path fields and a `Result[unique V2]` replace Cow; Hirsel whole-record
+consumption, relation and uniqueness rules replace Rust reference/lifetime and
+clone-on-write machinery. `[1, 2, 3]` and `"hello"` controls are retained; binding,
+UTF-8 and capability-domain cases come from the concrete Hirsel authoring
+failures, not a port of Rust policy.

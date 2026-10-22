@@ -1,0 +1,12 @@
+// Run only with a private writable directory: this writes input in that mount.
+pub fn main(rt: Io) -> Result[(), authoring.AppError] {
+  let d = authoring.directory(rt)?
+  file.write_bytes(d, path.of("input"), b"abc") ? File
+  let count = authoring.read(d) ? File
+  let _ = authoring.output(rt)?
+  if count == 3 {
+    Ok(())
+  } else {
+    Error(File(Truncated()))
+  }
+}

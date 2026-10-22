@@ -1,4 +1,5 @@
 mod admission;
+mod authoring_repairs_11;
 mod agreement;
 mod alias_diagnostics;
 mod alloc_elision_ir;

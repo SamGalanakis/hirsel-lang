@@ -1,0 +1,8 @@
+type Asset { path: String }
+fn consume(take asset: Asset) -> String {
+  let Asset(path: name) = take asset
+  let output = take name
+  let _ = name
+  take output
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

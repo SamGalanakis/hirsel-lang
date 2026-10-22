@@ -1,0 +1,5 @@
+type Manifest { assets: List[String] }
+fn consume(take value: Manifest) -> List[String] {
+  take value.assets
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

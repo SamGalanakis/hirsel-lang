@@ -181,6 +181,9 @@ The mistakes to avoid first:
 - Selecting code grants no I/O. Pass capabilities and supply launch grants.
   A `Path` is a name, not filesystem authority (CAP-1, PROG-3).
 
+For checked examples of these mistakes, use the [record, binding and literal
+repair table](ownership-repairs.md#record-binding-and-literal-repairs).
+
 ## Values and types
 
 Records, variants, tuples and sized scalars have value semantics. `match` is

@@ -1,0 +1,5 @@
+pub fn main() -> Result[(), ()] {
+  let data: List[u8] = []
+  let remaining = 65537 - list.len(data)
+  Ok(())
+}
