@@ -168,6 +168,7 @@ impl Checker<'_> {
         // `in heap` is the empty relation: a global value meets an arena
         // relation; a bounded value elsewhere does not (PROV-4).
         let (expected, mut actual) = (arenas(&b.modes.relation), arenas(&a.modes.relation));
+
         // v22 R3: a value is within S when its arena loans are on arenas S
         // names or that the relation of a binding S names names.
         let expected = self.admitted_arenas(&b.modes.relation, expected);
@@ -186,7 +187,6 @@ impl Checker<'_> {
             }
         }
         if (!expected.is_global() || within)
-            && (within || !b.modes.relation.has_environment())
             && !a.modes.relation.is_global()
             && !actual
                 .reaches()
@@ -375,9 +375,21 @@ impl Checker<'_> {
             .zip(Variance::Covariant.edges(&b.kind))
             .filter(|((_, b), _)| b.role.parameter_binders() == 0);
         for ((a, b), variance) in parts {
-            if !self.keeps_placement(a.ty, b.ty, span, false)
-                || variance == Variance::Exact && !self.keeps_exact_promises(a.ty, b.ty, span)
-                || !self.compatible(a.ty, b.ty, span, intrinsic, sibling)
+            // A payload is received within its owner's placement. Generic
+            // arguments keep their separately declared, invariant contracts.
+            let (actual, expected) = if b.role == TypeEdgeRole::Component {
+                (
+                    self.placed_item(actual_id, a.ty),
+                    self.placed_item(expected_id, b.ty),
+                )
+            } else {
+                (a.ty, b.ty)
+            };
+            // Reading a borrowed payload cannot keep its arena storage.
+            let borrowed = self.receiving.as_ref().is_some_and(|r| r.borrowed);
+            if !borrowed && !self.keeps_placement(actual, expected, span, false)
+                || variance == Variance::Exact && !self.keeps_exact_promises(actual, expected, span)
+                || !self.compatible(actual, expected, span, intrinsic, sibling)
             {
                 return false;
             }

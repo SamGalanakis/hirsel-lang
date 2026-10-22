@@ -82,6 +82,7 @@ struct Receiving {
     /// The annotated binding, whose brand can be dropped (probe 5a).
     annotated: Option<String>,
     argument: bool,
+    borrowed: bool,
     result: bool,
 }
 impl Receiving {
@@ -92,6 +93,7 @@ impl Receiving {
             value: None,
             annotated: None,
             argument: false,
+            borrowed: false,
             result: false,
         }
     }
@@ -1055,7 +1057,13 @@ impl<'a> Checker<'a> {
         let mut used = AuthoritySummary::inert();
         if matches!(
             kind,
-            ExprKind::Literal(_) | ExprKind::Sequence(_) | ExprKind::Tuple(_)
+            ExprKind::Literal(_)
+                | ExprKind::Sequence(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Unary {
+                    op: UnaryOp::Box,
+                    ..
+                }
         ) {
             if let Some((_, Some(expected), _)) = &context {
                 let _ = self.place_construction(e, *expected);
@@ -1559,7 +1567,18 @@ impl<'a> Checker<'a> {
                 // An ownership marker passes its operand on unchanged, so a
                 // marked callback literal is still built for the parameter.
                 let marker = matches!(op, UnaryOp::Take | UnaryOp::Copy | UnaryOp::Mut);
-                self.expr(value, context.filter(|_| marker));
+                let operand_context = if op == UnaryOp::Box {
+                    context.and_then(|(capture, expected, rule)| {
+                        let owner = expected?;
+                        let TypeKind::Box(part) = self.t.get(owner)?.kind else {
+                            return None;
+                        };
+                        Some((capture, Some(self.placed_item(owner, part)), rule))
+                    })
+                } else {
+                    context.filter(|_| marker)
+                };
+                self.expr(value, operand_context);
                 used = self.used(value);
                 if inferred_box {
                     let payload = self.construction_part_type(value).unwrap();
@@ -1567,6 +1586,22 @@ impl<'a> Checker<'a> {
                     owner.kind = TypeKind::Box(payload);
                     let owner = self.intern(owner);
                     self.set_ty(e, owner);
+                }
+                if op == UnaryOp::Box {
+                    let owner = self.ty(e).unwrap();
+                    if let TypeKind::Box(part) = self.t.get(owner).unwrap().kind {
+                        let expected = self.placed_item(owner, part);
+                        let actual = self.ty(value).unwrap();
+                        self.kept(
+                            actual,
+                            expected,
+                            self.span(value),
+                            value,
+                            false,
+                            Receiving::new("the boxed payload", self.span(e)),
+                            false,
+                        );
+                    }
                 }
                 // Copies preserve provenance but counted copies lose uniqueness.
                 if matches!(op, UnaryOp::Take | UnaryOp::Copy | UnaryOp::Mut) {

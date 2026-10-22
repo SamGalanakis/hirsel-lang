@@ -169,3 +169,70 @@ fn an_arena_enters_warm() {
         );
     }
 }
+
+fn check_placement(source: &'static str, accepted: bool) {
+    with_compiler_stack(move || {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine
+            .sources
+            .add(
+                "placement.hir",
+                format!("type Tree = Leaf | Branch(left: box Tree, right: box Tree)\n{source}"),
+            )
+            .unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        if accepted {
+            assert!(
+                output.diagnostics.is_empty(),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+        } else {
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.rule.as_str() == "PROV-4"),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
+
+#[test]
+fn nested_box_payloads_keep_the_receiving_arena() {
+    for source in [
+        "fn wrap(a: Arena, take child: (box Tree) in a) -> (box (box Tree)) in a { box take child }",
+        "fn wrap(a: Arena, take child: (box Tree) in a) -> (box (box (box Tree))) in a { box (box take child) }",
+    ] {
+        check_placement(source, true);
+    }
+}
+
+#[test]
+fn nested_box_payloads_cannot_escape_to_heap_or_another_arena() {
+    for source in [
+        "fn wrap(a: Arena, take child: (box Tree) in a) -> box (box Tree) { box take child }",
+        "fn wrap(a: Arena, b: Arena, take child: (box Tree) in a) -> (box (box Tree)) in b { box take child }",
+        "fn keep(a: Arena, take xs: List[box Tree] in a) -> List[box Tree] { take xs }",
+    ] {
+        check_placement(source, false);
+    }
+}
+
+#[test]
+fn borrowed_box_payloads_may_read_arena_storage() {
+    check_placement(
+        "fn read(value: box (box Tree)) {}\nfn pass(a: Arena, value: (box (box Tree)) in a) { read(value) }",
+        true,
+    );
+}
+
+#[test]
+fn borrowed_box_payloads_still_respect_an_explicit_arena() {
+    check_placement(
+        "fn read(a: Arena, value: (box (box Tree)) in a) {}\nfn pass(a: Arena, b: Arena, value: (box (box Tree)) in b) { read(a, value) }",
+        false,
+    );
+}

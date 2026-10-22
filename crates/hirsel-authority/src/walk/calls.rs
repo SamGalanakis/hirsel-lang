@@ -1304,6 +1304,7 @@ impl Checker<'_> {
                     value: Some(arguments[i].value),
                     annotated: None,
                     argument: true,
+                    borrowed: p.passing == PassingMode::Borrow,
                     result: false,
                 });
                 let kept = p.passing != PassingMode::Take || {
