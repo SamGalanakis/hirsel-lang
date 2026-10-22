@@ -5,6 +5,9 @@
 //!
 //! Follows Go's complete action-key contract (cmd/go/internal/cache/cache.go:28)
 //! and Cranelift's parameter-free cached stencil (incremental_cache.rs:36-95).
+#[path = "import_envelope.rs"]
+mod envelope;
+
 use hirsel_lir::layout_types::TargetSpec;
 use hirsel_lir::objects::{ObjectStore, UnitKey};
 use hirsel_rc::import::{CachedImport, ImportCache};
@@ -267,20 +270,19 @@ fn key(
 fn encode(import: &CachedImport, types: &TypeInterner) -> Option<Vec<u8>> {
     let effects = canonical(types, || serde_json::to_vec(&import.effects))?;
     let layouts: Vec<ContentHash> = import.layouts.iter().map(|k| k.0).collect();
-    serde_json::to_vec(&(
-        hirsel_codec::to_text(&import.unit),
-        layouts,
-        &import.abis,
-        effects,
-    ))
-    .ok()
+    let unit = hirsel_codec::to_text(&import.unit);
+    let layouts = serde_json::to_vec(&layouts).ok()?;
+    let abis = serde_json::to_vec(&import.abis).ok()?;
+    envelope::encode([unit.as_bytes(), &layouts, &abis, &effects])
 }
 
 fn decode(bytes: &[u8], types: &TypeInterner) -> Option<CachedImport> {
-    let (unit, layouts, abis, effects): (String, Vec<ContentHash>, Vec<ContentHash>, Vec<u8>) =
-        serde_json::from_slice(bytes).ok()?;
+    let [unit, layouts, abis, effects] = envelope::decode(bytes)?;
+    let unit = std::str::from_utf8(unit).ok()?;
+    let layouts: Vec<ContentHash> = serde_json::from_slice(layouts).ok()?;
+    let abis = serde_json::from_slice(abis).ok()?;
     let (table, value): (hirsel_types::TypeTable, Vec<u8>) =
-        serde_json::from_slice(&effects).ok()?;
+        serde_json::from_slice(effects).ok()?;
     let ids = hirsel_types::decode_table(types, &table);
     let effects =
         hirsel_types::with_table_decoding(&ids, || serde_json::from_slice(&value)).ok()?;
@@ -290,7 +292,7 @@ fn decode(bytes: &[u8], types: &TypeInterner) -> Option<CachedImport> {
         unit.len() as u64,
     );
     Some(CachedImport {
-        unit: hirsel_codec::from_text(&unit).ok()?,
+        unit: hirsel_codec::from_text(unit).ok()?,
         layouts: layouts.into_iter().map(hirsel_lir::LayoutKey).collect(),
         abis,
         effects,
@@ -352,6 +354,143 @@ mod tests {
         let input = engine.export_native_input().unwrap();
         let validated = engine.import_native_input(input).unwrap();
         super::super::adapt::program(&validated)
+    }
+
+    #[test]
+    fn native_import_envelope_11_roundtrips_effects_across_shifted_type_ids() {
+        hirsel_engine::with_compiler_stack(|| {
+            #[derive(Default)]
+            struct Capture(Vec<CachedImport>);
+            impl ImportCache for Capture {
+                fn get(
+                    &mut self,
+                    _: &Program,
+                    _: &Instances,
+                    _: InstanceId,
+                ) -> Option<CachedImport> {
+                    None
+                }
+                fn put(&mut self, _: InstanceId, value: Result<CachedImport, String>) {
+                    self.0.push(value.unwrap());
+                }
+            }
+            let donor = program(
+                "type P { n:u64 }\nfn keep(x:List[P])->List[P] in x { x }\nfn main()->u64 { let xs=keep([P(n:3u64)]); xs[0u64].n }",
+            );
+            let target = TargetSpec::x86_64_unknown_linux_gnu();
+            let mut capture = Capture::default();
+            hirsel_rc::import::lower_cached(
+                &donor,
+                &target,
+                &Default::default(),
+                &Default::default(),
+                &mut capture,
+            )
+            .unwrap();
+            let consumer = TypeInterner::new(None);
+            for size in 0..128 {
+                consumer.intern(hirsel_types::Type::with_kind(TypeKind::Tuple(
+                    vec![consumer.intern(hirsel_types::Type::boolean()); size].into(),
+                )));
+            }
+            let mut shifted = false;
+            assert!(!capture.0.is_empty());
+            for import in capture.0 {
+                let bytes = encode(&import, &donor.types).unwrap();
+                let decoded = decode(&bytes, &consumer).unwrap();
+                assert_eq!(encode(&decoded, &consumer).unwrap(), bytes);
+                assert_eq!(decoded.unit, import.unit);
+                assert_eq!(decoded.layouts, import.layouts);
+                assert_eq!(decoded.abis, import.abis);
+                let (_, before) =
+                    hirsel_types::with_table_collection(|| serde_json::to_vec(&import.effects));
+                let (_, after) =
+                    hirsel_types::with_table_collection(|| serde_json::to_vec(&decoded.effects));
+                shifted |= before != after && !before.is_empty();
+                assert_eq!(
+                    canonical(&consumer, || serde_json::to_vec(&decoded.effects)),
+                    canonical(&donor.types, || serde_json::to_vec(&import.effects))
+                );
+                let legacy = serde_json::to_vec(&(
+                    hirsel_codec::to_text(&import.unit),
+                    &import.layouts.iter().map(|k| k.0).collect::<Vec<_>>(),
+                    &import.abis,
+                    canonical(&donor.types, || serde_json::to_vec(&import.effects)).unwrap(),
+                ))
+                .unwrap();
+                assert!(decode(&legacy, &consumer).is_none());
+            }
+            assert!(shifted, "the roundtrip must actually remap effect TypeIds");
+        });
+    }
+
+    #[test]
+    fn native_import_envelope_11_corruption_misses_then_overwrites_and_reopens() {
+        hirsel_engine::with_compiler_stack(|| {
+            #[derive(Default)]
+            struct Store(std::sync::Mutex<BTreeMap<UnitKey, Arc<[u8]>>>);
+            impl ObjectStore for Store {
+                fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+                    self.0.lock().unwrap().get(key).cloned()
+                }
+                fn put(&self, key: &UnitKey, bytes: &[u8]) {
+                    self.0.lock().unwrap().insert(*key, bytes.into());
+                }
+            }
+            let source = "type P { n:u64 }\nfn helper(x:P)->u64 { x.n + 1u64 }\nfn main()->u64 { helper(P(n:3u64)) }";
+            let target = TargetSpec::x86_64_unknown_linux_gnu();
+            let store = Store::default();
+            let run = |program: &Program| {
+                let mut cache = Imports::new(&store, &target, program.types.clone(), false);
+                let cached = hirsel_rc::import::lower_cached(
+                    program,
+                    &target,
+                    &Default::default(),
+                    &Default::default(),
+                    &mut cache,
+                )
+                .unwrap();
+                let fresh = hirsel_rc::import::lower(program, &target).unwrap();
+                assert_eq!(cached.units, fresh.units);
+                assert_eq!(
+                    hirsel_codec::to_text(&cached.table),
+                    hirsel_codec::to_text(&fresh.table)
+                );
+                (cache.hits, cache.misses)
+            };
+            assert!(run(&program(source)).1 > 0);
+            let original = store.0.lock().unwrap().clone();
+            assert!(!original.is_empty());
+            for kind in 0..6 {
+                let mut damaged = original.clone();
+                for bytes in damaged.values_mut() {
+                    let mut corrupt = bytes.to_vec();
+                    match kind {
+                        0 => corrupt = br#"["legacy",[],[],[]]"#.to_vec(),
+                        1 => corrupt[6] += 1,
+                        2 => {
+                            corrupt.pop();
+                        }
+                        3 => corrupt.push(0),
+                        4 => corrupt[8] = 3,
+                        _ => {
+                            let [unit, layouts, abis, effects] = envelope::decode(bytes).unwrap();
+                            corrupt = envelope::encode([effects, layouts, abis, unit]).unwrap();
+                        }
+                    }
+                    assert!(
+                        decode(&corrupt, &TypeInterner::new(None)).is_none(),
+                        "damage {kind}"
+                    );
+                    *bytes = corrupt.into();
+                }
+                *store.0.lock().unwrap() = damaged;
+                assert_eq!(run(&program(source)), (0, original.len()));
+                // A fresh cache handle sees only the complete replacements, as in
+                // Go cache_test.go:22-61's overwrite/reopen vectors.
+                assert_eq!(run(&program(source)), (original.len(), 0));
+            }
+        });
     }
 
     #[test]
