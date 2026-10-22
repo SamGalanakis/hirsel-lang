@@ -536,3 +536,87 @@ fn zero_size_sites_keep_exact_existing_lowering() {
         assert_eq!(observed.counters.releases, 0);
     }
 }
+
+#[test]
+fn nested_duplicate_specializations_keep_their_callable_proof_owner() {
+    for (source, noalloc) in [
+        (
+            "fn invoke(f:fn()->u64 uses {})->u64 uses {f}{f()}\n\
+             fn main()->u64{let n=3u64;let f=fn()->u64 uses {}{invoke(fn()->u64 uses {}{n})};invoke(f)+invoke(f)}",
+            false,
+        ),
+        (
+            "@noalloc fn invoke(f:@noalloc fn()->u64 uses {})->u64 uses {f}{f()}\n\
+             @noalloc fn value(n:u64)->u64{invoke(fn()->u64 uses {}{n})}\n\
+             fn main()->u64{value(6u64)}",
+            true,
+        ),
+    ] {
+        let (_, lowered) = lower_valid(source);
+        assert!(lowered.units.len() > lowered.instances.len());
+        assert_eq!(lowered.units.len(), lowered.unit_origins.len());
+        let mut specialized_invoke = 0;
+        let mut identities = std::collections::BTreeSet::new();
+        for (i, (unit, &origin)) in lowered.units.iter().zip(&lowered.unit_origins).enumerate() {
+            assert!(identities.insert((unit.header.definition.clone(), unit.header.instance)));
+            assert_eq!(
+                unit.header.definition,
+                *lowered.instances.view(origin).key.definition()
+            );
+            if unit.header.definition.0.name == "invoke" {
+                assert_eq!(
+                    hirsel_rc::placement::noalloc(&lowered.instances, origin),
+                    noalloc
+                );
+                assert_eq!(
+                    hirsel_rc::insert::Proofs::for_instance(&lowered.instances, origin).noalloc,
+                    noalloc
+                );
+                specialized_invoke += usize::from(i >= lowered.instances.len());
+            }
+        }
+        assert!(specialized_invoke > 0);
+        if !noalloc {
+            let main = lowered
+                .units
+                .iter()
+                .find(|u| u.header.definition.0.name == "main")
+                .unwrap();
+            let targets: Vec<_> = main
+                .tables
+                .calls
+                .iter()
+                .filter_map(|call| {
+                    let hirsel_lir::ir::Callee::Direct(symbol) = call.callee else {
+                        return None;
+                    };
+                    let symbol = &main.tables.symbols[symbol.index()];
+                    (symbol.definition.0.name == "invoke").then_some(symbol.instance)
+                })
+                .collect();
+            assert_eq!(targets.len(), 2);
+            assert_eq!(
+                targets[0], targets[1],
+                "duplicate sites reuse their content-named body"
+            );
+        }
+        let after = run(source, true);
+        let audit = after.result.unwrap();
+        assert!(matches!(
+            audit.observation.returned,
+            Some(hirsel_heapcheck::Observed::Integer { bits: 6, .. })
+        ));
+    }
+}
+
+#[test]
+fn specialization_cannot_grant_noalloc_to_an_allocating_callback() {
+    let rejected = try_compile(
+        "@noalloc fn invoke(f:@noalloc fn()->u64 uses {})->u64 uses {f}{f()}\n\
+         fn allocating()->u64{3u64}\n\
+         fn main()->u64{invoke(allocating)}",
+    )
+    .err()
+    .expect("an allocating declaration cannot satisfy a noalloc callback contract");
+    assert!(rejected.contains("MEM-5"), "{rejected}");
+}

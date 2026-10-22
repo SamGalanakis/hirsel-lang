@@ -223,6 +223,16 @@ impl Instances {
     pub fn view(&self, id: InstanceId) -> &InstanceView {
         &self.views[id.index()]
     }
+    /// Source callable of a proof owner, never an appended Value-unit index.
+    pub(crate) fn callable(&self, id: InstanceId) -> &FunctionType {
+        match self.types.get(self.callables[id.index()]) {
+            Some(Type {
+                kind: TypeKind::Function(f),
+                ..
+            }) => f,
+            _ => panic!("instance {id:?} has no callable Function row"),
+        }
+    }
     pub fn ids(&self) -> impl Iterator<Item = InstanceId> + '_ {
         (0..self.views.len() as u32).map(InstanceId)
     }

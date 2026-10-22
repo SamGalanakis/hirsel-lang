@@ -32,7 +32,7 @@ use hirsel_lir::ir::{
 };
 use hirsel_lir::layout_types::{LayoutKind, LayoutTable, StorageKind};
 use hirsel_lir::stage::{Placed, Value};
-use hirsel_types::{Allocation, TypeKind};
+use hirsel_types::Allocation;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The single executing task's heap domain (M1b is single-task).
@@ -61,11 +61,7 @@ impl Options {
 
 /// Whether an instance's callable type declares `noalloc`.
 pub fn noalloc(instances: &Instances, id: InstanceId) -> bool {
-    let store = &*instances.types;
-    matches!(
-        store.get(instances.callables[id.index()]).map(|t| &t.kind),
-        Some(TypeKind::Function(f)) if f.allocation == Allocation::NoAlloc
-    )
+    instances.callable(id).allocation == Allocation::NoAlloc
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

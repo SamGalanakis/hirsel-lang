@@ -102,7 +102,9 @@ pub struct Lowered {
     pub table: LayoutTable,
     /// The static data of every constant a unit reads (`ReadStatic`).
     pub statics: Vec<hirsel_lir::statics::StaticData>,
-    /// Signature/placement proof owner of every unit, including specializations.
+    /// Original signature/placement proof owner of every unit. Specialization
+    /// appends Value units without adding source instances: a unit index must
+    /// be mapped through this table before indexing `instances`.
     pub unit_origins: Vec<InstanceId>,
     /// Explicit semantic owner of each native definition. None denotes a planned
     /// library body covered by the shared runtime node in ProgramRevision.
@@ -461,6 +463,7 @@ pub fn lower_cached(
         target,
         cache.scoped_specialization(),
     );
+    specialized.assert_origins(&lowered);
     lowered.unit_origins = specialized.origins;
     lowered.inline_instances = specialized.inline;
     crate::arena_credit::summarize(&mut lowered.units, &mut lowered.table);

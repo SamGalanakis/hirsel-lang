@@ -8,7 +8,7 @@ use hirsel_lir::ir::LirUnit;
 use hirsel_lir::stage::{Rc, Stage};
 use hirsel_lir::validate::Inputs;
 use hirsel_rc::insert::Proofs;
-use hirsel_rc::instance::{InstanceId, Program};
+use hirsel_rc::instance::Program;
 use hirsel_rc::placement::Options;
 use support::*;
 
@@ -70,20 +70,20 @@ fn check_stage<S: Stage>(
 fn build(source: &str, mode: Mode) -> Built {
     let (program, lowered) = lower_valid(source);
     let table = lowered.table.clone();
+    assert_eq!(lowered.units.len(), lowered.unit_origins.len());
     let placed: Vec<_> = lowered
         .units
         .into_iter()
-        .enumerate()
-        .map(|(i, u)| {
-            let options =
-                Options::for_instance(mode.regions, &lowered.instances, InstanceId(i as u32));
+        .zip(&lowered.unit_origins)
+        .map(|(u, &origin)| {
+            let options = Options::for_instance(mode.regions, &lowered.instances, origin);
             hirsel_rc::placement::place(u, &table, &options).expect("placement")
         })
         .collect();
     check_stage(&program, &table, &placed, source);
     let mut rc = Vec::new();
-    for (i, u) in placed.iter().enumerate() {
-        let proofs = Proofs::for_instance(&lowered.instances, InstanceId(i as u32));
+    for (u, &origin) in placed.iter().zip(&lowered.unit_origins) {
+        let proofs = Proofs::for_instance(&lowered.instances, origin);
         let mut r = hirsel_rc::insert::insert(u.clone(), &table, &proofs).expect("insertion");
         if mode.optimize {
             r = hirsel_rc::elide::elide(r, &table).expect("elision");
@@ -376,7 +376,7 @@ fn elision_leaves_an_insertion_fault_to_the_rc_validator() {
         .iter()
         .position(|u| u.header.definition.0.name == "main")
         .unwrap();
-    let instance = InstanceId(m as u32);
+    let instance = lowered.unit_origins[m];
     let options = Options::for_instance(false, &lowered.instances, instance);
     let placed =
         hirsel_rc::placement::place(lowered.units[m].clone(), &table, &options).expect("placement");
@@ -765,10 +765,18 @@ fn proven_unique_storage_is_written_in_place() {
 /// A closure capturing a holder by borrow (fix2's environment shape).
 #[test]
 fn a_borrowed_capture_leaves_its_holder_to_the_frame() {
-    returns(
-        "fn main() -> u64 { let t: box P = box P(a: 1, b: 2); let c = fn() -> u64 { let u = copy t; 4 }; c() }",
-        4,
+    let source = format!(
+        "{P}fn main() -> u64 {{ let t: box P = box P(a: 1, b: 2); let c = fn() -> u64 {{ let u = copy t; 4 }}; c() }}"
     );
+    for regions in [true, false] {
+        for optimize in [true, false] {
+            let built = build(&source, Mode { regions, optimize });
+            let run = execute(&built);
+            let audit = run.result.expect("holder cleanup ledger");
+            assert_eq!(returned_u64(&audit.observation), 4);
+            assert_eq!(run.counters.allocations, run.counters.frees);
+        }
+    }
 }
 
 /// Copy on write detaches only the written block (OWN-4: "First mutation of

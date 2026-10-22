@@ -184,6 +184,30 @@ pub struct Specializations {
     pub inline: BTreeSet<ContentHash>,
 }
 
+impl Specializations {
+    /// Specializations append Value bodies, not source instances. Every body
+    /// must retain an original callable/placement proof owner before import
+    /// publishes the lowering to placement and insertion.
+    pub(crate) fn assert_origins(&self, lowered: &Lowered) {
+        let instances = &lowered.instances;
+        let n = instances.len();
+        assert_eq!(instances.roles.len(), n);
+        assert_eq!(instances.callables.len(), n);
+        assert_eq!(instances.abis.len(), n);
+        assert_eq!(instances.actuals.len(), n);
+        assert_eq!(instances.environments.len(), n);
+        assert_eq!(self.origins.len(), lowered.units.len());
+        for (unit, &origin) in lowered.units.iter().zip(&self.origins) {
+            let view = instances.view(origin);
+            instances.callable(origin);
+            assert_eq!(&unit.header.definition, view.key.definition());
+        }
+        for id in instances.ids() {
+            assert_eq!(self.origins[id.index()], id);
+        }
+    }
+}
+
 pub fn specialize_scoped(
     lowered: &mut Lowered,
     program: &crate::instance::Program,

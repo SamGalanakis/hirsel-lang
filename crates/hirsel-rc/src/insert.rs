@@ -73,11 +73,7 @@ impl Proofs {
         id: crate::instance::InstanceId,
     ) -> Self {
         let store = &*instances.types;
-        let Some(hirsel_types::TypeKind::Function(f)) =
-            store.get(instances.callables[id.index()]).map(|t| &t.kind)
-        else {
-            return Self::default();
-        };
+        let f = instances.callable(id);
         Self {
             noalloc: f.allocation == hirsel_types::Allocation::NoAlloc,
             unique: f
