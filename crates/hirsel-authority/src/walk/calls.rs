@@ -2504,6 +2504,7 @@ impl Checker<'_> {
                 self.set_ty(e, root);
             }
         }
+        self.construction_destination(e);
         let Some(mut fields) = self.constructor_fields(e, root) else {
             return false;
         };
@@ -2574,8 +2575,11 @@ impl Checker<'_> {
             }
         }
         let mut row = self.t.get(root).unwrap().clone();
-        if self.placement(&row.modes.relation).is_global() && !parts.is_global() {
-            row.modes.relation = row.modes.relation.union(&parts);
+        let relation = row.modes.relation.union(&parts);
+        if relation != row.modes.relation {
+            // PROV-4: the destination arena and all held parts bound the
+            // constructed value, even when the destination already names one.
+            row.modes.relation = relation;
             root = self.intern(row);
             self.set_ty(e, root);
             let Some(placed) = self.constructor_fields(e, root) else {

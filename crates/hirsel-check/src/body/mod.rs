@@ -910,6 +910,7 @@ impl Checker<'_, '_> {
             .entry(id)
             .or_insert(self.body.expressions.len());
         self.body.expressions.push(Elaboration {
+            construction_destination: None,
             expression: id,
             ty,
             usage,

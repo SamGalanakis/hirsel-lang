@@ -8,6 +8,35 @@ use hirsel_types::{
 };
 
 impl Builder<'_, '_> {
+    fn construction_destination(
+        &self,
+        id: ExprId,
+        ty: TypeId,
+    ) -> Result<hirsel_types::Destination> {
+        match &self.decision(id)?.construction_destination {
+            Some(hirsel_types::Destination::Inferred) => Ok(self.row_destination(ty)),
+            Some(destination) => Ok(destination.clone()),
+            None => {
+                if self
+                    .types
+                    .get(ty)
+                    .unwrap()
+                    .modes
+                    .relation
+                    .arenas(|o| self.arena_place(o))
+                    .len()
+                    > 1
+                {
+                    return self.error(
+                        self.span(id)?,
+                        "missing construction destination for multiple arenas",
+                    );
+                }
+                Ok(self.row_destination(ty))
+            }
+        }
+    }
+
     pub(super) fn source_place(&self, id: ExprId) -> Result<hirsel_types::SourcePlace> {
         self.decisions
             .places
@@ -303,7 +332,7 @@ impl Builder<'_, '_> {
                                 variant: variant.0,
                             },
                             fields: vec![],
-                            destination: self.row_destination(row.ty),
+                            destination: self.construction_destination(id, row.ty)?,
                         },
                         span,
                     )
@@ -313,7 +342,7 @@ impl Builder<'_, '_> {
                         Rvalue::Construct {
                             constructor: Constructor::Record(path),
                             fields: vec![],
-                            destination: self.row_destination(row.ty),
+                            destination: self.construction_destination(id, row.ty)?,
                         },
                         span,
                     )
@@ -433,7 +462,7 @@ impl Builder<'_, '_> {
                         Constructor::Tuple
                     },
                     fields,
-                    destination: self.row_destination(row.ty),
+                    destination: self.construction_destination(id, row.ty)?,
                 };
                 self.construct(row.ty, rv, span)
             }
@@ -528,7 +557,7 @@ impl Builder<'_, '_> {
                                     usage: value.usage,
                                 },
                             }],
-                            destination: self.row_destination(row.ty),
+                            destination: self.construction_destination(id, row.ty)?,
                         };
                         self.construct(row.ty, rv, span)
                     }
@@ -1439,10 +1468,11 @@ impl Builder<'_, '_> {
                     (Constructor::SortedMap { by }, vec![])
                 }
             };
+            let destination = self.construction_destination(id, ty)?;
             let rv = Rvalue::Construct {
                 constructor,
                 fields,
-                destination: self.row_destination(ty),
+                destination,
             };
             return Ok(Some(self.construct(ty, rv, span)));
         }

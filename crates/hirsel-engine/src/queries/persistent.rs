@@ -1032,6 +1032,7 @@ mod malformed_tests {
             patterns: vec![],
             resolution: Default::default(),
             expressions: vec![hirsel_types::Elaboration {
+                construction_destination: None,
                 expression: hirsel_syntax::ExprId(0),
                 ty: boolean,
                 usage: hirsel_types::UseKind::Copy,

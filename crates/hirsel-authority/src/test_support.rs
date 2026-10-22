@@ -177,6 +177,7 @@ impl Fixture {
             origin: node_origin(100 + id.0 * 10),
         });
         self.body.expressions.push(Elaboration {
+            construction_destination: None,
             expression: id,
             ty,
             usage: UseKind::Borrow,

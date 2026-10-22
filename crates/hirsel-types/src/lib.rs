@@ -907,6 +907,9 @@ pub struct OwnershipFacts {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Elaboration {
     pub expression: ExprId,
+    /// Fresh storage selected before held-part placement enriches the row (PROV-4).
+    #[serde(default)]
+    pub construction_destination: Option<Destination>,
     pub ty: TypeId,
     pub usage: UseKind,
     pub instantiated_arguments: Vec<GenericArgument>,

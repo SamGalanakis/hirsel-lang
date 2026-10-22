@@ -179,6 +179,7 @@ impl Fixture {
             kind,
         });
         self.body.expressions.push(Elaboration {
+            construction_destination: None,
             expression: id,
             ty,
             usage: UseKind::Borrow,

@@ -1390,6 +1390,7 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(id, _)| Elaboration {
+                        construction_destination: None,
                         expression: hirsel_syntax::ExprId(id as u32),
                         ty: unit,
                         usage: UseKind::Take,

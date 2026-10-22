@@ -2723,6 +2723,29 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn constructor_placement(&mut self, ty: TypeId, destination: &Destination) {
+        // PROV-4: a constructed value carries its parts' placement as well
+        // as its fresh blocks' arena. The full relation is a set, so its
+        // first arena is not an allocation decision. Fields and their held
+        // bounds are independently checked below and by receipt flow.
+        let relation = &self.t.get(ty).unwrap().modes.relation;
+        let valid = match self.row_destination(ty) {
+            Destination::Arena(_) => matches!(destination,
+                Destination::Arena(arena) if self.arena_place(arena)
+                    && relation.reaches().contains(&Reach::Place(arena.clone()))),
+            Destination::Region(region) => *destination == Destination::Region(region),
+            _ => {
+                self.construction_placement(ty, destination, "constructor placement");
+                return;
+            }
+        };
+        if !valid {
+            self.error(ViolationKind::TypeMismatch {
+                entity: "constructor placement",
+            });
+        }
+    }
+
     fn rvalue_type(&mut self, destination: PlaceId, r: &Rvalue) {
         self.construction_effects(destination, r);
         let ty = self.place_type(destination);
@@ -3073,7 +3096,7 @@ impl<'a> Checker<'a> {
                 fields,
                 destination: placement,
             } => {
-                self.construction_placement(ty, placement, "constructor placement");
+                self.constructor_placement(ty, placement);
                 let witness;
                 let fields = if let Constructor::SortedMap { by } = constructor {
                     if !fields.is_empty() || by.usage != UseKind::Borrow {

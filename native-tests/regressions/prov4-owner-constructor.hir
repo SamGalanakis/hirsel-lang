@@ -1,0 +1,30 @@
+// rule: PROV-4
+// expect: run
+// v22 R3. Relating the view to selected as well admits everything selected
+// holds, while fresh blocks still go to a.
+type View {
+  bytes: Bytes,
+}
+
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn good(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) {
+  let selected = choose(a, b, x, y)
+  let _: View in {a, selected} = View(bytes: selected)
+}
+
+fn inside(a: Arena, b: Arena) -> u64 {
+  let x: Bytes in a = b"x"
+  let y: Bytes in b = b"yy"
+  good(a, b, x, y)
+  bytes.len(x) + bytes.len(y)
+}
+
+pub fn main() -> Result[(), ()] {
+  let n: u64 = arena.with(fn(a: Arena) -> u64 {
+    arena.with(fn(b: Arena) -> u64 { inside(a, b) })
+  })
+  if n == 3 { Ok(()) } else { Error(()) }
+}

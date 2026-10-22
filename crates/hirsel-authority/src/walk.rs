@@ -724,6 +724,21 @@ impl<'a> Checker<'a> {
             self.out.body.expressions[i].ty = ty
         }
     }
+    /// Preserve a construction's chosen storage before joining its parts.
+    fn construction_destination(&mut self, e: ExprId) {
+        let Some(ty) = self.ty(e) else { return };
+        let destination = if self.property(ty, Bound::Plain) {
+            // Plain values have no fresh blocks; written placement is inert.
+            Destination::Inferred
+        } else {
+            destination(&self.t.get(ty).unwrap().modes.relation, |o| {
+                self.arena_place(o)
+            })
+        };
+        if let Some(index) = self.elaborations.get(&e).copied() {
+            self.out.body.expressions[index].construction_destination = Some(destination);
+        }
+    }
     /// A fresh or explicitly detached value owns its blocks alone. Plain bits
     /// own none: their rows keep the one canonical spelling.
     fn set_unique(&mut self, e: ExprId) {
@@ -1127,6 +1142,17 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+        }
+        if matches!(
+            kind,
+            ExprKind::Sequence(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Unary {
+                    op: UnaryOp::Box,
+                    ..
+                }
+        ) {
+            self.construction_destination(e);
         }
         match kind {
             ExprKind::Block {
@@ -1943,6 +1969,23 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         if let Some(parts) = constructed_parts {
+            // PROV-4: carry payload placement at every enclosing depth so
+            // capture rows and structural comparisons see the same owner.
+            if let Some(root) = self.ty(e) {
+                let mut row = self.t.get(root).unwrap().clone();
+                for part in &parts {
+                    if let Some(ty) = self.ty(*part) {
+                        if !self.property(ty, Bound::Plain) {
+                            row.modes.relation = row
+                                .modes
+                                .relation
+                                .union(&self.placement(&self.t.get(ty).unwrap().modes.relation));
+                        }
+                    }
+                }
+                let root = self.intern(row);
+                self.set_ty(e, root);
+            }
             self.construction_sendability(e, &parts);
         }
         if matches!(
