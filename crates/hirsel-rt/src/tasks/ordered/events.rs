@@ -157,6 +157,10 @@ pub(super) enum CanonicalOutcome {
         expired: bool,
         failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
     },
+    BulkDetaching {
+        members: Vec<ObjectId>,
+    },
+    DetachSkipped,
     Detached,
     Joining,
     Joined {
@@ -224,6 +228,13 @@ pub(super) struct TaskResult {
     pub payload: Option<Vec<u8>>,
 }
 
+struct BulkDetachEvidence {
+    set: ObjectId,
+    members: Vec<ObjectId>,
+    ordinal: u64,
+    next: usize,
+}
+
 struct ScopeExitEvidence {
     scope: ObjectId,
     members: Vec<ObjectId>,
@@ -246,6 +257,8 @@ pub(super) struct Log {
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
     joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
     scope_exits: BTreeMap<Vec<u32>, ScopeExitEvidence>,
+    bulk_detaches: BTreeMap<Vec<u32>, BulkDetachEvidence>,
+    current_retirement: u64,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -361,7 +374,11 @@ impl Log {
 
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
-        if self.unsupported.is_empty() && self.joins.is_empty() && self.scope_exits.is_empty() {
+        if self.unsupported.is_empty()
+            && self.joins.is_empty()
+            && self.scope_exits.is_empty()
+            && self.bulk_detaches.is_empty()
+        {
             Ok(&self.canonical)
         } else {
             Err(&self.unsupported)
@@ -738,6 +755,141 @@ pub(super) fn detach_observed(
         ),
         (CanonicalItem::Object(child), CanonicalOutcome::Detached),
     ])
+}
+
+/// A bulk command commits only at the head. Capture its add-order members
+/// before the first called rest can mutate or retire another native row.
+pub(super) fn begin_bulk_detach(
+    s: &mut super::super::Scheduler,
+    caller: TaskId,
+    scope_word: u64,
+    set_word: u64,
+    words: &[u64],
+) -> Option<Subevents> {
+    if !enabled(s) {
+        return None;
+    }
+    let path = s.task(caller as u32).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let scope = log.scopes.get(&scope_word)?.clone();
+    let set = log.sets.get(&set_word)?.clone();
+    let members = words
+        .iter()
+        .map(|word| log.tasks.get(word).cloned())
+        .collect::<Option<Vec<_>>>()?;
+    let ordinal = log.ordinals.get(&path).copied().unwrap_or(0);
+    assert!(
+        log.bulk_detaches
+            .insert(
+                path,
+                BulkDetachEvidence {
+                    set: set.clone(),
+                    members: members.clone(),
+                    ordinal,
+                    next: 0
+                }
+            )
+            .is_none()
+    );
+    Some(vec![
+        (
+            CanonicalItem::Object(scope),
+            CanonicalOutcome::Alias(set.clone()),
+        ),
+        (
+            CanonicalItem::Object(set),
+            CanonicalOutcome::BulkDetaching { members },
+        ),
+    ])
+}
+
+/// Called by the actual bounded member effect, including inert members that
+/// an earlier called rest already retired. No parked context is consulted.
+pub(super) fn bulk_detach_member(
+    s: &mut super::super::Scheduler,
+    caller: TaskId,
+    word: u64,
+    applied: bool,
+) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(caller as u32).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let Some(pending) = log.bulk_detaches.get_mut(&path) else {
+        return;
+    };
+    let child = log
+        .tasks
+        .get(&word)
+        .expect("retained bulk member identity")
+        .clone();
+    assert_eq!(
+        pending.members.get(pending.next),
+        Some(&child),
+        "bulk effects follow add order"
+    );
+    pending.next += 1;
+    let boundary = Boundary {
+        task: path,
+        ordinal: pending.ordinal,
+        op: None,
+        transition: Transition::Keep,
+        retirement: log.current_retirement,
+        before,
+        credit: 0,
+        native_outcome: None,
+    };
+    log.subevents(
+        &boundary,
+        "task.detach_all",
+        vec![(
+            CanonicalItem::Object(child),
+            if applied {
+                CanonicalOutcome::Detached
+            } else {
+                CanonicalOutcome::DetachSkipped
+            },
+        )],
+    );
+}
+
+pub(super) fn complete_bulk_detach(s: &mut super::super::Scheduler, caller: TaskId) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(caller as u32).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let Some(pending) = log.bulk_detaches.remove(&path) else {
+        return;
+    };
+    assert_eq!(pending.next, pending.members.len());
+    let boundary = Boundary {
+        task: path,
+        ordinal: pending.ordinal,
+        op: None,
+        transition: Transition::Keep,
+        retirement: log.current_retirement,
+        before,
+        credit: 0,
+        native_outcome: None,
+    };
+    log.subevents(
+        &boundary,
+        "task.detach_all",
+        vec![(CanonicalItem::Object(pending.set), CanonicalOutcome::Unit)],
+    );
 }
 
 /// Retain scope membership in spawn order before saved waits and reverse
@@ -1368,6 +1520,7 @@ pub(super) fn record(
         unreachable!()
     };
     let log = driver.events.as_mut().unwrap();
+    log.current_retirement = retirement.index;
     let next = log.ordinals.entry(path.clone()).or_default();
     let ordinal = if let Some((op, _)) = operation {
         let ordinal = *next;
@@ -3535,6 +3688,225 @@ mod tests {
                         assert_eq!(&rows, reference);
                     } else {
                         reference = Some(rows);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_detach_events_follow_add_order_through_yielding_rests_and_empty_sets() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 32,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let image = crate::Layout {
+            size: 16,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &image];
+        for count in [0usize, 2] {
+            for running in [false, true] {
+                let mut reference = None;
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let cleanup = Arc::new(Mutex::new(Vec::<u64>::new()));
+                        let order = cleanup.clone();
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = layouts.as_ptr();
+                        run.config.layout_count = 2;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy = Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                enable(ctx);
+                                install_value(ctx, 3, received_integer_program());
+                            },
+                            move |ctx| unsafe {
+                                let mut scope = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_enter(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut scope,
+                                        &0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut children = [0; 2];
+                                for (index, child) in children.iter_mut().enumerate().take(count) {
+                                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                                        ctx,
+                                        2,
+                                        32,
+                                        8,
+                                        crate::alloc::DOMAIN_HEAP,
+                                        0,
+                                    );
+                                    crate::alloc::payload(env).cast::<[u64; 4]>().write([
+                                        Arc::as_ptr(&order) as u64,
+                                        index as u64,
+                                        u64::from(running),
+                                        0,
+                                    ]);
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_spawn(
+                                            ctx,
+                                            0,
+                                            0,
+                                            std::ptr::null_mut(),
+                                            child,
+                                            &scope,
+                                            scope_trace_child,
+                                            env,
+                                            0
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                let mut set = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_set(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut set,
+                                        &scope
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                for member in (0..count).rev() {
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_add(
+                                            ctx,
+                                            &scope,
+                                            &mut set,
+                                            &mut children[member]
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                assert_eq!(
+                                    hirsel_rt_v2_task_detach_all(ctx, &scope, &mut set),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                                    crate::STATUS_OK
+                                );
+                                let cleaned = order.lock().unwrap();
+                                if count == 0 {
+                                    assert!(cleaned.is_empty());
+                                } else if running {
+                                    let mut members = cleaned.clone();
+                                    members.sort_unstable();
+                                    assert_eq!(members, [0, 1]);
+                                } else {
+                                    assert_eq!(*cleaned, [1, 0]);
+                                }
+                                drop(cleaned);
+                                let _role = role::Guard::new(ctx);
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| row.op == "task.detach_all")
+                                    .cloned()
+                                    .collect();
+                                assert_eq!(rows.len(), count + 3);
+                                let ordinal = 2 + 2 * count as u64;
+                                assert!(
+                                    rows.iter()
+                                        .all(|row| row.task.is_empty() && row.ordinal == ordinal)
+                                );
+                                for (index, row) in rows.iter().enumerate() {
+                                    assert_eq!(row.subevent as usize, index);
+                                }
+                                let set_id = ObjectId {
+                                    creator: vec![],
+                                    ordinal: 1 + count as u64,
+                                };
+                                assert_eq!(
+                                    rows[0].outcome,
+                                    CanonicalOutcome::Alias(set_id.clone())
+                                );
+                                assert_eq!(rows[1].item, CanonicalItem::Object(set_id.clone()));
+                                let members: Vec<_> = (0..count)
+                                    .rev()
+                                    .map(|index| ObjectId {
+                                        creator: vec![],
+                                        ordinal: 1 + index as u64,
+                                    })
+                                    .collect();
+                                assert_eq!(
+                                    rows[1].outcome,
+                                    CanonicalOutcome::BulkDetaching {
+                                        members: members.clone()
+                                    }
+                                );
+                                assert_eq!(
+                                    rows[1].transition,
+                                    Transition::Call {
+                                        members: (0..count)
+                                            .rev()
+                                            .map(|index| vec![index as u32])
+                                            .collect(),
+                                        then_yield: true
+                                    }
+                                );
+                                for (index, member) in members.iter().enumerate() {
+                                    assert_eq!(
+                                        rows[2 + index].item,
+                                        CanonicalItem::Object(member.clone())
+                                    );
+                                    assert_eq!(rows[2 + index].outcome, CanonicalOutcome::Detached);
+                                    assert_eq!(rows[2 + index].transition, Transition::Keep);
+                                }
+                                assert_eq!(
+                                    rows.last().unwrap().item,
+                                    CanonicalItem::Object(set_id)
+                                );
+                                assert_eq!(rows.last().unwrap().outcome, CanonicalOutcome::Unit);
+                                assert_eq!(rows.last().unwrap().transition, Transition::Keep);
+                                assert_eq!(rows.last().unwrap().version, 3 + count as u64);
+                                assert!(log.bulk_detaches.is_empty());
+                                assert!(
+                                    log.unsupported
+                                        .iter()
+                                        .all(|row| row.op != Some("task.detach_all"))
+                                );
+                                assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
+                                *seen.lock().unwrap() = rows;
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
                     }
                 }
             }

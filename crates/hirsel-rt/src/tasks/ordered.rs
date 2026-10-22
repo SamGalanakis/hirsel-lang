@@ -328,14 +328,18 @@ impl Backend<Command> for Objects<'_> {
                 Command::PlainClose { .. } => unreachable!("cleanup owns no scheduler borrow"),
                 Command::TaskDetachAll { scope, set } => {
                     assert!(!early, "bulk detach only retires");
-                    let scope = s.scope_handle(*scope);
+                    let scope_word = *scope;
+                    let set_word = *set;
+                    let scope = s.scope_handle(scope_word);
                     let set = s.set_handle(*set, scope);
                     let words = s.set(set).members.clone();
-                    let members = words
+                    let members: Vec<u64> = words
                         .into_iter()
                         .flatten()
                         .filter(|&word| s.member(word).is_some())
                         .collect();
+                    let canonical =
+                        events::begin_bulk_detach(s, task, scope_word, set_word, &members);
                     let super::Logical::Ordered(driver) = &mut s.logical else {
                         unreachable!()
                     };
@@ -343,8 +347,10 @@ impl Backend<Command> for Objects<'_> {
                         driver.detaching.insert(task, set).is_none(),
                         "one active bulk call per task"
                     );
+                    let mut outcome = Outcome::image(0, Vec::new());
+                    outcome.canonical = canonical;
                     (
-                        Outcome::image(0, Vec::new()),
+                        outcome,
                         Next::Call {
                             members,
                             then_yield: true,
@@ -663,6 +669,7 @@ impl Backend<Command> for Objects<'_> {
         };
         if let Some(set) = driver.detaching.remove(&caller) {
             s.close_set(set);
+            events::complete_bulk_detach(s, caller);
         }
     }
 

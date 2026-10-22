@@ -330,10 +330,15 @@ pub(super) fn detach_member(s: &mut Scheduler, caller: u64, child: u64) {
     if !driver.detaching.contains_key(&caller) {
         return;
     }
-    let Some(index) = s.member(child) else { return };
+    let Some(index) = s.member(child) else {
+        super::events::bulk_detach_member(s, caller, child, false);
+        return;
+    };
     let row = s.task(index);
     row.detached = true;
-    if row.state == State::Done && row.failure.is_none() {
+    let retire = row.state == State::Done && row.failure.is_none();
+    super::events::bulk_detach_member(s, caller, child, true);
+    if retire {
         assert!(readiness::saved(s, index));
         let scope = s.task(index).scope.expect("a detached child scope");
         s.scope(scope).children.retain(|&c| c != index);
