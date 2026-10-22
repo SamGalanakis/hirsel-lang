@@ -3,7 +3,7 @@
 //! Adapted from Go ebe2feefc400f813aefdc8a036e66d2619da6649:
 //! cmd/go/internal/cache/cache.go:200-255 (version/header/complete-entry checks),
 //! encoding/binary/varint.go:32-86 (bounded unsigned lengths).
-//! Hirsel uses four ordered tags, canonical varints and borrowed sections; Go's
+//! Hirsel uses five ordered tags, canonical varints and borrowed sections; Go's
 //! action identity/checksum remains the responsibility of the existing object store.
 //!
 //! Copyright 2009 The Go Authors.
@@ -33,10 +33,14 @@
 //! ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 //! POSSIBILITY OF SUCH DAMAGE.
 
-// No legacy JSON fallback: an old stored entry is an ordinary import-cache miss.
+// Version 2 splits the old effects (TypeTable, Vec<u8>) JSON into table JSON
+// and raw effects JSON. As in serde_json 20572a6d src/raw.rs:16-76, preserve
+// nested JSON bytes verbatim. Length framing avoids even a RawValue scan before
+// the one semantic parse of each section; no serde_json source is copied.
+// No legacy JSON or version-1 fallback: an old stored entry is an ordinary import-cache miss.
 const MAGIC: &[u8; 6] = b"HIRIMP";
-const VERSION: u8 = 1;
-const SECTIONS: u8 = 4;
+const VERSION: u8 = 2;
+const SECTIONS: u8 = 5;
 
 fn length(out: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
@@ -66,8 +70,8 @@ fn read_length(bytes: &[u8], cursor: &mut usize) -> Option<usize> {
     None
 }
 
-pub(super) fn encode(sections: [&[u8]; 4]) -> Option<Vec<u8>> {
-    let mut header = Vec::with_capacity(52);
+pub(super) fn encode(sections: [&[u8]; 5]) -> Option<Vec<u8>> {
+    let mut header = Vec::with_capacity(63);
     header.extend_from_slice(MAGIC);
     header.extend_from_slice(&[VERSION, SECTIONS]);
     let mut total = 0usize;
@@ -86,12 +90,12 @@ pub(super) fn encode(sections: [&[u8]; 4]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub(super) fn decode(bytes: &[u8]) -> Option<[&[u8]; 4]> {
+pub(super) fn decode(bytes: &[u8]) -> Option<[&[u8]; 5]> {
     if bytes.get(..6)? != MAGIC || *bytes.get(6)? != VERSION || *bytes.get(7)? != SECTIONS {
         return None;
     }
     let mut cursor = 8usize;
-    let mut lengths = [0usize; 4];
+    let mut lengths = [0usize; 5];
     let mut total = 0usize;
     for (tag, size) in lengths.iter_mut().enumerate() {
         if *bytes.get(cursor)? != tag as u8 {
@@ -105,7 +109,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<[&[u8]; 4]> {
     if cursor.checked_add(total)? != bytes.len() {
         return None;
     }
-    let mut sections = [&[][..]; 4];
+    let mut sections = [&[][..]; 5];
     for (section, size) in sections.iter_mut().zip(lengths) {
         let end = cursor.checked_add(size)?;
         *section = bytes.get(cursor..end)?;

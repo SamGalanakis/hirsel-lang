@@ -267,25 +267,32 @@ fn key(
     )))
 }
 
+// Stored effects deliberately do not use canonical(): that byte-array JSON
+// encoding is an action-key contract. Keep its table collection and TypeId
+// remapping, but store the table and raw effect JSON as separate bounded sections.
 fn encode(import: &CachedImport, types: &TypeInterner) -> Option<Vec<u8>> {
-    let effects = canonical(types, || serde_json::to_vec(&import.effects))?;
+    let encode = || serde_json::to_vec(&import.effects);
+    let (probe, roots) = hirsel_types::with_table_collection(&encode);
+    probe.ok()?;
+    let table = hirsel_types::encode_table(types, &roots).0;
+    let table = serde_json::to_vec(&table).ok()?;
+    let effects = hirsel_types::with_table_encoding(types, &roots, encode).ok()?;
     let layouts: Vec<ContentHash> = import.layouts.iter().map(|k| k.0).collect();
     let unit = hirsel_codec::to_text(&import.unit);
     let layouts = serde_json::to_vec(&layouts).ok()?;
     let abis = serde_json::to_vec(&import.abis).ok()?;
-    envelope::encode([unit.as_bytes(), &layouts, &abis, &effects])
+    envelope::encode([unit.as_bytes(), &layouts, &abis, &table, &effects])
 }
 
 fn decode(bytes: &[u8], types: &TypeInterner) -> Option<CachedImport> {
-    let [unit, layouts, abis, effects] = envelope::decode(bytes)?;
+    let [unit, layouts, abis, table, effects] = envelope::decode(bytes)?;
     let unit = std::str::from_utf8(unit).ok()?;
     let layouts: Vec<ContentHash> = serde_json::from_slice(layouts).ok()?;
     let abis = serde_json::from_slice(abis).ok()?;
-    let (table, value): (hirsel_types::TypeTable, Vec<u8>) =
-        serde_json::from_slice(effects).ok()?;
+    let table: hirsel_types::TypeTable = serde_json::from_slice(table).ok()?;
     let ids = hirsel_types::decode_table(types, &table);
     let effects =
-        hirsel_types::with_table_decoding(&ids, || serde_json::from_slice(&value)).ok()?;
+        hirsel_types::with_table_decoding(&ids, || serde_json::from_slice(effects)).ok()?;
     hirsel_intern::timings::count(hirsel_intern::timings::Count::ValueDecodes);
     hirsel_intern::timings::count_by(
         hirsel_intern::timings::Count::ValueDecodeBytes,
@@ -474,8 +481,10 @@ mod tests {
                         3 => corrupt.push(0),
                         4 => corrupt[8] = 3,
                         _ => {
-                            let [unit, layouts, abis, effects] = envelope::decode(bytes).unwrap();
-                            corrupt = envelope::encode([effects, layouts, abis, unit]).unwrap();
+                            let [unit, layouts, abis, table, effects] =
+                                envelope::decode(bytes).unwrap();
+                            corrupt =
+                                envelope::encode([effects, layouts, abis, table, unit]).unwrap();
                         }
                     }
                     assert!(
@@ -489,6 +498,74 @@ mod tests {
                 // A fresh cache handle sees only the complete replacements, as in
                 // Go cache_test.go:22-61's overwrite/reopen vectors.
                 assert_eq!(run(&program(source)), (original.len(), 0));
+            }
+        });
+    }
+
+    #[test]
+    fn native_effects_frame_15_raw_sections_and_corrupt_json_miss() {
+        hirsel_engine::with_compiler_stack(|| {
+            #[derive(Default)]
+            struct Store(std::sync::Mutex<BTreeMap<UnitKey, Arc<[u8]>>>);
+            impl ObjectStore for Store {
+                fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+                    self.0.lock().unwrap().get(key).cloned()
+                }
+                fn put(&self, key: &UnitKey, bytes: &[u8]) {
+                    self.0.lock().unwrap().insert(*key, bytes.into());
+                }
+            }
+            let source = "type P { n:u64 }\nfn keep(x:List[P])->List[P] in x { x }\nfn main()->u64 { let xs=keep([P(n:3u64)]); xs[0u64].n }";
+            let target = TargetSpec::x86_64_unknown_linux_gnu();
+            let store = Store::default();
+            let run = || {
+                let program = program(source);
+                let mut cache = Imports::new(&store, &target, program.types.clone(), false);
+                let cached = hirsel_rc::import::lower_cached(
+                    &program,
+                    &target,
+                    &Default::default(),
+                    &Default::default(),
+                    &mut cache,
+                )
+                .unwrap();
+                let fresh = hirsel_rc::import::lower(&program, &target).unwrap();
+                assert_eq!(cached.units, fresh.units);
+                assert_eq!(
+                    hirsel_codec::to_text(&cached.table),
+                    hirsel_codec::to_text(&fresh.table)
+                );
+                (cache.hits, cache.misses)
+            };
+            assert!(run().1 > 0);
+            let original = store.0.lock().unwrap().clone();
+            let donor = program(source);
+            for bytes in original.values() {
+                let [_, _, _, table, effects] = envelope::decode(bytes).unwrap();
+                let decoded = decode(bytes, &donor.types).unwrap();
+                let old = canonical(&donor.types, || serde_json::to_vec(&decoded.effects)).unwrap();
+                let (old_table, old_payload): (hirsel_types::TypeTable, Vec<u8>) =
+                    serde_json::from_slice(&old).unwrap();
+                assert_eq!(table, serde_json::to_vec(&old_table).unwrap());
+                assert_eq!(effects, old_payload);
+            }
+            // Invalid JSON, wrong shapes and complete-but-extra JSON in either
+            // section are semantic misses even when framing is valid. Reopen
+            // after rebuilding to prove the miss replaces the damaged entry.
+            for section in [3, 4] {
+                for malformed in [&b"{"[..], &b"null"[..], &b"[] []"[..]] {
+                    let mut damaged = original.clone();
+                    for bytes in damaged.values_mut() {
+                        let mut sections = envelope::decode(bytes).unwrap();
+                        sections[section] = malformed;
+                        let corrupt = envelope::encode(sections).unwrap();
+                        assert!(decode(&corrupt, &TypeInterner::new(None)).is_none());
+                        *bytes = corrupt.into();
+                    }
+                    *store.0.lock().unwrap() = damaged;
+                    assert_eq!(run(), (0, original.len()));
+                    assert_eq!(run(), (original.len(), 0));
+                }
             }
         });
     }

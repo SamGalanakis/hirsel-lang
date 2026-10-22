@@ -4,15 +4,18 @@
 mod envelope;
 
 // Handwritten: magic, version, section count, ordered (tag,length) headers,
-// then raw payloads. The final section includes both byte boundaries.
-const EMPTY: &[u8] = b"HIRIMP\x01\x04\x00\x00\x01\x00\x02\x00\x03\x00";
-const BINARY: &[u8] = b"HIRIMP\x01\x04\x00\x01\x01\x02\x02\x00\x03\x02a[]\x00\xff";
+// then raw payloads. The fourth section includes both byte boundaries.
+const EMPTY: &[u8] = b"HIRIMP\x02\x05\x00\x00\x01\x00\x02\x00\x03\x00\x04\x00";
+const BINARY: &[u8] = b"HIRIMP\x02\x05\x00\x01\x01\x02\x02\x00\x03\x02\x04\x00a[]\x00\xff";
 
 #[test]
 fn handcrafted_sections_and_go_varint_prefix_vectors() {
     for (bytes, sections) in [
-        (EMPTY, [&b""[..], &b""[..], &b""[..], &b""[..]]),
-        (BINARY, [&b"a"[..], &b"[]"[..], &b""[..], &b"\x00\xff"[..]]),
+        (EMPTY, [&b""[..], &b""[..], &b""[..], &b""[..], &b""[..]]),
+        (
+            BINARY,
+            [&b"a"[..], &b"[]"[..], &b""[..], &b"\x00\xff"[..], &b""[..]],
+        ),
     ] {
         assert_eq!(envelope::decode(bytes), Some(sections));
         assert_eq!(envelope::encode(sections).unwrap(), bytes);
@@ -27,11 +30,11 @@ fn handcrafted_sections_and_go_varint_prefix_vectors() {
         (16384, &b"\x80\x80\x01"[..]),
     ] {
         let payload = vec![255; size];
-        let mut expected = b"HIRIMP\x01\x04\x00".to_vec();
+        let mut expected = b"HIRIMP\x02\x05\x00".to_vec();
         expected.extend_from_slice(prefix);
-        expected.extend_from_slice(b"\x01\x00\x02\x00\x03\x00");
+        expected.extend_from_slice(b"\x01\x00\x02\x00\x03\x00\x04\x00");
         expected.extend_from_slice(&payload);
-        let sections = [&payload[..], &b""[..], &b""[..], &b""[..]];
+        let sections = [&payload[..], &b""[..], &b""[..], &b""[..], &b""[..]];
         assert_eq!(envelope::encode(sections).unwrap(), expected);
         assert_eq!(envelope::decode(&expected), Some(sections));
     }
@@ -51,7 +54,7 @@ fn every_truncation_and_trailing_byte_is_rejected() {
 
 #[test]
 fn malformed_headers_versions_lengths_and_swapped_sections_are_rejected() {
-    for index in [0, 5, 6, 7, 8, 10, 12, 14] {
+    for index in [0, 5, 6, 7, 8, 10, 12, 14, 16] {
         let mut corrupt = BINARY.to_vec();
         corrupt[index] ^= 0x80;
         assert!(envelope::decode(&corrupt).is_none(), "byte {index}");
@@ -63,14 +66,14 @@ fn malformed_headers_versions_lengths_and_swapped_sections_are_rejected() {
         &b"\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x00"[..], // too many bytes
         &b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01"[..],     // u64::MAX, short body
     ] {
-        let mut corrupt = b"HIRIMP\x01\x04\x00".to_vec();
+        let mut corrupt = b"HIRIMP\x02\x05\x00".to_vec();
         corrupt.extend_from_slice(length);
-        corrupt.extend_from_slice(b"\x01\x00\x02\x00\x03\x00");
+        corrupt.extend_from_slice(b"\x01\x00\x02\x00\x03\x00\x04\x00");
         assert!(envelope::decode(&corrupt).is_none());
     }
     // Two individually representable lengths whose sum overflows usize on 64-bit.
-    let mut sum = b"HIRIMP\x01\x04\x00".to_vec();
-    sum.extend_from_slice(b"\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x01\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x02\x02\x03\x00");
+    let mut sum = b"HIRIMP\x02\x05\x00".to_vec();
+    sum.extend_from_slice(b"\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x01\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x02\x02\x03\x00\x04\x00");
     assert!(envelope::decode(&sum).is_none());
     let mut swapped = BINARY.to_vec();
     swapped.swap(10, 14);
