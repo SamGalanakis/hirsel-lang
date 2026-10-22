@@ -15,6 +15,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 # Sources whose ignored cases tools/check-native.sh runs, with the stage's selection.
 NATIVE = [
+    ('crates/hirsel-pipeline-tests/tests/rc/flat_storage_audit_16.rs', '$(libtest flat_storage_audit_16::native_flat_region_copy_parity --ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/native_desc_cell_16.rs', '$(libtest native_desc_cell_16:: --ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/native_simd_eq_17.rs', '$(libtest native_simd_eq_17:: --ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/isolate_bytes_leak_17.rs', '$(libtest isolate_bytes_leak_17::isolate_returns_unique_bytes --ignored --test-threads=1)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_import.rs', '$(libtest rc_import::loop_version_matches_reference_heap_llvm_and_cranelift --ignored --test-threads=1)'),
     ('crates/hirsel-llvm/src/', '//:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)'),
     ('crates/hirsel-llvm/tests/it/', '//:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)'),
