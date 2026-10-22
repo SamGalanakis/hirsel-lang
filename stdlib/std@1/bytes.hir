@@ -2,6 +2,12 @@
 pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src {
   let width = core@1/bytes.len(old)
   core@1/failure.check(width != 0, TextInvariant())
+  let replacement_len = core@1/bytes.len(new)
+  let replacement_byte = if replacement_len == 1 {
+    new[0]
+  } else {
+    0u8
+  }
   let len = core@1/bytes.len(src)
   let mut builder: List[u8] = []
   let mut i: u64 = 0
@@ -13,16 +19,15 @@ pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src {
       Some(at) => at,
       None() => len,
     }
-    while i < end {
-      core@1/list.push(mut builder, src[i])
-      i += 1
+    if i < end {
+      core@1/bytes.append(mut builder, core@1/bytes.slice(src, i, end))
     }
     match found {
       Some(at) => {
-        let mut k: u64 = 0
-        while k < core@1/bytes.len(new) {
-          core@1/list.push(mut builder, new[k])
-          k += 1
+        if replacement_len == 1 {
+          core@1/list.push(mut builder, replacement_byte)
+        } else if replacement_len != 0 {
+          core@1/bytes.append(mut builder, new)
         }
         i = at + width
       },

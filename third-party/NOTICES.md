@@ -1538,3 +1538,5 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+Go byte replacement: `stdlib/std@1/bytes.hir` ports the unmatched/replacement span-copy structure from Go `ebe2feefc400f813aefdc8a036e66d2619da6649`, `src/bytes/bytes.go:1192–1228`; `crates/hirsel-driver/tests/it-stdlib/bytes_replace_bulk_6.rs` adapts compatible all-replacement vectors from `src/bytes/bytes_test.go:1763–1821`. BSD-3-Clause (Go), copyright 2009 The Go Authors; the Go license above applies. Hirsel rejects empty patterns, keeps its prepared search and returns fresh storage; a measured singleton push avoids bulk-call overhead, and the measured extra count/reserve pass is declined.
