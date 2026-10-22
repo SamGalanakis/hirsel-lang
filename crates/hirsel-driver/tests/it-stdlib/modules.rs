@@ -52,3 +52,4 @@ mod lru_cache_7;
 mod base32_8;
 mod utf16_8;
 mod http_replace_range;
+mod json_merge_patch_8;

@@ -1241,6 +1241,12 @@
       "module": [
         "utf16"
       ]
+    },
+    {
+      "path": "json_merge_patch.hir",
+      "module": [
+        "json_merge_patch"
+      ]
     }
   ],
   "dependencies": []

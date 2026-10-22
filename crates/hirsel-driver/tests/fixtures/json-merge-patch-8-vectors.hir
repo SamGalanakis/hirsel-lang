@@ -1,0 +1,134 @@
+// json-patch (3 named vectors) and json-merge-patch (15 Appendix A vectors).
+// Pins, licenses and adaptations: docs/json-merge-patch.md.
+// JSON object meaning ignores insertion order; ordinary Map equality does not.
+// These independent fixtures are shallow; this comparator is test-only.
+fn same(left: std@1/json.Value, right: std@1/json.Value) -> bool {
+  match left {
+    Object(entries) => {
+      let Object(other) = right else {
+        return false
+      }
+      if map.len(entries) != map.len(other) {
+        return false
+      }
+      for (key, child) in entries {
+        let Some(other_child) = map.get(other, key) else {
+          return false
+        }
+        if !same(child, other_child) {
+          return false
+        }
+      }
+      true
+    },
+    Array(items) => {
+      let Array(other_items) = right else {
+        return false
+      }
+      if list.len(items) != list.len(other_items) {
+        return false
+      }
+      let mut i: u64 = 0
+      while i < list.len(items) {
+        if !same(items[i], other_items[i]) {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    _ => left == right,
+  }
+}
+
+fn check(take target: String, take patch_text: String, take expected: String) -> () {
+  let Ok(target_value) = std@1/json.parse(copy target) else {
+    failure.check(false, Bounds())
+    return
+  }
+  let Ok(patch) = std@1/json.parse(copy patch_text) else {
+    failure.check(false, Bounds())
+    return
+  }
+  let Ok(expected_value) = std@1/json.parse(copy expected) else {
+    failure.check(false, Bounds())
+    return
+  }
+  let Ok(original_target) = std@1/json.parse(copy target) else {
+    failure.check(false, Bounds())
+    return
+  }
+  let Ok(original_patch) = std@1/json.parse(copy patch_text) else {
+    failure.check(false, Bounds())
+    return
+  }
+  let alias = copy target_value
+  let patch_alias = copy patch
+  let Ok(merged) = std@1/json_merge_patch.apply(copy target_value, patch, 64) else {
+    failure.check(false, Bounds())
+    return
+  }
+  failure.check(same(merged, expected_value), Bounds())
+  failure.check(target_value == original_target && alias == original_target, Bounds())
+  failure.check(patch == original_patch && patch_alias == original_patch, Bounds())
+  let Ok(again) = std@1/json_merge_patch.apply(copy alias, patch, 64) else {
+    failure.check(false, Bounds())
+    return
+  }
+  failure.check(same(again, expected_value), Bounds())
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "{\"a\":\"b\",\"c\":{\"d\":\"e\",\"f\":\"g\"}}",
+    "{\"a\":\"z\",\"c\":{\"f\":null}}",
+    "{\"a\":\"z\",\"c\":{\"d\":\"e\"}}"
+  )
+  check(
+    "{\"title\":\"Goodbye!\",\"author\":{\"givenName\":\"John\",\"familyName\":\"Doe\"},\"tags\":[\"example\",\"sample\"],\"content\":\"This will be unchanged\"}",
+    "{\"title\":\"Hello!\",\"phoneNumber\":\"+01-123-456-7890\",\"author\":{\"familyName\":null},\"tags\":[\"example\"]}",
+    "{\"title\":\"Hello!\",\"author\":{\"givenName\":\"John\"},\"tags\":[\"example\"],\"content\":\"This will be unchanged\",\"phoneNumber\":\"+01-123-456-7890\"}"
+  )
+  check(
+    "{\"title\":\"Goodbye!\",\"author\":{\"givenName\":\"John\"},\"tags\":[\"example\",\"sample\"],\"content\":\"This will be unchanged\"}",
+    "{\"tags\":{\"kind\":\"example\"}}",
+    "{\"title\":\"Goodbye!\",\"author\":{\"givenName\":\"John\"},\"tags\":{\"kind\":\"example\"},\"content\":\"This will be unchanged\"}"
+  )
+  check("{\"a\":\"b\"}", "{\"a\":\"c\"}", "{\"a\":\"c\"}")
+  check("{\"a\":\"b\"}", "{\"b\":\"c\"}", "{\"a\":\"b\",\"b\":\"c\"}")
+  check("{\"a\":\"b\"}", "{\"a\":null}", "{}")
+  check("{\"a\":\"b\",\"b\":\"c\"}", "{\"a\":null}", "{\"b\":\"c\"}")
+  check("{\"a\":[\"b\"]}", "{\"a\":\"c\"}", "{\"a\":\"c\"}")
+  check("{\"a\":\"c\"}", "{\"a\":[\"b\"]}", "{\"a\":[\"b\"]}")
+  check(
+    "{\"a\":{\"b\":\"c\"}}",
+    "{\"a\":{\"b\":\"d\",\"c\":null}}",
+    "{\"a\":{\"b\":\"d\"}}"
+  )
+  check("{\"a\":[{\"b\":\"c\"}]}", "{\"a\":[1]}", "{\"a\":[1]}")
+  check("[\"a\",\"b\"]", "[\"c\",\"d\"]", "[\"c\",\"d\"]")
+  check("{\"a\":\"b\"}", "[\"c\"]", "[\"c\"]")
+  check("{\"a\":\"foo\"}", "null", "null")
+  check("{\"a\":\"foo\"}", "\"bar\"", "\"bar\"")
+  check("{\"e\":null}", "{\"a\":1}", "{\"e\":null,\"a\":1}")
+  check("[1,2]", "{\"a\":\"b\",\"c\":null}", "{\"a\":\"b\"}")
+  check("{}", "{\"a\":{\"bb\":{\"ccc\":null}}}", "{\"a\":{\"bb\":{}}}")
+  check("null", "null", "null")
+  check("{\"keep\":1}", "{\"missing\":null}", "{\"keep\":1}")
+  check("{\"x\":3}", "{\"x\":{\"y\":2}}", "{\"x\":{\"y\":2}}")
+  check("{\"x\":null}", "{}", "{\"x\":null}")
+  check("{\"a\":[1,2]}", "{\"a\":[]}", "{\"a\":[]}")
+  check(
+    "{\"雪\":1,\"__proto__\":{\"x\":1}}",
+    "{\"雪\":2,\"__proto__\":{\"y\":3},\"constructor\":4,\"prototype\":5}",
+    "{\"雪\":2,\"__proto__\":{\"x\":1,\"y\":3},\"constructor\":4,\"prototype\":5}"
+  )
+  check(
+    "{\"a\":1,\"b\":1.0,\"c\":1e0}",
+    "{\"b\":1e0,\"d\":[1,1.0,1e0]}",
+    "{\"a\":1,\"b\":1e0,\"c\":1e0,\"d\":[1,1.0,1e0]}"
+  )
+  check("1", "1.0", "1.0")
+  check("1.0", "1e0", "1e0")
+  Ok(())
+}

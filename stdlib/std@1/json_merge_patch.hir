@@ -1,0 +1,176 @@
+// Adapted from json-patch src/lib.rs:666-683, 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c.
+// MIT (Ivan Dubrov); see docs/json-merge-patch-LICENSE-MIT.txt.
+// Changed: consumed target, exact lexical values, complete depth preflight and
+// explicit stacks instead of recursive calls. No borrowed input is mutated.
+@serializable
+pub type MergeError = Depth(u64)
+
+// Borrow one child without copying a JSON subtree. Map indexes follow the
+// existing insertion order and include every entry, including null members.
+fn child_at(value: json.Value, index: u64) -> Option[json.Value] in value uses {} {
+  match value {
+    Array(items) => {
+      if index < core@1/list.len(items) {
+        return Some(items[index])
+      }
+    },
+    Object(entries) => {
+      let mut i: u64 = 0
+      for (_, child) in entries {
+        if i == index {
+          return Some(child)
+        }
+        i += 1
+      }
+    },
+    _ => {},
+  }
+  None()
+}
+
+fn view(value: json.Value) -> json.Value in value uses {} {
+  value
+}
+
+fn node_at(value: json.Value, path: List[u64]) -> json.Value in value uses {} {
+  let mut node = view(value)
+  for index in path {
+    let Some(child) = child_at(node, index) else {
+      return node
+    }
+    node = child
+  }
+  node
+}
+
+// Keep only child indexes, never copied DOM values. Re-walking the ancestor
+// path trades lookup work for a depth-bounded stack using public borrowed APIs.
+fn preflight(value: json.Value, max_depth: u64) -> Result[(), MergeError] uses {} {
+  let mut path: List[u64] = []
+  let mut next: u64 = 0
+  while true {
+    let node = node_at(value, path)
+    if let Some(_) = child_at(node, next) {
+      if core@1/list.len(path) == max_depth {
+        return Error(Depth(max_depth))
+      }
+      core@1/list.push(mut path, next)
+      next = 0
+    } else {
+      let Some(parent_index) = core@1/list.pop(mut path) else {
+        break
+      }
+      next = parent_index + 1
+    }
+  }
+  Ok(())
+}
+
+type Frame {
+  target: unique Map[String, json.Value],
+  pending: unique Map[String, json.Value],
+  key: String,
+  depth: u64,
+}
+
+fn frame(
+  take target: unique json.Value,
+  take patch: unique Map[String, json.Value],
+  take key: unique String,
+  depth: u64
+) -> unique Frame uses {} {
+  let entries = match take target {
+    Object(values) => take values,
+    _ => core@1/map.empty(),
+  }
+  Frame(target: take entries, pending: take patch, key: take key, depth: depth)
+}
+
+// Copy only the next key; removing it transfers the owned child subtree.
+fn first_key(entries: Map[String, json.Value]) -> unique Option[String] uses {} {
+  for (key, _) in entries {
+    return Some(unique key)
+  }
+  None()
+}
+
+fn next_entry(mut pending: unique Map[String, json.Value]) -> unique Option[
+  (String, json.Value)
+] uses {} {
+  let Some(key) = take first_key(pending) else {
+    return None()
+  }
+  match take core@1/map.remove(mut pending, key) {
+    Some(value) => Some((take key, take value)),
+    None => None(),
+  }
+}
+
+// Both complete inputs obey the bound even when the patch replaces the root or
+// leaves a target subtree untouched. Root is depth 0; equality is permitted.
+// Error consumes/drops target normally and publishes no partial value.
+pub fn apply(take target: json.Value, patch: json.Value, max_depth: u64) -> Result[
+  json.Value,
+  MergeError
+] uses {} {
+  preflight(target, max_depth)?
+  preflight(patch, max_depth)?
+  let replacement = unique patch
+  if !match replacement {
+    Object(_) => true,
+    _ => false,
+  } {
+    return Ok(take replacement)
+  }
+  let Object(patch_map) = take replacement else {
+    return Ok(Null())
+  }
+  let mut frames: unique List[unique Frame] = []
+  core@1/list.push(mut frames, frame(unique target, take patch_map, "", 0))
+  while let Some(popped) = take core@1/list.pop(mut frames) {
+    let mut current = take popped
+    let Some(entry) = take next_entry(mut current.pending) else {
+      let Frame(target: merged_map, pending: _, key: merged_key, depth: _) = take current
+      let merged: unique json.Value = Object(take merged_map)
+      let Some(popped_parent) = take core@1/list.pop(mut frames) else {
+        return Ok(take merged)
+      }
+      let mut parent = take popped_parent
+      core@1/map.insert(mut parent.target, take merged_key, take merged)
+      core@1/list.push(mut frames, take parent)
+      continue
+    }
+    let (key, value) = take entry
+    if !match value {
+      Null => true,
+      Object(_) => true,
+      _ => false,
+    } {
+      core@1/map.insert(mut current.target, take key, take value)
+      core@1/list.push(mut frames, take current)
+      continue
+    }
+    match take value {
+      Null => {
+        let _ = core@1/map.remove(mut current.target, key)
+      },
+      Object(children) => {
+        // The preflight proves this too; check before advancing the frame depth.
+        if current.depth == max_depth {
+          return Error(Depth(max_depth))
+        }
+        let old = match take core@1/map.remove(mut current.target, key) {
+          Some(old) => take old,
+          None => Null(),
+        }
+        let child = frame(take old, take children, take key, current.depth + 1)
+        core@1/list.push(mut frames, take current)
+        core@1/list.push(mut frames, take child)
+        continue
+      },
+      _ => {},
+    }
+    core@1/list.push(mut frames, take current)
+  }
+  Ok(Null())
+}

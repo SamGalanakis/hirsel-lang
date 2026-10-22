@@ -1,0 +1,96 @@
+fn parsed(take text: String) -> std@1/json.Value {
+  match std@1/json.parse(take text) {
+    Ok(value) => take value,
+    Error(_) => {
+      failure.check(false, Bounds())
+      Null()
+    },
+  }
+}
+
+fn depth(take target: String, take patch: String, cap: u64, accepted: bool) -> () {
+  let target_value = parsed(take target)
+  let alias = copy target_value
+  let patch_value = parsed(take patch)
+  let patch_alias = copy patch_value
+  let merged = std@1/json_merge_patch.apply(copy target_value, patch_value, cap)
+  if accepted {
+    failure.check(
+      match merged {
+        Ok(_) => true,
+        _ => false,
+      },
+      Bounds()
+    )
+  } else {
+    failure.check(merged == Error(Depth(cap)), Bounds())
+  }
+  failure.check(target_value == alias && patch_value == patch_alias, Bounds())
+}
+
+pub fn main() -> Result[(), ()] {
+  depth("null", "null", 0, true)
+  depth("{}", "{}", 0, true)
+  depth("[]", "[]", 0, true)
+  depth("0", "{\"a\":null}", 0, false)
+  depth("{\"a\":0}", "null", 0, false)
+  depth("{\"a\":0}", "{}", 1, true)
+  depth("null", "{\"a\":{}}", 1, true)
+  depth("{\"a\":{}}", "{\"a\":{}}", 1, true)
+  depth("{\"a\":{\"b\":1}}", "{}", 1, false)
+  depth("{\"a\":{\"b\":1}}", "null", 1, false)
+  depth("null", "[[0]]", 1, false)
+  depth("null", "[[0]]", 2, true)
+  depth("{\"a\":0}", "{\"a\":[],\"z\":[[0]]}", 2, false)
+  depth("{\"a\":0}", "{\"a\":[],\"z\":[[0]]}", 3, true)
+  depth("null", "0", 18446744073709551615, true)
+  // Construct deeper values directly: parser nesting policy is independent.
+  let mut deep: std@1/json.Value = Number("1e0")
+  let mut i: u64 = 0
+  while i < 192 {
+    deep = Array([take deep])
+    i += 1
+  }
+  let patch_alias = copy deep
+  failure.check(
+    std@1/json_merge_patch.apply(Null(), deep, 191) == Error(Depth(191)),
+    Bounds()
+  )
+  let Ok(merged) = std@1/json_merge_patch.apply(Null(), deep, 192) else {
+    return Error(())
+  }
+  failure.check(merged == deep && patch_alias == deep, Bounds())
+  // A consumed target is cleaned up on rejection, with its external copy intact.
+  failure.check(
+    std@1/json_merge_patch.apply(copy deep, Null(), 191) == Error(Depth(191)),
+    Bounds()
+  )
+  failure.check(deep == patch_alias, Bounds())
+  // Exercise the merge frame stack itself at an exact object depth boundary.
+  let mut deep_target: std@1/json.Value = Text("old")
+  let mut deep_patch: std@1/json.Value = Number("1e0")
+  let mut level: u64 = 0
+  while level < 48 {
+    let mut target_map: Map[String, std@1/json.Value] = map.empty()
+    map.insert(mut target_map, "x", take deep_target)
+    deep_target = Object(take target_map)
+    let mut patch_map: Map[String, std@1/json.Value] = map.empty()
+    map.insert(mut patch_map, "x", take deep_patch)
+    deep_patch = Object(take patch_map)
+    level += 1
+  }
+  failure.check(
+    std@1/json_merge_patch.apply(copy deep_target, deep_patch, 47) == Error(Depth(47)),
+    Bounds()
+  )
+  let Ok(overlaid) = std@1/json_merge_patch.apply(take deep_target, deep_patch, 48) else {
+    return Error(())
+  }
+  failure.check(overlaid == deep_patch, Bounds())
+  // Reuse a patch after the consumed-target depth-error path as well.
+  let Ok(promoted) = std@1/json_merge_patch.apply(Null(), deep_patch, 48) else {
+    return Error(())
+  }
+  failure.check(promoted == deep_patch, Bounds())
+  Ok(())
+}
