@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2103 exported definitions; 883 variants.
+2163 exported definitions; 905 variants.
 
 ## Types and roots
 
@@ -2136,6 +2136,35 @@ References: [`core@1/u8`](#def-core_401_2fu8)
 References: [`core@1/u8`](#def-core_401_2fu8)
 
 
+## ascii85
+
+<a id="def-std_401_2fascii85_2fDecodeError"></a>
+
+- `@serializable pub type ascii85.DecodeError = CorruptInput(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fascii85_2fDecodeError_23CorruptInput"></a>
+
+- `CorruptInput(u64) -> ascii85.DecodeError`
+
+Variant of ascii85.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fascii85_2fdecode"></a>
+
+- `pub fn ascii85.decode(data: Bytes) -> Result[unique Bytes, DecodeError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/ascii85/DecodeError`](#def-std_401_2fascii85_2fDecodeError)
+
+<a id="def-std_401_2fascii85_2fencode"></a>
+
+- `pub fn ascii85.encode(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+
 ## atomic
 
 <a id="def-core_401_2fatomic_2fcreate"></a>
@@ -3388,6 +3417,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
+<a id="def-core_401_2fbytes_2freplace_5frange"></a>
+
+- `@preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()`
+
 <a id="def-core_401_2fbytes_2fslice"></a>
 
 - `@noalloc fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src`
@@ -3535,6 +3568,89 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/char`](#def-core
 <a id="def-core_401_2fchild_2fwrite"></a>
 
 - `@noalloc fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]`
+
+
+## cidr
+
+<a id="def-std_401_2fcidr_2fPrefix"></a>
+
+- `pub opaque type cidr.Prefix: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fcidr_2fPrefixError"></a>
+
+- `@serializable pub type cidr.PrefixError = InvalidPrefix | InvalidAddress | InvalidWidth | WidthOutOfRange`
+
+<a id="def-std_401_2fcidr_2fPrefixError_23InvalidAddress"></a>
+
+- `InvalidAddress -> cidr.PrefixError`
+
+Variant of cidr.PrefixError.
+
+<a id="def-std_401_2fcidr_2fPrefixError_23InvalidPrefix"></a>
+
+- `InvalidPrefix -> cidr.PrefixError`
+
+Variant of cidr.PrefixError.
+
+<a id="def-std_401_2fcidr_2fPrefixError_23InvalidWidth"></a>
+
+- `InvalidWidth -> cidr.PrefixError`
+
+Variant of cidr.PrefixError.
+
+<a id="def-std_401_2fcidr_2fPrefixError_23WidthOutOfRange"></a>
+
+- `WidthOutOfRange -> cidr.PrefixError`
+
+Variant of cidr.PrefixError.
+
+<a id="def-std_401_2fcidr_2faddr"></a>
+
+- `@noalloc pub fn cidr.addr(prefix: Prefix) -> IpAddr uses {}`
+
+References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2fbits"></a>
+
+- `@noalloc pub fn cidr.bits(prefix: Prefix) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2fcontains"></a>
+
+- `@noalloc pub fn cidr.contains(prefix: Prefix, ip: IpAddr) -> bool uses {}`
+
+References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`core@1/bool`](#def-core_401_2fbool), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2fformat"></a>
+
+- `pub fn cidr.format(prefix: Prefix) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2ffrom_5faddr"></a>
+
+- `@noalloc pub fn cidr.from_addr(ip: IpAddr, width: i64) -> Result[Prefix, PrefixError] uses {}`
+
+References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix), [`std@1/cidr/PrefixError`](#def-std_401_2fcidr_2fPrefixError)
+
+<a id="def-std_401_2fcidr_2fmasked"></a>
+
+- `@noalloc pub fn cidr.masked(prefix: Prefix) -> Prefix uses {}`
+
+References: [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2foverlaps"></a>
+
+- `@noalloc pub fn cidr.overlaps(a: Prefix, b: Prefix) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix)
+
+<a id="def-std_401_2fcidr_2fparse"></a>
+
+- `pub fn cidr.parse(text: String) -> Result[Prefix, PrefixError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cidr/Prefix`](#def-std_401_2fcidr_2fPrefix), [`std@1/cidr/PrefixError`](#def-std_401_2fcidr_2fPrefixError)
 
 
 ## cli
@@ -4001,6 +4117,12 @@ Variant of csv.ReadError.
 
 - `pub opaque type csv.Reader: copyable + inert + noalloc_drop uses {}`
 
+<a id="def-std_401_2fcsv_2fSliceReader"></a>
+
+- `pub opaque type csv.SliceReader: copyable + inert + noalloc_drop uses {}`
+
+A borrowed input cursor with reusable field spans and one escape buffer per record.
+
 <a id="def-std_401_2fcsv_2fStreamConfig"></a>
 
 - `pub type csv.StreamConfig { csv: Config, refill_bytes: u64, max_input_bytes: u64, max_records: u64, max_outputs: u64, }`
@@ -4022,6 +4144,12 @@ References: [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig)
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/Reader`](#def-std_401_2fcsv_2fReader)
 
+<a id="def-std_401_2fcsv_2ffield_5fcount"></a>
+
+- `pub fn csv.field_count(r: SliceReader) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/csv/SliceReader`](#def-std_401_2fcsv_2fSliceReader)
+
 <a id="def-std_401_2fcsv_2ffold_5fscoped"></a>
 
 - `pub fn csv.fold_scoped[S, A, E]( scope: Scope, take source: S, config: StreamConfig, take initial: A, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], accept: fn(List[String]) -> Result[bool, E], step: fn(take A, take List[String]) -> Result[A, E] ) -> Result[A, DriverError[E]] uses {scope, source, initial, refill, accept, step}`
@@ -4029,6 +4157,31 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 Consume an owned source with bounded parsing and explicit cooperative checks.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Scope`](#def-core_401_2fScope), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/DriverError`](#def-std_401_2fcsv_2fDriverError), [`std@1/csv/StreamConfig`](#def-std_401_2fcsv_2fStreamConfig)
+
+<a id="def-std_401_2fcsv_2fget_5ffield"></a>
+
+- `pub fn csv.get_field(r: SliceReader, index: u64) -> Option[String] in r uses {}`
+
+Borrow a decoded UTF-8 field from the current record.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/csv/SliceReader`](#def-std_401_2fcsv_2fSliceReader)
+
+<a id="def-std_401_2fcsv_2fget_5ffield_5fbytes"></a>
+
+- `@noalloc pub fn csv.get_field_bytes(r: SliceReader, index: u64) -> Option[Bytes] in r uses {}`
+
+Borrow decoded field bytes without constructing String boundary positions.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/csv/SliceReader`](#def-std_401_2fcsv_2fSliceReader)
+
+<a id="def-std_401_2fcsv_2fnext_5frecord"></a>
+
+- `pub fn csv.next_record(mut r: SliceReader) -> Result[bool, CsvError] uses {}`
+
+Advance one record; false means EOF. Errors are terminal. Release field
+views before advancing again; the field-span storage is reused.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/SliceReader`](#def-std_401_2fcsv_2fSliceReader)
 
 <a id="def-std_401_2fcsv_2fparse"></a>
 
@@ -4047,6 +4200,14 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 - `pub fn csv.reader(config: Config) -> Result[Reader, CsvError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/Reader`](#def-std_401_2fcsv_2fReader)
+
+<a id="def-std_401_2fcsv_2fslice_5freader"></a>
+
+- `pub fn csv.slice_reader(text: String, config: Config) -> Result[SliceReader, CsvError] in text uses {}`
+
+Borrow UTF-8 input. Each next_record replaces the current record's views.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/SliceReader`](#def-std_401_2fcsv_2fSliceReader)
 
 <a id="def-std_401_2fcsv_2fwrite_5frecord"></a>
 
@@ -4635,6 +4796,18 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
 
+<a id="def-std_401_2fderive_2fread_5fjson_5ff32"></a>
+
+- `pub fn derive.read_json_f32(mut cursor: json.Reader) -> Result[f32, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_401_2ff32), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fderive_2fread_5fjson_5ff64"></a>
+
+- `pub fn derive.read_json_f64(mut cursor: json.Reader) -> Result[f64, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
 <a id="def-std_401_2fderive_2fread_5fnull"></a>
 
 - `pub fn derive.read_null(mut cursor: json.Reader) -> Result[(), String] uses {}`
@@ -4653,6 +4826,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
 
+<a id="def-std_401_2fderive_2fremember_5funknown_5fkey"></a>
+
+- `pub fn derive.remember_unknown_key(mut keys: Option[Set[String]], take key: String) -> bool uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Set`](#def-core_401_2fSet), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fderive_2fschema_5fdecode"></a>
 
 - `pub fn derive.schema_decode[T](s: TypeShape[T], p: schema.Policy) -> Result[ Body[fn(json.Value, mut schema.CheckState) -> Result[T, schema.SchemaError] uses {}], String ] uses {}`
@@ -4670,6 +4849,18 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.unknown_variant(tag: String, expected: String) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fderive_2fwrite_5fjson_5ff32"></a>
+
+- `@preserves_unique(out) pub fn derive.write_json_f32(value: f32, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/f32`](#def-core_401_2ff32), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fderive_2fwrite_5fjson_5ff64"></a>
+
+- `@preserves_unique(out) pub fn derive.write_json_f64(value: f64, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/f64`](#def-core_401_2ff64), [`core@1/u8`](#def-core_401_2fu8)
 
 
 ## diff
@@ -5150,6 +5341,12 @@ References: [`core@1/f32`](#def-core_401_2ff32)
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_401_2ff32), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
 
+<a id="def-std_401_2ff32_2fparse_5fbytes"></a>
+
+- `@noalloc pub fn f32.parse_bytes(data: Bytes) -> Result[f32, scalar.ParseError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/f32`](#def-core_401_2ff32), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
 <a id="def-std_401_2ff32_2fpow"></a>
 
 - `@noalloc pub fn f32.pow(x: f32, y: f32) -> f32 uses {}`
@@ -5410,6 +5607,12 @@ References: [`core@1/f64`](#def-core_401_2ff64)
 - `@noalloc pub fn f64.parse(text: String) -> Result[f64, scalar.ParseError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
+<a id="def-std_401_2ff64_2fparse_5fbytes"></a>
+
+- `@noalloc pub fn f64.parse_bytes(data: Bytes) -> Result[f64, scalar.ParseError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/f64`](#def-core_401_2ff64), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
 
 <a id="def-std_401_2ff64_2fpow"></a>
 
@@ -8964,6 +9167,82 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
 
 
+## json_merge_patch
+
+<a id="def-std_401_2fjson_5fmerge_5fpatch_2fMergeError"></a>
+
+- `@serializable pub type json_merge_patch.MergeError = Depth(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fmerge_5fpatch_2fMergeError_23Depth"></a>
+
+- `Depth(u64) -> json_merge_patch.MergeError`
+
+Variant of json_merge_patch.MergeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fmerge_5fpatch_2fapply"></a>
+
+- `pub fn json_merge_patch.apply(take target: json.Value, patch: json.Value, max_depth: u64) -> Result[ json.Value, MergeError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_merge_patch/MergeError`](#def-std_401_2fjson_5fmerge_5fpatch_2fMergeError)
+
+
+## json_pointer
+
+<a id="def-std_401_2fjson_5fpointer_2fPointer"></a>
+
+- `pub opaque type json_pointer.Pointer: copyable + inert + noalloc_drop uses {}`
+
+Owned decoded RFC6901 reference tokens. No source-text borrow is retained.
+
+<a id="def-std_401_2fjson_5fpointer_2fPointerError"></a>
+
+- `pub type json_pointer.PointerError = MissingSlash(u64) | InvalidEscape(u64)`
+
+Zero-based UTF-8 byte offsets in the original pointer. InvalidEscape points
+at the tilde, including a trailing tilde. Fragment form is not accepted.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fpointer_2fPointerError_23InvalidEscape"></a>
+
+- `InvalidEscape(u64) -> json_pointer.PointerError`
+
+Variant of json_pointer.PointerError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fpointer_2fPointerError_23MissingSlash"></a>
+
+- `MissingSlash(u64) -> json_pointer.PointerError`
+
+Variant of json_pointer.PointerError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fpointer_2fget"></a>
+
+- `pub fn json_pointer.get(value: json.Value, pointer: Pointer) -> Option[json.Value] in value uses {}`
+
+Borrows the selected value from value, never from pointer. Empty selects
+the complete value. Missing members, invalid/missing array indexes and
+scalar descent return None. No mutation or deep copy is performed.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_pointer/Pointer`](#def-std_401_2fjson_5fpointer_2fPointer)
+
+<a id="def-std_401_2fjson_5fpointer_2fparse"></a>
+
+- `pub fn json_pointer.parse(pointer: String) -> Result[Pointer, PointerError] uses {}`
+
+Parses the string form (not a URI fragment). Decode each escape once:
+~01 is the literal token ~1. Every token owns its UTF-8 bytes.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json_pointer/Pointer`](#def-std_401_2fjson_5fpointer_2fPointer), [`std@1/json_pointer/PointerError`](#def-std_401_2fjson_5fpointer_2fPointerError)
+
+
 ## jwt
 
 <a id="def-std_401_2fjwt_2fJwtError"></a>
@@ -9413,6 +9692,17 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_
 
 Stable, allocation-free WikiSort. Equal elements retain their input order.
 O(n log n) time and O(1) auxiliary space, including move-only elements.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
+
+<a id="def-std_401_2flist_2fsort_5fstable_5ffast"></a>
+
+- `pub fn list.sort_stable_fast[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
+
+Stable driftsort with bounded O(n) scratch. Choose this for throughput;
+choose sort_stable for its @noalloc guarantee. Equal keys retain order.
+Above 20 elements, comparisons finish before elements move. Smaller inputs
+use stable insertion by swaps; comparator failures propagate immediately.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
 
@@ -11155,6 +11445,67 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 - `@noalloc pub fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}`
 
 References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus), [`core@1/PipelineOutput`](#def-core_401_2fPipelineOutput)
+
+
+## quoted_printable
+
+<a id="def-std_401_2fquoted_5fprintable_2fDecodeError"></a>
+
+- `@serializable pub type quoted_printable.DecodeError = InvalidByte(u64) | InvalidHex(u64) | UnexpectedEof(u64) | InvalidSoftBreak( u64 )`
+
+Original zero-based input byte offsets. Errors never contain partial output.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fquoted_5fprintable_2fDecodeError_23InvalidByte"></a>
+
+- `InvalidByte(u64) -> quoted_printable.DecodeError`
+
+Variant of quoted_printable.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fquoted_5fprintable_2fDecodeError_23InvalidHex"></a>
+
+- `InvalidHex(u64) -> quoted_printable.DecodeError`
+
+Variant of quoted_printable.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fquoted_5fprintable_2fDecodeError_23InvalidSoftBreak"></a>
+
+- `InvalidSoftBreak( u64 ) -> quoted_printable.DecodeError`
+
+Variant of quoted_printable.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fquoted_5fprintable_2fDecodeError_23UnexpectedEof"></a>
+
+- `UnexpectedEof(u64) -> quoted_printable.DecodeError`
+
+Variant of quoted_printable.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fquoted_5fprintable_2fdecode"></a>
+
+- `pub fn quoted_printable.decode(data: Bytes) -> Result[unique Bytes, DecodeError] uses {}`
+
+Go Reader compatibility, including literal equals and permissive newlines.
+See docs/quoted-printable.md; this is not a strict RFC 2045 validator.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/quoted_printable/DecodeError`](#def-std_401_2fquoted_5fprintable_2fDecodeError)
+
+<a id="def-std_401_2fquoted_5fprintable_2fencode"></a>
+
+- `pub fn quoted_printable.encode(data: Bytes) -> unique String uses {}`
+
+Go Writer binary mode: preserves every byte, including CR and LF.
+Uppercase escapes stay whole; soft-broken lines have at most 76 columns.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
 
 
 ## random
@@ -15829,6 +16180,41 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401_2fchar), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
 
+## text_similarity
+
+<a id="def-std_401_2ftext_5fsimilarity_2fError"></a>
+
+- `pub type text_similarity.Error = TooLarge()`
+
+A scalar cap, matching-work budget or unrepresentable scratch size.
+
+<a id="def-std_401_2ftext_5fsimilarity_2fError_23TooLarge"></a>
+
+- `TooLarge() -> text_similarity.Error`
+
+Variant of text_similarity.Error.
+
+<a id="def-std_401_2ftext_5fsimilarity_2fjaro"></a>
+
+- `pub fn text_similarity.jaro(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[ f64, Error ] uses {}`
+
+Jaro similarity over Unicode scalars, without normalization or grapheme folding.
+max_scalars bounds EACH input; max_cells bounds n*m matching work.
+TooLarge is checked before scratch allocation. Empty inputs still obey the
+scalar cap and require zero cells. Time O(n+m+n*m); scratch O(n+m).
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64), [`core@1/u64`](#def-core_401_2fu64), [`std@1/text_similarity/Error`](#def-std_401_2ftext_5fsimilarity_2fError)
+
+<a id="def-std_401_2ftext_5fsimilarity_2fjaro_5fwinkler"></a>
+
+- `pub fn text_similarity.jaro_winkler(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[ f64, Error ] uses {}`
+
+Jaro with a 0.1 boost per common prefix scalar (at most four), only above 0.7.
+Uses the same bounds and refusal rules as jaro; both inputs remain unchanged.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64), [`core@1/u64`](#def-core_401_2fu64), [`std@1/text_similarity/Error`](#def-std_401_2ftext_5fsimilarity_2fError)
+
+
 ## time
 
 <a id="def-std_401_2ftime_2fBrokenDownTime"></a>
@@ -16532,6 +16918,70 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/toml/Document`](#
 - `pub fn toml.stringify(value: Value) -> Result[unique String, TomlError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+
+## toposort
+
+<a id="def-std_401_2ftoposort_2fEdge"></a>
+
+- `pub type toposort.Edge { from: u64, to: u64, }`
+
+An edge says `from` must precede `to`.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2fGraphError"></a>
+
+- `pub type toposort.GraphError = NodeLimit(u64) | EdgeLimit(u64) | Endpoint(u64, u64) | Blocked( List[u64] )`
+
+Limit payloads are supplied counts; Endpoint carries the first invalid
+edge's input index and endpoint (from is checked first). Blocked is sorted
+and includes downstream vertices that cannot be released, not just cycles.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2fGraphError_23Blocked"></a>
+
+- `Blocked( List[u64] ) -> toposort.GraphError`
+
+Variant of toposort.GraphError.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2fGraphError_23EdgeLimit"></a>
+
+- `EdgeLimit(u64) -> toposort.GraphError`
+
+Variant of toposort.GraphError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2fGraphError_23Endpoint"></a>
+
+- `Endpoint(u64, u64) -> toposort.GraphError`
+
+Variant of toposort.GraphError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2fGraphError_23NodeLimit"></a>
+
+- `NodeLimit(u64) -> toposort.GraphError`
+
+Variant of toposort.GraphError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoposort_2forder"></a>
+
+- `pub fn toposort.order(node_count: u64, edges: List[Edge], max_nodes: u64, max_edges: u64) -> Result[ List[u64], GraphError ] uses {}`
+
+Order vertices 0..node_count within caller-supplied inclusive caps.
+Initially ready IDs are ascending, then newly ready IDs join the FIFO in
+input successor order. This is deterministic, not lexicographically minimal.
+Counts and all endpoints are checked before allocating graph storage.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/toposort/Edge`](#def-std_401_2ftoposort_2fEdge), [`std@1/toposort/GraphError`](#def-std_401_2ftoposort_2fGraphError)
 
 
 ## txn
@@ -17367,6 +17817,86 @@ References: [`core@1/char`](#def-core_401_2fchar)
 References: [`core@1/char`](#def-core_401_2fchar)
 
 
+## union_find
+
+<a id="def-std_401_2funion_5ffind_2fError"></a>
+
+- `pub type union_find.Error = NodeLimit(u64, u64) | InvalidId(u64, u64)`
+
+Requested nodes and cap, or invalid ID and domain length.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2funion_5ffind_2fError_23InvalidId"></a>
+
+- `InvalidId(u64, u64) -> union_find.Error`
+
+Variant of union_find.Error.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2funion_5ffind_2fError_23NodeLimit"></a>
+
+- `NodeLimit(u64, u64) -> union_find.Error`
+
+Variant of union_find.Error.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2funion_5ffind_2fForest"></a>
+
+- `pub opaque type union_find.Forest: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2funion_5ffind_2fcount"></a>
+
+- `@noalloc pub fn union_find.count(forest: Forest) -> u64 uses {}`
+
+Number of disjoint components, including isolated IDs.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+<a id="def-std_401_2funion_5ffind_2ffind"></a>
+
+- `pub fn union_find.find(mut forest: Forest, id: u64) -> Result[u64, Error] uses {}`
+
+Returns an opaque representative; compresses paths with normal COW semantics.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Error`](#def-std_401_2funion_5ffind_2fError), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+<a id="def-std_401_2funion_5ffind_2fnew"></a>
+
+- `pub fn union_find.new(nodes: u64, max_nodes: u64) -> Result[Forest, Error] uses {}`
+
+Creates singleton sets for IDs in [0, count); checks the cap before allocating.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Error`](#def-std_401_2funion_5ffind_2fError), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+<a id="def-std_401_2funion_5ffind_2fsame"></a>
+
+- `pub fn union_find.same(mut forest: Forest, a: u64, b: u64) -> Result[bool, Error] uses {}`
+
+Checks both endpoints before compression, just like union.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Error`](#def-std_401_2funion_5ffind_2fError), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+<a id="def-std_401_2funion_5ffind_2fsnapshot"></a>
+
+- `pub fn union_find.snapshot(mut forest: Forest) -> unique List[u64] uses {}`
+
+Owned ID-to-root snapshot, independent of later forest mutations.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+<a id="def-std_401_2funion_5ffind_2funion"></a>
+
+- `pub fn union_find.union(mut forest: Forest, a: u64, b: u64) -> Result[u64, Error] uses {}`
+
+Returns the merged representative. Equal ranks prefer the first root.
+Both IDs are checked before either path is compressed.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/union_find/Error`](#def-std_401_2funion_5ffind_2fError), [`std@1/union_find/Forest`](#def-std_401_2funion_5ffind_2fForest)
+
+
 ## uri
 
 <a id="def-std_401_2furi_2fComponent"></a>
@@ -17566,6 +18096,42 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `pub fn uri.to_string(parsed_uri: Uri) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
+
+
+## utf16
+
+<a id="def-std_401_2futf16_2fDecodeError"></a>
+
+- `pub type utf16.DecodeError { index: u64, }`
+
+The zero-based index of the first unpaired surrogate, in u16 code units.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2futf16_2fdecode_5flossy"></a>
+
+- `pub fn utf16.decode_lossy(units: List[u16]) -> String uses {}`
+
+Replace each unpaired surrogate with U+FFFD, preserving valid pairs.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2futf16_2fdecode_5fstrict"></a>
+
+- `pub fn utf16.decode_strict(units: List[u16]) -> Result[String, DecodeError] uses {}`
+
+Refuse the first unpaired surrogate; no partial String is returned.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/utf16/DecodeError`](#def-std_401_2futf16_2fDecodeError)
+
+<a id="def-std_401_2futf16_2fencode"></a>
+
+- `pub fn utf16.encode(value: String) -> unique List[u16] uses {}`
+
+Encode valid String scalars into independently owned UTF-16 code units.
+NUL and U+FEFF are ordinary data. No byte order or BOM policy is applied.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16)
 
 
 ## utf8
@@ -17894,6 +18460,75 @@ References: [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid), [`std@1/uuid/Varian
 The version field, the top four bits of byte 6, whatever the variant.
 
 References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+
+## varint
+
+<a id="def-std_401_2fvarint_2fReadError"></a>
+
+- `pub type varint.ReadError = OffsetBeyondEnd(u64) | Truncated(u64) | Overflow(u64)`
+
+Absolute offsets: requested out-of-range cursor, first missing byte, or
+invalid tenth byte. Errors contain no partial scalar or advanced cursor.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fvarint_2fReadError_23OffsetBeyondEnd"></a>
+
+- `OffsetBeyondEnd(u64) -> varint.ReadError`
+
+Variant of varint.ReadError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fvarint_2fReadError_23Overflow"></a>
+
+- `Overflow(u64) -> varint.ReadError`
+
+Variant of varint.ReadError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fvarint_2fReadError_23Truncated"></a>
+
+- `Truncated(u64) -> varint.ReadError`
+
+Variant of varint.ReadError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fvarint_2fappend_5fi64"></a>
+
+- `@preserves_unique(out) pub fn varint.append_i64(value: i64, mut out: List[u8]) -> () uses {}`
+
+Append canonical ZigZag without negating a signed value.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fvarint_2fappend_5fu64"></a>
+
+- `@preserves_unique(out) pub fn varint.append_u64(value: u64, mut out: List[u8]) -> () uses {}`
+
+Append the canonical shortest unsigned base128 encoding, preserving prefix.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fvarint_2fread_5fi64"></a>
+
+- `@noalloc pub fn varint.read_i64(data: Bytes, offset: u64) -> Result[(i64, u64), ReadError] uses {}`
+
+Read signed ZigZag (not signed LEB128), including i64 MIN.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64), [`std@1/varint/ReadError`](#def-std_401_2fvarint_2fReadError)
+
+<a id="def-std_401_2fvarint_2fread_5fu64"></a>
+
+- `@noalloc pub fn varint.read_u64(data: Bytes, offset: u64) -> Result[(u64, u64), ReadError] uses {}`
+
+Read unsigned base128, returning (value, next absolute offset). Overlong
+encodings are accepted. An invalid tenth byte overflows immediately.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/varint/ReadError`](#def-std_401_2fvarint_2fReadError)
 
 
 ## watcher
