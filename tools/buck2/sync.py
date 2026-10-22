@@ -983,6 +983,12 @@ def first_party(meta: dict) -> str:
                             bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["tools/json-hooks", "tools/tests/test_json_hooks.py", "examples/typed-json-kit/main.hir", "examples/typed-json-kit/check.hir", "examples/typed-json-kit/hirsel.json", "examples/typed-json-kit/check.json", "stdlib/std@1/**"])')))
+    out.append("\n" + call("hirsel_script_test", name="test-portable-manifest", script="tools/tests/portable_manifest.py", full=False,
+                            data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
+    out.append("\n" + call("hirsel_script_test", name="test-portable-manifest-integration", script="tools/tests/portable_manifest.py", full=False,
+                            args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-portable-manifest-integration/hirsel"],
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, runtime_archives=RUNTIME_ARCHIVES,
+                            data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],

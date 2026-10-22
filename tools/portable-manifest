@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Make one schema-1 package manifest's local dependencies workspace-relative."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+
+# crates/hirsel-syntax/src/lib.rs::Keyword::from_spelling and
+# crates/hirsel-engine/src/package.rs::{identifier, package_value}.
+KEYWORDS = set('fn let mut match if else for in while break continue return take copy '
+               'unique type distinct flat resource drop box pub opaque const comptime '
+               'shape heap before requires ensures result where uses of local global '
+               'once todo extern unsafe true false'.split())
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'duplicate JSON field {key!r}')
+        result[key] = value
+    return result
+
+
+def invalid_constant(value):
+    raise ValueError(f'non-JSON constant {value}')
+
+
+def identity(value):
+    if not isinstance(value, dict):
+        raise ValueError('package identity must be an object with name and version')
+    name, version = value.get('name'), value.get('version')
+    if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', name)
+            or name in KEYWORDS):
+        raise ValueError('package name must be a non-keyword ASCII identifier')
+    if (not isinstance(version, str) or not re.fullmatch(r'0|[1-9][0-9]{0,19}', version)
+            or int(version) > 2**64 - 1):
+        raise ValueError('package version must be a canonical decimal u64 major string')
+    return name, version
+
+
+def read_manifest(path):
+    with path.open(encoding='utf-8') as stream:
+        value = json.load(stream, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    if not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] != 1:
+        raise ValueError(f'{path}: package schema must be 1')
+    identity(value.get('package'))
+    if not isinstance(value.get('dependencies'), list):
+        raise ValueError(f'{path}: dependencies must be an array of local manifest selections')
+    if not isinstance(value.get('sources'), list) or not value['sources']:
+        raise ValueError(f'{path}: sources must be a nonempty array')
+    return value
+
+
+def contained_file(path, root):
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise ValueError(f'{path}: manifest resolves outside workspace root {root}')
+    if not resolved.is_file():
+        raise ValueError(f'{path}: expected a manifest file')
+    return resolved
+
+
+def local_path(value):
+    # Scheme references (including file:), UNC and foreign Windows drive paths
+    # are unsupported, rather than being mistaken for POSIX filenames.
+    if (not isinstance(value, str) or not value or '\x00' in value
+            or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', value)
+            or value.startswith(('//', '\\\\'))):
+        raise ValueError('dependency manifest must be a local filesystem path; remote references are unsupported')
+    return Path(value)
+
+
+def relative_manifest(target, directory):
+    """Go filepath.Rel's component-relative result, using the host stdlib.
+
+    Reference: Go ebe2feefc400, src/path/filepath/path.go:185-264.
+    Both inputs here are canonical existing paths, so unresolved dot components
+    and mixed absolute/relative roots cannot reach this operation.
+    """
+    return os.path.relpath(target, directory)
+
+
+def portable(manifest, workspace_root, std_manifest=None):
+    root = workspace_root.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError('workspace root must be a directory')
+    path = contained_file(manifest, root)
+    value = read_manifest(path)
+    dependencies = value['dependencies']
+    selections = []
+    std_indices = []
+    for index, dependency in enumerate(dependencies):
+        if not isinstance(dependency, dict):
+            raise ValueError('dependency must be an object with manifest and package')
+        selected = identity(dependency.get('package'))
+        spelling = local_path(dependency.get('manifest'))
+        selections.append((selected, spelling))
+        if selected == ('std', '1'):
+            std_indices.append(index)
+    if len(std_indices) > 1:
+        raise ValueError('ambiguous duplicate std@1 dependencies')
+    if std_manifest is not None and not std_indices:
+        raise ValueError('--std-manifest requires exactly one existing std@1 dependency')
+    replacement = None
+    if std_manifest is not None:
+        replacement = contained_file(std_manifest, root)
+        if identity(read_manifest(replacement)['package']) != ('std', '1'):
+            raise ValueError('--std-manifest target must identify std@1')
+    for dependency, (expected, spelling) in zip(dependencies, selections):
+        target = (replacement if expected == ('std', '1') and replacement is not None
+                  else contained_file(path.parent / spelling, root))
+        if identity(read_manifest(target)['package']) != expected:
+            raise ValueError(f'{target}: package identity does not match dependency {expected[0]}@{expected[1]}')
+        dependency['manifest'] = relative_manifest(target, path.parent)
+    # Serialize completely before stdout or creating a temporary file.
+    return path, (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
+
+
+def replace_manifest(path, contents):
+    permissions = stat.S_IMODE(path.stat().st_mode)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f'.{path.name}.', delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(contents)
+            stream.flush()
+            os.fchmod(stream.fileno(), permissions)
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument('manifest', type=Path)
+    parser.add_argument('--workspace-root', required=True, type=Path)
+    parser.add_argument('--std-manifest', type=Path, help='explicit matching workspace std@1 manifest')
+    parser.add_argument('--write', action='store_true', help='atomically replace only the input manifest')
+    args = parser.parse_args()
+    try:
+        if args.write and args.manifest.is_symlink():
+            raise ValueError('--write refuses a symlink input manifest')
+        path, contents = portable(args.manifest, args.workspace_root, args.std_manifest)
+        if args.write:
+            replace_manifest(path, contents)
+        else:
+            sys.stdout.buffer.write(contents)
+    except (OSError, ValueError, RuntimeError) as error:
+        parser.error(str(error))
+
+
+if __name__ == '__main__':
+    main()
