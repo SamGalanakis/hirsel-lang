@@ -9,8 +9,20 @@ fn fixture() -> PathBuf {
 
 #[test]
 fn vectors_on_h_llvm_and_cranelift() {
+    check_vectors(fixture());
+}
+
+#[test]
+fn json_pointer_cursor_15_vectors_on_h_heap_llvm_and_cranelift() {
+    check_vectors(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/json-pointer-cursor-15/vectors.hir"),
+    );
+}
+
+fn check_vectors(path: PathBuf) {
     with_compiler_stack(|| {
-        let mut loaded = load_program(&fixture()).unwrap();
+        let mut loaded = load_program(&path).unwrap();
         loaded.check_for_execution().unwrap_or_else(|e| match e {
             ToolError::Query { error, .. } => panic!("{error:?}"),
             e => panic!("{e}"),
@@ -54,7 +66,22 @@ fn vectors_on_h_llvm_and_cranelift() {
                 },
             },
         ];
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("json-pointer-8-vectors");
+        let ready = native::build(&validated, &configs[0].options).unwrap();
+        let heap = native::run_heap(
+            &ready,
+            &loaded.entry,
+            &native::Sites::new(validated.snapshot()),
+        )
+        .unwrap();
+        assert_eq!(heap.observation, expected);
+        assert_eq!(heap.counters.live_heap_bytes, 0);
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(
+            if path.parent().unwrap().ends_with("json-pointer-cursor-15") {
+                "json-pointer-cursor-15"
+            } else {
+                "json-pointer-8-vectors"
+            },
+        );
         let tools = native::Toolchain::for_matrix(&dir.join("runtime"), &configs).unwrap();
         for (config, outcome) in
             native::differential(&validated, &loaded.entry, &expected, &configs, &tools, &dir)

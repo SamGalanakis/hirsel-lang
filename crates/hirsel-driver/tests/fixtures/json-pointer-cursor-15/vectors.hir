@@ -1,0 +1,64 @@
+fn pointer(source: String) -> std@1/json_pointer.Pointer uses {} {
+  match std@1/json_pointer.parse(source) {
+    Ok(p) => p,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      pointer("")
+    },
+  }
+}
+
+fn selected(value: std@1/json.Value, p: std@1/json_pointer.Pointer) -> () uses {} {
+  match std@1/json_pointer.get(value, p) {
+    Some(Text(s)) => core@1/failure.check(s == "cursor leaf", TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+}
+pub fn main() -> Result[(), u64] {
+  let mut deep: std@1/json.Value = Text("cursor leaf")
+  let mut path = ""
+  for _ in 0u64..128 {
+    deep = Array([take deep])
+    path = std@1/string.join([path, "/0"], "")
+  }
+  let alias = copy deep
+  let selected_value = {
+    let p = pointer(path)
+    std@1/json_pointer.get(deep, p)
+  }
+  match selected_value {
+    Some(Text(s)) => core@1/failure.check(s == "cursor leaf", TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  selected(alias, pointer(path))
+  let mut mixed: std@1/json.Value = Text("cursor leaf")
+  let mut mixed_path = ""
+  for _ in 0u64..8 {
+    let mut members: Map[String, std@1/json.Value] = core@1/map.empty()
+    for n in 0u64..128 {
+      core@1/map.insert(mut members, std@1/u64.to_string(n), Null())
+    }
+    core@1/map.insert(mut members, "é/😀~", Array([Array([take mixed])]))
+    mixed = Array([Object(take members)])
+    mixed_path = std@1/string.join(["/0/é~1😀~0/0/0", mixed_path], "")
+  }
+  selected(mixed, pointer(mixed_path))
+  let bad_paths: List[String] = ["/00", "/01", "/-", "/1", "/18446744073709551615", "/18446744073709551616", "/0/nope"]
+  for bad in bad_paths {
+    match std@1/json_pointer.get(deep, pointer(bad)) {
+      None() => (),
+      Some(_) => core@1/failure.check(false, TextInvariant()),
+    }
+  }
+  match std@1/json_pointer.get(deep, pointer("")) {
+    Some(Array(xs)) => core@1/failure.check(core@1/list.len(xs) == 1, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  let scalar: std@1/json.Value = Text("cursor leaf")
+  selected(scalar, pointer(""))
+  match std@1/json_pointer.get(scalar, pointer("/0")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

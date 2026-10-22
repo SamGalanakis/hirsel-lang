@@ -87,8 +87,9 @@ fn index(token: String) -> Option[u64] uses {} {
   Some(acc)
 }
 
-// Hirsel's local child freezes its source. Descend with borrowed parameters,
-// keeping ancestors live instead of rebinding a cursor to its own borrowed child.
+// Objects keep the original hashed lookup and recursive owned-result handoff.
+// Consecutive arrays use a cursor; reaching an object starts a fresh invocation
+// so its map.get result is rooted in the parameter, never in a cursor payload.
 fn descend(value: json.Value, tokens: List[String], at: u64) -> Option[json.Value] in value uses {} {
   if at == core@1/list.len(tokens) {
     return Some(copy value)
@@ -100,14 +101,26 @@ fn descend(value: json.Value, tokens: List[String], at: u64) -> Option[json.Valu
       }
       descend(child, tokens, at + 1)
     },
-    Array(items) => {
-      let Some(index_at) = index(tokens[at]) else {
-        return None()
+    Array(_) => {
+      let mut target = value
+      let mut pos = at
+      while pos < core@1/list.len(tokens) {
+        match target {
+          Array(items) => {
+            let Some(index_at) = index(tokens[pos]) else {
+              return None()
+            }
+            if index_at >= core@1/list.len(items) {
+              return None()
+            }
+            target = items[index_at]
+            pos += 1
+          },
+          Object(_) => { return descend(target, tokens, pos) },
+          _ => { return None() },
+        }
       }
-      if index_at >= core@1/list.len(items) {
-        return None()
-      }
-      descend(items[index_at], tokens, at + 1)
+      Some(copy target)
     },
     _ => None(),
   }
