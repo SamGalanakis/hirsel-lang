@@ -104,3 +104,46 @@ fn compact_store_hits_do_not_lookup_or_materialize_modes_bodies() {
         }
     });
 }
+
+#[test]
+fn settled_summary_identity_ignores_source_and_positions_but_observes_calls() {
+    with_compiler_stack(|| {
+        let source = "fn value(x:u32)->u32{x+1u32}\nfn other(x:u32)->u32{x}\nfn caller()->u32{value(4u32)}\n";
+        let store = Arc::new(Observed::default());
+        let (mut resident, original) = publish(store.clone(), source, 1);
+        assert!(original.iter().all(|o| o.result.is_ok()));
+        let caller = original
+            .iter()
+            .find(|o| o.definition.0.name == "caller")
+            .unwrap();
+        let id = hirsel_syntax::DefId::intern(&caller.definition);
+        let original_key = resident.definition_summary_identity(id).unwrap().unwrap();
+        for jobs in [1, 2, 4, 8] {
+            let shifted = source
+                .replace("x+1u32", "x+2u32")
+                .replace("{value(4u32)}", "{  value(4u32) }");
+            let file = resident
+                .sources
+                .add("completion.hir", shifted.clone())
+                .unwrap();
+            resident.parse_file(file, &default_context()).unwrap();
+            assert_eq!(
+                resident.definition_summary_identity(id).unwrap(),
+                Some(original_key)
+            );
+            let (mut fresh, outputs) = publish(store.clone(), &shifted, jobs);
+            assert!(outputs.iter().all(|o| o.result.is_ok()));
+            assert_eq!(
+                fresh.definition_summary_identity(id).unwrap(),
+                Some(original_key)
+            );
+            let changed = shifted.replace("value(4u32)", "other(4u32)");
+            let (mut fresh, outputs) = publish(store.clone(), &changed, jobs);
+            assert!(outputs.iter().all(|o| o.result.is_ok()));
+            assert_ne!(
+                fresh.definition_summary_identity(id).unwrap(),
+                Some(original_key)
+            );
+        }
+    });
+}

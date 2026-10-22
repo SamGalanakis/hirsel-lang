@@ -2,6 +2,55 @@
 use super::*;
 
 impl QueryEngine {
+    /// Demand the settled summary output identity. A provisional computation
+    /// has no reusable output identity, even when its current bytes are equal.
+    pub fn definition_summary_identity(
+        &mut self,
+        definition: DefId,
+    ) -> Result<Option<ContentHash>, QueryError> {
+        self.definition_summary(definition)?;
+        Ok(self
+            .graph
+            .output(&MemoKey::new(QueryKind::Summary, definition)))
+    }
+
+    fn summary_output(
+        &self,
+        summary: &DefinitionSummary,
+        growth: &ParameterGrowth,
+        checked: Option<&CheckedSummary>,
+    ) -> Option<ContentHash> {
+        if !self.s1.is_empty() || !self.s1.failure_is_own() || !self.signature_stack.is_empty() {
+            return None;
+        }
+        fn semantic(
+            summary: &DefinitionSummary,
+            growth: &ParameterGrowth,
+        ) -> (DefinitionSummary, ParameterGrowth) {
+            let mut summary = summary.clone();
+            for call in &mut summary.calls {
+                call.site = Span::default();
+            }
+            let mut growth = growth.clone();
+            for edge in &mut growth.edges {
+                edge.3 = Span::default();
+            }
+            (summary, growth)
+        }
+        // Use the portable codec's canonical type graph positions. Diagnostic
+        // locations remain in the published record and its position witnesses;
+        // source text, reads and locations are outside the semantic output.
+        let value = (
+            semantic(summary, growth),
+            checked.map(|c| semantic(&c.summary, &c.growth)),
+        );
+        let bytes = self.encode_record(&value)?;
+        Some(ContentHash::of_parts(
+            "hirsel.summary.output.v1",
+            [bytes.as_slice()],
+        ))
+    }
+
     /// Publish the compact summary before releasing intermediate bodies whose
     /// S1 work has settled. A later body demand uses the ordinary miss path.
     pub fn publish_definition(
@@ -206,16 +255,19 @@ impl QueryEngine {
         let reads = summary.reads.clone();
         let key = crate::memo::MemoKey::new(QueryKind::Summary, definition);
         let text = summary.text;
+        let output =
+            self.summary_output(&summary.summary, &summary.growth, summary.checked.as_ref());
         let value = Ok(std::sync::Arc::new(QueryOutput {
             value: summary,
             diagnostics: vec![],
             dependencies: detail.signatures.clone(),
         }));
         let memo = if adopted {
-            self.graph.adopt_value(key, text, value, reads, durability)
+            self.graph
+                .adopt_output(key, text, value, reads, durability, output)
         } else {
             self.graph
-                .insert(key, text, value, reads, durability, false)
+                .insert_output(key, text, value, reads, durability, output)
         };
         self.summaries.insert(
             definition,
@@ -299,16 +351,18 @@ impl QueryEngine {
     ) {
         let key = MemoKey::new(QueryKind::CheckedSummary, definition);
         let durability = reads.durability(|read| self.durability_of(read));
+        let output = self.summary_output(&summary.summary, &summary.growth, None);
         let value = Ok(Arc::new(QueryOutput {
             value: Arc::new(summary),
             diagnostics: vec![],
             dependencies: detail.signatures.clone(),
         }));
         let memo = if adopted {
-            self.graph.adopt_value(key, text, value, reads, durability)
+            self.graph
+                .adopt_output(key, text, value, reads, durability, output)
         } else {
             self.graph
-                .insert(key, text, value, reads, durability, false)
+                .insert_output(key, text, value, reads, durability, output)
         };
         self.checked_summaries.insert(
             definition,
