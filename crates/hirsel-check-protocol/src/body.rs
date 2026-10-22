@@ -101,6 +101,9 @@ pub struct Plans {
     pub resource_patterns: Vec<(ast::PatternId, Vec<TypeId>)>,
     /// Ordered H-selected record, tuple, and variant payload projections.
     pub pattern_literals: Vec<(ast::PatternId, ast::Literal)>,
+    /// Catch-all arms covered by earlier unguarded patterns. Their bodies still check,
+    /// but have no executable path and must not be lowered.
+    pub unreachable_arms: Vec<ast::PatternId>,
     pub tries: Vec<TryPlan>,
     pub loops: Vec<ForPlan>,
     pub functions: Vec<FunctionPlan>,

@@ -1,0 +1,25 @@
+// rule: LANG-13
+// expect: run
+// boundary: redundant structural arms and reachable fallbacks retain match semantics.
+resource type Trace {
+  value: String,
+}
+drop(x) {
+  ()
+}
+
+resource type Parent {
+  first: Trace,
+}
+drop(x) {
+  ()
+}
+
+pub fn main() -> Result[(), ()] {
+  let parent = Parent(first: Trace(value: "a"))
+  match take parent {
+    Parent(first: kept) => (),
+    _ => (),
+  }
+  Ok(())
+}

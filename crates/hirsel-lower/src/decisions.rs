@@ -26,6 +26,7 @@ pub(super) struct Decisions<'a> {
     /// The owner of the lowered item's lexical sites, which rows qualify them with.
     pub lexical: hirsel_types::LexicalOwner,
     pub cloned_scopes: std::cell::RefCell<BTreeMap<hirsel_types::SiteRef, hirsel_types::SiteRef>>,
+    pub unreachable_arms: Table<'a, PatternId, PatternId>,
     pub resource_patterns: Table<'a, PatternId, (PatternId, Vec<TypeId>)>,
     pub literals:
         Table<'a, hirsel_syntax::PatternId, (hirsel_syntax::PatternId, hirsel_syntax::Literal)>,
@@ -72,6 +73,7 @@ impl<'a> Decisions<'a> {
             lexical: input.syntax.owner(),
             cloned_scopes: Default::default(),
             repeats: Table::new(&input.syntax.tree.repeats, |row| row.sequence),
+            unreachable_arms: Table::new(&input.plans.unreachable_arms, |row| *row),
             resource_patterns: Table::new(&input.plans.resource_patterns, |row| row.0),
             literals: Table::new(&input.plans.pattern_literals, |row| row.0),
             entries: Table::new(&input.plans.entry_checks, |row| row.0),

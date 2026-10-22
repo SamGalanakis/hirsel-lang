@@ -1077,6 +1077,11 @@ impl Builder<'_, '_> {
             span,
         );
         for arm in arms {
+            // H still checks redundant structural arms, but no match edge can
+            // supply their bodies with an ownership state. Omit them entirely.
+            if !self.decisions.unreachable_arms.get(&arm.pattern).is_empty() {
+                continue;
+            }
             let Some(choices) = self.input.syntax.tree.pattern_choices(arm.pattern) else {
                 return self.error(span, "unchecked or-pattern expansion");
             };

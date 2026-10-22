@@ -245,6 +245,10 @@ origins into the child, including nested checked type edges. Lowering preserves
 the checked type and does not require duplicate owner parameters there; TIR validation independently checks the capture relationship.
 
 Match lowering transports CheckedBody.patterns into ordered TIR match tables.
+H also marks catch-all arms covered by earlier unguarded patterns using its existing
+usefulness judgment. K omits those arms entirely, including guards and bodies, while H still
+checks their source. LANG-13 rejects redundant ranges and or-pattern alternatives;
+other redundant arms remain accepted.
 H publishes checked literal payloads through its private lowering plan; K adds no
 pattern acceptance decision. Guard tests borrow before commit and false guards
 restart the same table after cleanup. There is no match fallthrough sentinel.

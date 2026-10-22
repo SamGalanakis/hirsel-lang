@@ -1,0 +1,32 @@
+// rule: LANG-13
+// expect: run
+// boundary: redundant structural arms and reachable fallbacks retain match semantics.
+resource type Trace {
+  value: String,
+}
+drop(x) {
+  ()
+}
+
+resource type Parent {
+  first: Trace,
+}
+drop(x) {
+  ()
+}
+
+fn pick(accept: bool) -> u64 {
+  let parent = Parent(first: Trace(value: "a"))
+  match take parent {
+    Parent(first: kept) if accept => 1,
+    _ => 2,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  if pick(true) == 1 && pick(false) == 2 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

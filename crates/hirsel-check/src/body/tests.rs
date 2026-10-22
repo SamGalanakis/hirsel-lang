@@ -440,3 +440,41 @@ fn trailing_while_keeps_unit_and_suggests_an_explicit_tail() {
         assert!(ds.is_empty(), "{source}: {ds:?}");
     }
 }
+
+#[test]
+fn redundant_structural_arms_are_checked_but_planned_out_of_execution() {
+    for (source, dead) in [
+        (
+            "type R { n: u8 }\nfn main(r: R) -> u8 { match r { R(n: n) => n, _ => 2 } }",
+            1,
+        ),
+        (
+            "fn main(b: bool) -> u8 { match b { true => 1, false => 2, _ => 3 } }",
+            1,
+        ),
+        (
+            "fn main(b: bool) -> u8 { match b { _ => 1, _ if b => 2 } }",
+            1,
+        ),
+        (
+            "fn main(b: bool) -> u8 { match b { true => 1, _ => 2 } }",
+            0,
+        ),
+        (
+            "type R { n: u8 }\nfn main(r: R, b: bool) -> u8 { match r { R(n: n) if b => n, _ => 2 } }",
+            0,
+        ),
+    ] {
+        let (diagnostics, outputs, _) = support::check_source(source);
+        assert!(diagnostics.is_empty(), "{source}: {diagnostics:?}");
+        assert_eq!(
+            outputs.last().unwrap().plans.unreachable_arms.len(),
+            dead,
+            "{source}"
+        );
+    }
+    let (diagnostics, _, _) =
+        support::check_source("fn main(b: bool) -> u8 { match b { _ => 1, _ => false } }");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].rule.as_str(), "LANG-7");
+}

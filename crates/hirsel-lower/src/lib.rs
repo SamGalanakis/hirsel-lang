@@ -40,6 +40,8 @@ pub struct Plans {
     pub staged: Vec<(ExprId, TypeId)>,
     /// Nominal variant cardinalities proved by H for constructor patterns.
     pub pattern_literals: Vec<(hirsel_syntax::PatternId, hirsel_syntax::Literal)>,
+    /// H-proved catch-all arms covered by earlier unguarded patterns.
+    pub unreachable_arms: Vec<hirsel_syntax::PatternId>,
     pub entry_checks: Vec<(NameSite, ExprId, hirsel_diag::RuleId)>,
     pub contracts: Vec<hirsel_check_protocol::body::ContractPlan>,
     pub facts: Vec<hirsel_check_protocol::body::FactPlan>,

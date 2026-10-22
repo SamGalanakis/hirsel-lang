@@ -37,6 +37,7 @@ impl Plans {
         output.contracts = source.contracts.clone();
         output.facts = source.facts.clone();
         output.pattern_literals = source.pattern_literals.clone();
+        output.unreachable_arms = source.unreachable_arms.clone();
         for propagation in &source.tries {
             let id = propagation.expression;
             let ExprKind::Try { value, .. } = tree.expressions[id.0 as usize].kind else {

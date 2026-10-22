@@ -1625,6 +1625,10 @@ conformance/LANG/LANG-13-recursive-map-member-pattern-run.hir
 conformance/LANG/LANG-13-recursive-map-pattern-run.hir
 conformance/LANG/LANG-13-recursive-member-loop-return-run.hir
 conformance/LANG/LANG-13-recursive-tuple-match-run.hir
+conformance/LANG/LANG-13-redundant-structural-guarded-run.hir
+conformance/LANG/LANG-13-redundant-structural-plain-run.hir
+conformance/LANG/LANG-13-redundant-structural-reachable-run.hir
+conformance/LANG/LANG-13-redundant-structural-resource-run.hir
 conformance/LANG/LANG-13-refutable-let-bad.hir
 conformance/LANG/LANG-13-refutable-let-ok.hir
 conformance/LANG/LANG-13-tour-patterns-run.hir

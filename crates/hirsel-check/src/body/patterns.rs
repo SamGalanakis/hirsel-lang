@@ -589,7 +589,8 @@ impl Checker<'_, '_> {
     }
     /// LANG-13: a range pattern or an alternative no value reaches, because
     /// earlier arms or earlier alternatives of its or-pattern match every value
-    /// it matches, is rejected. Other unreachable arms are not judged here.
+    /// it matches, is rejected. Other arms remain accepted; covered catch-all
+    /// arms have a producer plan to omit their bodies during lowering.
     pub(super) fn unreachable_patterns(
         &mut self,
         root: TypeId,
@@ -599,10 +600,21 @@ impl Checker<'_, '_> {
         let mut rows: Vec<Row> = vec![];
         for arm in arms {
             let whole = vec![Some(arm.pattern)];
+            // Only a catch-all needs the new reachability query. Keep the
+            // existing range/or diagnostics and recursive-pattern work budget.
             let (alternations, range) = self.refining_patterns(arm.pattern);
+            let catch_all = self.wild(Some(arm.pattern));
+            let reachable = if catch_all || range.is_some() && alternations.is_empty() {
+                self.useful_choosing(root, rows.clone(), (whole.clone(), free.clone()))?
+            } else {
+                true
+            };
+            if catch_all && !reachable {
+                self.plans.unreachable_arms.push(arm.pattern);
+            }
             if alternations.is_empty() {
                 if let Some(range) = range
-                    && !self.useful_choosing(root, rows.clone(), (whole.clone(), free.clone()))?
+                    && !reachable
                 {
                     self.report(
                         const { RuleId::of("LANG-13") },

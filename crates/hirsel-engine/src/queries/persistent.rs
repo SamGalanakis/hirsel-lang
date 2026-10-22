@@ -281,6 +281,7 @@ fn valid_body_indices(
         && resolution.bindings.iter().all(|(id, _, _)| pattern(*id))
         && plans.resource_patterns.iter().all(|(id, _)| pattern(*id))
         && plans.pattern_literals.iter().all(|(id, _)| pattern(*id))
+        && plans.unreachable_arms.iter().all(|id| pattern(*id))
         && plans
             .tries
             .iter()

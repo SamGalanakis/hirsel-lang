@@ -1,0 +1,23 @@
+// rule: LANG-13
+// expect: run
+// boundary: redundant structural arms and reachable fallbacks retain match semantics.
+type Trace {
+  value: String,
+}
+
+type Parent {
+  first: Trace,
+}
+
+pub fn main() -> Result[(), ()] {
+  let parent = Parent(first: Trace(value: "a"))
+  let n: u64 = match take parent {
+    Parent(first: kept) => 1,
+    _ => 2,
+  }
+  if n == 1 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}
