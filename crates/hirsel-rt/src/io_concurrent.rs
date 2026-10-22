@@ -25,6 +25,11 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn identity(&self, _handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
         None
     }
+    /// Full process issue domains, including inherited sinks not yet projected
+    /// as handles. Only checked process grants may supply this metadata.
+    fn process_keys(&self, _process: u64) -> Option<KeySet> {
+        None
+    }
     /// Enter a request-owned wait token and perform exactly one bounded attempt.
     fn call_at(&self, _token: u64, request: Request) -> Result<Completion, AdapterError> {
         self.call(request)

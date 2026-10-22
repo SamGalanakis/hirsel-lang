@@ -45,7 +45,11 @@ pub(in crate::tasks::free) fn replay_keys(
     handles: &handles::Handles,
     request: &Request,
 ) -> Stopped<KeySet> {
-    request_keys(request, |word| handles.identity(word))
+    request_keys_with_process(
+        request,
+        |word| handles.identity(word),
+        |word| handles.process_keys(word),
+    )
 }
 
 /// One allow-list and footprint rule for live admission and replay. Native
@@ -53,7 +57,17 @@ pub(in crate::tasks::free) fn replay_keys(
 /// domain alone; extra adapter domains refuse before preparation or effect.
 pub(super) fn request_keys(
     request: &Request,
+    identity: impl FnMut(u64) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)>,
+) -> Stopped<KeySet> {
+    request_keys_with_process(request, identity, |_| {
+        Err(Stop::Diverged("missing process issue domains".into()))
+    })
+}
+
+pub(super) fn request_keys_with_process(
+    request: &Request,
     mut identity: impl FnMut(u64) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)>,
+    mut process_keys: impl FnMut(u64) -> Stopped<KeySet>,
 ) -> Stopped<KeySet> {
     use crate::io_keys::{Kind, NAMESPACE, ROOT};
     use Request as R;
@@ -67,6 +81,7 @@ pub(super) fn request_keys(
     let keys = match request {
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
+        | R::Process { io: 1 }
         | R::Telemetry { io: 1 }
         | R::Signals { io: 1 }
         | R::Stdin { io: 1 }
@@ -117,6 +132,80 @@ pub(super) fn request_keys(
                 return Err(Stop::Diverged("native span resource differs".into()));
             }
             vec![(provider.0, Mode::Exclusive)]
+        }
+        R::ProcessNarrow { process, .. } => {
+            let (key, kind) = identity(*process)?;
+            if kind != Kind::Other {
+                return Err(Stop::Diverged("native process kind differs".into()));
+            }
+            process_keys(*process)?;
+            vec![(key, Mode::Shared)]
+        }
+        R::ProcessRun {
+            process,
+            command,
+            deadline,
+            ..
+        } => {
+            if let Some(directory) = command.directory {
+                file(directory)?;
+            }
+            if let Some(deadline) = deadline {
+                identity(deadline.clock)?;
+            }
+            return process_keys(*process);
+        }
+        R::ProcessSpawn { process, command } => {
+            if let Some(directory) = command.directory {
+                file(directory)?;
+            }
+            return process_keys(*process);
+        }
+        R::ProcessPipeline {
+            process,
+            stages,
+            deadline,
+            ..
+        } => {
+            for command in stages {
+                if let Some(directory) = command.directory {
+                    file(directory)?;
+                }
+            }
+            if let Some(deadline) = deadline {
+                identity(deadline.clock)?;
+            }
+            return process_keys(*process);
+        }
+        R::ProcessSpawnPipeline {
+            process, stages, ..
+        } => {
+            for command in stages {
+                if let Some(directory) = command.directory {
+                    file(directory)?;
+                }
+            }
+            return process_keys(*process);
+        }
+        R::ChildWrite { process, child, .. }
+        | R::ChildRead { process, child, .. }
+        | R::ChildCloseStdin { process, child }
+        | R::ChildWait { process, child, .. }
+        | R::ChildKill { process, child, .. } => {
+            process_keys(*process)?;
+            let (key, kind) = identity(*child)?;
+            if kind != Kind::Other {
+                return Err(Stop::Diverged("native child kind differs".into()));
+            }
+            vec![(key, Mode::Exclusive)]
+        }
+        R::GroupWait { process, group, .. } => {
+            process_keys(*process)?;
+            let (key, kind) = identity(*group)?;
+            if kind != Kind::Other {
+                return Err(Stop::Diverged("native group kind differs".into()));
+            }
+            vec![(key, Mode::Exclusive)]
         }
         R::Directory { io: 1, .. } => vec![(NAMESPACE, Mode::Shared)],
         R::NarrowDir { directory, .. }

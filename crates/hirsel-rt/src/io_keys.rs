@@ -220,6 +220,19 @@ impl Registry {
     pub fn identity(&self, handle: u64) -> Option<(Key, Kind)> {
         self.handles.get(&handle).copied()
     }
+    /// A process issue touches the grant, namespace and every inherited stream.
+    /// The caller has checked that `process` is a live process grant.
+    pub fn process_keys(&self, process: u64) -> Option<KeySet> {
+        let (key, Kind::Other) = self.identity(process)? else {
+            return None;
+        };
+        let mut keys = vec![(key, Mode::Exclusive), (NAMESPACE, Mode::Exclusive)];
+        keys.extend(self.sinks.iter().map(|&key| (key, Mode::Exclusive)));
+        if self.unknown_storage {
+            keys.push((COUPLED, Mode::Exclusive));
+        }
+        Some(KeySet::new(keys))
+    }
     fn handle(&self, handle: u64) -> (Key, Kind) {
         self.handles
             .get(&handle)

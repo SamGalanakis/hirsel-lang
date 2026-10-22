@@ -205,6 +205,16 @@ impl ConcurrentAdapter for ConcurrentIo {
     fn identity(&self, handle: u64) -> Option<(Key, Kind)> {
         self.registry.lock().unwrap().identity(handle)
     }
+    fn process_keys(&self, process: u64) -> Option<KeySet> {
+        let core = self.core.lock().unwrap();
+        if !matches!(
+            core.state.handles.rows.get(&process),
+            Some(crate::handles::Grant::Process { .. })
+        ) {
+            return None;
+        }
+        self.registry.lock().unwrap().process_keys(process)
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         if matches!(request, Request::Ready { .. } | Request::Schedule { .. }) {
             return Err(AdapterError::InvalidCompletion);

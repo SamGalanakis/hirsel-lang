@@ -390,6 +390,7 @@ fn owned_process_results_preserve_all_payloads_and_reject_creation_metadata() {
                     output_count: None,
                     result,
                     created: vec![Created {
+                        process_keys: None,
                         path: vec![],
                         ordinal: 1,
                         resource: 17,

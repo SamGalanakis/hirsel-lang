@@ -213,11 +213,19 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
             .expect("concurrent host admission")
     };
     let _segment = unsafe { role::Segment::new(ctx) };
-    let expected = super::native::request_keys(request, |word| {
-        io.adapter
-            .identity(word)
-            .ok_or_else(|| Stop::Refused("unmapped live host resource".into()))
-    })
+    let expected = super::native::request_keys_with_process(
+        request,
+        |word| {
+            io.adapter
+                .identity(word)
+                .ok_or_else(|| Stop::Refused("unmapped live host resource".into()))
+        },
+        |word| {
+            io.adapter
+                .process_keys(word)
+                .ok_or_else(|| Stop::Refused("unmapped process issue domains".into()))
+        },
+    )
     .map_err(|_| Stop::Refused("native host request metadata is not admitted".into()))?;
     if expected != io.adapter.keys(request) {
         return Err(Stop::Refused(

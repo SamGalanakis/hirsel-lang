@@ -9,6 +9,7 @@ pub(in crate::tasks::free) struct Created {
     pub(in crate::tasks::free) ordinal: u64,
     pub(in crate::tasks::free) resource: u32,
     pub(in crate::tasks::free) kind: crate::io_keys::Kind,
+    pub(in crate::tasks::free) process_keys: Option<Vec<u32>>,
 }
 
 pub(in crate::tasks::free) struct Envelope {
@@ -33,6 +34,7 @@ impl Wire for Created {
                 stream.0.encode(out);
             }
         }
+        self.process_keys.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
         Ok(Self {
@@ -50,18 +52,19 @@ impl Wire for Created {
                 },
                 _ => return Err("unknown host resource kind".into()),
             },
+            process_keys: Wire::decode(input)?,
         })
     }
 }
 impl Wire for Envelope {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(b"F1H2");
+        out.extend_from_slice(b"F1H3");
         self.result.encode(out);
         self.created.encode(out);
         self.output_count.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
-        if input.take(4)? != b"F1H2" {
+        if input.take(4)? != b"F1H3" {
             return Err("unsupported Free host envelope".into());
         }
         Ok(Self {
@@ -143,6 +146,15 @@ impl Handles {
         // Validate every field before changing the table, so a corrupt second
         // field cannot install even the first identity.
         for (index, (word, created)) in fields.iter().flatten().zip(&envelope.created).enumerate() {
+            if let Some(keys) = &created.process_keys {
+                if created.kind != crate::io_keys::Kind::Other
+                    || !keys.contains(&created.resource)
+                    || !keys.contains(&crate::io_keys::NAMESPACE.0)
+                    || keys.windows(2).any(|pair| pair[0] >= pair[1])
+                {
+                    return Err(Stop::Diverged("invalid process issue domains".into()));
+                }
+            }
             if **word != 0
                 || created.ordinal == 0
                 || envelope.created[..index]
@@ -196,6 +208,18 @@ impl Handles {
             .map(|created| (crate::io_keys::Key(created.resource), created.kind))
             .ok_or_else(|| Stop::Diverged("unmapped replay host handle".into()))
     }
+    pub(in crate::tasks::free) fn process_keys(&self, word: u64) -> Stopped<KeySet> {
+        let keys = self
+            .words
+            .get(&word)
+            .and_then(|created| created.process_keys.as_ref())
+            .ok_or_else(|| Stop::Diverged("missing process issue domains".into()))?;
+        Ok(KeySet::new(
+            keys.iter()
+                .map(|&key| (crate::io_keys::Key(key), Mode::Exclusive))
+                .collect(),
+        ))
+    }
     pub(in crate::tasks::free) fn resource(&self, word: u64) -> Stopped<crate::io_keys::Key> {
         self.identity(word).map(|(key, _)| key)
     }
@@ -209,6 +233,7 @@ mod tests {
             output_count: None,
             result: Ok(Completion::Handle(Ok(0))),
             created: vec![Created {
+                process_keys: None,
                 path: path.to_vec(),
                 ordinal,
                 resource,
@@ -420,6 +445,7 @@ mod tests {
                     output_count: None,
                     result: Ok(Completion::Unit(Ok(()))),
                     created: vec![Created {
+                        process_keys: None,
                         path: vec![],
                         ordinal: 1,
                         resource: 17,
@@ -526,6 +552,7 @@ mod payload_tests {
                         output_count: None,
                         result: Ok(completion),
                         created: vec![Created {
+                            process_keys: None,
                             path: vec![1],
                             ordinal: 1,
                             resource: 17,

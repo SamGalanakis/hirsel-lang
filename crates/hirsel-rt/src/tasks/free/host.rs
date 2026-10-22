@@ -183,6 +183,7 @@ pub(crate) unsafe fn prepare_typed_creations(
             ordinal,
             resource: resource.0,
             kind,
+            process_keys: None,
         })
         .collect();
     Ok(())
@@ -397,6 +398,7 @@ pub(crate) unsafe fn invoke_concurrent(
                 adapter.call_observed_at(token, request.clone())
             },
             |handle| adapter.identity(handle),
+            |handle| adapter.process_keys(handle),
         )
     }
 }
@@ -411,13 +413,14 @@ pub(crate) unsafe fn invoke_discovered(
     call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
     identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
 ) -> Stopped<()> {
-    unsafe { invoke_discovered_observed(ctx, |request| (call(request), None), identity) }
+    unsafe { invoke_discovered_observed(ctx, |request| (call(request), None), identity, |_| None) }
 }
 
 unsafe fn invoke_discovered_observed(
     ctx: *mut TaskCtx,
     call: impl FnOnce(&Request) -> (Result<Completion, AdapterError>, Option<u64>),
     identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
+    process_keys: impl Fn(u64) -> Option<KeySet>,
 ) -> Stopped<()> {
     unsafe {
         invoke_resolved(ctx, call, |completion| {
@@ -428,9 +431,23 @@ unsafe fn invoke_discovered_observed(
                 .into_iter()
                 .flatten()
                 .map(|word| {
-                    identity(*word).ok_or_else(|| {
+                    let (key, kind) = identity(*word).ok_or_else(|| {
                         Stop::Refused("created host handle has no registered resource".into())
-                    })
+                    })?;
+                    let domains = process_keys(*word);
+                    if let Some(domains) = &domains {
+                        if kind != crate::io_keys::Kind::Other
+                            || !domains.contains(key, Mode::Exclusive)
+                            || !domains.contains(crate::io_keys::NAMESPACE, Mode::Exclusive)
+                            || domains
+                                .keys()
+                                .iter()
+                                .any(|(_, mode)| *mode != Mode::Exclusive)
+                        {
+                            return Err(Stop::Refused("invalid process issue domains".into()));
+                        }
+                    }
+                    Ok((key, kind, domains))
                 })
                 .collect::<Stopped<Vec<_>>>()?;
             Ok(Some(resources))
@@ -445,7 +462,7 @@ unsafe fn invoke_result(
     unsafe { invoke_resolved(ctx, |request| (call(request), None), |_| Ok(None)) }
 }
 
-type Resources = Vec<(crate::io_keys::Key, crate::io_keys::Kind)>;
+type Resources = Vec<(crate::io_keys::Key, crate::io_keys::Kind, Option<KeySet>)>;
 
 unsafe fn invoke_resolved(
     ctx: *mut TaskCtx,
@@ -490,17 +507,31 @@ unsafe fn invoke_resolved(
         if pending.created.is_empty() {
             pending.created = resources
                 .into_iter()
-                .map(|(resource, kind)| Created {
+                .map(|(resource, kind, process_keys)| Created {
                     path: pending.path.clone(),
                     ordinal: super::record::reserve_host_handle(ctx),
                     resource: resource.0,
                     kind,
+                    process_keys: process_keys
+                        .map(|keys| keys.keys().iter().map(|(key, _)| key.0).collect()),
                 })
                 .collect();
         } else if pending
             .created
             .iter()
-            .map(|created| (crate::io_keys::Key(created.resource), created.kind))
+            .map(|created| {
+                (
+                    crate::io_keys::Key(created.resource),
+                    created.kind,
+                    created.process_keys.as_ref().map(|keys| {
+                        KeySet::new(
+                            keys.iter()
+                                .map(|&key| (crate::io_keys::Key(key), Mode::Exclusive))
+                                .collect(),
+                        )
+                    }),
+                )
+            })
             .ne(resources)
         {
             pending.completion = Some(completion);
@@ -895,3 +926,6 @@ mod native_signal_tests;
 
 #[cfg(test)]
 mod native_telemetry_tests;
+
+#[cfg(test)]
+mod native_process_tests;

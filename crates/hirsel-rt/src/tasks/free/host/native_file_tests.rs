@@ -366,10 +366,19 @@ fn native_file_keys_validate_all_resource_metadata_and_namespace_modes() {
         )
         .is_err()
     );
-    assert!(
+    // Native span and child closes now share the existing Other identity kind.
+    assert_eq!(
         native::request_keys(&Request::Close { handle: 18 }, |_| Ok((
             Key(8),
             Kind::Other
+        )))
+        .unwrap(),
+        KeySet::new(vec![(Key(8), Mode::Exclusive)])
+    );
+    assert!(
+        native::request_keys(&Request::Close { handle: 18 }, |_| Ok((
+            Key(8),
+            Kind::Half { stream: Key(9) }
         )))
         .is_err()
     );
