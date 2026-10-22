@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyModule};
 use llvm_sys::core::*;
 use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMGetErrorMessage};
-use llvm_sys::ir_reader::LLVMParseIRInContext;
+use llvm_sys::ir_reader::LLVMParseIRInContext2;
 use llvm_sys::prelude::{
     LLVMBasicBlockRef, LLVMBuilderRef, LLVMContextRef, LLVMMemoryBufferRef, LLVMModuleRef,
     LLVMTypeRef, LLVMValueRef,
@@ -351,8 +351,13 @@ impl<'context> Module<'context> {
         };
         let mut raw = ptr::null_mut();
         let mut message = ptr::null_mut();
-        // SAFETY: the context and buffer are live; the parser takes ownership of the buffer.
-        let failed = unsafe { LLVMParseIRInContext(context.raw, buffer, &mut raw, &mut message) };
+        // SAFETY: the context and buffer are live. The parser borrows the buffer;
+        // dispose of our copy after parsing on either outcome (LLVM23 IRReader.h).
+        let failed = unsafe {
+            let failed = LLVMParseIRInContext2(context.raw, buffer, &mut raw, &mut message);
+            LLVMDisposeMemoryBuffer(buffer);
+            failed
+        };
         // SAFETY: on either outcome the message is null or ours to dispose of.
         let message = unsafe { take_message(message) };
         if failed != 0 || raw.is_null() {
