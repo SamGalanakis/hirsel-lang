@@ -14,7 +14,14 @@ impl Builder<'_, '_> {
         ty: TypeId,
     ) -> Result<hirsel_types::Destination> {
         match &self.decision(id)?.construction_destination {
-            Some(hirsel_types::Destination::Inferred) => Ok(self.row_destination(ty)),
+            // A receipt preserves the storage selected before parts are joined.
+            // Parameter-only relations name lifetime sources, not this body's
+            // hidden ABI destination (they may belong to a borrowed call result
+            // used as another arm's expected type). Resolve their actual arena
+            // from the completed row, just as for an inferred destination.
+            Some(hirsel_types::Destination::Inferred | hirsel_types::Destination::Caller(_)) => {
+                Ok(self.row_destination(ty))
+            }
             Some(destination) => Ok(destination.clone()),
             None => {
                 if self
