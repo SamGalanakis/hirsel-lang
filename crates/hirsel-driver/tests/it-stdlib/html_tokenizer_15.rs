@@ -200,7 +200,7 @@ fn html_tokenizer_15_heap_remaining_batches() {
     assert_eq!(executed, 368);
     let caps = source.split("fn caps() -> () uses {} {").nth(1).unwrap();
     let (basic, remaining) = caps.split_once("  // Every work cutoff").unwrap();
-    let (sweep, rest) = remaining.split_once("  // Switch mode").unwrap();
+    let (_, rest) = remaining.split_once("  // Switch mode").unwrap();
     let basic_source = format!(
         "{prefix}fn caps() -> () uses {{}} {{{basic}\n  // Switch mode{rest}\npub fn main(rt: Io, args: Args) -> Result[(), ()] {{ caps(); Ok(()) }}\n"
     );
@@ -212,6 +212,19 @@ fn html_tokenizer_15_heap_remaining_batches() {
         .exit_code,
         Some(0)
     );
+    eprintln!(
+        "html-tokenizer-15: heap completed {executed} remaining exact lexical cases (case251 separate) and all fixed cap boundaries; every ledger has zero live bytes"
+    );
+}
+
+#[test]
+fn html_tokenizer_15_heap_work_cutoff_batches() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/html-tokenizer-15/vectors.hir");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let prefix = source.split("pub fn main(").next().unwrap();
+    let sweep = source.split_once("  // Every work cutoff").unwrap().1;
+    let sweep = sweep.split_once("  // Switch mode").unwrap().0;
     // Keep the exact same sweep body as H/native, selecting one source and a
     // bounded work interval per fresh ledger. Stop at its first success just
     // as the original sweep does, so every executed cutoff is accounted for.
@@ -223,6 +236,7 @@ fn html_tokenizer_15_heap_remaining_batches() {
         )
         .replace("let mut work: u64 = 0", "let mut work: u64 = first")
         .replace("while work < 2000", "while work < last")
+        .replace("; return\n", "; return false\n")
         .replace(
             "    core@1/failure.check(succeeded, TextInvariant())",
             "    return succeeded",
@@ -249,7 +263,7 @@ fn html_tokenizer_15_heap_remaining_batches() {
         );
     }
     eprintln!(
-        "html-tokenizer-15: heap completed {executed} remaining exact lexical cases (case251 separate), fixed cap boundaries and all cutoffs through first success for each of 5 sources ({cutoffs} selected work slots; final batches stop at success); every ledger has zero live bytes"
+        "html-tokenizer-15: heap completed all cutoffs through first success for each of 5 sources ({cutoffs} selected work slots; final batches stop at success); every ledger has zero live bytes"
     );
 }
 
