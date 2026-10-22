@@ -150,9 +150,11 @@ fn the_hash_is_a_pinned_function_of_content() {
         // No HashMap order, arena id, path or position enters: the same
         // content hashes to this value on every machine and build. It moves
         // with TIR_VERSION, the content encoding, or an edit to anything `f`
-        // reaches, which includes the core types its signature's role table
-        // names (core@1/Result, Unsafe, Tasks, Scope, Arena and heap).
-        const PINNED: &str = "4f584c19593107a4aae1b012d94b017627259d6059016bec5ddd2bda0e255256";
+        // reaches. Nominal role names add no core declaration dependency here.
+        // 1d696836 intentionally moved TIR 9 -> 10 and added Body.borrow_cursors:
+        // even this scalar body's empty cursor list enters the canonical text.
+        // Undoing both changes reproduces the previous 4f584c19... pin.
+        const PINNED: &str = "12e1cfe3fe4f99bb224a55fcdfc7aa4b86d6d20610fe9d6fa9ca9feff9747b26";
         let hash = hashes("fn f(x: u64) -> u64 { x + 1u64 }\n", &["f"])[0];
         let text: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
         assert!(

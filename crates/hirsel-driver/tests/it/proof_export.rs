@@ -4,7 +4,8 @@
 //! obligation ids are stable exactly as PS-4..PS-6 promise.
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_proof_export::{DefinitionSection, Detail, Export, ImportError, ObligationKind};
+use hirsel_proof_export::{DefinitionSection, Detail, Export, FORMAT, ImportError, ObligationKind};
+use hirsel_tir::TIR_VERSION;
 use std::path::{Path, PathBuf};
 
 fn named(name: &str) -> DefPath {
@@ -89,7 +90,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v9\" 9"));
+        assert!(text.starts_with(&format!("(Export\n  (Header \"{FORMAT}\" {TIR_VERSION}\n")));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -164,14 +165,26 @@ fn a_forged_definition_with_recomputed_digests_is_refused_by_v() {
 fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
-        let other = text.replacen(
-            "(Header \"hirsel.tir.export.v9\" 9",
-            "(Header \"hirsel.tir.export.v9\" 10",
-            1,
+        let header = format!("(Header \"{FORMAT}\" {TIR_VERSION}\n");
+        let refuse_header = |replacement: String, at: &str| {
+            assert_eq!(text.matches(&header).count(), 1);
+            let other = text.replacen(&header, &replacement, 1);
+            assert_ne!(other, text, "the negative control must change the export");
+            assert_eq!(other.matches(&replacement).count(), 1);
+            let error = import(&other).unwrap_err();
+            assert_eq!(error.at, at, "{error}");
+        };
+        // Keep the format valid while changing only the TIR version.
+        refuse_header(
+            format!("(Header \"{FORMAT}\" {}\n", TIR_VERSION + 1),
+            "header.tir_version",
         );
-        assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v9", "hirsel.tir.export.v0", 1);
-        assert_eq!(import(&other).unwrap_err().at, "header.format");
+        // v0 is an intentionally unsupported format, with the current TIR.
+        assert_ne!(FORMAT, "hirsel.tir.export.v0");
+        refuse_header(
+            format!("(Header \"hirsel.tir.export.v0\" {TIR_VERSION}\n"),
+            "header.format",
+        );
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
         expected.compiler_version.push_str("-other");
