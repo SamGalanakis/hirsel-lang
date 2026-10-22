@@ -1,0 +1,42 @@
+// rule: SEM-5
+// expect: run
+// Missing operations return None, preserve order, and leave the map usable.
+pub fn main() -> Result[(), ()] {
+  let mut m: Map[Set[String], List[u64]] = map.empty()
+  let mut a: Set[String] = set.empty()
+  let mut b: Set[String] = set.empty()
+  set.insert(mut a, "é")
+  set.insert(mut a, "猫")
+  set.insert(mut b, "猫")
+  set.insert(mut b, "é")
+  failure.check(map.get(m, a) == None, TextInvariant())
+  failure.check(map.remove(mut m, b) == None, TextInvariant())
+  map.insert(mut m, unique copy a, [1])
+  map.insert(mut m, unique copy b, [2])
+  failure.check(map.len(m) == 1 && map.get(m, a) == Some([2]), TextInvariant())
+  for (stored, _) in m {
+    let mut position: u64 = 0
+    for s in stored {
+      failure.check(
+        position == 0 && s == "é" || position == 1 && s == "猫",
+        TextInvariant()
+      )
+      position += 1
+    }
+    failure.check(position == 2, TextInvariant())
+  }
+  let mut missing: Set[String] = set.empty()
+  set.insert(mut missing, "é")
+  set.insert(mut missing, "猫")
+  failure.check(map.get(m, missing) == None, TextInvariant())
+  failure.check(map.remove(mut m, missing) == None, TextInvariant())
+  failure.check(map.remove(mut m, b) == Some([2]), TextInvariant())
+  failure.check(map.remove(mut m, a) == None && map.len(m) == 0, TextInvariant())
+  let mut visited = false
+  for _ in take m {
+    visited = true
+    break
+  }
+  failure.check(!visited, TextInvariant())
+  Ok(())
+}

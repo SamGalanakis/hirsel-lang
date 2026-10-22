@@ -1,0 +1,31 @@
+// rule: SEM-5
+// expect: run
+// Replacement keeps position; remove/reinsert appends, after a borrowed loan ends.
+pub fn main() -> Result[(), ()] {
+  let mut m: Map[String, List[u64]] = map.empty()
+  map.insert(mut m, "é", [1])
+  map.insert(mut m, "é", [2])
+  map.insert(mut m, "é", [3])
+  let mut seen: List[(String, List[u64])] = []
+  for (k, v) in m {
+    list.push(mut seen, (unique k, unique v))
+  }
+  failure.check(seen == [("é", [3]), ("é", [2])], TextInvariant())
+  failure.check(map.remove(mut m, "é") == Some([3]), TextInvariant())
+  map.insert(mut m, "é", [4])
+  let mut expected: Map[String, List[u64]] = map.empty()
+  map.insert(mut expected, "é", [2])
+  map.insert(mut expected, "é", [4])
+  failure.check(m == expected, TextInvariant())
+  let saved = copy m
+  for (k, v) in take m {
+    failure.check(k == "é" && v == [2], TextInvariant())
+    break
+  }
+  failure.check(saved == expected, TextInvariant())
+  for (k, v) in take saved {
+    failure.check(k == "é" && v == [2], TextInvariant())
+    break
+  }
+  Ok(())
+}

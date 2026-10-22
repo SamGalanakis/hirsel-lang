@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-5-map-seed-model-16-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

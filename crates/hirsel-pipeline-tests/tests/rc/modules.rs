@@ -21,6 +21,7 @@ mod rc_library_sorted;
 mod rc_library_views;
 mod rc_maps;
 mod rc_maps_native;
+mod map_seed_model_16;
 mod rc_normalize;
 mod rc_packed_walk;
 mod rc_perceus;

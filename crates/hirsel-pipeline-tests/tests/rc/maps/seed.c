@@ -6,10 +6,20 @@
 @CALLS@
 struct program_binding { const hirsel_rt_v2_layout *const *layouts; uint64_t count; };
 extern const struct program_binding program __asm__("hirsel.program.registry");
+#ifdef HIRSEL_MAP_MODEL
+// The same private config injection as the placement control below.
 int main(void) {
-  uint64_t placements[3][64];
-  const uint64_t seeds[] = {0, 1, UINT64_C(0x983bbfafffaa173c)};
-  for (unsigned run = 0; run < 3; ++run) {
+  const uint64_t seeds[] = {0, 1, 2, UINT64_C(0x9e3779b97f4a7c15)};
+  for (unsigned run = 0; run < 4; ++run) {
+    @MODEL_CALLS@
+  }
+  puts("mixed traces agree across four seeds; zero live heap");
+}
+#else
+int main(void) {
+  uint64_t placements[4][64];
+  const uint64_t seeds[] = {0, 1, 2, UINT64_C(0x9e3779b97f4a7c15)};
+  for (unsigned run = 0; run < 4; ++run) {
     hirsel_rt_v2_config config = {.abi_version=HIRSEL_RT_V2_ABI_VERSION, .flags=HIRSEL_RT_V2_CONFIG_DIAGNOSTIC, .hash_seed=seeds[run], .layouts=program.layouts, .layout_count=(uint32_t)program.count};
     hirsel_rt_v2_ctx* ctx = NULL;
     assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
@@ -96,7 +106,9 @@ int main(void) {
     assert(audit.live_blocks == 0 && audit.retained_bytes == 0 && audit.active_regions == 0);
     hirsel_rt_v2_ctx_destroy(ctx);
   }
-  assert(memcmp(placements[0], placements[1], sizeof placements[0]) != 0);
-  assert(memcmp(placements[0], placements[2], sizeof placements[0]) != 0);
+  for (unsigned run = 1; run < 4; ++run) {
+    assert(memcmp(placements[0], placements[run], sizeof placements[0]) != 0);
+  }
   puts("seed changes buckets; insertion order stays 0..31");
 }
+#endif

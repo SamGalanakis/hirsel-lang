@@ -9,6 +9,135 @@ use hirsel_lir::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec,
 };
 
+/// Reuse seed.c's private context seed injection and exit audit for mixed traces.
+pub(super) fn model_seed_harness(source: &str, traces: &[super::map_seed_model_16::model::Trace]) {
+    use super::map_seed_model_16::model;
+    use std::fmt::Write;
+    with_compiler_stack(|| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hirsel-driver/tests/fixtures/std_source/main.hir");
+        let mut loaded = hirsel_driver::load_program_source(&path, Some(source)).unwrap();
+        loaded.check_for_execution().unwrap_or_else(|e| match e {
+            hirsel_engine::ToolError::Query { error, .. } => panic!("{error:?}"),
+            e => panic!("{e}"),
+        });
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("map-seed-model-16");
+        let tools = Toolchain::in_tree_diagnostic(&root.join("runtime"), &[&target]).unwrap();
+        let mut options = Options::new(target.clone());
+        options.regions = false;
+        let ready = build(&validated, &options).unwrap();
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let objects = emit_backend_objects(
+                &ready,
+                backend,
+                OptLevel::Speed,
+                Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            let dir = root.join(backend.name());
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut calls = String::new();
+            let mut checks = String::new();
+            for id in 0..traces.len() {
+                let name = format!("trace{id}");
+                let unit = ready
+                    .units
+                    .iter()
+                    .map(|u| u.unit())
+                    .find(|u| u.header.definition.0.name == name)
+                    .unwrap();
+                let abi = &ready.table.fn_abis[unit.header.abi.0 as usize];
+                let symbol = objects
+                    .iter()
+                    .flat_map(|o| &o.exports)
+                    .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == name))
+                    .unwrap();
+                calls.push_str(&c_call(
+                    &ready.table,
+                    abi,
+                    &symbol.name,
+                    &format!("call_{id}"),
+                ));
+                writeln!(checks, "{{
+                    hirsel_rt_v2_config config = {{.abi_version=HIRSEL_RT_V2_ABI_VERSION, .flags=HIRSEL_RT_V2_CONFIG_DIAGNOSTIC, .hash_seed=seeds[run], .layouts=program.layouts, .layout_count=(uint32_t)program.count}};
+                    hirsel_rt_v2_ctx* ctx = NULL;
+                    assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
+                    uint64_t code = 0;
+                    uint8_t status = call_{id}(ctx, &code);
+                    if (status != 0 || code != 0) {{ fprintf(stderr, \"seed=%llu trace={id} status=%u code=%llu\\n\", (unsigned long long)seeds[run], status, (unsigned long long)code); return 1; }}
+                    hirsel_rt_v2_audit audit;
+                    hirsel_rt_v2_task_exit(ctx, &audit);
+                    assert(audit.live_blocks == 0 && audit.retained_bytes == 0 && audit.active_regions == 0);
+                    hirsel_rt_v2_ctx_destroy(ctx);
+                }}").unwrap();
+            }
+            let c = format!(
+                "#define HIRSEL_MAP_MODEL\n{}",
+                include_str!("maps/seed.c")
+                    .replace("@CALLS@", &calls)
+                    .replace("@MODEL_CALLS@", &checks)
+            );
+            let harness = dir.join("seed.c");
+            std::fs::write(&harness, c).unwrap();
+            let exe = dir.join("program");
+            let mut compiler = std::process::Command::new(&tools.clang);
+            compiler
+                .arg(&harness)
+                .arg("-I")
+                .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hirsel-rt/include"));
+            for (id, object) in objects.iter().enumerate() {
+                let path = dir.join(format!("map-{id}.o"));
+                std::fs::write(&path, &object.bytes).unwrap();
+                compiler.arg(path);
+            }
+            let linked = compiler
+                .arg(tools.archive(&target.triple).unwrap())
+                .args([
+                    "-lgcc_s",
+                    "-lutil",
+                    "-lrt",
+                    "-lpthread",
+                    "-lm",
+                    "-ldl",
+                    "-o",
+                ])
+                .arg(&exe)
+                .output()
+                .unwrap();
+            assert!(
+                linked.status.success(),
+                "{}",
+                String::from_utf8_lossy(&linked.stderr)
+            );
+            let run = std::process::Command::new(exe).output().unwrap();
+            if !run.status.success() {
+                let stderr = String::from_utf8_lossy(&run.stderr);
+                let report = stderr
+                    .split_whitespace()
+                    .find_map(|s| s.strip_prefix("code="))
+                    .and_then(|s| s.parse().ok())
+                    .filter(|&code| code != 0)
+                    .map(|code| model::failure(code, traces));
+                panic!("{backend:?}: {stderr}; {report:?}");
+            }
+            assert_eq!(
+                run.stdout,
+                b"mixed traces agree across four seeds; zero live heap\n"
+            );
+            eprintln!(
+                "{backend:?}: {} traces x {} seeds, zero live blocks/bytes/regions",
+                traces.len(),
+                model::SEEDS.len()
+            );
+        }
+    });
+}
+
 /// The count offset, first-element offset, stride and element layout of the
 /// counted sequence a block field references, from the layout table.
 fn sequence(table: &LayoutTable, field: &FieldLayout) -> (u64, u64, u64, LayoutId) {
