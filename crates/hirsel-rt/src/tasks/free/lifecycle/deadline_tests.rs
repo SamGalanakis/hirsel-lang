@@ -16,6 +16,7 @@ struct Clock {
     calls: Arc<AtomicU64>,
     finishes: Arc<AtomicU64>,
     exit_op: u64,
+    disarm_probe: Option<Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>>,
 }
 
 struct NoReplayClock;
@@ -51,6 +52,7 @@ fn native_deadline_replay_substitutes_expiry_without_calling_live_timers() {
                 calls: calls.clone(),
                 finishes: finishes.clone(),
                 exit_op: 3,
+                disarm_probe: None,
             }));
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
@@ -197,6 +199,14 @@ impl Adapter for Clock {
     }
     fn finish(&mut self, _: u64) {
         assert_eq!(std::thread::current().id(), self.home);
+        if let Some(probe) = &self.disarm_probe {
+            // A synchronous disarm must let home finish an in-progress
+            // readiness merge. Nonreentrant acquisition detects a worker
+            // retaining its role across that bridge, independent of timing.
+            let run = probe.load(Ordering::Acquire);
+            assert!(!run.is_null());
+            drop(unsafe { role::IdleGuard::new(run) });
+        }
         let cut = self.recording.recorder.flush().unwrap().unwrap();
         let progress = cut.progress[&Vec::new()];
         assert!(
@@ -225,6 +235,7 @@ fn native_deadline_entry_records_before_home_arm_and_exit_records_expired() {
                     calls: calls.clone(),
                     finishes: finishes.clone(),
                     exit_op: 4,
+                    disarm_probe: None,
                 }));
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
@@ -351,6 +362,8 @@ fn native_scope_exit_keeps_its_timer_until_the_saved_child_rest_returns() {
         for durable in [false, true] {
             let recording = super::super::record::Recording::new(b"native deadline rest", durable);
             let install = recording.clone();
+            let run_ptr = Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()));
+            let install_run = run_ptr.clone();
             let calls = Arc::new(AtomicU64::new(0));
             let finishes = Arc::new(AtomicU64::new(0));
             let mut run = crate::host::BodyRun::new(width, true);
@@ -361,6 +374,7 @@ fn native_scope_exit_keeps_its_timer_until_the_saved_child_rest_returns() {
                 calls: calls.clone(),
                 finishes: finishes.clone(),
                 exit_op: 3,
+                disarm_probe: Some(run_ptr),
             }));
             let layout = crate::Layout {
                 magic: crate::LAYOUT_MAGIC,
@@ -384,6 +398,7 @@ fn native_scope_exit_keeps_its_timer_until_the_saved_child_rest_returns() {
             let outcome = run.run(
                 move |ctx| unsafe {
                     super::super::enable(ctx);
+                    install_run.store((*ctx).run_ptr(), Ordering::Release);
                     install.root(ctx);
                 },
                 move |ctx| unsafe {
@@ -472,8 +487,10 @@ impl Adapter for ParkedClock {
         assert_eq!(std::thread::current().id(), self.home);
         let run = self.run.load(Ordering::Acquire);
         assert!(!run.is_null());
-        let guard = unsafe { role::IdleGuard::try_new(run) };
-        assert!(guard.is_some(), "readiness probes hold no scheduler role");
+        // Another worker may acquire the role after home's snapshot. Wait
+        // for it rather than requiring global idleness. A role retained by
+        // this home callback would deadlock here: idle claims never reenter.
+        let guard = unsafe { role::IdleGuard::new(run) };
         drop(guard);
         Ok(if self.now {
             crate::io::Ready::Every

@@ -107,6 +107,10 @@ unsafe fn exit_scope(
     // The timer is owned by this scope until all called child rests return.
     // Removing its host interest may bridge to home, outside every section.
     if let Some(token) = unsafe { (*s).scope(scope).deadline.as_ref().and_then(|d| d.token) } {
+        // Home may be merging a readiness snapshot under the role. No table
+        // borrow may cross its synchronous bridge, or both threads can wait
+        // for one another. This scope and its child rests remain owner-held.
+        let _segment = unsafe { role::Segment::new(ctx) };
         unsafe { crate::host_waits::disarm(ctx, token) };
     }
     let replay = super::replay::token(ctx);
