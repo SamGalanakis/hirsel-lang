@@ -172,7 +172,7 @@ TEST_DATA = {
     "hirsel-cli-test-examples": ["examples/tasks/**", "examples/ledger-service/**"],
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
-    # Relative spec links reach top-level docs, research notes and port reports.
+    # Relative spec links reach top-level docs, research notes, port reports and licenses.
     "hirsel-conformance-test-spec_links": ["crates/**", "docs/*.md", "docs/research/**", "reports/**"],
     # memcheck:: compiles a C program against the runtime header.
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**",
@@ -765,6 +765,9 @@ def test_data(binary: str, package: str, package_dir: pathlib.Path, src: pathlib
     expression = f"glob({starlark(paths, 4)})"
     if binary == "hirsel-lir-test-it":
         expression += ' + ["//tools/buck2:workspace-metadata.json"]'
+    if binary == "hirsel-conformance-test-spec_links":
+        # A root glob cannot cross the third-party Buck package boundary.
+        expression += ' + ["//third-party:NOTICES.md"]'
     own = target_dir(package_dir, src)
     if own != package_dir / "tests":
         directory = relative(own)

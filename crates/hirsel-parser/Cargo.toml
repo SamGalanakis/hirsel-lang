@@ -13,5 +13,6 @@ hirsel-diag = { path = "../hirsel-diag" }
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
+hirsel-lexer = { path = "../hirsel-lexer" }
 insta = "1"
 proptest = "1"

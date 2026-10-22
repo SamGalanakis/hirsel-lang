@@ -2,12 +2,20 @@ use crate::support;
 use hirsel_syntax::*;
 
 fn clean(source: &str) -> SyntaxFile {
-    let (output, sources) = support::parse(source);
+    // Spec examples use the language's lexer, including byte and raw literals.
+    let mut sources = hirsel_span::SourceMap::default();
+    let file = sources.add("fixture.hir", source.into()).unwrap();
+    let lexed = hirsel_lexer::lex(file, &sources);
+    let output = hirsel_parser::parse(file, lexed.tokens, &support::context(), &mut sources);
+    let diagnostics: Vec<_> = lexed
+        .diagnostics
+        .iter()
+        .chain(&output.diagnostics)
+        .collect();
     assert!(
-        output.diagnostics.is_empty(),
+        diagnostics.is_empty(),
         "{source}\n{}",
-        output
-            .diagnostics
+        diagnostics
             .iter()
             .map(|d| d.render_human(&sources))
             .collect::<String>()

@@ -37,4 +37,7 @@ load(
     "third_party_rust_binary",
     "third_party_rust_library",
 )
+
+# Tests resolve license links at their repository path on remote workers.
+export_file(name = "NOTICES.md", mode = "reference", visibility = ["PUBLIC"])
 """

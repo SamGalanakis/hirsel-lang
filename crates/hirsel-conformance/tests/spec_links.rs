@@ -81,6 +81,14 @@ fn anchors(text: &str) -> BTreeSet<String> {
     anchors
 }
 
+fn file_link_resolves(file: &Path, fragment: &str) -> bool {
+    if fragment.is_empty() {
+        file.exists()
+    } else {
+        fs::read_to_string(file).is_ok_and(|text| anchors(&text).contains(fragment))
+    }
+}
+
 fn spec_parts() -> BTreeMap<String, String> {
     let dir = root().join(SPEC_DIR);
     let mut parts = vec![];
@@ -235,7 +243,7 @@ fn every_relative_spec_link_resolves() {
                 match anchors.get(file) {
                     Some(set) if fragment.is_empty() || set.contains(fragment) => {}
                     Some(_) => broken.push(format!("{name}: {target}")),
-                    None if fragment.is_empty() && root.join(SPEC_DIR).join(file).exists() => {}
+                    None if file_link_resolves(&root.join(SPEC_DIR).join(file), fragment) => {}
                     None => broken.push(format!("{name}: {target}")),
                 }
             }
@@ -246,6 +254,17 @@ fn every_relative_spec_link_resolves() {
         broken.is_empty(),
         "spec links that resolve nowhere: {broken:#?}"
     );
+}
+
+#[test]
+fn relative_file_links_require_existing_targets_and_headings() {
+    let notices = root().join("third-party/NOTICES.md");
+    assert!(file_link_resolves(&notices, ""));
+    assert!(file_link_resolves(&notices, "bsd-3-clause-license-go"));
+    assert!(!file_link_resolves(&notices, "no-such-license-heading"));
+    let missing = root().join("third-party/no-such-notices.md");
+    assert!(!file_link_resolves(&missing, ""));
+    assert!(!file_link_resolves(&missing, "bsd-3-clause-license-go"));
 }
 
 #[test]
@@ -284,6 +303,36 @@ fn the_spec_hash_covers_every_spec_part() {
     for (name, text) in hirsel_engine::SPEC_PARTS {
         assert_eq!(text, parts[name].as_bytes(), "{name}");
     }
+    assert!(
+        hirsel_engine::SPEC_PARTS
+            .windows(2)
+            .all(|pair| pair[0].0 < pair[1].0),
+        "spec parts must be in filename order"
+    );
+
+    // Reconstruct from the directory, independently of the embedded part list.
+    let hash = |parts: &BTreeMap<String, String>| {
+        hirsel_syntax::ContentHash::of_parts(
+            "hirsel.spec",
+            parts
+                .iter()
+                .flat_map(|(name, text)| [name.as_bytes(), text.as_bytes()]),
+        )
+    };
+    let expected = hirsel_engine::default_environment().spec_hash;
+    assert_eq!(expected, hash(&parts));
+    assert_eq!(expected, hirsel_engine::default_environment().spec_hash);
+    let mut edited = parts.clone();
+    for name in parts.keys() {
+        edited.get_mut(name).unwrap().push('\n');
+        assert_ne!(
+            expected,
+            hash(&edited),
+            "editing {name} must change the hash"
+        );
+        edited.get_mut(name).unwrap().pop();
+    }
+    assert_eq!(expected, hash(&edited));
 }
 
 #[test]

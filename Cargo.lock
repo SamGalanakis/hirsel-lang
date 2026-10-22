@@ -903,6 +903,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-guard",
  "hirsel-intern",
+ "hirsel-lexer",
  "hirsel-span",
  "hirsel-syntax",
  "insta",

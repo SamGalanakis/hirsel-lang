@@ -254,9 +254,11 @@ signature works for the others:
 
 ## List construction and truncation
 
+Declarations in `std@1/list`:
+
 ```hirsel
-fn list.filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}
-@preserves_unique(xs) fn list.truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
+fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}
+@preserves_unique(xs) fn truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
 ```
 
 `filled` evaluates `n` and its taken seed `value` once, reserves capacity before copying, and
@@ -2414,14 +2416,17 @@ an option's value does not terminate parsing. Error indices always refer to the
 original argument list, including positionals and consumed values.
 
 ```hirsel
-let specs: List[std@1/cli.Flag] = [
-  std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "target version")
-]
-let Ok(parsed) = std@1/cli.parse_interspersed(["FILE", "--to", "2"], specs) else {
-  return Error(())
+fn parse_example() -> Result[std@1/cli.Parsed, ()] uses {} {
+  let specs: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "target version")
+  ]
+  let Ok(parsed) = std@1/cli.parse_interspersed(["FILE", "--to", "2"], specs) else {
+    return Error(())
+  }
+  // parsed.positional == ["FILE"]; map.get(parsed.flags, "to") == Some(["2"])
+  // Convert the retained text separately with std@1/u64.parse, as needed.
+  Ok(parsed)
 }
-// parsed.positional == ["FILE"]; map.get(parsed.flags, "to") == Some(["2"])
-// Convert the retained text separately with std@1/u64.parse, as needed.
 ```
 
 `usage` requires valid specs (otherwise SEM-3 failure), emits a Usage line and
@@ -3121,10 +3126,12 @@ builder failure and cleanup rules; there is no transactional rollback contract.
 Repeated calls and sliced Bytes inputs follow the normal borrowing rules.
 
 ```hirsel
-let mut out: List[u8] = []
-std@1/text.append(mut out, "digest: ")
-std@1/hex.encode_into(b"\x00\xff", mut out)
-let encoded = std@1/text.finish_valid(take out) // "digest: 00ff"
+fn encode_example() -> String uses {} {
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "digest: ")
+  std@1/hex.encode_into(b"\x00\xff", mut out)
+  std@1/text.finish_valid(take out) // "digest: 00ff"
+}
 ```
 
 `hex.decode(text: String) -> Result[unique Bytes, hex.DecodeError]` accepts both ASCII
