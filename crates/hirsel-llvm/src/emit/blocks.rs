@@ -78,6 +78,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(source) = self.measured else {
             return Ok(());
         };
+        // Explicit source-less glue inherits the surrounding call's context.
+        // A mapped selector/range outside this source revision remains an error.
+        if site.source == u32::MAX {
+            self.builder.profile_site(None);
+            return Ok(());
+        }
         let Some(position) = source.site_location(site) else {
             return self.invalid("profile anchor is outside its source revision");
         };

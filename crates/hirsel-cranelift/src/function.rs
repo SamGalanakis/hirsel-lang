@@ -142,7 +142,9 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     blocks: Vec<Block>,
     params: Vec<Vec<Param>>,
     failures: BTreeMap<FailureId, Block>,
-    deferred: Vec<(ir::SourceLoc, Deferred)>,
+    deferred: Vec<(ir::SourceLoc, Option<crate::profile::CallSite>, Deferred)>,
+    pub(crate) measured: Option<&'a hirsel_lir::profile::ProfileSource>,
+    profile: Option<crate::profile::CallSite>,
     debug_sites: Option<hirsel_lir::debug::SiteTable>,
     /// Per compiler-local region instance, its `hirsel_rt_v2_region` record in the frame.
     pub(crate) regions: Vec<Value>,
@@ -225,6 +227,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             params: Vec::new(),
             failures: BTreeMap::new(),
             deferred: Vec::new(),
+            measured: None,
+            profile: None,
             regions: Vec::new(),
             funcs: HashMap::new(),
             globals: HashMap::new(),
@@ -530,9 +534,32 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     /// Calls `id` with `args`: its results.
     pub(crate) fn call(&mut self, id: FuncId, args: &[Value]) -> Vec<Value> {
+        let previous = self.profile_enter();
+        let returned = self.raw_call(id, args);
+        self.profile_leave(previous);
+        returned
+    }
+
+    /// Calls without profiling the profile hooks themselves.
+    fn raw_call(&mut self, id: FuncId, args: &[Value]) -> Vec<Value> {
         let r = self.func_ref(id);
         let call = self.b.ins().call(r, args);
         self.b.inst_results(call).to_vec()
+    }
+
+    fn profile_enter(&mut self) -> Option<Value> {
+        let site = self.profile?;
+        let metadata = self.data_addr(site.metadata, 0);
+        Some(self.raw_call(site.enter, &[self.context, metadata])[0])
+    }
+
+    fn profile_leave(&mut self, previous: Option<Value>) {
+        if let Some(previous) = previous {
+            self.raw_call(
+                self.profile.expect("entered site").leave,
+                &[self.context, previous],
+            );
+        }
     }
 
     /// Calls the runtime entry `entry`: its result, if it has one.
@@ -680,8 +707,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         for b in order {
             self.emit_block(BlockId(b as u32))?;
         }
-        while let Some((location, deferred)) = self.deferred.pop() {
+        while let Some((location, profile, deferred)) = self.deferred.pop() {
             self.b.set_srcloc(location);
+            self.profile = profile;
             self.fill_deferred(deferred)?;
         }
         self.b.seal_all_blocks();
@@ -1146,11 +1174,17 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.charge_fuel()?;
         }
         for inst in self.pool(unit.blocks[b.index()].instructions, &unit.instructions)? {
-            self.source_location(hirsel_lir::profile::instruction_site(unit, b, inst));
+            self.profile_location(
+                hirsel_lir::profile::instruction_site(unit, b, inst),
+                inst.opcode(),
+            )?;
             self.instruction(inst)?;
         }
         let terminator = &unit.terminators[b.index()];
-        self.source_location(hirsel_lir::profile::terminator_site(unit, b));
+        self.profile_location(
+            hirsel_lir::profile::terminator_site(unit, b),
+            terminator.opcode(),
+        )?;
         self.terminator(terminator)
     }
 
@@ -1188,6 +1222,23 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.b
                 .set_srcloc(ir::SourceLoc::new(sites.code(site).unwrap_or(u32::MAX)));
         }
+    }
+
+    fn profile_location(&mut self, site: SiteRange, operation: hirsel_lir::Opcode) -> Emitted {
+        self.source_location(site);
+        self.profile = match self.measured {
+            // Explicit source-less glue inherits its caller's active context.
+            // Mapped selectors/ranges still go through strict source validation.
+            Some(source) if site.source != u32::MAX => Some(crate::profile::call_site(
+                self.em,
+                self.unit,
+                source,
+                site,
+                &format!("{operation:?}"),
+            )?),
+            _ => None,
+        };
+        Ok(())
     }
 
     /// The arguments an edge passes to its target's SSA parameters, after copying each bytes
@@ -1291,7 +1342,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn defer(&mut self, deferred: Deferred) {
-        self.deferred.push((self.b.srcloc(), deferred));
+        self.deferred
+            .push((self.b.srcloc(), self.profile, deferred));
     }
 
     fn fill_deferred(&mut self, deferred: Deferred) -> Emitted {
@@ -1914,8 +1966,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             (None, Some(code)) => {
                 let sig_ref = self.b.import_signature(signature.ir.clone());
+                let previous = self.profile_enter();
                 let call = self.b.ins().call_indirect(sig_ref, code, &args);
-                self.b.inst_results(call).to_vec()
+                let returned = self.b.inst_results(call).to_vec();
+                self.profile_leave(previous);
+                returned
             }
             (None, None) => return self.invalid("a call without a callee"),
         };

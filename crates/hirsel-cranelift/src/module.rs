@@ -381,7 +381,11 @@ pub(crate) fn emit(
         context.func = Function::with_name_signature(ir::UserFuncName::default(), sig.ir.clone());
         {
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
-            crate::function::FnEmitter::new(&mut emitter, unit, builder, sig).emit()?;
+            let mut function = crate::function::FnEmitter::new(&mut emitter, unit, builder, sig);
+            if inputs.measurement {
+                function.measured = profile.sources.and_then(|s| s.get(&unit.header.definition));
+            }
+            function.emit()?;
         }
         emitter.compile(&name, id, &mut context)?;
         if emitter.debug {

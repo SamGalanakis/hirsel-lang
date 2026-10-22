@@ -28,6 +28,7 @@ mod instructions;
 mod module;
 mod object;
 mod places;
+mod profile;
 mod program;
 mod scalar;
 mod soa;
