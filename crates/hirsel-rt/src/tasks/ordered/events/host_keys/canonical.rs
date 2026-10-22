@@ -54,12 +54,14 @@ fn pending() -> Log {
         result,
         observation: Some(observation),
     });
+    log.host_initials
+        .insert((vec![1], 0), log.host_completions[0].clone());
     log
 }
 
 #[test]
 fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent() {
-    for missing in 0..12 {
+    for missing in 0..14 {
         let mut log = pending();
         let key = (vec![1], 0);
         match missing {
@@ -99,6 +101,13 @@ fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent(
                 }),
             11 => {
                 log.host_outputs.remove(&key);
+            }
+            12 => {
+                log.host_initials.remove(&key);
+            }
+            13 => {
+                log.host_initials.get_mut(&key).unwrap().result =
+                    Err(crate::io::AdapterError::Blocked);
             }
             _ => unreachable!(),
         }
@@ -161,6 +170,8 @@ fn canonical_host_alias_observations_keep_the_original_handle_creation_version()
         .unwrap(),
     );
     log.host_creations.insert((vec![1], 0), vec![row.clone()]);
+    log.host_initials
+        .insert((vec![1], 0), log.host_completions[0].clone());
     log.certify_host(&[1], 0).unwrap();
     assert_eq!(log.versions[&CanonicalItem::HostHandle(handle.clone())], 1);
     let key = (vec![1], 1);
@@ -174,6 +185,7 @@ fn canonical_host_alias_observations_keep_the_original_handle_creation_version()
     log.host_creations.insert(key, vec![row]);
     let mut completion = log.host_completions[0].clone();
     completion.ordinal = 1;
+    log.host_initials.insert((vec![1], 1), completion.clone());
     log.host_completions.push(completion);
     log.certify_host(&[1], 1).unwrap();
     let aliases: Vec<_> = log

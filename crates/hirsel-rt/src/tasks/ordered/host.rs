@@ -495,6 +495,10 @@ mod tests {
                         let log = engine::driver(ctx).events.as_ref().unwrap();
                         assert_eq!(log.host_polls.len(), 1);
                         assert_eq!(log.host_attempts.len(), 2);
+                        assert_eq!(log.host_initials.len(), 1);
+                        let initial = &log.host_initials[&(vec![], 0)];
+                        assert_eq!(initial.result, Err(AdapterError::Blocked));
+                        assert!(initial.observation.is_some());
                         let attempts = &log.host_attempts;
                         assert_eq!(attempts[0].completion.result, Err(AdapterError::Blocked));
                         assert_eq!(attempts[1].completion.result, Ok(Completion::Wait(Ok(()))));
@@ -867,6 +871,13 @@ mod tests {
                     let driver = engine::driver(ctx);
                     let log = driver.events.as_ref().unwrap();
                     assert_eq!(log.host_completions.len(), 3);
+                    assert_eq!(log.host_initials.len(), 3);
+                    for completion in &log.host_completions {
+                        assert_eq!(
+                            log.host_initials[&(completion.task.clone(), completion.ordinal)],
+                            *completion
+                        );
+                    }
                     assert_eq!(
                         log.host_completions
                             .iter()

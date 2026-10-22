@@ -67,11 +67,21 @@ impl super::Log {
             .get(&key)
             .ok_or("incomplete host creation discovery")?
             .clone();
-        let result = self
+        let completion = self
             .host_completions
             .iter()
             .find(|done| done.task == task && done.ordinal == ordinal)
-            .and_then(|done| done.observation.as_ref())
+            .ok_or("incomplete host result")?;
+        let initial = self
+            .host_initials
+            .get(&key)
+            .ok_or("missing first host attempt")?;
+        if initial != completion {
+            return Err("bounded initial attempt differs from completion");
+        }
+        let result = completion
+            .observation
+            .as_ref()
             .ok_or("incomplete host result")?
             .clone();
         if created

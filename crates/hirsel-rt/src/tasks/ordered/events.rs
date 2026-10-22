@@ -373,6 +373,7 @@ pub(super) struct Log {
     host_creations: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Creation>>,
     pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_requests::HostRequestValue>>,
     pub host_completions: Vec<HostCompletion>,
+    pub host_initials: BTreeMap<(Vec<u32>, u64), HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
     /// Actual readiness retries, including Blocked; skipped probes emit none.
     pub host_attempts: Vec<HostPollCompletion>,
@@ -811,6 +812,44 @@ pub(crate) fn record_host_poll(
             .try_into()
             .expect("host poll sequence fits u64"),
     });
+}
+
+/// Capture the first bounded attempt on its owner before it can park. The
+/// snapshot owns mapping bytes and keeps the original ordinal even when a
+/// future retry completes it from another executor.
+pub(crate) fn record_host_initial(
+    ctx: *mut TaskCtx,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() };
+    let Some(s) = s.filter(|s| enabled(s)) else {
+        return;
+    };
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let result = owned_host_result(result);
+    let observation = host_values::project(&result, |word| host_identity(driver, word)).ok();
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("initial attempt follows entry");
+    let op = log.last_ops[&path];
+    assert!(matches!(op, "host.request" | "host.handle_drop"));
+    let completion = HostCompletion {
+        task: path.clone(),
+        ordinal,
+        op,
+        result,
+        observation,
+    };
+    assert!(
+        log.host_initials
+            .insert((path, ordinal), completion)
+            .is_none(),
+        "one initial host attempt per ordinal"
+    );
 }
 
 /// Source-free evidence of one actual poll attempt, captured before any wake.

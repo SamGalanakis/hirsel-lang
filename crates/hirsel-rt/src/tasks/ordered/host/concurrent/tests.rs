@@ -365,6 +365,8 @@ fn ordered_concurrent_bounded_cancellation_preserves_checks_and_rejects_waits_be
                 assert!((*ctx).pending_ordered_host.is_none());
                 let log = engine::driver(ctx).events.as_ref().unwrap();
                 assert_eq!(log.host_completions.len(), 5);
+                assert_eq!(log.host_initials.len(), 5);
+                assert_eq!(log.host_initials[&(vec![], 2)], log.host_completions[2]);
                 assert!(log.host_completions[2].observation.is_some());
                 assert!(
                     log.host_completions[3].observation.is_none(),

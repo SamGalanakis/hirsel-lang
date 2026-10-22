@@ -373,7 +373,9 @@ unsafe fn issue_here(
     if let Some(cause) = unsafe { crate::tasks::canceled(ctx) }
         && let Some(completion) = unsafe { canceled(ctx, &request, cause) }?
     {
-        return Ok((Ok(completion), false));
+        let result = Ok(completion);
+        crate::tasks::ordered::events::record_host_initial(ctx, &result);
+        return Ok((result, false));
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
@@ -383,7 +385,9 @@ unsafe fn issue_here(
     }
     let binding = unsafe { Binding::get(ctx) };
     if !may_park(&request) {
-        return Ok((binding.adapter.call(request), false));
+        let result = binding.adapter.call(request);
+        crate::tasks::ordered::events::record_host_initial(ctx, &result);
+        return Ok((result, false));
     }
     let token = binding.waits.next;
     binding.waits.next += 1;
@@ -393,7 +397,10 @@ unsafe fn issue_here(
         Request::ReadStdin { .. } | Request::WatchNext { .. }
     );
     let retry = request.clone();
-    match binding.adapter.call(request) {
+    let result = binding.adapter.call(request);
+    crate::tasks::ordered::events::record_host_initial(ctx, &result);
+    // The snapshot owns the first attempt before this frame may be saved.
+    match result {
         Err(AdapterError::Blocked) => {}
         result => {
             binding.adapter.finish(token);

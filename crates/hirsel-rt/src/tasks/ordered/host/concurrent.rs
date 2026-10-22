@@ -94,6 +94,7 @@ pub(crate) unsafe fn request(
     // it must never certify an incomplete canonical result.
     let discovery = discovered
         .and_then(|discovered| super::super::events::discover_host(ctx, &result, &discovered));
+    super::super::events::record_host_initial(ctx, &result);
     super::super::events::complete_host(ctx, close, &result);
     super::super::events::host_output::record(ctx, output);
     discovery.map_err(|error| Stop::Refused(error.into()))?;
