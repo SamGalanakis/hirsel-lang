@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2194 exported definitions; 938 variants.
+2233 exported definitions; 972 variants.
 
 ## Types and roots
 
@@ -4142,11 +4142,27 @@ zero output budget succeeds without pulling. Refill and record sizes are positiv
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig)
 
+<a id="def-std_401_2fcsv_2fWriteConfig"></a>
+
+- `@serializable pub type csv.WriteConfig { delimiter: u8, preserve_single_empty: bool, }`
+
+Writer policy; zero fields still produce a blank line.
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`core@1/u8`](#def-core_401_2fu8)
+
 <a id="def-std_401_2fcsv_2fdefault_5fconfig"></a>
 
 - `pub fn csv.default_config() -> Config uses {}`
 
 References: [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig)
+
+<a id="def-std_401_2fcsv_2fdefault_5fwrite_5fconfig"></a>
+
+- `pub fn csv.default_write_config() -> WriteConfig uses {}`
+
+Comma delimiter and the legacy Go-compatible empty-field representation.
+
+References: [`std@1/csv/WriteConfig`](#def-std_401_2fcsv_2fWriteConfig)
 
 <a id="def-std_401_2fcsv_2ffeed"></a>
 
@@ -4224,6 +4240,14 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `pub fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[ (), CsvError ] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
+
+<a id="def-std_401_2fcsv_2fwrite_5frecord_5fwith"></a>
+
+- `pub fn csv.write_record_with(fields: List[String], config: WriteConfig, mut out: List[u8]) -> Result[ (), CsvError ] uses {}`
+
+Append a record; optionally quote a sole empty field. Zero fields stay LF.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError), [`std@1/csv/WriteConfig`](#def-std_401_2fcsv_2fWriteConfig)
 
 
 ## date
@@ -6791,6 +6815,154 @@ References: [`core@1/String`](#def-core_401_2fString)
 Append HTML text/quoted-attribute escaping, retaining existing output bytes.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
+
+
+## html_tokenizer
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fAttribute"></a>
+
+- `pub type html_tokenizer.Attribute { key: String, value: String, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind"></a>
+
+- `pub type html_tokenizer.Kind = Text | StartTag | EndTag | SelfClosingTag | Comment | Doctype`
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23Comment"></a>
+
+- `Comment -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23Doctype"></a>
+
+- `Doctype -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23EndTag"></a>
+
+- `EndTag -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23SelfClosingTag"></a>
+
+- `SelfClosingTag -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23StartTag"></a>
+
+- `StartTag -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fKind_23Text"></a>
+
+- `Text -> html_tokenizer.Kind`
+
+Variant of html_tokenizer.Kind.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimit"></a>
+
+- `pub type html_tokenizer.Limit = InputBytes | Tokens | Attributes | Work`
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimit_23Attributes"></a>
+
+- `Attributes -> html_tokenizer.Limit`
+
+Variant of html_tokenizer.Limit.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimit_23InputBytes"></a>
+
+- `InputBytes -> html_tokenizer.Limit`
+
+Variant of html_tokenizer.Limit.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimit_23Tokens"></a>
+
+- `Tokens -> html_tokenizer.Limit`
+
+Variant of html_tokenizer.Limit.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimit_23Work"></a>
+
+- `Work -> html_tokenizer.Limit`
+
+Variant of html_tokenizer.Limit.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fLimits"></a>
+
+- `pub type html_tokenizer.Limits { bytes: u64, tokens: u64, attributes: u64, work: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fSpan"></a>
+
+- `pub type html_tokenizer.Span { start: u64, end: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fToken"></a>
+
+- `pub type html_tokenizer.Token { kind: Kind, span: Span, data: String, attributes: List[Attribute], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/html_tokenizer/Attribute`](#def-std_401_2fhtml_5ftokenizer_2fAttribute), [`std@1/html_tokenizer/Kind`](#def-std_401_2fhtml_5ftokenizer_2fKind), [`std@1/html_tokenizer/Span`](#def-std_401_2fhtml_5ftokenizer_2fSpan)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fTokenizeError"></a>
+
+- `pub type html_tokenizer.TokenizeError = LimitExceeded(Limit, u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/html_tokenizer/Limit`](#def-std_401_2fhtml_5ftokenizer_2fLimit)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fTokenizeError_23LimitExceeded"></a>
+
+- `LimitExceeded(Limit, u64) -> html_tokenizer.TokenizeError`
+
+Variant of html_tokenizer.TokenizeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/html_tokenizer/Limit`](#def-std_401_2fhtml_5ftokenizer_2fLimit)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fTokenizer"></a>
+
+- `pub opaque type html_tokenizer.Tokenizer: copyable + inert + noalloc_drop uses {}`
+
+Owns the bounded whole UTF-8 input. No I/O or caller-owned views.
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fnext"></a>
+
+- `pub fn html_tokenizer.next(mut z: Tokenizer, allow_cdata: bool) -> Result[Option[Token], TokenizeError] uses {}`
+
+None is stable EOF; errors poison the tokenizer and repeat unchanged.
+Caller selects CDATA for this token's foreign-content context.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/html_tokenizer/Token`](#def-std_401_2fhtml_5ftokenizer_2fToken), [`std@1/html_tokenizer/TokenizeError`](#def-std_401_2fhtml_5ftokenizer_2fTokenizeError), [`std@1/html_tokenizer/Tokenizer`](#def-std_401_2fhtml_5ftokenizer_2fTokenizer)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2fnext_5fis_5fnot_5fraw_5ftext"></a>
+
+- `pub fn html_tokenizer.next_is_not_raw_text(mut z: Tokenizer) -> () uses {}`
+
+Override the next rawtext/RCDATA transition (e.g. an SVG title).
+
+References: [`std@1/html_tokenizer/Tokenizer`](#def-std_401_2fhtml_5ftokenizer_2fTokenizer)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2ftokenize"></a>
+
+- `pub fn html_tokenizer.tokenize(take source: String, limits: Limits, allow_cdata: bool) -> Result[ List[Token], TokenizeError ] uses {}`
+
+Collect using a fixed CDATA policy. Use tokenizer/next to vary the context.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/html_tokenizer/Limits`](#def-std_401_2fhtml_5ftokenizer_2fLimits), [`std@1/html_tokenizer/Token`](#def-std_401_2fhtml_5ftokenizer_2fToken), [`std@1/html_tokenizer/TokenizeError`](#def-std_401_2fhtml_5ftokenizer_2fTokenizeError)
+
+<a id="def-std_401_2fhtml_5ftokenizer_2ftokenizer"></a>
+
+- `pub fn html_tokenizer.tokenizer(take source: String, limits: Limits) -> Result[ Tokenizer, TokenizeError ] uses {}`
+
+All caps are inclusive; zero permits zero, never unlimited.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/html_tokenizer/Limits`](#def-std_401_2fhtml_5ftokenizer_2fLimits), [`std@1/html_tokenizer/TokenizeError`](#def-std_401_2fhtml_5ftokenizer_2fTokenizeError), [`std@1/html_tokenizer/Tokenizer`](#def-std_401_2fhtml_5ftokenizer_2fTokenizer)
 
 
 ## http
@@ -9368,6 +9540,67 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_4
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
 
 
+## json_access
+
+<a id="def-std_401_2fjson_5faccess_2fas_5farray"></a>
+
+- `pub fn json_access.as_array(value: json.Value) -> Option[List[json.Value]] in value uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fas_5fbool"></a>
+
+- `pub fn json_access.as_bool(value: json.Value) -> Option[bool] uses {}`
+
+Bool payload only. The plain bool result has no source lifetime restriction.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fas_5fobject"></a>
+
+- `pub fn json_access.as_object(value: json.Value) -> Option[Map[String, json.Value]] in value uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fas_5ftext"></a>
+
+- `pub fn json_access.as_text(value: json.Value) -> Option[String] in value uses {}`
+
+Text payload only; booleans and numbers are never formatted as text.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2felement"></a>
+
+- `pub fn json_access.element(value: json.Value, index: u64) -> Option[json.Value] in value uses {}`
+
+Select a zero-based array element; wrong variants and out-of-range return None().
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fis_5fnull"></a>
+
+- `pub fn json_access.is_null(value: json.Value) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fmember"></a>
+
+- `pub fn json_access.member(value: json.Value, key: String) -> Option[json.Value] in value uses {}`
+
+Select an object member; present null is Some(Null()), absence is None().
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_5faccess_2fnumber_5ftext"></a>
+
+- `pub fn json_access.number_text(value: json.Value) -> Option[String] in value uses {}`
+
+Number payload only, retaining its exact lexical spelling without parsing.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+
 ## json_document
 
 <a id="def-std_401_2fjson_5fdocument_2fDocument"></a>
@@ -9520,6 +9753,261 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 - `pub fn json_merge_patch.apply(take target: json.Value, patch: json.Value, max_depth: u64) -> Result[ json.Value, MergeError ] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_merge_patch/MergeError`](#def-std_401_2fjson_5fmerge_5fpatch_2fMergeError)
+
+
+## json_patch
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind"></a>
+
+- `@serializable pub type json_patch.ErrorKind = LimitsError | BytesLimit | OperationsLimit | DepthLimit | TokensLimit | WorkLimit | InvalidJson( json.JsonError ) | Shape | Field(String) | UnknownOperation | InvalidPath(u64) | MissingTarget | MissingSource | InvalidIndex | MoveDescendant | TestFailed | InvalidNumber`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23BytesLimit"></a>
+
+- `BytesLimit -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23DepthLimit"></a>
+
+- `DepthLimit -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23Field"></a>
+
+- `Field(String) -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23InvalidIndex"></a>
+
+- `InvalidIndex -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23InvalidJson"></a>
+
+- `InvalidJson( json.JsonError ) -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23InvalidNumber"></a>
+
+- `InvalidNumber -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23InvalidPath"></a>
+
+- `InvalidPath(u64) -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23LimitsError"></a>
+
+- `LimitsError -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23MissingSource"></a>
+
+- `MissingSource -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23MissingTarget"></a>
+
+- `MissingTarget -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23MoveDescendant"></a>
+
+- `MoveDescendant -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23OperationsLimit"></a>
+
+- `OperationsLimit -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23Shape"></a>
+
+- `Shape -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23TestFailed"></a>
+
+- `TestFailed -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23TokensLimit"></a>
+
+- `TokensLimit -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23UnknownOperation"></a>
+
+- `UnknownOperation -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fErrorKind_23WorkLimit"></a>
+
+- `WorkLimit -> json_patch.ErrorKind`
+
+Variant of json_patch.ErrorKind.
+
+<a id="def-std_401_2fjson_5fpatch_2fLimits"></a>
+
+- `pub type json_patch.Limits { max_bytes: u64, max_operations: u64, max_depth: u64, max_tokens: u64, max_work: u64, }`
+
+Limits are inclusive. Hard ceilings: 16 MiB, 4096 operations, depth 128,
+128 tokens/path, 100 million work units. Invalid limits return LimitsError.
+Bytes count UTF-8 payload bytes plus one per node (and object key bytes).
+parse_text additionally bounds the complete encoded input before parsing.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation"></a>
+
+- `pub type json_patch.Operation = Add(Path, json.Value) | Remove(Path) | Replace(Path, json.Value) | Move( Path, Path ) | Copy(Path, Path) | Test(Path, json.Value)`
+
+Move and Copy carry destination first, then source; other paths are targets.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Add"></a>
+
+- `Add(Path, json.Value) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Copy"></a>
+
+- `Copy(Path, Path) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Move"></a>
+
+- `Move( Path, Path ) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Remove"></a>
+
+- `Remove(Path) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Replace"></a>
+
+- `Replace(Path, json.Value) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fOperation_23Test"></a>
+
+- `Test(Path, json.Value) -> json_patch.Operation`
+
+Variant of json_patch.Operation.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
+
+<a id="def-std_401_2fjson_5fpatch_2fPatch"></a>
+
+- `pub opaque type json_patch.Patch: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fjson_5fpatch_2fPatchError"></a>
+
+- `@serializable pub type json_patch.PatchError { operation: u64, path: String, kind: ErrorKind, }`
+
+operation is zero-based. Errors before operation dispatch use operation 0
+and path "". For source failures path is the original `from` string.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_patch/ErrorKind`](#def-std_401_2fjson_5fpatch_2fErrorKind)
+
+<a id="def-std_401_2fjson_5fpatch_2fPath"></a>
+
+- `pub opaque type json_patch.Path: copyable + inert + noalloc_drop uses {}`
+
+Validated RFC6901 path. Both the shipped pointer and decoded mutation tokens
+are owned; no source JSON or source text is borrowed by a parsed patch.
+
+<a id="def-std_401_2fjson_5fpatch_2fapply"></a>
+
+- `pub fn json_patch.apply(document: Option[json.Value], patch: Patch, limits: Limits) -> Result[ Option[json.Value], PatchError ] uses {}`
+
+Borrows both inputs and publishes only a completely successful owned result.
+None is document absence, distinct from Some(Null()). Only root add creates
+an absent document. An empty patch preserves absence. Root remove returns
+None; later root add may recreate it. All failures leave both inputs intact.
+Each call has one work budget across preflight, copies, edits and tests.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Limits`](#def-std_401_2fjson_5fpatch_2fLimits), [`std@1/json_patch/Patch`](#def-std_401_2fjson_5fpatch_2fPatch), [`std@1/json_patch/PatchError`](#def-std_401_2fjson_5fpatch_2fPatchError)
+
+<a id="def-std_401_2fjson_5fpatch_2fdefault_5flimits"></a>
+
+- `pub fn json_patch.default_limits() -> Limits uses {}`
+
+References: [`std@1/json_patch/Limits`](#def-std_401_2fjson_5fpatch_2fLimits)
+
+<a id="def-std_401_2fjson_5fpatch_2foperations"></a>
+
+- `pub fn json_patch.operations(patch: Patch) -> List[Operation] in patch uses {}`
+
+Borrows the typed operation sequence from a parsed patch.
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/json_patch/Operation`](#def-std_401_2fjson_5fpatch_2fOperation), [`std@1/json_patch/Patch`](#def-std_401_2fjson_5fpatch_2fPatch)
+
+<a id="def-std_401_2fjson_5fpatch_2fparse"></a>
+
+- `pub fn json_patch.parse(take value: json.Value, limits: Limits) -> Result[Patch, PatchError] uses {}`
+
+Validates the complete owned patch list before application. Extra operation
+members are ignored, as RFC6902 requires. Duplicate keys are json.parse errors.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_patch/Limits`](#def-std_401_2fjson_5fpatch_2fLimits), [`std@1/json_patch/Patch`](#def-std_401_2fjson_5fpatch_2fPatch), [`std@1/json_patch/PatchError`](#def-std_401_2fjson_5fpatch_2fPatchError)
+
+<a id="def-std_401_2fjson_5fpatch_2fparse_5ftext"></a>
+
+- `pub fn json_patch.parse_text(take text: String, limits: Limits) -> Result[Patch, PatchError] uses {}`
+
+Bounds raw UTF-8 bytes and parser work before calling the shipped JSON parser.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json_patch/Limits`](#def-std_401_2fjson_5fpatch_2fLimits), [`std@1/json_patch/Patch`](#def-std_401_2fjson_5fpatch_2fPatch), [`std@1/json_patch/PatchError`](#def-std_401_2fjson_5fpatch_2fPatchError)
+
+<a id="def-std_401_2fjson_5fpatch_2fpath_5ftext"></a>
+
+- `pub fn json_patch.path_text(selected: Path) -> String in selected uses {}`
+
+Borrows a path's original encoded RFC6901 text.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json_patch/Path`](#def-std_401_2fjson_5fpatch_2fPath)
 
 
 ## json_pointer
@@ -11913,6 +12401,37 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 
 ## process
+
+<a id="def-std_401_2fprocess_2fExitCode"></a>
+
+- `pub opaque type process.ExitCode: plain + inert + noalloc_drop uses {}`
+
+A program's returned exit status, from 0 through 255. Returning it runs
+ordinary cleanup; it performs no effect and requires no capability.
+
+<a id="def-std_401_2fprocess_2fFAILURE"></a>
+
+- `pub const process.FAILURE: ExitCode`
+
+Unsuccessful completion (1), without an Error payload report.
+
+References: [`std@1/process/ExitCode`](#def-std_401_2fprocess_2fExitCode)
+
+<a id="def-std_401_2fprocess_2fSUCCESS"></a>
+
+- `pub const process.SUCCESS: ExitCode`
+
+Successful completion (0).
+
+References: [`std@1/process/ExitCode`](#def-std_401_2fprocess_2fExitCode)
+
+<a id="def-std_401_2fprocess_2fexit_5fcode"></a>
+
+- `@noalloc pub fn process.exit_code(n: u8) -> ExitCode uses {}`
+
+Construct an exit status from the portable unsigned byte range.
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/process/ExitCode`](#def-std_401_2fprocess_2fExitCode)
 
 <a id="def-std_401_2fprocess_2fpipefail"></a>
 
