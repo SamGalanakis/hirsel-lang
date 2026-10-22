@@ -1,0 +1,181 @@
+// Port of strsim dacc84c0dc61eff0ee0ff66962bcf2e17018ad26,
+// src/lib.rs:90-219 (MIT; full notice in docs/text-similarity.md).
+
+/// A scalar cap, matching-work budget or unrepresentable scratch size.
+pub type Error = TooLarge()
+
+@noalloc
+fn count(s: String, limit: u64) -> Result[u64, Error] uses {} {
+  let mut n: u64 = 0
+  for _ in core@1/string.scalars(s) {
+    if n == limit {
+      return Error(TooLarge())
+    }
+    n += 1
+  }
+  Ok(n)
+}
+
+// Separate from decoding so synthetic overflow boundaries can be tested.
+@noalloc
+fn preflight(n: u64, m: u64, max_cells: u64) -> Result[(), Error] uses {} {
+  if n == 0 || m == 0 {
+    return Ok(())
+  }
+  // Division checks the product without ever evaluating n*m.
+  if n > max_cells / m {
+    return Error(TooLarge())
+  }
+  let total = match core@1/int.checked_add(n, m) {
+    Some(total) => total,
+    None() => return Error(TooLarge()),
+  }
+  // Two char buffers (4 bytes/scalar) and one bool buffer (1 byte/flag).
+  // Native sequence prefixes are 16 bytes; EXTENT_MAX is isize::MAX / 2.
+  // Check each extent and the aggregate byte arithmetic before allocation.
+  if n > 1152921504606846971u64 || m > 1152921504606846971u64 || total > 4611686018427387887u64 || total > 3689348814741910313u64 {
+    return Error(TooLarge())
+  }
+  Ok(())
+}
+
+fn buffer(s: String, n: u64) -> unique List[char] uses {} {
+  let mut out: List[char] = []
+  core@1/list.reserve(mut out, n)
+  for c in core@1/string.scalars(s) {
+    core@1/list.push(mut out, c)
+  }
+  take out
+}
+
+fn score(a: List[char], b: List[char]) -> f64 uses {} {
+  let n = core@1/list.len(a)
+  let m = core@1/list.len(b)
+  let longer = if n > m {
+    n
+  } else {
+    m
+  }
+  let half = longer / 2
+  let radius: u64 = if half == 0 {
+    0
+  } else {
+    half - 1
+  }
+  let mut flags: List[bool] = []
+  core@1/list.reserve(mut flags, n + m)
+  for _ in 0u64..n + m {
+    core@1/list.push(mut flags, false)
+  }
+  let mut matches: u64 = 0
+  let mut i: u64 = 0
+  while i < n {
+    let low: u64 = if i > radius {
+      i - radius
+    } else {
+      0
+    }
+    // Preflight bounds n and m, so i+radius+1 cannot wrap.
+    let end = i + radius + 1
+    let high = if m < end {
+      m
+    } else {
+      end
+    }
+    let mut j = low
+    while j < high {
+      if a[i] == b[j] && !flags[n + j] {
+        flags[i] = true
+        flags[n + j] = true
+        matches += 1
+        break
+      }
+      j += 1
+    }
+    i += 1
+  }
+  if matches == 0 {
+    return 0.0
+  }
+  let mut mismatches: u64 = 0
+  let mut j: u64 = 0
+  i = 0
+  while i < n {
+    if flags[i] {
+      while !flags[n + j] {
+        j += 1
+      }
+      if a[i] != b[j] {
+        mismatches += 1
+      }
+      j += 1
+    }
+    i += 1
+  }
+  // Preserve strsim's integer halving, including odd mismatch counts.
+  let transpositions = mismatches / 2
+  let matched: f64 = core@1/float.from_int(matches)
+  let left: f64 = core@1/float.from_int(n)
+  let right: f64 = core@1/float.from_int(m)
+  let ordered: f64 = core@1/float.from_int(matches - transpositions)
+  (matched / left + matched / right + ordered / matched) / 3.0
+}
+
+@noalloc
+fn boost(sim: f64, prefix: u64) -> f64 uses {} {
+  if sim > 0.7 {
+    let length: f64 = core@1/float.from_int(prefix)
+    sim + 0.1 * length * (1.0 - sim)
+  } else {
+    sim
+  }
+}
+
+fn similarity(a: String, b: String, max_cells: u64, max_scalars: u64, winkler: bool) -> Result[
+  f64,
+  Error
+] uses {} {
+  let n = count(a, max_scalars)?
+  let m = count(b, max_scalars)?
+  preflight(n, m, max_cells)?
+  if n == 0 && m == 0 {
+    return Ok(1.0)
+  }
+  if n == 0 || m == 0 {
+    return Ok(0.0)
+  }
+  let left = buffer(a, n)
+  let right = buffer(b, m)
+  let sim = score(left, right)
+  if winkler {
+    let mut prefix: u64 = 0
+    while prefix < 4 && prefix < n && prefix < m {
+      if left[prefix] != right[prefix] {
+        break
+      }
+      prefix += 1
+    }
+    return Ok(boost(sim, prefix))
+  }
+  Ok(sim)
+}
+
+/// Jaro similarity over Unicode scalars, without normalization or grapheme folding.
+/// max_scalars bounds EACH input; max_cells bounds n*m matching work.
+/// TooLarge is checked before scratch allocation. Empty inputs still obey the
+/// scalar cap and require zero cells. Time O(n+m+n*m); scratch O(n+m).
+pub fn jaro(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[
+  f64,
+  Error
+] uses {} {
+  similarity(a, b, max_cells, max_scalars, false)
+}
+
+/// Jaro with a 0.1 boost per common prefix scalar (at most four), only above 0.7.
+/// Uses the same bounds and refusal rules as jaro; both inputs remain unchanged.
+pub fn jaro_winkler(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[
+  f64,
+  Error
+] uses {} {
+  similarity(a, b, max_cells, max_scalars, true)
+}

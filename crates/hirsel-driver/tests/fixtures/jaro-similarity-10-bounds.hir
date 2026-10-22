@@ -1,0 +1,45 @@
+fn bounded(
+  a: String,
+  b: String,
+  cells: u64,
+  scalars: u64,
+  expected: Result[f64, std@1/text_similarity.Error]
+) -> () {
+  let alias_a = a
+  let alias_b = b
+  failure.check(
+    std@1/text_similarity.jaro(a, b, cells, scalars) == expected,
+    TextInvariant()
+  )
+  failure.check(
+    std@1/text_similarity.jaro_winkler(a, b, cells, scalars) == expected,
+    TextInvariant()
+  )
+  failure.check(a == alias_a && b == alias_b, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let refused: Result[f64, std@1/text_similarity.Error] = Error(TooLarge())
+  bounded("", "", 0, 0, Ok(1.0))
+  bounded("", "💚", 0, 1, Ok(0.0))
+  bounded("💚", "", 0, 1, Ok(0.0))
+  bounded("", "💚", 0, 0, refused)
+  bounded("💚", "", 0, 0, refused)
+  bounded("é", "é", 1, 1, Ok(1.0))
+  bounded("é", "é", 0, 1, refused)
+  bounded("é", "é", 1, 0, refused)
+  bounded("a", "b", 0, 1, refused)
+  bounded("é", "é", 4, 2, Ok(1.0))
+  bounded("é", "é", 3, 2, refused)
+  bounded("é", "é", 4, 1, refused)
+  bounded("💚", "é", 18446744073709551615, 18446744073709551615, Ok(0.0))
+  let long = "💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚💚"
+  bounded(long, long, 65536, 256, Ok(1.0))
+  bounded(long, long, 65535, 256, refused)
+  bounded(long, long, 65536, 255, refused)
+  bounded(long, "", 0, 256, Ok(0.0))
+  bounded(long, "", 0, 255, refused)
+  bounded("", long, 0, 255, refused)
+  bounded(long, long, 0, 0, refused)
+  Ok(())
+}

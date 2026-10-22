@@ -1,0 +1,98 @@
+// strsim dacc84c0dc61eff0ee0ff66962bcf2e17018ad26; MIT, docs/text-similarity.md.
+fn check(a: String, b: String, expected: f64, tolerance: f64, winkler: bool) -> () {
+  let alias_a = a
+  let alias_b = b
+  let answer = if winkler {
+    std@1/text_similarity.jaro_winkler(a, b, 1000000, 10000)
+  } else {
+    std@1/text_similarity.jaro(a, b, 1000000, 10000)
+  }
+  match answer {
+    Ok(value) => {
+      let delta = value - expected
+      failure.check(delta <= tolerance && delta >= -tolerance, TextInvariant())
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  failure.check(a == alias_a && b == alias_b, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", "", 1.0, 0.0, false)
+  check("", "jaro", 0.0, 0.0, false)
+  check("distance", "", 0.0, 0.0, false)
+  check("jaro", "jaro", 1.0, 0.0, false)
+  check("testabctest", "testöঙ香test", 0.818, 0.001, false)
+  check("testöঙ香test", "testabctest", 0.818, 0.001, false)
+  check("dixon", "dicksonx", 0.767, 0.001, false)
+  check("a", "b", 0.0, 0.0, false)
+  check("a", "a", 1.0, 0.0, false)
+  check("ab", "cd", 0.0, 0.0, false)
+  check("a", "ab", 0.83, 0.01, false)
+  check("ab", "a", 0.83, 0.01, false)
+  check("dwayne", "duane", 0.822, 0.001, false)
+  check("martha", "marhta", 0.944, 0.001, false)
+  check("a jke", "jane a k", 0.6, 0.001, false)
+  check("Friedrich Nietzsche", "Jean-Paul Sartre", 0.392, 0.001, false)
+  check("", "", 1.0, 0.0, true)
+  check("", "jaro-winkler", 0.0, 0.0, true)
+  check("distance", "", 0.0, 0.0, true)
+  check("Jaro-Winkler", "Jaro-Winkler", 1.0, 0.0, true)
+  check("testabctest", "testöঙ香test", 0.89, 0.001, true)
+  check("testöঙ香test", "testabctest", 0.89, 0.001, true)
+  check("dixon", "dicksonx", 0.813, 0.001, true)
+  check("dicksonx", "dixon", 0.813, 0.001, true)
+  check("a", "b", 0.0, 0.0, true)
+  check("a", "a", 1.0, 0.0, true)
+  check("dwayne", "duane", 0.84, 0.001, true)
+  check("martha", "marhta", 0.961, 0.001, true)
+  check("a jke", "jane a k", 0.6, 0.001, true)
+  check("Friedrich Nietzsche", "Fran-Paul Sartre", 0.452, 0.001, true)
+  check("cheeseburger", "cheese fries", 0.866, 0.001, true)
+  check("Thorkel", "Thorgier", 0.868, 0.001, true)
+  check("Dinsdale", "D", 0.738, 0.001, true)
+  check(
+    "thequickbrownfoxjumpedoverx",
+    "thequickbrownfoxjumpedovery",
+    0.98519,
+    1e-05,
+    true
+  )
+  check("aaabaa", "baaaab", 0.8222222222222223, 0.0, false)
+  check("aaabaa", "baaaab", 0.8222222222222223, 0.0, true)
+  check("baaaab", "aaabaa", 0.8222222222222223, 0.0, false)
+  check("baaaab", "aaabaa", 0.8222222222222223, 0.0, true)
+  check("aaaabc", "aaabca", 0.9444444444444445, 0.0, false)
+  check("aaaabc", "aaabca", 0.9611111111111111, 0.0, true)
+  check("aaabca", "aaaabc", 0.9444444444444445, 0.0, false)
+  check("aaabca", "aaaabc", 0.9611111111111111, 0.0, true)
+  check("é", "é", 0.0, 0.0, false)
+  check("é", "é", 0.0, 0.0, true)
+  check("é", "é", 0.0, 0.0, false)
+  check("é", "é", 0.0, 0.0, true)
+  check("é", "è", 0.6666666666666666, 0.0, false)
+  check("é", "è", 0.6666666666666666, 0.0, true)
+  check("è", "é", 0.6666666666666666, 0.0, false)
+  check("è", "é", 0.6666666666666666, 0.0, true)
+  check("👩‍💻", "👩💻", 0.611111111111111, 0.0, false)
+  check("👩‍💻", "👩💻", 0.611111111111111, 0.0, true)
+  check("👩💻", "👩‍💻", 0.611111111111111, 0.0, false)
+  check("👩💻", "👩‍💻", 0.611111111111111, 0.0, true)
+  check("💚", "💚", 1.0, 0.0, false)
+  check("💚", "💚", 1.0, 0.0, true)
+  check("💚", "💚", 1.0, 0.0, false)
+  check("💚", "💚", 1.0, 0.0, true)
+  check("\u{0}", "a", 0.0, 0.0, false)
+  check("\u{0}", "a", 0.0, 0.0, true)
+  check("a", "\u{0}", 0.0, 0.0, false)
+  check("a", "\u{0}", 0.0, 0.0, true)
+  check("ababc", "bacba", 0.6222222222222222, 0.0, false)
+  check("ababc", "bacba", 0.6222222222222222, 0.0, true)
+  check("bacba", "ababc", 0.6222222222222222, 0.0, false)
+  check("bacba", "ababc", 0.6222222222222222, 0.0, true)
+  check("abcde", "abedc", 0.7333333333333334, 0.0, false)
+  check("abcde", "abedc", 0.7866666666666667, 0.0, true)
+  check("abedc", "abcde", 0.7333333333333334, 0.0, false)
+  check("abedc", "abcde", 0.7866666666666667, 0.0, true)
+  Ok(())
+}

@@ -1265,6 +1265,12 @@
       "module": [
         "cidr"
       ]
+    },
+    {
+      "path": "text_similarity.hir",
+      "module": [
+        "text_similarity"
+      ]
     }
   ],
   "dependencies": []

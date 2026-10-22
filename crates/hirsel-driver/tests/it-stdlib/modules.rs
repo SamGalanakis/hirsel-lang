@@ -56,3 +56,4 @@ mod json_merge_patch_8;
 mod quoted_printable_8;
 mod stdlib_drift;
 mod cidr_8;
+mod jaro_similarity_10;
