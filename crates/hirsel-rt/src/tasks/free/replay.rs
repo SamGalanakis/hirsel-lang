@@ -29,7 +29,7 @@ impl Replay {
     /// Admission only, before any task runs. This initial replay slice admits
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
-    /// scopes with settled children, task-set selection, serial gates and
+    /// scopes whose children use these admitted operations, task-set selection, serial gates and
     /// scalar mutex operations including kill/cause and scalar channels with
     /// endpoint aliases/closes; no host requests or general cancellation-ended
     /// waits yet. Deterministic yielding object finalizers

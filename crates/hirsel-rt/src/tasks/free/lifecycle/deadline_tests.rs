@@ -447,6 +447,7 @@ struct ParkedClock {
     now: bool,
     advance: bool,
     run: Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>,
+    recording: Option<Arc<super::super::record::Recording>>,
 }
 impl Adapter for ParkedClock {
     fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
@@ -482,6 +483,9 @@ impl Adapter for ParkedClock {
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         assert_eq!(std::thread::current().id(), self.home);
+        if let Some(recording) = &self.recording {
+            recording.recorder.flush().unwrap().unwrap();
+        }
         self.now = self.advance;
         Ok(self.advance)
     }
@@ -521,6 +525,7 @@ fn parked_deadline(child: bool, advance: bool) {
                 now: false,
                 advance,
                 run: run_ptr,
+                recording: None,
             }));
             let layout = crate::Layout {
                 magic: crate::LAYOUT_MAGIC,
@@ -640,4 +645,168 @@ fn a_deadline_wakes_scope_exit_waiting_for_a_saved_free_child() {
 #[test]
 fn an_armed_free_deadline_without_a_source_reports_blocked() {
     parked_deadline(false, false);
+}
+
+unsafe fn deadline_child_scope(ctx: *mut TaskCtx, child: bool) {
+    unsafe {
+        let mut scope = 0;
+        hirsel_rt_v2_task_scope_enter_until(ctx, std::ptr::null_mut(), &mut scope, &0, &[11, 100]);
+        let mut endpoints = [0; 2];
+        let mut image = [0u64; 2];
+        hirsel_rt_v2_channel_open(
+            ctx,
+            std::ptr::null_mut(),
+            endpoints.as_mut_ptr(),
+            &0,
+            image.as_ptr().cast(),
+            2,
+        );
+        if child {
+            let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+            crate::alloc::payload(env).cast::<u64>().write(endpoints[1]);
+            let mut task = 0;
+            hirsel_rt_v2_task_spawn(
+                ctx,
+                0,
+                0,
+                std::ptr::null_mut(),
+                &mut task,
+                &scope,
+                receiving_child,
+                env,
+                0,
+            );
+        } else {
+            let mut status = 99;
+            hirsel_rt_v2_channel_receive(
+                ctx,
+                0,
+                0,
+                &mut status,
+                &mut endpoints[1],
+                image.as_mut_ptr().cast(),
+            );
+            assert_eq!(status, crate::channels::CANCELED + CANCEL_DEADLINE);
+        }
+        let mut expired = 99;
+        assert_eq!(
+            hirsel_rt_v2_task_scope_exit_until(ctx, 0, 0, &mut expired, &scope, 0),
+            STATUS_OK
+        );
+        assert_eq!(expired, 1);
+        crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[0], 0, 0);
+        if !child {
+            crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[1], 0, 0);
+        }
+    }
+}
+
+#[test]
+fn native_deadline_replay_finishes_waiting_child_scopes_without_a_live_timer() {
+    const CHILD: &str = "HIRSEL_F1_DEADLINE_CHILD_REPLAY";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tasks::free::lifecycle::deadline_tests::native_deadline_replay_finishes_waiting_child_scopes_without_a_live_timer", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+    crate::pool::set_compute_grant(1);
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 16,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let layouts = [&raw const layout];
+    for (durable, child) in [(false, false), (true, false), (false, true), (true, true)] {
+        let recording =
+            super::super::record::Recording::new(b"deadline child scope replay", durable);
+        let install = recording.clone();
+        let run_ptr = Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()));
+        let install_run = run_ptr.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        run.adapter = Some(Box::new(ParkedClock {
+            home: std::thread::current().id(),
+            now: false,
+            advance: true,
+            run: run_ptr,
+            recording: Some(recording.clone()),
+        }));
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install_run.store((*ctx).run_ptr(), Ordering::Release);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                deadline_child_scope(ctx, child);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        recording.recorder.stop("returned", None).unwrap().unwrap();
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let entered = (1..bytes.len())
+            .find(|&end| {
+                hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                    tape.cut.get(&Vec::new())
+                        == Some(&Progress::new(if child { 4 } else { 3 }, Phase::Entered))
+                })
+            })
+            .unwrap();
+        for end in [bytes.len(), entered, entered + 1] {
+            let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+            let expected = Projection::new(
+                if end == bytes.len() {
+                    "returned"
+                } else {
+                    "truncated"
+                },
+                &parsed.cut,
+                &trace,
+            );
+            for width in [1, 2, 8] {
+                let replay = Replay::new(&bytes[..end]).unwrap();
+                let install = replay.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                run.adapter = Some(Box::new(NoReplayClock));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe { install.root(ctx) },
+                    move |ctx| unsafe {
+                        deadline_child_scope(ctx, child);
+                        panic!("deadline child replay passed its cut");
+                    },
+                );
+                assert!(
+                    matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                    "{outcome:?}"
+                );
+                assert_eq!(replay.finish().unwrap(), expected);
+            }
+        }
+    }
 }
