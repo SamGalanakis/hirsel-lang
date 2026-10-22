@@ -14,6 +14,7 @@ pub(in crate::tasks::free) struct Created {
 }
 
 pub(in crate::tasks::free) struct Envelope {
+    pub(in crate::tasks::free) refusal: Option<super::requests::Authority>,
     pub(in crate::tasks::free) result: Result<Completion, AdapterError>,
     pub(in crate::tasks::free) created: Vec<Created>,
     pub(in crate::tasks::free) output_count: Option<u64>,
@@ -76,16 +77,18 @@ impl Wire for Created {
 }
 impl Wire for Envelope {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(b"F1H4");
+        out.extend_from_slice(b"F1H5");
+        self.refusal.encode(out);
         self.result.encode(out);
         self.created.encode(out);
         self.output_count.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
-        if input.take(4)? != b"F1H4" {
+        if input.take(4)? != b"F1H5" {
             return Err("unsupported Free host envelope".into());
         }
         Ok(Self {
+            refusal: Wire::decode(input)?,
             result: Wire::decode(input)?,
             created: Wire::decode(input)?,
             output_count: Wire::decode(input)?,
@@ -99,7 +102,18 @@ pub(in crate::tasks::free) fn encode(
 ) -> Stopped<()> {
     capture(result)?;
     let mut canonical = result.clone();
-    let fields = fields(&mut canonical).map_err(|error| Stop::Refused(error.into()))?;
+    let refusal = if let Some(word) = refusal_word(&canonical) {
+        let authority = pending.shared.authorities.reference(word)?;
+        *refusal_field(&mut canonical).unwrap() = 0;
+        Some(authority)
+    } else {
+        None
+    };
+    let fields = if refusal.is_some() {
+        [None, None]
+    } else {
+        fields(&mut canonical).map_err(|error| Stop::Refused(error.into()))?
+    };
     let count = fields.iter().flatten().count();
     let created = if count == 0 {
         Vec::new()
@@ -123,9 +137,13 @@ pub(in crate::tasks::free) fn encode(
                 crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted,
             ))) => Some(0),
             _ => {
-                return Err(Stop::Refused(
-                    "failed output needs an observed written prefix".into(),
-                ));
+                if refusal.is_some() {
+                    Some(0)
+                } else {
+                    return Err(Stop::Refused(
+                        "failed output needs an observed written prefix".into(),
+                    ));
+                }
             }
         };
     }
@@ -134,6 +152,7 @@ pub(in crate::tasks::free) fn encode(
     }
     pending.encoded.clear();
     let envelope = Envelope {
+        refusal,
         output_count: pending.output_count,
         result: canonical,
         created,
@@ -145,6 +164,40 @@ pub(in crate::tasks::free) fn encode(
 
 // Preserve the established Free codec seam and callers.
 pub(super) use crate::io_observation::{capture, fields};
+
+pub(in crate::tasks::free) fn refusal_word(
+    result: &Result<Completion, AdapterError>,
+) -> Option<u64> {
+    match result {
+        Err(AdapterError::InvalidHandle(word)) | Ok(Completion::Refused(word)) => Some(*word),
+        _ => None,
+    }
+}
+fn refusal_field(result: &mut Result<Completion, AdapterError>) -> Option<&mut u64> {
+    match result {
+        Err(AdapterError::InvalidHandle(word)) | Ok(Completion::Refused(word)) => Some(word),
+        _ => None,
+    }
+}
+pub(in crate::tasks::free) fn restore_refusal(
+    envelope: &mut Envelope,
+    authorities: &super::requests::Authorities,
+) -> Stopped<bool> {
+    match (&envelope.refusal, refusal_field(&mut envelope.result)) {
+        (Some(authority), Some(word))
+            if *word == 0
+                && envelope.created.is_empty()
+                && envelope.output_count.is_none_or(|count| count == 0) =>
+        {
+            *word = authorities.resolve(authority)?;
+            Ok(true)
+        }
+        (None, None) => Ok(false),
+        _ => Err(Stop::Diverged(
+            "invalid logical host refusal envelope".into(),
+        )),
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Handles {
@@ -186,6 +239,11 @@ impl Handles {
         &mut self,
         envelope: Envelope,
     ) -> Stopped<Result<Completion, AdapterError>> {
+        if envelope.refusal.is_some() {
+            return Err(Stop::Diverged(
+                "host refusal requires authority substitution".into(),
+            ));
+        }
         let mut result = envelope.result;
         let fields = fields(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
         if fields.iter().flatten().count() != envelope.created.len() {
@@ -310,6 +368,7 @@ mod tests {
     use super::*;
     fn envelope(path: &[u32], ordinal: u64, resource: u32) -> Envelope {
         Envelope {
+            refusal: None,
             output_count: None,
             result: Ok(Completion::Handle(Ok(0))),
             created: vec![Created {
@@ -393,6 +452,7 @@ mod tests {
             );
             let mut bytes = Vec::new();
             Envelope {
+                refusal: None,
                 output_count: None,
                 result: Ok(completion.clone()),
                 created: Vec::new(),
@@ -403,6 +463,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        refusal: None,
                         output_count: None,
                         result: Ok(completion),
                         created: envelope(&[], 1, 17).created
@@ -422,6 +483,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        refusal: None,
                         output_count: None,
                         result: result.clone(),
                         created: Vec::new()
@@ -431,6 +493,7 @@ mod tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        refusal: None,
                         output_count: None,
                         result,
                         created: envelope(&[], 1, 17).created
@@ -441,6 +504,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    refusal: None,
                     output_count: None,
                     result: Ok(Completion::Halves(Ok((99, 100)))),
                     created: Vec::new()
@@ -454,6 +518,7 @@ mod tests {
         let mut created = envelope(&[], 1, 17).created;
         created.extend(envelope(&[], second_ordinal, second_resource).created);
         Envelope {
+            refusal: None,
             output_count: None,
             result: Ok(Completion::Halves(Ok((0, 0)))),
             created,
@@ -514,6 +579,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    refusal: None,
                     output_count: None,
                     result: Ok(Completion::Handle(Ok(99))),
                     created: Vec::new()
@@ -523,6 +589,7 @@ mod tests {
         assert!(
             handles
                 .substitute(Envelope {
+                    refusal: None,
                     output_count: None,
                     result: Ok(Completion::Unit(Ok(()))),
                     created: vec![Created {
@@ -619,6 +686,7 @@ mod payload_tests {
             );
             let mut bytes = Vec::new();
             Envelope {
+                refusal: None,
                 output_count: None,
                 result,
                 created: Vec::new(),
@@ -631,6 +699,7 @@ mod payload_tests {
             assert!(
                 handles
                     .substitute(Envelope {
+                        refusal: None,
                         output_count: None,
                         result: Ok(completion),
                         created: vec![Created {
@@ -813,6 +882,7 @@ mod mapping_tests {
         assert!(fields(&mut owned).unwrap().iter().all(Option::is_none));
         let mut tape = Vec::new();
         Envelope {
+            refusal: None,
             output_count: None,
             result: canonical,
             created: Vec::new(),
@@ -864,6 +934,99 @@ mod error_tests {
     use super::*;
 
     #[test]
+    fn logical_refusals_substitute_known_authorities_without_creating_a_handle() {
+        use super::super::requests::{Authorities, Authority};
+        const LIVE: u64 = 0x1f23_4567_89ab_cdef;
+        let live = Authorities::default();
+        live.root(true);
+        live.observe(&[2], 7, &Ok(Completion::Handle(Ok(LIVE))))
+            .unwrap();
+        let replay = Authorities::default();
+        replay.root(true);
+        replay
+            .observe(&[2], 7, &Ok(Completion::Handle(Ok(12))))
+            .unwrap();
+        for original in [
+            Err(AdapterError::InvalidHandle(LIVE)),
+            Ok(Completion::Refused(LIVE)),
+        ] {
+            let authority = live.reference(refusal_word(&original).unwrap()).unwrap();
+            let mut canonical = original.clone();
+            *refusal_field(&mut canonical).unwrap() = 0;
+            let envelope = Envelope {
+                refusal: Some(authority),
+                result: canonical,
+                created: vec![],
+                output_count: None,
+            };
+            let mut bytes = Vec::new();
+            envelope.encode(&mut bytes);
+            assert!(!bytes.windows(8).any(|part| part == LIVE.to_le_bytes()));
+            let mut decoded: Envelope = crate::tape_wire::decode(&bytes).unwrap();
+            assert!(restore_refusal(&mut decoded, &replay).unwrap());
+            assert_eq!(refusal_word(&decoded.result), Some(12));
+            replay.observe(&[9], 99, &decoded.result).unwrap();
+            assert_eq!(
+                replay.reference(12).unwrap(),
+                Authority::Created {
+                    path: vec![2],
+                    op: 7,
+                    field: 0
+                }
+            );
+        }
+        assert!(live.reference(999).is_err());
+        for original in [
+            Err(AdapterError::InvalidHandle(1)),
+            Ok(Completion::Refused(1)),
+        ] {
+            let request = Request::Print {
+                stdout: 1,
+                bytes: b"must not publish".to_vec(),
+            };
+            assert_eq!(
+                checked_output(&request, &original, Some(0)).unwrap(),
+                Some(0)
+            );
+            assert!(checked_output(&request, &original, Some(1)).is_err());
+        }
+        for (refusal, word) in [
+            (None, 0),
+            (Some(Authority::RootIo), LIVE),
+            (
+                Some(Authority::Created {
+                    path: vec![2],
+                    op: 7,
+                    field: 1,
+                }),
+                0,
+            ),
+        ] {
+            let mut envelope = Envelope {
+                refusal,
+                result: Err(AdapterError::InvalidHandle(word)),
+                created: vec![],
+                output_count: None,
+            };
+            assert!(restore_refusal(&mut envelope, &replay).is_err());
+        }
+        let mut envelope = Envelope {
+            refusal: Some(Authority::RootIo),
+            result: Err(AdapterError::InvalidHandle(0)),
+            created: vec![],
+            output_count: Some(1),
+        };
+        assert!(restore_refusal(&mut envelope, &replay).is_err());
+        let envelope = Envelope {
+            refusal: Some(Authority::RootIo),
+            result: Err(AdapterError::InvalidHandle(0)),
+            created: vec![],
+            output_count: None,
+        };
+        assert!(Handles::default().substitute(envelope).is_err());
+    }
+
+    #[test]
     fn handle_bearing_adapter_refusals_never_publish_physical_words() {
         const WORD: u64 = 0x1f23_4567_89ab_cdef;
         for width in [1, 8] {
@@ -907,6 +1070,7 @@ mod error_tests {
         // A crafted envelope cannot inject a native word on the replay side.
         let mut encoded = Vec::new();
         Envelope {
+            refusal: None,
             output_count: None,
             result: Err(AdapterError::InvalidHandle(WORD)),
             created: Vec::new(),

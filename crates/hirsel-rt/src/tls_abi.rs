@@ -307,6 +307,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
         binding.tls_server(stream, &identities, clients, &alpn);
     }
     let server = crate::net::TlsServerDigest::of(&identities, clients, &alpn);
+    drop(identities);
+    drop(alpn);
     let request = Request::TlsAccept {
         net: unsafe { n.read() },
         stream,
@@ -347,12 +349,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
     };
-    let value = match unsafe { crate::net_abi::call(ctx, request) } {
-        Some(Completion::Certificates(value)) => value,
-        Some(_) => crate::fault("TLS completion type mismatch"),
+    let completion = match unsafe { crate::net_abi::call(ctx, request) } {
+        Some(completion) => completion,
         None => return STATUS_FAILURE,
     };
-    unsafe { write_optional_bytes(ctx, out, value) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Certificates(value) = completion else {
+                crate::fault("TLS completion type mismatch")
+            };
+            write_optional_bytes(ctx, out, value.as_ref().map(|value| value.as_deref()));
+        })
+    };
     STATUS_OK
 }
 
@@ -374,12 +382,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_negotiated_protocol(
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
     };
-    let value = match unsafe { crate::net_abi::call(ctx, request) } {
-        Some(Completion::Protocol(value)) => value,
-        Some(_) => crate::fault("TLS completion type mismatch"),
+    let completion = match unsafe { crate::net_abi::call(ctx, request) } {
+        Some(completion) => completion,
         None => return STATUS_FAILURE,
     };
-    unsafe { write_optional_bytes(ctx, out, value.map(|p| p.map(String::into_bytes))) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Protocol(value) = completion else {
+                crate::fault("TLS completion type mismatch")
+            };
+            write_optional_bytes(
+                ctx,
+                out,
+                value
+                    .as_ref()
+                    .map(|value| value.as_ref().map(|text| text.as_bytes())),
+            );
+        })
+    };
     STATUS_OK
 }
 
@@ -389,7 +409,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_negotiated_protocol(
 unsafe fn write_optional_bytes(
     ctx: *mut TaskCtx,
     out: *mut NetChainResult,
-    value: Result<Option<Vec<u8>>, crate::net::NetError>,
+    value: Result<Option<&[u8]>, &crate::net::NetError>,
 ) {
     // Initialize padding and inactive bytes without manufacturing a pointer from error bits.
     unsafe {
@@ -399,13 +419,13 @@ unsafe fn write_optional_bytes(
     match value {
         Ok(None) => {}
         Ok(Some(chain)) => unsafe {
-            (*out).value = crate::text::allocate_bytes(ctx, &chain);
+            (*out).value = crate::text::allocate_bytes(ctx, chain);
         },
         Err(error) => unsafe {
             (*out).tag = 1;
             std::ptr::addr_of_mut!((*out).value)
                 .cast::<crate::net_abi::NetErrorAbi>()
-                .write(crate::net_abi::NetErrorAbi::of(error));
+                .write(crate::net_abi::NetErrorAbi::of(error.clone()));
         },
     }
 }

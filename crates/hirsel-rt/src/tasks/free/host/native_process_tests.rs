@@ -225,6 +225,7 @@ fn native_process_issue_replays_inherited_sink_domains_without_an_adapter() {
 fn native_process_domains_reject_missing_unsorted_or_changed_creation_metadata() {
     fn envelope(keys: Option<Vec<u32>>) -> Envelope {
         Envelope {
+            refusal: None,
             result: Ok(Completion::Handle(Ok(0))),
             output_count: None,
             created: vec![Created {

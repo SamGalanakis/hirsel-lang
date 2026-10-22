@@ -392,8 +392,11 @@ impl Token {
     pub(super) fn host_result(
         &self,
         request: &crate::io::Request,
-        envelope: super::host::handles::Envelope,
+        mut envelope: super::host::handles::Envelope,
     ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
+        if super::host::handles::restore_refusal(&mut envelope, &self.shared.authorities)? {
+            return Ok(envelope.result);
+        }
         if envelope
             .created
             .iter()

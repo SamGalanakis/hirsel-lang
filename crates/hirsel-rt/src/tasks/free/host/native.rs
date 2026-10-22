@@ -372,6 +372,7 @@ pub(in crate::tasks::free) fn request_keys_with_domains(
         | R::Map { directory, .. }
         | R::Watch { directory, .. }
         | R::ReadDir { directory, .. }
+        | R::Walk { directory }
         | R::Metadata { directory, .. } => {
             file(*directory)?;
             vec![(NAMESPACE, Mode::Shared)]

@@ -30,6 +30,7 @@ fn checked_output(
     match (output_bytes(request), count) {
         (None, None) => Ok(None),
         (Some(bytes), Some(count)) if count <= bytes.len() as u64 => match result {
+            result if count == 0 && handles::refusal_word(result).is_some() => Ok(Some(0)),
             Ok(Completion::Unit(Ok(()))) if count == bytes.len() as u64 => Ok(Some(count)),
             Ok(Completion::Unit(Err(
                 crate::io::IoError::Canceled(_) | crate::io::IoError::NotGranted,
@@ -447,6 +448,9 @@ unsafe fn invoke_discovered_observed(
     unsafe {
         invoke_resolved(ctx, call, |completion| {
             handles::capture(completion)?;
+            if handles::refusal_word(completion).is_some() {
+                return Ok(Some(Vec::new()));
+            }
             let fields =
                 handles::fields(completion).map_err(|error| Stop::Refused(error.into()))?;
             let resources = fields
@@ -980,3 +984,6 @@ mod native_process_abi_tests;
 
 #[cfg(test)]
 mod native_network_tests;
+
+#[cfg(test)]
+mod native_conversion_tests;

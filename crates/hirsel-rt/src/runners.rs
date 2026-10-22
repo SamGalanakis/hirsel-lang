@@ -1253,7 +1253,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_entry_path(
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let path = entry_path(ctx, unsafe { entry.read() });
-    unsafe { out.write(crate::text::allocate_bytes(ctx, path.as_bytes())) };
+    unsafe { out.write(allocate_owned_bytes(ctx, path.into_bytes())) };
     STATUS_OK
 }
 
@@ -1330,18 +1330,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_take(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let call = state(ctx)
+    let mut call = state(ctx)
         .calls
         .remove(&ticket)
         .unwrap_or_else(|| fault("a runner take without its call"));
-    let bytes = match call.completion.map(|c| c.outcome) {
+    let bytes = match call.completion.take().map(|c| c.outcome) {
         Some(CallOutcome::Ok(bytes) | CallOutcome::Failed(bytes) | CallOutcome::Faulted(bytes)) => {
             bytes
         }
         Some(_) => Vec::new(),
         None => fault("a runner take before its wait"),
     };
-    unsafe { out.write(crate::text::allocate_bytes(ctx, &bytes)) };
+    drop(call);
+    unsafe { out.write(allocate_owned_bytes(ctx, bytes)) };
     STATUS_OK
 }
 
@@ -1389,8 +1390,25 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_argument(
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let argument = std::mem::take(&mut callee(ctx).start.argument);
-    unsafe { out.write(crate::text::allocate_bytes(ctx, &argument)) };
+    unsafe { out.write(allocate_owned_bytes(ctx, argument)) };
     STATUS_OK
+}
+
+/// Hold the removed call/argument payload outside an abandonable conversion
+/// frame when Free native allocation can stop the run.
+unsafe fn allocate_owned_bytes(ctx: *mut TaskCtx, bytes: Vec<u8>) -> Slice {
+    unsafe {
+        crate::tasks::free::host::native::convert_result(
+            ctx,
+            Completion::Bytes(Ok(bytes)),
+            |completion| {
+                let Completion::Bytes(Ok(bytes)) = completion else {
+                    unreachable!()
+                };
+                crate::text::allocate_bytes(ctx, bytes)
+            },
+        )
+    }
 }
 
 /// `$intrinsic.RunnerIo() -> Io`: the running callee's root Io (`runner.call`'s form).

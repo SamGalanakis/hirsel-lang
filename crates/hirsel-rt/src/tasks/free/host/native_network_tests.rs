@@ -3,6 +3,7 @@ use crate::io_keys::{Key, Kind, NAMESPACE};
 
 fn net(ordinal: u64, resource: u32, ports: Option<u32>) -> Envelope {
     Envelope {
+        refusal: None,
         result: Ok(Completion::NetHandle(Ok(0))),
         output_count: None,
         created: vec![Created {

@@ -3796,8 +3796,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
     }
     let text = usize::try_from(index)
         .ok()
-        .and_then(|i| crate::paths::names(ctx).arguments.get(i))
-        .cloned();
+        .and_then(|i| crate::paths::names(ctx).arguments.get(i));
     // Zero initializes the MissingArgument tag and all padding on the error arm.
     let mut result: crate::text::StringResult = unsafe { std::mem::zeroed() };
     match text {
@@ -4823,7 +4822,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let Ok(completion) = (unsafe {
+    let Ok(mut completion) = (unsafe {
         capability_call(
             ctx,
             Request::Walk {
@@ -4833,37 +4832,52 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::Paths(value) = completion else {
+    let Completion::Paths(value) = &mut completion else {
         crate::fault("walk completion mismatch");
     };
-    unsafe {
-        out.cast::<u8>()
-            .write_bytes(0, std::mem::size_of::<WalkResult>())
-    };
-    match value {
-        Ok(mut paths) => {
-            paths.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-            let items: Vec<_> = paths
-                .iter()
-                .map(|p| HandleResult::of(Ok(unsafe { Binding::get(ctx) }.intern_path(p))))
-                .collect();
-            unsafe {
-                (*out).value = WalkIterator {
-                    code: hirsel_rt_v2_file_walk_step as *const std::ffi::c_void,
-                    environment: walk_environment(ctx, &items),
-                    drop: std::ptr::null(),
-                }
-            };
-        }
-        Err(error) => unsafe {
-            (*out).tag = 1;
-            std::ptr::copy_nonoverlapping(
-                error_word(error).to_le_bytes().as_ptr(),
-                std::ptr::addr_of_mut!((*out).value).cast::<u8>(),
-                8,
-            )
-        },
+    if let Ok(paths) = value {
+        paths.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     }
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Paths(value) = completion else {
+                unreachable!()
+            };
+            out.cast::<u8>()
+                .write_bytes(0, std::mem::size_of::<WalkResult>());
+            match value {
+                Ok(paths) => {
+                    let size = (paths.len() as u64)
+                        .checked_mul(16)
+                        .and_then(|n| n.checked_add(16))
+                        .unwrap_or_else(|| crate::fault("walk extent overflow"));
+                    let environment =
+                        crate::alloc::hirsel_rt_v2_alloc(ctx, 1, size, 8, crate::DOMAIN_HEAP, 0);
+                    let payload = crate::alloc::payload(environment);
+                    payload.cast::<u64>().write(0);
+                    payload.add(8).cast::<u64>().write(paths.len() as u64);
+                    for (index, path) in paths.iter().enumerate() {
+                        payload.add(16 + index * 16).cast::<HandleResult>().write(
+                            HandleResult::of(Ok(crate::paths::names(ctx).paths.intern(path))),
+                        );
+                    }
+                    (*out).value = WalkIterator {
+                        code: hirsel_rt_v2_file_walk_step as *const std::ffi::c_void,
+                        environment,
+                        drop: std::ptr::null(),
+                    };
+                }
+                Err(error) => {
+                    (*out).tag = 1;
+                    std::ptr::copy_nonoverlapping(
+                        error_word(error.clone()).to_le_bytes().as_ptr(),
+                        std::ptr::addr_of_mut!((*out).value).cast::<u8>(),
+                        8,
+                    )
+                }
+            }
+        })
+    };
     crate::STATUS_OK
 }
 /// IterNext closure ABI: context, environment, the inert caller and operation
@@ -5009,7 +5023,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
         .wrapping_add(8)
         .wrapping_add(start as usize);
     let name = unsafe { native_text(data, len) }.to_owned();
-    let Ok(Completion::Env(value)) = (unsafe {
+    let Ok(completion) = (unsafe {
         capability_call(
             ctx,
             Request::EnvGet {
@@ -5020,26 +5034,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
     }) else {
         return crate::STATUS_FAILURE;
     };
-    // Zero bytes are `Ok(None)`; an error ordinal never becomes a pointer value.
     unsafe {
-        out.cast::<u8>()
-            .write_bytes(0, std::mem::size_of::<EnvResult>())
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Env(value) = completion else {
+                crate::fault("Env completion mismatch")
+            };
+            // Zero bytes are `Ok(None)`; an error ordinal never becomes a pointer value.
+            out.cast::<u8>()
+                .write_bytes(0, std::mem::size_of::<EnvResult>());
+            match value {
+                Ok(Some(text)) => {
+                    (*out).value = crate::text::allocate_bytes(ctx, text.as_bytes());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    (*out).tag = 1;
+                    std::ptr::addr_of_mut!((*out).value)
+                        .cast::<u32>()
+                        .write(match error {
+                            EnvError::NotGranted => 0,
+                            EnvError::InvalidUtf8 => 1,
+                        });
+                }
+            }
+        })
     };
-    match value {
-        Ok(Some(text)) => unsafe {
-            (*out).value = crate::text::allocate_bytes(ctx, text.as_bytes());
-        },
-        Ok(None) => {}
-        Err(error) => unsafe {
-            (*out).tag = 1;
-            std::ptr::addr_of_mut!((*out).value)
-                .cast::<u32>()
-                .write(match error {
-                    EnvError::NotGranted => 0,
-                    EnvError::InvalidUtf8 => 1,
-                });
-        },
-    }
     crate::STATUS_OK
 }
 
@@ -5277,24 +5296,29 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
     };
-    let Ok(Completion::Entries(result)) = (unsafe { capability_call(ctx, request) }) else {
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let result = result.map(|entries| {
-        // DirEntry is pointer-free (Path @0, FileKind @8), like the runtime address list.
-        let block = unsafe { crate::alloc::allocate_sequence(ctx, 0, entries.len() as u64, 16, 8) };
-        let first = crate::alloc::sequence_elements_offset(8) as usize;
-        for (index, entry) in entries.into_iter().enumerate() {
-            let id = unsafe { Binding::get(ctx) }.intern_path(&entry.path);
-            unsafe {
-                let slot = crate::alloc::payload(block).add(first + index * 16);
-                slot.cast::<u64>().write(id);
-                slot.add(8).cast::<u64>().write(entry.kind as u64);
-            }
-        }
-        block as u64
-    });
-    unsafe { out.write(HandleResult::of(result)) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Entries(result) = completion else {
+                crate::fault("directory entries completion mismatch")
+            };
+            let result = result.as_ref().map(|entries| {
+                // DirEntry is pointer-free (Path @0, FileKind @8), like the runtime address list.
+                let block = crate::alloc::allocate_sequence(ctx, 0, entries.len() as u64, 16, 8);
+                let first = crate::alloc::sequence_elements_offset(8) as usize;
+                for (index, entry) in entries.iter().enumerate() {
+                    let id = crate::paths::names(ctx).paths.intern(&entry.path);
+                    let slot = crate::alloc::payload(block).add(first + index * 16);
+                    slot.cast::<u64>().write(id);
+                    slot.add(8).cast::<u64>().write(entry.kind as u64);
+                }
+                block as u64
+            });
+            out.write(HandleResult::of(result.map_err(Clone::clone)));
+        })
+    };
     crate::STATUS_OK
 }
 

@@ -400,11 +400,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
         host: unsafe { text(owner, start, len) },
         port,
     };
-    let Some(Completion::Addresses(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(completion) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
-    let value = value.map(|addresses| unsafe { address_list(ctx, &addresses) } as u64);
-    unsafe { out.write(NetWordResult::of(value)) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Addresses(value) = completion else {
+                mismatch()
+            };
+            let value = match value {
+                Ok(addresses) => Ok(address_list(ctx, addresses) as u64),
+                Err(error) => Err(error.clone()),
+            };
+            out.write(NetWordResult::of(value));
+        })
+    };
     STATUS_OK
 }
 
@@ -493,14 +503,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
             return STATUS_OK;
         }
     }
-    let Some(Completion::NetBytes(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(completion) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
-    let value = value.map(|bytes| {
-        unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
-        bytes.len() as u64
-    });
-    unsafe { out.write(NetWordResult::of(value)) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::NetBytes(value) = completion else {
+                mismatch()
+            };
+            let value = match value {
+                Ok(bytes) => {
+                    crate::io::append_byte_list(ctx, buffer, bytes);
+                    Ok(bytes.len() as u64)
+                }
+                Err(error) => Err(error.clone()),
+            };
+            out.write(NetWordResult::of(value));
+        })
+    };
     STATUS_OK
 }
 
@@ -1105,31 +1125,36 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_recv_from(
         socket: unsafe { s.read() },
         max,
     };
-    let Some(Completion::Datagram(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(completion) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
-    let mut result = UdpReceivedResult::default();
-    match value {
-        Ok((bytes, peer, truncated)) => {
-            unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
-            result.count = bytes.len() as u64;
-            result.peer = SocketAddrAbi::of(peer);
-            result.truncated = u8::from(truncated);
-        }
-        Err(e) => {
-            result.tag = 1;
-            let e = NetErrorAbi::of(e);
-            // SAFETY: result's payload has room for the error's twelve bytes.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    (&raw const e).cast::<u8>(),
-                    (&raw mut result.count).cast::<u8>(),
-                    std::mem::size_of::<NetErrorAbi>(),
-                )
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Datagram(value) = completion else {
+                mismatch()
             };
-        }
-    }
-    unsafe { out.write(result) };
+            let mut result = UdpReceivedResult::default();
+            match value {
+                Ok((bytes, peer, truncated)) => {
+                    crate::io::append_byte_list(ctx, buffer, bytes);
+                    result.count = bytes.len() as u64;
+                    result.peer = SocketAddrAbi::of(*peer);
+                    result.truncated = u8::from(*truncated);
+                }
+                Err(e) => {
+                    result.tag = 1;
+                    let e = NetErrorAbi::of(e.clone());
+                    // SAFETY: result's payload has room for the error's twelve bytes.
+                    std::ptr::copy_nonoverlapping(
+                        (&raw const e).cast::<u8>(),
+                        (&raw mut result.count).cast::<u8>(),
+                        std::mem::size_of::<NetErrorAbi>(),
+                    );
+                }
+            }
+            out.write(result);
+        })
+    };
     STATUS_OK
 }
 /// Consume and close a UDP socket (DROP-3).

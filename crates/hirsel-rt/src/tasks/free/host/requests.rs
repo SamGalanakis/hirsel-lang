@@ -41,6 +41,22 @@ impl Wire for Authority {
 #[derive(Default)]
 pub(in crate::tasks::free) struct Authorities(Mutex<BTreeMap<u64, Authority>>);
 impl Authorities {
+    pub(super) fn reference(&self, word: u64) -> Stopped<Authority> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&word)
+            .cloned()
+            .ok_or_else(|| Stop::Refused("host refusal needs a logical handle identity".into()))
+    }
+    pub(super) fn resolve(&self, authority: &Authority) -> Stopped<u64> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(&word, known)| (known == authority).then_some(word))
+            .ok_or_else(|| Stop::Diverged("unmapped logical host refusal".into()))
+    }
     pub(in crate::tasks::free) fn root(&self, env: bool) {
         assert!(
             self.0
@@ -73,6 +89,9 @@ impl Authorities {
         op: u64,
         result: &Result<Completion, AdapterError>,
     ) -> Stopped<()> {
+        if super::handles::refusal_word(result).is_some() {
+            return Ok(());
+        }
         let mut result = result.clone();
         let fields = handles::fields(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
         let mut map = self.0.lock().unwrap();

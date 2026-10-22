@@ -304,3 +304,6 @@ mod tls_tests;
 
 #[cfg(test)]
 mod namespace_tests;
+
+#[cfg(test)]
+mod refusal_tests;
