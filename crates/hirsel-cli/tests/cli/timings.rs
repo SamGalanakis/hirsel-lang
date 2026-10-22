@@ -68,7 +68,7 @@ const PHASES: [&str; 21] = [
     "declarations",
     "signature normalize",
 ];
-const COUNTS: [&str; 57] = [
+const COUNTS: [&str; 63] = [
     "definitions",
     "units",
     "V runs",
@@ -126,6 +126,12 @@ const COUNTS: [&str; 57] = [
     "closure body scans",
     "arena body scans",
     "native late keys",
+    "image declaration rows decoded",
+    "image declaration rows adopted",
+    "declaration site reads",
+    "declaration sites materialized",
+    "image declaration bytes",
+    "image entry decode attempts",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {
