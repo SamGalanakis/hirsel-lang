@@ -531,6 +531,11 @@ pub(crate) unsafe fn issue_net(
     stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Stopped<Option<(Result<crate::io::NetResult, AdapterError>, bool)>> {
+    // Native Free records owned payloads and retries through its claim/epoch
+    // service. Decline the borrowed shortcut before touching the home Binding.
+    if crate::tasks::free::host::native::enabled(ctx) {
+        return Ok(None);
+    }
     // Ordered host waits retain owned request/completion buffers. Borrowed
     // socket storage remains on the owned fallback until its boundary audit.
     if crate::tasks::ordered::engine::on(ctx) {

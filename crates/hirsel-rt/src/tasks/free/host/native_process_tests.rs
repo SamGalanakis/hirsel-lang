@@ -233,6 +233,7 @@ fn native_process_domains_reject_missing_unsorted_or_changed_creation_metadata()
                 resource: 17,
                 kind: crate::io_keys::Kind::Other,
                 process_keys: keys,
+                net_ports: None,
             }],
         }
     }

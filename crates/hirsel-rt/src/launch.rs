@@ -2236,6 +2236,7 @@ pub(crate) unsafe fn execute(
         .and_then(|io| io.tasks.as_deref())
         == Some("tasks.free@1");
     unsafe { &mut *ctx }.run().free_production = production_free;
+    unsafe { &mut *ctx }.run().free_root_env = entry.roots() & crate::standalone::ROOT_ENV != 0;
     unsafe { &mut *ctx }.run().free_return = (program.return_kind, program.success_offset);
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;

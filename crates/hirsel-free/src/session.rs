@@ -517,7 +517,9 @@ impl Session {
             return Err(Diverged("host request needs replay".into()));
         };
         if replayer.observation(path, op)? != expected {
-            return Err(Diverged("host request differs".into()));
+            return Err(Diverged(format!(
+                "host request differs at {path:?} operation {op}"
+            )));
         }
         Ok(())
     }

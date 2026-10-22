@@ -138,6 +138,23 @@ impl Drop for Service {
     }
 }
 
+/// Run a bounded provider setup outside the scheduler role. No adapter loan
+/// escapes this call, and no facade borrow is retained while the role is free.
+/// Replay consumes only the resulting request digest and invokes no provider.
+pub(crate) fn with_current(action: impl FnOnce(&dyn ConcurrentAdapter)) -> bool {
+    let ctx = crate::stop::running();
+    if ctx.is_null() || !super::native::enabled(ctx) {
+        return false;
+    }
+    if unsafe { (*ctx).run_ref().free_replay } {
+        return true;
+    }
+    let io = unsafe { (*ctx).run_ref().free_io.get().expect("native Free service") };
+    let _segment = unsafe { role::Segment::new(ctx) };
+    action(&*io.adapter);
+    true
+}
+
 /// # Safety
 /// A live run; this query never accesses a context or scheduler.
 pub(crate) unsafe fn pending(run: *mut RunShared) -> bool {
@@ -228,7 +245,7 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
             .expect("concurrent host admission")
     };
     let _segment = unsafe { role::Segment::new(ctx) };
-    let expected = super::native::request_keys_with_process(
+    let expected = super::native::request_keys_with_domains(
         request,
         |word| {
             io.adapter
@@ -240,6 +257,12 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
                 .process_keys(word)
                 .ok_or_else(|| Stop::Refused("unmapped process issue domains".into()))
         },
+        |word| {
+            io.adapter
+                .net_ports(word)
+                .ok_or_else(|| Stop::Refused("unmapped Net port domain".into()))
+        },
+        unsafe { (*ctx).run_ref().free_root_env },
     )
     .map_err(|_| Stop::Refused("native host request metadata is not admitted".into()))?;
     if expected != io.adapter.keys(request) {

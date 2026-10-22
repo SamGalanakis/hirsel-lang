@@ -265,3 +265,9 @@ fn validate_receipt(tape: &hirsel_free::tape::Tape, text: &str) -> Result<(), St
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod network_tests;
+
+#[cfg(test)]
+mod tls_tests;

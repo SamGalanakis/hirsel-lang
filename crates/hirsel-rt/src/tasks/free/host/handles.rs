@@ -10,12 +10,28 @@ pub(in crate::tasks::free) struct Created {
     pub(in crate::tasks::free) resource: u32,
     pub(in crate::tasks::free) kind: crate::io_keys::Kind,
     pub(in crate::tasks::free) process_keys: Option<Vec<u32>>,
+    pub(in crate::tasks::free) net_ports: Option<u32>,
 }
 
 pub(in crate::tasks::free) struct Envelope {
     pub(in crate::tasks::free) result: Result<Completion, AdapterError>,
     pub(in crate::tasks::free) created: Vec<Created>,
     pub(in crate::tasks::free) output_count: Option<u64>,
+}
+impl Envelope {
+    pub(in crate::tasks::free) fn validate_request(&self, request: &Request) -> Stopped<()> {
+        let net = matches!(request, Request::Net { .. } | Request::NetNarrow { .. });
+        if self
+            .created
+            .iter()
+            .any(|created| created.net_ports.is_some() != net)
+        {
+            return Err(Stop::Diverged(
+                "host creation has missing or unexpected Net port domain".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 impl Wire for Created {
     fn encode(&self, out: &mut Vec<u8>) {
@@ -35,6 +51,7 @@ impl Wire for Created {
             }
         }
         self.process_keys.encode(out);
+        self.net_ports.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
         Ok(Self {
@@ -53,18 +70,19 @@ impl Wire for Created {
                 _ => return Err("unknown host resource kind".into()),
             },
             process_keys: Wire::decode(input)?,
+            net_ports: Wire::decode(input)?,
         })
     }
 }
 impl Wire for Envelope {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(b"F1H3");
+        out.extend_from_slice(b"F1H4");
         self.result.encode(out);
         self.created.encode(out);
         self.output_count.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
-        if input.take(4)? != b"F1H3" {
+        if input.take(4)? != b"F1H4" {
             return Err("unsupported Free host envelope".into());
         }
         Ok(Self {
@@ -115,12 +133,13 @@ pub(in crate::tasks::free) fn encode(
         checked_output(pending.request.buffers(), result, pending.output_count)?;
     }
     pending.encoded.clear();
-    Envelope {
+    let envelope = Envelope {
         output_count: pending.output_count,
         result: canonical,
         created,
-    }
-    .encode(&mut pending.encoded);
+    };
+    envelope.validate_request(pending.request.buffers())?;
+    envelope.encode(&mut pending.encoded);
     Ok(())
 }
 
@@ -132,8 +151,37 @@ pub(crate) struct Handles {
     identities: BTreeMap<(Vec<u32>, u64), u64>,
     words: BTreeMap<u64, Created>,
     next: u64,
+    root_net: Option<(u32, u32)>,
 }
 impl Handles {
+    pub(in crate::tasks::free) fn substitute_for(
+        &mut self,
+        request: &Request,
+        envelope: Envelope,
+    ) -> Stopped<Result<Completion, AdapterError>> {
+        envelope.validate_request(request)?;
+        let domain = envelope
+            .created
+            .first()
+            .and_then(|created| created.net_ports.map(|ports| (created.resource, ports)));
+        if let Some(domain) = domain {
+            let expected = match request {
+                Request::Net { .. } => self.root_net,
+                Request::NetNarrow { net, .. } => {
+                    Some((self.resource(*net)?.0, self.net_ports(*net)?.0))
+                }
+                _ => unreachable!("validated Net creation"),
+            };
+            if expected.is_some_and(|expected| expected != domain) {
+                return Err(Stop::Diverged("Net grant changed its world domains".into()));
+            }
+        }
+        let result = self.substitute(envelope)?;
+        if matches!(request, Request::Net { .. }) && domain.is_some() {
+            self.root_net = domain;
+        }
+        Ok(result)
+    }
     pub(in crate::tasks::free) fn substitute(
         &mut self,
         envelope: Envelope,
@@ -154,6 +202,31 @@ impl Handles {
                 {
                     return Err(Stop::Diverged("invalid process issue domains".into()));
                 }
+            }
+            if let Some(ports) = created.net_ports {
+                if created.kind != crate::io_keys::Kind::Other
+                    || created.process_keys.is_some()
+                    || ports < 4
+                    || created.resource < 4
+                    || ports == created.resource
+                {
+                    return Err(Stop::Diverged("invalid Net port domain".into()));
+                }
+            }
+            if self
+                .words
+                .values()
+                .chain(envelope.created[..index].iter())
+                .any(|prior| {
+                    (prior.resource == created.resource
+                        && prior.net_ports != created.net_ports
+                        && (prior.net_ports.is_some() || created.net_ports.is_some()))
+                        || (prior.resource != created.resource
+                            && prior.net_ports.is_some()
+                            && prior.net_ports == created.net_ports)
+                })
+            {
+                return Err(Stop::Diverged("Net alias/port domain changed".into()));
             }
             if **word != 0
                 || created.ordinal == 0
@@ -208,6 +281,13 @@ impl Handles {
             .map(|created| (crate::io_keys::Key(created.resource), created.kind))
             .ok_or_else(|| Stop::Diverged("unmapped replay host handle".into()))
     }
+    pub(in crate::tasks::free) fn net_ports(&self, word: u64) -> Stopped<crate::io_keys::Key> {
+        self.words
+            .get(&word)
+            .and_then(|created| created.net_ports)
+            .map(crate::io_keys::Key)
+            .ok_or_else(|| Stop::Diverged("missing Net port domain".into()))
+    }
     pub(in crate::tasks::free) fn process_keys(&self, word: u64) -> Stopped<KeySet> {
         let keys = self
             .words
@@ -234,6 +314,7 @@ mod tests {
             result: Ok(Completion::Handle(Ok(0))),
             created: vec![Created {
                 process_keys: None,
+                net_ports: None,
                 path: path.to_vec(),
                 ordinal,
                 resource,
@@ -446,6 +527,7 @@ mod tests {
                     result: Ok(Completion::Unit(Ok(()))),
                     created: vec![Created {
                         process_keys: None,
+                        net_ports: None,
                         path: vec![],
                         ordinal: 1,
                         resource: 17,
@@ -553,6 +635,7 @@ mod payload_tests {
                         result: Ok(completion),
                         created: vec![Created {
                             process_keys: None,
+                            net_ports: None,
                             path: vec![1],
                             ordinal: 1,
                             resource: 17,

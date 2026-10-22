@@ -239,6 +239,11 @@ impl Registry {
             .copied()
             .unwrap_or((COUPLED, Kind::Other))
     }
+    /// Persist the existing world's port domain before its first effect.
+    pub fn net_ports(&mut self, net: u64) -> Option<Key> {
+        self.identity(net)?;
+        Some(self.ports(net))
+    }
     fn ports(&mut self, net: u64) -> Key {
         let net = self.handle(net).0;
         if let Some(&key) = self.ports.get(&net) {

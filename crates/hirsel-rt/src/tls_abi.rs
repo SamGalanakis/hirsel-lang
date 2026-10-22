@@ -20,7 +20,9 @@ unsafe fn roots(ctx: *mut TaskCtx, stream: u64, roots: *const TlsRootsAbi) -> Ro
         return RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into());
     }
     let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
-    unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
+    if !crate::tasks::free::host::concurrent::with_current(|io| io.tls_roots(stream, bytes)) {
+        unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
+    }
     crate::net_tls::pem_digest(bytes)
 }
 
@@ -36,7 +38,9 @@ unsafe fn connect(
     identity: Option<*const TlsIdentityAbi>,
     alpn: Vec<String>,
 ) -> u8 {
-    unsafe { Binding::get(ctx) }.tls(crate::net_tls::engine());
+    if !crate::tasks::free::host::concurrent::with_current(|io| io.tls(crate::net_tls::engine())) {
+        unsafe { Binding::get(ctx) }.tls(crate::net_tls::engine());
+    }
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let name = unsafe { crate::io::slice_bytes(name.0, name.1, name.2) };
@@ -46,7 +50,11 @@ unsafe fn connect(
     let roots = unsafe { self::roots(ctx, stream, roots) };
     let identity = identity.map(|identity| {
         let (chain, key) = unsafe { (*identity).bytes() };
-        unsafe { Binding::get(ctx) }.tls_identity(stream, chain, key);
+        if !crate::tasks::free::host::concurrent::with_current(|io| {
+            io.tls_identity(stream, chain, key)
+        }) {
+            unsafe { Binding::get(ctx) }.tls_identity(stream, chain, key);
+        }
         crate::net_tls::chain_digest(chain)
     });
     let request = Request::TlsConnect {
@@ -290,9 +298,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let (identities, clients, alpn) = unsafe { (*server).parts() };
-    let binding = unsafe { Binding::get(ctx) };
-    binding.tls(crate::net_tls::engine());
-    binding.tls_server(stream, &identities, clients, &alpn);
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.tls(crate::net_tls::engine());
+        io.tls_server(stream, &identities, clients, &alpn);
+    }) {
+        let binding = unsafe { Binding::get(ctx) };
+        binding.tls(crate::net_tls::engine());
+        binding.tls_server(stream, &identities, clients, &alpn);
+    }
     let server = crate::net::TlsServerDigest::of(&identities, clients, &alpn);
     let request = Request::TlsAccept {
         net: unsafe { n.read() },

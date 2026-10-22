@@ -8,12 +8,14 @@ use std::sync::Mutex;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tasks::free) enum Authority {
     RootIo,
+    RootEnv,
     Created { path: Vec<u32>, op: u64, field: u32 },
 }
 impl Wire for Authority {
     fn encode(&self, out: &mut Vec<u8>) {
         match self {
             Self::RootIo => 0u8.encode(out),
+            Self::RootEnv => 2u8.encode(out),
             Self::Created { path, op, field } => {
                 1u8.encode(out);
                 path.encode(out);
@@ -25,6 +27,7 @@ impl Wire for Authority {
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
         match u8::decode(input)? {
             0 => Ok(Self::RootIo),
+            2 => Ok(Self::RootEnv),
             1 => Ok(Self::Created {
                 path: Wire::decode(input)?,
                 op: Wire::decode(input)?,
@@ -38,7 +41,7 @@ impl Wire for Authority {
 #[derive(Default)]
 pub(in crate::tasks::free) struct Authorities(Mutex<BTreeMap<u64, Authority>>);
 impl Authorities {
-    pub(in crate::tasks::free) fn root(&self) {
+    pub(in crate::tasks::free) fn root(&self, env: bool) {
         assert!(
             self.0
                 .lock()
@@ -46,6 +49,15 @@ impl Authorities {
                 .insert(crate::launch::IO_HANDLE, Authority::RootIo)
                 .is_none()
         );
+        if env {
+            assert!(
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(crate::io::ENV_HANDLE, Authority::RootEnv)
+                    .is_none()
+            );
+        }
     }
     pub(in crate::tasks::free) fn project(&self, request: &Request) -> Stopped<Vec<u8>> {
         let map = self.0.lock().unwrap();
@@ -65,11 +77,17 @@ impl Authorities {
         let fields = handles::fields(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
         let mut map = self.0.lock().unwrap();
         for (field, word) in fields.into_iter().flatten().enumerate() {
-            map.entry(*word).or_insert_with(|| Authority::Created {
-                path: path.to_vec(),
-                op,
-                field: field as u32,
-            });
+            // NetJoin restores a consumed stream's physical word. Every
+            // initialized result field gets this creating operation's identity;
+            // Ended/Done observations of that same field are idempotent.
+            map.insert(
+                *word,
+                Authority::Created {
+                    path: path.to_vec(),
+                    op,
+                    field: field as u32,
+                },
+            );
         }
         Ok(())
     }

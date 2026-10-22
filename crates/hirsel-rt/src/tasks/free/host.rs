@@ -195,6 +195,7 @@ pub(crate) unsafe fn prepare_typed_creations(
             resource: resource.0,
             kind,
             process_keys: None,
+            net_ports: None,
         })
         .collect();
     Ok(())
@@ -410,6 +411,7 @@ pub(crate) unsafe fn invoke_concurrent(
             },
             |handle| adapter.identity(handle),
             |handle| adapter.process_keys(handle),
+            |handle| adapter.net_ports(handle),
         )
     }
 }
@@ -424,7 +426,15 @@ pub(crate) unsafe fn invoke_discovered(
     call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
     identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
 ) -> Stopped<()> {
-    unsafe { invoke_discovered_observed(ctx, |request| (call(request), None), identity, |_| None) }
+    unsafe {
+        invoke_discovered_observed(
+            ctx,
+            |request| (call(request), None),
+            identity,
+            |_| None,
+            |_| None,
+        )
+    }
 }
 
 unsafe fn invoke_discovered_observed(
@@ -432,6 +442,7 @@ unsafe fn invoke_discovered_observed(
     call: impl FnOnce(&Request) -> (Result<Completion, AdapterError>, Option<u64>),
     identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
     process_keys: impl Fn(u64) -> Option<KeySet>,
+    net_ports: impl Fn(u64) -> Option<crate::io_keys::Key>,
 ) -> Stopped<()> {
     unsafe {
         invoke_resolved(ctx, call, |completion| {
@@ -458,7 +469,13 @@ unsafe fn invoke_discovered_observed(
                             return Err(Stop::Refused("invalid process issue domains".into()));
                         }
                     }
-                    Ok((key, kind, domains))
+                    let ports = net_ports(*word);
+                    if ports
+                        .is_some_and(|p| kind != crate::io_keys::Kind::Other || p == key || p.0 < 4)
+                    {
+                        return Err(Stop::Refused("invalid live Net port domain".into()));
+                    }
+                    Ok((key, kind, domains, ports))
                 })
                 .collect::<Stopped<Vec<_>>>()?;
             Ok(Some(resources))
@@ -473,7 +490,12 @@ unsafe fn invoke_result(
     unsafe { invoke_resolved(ctx, |request| (call(request), None), |_| Ok(None)) }
 }
 
-type Resources = Vec<(crate::io_keys::Key, crate::io_keys::Kind, Option<KeySet>)>;
+type Resources = Vec<(
+    crate::io_keys::Key,
+    crate::io_keys::Kind,
+    Option<KeySet>,
+    Option<crate::io_keys::Key>,
+)>;
 
 unsafe fn invoke_resolved(
     ctx: *mut TaskCtx,
@@ -518,11 +540,12 @@ unsafe fn invoke_resolved(
         if pending.created.is_empty() {
             pending.created = resources
                 .into_iter()
-                .map(|(resource, kind, process_keys)| Created {
+                .map(|(resource, kind, process_keys, net_ports)| Created {
                     path: pending.path.clone(),
                     ordinal: super::record::reserve_host_handle(ctx),
                     resource: resource.0,
                     kind,
+                    net_ports: net_ports.map(|key| key.0),
                     process_keys: process_keys
                         .map(|keys| keys.keys().iter().map(|(key, _)| key.0).collect()),
                 })
@@ -541,6 +564,7 @@ unsafe fn invoke_resolved(
                                 .collect(),
                         )
                     }),
+                    created.net_ports.map(crate::io_keys::Key),
                 )
             })
             .ne(resources)
@@ -814,7 +838,7 @@ pub(crate) unsafe fn replay_request(
                 }
                 host.positions.clear();
                 host.output_count = count;
-                let result = token.host_result(envelope)?;
+                let result = token.host_result(&host._request, envelope)?;
                 native::observe_span(ctx, &host._request, &result)?;
                 if matches!(result, Err(AdapterError::Blocked)) {
                     token.host_readiness(false)?;
@@ -860,7 +884,7 @@ pub(crate) unsafe fn replay_request(
             } else {
                 None
             };
-            let result = token.host_result(envelope)?;
+            let result = token.host_result(&host._request, envelope)?;
             if host.output_count != count || host.observed.as_ref() != Some(&result) {
                 return Err(Stop::Diverged(
                     "host completion differs from final observation".into(),
@@ -953,3 +977,6 @@ mod native_process_tests;
 
 #[cfg(test)]
 mod native_process_abi_tests;
+
+#[cfg(test)]
+mod native_network_tests;

@@ -14,6 +14,7 @@ pub(crate) struct Replay {
     handles: Mutex<super::host::handles::Handles>,
     output: Mutex<(Vec<u8>, Vec<u8>)>,
     authorities: super::host::requests::Authorities,
+    root_env: AtomicBool,
 }
 
 impl Replay {
@@ -26,6 +27,7 @@ impl Replay {
             handles: Mutex::default(),
             output: Mutex::default(),
             authorities: Default::default(),
+            root_env: AtomicBool::new(false),
         }))
     }
 
@@ -42,7 +44,9 @@ impl Replay {
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
         if unsafe { (*ctx).run_ref().free_production } {
-            self.authorities.root();
+            let env = unsafe { (*ctx).run_ref().free_root_env };
+            self.root_env.store(env, Ordering::Relaxed);
+            self.authorities.root(env);
         }
         unsafe { (*ctx).run().free_replay = true };
         scheduler(ctx).logical = Logical::Free(super::Driver {
@@ -376,6 +380,7 @@ impl Token {
 
     pub(super) fn host_result(
         &self,
+        request: &crate::io::Request,
         envelope: super::host::handles::Envelope,
     ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
         if envelope
@@ -387,7 +392,12 @@ impl Token {
                 "host creation belongs to a different task".into(),
             ));
         }
-        let result = self.shared.handles.lock().unwrap().substitute(envelope)?;
+        let result = self
+            .shared
+            .handles
+            .lock()
+            .unwrap()
+            .substitute_for(request, envelope)?;
         let op = self.shared.with(|session| session.op(&self.path));
         self.shared.authorities.observe(&self.path, op, &result)?;
         Ok(result)
@@ -406,7 +416,14 @@ impl Token {
         &self,
         request: &crate::io::Request,
     ) -> Stopped<crate::io_keys::KeySet> {
-        super::host::native::replay_keys(&self.shared.handles.lock().unwrap(), request)
+        let handles = self.shared.handles.lock().unwrap();
+        super::host::native::request_keys_with_domains(
+            request,
+            |word| handles.identity(word),
+            |word| handles.process_keys(word),
+            |word| handles.net_ports(word),
+            self.shared.root_env.load(Ordering::Relaxed),
+        )
     }
 
     pub(super) fn host_identity(

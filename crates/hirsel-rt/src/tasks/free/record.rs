@@ -586,7 +586,8 @@ impl Recording {
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
         if unsafe { (*ctx).run_ref().free_production } {
-            self.authorities.root();
+            self.authorities
+                .root(unsafe { (*ctx).run_ref().free_root_env });
         }
         let mut worker = self.recorder.worker(0).unwrap();
         let log = self.recorder.root(&mut worker).unwrap();

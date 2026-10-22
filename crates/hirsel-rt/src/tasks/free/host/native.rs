@@ -48,20 +48,24 @@ pub(crate) unsafe fn issue(
     Ok((result, false))
 }
 
+#[cfg(test)]
 pub(in crate::tasks::free) fn replay_keys(
     handles: &handles::Handles,
     request: &Request,
 ) -> Stopped<KeySet> {
-    request_keys_with_process(
+    request_keys_with_domains(
         request,
         |word| handles.identity(word),
         |word| handles.process_keys(word),
+        |word| handles.net_ports(word),
+        false,
     )
 }
 
 /// One allow-list and footprint rule for live admission and replay. Native
 /// files currently require fully described File identities and the namespace
 /// domain alone; extra adapter domains refuse before preparation or effect.
+#[cfg(test)]
 pub(super) fn request_keys(
     request: &Request,
     identity: impl FnMut(u64) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)>,
@@ -71,10 +75,27 @@ pub(super) fn request_keys(
     })
 }
 
+#[cfg(test)]
 pub(super) fn request_keys_with_process(
+    request: &Request,
+    identity: impl FnMut(u64) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)>,
+    process_keys: impl FnMut(u64) -> Stopped<KeySet>,
+) -> Stopped<KeySet> {
+    request_keys_with_domains(
+        request,
+        identity,
+        process_keys,
+        |_| Err(Stop::Diverged("missing Net port domain".into())),
+        false,
+    )
+}
+
+pub(in crate::tasks::free) fn request_keys_with_domains(
     request: &Request,
     mut identity: impl FnMut(u64) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)>,
     mut process_keys: impl FnMut(u64) -> Stopped<KeySet>,
+    mut net_ports: impl FnMut(u64) -> Stopped<crate::io_keys::Key>,
+    initial_env: bool,
 ) -> Stopped<KeySet> {
     use crate::io_keys::{Kind, NAMESPACE, ROOT};
     use Request as R;
@@ -94,8 +115,111 @@ pub(super) fn request_keys_with_process(
         | R::Stdin { io: 1 }
         | R::Random { io: 1 }
         | R::Tasks { io: 1 }
+        | R::Net { io: 1 }
         | R::Stdout { io: 1 }
         | R::Stderr { io: 1 } => vec![(ROOT, Mode::Shared)],
+        R::EnvGet { env, .. } | R::EnvNarrow { env, .. } => {
+            if *env == crate::io::ENV_HANDLE {
+                if !initial_env {
+                    return Err(Stop::Diverged(
+                        "initial Env authority was not admitted".into(),
+                    ));
+                }
+            } else if identity(*env)?.1 != Kind::Other {
+                return Err(Stop::Diverged("native Env authority differs".into()));
+            }
+            Vec::new()
+        }
+        R::NetNarrow { net, .. } | R::Resolve { net, .. } => {
+            net_ports(*net)?;
+            let (key, kind) = identity(*net)?;
+            if kind != Kind::Other {
+                return Err(Stop::Diverged("native Net resource kind differs".into()));
+            }
+            vec![(key, Mode::Shared)]
+        }
+        R::Connect { net, .. }
+        | R::ConnectAddr { net, .. }
+        | R::Listen { net, .. }
+        | R::UdpBind { net, .. }
+        | R::UnixConnect { net, .. }
+        | R::UnixListen { net, .. } => {
+            let mut keys = vec![(net_ports(*net)?, Mode::Exclusive)];
+            match request {
+                R::UnixConnect { .. } => keys.push((NAMESPACE, Mode::Shared)),
+                R::UnixListen { .. } => keys.push((NAMESPACE, Mode::Exclusive)),
+                _ => {}
+            }
+            keys
+        }
+        R::NetRead {
+            net, stream: word, ..
+        }
+        | R::NetWrite {
+            net, stream: word, ..
+        }
+        | R::NetWriteAll {
+            net, stream: word, ..
+        }
+        | R::Shutdown {
+            net, stream: word, ..
+        }
+        | R::SetTimeout {
+            net, stream: word, ..
+        }
+        | R::PeerAddr { net, stream: word }
+        | R::TlsConnect {
+            net, stream: word, ..
+        }
+        | R::TlsAccept {
+            net, stream: word, ..
+        }
+        | R::TlsPeer { net, stream: word }
+        | R::TlsProtocol { net, stream: word }
+        | R::TlsClose { net, stream: word }
+        | R::NetSplit { net, stream: word }
+        | R::UdpSend {
+            net, socket: word, ..
+        }
+        | R::UdpRecv {
+            net, socket: word, ..
+        }
+        | R::Accept {
+            net,
+            listener: word,
+        }
+        | R::LocalAddr {
+            net,
+            listener: word,
+        } => {
+            net_ports(*net)?;
+            let (key, kind) = identity(*word)?;
+            let mut keys = vec![(key, Mode::Exclusive)];
+            match kind {
+                Kind::Other => {}
+                Kind::Half { stream } => keys.push((stream, Mode::Shared)),
+                _ => {
+                    return Err(Stop::Diverged(
+                        "native network resource kind differs".into(),
+                    ));
+                }
+            }
+            keys
+        }
+        R::NetJoin { net, read, write } => {
+            net_ports(*net)?;
+            let mut keys = Vec::new();
+            for word in [*read, *write] {
+                let (key, kind) = identity(word)?;
+                keys.push((key, Mode::Exclusive));
+                match kind {
+                    Kind::Half { stream } => keys.push((stream, Mode::Exclusive)),
+                    Kind::Other => {} // TLS split endpoints alias their parent.
+                    _ => return Err(Stop::Diverged("native join resource kind differs".into())),
+                }
+            }
+            keys
+        }
         R::Print { stdout: word, .. }
         | R::PrintStderr { stderr: word, .. }
         | R::ReadStdin { stdin: word, .. } => {
@@ -304,6 +428,7 @@ pub(super) fn request_keys_with_process(
             match kind {
                 Kind::File => vec![(key, Mode::Exclusive), (NAMESPACE, Mode::Shared)],
                 Kind::Other => vec![(key, Mode::Exclusive)],
+                Kind::Half { stream } => vec![(key, Mode::Exclusive), (stream, Mode::Shared)],
                 _ => return Err(Stop::Diverged("unadmitted native close resource".into())),
             }
         }
@@ -462,4 +587,14 @@ pub(super) fn observe_span(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn test_net_creations(bytes: &[u8]) -> Vec<(u32, u32)> {
+    let envelope: handles::Envelope = crate::tape_wire::decode(bytes).unwrap();
+    envelope
+        .created
+        .iter()
+        .filter_map(|c| c.net_ports.map(|ports| (c.resource, ports)))
+        .collect()
 }

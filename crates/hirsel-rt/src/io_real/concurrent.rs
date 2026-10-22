@@ -13,6 +13,9 @@ pub struct ConcurrentIo {
     core: Mutex<RealCore<SendStreams>>,
     registry: Mutex<Registry>,
     calls: KeyTable,
+    // TLS roots belong to a stream until its first bounded handshake attempt.
+    // A provider's single staging slot must never couple concurrent callers.
+    tls_pem: Mutex<std::collections::BTreeMap<u64, Vec<u8>>>,
     #[cfg(test)]
     before_file: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -49,6 +52,7 @@ impl ConcurrentIo {
             core: Mutex::new(core),
             registry: Mutex::new(registry),
             calls: KeyTable::default(),
+            tls_pem: Default::default(),
             #[cfg(test)]
             before_file: None,
         }
@@ -150,6 +154,14 @@ impl ConcurrentIo {
             if matches!(core.state.handles.rows.get(stream), Some(crate::handles::Grant::Stream { tls: true, .. })));
         let first_new = core.state.handles.next();
         core.disk.observed_output = None;
+        if let Request::TlsConnect { stream, .. } = &request
+            && let Some(pem) = self.tls_pem.lock().unwrap().remove(stream)
+        {
+            core.tls_roots(*stream, &pem);
+        }
+        if let Request::Close { handle } = &request {
+            self.tls_pem.lock().unwrap().remove(handle);
+        }
         let result = core.call(request.clone());
         *observed = core.disk.observed_output.take();
         debug_assert!(core.disk.prefetched.is_none() && core.disk.prefetched_output.is_none());
@@ -214,6 +226,39 @@ impl ConcurrentAdapter for ConcurrentIo {
             return None;
         }
         self.registry.lock().unwrap().process_keys(process)
+    }
+    fn net_ports(&self, net: u64) -> Option<Key> {
+        let core = self.core.lock().unwrap();
+        if !matches!(
+            core.state.handles.rows.get(&net),
+            Some(crate::handles::Grant::Net { .. })
+        ) {
+            return None;
+        }
+        self.registry.lock().unwrap().net_ports(net)
+    }
+    fn tls(&self, engine: &'static dyn crate::net_tls::TlsEngine) {
+        self.core.lock().unwrap().tls(engine);
+    }
+    fn tls_roots(&self, stream: u64, pem: &[u8]) {
+        let mut core = self.core.lock().unwrap();
+        core.state.remember_tls_roots(stream, pem);
+        self.tls_pem.lock().unwrap().insert(stream, pem.to_vec());
+    }
+    fn tls_identity(&self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.core.lock().unwrap().tls_identity(stream, chain, key);
+    }
+    fn tls_server(
+        &self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
+    ) {
+        self.core
+            .lock()
+            .unwrap()
+            .tls_server(stream, identities, clients, alpn);
     }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         if matches!(request, Request::Ready { .. } | Request::Schedule { .. }) {

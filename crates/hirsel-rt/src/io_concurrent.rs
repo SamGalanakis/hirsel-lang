@@ -30,6 +30,22 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn process_keys(&self, _process: u64) -> Option<KeySet> {
         None
     }
+    /// Checked port allocation domain for this Net world. Aliased/narrowed
+    /// grants of one world share it; only actual Net grants may supply it.
+    fn net_ports(&self, _net: u64) -> Option<crate::io_keys::Key> {
+        None
+    }
+    fn tls(&self, _engine: &'static dyn crate::net_tls::TlsEngine) {}
+    fn tls_roots(&self, _stream: u64, _pem: &[u8]) {}
+    fn tls_identity(&self, _stream: u64, _chain: &[u8], _key: &[u8]) {}
+    fn tls_server(
+        &self,
+        _stream: u64,
+        _identities: &[(&[u8], &[u8])],
+        _clients: crate::net::ClientAuth<&[u8]>,
+        _alpn: &[String],
+    ) {
+    }
     /// Enter a request-owned wait token and perform exactly one bounded attempt.
     fn call_at(&self, _token: u64, request: Request) -> Result<Completion, AdapterError> {
         self.call(request)
