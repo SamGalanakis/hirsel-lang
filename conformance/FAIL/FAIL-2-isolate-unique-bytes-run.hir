@@ -1,0 +1,17 @@
+// rule: FAIL-2
+// expect: run
+// FAIL-2 returns R; MODE-4 moves unique results across the boundary.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let caught: Result[unique Bytes, Failure] = task.isolate(
+    tasks,
+    fn() -> unique Bytes {
+      unique b"x"
+    }
+  )
+  match take caught {
+    Ok(value) => failure.check(value == b"x", Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

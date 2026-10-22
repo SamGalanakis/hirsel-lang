@@ -1,0 +1,13 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 8
+// twin: FAIL/FAIL-2-isolate-unique-bytes-run.hir
+// CLO-3: isolate may return unique Bytes, but may not borrow counted captures.
+fn example(tasks: Tasks, take x: unique Bytes) {
+  let _ = task.isolate(
+    tasks,
+    fn() -> unique Bytes {
+      let _ = x
+      unique b"x"
+    }
+  )
+}

@@ -468,6 +468,7 @@ conformance/CLO/CLO-3-counted-child-borrow-ok.hir
 conformance/CLO/CLO-3-inferred-task-result-error.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-bad.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-ok.hir
+conformance/CLO/CLO-3-isolate-unique-bytes-borrow-bad.hir
 conformance/CLO/CLO-3-json-document-task-bad.hir
 conformance/CLO/CLO-3-json-document-task-ok.hir
 conformance/CLO/CLO-3-local-receiver-capture-bad.hir
@@ -1164,6 +1165,7 @@ conformance/FAIL/FAIL-2-isolate-catches.hir
 conformance/FAIL/FAIL-2-isolate-expected-error.hir
 conformance/FAIL/FAIL-2-isolate-failure-fields-run.hir
 conformance/FAIL/FAIL-2-isolate-success.hir
+conformance/FAIL/FAIL-2-isolate-unique-bytes-run.hir
 conformance/FAIL/FAIL-2-scope-propagates.hir
 conformance/FAIL/FAIL-3-arena-scope-unwind.hir
 conformance/FAIL/FAIL-3-call-operand-preparation-run.hir

@@ -119,9 +119,19 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         unwound,
         BlockKind::Body,
     );
+    // Dropping the callback can fail. Keep its owned result in the frame's
+    // cleanup until that drop succeeds, then transfer it into Ok.
+    let held = value.map(|value| local(&mut b, value)).transpose()?;
     drop_local(&mut b, f_slot, f_address);
-    let ok = match value {
-        Some(value) => vec![value],
+    let ok = match held {
+        Some((slot, address)) => {
+            let value = b.take(address)?;
+            b.push(Inst::StorageDead {
+                slot,
+                if_live: false,
+            });
+            vec![value]
+        }
         None => match payload(&b, returned, RESULT_OK) {
             Some(unit) => vec![b.constant(unit, ConstantValue::Unit)],
             None => Vec::new(),
