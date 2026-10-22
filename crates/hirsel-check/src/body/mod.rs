@@ -886,7 +886,19 @@ impl Checker<'_, '_> {
                     },
                     _ => (ty, expected),
                 };
+                let missing_loop_tail = rule.as_str() == "LANG-7"
+                    && matches!(&self.input.syntax.tree.expressions[id.0 as usize].kind,
+                    ast::ExprKind::Block { statements, tail: None, .. }
+                    if statements.last().is_some_and(|statement| matches!(
+                        self.input.syntax.tree.statements[statement.0 as usize].kind,
+                        ast::StmtKind::While { .. }
+                    )));
                 self.type_mismatch(rule, span, message, actual, required);
+                if missing_loop_tail {
+                    self.diagnostics.last_mut().unwrap().notes.push(
+                        "help: A `while` statement has type `()`, even for `while true`. Add an explicit tail value matching the result, such as `Ok(())`. Use `return` inside the loop for early exits; the enclosing block still needs its tail value.".into(),
+                    );
+                }
                 ty = self.error();
             }
         }

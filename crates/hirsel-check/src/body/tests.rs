@@ -403,3 +403,40 @@ fn branch_prefix_conflicts_cite_the_later_constructor() {
         );
     }
 }
+
+#[test]
+fn trailing_while_keeps_unit_and_suggests_an_explicit_tail() {
+    for source in [
+        "fn main() -> Result[(), ()] { while true {} }",
+        "fn main() -> Result[(), ()] { while true { return Ok(()) } }",
+    ] {
+        let (ds, _, map) = support::check_source(source);
+        assert_eq!(ds.len(), 1, "{source}: {ds:?}");
+        assert_eq!(ds[0].rule.as_str(), "LANG-7");
+        assert!(map.slice(ds[0].primary).unwrap().starts_with('{'));
+        let notes = ds[0].notes.join("\n");
+        assert!(
+            notes.contains("Ok(())") && notes.contains("`return` inside the loop"),
+            "{notes}"
+        );
+        let json = ds[0].to_json(&map);
+        assert!(
+            json["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("explicit tail value"))
+        );
+        assert!(ds[0].render_human(&map).contains("explicit tail value"));
+    }
+    let (ds, _, _) = support::check_source("fn main() -> u8 {}");
+    assert_eq!(ds.len(), 1);
+    assert!(ds[0].notes.is_empty());
+    for source in [
+        "fn main() -> Result[(), ()] { while false {} Ok(()) }",
+        "fn main() -> Result[(), ()] { while true { return Ok(()) } Ok(()) }",
+    ] {
+        let (ds, _, _) = support::check_source(source);
+        assert!(ds.is_empty(), "{source}: {ds:?}");
+    }
+}

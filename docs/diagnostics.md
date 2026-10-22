@@ -65,6 +65,23 @@ A type or value does not satisfy the type required at this site.
 
 Typical fix: Make the operand and receiving annotation agree. For a non-exhaustive `match`, add arms for the missing values; guarded arms do not establish complete coverage.
 
+**A body ending in while.**
+
+A `while` statement has type `()`, including `while true { ... }`. The checker
+keeps this rule and reports LANG-7 when a function expecting a non-unit result
+ends with that statement. The diagnostic suggests an explicit tail value matching
+the result, such as `Ok(())` for `Result[(), E]`. A `return` inside the loop can
+handle an early exit; it does not remove the enclosing block's required tail.
+
+```hirsel
+fn follow() -> Result[(), ()] {
+  while true {
+    // Work, or return Ok(()) for an early exit.
+  }
+  Ok(())
+}
+```
+
 ## MEM-5: Allocation promises
 
 An operation or cleanup may allocate inside an `@noalloc` function.
