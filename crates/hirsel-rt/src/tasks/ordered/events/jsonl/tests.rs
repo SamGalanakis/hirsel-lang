@@ -1,6 +1,6 @@
 use super::*;
 
-fn event(outcome: CanonicalOutcome) -> CanonicalEvent {
+pub(super) fn event(outcome: CanonicalOutcome) -> CanonicalEvent {
     CanonicalEvent {
         task: vec![2, 1],
         ordinal: u64::MAX,

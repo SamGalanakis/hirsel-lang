@@ -20,6 +20,83 @@ impl Log {
     }
 }
 
+/// A complete owned trace, detached from scheduler rows before destruction.
+/// Its bytes can only be constructed after validation; destination creation
+/// and writes happen after that validation and outside the scheduler role.
+#[derive(Debug)]
+pub(crate) struct Trace(Vec<u8>);
+
+impl Trace {
+    /// # Safety
+    /// Admission's home thread, after run_root returned, before abandonment
+    /// or destruction. The run remains live, including when workers linger.
+    #[cfg(test)]
+    pub(crate) unsafe fn capture(
+        run: *mut crate::context::RunShared,
+        pending: u32,
+    ) -> Result<Self, &'static str> {
+        if pending != 0 {
+            return Err("canonical trace has running workers");
+        }
+        let _role = unsafe { crate::tasks::role::IdleGuard::new(run) };
+        let scheduler = unsafe { &*(*run).tasks.get() }
+            .as_deref()
+            .ok_or("no ordered scheduler")?;
+        let Logical::Ordered(driver) = &scheduler.logical else {
+            return Err("no ordered scheduler");
+        };
+        let log = driver
+            .events
+            .as_ref()
+            .ok_or("canonical evidence was not enabled")?;
+        Self::completed(log)
+    }
+
+    fn completed(log: &Log) -> Result<Self, &'static str> {
+        let events = log
+            .canonical()
+            .map_err(|_| "incomplete canonical event evidence")?;
+        if !events.last().is_some_and(|event| {
+            event.item == CanonicalItem::Terminal
+                || matches!(event.outcome, CanonicalOutcome::RootEnd { .. })
+        }) {
+            return Err("canonical trace has no terminal boundary");
+        }
+        log.jsonl().map(Self)
+    }
+
+    /// Use the launcher's existing physical grant/alias checks. The pinned
+    /// destination creates/truncates nothing until this validated trace exists.
+    pub(crate) fn publish(
+        &self,
+        destination: crate::host_paths::RecorderDestination,
+        grants: &[(&str, &crate::host_paths::PinnedDirectory)],
+        files: &[(&str, &std::fs::File)],
+    ) -> Result<(), String> {
+        self.write(|| {
+            destination
+                .open_with_files(grants, files)
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn write<W: std::io::Write>(
+        &self,
+        open: impl FnOnce() -> Result<W, String>,
+    ) -> Result<(), String> {
+        let mut writer = open()?;
+        writer
+            .write_all(&self.0)
+            .and_then(|()| writer.flush())
+            .map_err(|error| format!("canonical trace: {error}"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 fn object(id: &ObjectId) -> Value {
     json!({"creator": id.creator, "ordinal": id.ordinal})
 }
@@ -214,3 +291,6 @@ fn row(event: &CanonicalEvent) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod export_tests;

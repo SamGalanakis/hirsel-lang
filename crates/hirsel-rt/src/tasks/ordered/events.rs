@@ -17,6 +17,7 @@ pub(super) use host_requests::HostAuthority;
 mod host_values;
 mod jsonl;
 pub(super) use host_values::HostHandleId;
+pub(crate) use jsonl::Trace;
 
 #[cfg(test)]
 mod blocked;

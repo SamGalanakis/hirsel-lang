@@ -495,6 +495,32 @@ impl BodyRun {
         setup: impl FnOnce(*mut crate::TaskCtx),
         body: impl FnMut(*mut crate::TaskCtx) -> u8 + Send + 'static,
     ) -> BodyOutcome {
+        self.run_impl(setup, body, |_, _| ()).0
+    }
+
+    /// Collect a complete Ordered trace after root completion, before its
+    /// scheduler or abandoned frames are destroyed. Test admission is explicit
+    /// in setup; this never enables a policy or samples a parked TaskCtx.
+    #[cfg(test)]
+    pub(crate) fn run_traced(
+        self,
+        setup: impl FnOnce(*mut crate::TaskCtx),
+        body: impl FnMut(*mut crate::TaskCtx) -> u8 + Send + 'static,
+    ) -> (
+        BodyOutcome,
+        Result<crate::tasks::ordered::events::Trace, &'static str>,
+    ) {
+        self.run_impl(setup, body, |ctx, pending| unsafe {
+            crate::tasks::ordered::events::Trace::capture((*ctx).run_ptr(), pending)
+        })
+    }
+
+    fn run_impl<T>(
+        self,
+        setup: impl FnOnce(*mut crate::TaskCtx),
+        body: impl FnMut(*mut crate::TaskCtx) -> u8 + Send + 'static,
+        observe: impl FnOnce(*mut crate::TaskCtx, u32) -> T,
+    ) -> (BodyOutcome, T) {
         let mut body = body;
         let mut ctx = std::ptr::null_mut();
         // SAFETY: a valid configuration and out-parameter.
@@ -559,6 +585,7 @@ impl BodyRun {
             Err(_) => crate::pool::busy(unsafe { (*ctx).run_ref() }),
             Ok(_) => 0,
         };
+        let observed = observe(ctx, pending);
         // SAFETY: the root context; a detached run's workers free it.
         unsafe {
             if pending > 0 {
@@ -575,6 +602,6 @@ impl BodyRun {
         }
         drop(binding);
         self.control.finish(pending);
-        BodyOutcome { ended, pending }
+        (BodyOutcome { ended, pending }, observed)
     }
 }

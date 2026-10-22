@@ -90,7 +90,7 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
             let seen = output.clone();
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
-            let outcome = run.run(
+            let (outcome, trace) = run.run_traced(
                 move |ctx| unsafe {
                     let mut policy = Policy::admit(&Default::default(), None);
                     policy.reorder = reorder;
@@ -229,13 +229,33 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
             );
             assert_eq!(outcome.ended, Ok(STATUS_OK));
             assert_eq!(outcome.pending, 0);
+            let trace = trace.expect("complete host trace includes final root end");
+            let destination = tempfile::tempdir().unwrap();
+            let path = destination.path().join("events.jsonl");
+            trace
+                .publish(
+                    crate::host_paths::RecorderDestination::pin(&path).unwrap(),
+                    &[],
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), trace.bytes());
+            let last: serde_json::Value = serde_json::from_str(
+                std::str::from_utf8(trace.bytes())
+                    .unwrap()
+                    .lines()
+                    .last()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(last["outcome"]["kind"], "root_end");
             assert_eq!(
                 std::fs::read(root.path().join("data")).unwrap(),
                 [0, 255, 7]
             );
             assert_eq!(*adapter.tokens.lock().unwrap(), [1, 2, 3, 4, 5, 6]);
             assert_eq!(*adapter.finished.lock().unwrap(), [1, 2, 3, 4, 5, 6]);
-            let rows = output.lock().unwrap().clone();
+            let rows = (output.lock().unwrap().clone(), trace.bytes().to_vec());
             if let Some(reference) = &reference {
                 assert_eq!(&rows, reference);
             } else {
