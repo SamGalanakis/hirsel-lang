@@ -1,0 +1,9 @@
+// RECOMPILE_MARKER_0
+fn helper(x:u64)->u64{x + 1}
+pub fn main(rt:Io)->Result[(),String]{
+ let Ok(output)=io.stdout(rt) else {return Error("stdout")}
+ let value=helper(4)
+ let text=if value == 5 {"5\n"} else if value == 6 {"6\n"} else {return Error("unexpected result")}
+ let Ok(())=out.print(output,text) else {return Error("print")}
+ Ok(())
+}

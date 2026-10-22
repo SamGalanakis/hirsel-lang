@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+"""Bounded incremental attribution; never builds a compiler or claims wall ratios.
+
+matrix: ten seeded interleaved rounds, independently restored/warmed cells.
+profile: additional one-body perf stack and allocation observations.
+legacy: one LangArena marker rebuild, explicitly unequal suite coverage.
+Run inside tools/capped; its retained log must include an unconditional EXIT marker.
+"""
+import argparse
+import contextlib
+import difflib
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import shutil
+import statistics
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURE = ROOT / 'tools/tests/fixtures/incremental-profile-9'
+
+
+def module(path):
+    loader = importlib.machinery.SourceFileLoader('incremental_resident', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    result = importlib.util.module_from_spec(spec)
+    loader.exec_module(result)
+    return result
+
+
+def dump(path, value):
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+
+
+def sha(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def compiler_environment(environ):
+    """Retain compiler inputs, excluding unrelated connector/session secrets."""
+    names = {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'TMPDIR'}
+    return {k:v for k,v in environ.items() if k in names or k.startswith(('HIRSEL_', 'LLVM_', 'XDG_'))}
+
+
+def inventory(paths):
+    result = {}
+    for path in paths:
+        path = Path(path).resolve()
+        files = sorted(p for p in path.rglob('*') if p.is_file()) if path.is_dir() else [path]
+        result.update({str(p): sha(p) for p in files})
+    return result
+
+
+def verify(frozen, roots=None):
+    changed = [p for p, digest in frozen.items() if not Path(p).is_file() or sha(Path(p)) != digest]
+    if changed:
+        raise RuntimeError(f'frozen inputs changed: {changed[:10]}')
+    if roots is not None and inventory(roots) != frozen:
+        raise RuntimeError('frozen input tree membership changed')
+
+
+def variants(base):
+    replacements = {'marker': ('RECOMPILE_MARKER_0', 'RECOMPILE_MARKER_1'),
+                    'body': ('x + 1', 'x + 2'),
+                    'signature': ('helper(x:u64)->u64', 'helper(x:u32)->u32')}
+    result = {'unchanged': base}
+    for name, (old, new) in replacements.items():
+        if base.count(old) != 1:
+            raise ValueError(f'{name}: expected exactly one edit site')
+        result[name] = base.replace(old, new)
+    return result
+
+
+@contextlib.contextmanager
+def edit(path, text):
+    original = path.read_bytes()
+    try:
+        path.write_text(text)
+        yield
+    finally:
+        path.write_bytes(original)
+
+
+def namespace(work, mode, round_number, name):
+    # No deletion: every attempted preparation/sample has a private namespace.
+    path = work / f'{round_number:02}-{mode}-{name}'
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def timings(stderr):
+    for line in reversed(stderr.splitlines()):
+        try:
+            report = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(report, dict) and report.get('schema') == 1 and 'wall_ns' in report:
+            return report
+    return None
+
+
+def perf_counts(path):
+    counts, coverage = {}, {}
+    for line in path.read_text().splitlines():
+        fields = line.split(',')
+        if len(fields) > 2 and fields[2].strip() in ('cycles', 'instructions'):
+            name = fields[2].strip()
+            counts[name] = float(fields[0])
+            coverage[name] = float(fields[4]) if len(fields) > 4 and fields[4].strip() else None
+    if set(counts) != {'cycles', 'instructions'} or min(counts.values()) <= 0:
+        raise RuntimeError(f'incomplete PMU counters: {path}')
+    return {'counts': counts, 'running_percent': coverage}
+
+
+def accepted(rows, rounds):
+    return len(rows) == rounds and all(r.get('status') == 'pass' and r.get('perf') for r in rows)
+
+
+class Runner:
+    def __init__(self, args):
+        self.args = args
+        self.work = args.work.resolve()
+        self.work.mkdir(parents=True, exist_ok=False)
+        self.cli = args.cli.resolve()
+        self.env = compiler_environment(os.environ) | json.loads(args.env.read_text())
+        # Explicit provider controls override ambient values; native reuse is retained.
+        self.env |= {'HIRSEL_JOBS': '1', 'HIRSEL_DAEMON': 'off', 'HIRSEL_RESULTS': 'dir@1',
+                     'HIRSEL_OBJECTS': 'dir@1', 'HIRSEL_PROGRAM_CACHE': 'off',
+                     'HIRSEL_STD_OBJECTS': 'none', 'LC_ALL': 'C'}
+        self.report = {'schema': 1, 'seed': args.seed, 'rounds': args.rounds, 'cpu': args.cpu,
+                       'wall_ratios': False, 'scope': 'compiler threads and descendants, including linker',
+                       'std_objects': 'none; fixture selects no std', 'jobs': 1,
+                       'attempts': [], 'frozen_verified': False}
+        self.freeze_roots = [self.cli, args.env, Path(__file__), ROOT/'tools/compiler-bench/resident', ROOT/'tools/compiler-bench/corpus.py', ROOT/'bench/micro/measure.py', FIXTURE, *args.freeze]
+        self.frozen = inventory(self.freeze_roots)
+        dump(self.work / 'inputs.json', self.frozen)
+        self.resident = module(ROOT / 'tools/compiler-bench/resident')
+        self.grants = '{"io":{"stdout":"stdout.bytes@1","dirs":[]}}'
+
+    def call(self, label, argv, env, counted=False, server=None):
+        prefix = self.work / f'{len(self.report["attempts"]):04}-{label}'
+        command = list(map(str, argv))
+        if counted:
+            # perf inherits threads and fork/exec descendants. Resident server is
+            # separately bracketed by the existing enable/ack implementation.
+            command = ['perf', 'stat', '-x,', '-e', 'cycles,instructions', '-o', str(prefix)+'.perf',
+                       '--', 'taskset', '-c', str(self.args.cpu), '/usr/bin/env', '-i',
+                       *[f'{k}={v}' for k, v in env.items()], *command]
+        before = server.log_path.read_bytes().count(b'exited ') if server else None
+        start = time.monotonic()
+        with self.resident.server_counts(server.process.pid, Path(str(prefix)+'.server.perf')) if counted and server else contextlib.nullcontext():
+            try:
+                done = subprocess.run(command, env=env, capture_output=True, cwd=self.work, timeout=300)
+            except subprocess.TimeoutExpired as error:
+                done = subprocess.CompletedProcess(command, 124, error.stdout or b'', (error.stderr or b'') + b'\nHARNESS TIMEOUT 300s\n')
+        row = {'label': label, 'command': command, 'environment': env, 'cwd': str(self.work),
+               'exit': done.returncode, 'wall_s': time.monotonic()-start,
+               'status': 'pass' if done.returncode == 0 else 'failed', 'log_prefix': str(prefix)}
+        Path(str(prefix)+'.stdout').write_bytes(done.stdout)
+        Path(str(prefix)+'.stderr').write_bytes(done.stderr)
+        row['timings'] = timings(done.stderr.decode(errors='replace'))
+        self.report['attempts'].append(row)
+        dump(self.work/'result.json', self.report)
+        if done.returncode:
+            raise RuntimeError(f'{label}: exit {done.returncode}; {prefix}.stderr')
+        if server and server.log_path.read_bytes().count(b'exited ') != before + 1:
+            row['status'] = 'failed'
+            raise RuntimeError('resident request did not execute on owned server')
+        if counted:
+            row['perf'] = perf_counts(Path(str(prefix)+'.perf'))
+            if server:
+                row['server_perf'] = perf_counts(Path(str(prefix)+'.server.perf'))
+                row['perf']['counts'] = {k: v + row['server_perf']['counts'][k] for k, v in row['perf']['counts'].items()}
+        row['stdout_sha256'] = hashlib.sha256(done.stdout).hexdigest()
+        row['diagnostics_sha256'] = hashlib.sha256(done.stderr).hexdigest()
+        dump(self.work/'result.json', self.report)
+        return row, done
+
+    def fixture(self, directory):
+        for p in FIXTURE.iterdir():
+            shutil.copyfile(p, directory/p.name)
+        return directory/'main.hir'
+
+    def environment(self, directory):
+        runtime = Path('/tmp')/('ip9-'+hashlib.sha256(str(directory).encode()).hexdigest()[:12])
+        runtime.mkdir(mode=0o700)
+        return self.env | {'HIRSEL_RESULTS_DIR': str(directory/'results'),
+                           'XDG_CACHE_HOME': str(directory/'cache'),
+                           'HIRSEL_NATIVE_CACHE': str(directory/'native'),
+                           'TMPDIR': str(directory), 'XDG_RUNTIME_DIR': str(runtime)}
+
+    def command(self, mode, source, binary, timed=True):
+        return [self.cli, 'build' if mode == 'native' else 'check',
+                *(['--debug'] if mode == 'native' else []),
+                *(['--timings=json'] if timed else []), source,
+                *(['-o', binary] if mode == 'native' else [])]
+
+    def oracle(self, source, binary, env, expected, native):
+        reference = env | {'HIRSEL_DAEMON': 'off', 'HIRSEL_RESULTS': 'none@1', 'HIRSEL_OBJECTS': 'none@1'}
+        _, cold = self.call('oracle-check', [self.cli, 'check', source], reference)
+        if cold.stdout or cold.stderr:
+            raise RuntimeError('cache-free check emitted diagnostics')
+        _, interpreted = self.call('oracle-run', [self.cli, 'run', source, '--grants', self.grants], reference)
+        if interpreted.stdout != expected or interpreted.stderr:
+            raise RuntimeError('edited helper was not executed with the independently expected result')
+        if native:
+            _, actual = self.call('reused-native-run', [binary, '--hirsel-grants', self.grants], env)
+            fresh = binary.with_name('fresh-program')
+            self.call('oracle-build', self.command('native', source, fresh), reference)
+            _, output = self.call('fresh-native-run', [fresh, '--hirsel-grants', self.grants], reference)
+            if actual.stdout != expected or output.stdout != expected or actual.stderr or output.stderr:
+                raise RuntimeError('native output disagrees with fresh cache-free output')
+            self.report.setdefault('artifacts', []).append({'reused': str(binary), 'sha256': sha(binary),
+                                                           'fresh': str(fresh), 'fresh_sha256': sha(fresh)})
+
+    def matrix(self):
+        cells = [(mode, name) for mode in ('resident', 'disk', 'native') for name in variants((FIXTURE/'main.hir').read_text())]
+        rng = random.Random(self.args.seed)
+        for round_number in range(self.args.rounds):
+            order = cells.copy()
+            rng.shuffle(order)
+            for mode, name in order:
+                directory = namespace(self.work, mode, round_number, name)
+                source = self.fixture(directory)
+                base = source.read_text()
+                text = variants(base)[name]
+                (directory/'edit.patch').write_text(''.join(difflib.unified_diff(base.splitlines(True), text.splitlines(True), fromfile='base/main.hir', tofile=f'{name}/main.hir')))
+                env = self.environment(directory)
+                binary = directory/'program'
+                server = None
+                try:
+                    if mode == 'resident':
+                        server = OwnedServer(self.cli, directory, env, self.args.cpu)
+                        env = server.env
+                    self.call('prepare-'+mode, self.command(mode, source, binary, timed=mode != 'resident'), env, server=server)
+                    with edit(source, text):
+                        row, done = self.call('sample-'+mode+'-'+name, self.command(mode, source, binary, timed=mode != 'resident'), env, counted=True, server=server)
+                        row |= {'mode': mode, 'edit': name, 'round': round_number, 'source_sha256': sha(source)}
+                        if done.stdout or (mode == 'resident' and done.stderr):
+                            raise RuntimeError('successful check/build emitted unexpected output')
+                        self.oracle(source, binary, env, b'6\n' if name == 'body' else b'5\n', mode == 'native')
+                    if source.read_text() != base:
+                        raise RuntimeError('restore failed')
+                finally:
+                    if server:
+                        server.close()
+                print(f'pass round={round_number} mode={mode} edit={name}', flush=True)
+        self.report['medians'] = []
+        for mode, name in cells:
+            rows = [r for r in self.report['attempts'] if r.get('mode') == mode and r.get('edit') == name]
+            if accepted(rows, 10):
+                self.report['medians'].append({'mode': mode, 'edit': name,
+                    **{k: statistics.median(r['perf']['counts'][k] for r in rows) for k in ('instructions', 'cycles')}})
+
+    def profile(self):
+        for kind in ('timings', 'stacks', 'allocations', 'heaptrack', 'process-tree', 'callgrind'):
+            # Each profiler sees a body state absent from its private result and
+            # object stores, even after a previous profiler checked that variant.
+            directory = namespace(self.work, 'profile', 0, kind)
+            source = self.fixture(directory)
+            env = self.environment(directory)
+            binary = directory/'program'
+            base = source.read_text()
+            self.call('profile-prepare-'+kind, self.command('native', source, binary), env)
+            with edit(source, variants(base)['body']):
+                command = self.command('native', source, binary)
+                if kind == 'stacks':
+                    command = ['perf', 'record', '-e', 'instructions', '-F999', '--call-graph', 'dwarf', '-o', directory/'perf.data', '--', *command]
+                elif kind == 'allocations':
+                    command.insert(2, '--mem-usage')
+                elif kind == 'heaptrack':
+                    command = ['heaptrack', '-o', directory/'heaptrack', *command]
+                elif kind == 'process-tree':
+                    command = ['strace', '-f', '-qq', '-s', '4096', '-e', 'trace=process', '-o', directory/'process.trace', *command]
+                elif kind == 'callgrind':
+                    runtime = env['HIRSEL_VALGRIND_RUNTIME']
+                    command = [env['HIRSEL_VALGRIND'], '--tool=callgrind', '--trace-children=yes',
+                               '--callgrind-out-file='+str(directory/'callgrind.%p'),
+                               runtime+'/ld-linux-x86-64.so.2', '--library-path', runtime+':'+env['LLVM_SYS_211_PREFIX']+'/lib', *command]
+                row, _ = self.call('profile-body-'+kind, command, env)
+                if row['timings']['counts']['object misses'] != 1:
+                    raise RuntimeError('profile must observe the first body edit, not a previously cached variant')
+                self.oracle(source, binary, env, b'6\n', True)
+            if kind == 'stacks':
+                self.call('profile-report', ['perf', 'report', '--stdio', '--no-inline', '--no-children', '-i', directory/'perf.data'], env)
+
+    def legacy(self):
+        if not self.args.legacy_root:
+            raise ValueError('legacy requires --legacy-root: owned frozen source snapshot')
+        root = self.args.legacy_root.resolve()
+        manifest = root/'bench/langarena/build/hirsel.json'
+        source = root/'bench/langarena/main.hir'
+        directory = namespace(self.work, 'legacy', 0, 'marker')
+        env = self.environment(directory)
+        binary = directory/'langarena'
+        command = [self.cli, 'build', '--release', '--timings=json', manifest, '-o', binary]
+        base = source.read_text()
+        if base.count('RECOMPILE_MARKER_0') != 1:
+            raise ValueError('legacy marker must occur exactly once')
+        self.report['legacy_coverage'] = 'Hirsel registered subset versus upstream Rust whole suite: unequal; no ratio'
+        self.call('legacy-prepare', command, env)
+        text = base.replace('RECOMPILE_MARKER_0', 'RECOMPILE_MARKER_1')
+        (directory/'edit.patch').write_text(''.join(difflib.unified_diff(base.splitlines(True), text.splitlines(True), fromfile='base/main.hir', tofile='marker/main.hir')))
+        with edit(source, text):
+            self.call('legacy-marker', command, env, counted=True)
+        self.report['artifacts'] = [{'binary':str(binary), 'sha256':sha(binary)}]
+
+    def finish(self):
+        verify(self.frozen, self.freeze_roots)
+        self.report['frozen_verified'] = True
+        dump(self.work/'result.json', self.report)
+
+
+class OwnedServer:
+    def __init__(self, cli, directory, env, cpu):
+        self.env = env | {'HIRSEL_DAEMON': 'auto'}
+        self.log_path = directory/'server.log'
+        self.log = self.log_path.open('wb')
+        self.process = subprocess.Popen(['taskset', '-c', str(cpu), str(cli), 'serve', '--workspace', str(directory)],
+                                        env=self.env, cwd=directory, stdin=subprocess.DEVNULL, stdout=self.log, stderr=self.log)
+        # Readiness is setup only. No sampling interval includes it.
+        deadline = time.monotonic()+10
+        while b'serving ' not in self.log_path.read_bytes():
+            if self.process.poll() is not None or time.monotonic() > deadline:
+                self.close()
+                raise RuntimeError('owned server failed readiness')
+            time.sleep(.01)
+
+    def close(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+        self.log.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=('matrix', 'profile', 'legacy'))
+    parser.add_argument('--cli', type=Path, required=True, help='frozen prebuilt binary named hirsel')
+    parser.add_argument('--env', type=Path, required=True, help='JSON native tool environment')
+    parser.add_argument('--work', type=Path, required=True, help='new session directory; never reused/deleted')
+    parser.add_argument('--legacy-root', type=Path)
+    parser.add_argument('--freeze', type=Path, action='append', default=[])
+    parser.add_argument('--rounds', type=int, choices=(1,10), default=10, help='one is oracle smoke only')
+    parser.add_argument('--seed', type=int, default=20261022)
+    parser.add_argument('--cpu', type=int, default=6)
+    args = parser.parse_args()
+    if args.cpu == 31:
+        parser.error('CPU31 is reserved by another lane')
+    runner = Runner(args)
+    try:
+        getattr(runner, args.mode)()
+        runner.report['status'] = 'pass'
+    except BaseException:
+        runner.report['status'] = 'failed'
+        raise
+    finally:
+        runner.finish()
+
+
+if __name__ == '__main__':
+    main()
