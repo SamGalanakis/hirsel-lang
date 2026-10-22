@@ -196,61 +196,81 @@ fn bwt_decode(encoded: Bwt) -> unique List[u8] {
   take out
 }
 
-type Node = Leaf(frequency: u64, byte: u8) | Branch(
-  frequency: u64,
-  left: box Node,
-  right: box Node
-)
-
-@noalloc
-fn frequency(node: box Node) -> u64 {
-  match node {
-    Leaf(frequency: f, byte: _) => f,
-    Branch(frequency: f, left: _, right: _) => f,
+// compress.rs:255-296: Huffman frequencies, codes and bit counts are i32.
+fn huff_zeros() -> unique List[i32] {
+  let mut out: List[i32] = []
+  list.reserve(mut out, 256)
+  for _ in 0u64..256u64 {
+    list.push(mut out, 0)
   }
+  take out
+}
+
+// compress.rs:255-270: match Rust's node record, including nullable boxed
+// children, instead of giving leaves and branches separate payload layouts.
+type Node {
+  frequency: i32,
+  byte: u8,
+  is_leaf: bool,
+  left: Option[box Node],
+  right: Option[box Node],
+}
+
+fn huff_leaf(frequency: i32, byte: u8) -> unique box Node {
+  box Node(frequency: frequency, byte: byte, is_leaf: true, left: None, right: None)
 }
 
 // compress.rs:300-345. Stable initial ordering, then binary insertion.
-fn huff_tree(freq: List[u64]) -> box Node {
+fn huff_tree(freq: List[i32]) -> Option[box Node] {
   let mut nodes: List[box Node] = []
   for i in 0u64..256u64 {
     if freq[i] > 0 {
-      let node: box Node = box Leaf(frequency: freq[i], byte: int.narrow(i))
+      let node = huff_leaf(freq[i], int.narrow(i))
       let mut pos = list.len(nodes)
       list.push(mut nodes, take node)
-      while pos > 0 && frequency(nodes[pos - 1]) > freq[i] {
+      while pos > 0 && nodes[pos - 1].frequency > freq[i] {
         list.swap(mut nodes, pos, pos - 1)
         pos -= 1
       }
     }
   }
   if list.len(nodes) == 0 {
-    return box Leaf(frequency: 0, byte: 0)
+    return None
   }
   if list.len(nodes) == 1 {
-    return box Branch(
-      frequency: frequency(nodes[0]),
-      left: nodes[0],
-      right: box Leaf(frequency: 0, byte: 0)
+    return Some(
+      box Node(
+        frequency: nodes[0].frequency,
+        byte: 0,
+        is_leaf: false,
+        left: Some(nodes[0]),
+        right: Some(huff_leaf(0, 0))
+      )
     )
   }
   while list.len(nodes) > 1 {
     let left = list.remove(mut nodes, 0)
     let right = list.remove(mut nodes, 0)
-    let f = frequency(left) + frequency(right)
-    let parent: box Node = box Branch(frequency: f, left: left, right: right)
+    let f = left.frequency + right.frequency
+    let parent = box Node(
+      frequency: f,
+      byte: 0,
+      is_leaf: false,
+      left: Some(left),
+      right: Some(right)
+    )
     let mut lo: u64 = 0
     let mut hi = list.len(nodes)
     while lo < hi {
       let mid = (lo + hi) / 2
-      if frequency(nodes[mid]) <= f {
+      if nodes[mid].frequency <= f {
         lo = mid + 1
       } else {
         hi = mid
       }
     }
     // Rust binary_search returns the last equal frequency, rather than after it.
-    if lo > 0 && frequency(nodes[lo - 1]) == f {
+    if lo > 0 && nodes[lo - 1].frequency == f {
       lo -= 1
     }
     list.push(mut nodes, take parent)
@@ -260,56 +280,62 @@ fn huff_tree(freq: List[u64]) -> box Node {
       pos -= 1
     }
   }
-  nodes[0]
+  Some(nodes[0])
 }
 
 fn huff_codes(
   node: box Node,
-  code: u64,
-  length: u64,
-  mut lengths: unique List[u64],
-  mut codes: unique List[u64]
+  code: i32,
+  length: i32,
+  mut lengths: unique List[i32],
+  mut codes: unique List[i32]
 ) {
-  match node {
-    Leaf(frequency: _, byte: b) => {
-      if length > 0 || b != 0 {
-        let index: u64 = int.widen(b)
-        lengths[index] = length
-        codes[index] = code
-      }
-    },
-    Branch(frequency: _, left: l, right: r) => {
-      huff_codes(l, code << 1, length + 1, mut lengths, mut codes)
-      huff_codes(r, code << 1 | 1, length + 1, mut lengths, mut codes)
-    },
+  if node.is_leaf {
+    if length > 0 || node.byte != 0 {
+      let index: u64 = int.widen(node.byte)
+      lengths[index] = length
+      codes[index] = code
+    }
+  } else {
+    if let Some(left) = node.left {
+      huff_codes(left, code << 1, length + 1, mut lengths, mut codes)
+    }
+    if let Some(right) = node.right {
+      huff_codes(right, code << 1 | 1, length + 1, mut lengths, mut codes)
+    }
   }
 }
 
 type Huff {
   data: List[u8],
-  bits: u64,
-  freq: List[u64],
+  bits: i32,
+  freq: List[i32],
 }
 
 // compress.rs:347-423.
 fn huff_encode(data: List[u8]) -> Huff {
-  let freq = frequencies(data)
-  let tree = huff_tree(freq)
-  let mut lengths = zeros(256)
-  let mut codes = zeros(256)
-  huff_codes(tree, 0, 0, mut lengths, mut codes)
+  let mut freq = huff_zeros()
+  for byte in data {
+    let index: u64 = int.widen(byte)
+    freq[index] += 1
+  }
+  let mut lengths = huff_zeros()
+  let mut codes = huff_zeros()
+  if let Some(tree) = huff_tree(freq) {
+    huff_codes(tree, 0, 0, mut lengths, mut codes)
+  }
   let mut out: List[u8] = []
   list.reserve(mut out, list.len(data) * 2)
   let mut byte: u8 = 0
   let mut position: u64 = 0
-  let mut bits: u64 = 0
+  let mut bits: i32 = 0
   for b in data {
     let index: u64 = int.widen(b)
     let code = codes[index]
     let mut i = lengths[index]
     while i > 0 {
       i -= 1
-      if code & 1u64 << i != 0 {
+      if code & 1i32 << i != 0 {
         byte = byte | 1u8 << int.narrow(7u64 - position)
       }
       position += 1
@@ -327,35 +353,52 @@ fn huff_encode(data: List[u8]) -> Huff {
   Huff(data: take out, bits: bits, freq: take freq)
 }
 
-// compress.rs:432-473. Keep the bit-count-sized scratch allocation.
+// compress.rs:432-473: load each encoded byte once, then walk its bits MSB
+// first. Keep the upstream boxed tree, bit-count-sized initialized scratch,
+// and zero-byte filtering. Rebindable borrowed cursors, bulk List zero fill
+// and list.truncate are missing; see RESULTS-la-port-fidelity-8.md.
 fn huff_decode(encoded: Huff) -> unique List[u8] {
-  let root = huff_tree(encoded.freq)
+  let Some(root) = huff_tree(encoded.freq) else {
+    return []
+  }
   let mut node = copy root
-  let mut out = zero_bytes(encoded.bits)
+  let mut out = zero_bytes(int.narrow(encoded.bits))
   let mut size: u64 = 0
-  for bit in 0u64..encoded.bits {
-    match node {
-      Branch(frequency: _, left: l, right: r) => {
-        node = if encoded.data[bit / 8] >> int.narrow(7u64 - bit % 8) & 1 == 1 {
-          r
-        } else {
-          l
-        }
-      },
-      Leaf(frequency: _, byte: _) => {},
-    }
-    match node {
-      Leaf(frequency: _, byte: b) => {
-        if b != 0 {
-          out[size] = b
+  let mut bits_processed: i32 = 0
+  let mut byte_index: u64 = 0
+  while bits_processed < encoded.bits && byte_index < list.len(encoded.data) {
+    let byte = encoded.data[byte_index]
+    byte_index += 1
+    let mut bit_pos: u8 = 8
+    while bit_pos > 0 {
+      if bits_processed >= encoded.bits {
+        break
+      }
+      bit_pos -= 1
+      let bit = byte >> bit_pos & 1 == 1
+      bits_processed += 1
+      let next = if bit {
+        node.right
+      } else {
+        node.left
+      }
+      match take next {
+        Some(child) => {
+          node = take child
+        },
+        None => {
+          failure.check(false, TextInvariant())
+        },
+      }
+      if node.is_leaf {
+        if node.byte != 0 {
+          out[size] = node.byte
           size += 1
         }
         node = copy root
-      },
-      Branch(frequency: _, left: _, right: _) => {},
+      }
     }
   }
-  // Hirsel has no list.truncate; pop the unused initialized tail.
   while list.len(out) > size {
     let _ = list.pop(mut out)
   }
@@ -741,8 +784,13 @@ fn codec_vectors(t: Test) {
   let huff = huff_encode(abracadabra)
   test.check(t, huff.data == [105u8, 207u8, 104u8] && huff.bits == 23)
   test.check(t, arith_encode(abracadabra).data == [71u8, 94u8, 178u8])
+  test.check(t, huff_decode(huff) == abracadabra)
+  let truncated = Huff(data: [], bits: huff.bits, freq: copy huff.freq)
+  test.check(t, huff_decode(truncated) == [])
   let banana_huff = huff_encode(banana)
   test.check(t, banana_huff.data == [45u8, 128u8] && banana_huff.bits == 9)
+  test.check(t, huff_decode(banana_huff) == banana)
+  test.check(t, huff_decode(huff_encode([0u8, 0u8])) == [])
   test.check(t, arith_encode(banana).data == [144u8, 192u8])
   let lzw_input: List[u8] = [65, 66, 65, 66, 65, 66, 65]
   let lzw = lzw_encode(lzw_input)
