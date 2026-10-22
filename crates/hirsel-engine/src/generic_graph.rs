@@ -21,7 +21,7 @@ use hirsel_types::{
     GenericArgument, NameSite, SiteRef, SizeParamId, SizeParameterRef, TypeId, TypeInterner,
     TypeKind, TypeParamId, TypeParameterRef, UseKind,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 /// Why an owner's instance requires the callee's instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]

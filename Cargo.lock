@@ -681,6 +681,7 @@ dependencies = [
  "hirsel-interp",
  "hirsel-lexer",
  "hirsel-parser",
+ "hirsel-product-codec",
  "hirsel-proof-export",
  "hirsel-resolve",
  "hirsel-run-config",
@@ -982,6 +983,21 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "hirsel-product-codec"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "hirsel-artifact-store",
+ "hirsel-graph",
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-types",
+ "serde",
 ]
 
 [[package]]
