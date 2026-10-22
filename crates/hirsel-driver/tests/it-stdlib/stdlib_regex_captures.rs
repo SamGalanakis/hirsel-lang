@@ -11,6 +11,13 @@ fn regex_captures_exports_and_ownership_are_source_only() {
         let mut loaded = load_program(&path).unwrap();
         loaded.check_for_execution().unwrap();
         let snapshot = loaded.engine.export_native_input().unwrap();
+        // Source owners describe reachable code. The API fixture exercises
+        // expanded/callback replacement; the Go replacement fixture also
+        // reaches the literal replacement entry point.
+        let literal_path = root.join("conformance/SEM/SEM-3-regex-captures-replacement-1-run.hir");
+        let mut literal = load_program(&literal_path).unwrap();
+        literal.check_for_execution().unwrap();
+        let literal_snapshot = literal.engine.export_native_input().unwrap();
         for function in [
             "compile_flags",
             "find_captures",
@@ -23,9 +30,15 @@ fn regex_captures_exports_and_ownership_are_source_only() {
             "subexp_names",
         ] {
             assert!(
-                snapshot.source_owners.keys().any(|p| {
-                    p.0.package.name_is("std") && p.0.modules == ["regex"] && p.0.name == function
-                }),
+                snapshot
+                    .source_owners
+                    .keys()
+                    .chain(literal_snapshot.source_owners.keys())
+                    .any(|p| {
+                        p.0.package.name_is("std")
+                            && p.0.modules == ["regex"]
+                            && p.0.name == function
+                    }),
                 "missing regex.{function} source owner"
             );
             assert!(
