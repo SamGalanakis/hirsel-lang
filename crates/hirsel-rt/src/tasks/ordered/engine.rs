@@ -523,7 +523,7 @@ pub(crate) fn terminal(ctx: *mut TaskCtx, stop: &Stop) -> Stopped<()> {
         ctx,
         "stop",
         || ((), Next::Stop),
-        |_| super::events::terminal(stop),
+        |_| unsafe { super::events::terminal(ctx, stop) },
     )?;
     assert_eq!(progress, Progress::Stopped);
     Ok(())

@@ -2068,20 +2068,31 @@ pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option
     }
 }
 
-/// Capture only terminal causes whose schema already excludes physical identities.
-/// Blocked targets need the same typed object mapping as their wait operations;
-/// Failed needs its immutable failure chain. Neither can certify a scalar stop.
-pub(super) fn terminal(stop: &crate::stop::Stop) -> Option<Subevents> {
-    if matches!(
-        stop,
-        crate::stop::Stop::Blocked(_) | crate::stop::Stop::Failed
-    ) {
-        return None;
-    }
-    Some(vec![(
-        CanonicalItem::Terminal,
-        CanonicalOutcome::Stopped(stop.clone().outcome()),
-    )])
+/// Capture a task-local terminal cause while its owner and immutable failure
+/// metadata are still live. Unknown blocked targets cannot certify a stop.
+/// # Safety
+/// The bounded strict-head callback owns the role and ctx's failure state.
+pub(super) unsafe fn terminal(ctx: *mut TaskCtx, stop: &crate::stop::Stop) -> Option<Subevents> {
+    let outcome = match stop {
+        crate::stop::Stop::Blocked(_) => return None,
+        crate::stop::Stop::Failed => {
+            let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+            let path = &s.tasks[unsafe { (*ctx).task_id } as usize].as_ref()?.path;
+            let chain = unsafe { (*ctx).failure.chain(path) };
+            if chain.is_empty() {
+                return None;
+            }
+            let table = unsafe { (*ctx).run_ref().failure_table }?;
+            CanonicalOutcome::Failures(
+                chain
+                    .iter()
+                    .map(|(record, path)| (table.failure(record), path.clone()))
+                    .collect(),
+            )
+        }
+        _ => CanonicalOutcome::Stopped(stop.clone().outcome()),
+    };
+    Some(vec![(CanonicalItem::Terminal, outcome)])
 }
 
 /// Final root status after mandatory returned-result cleanup, using the

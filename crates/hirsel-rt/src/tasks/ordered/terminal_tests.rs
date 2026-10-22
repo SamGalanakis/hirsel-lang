@@ -412,6 +412,16 @@ fn stopped_trace(
     jitter: bool,
     stop: Stop,
 ) -> (Vec<super::events::CanonicalEvent>, bool) {
+    stopped_trace_with_failures(width, reorder, jitter, stop, None)
+}
+
+fn stopped_trace_with_failures(
+    width: u32,
+    reorder: hirsel_run_config::Reorder,
+    jitter: bool,
+    stop: Stop,
+    failure_metadata: Option<bool>,
+) -> (Vec<super::events::CanonicalEvent>, bool) {
     let mut ctx = std::ptr::null_mut();
     unsafe {
         assert_eq!(
@@ -420,6 +430,20 @@ fn stopped_trace(
         );
         let mut policy = Policy::admit(&Default::default(), None);
         policy.reorder = reorder;
+        if failure_metadata == Some(true) {
+            static TABLE: [u8; 72] = {
+                let mut bytes = [0; 72];
+                bytes[0] = 2;
+                bytes[8] = 1;
+                bytes[16] = 17;
+                bytes[20] = 3;
+                bytes[40] = 2;
+                bytes[48] = 23;
+                bytes[52] = 5;
+                bytes
+            };
+            (*ctx).run().failure_table = crate::isolate::FailureTable::new(&TABLE);
+        }
         engine::enable(ctx, policy);
         super::events::enable(ctx);
         crate::pool::start(ctx, width, true);
@@ -452,6 +476,24 @@ fn stopped_trace(
                 STATUS_OK
             );
             assert_eq!(value, 23);
+            if failure_metadata.is_some() {
+                crate::failure::hirsel_rt_v2_failure_begin(
+                    ctx,
+                    1,
+                    hirsel_core_contract::RUNTIME_RULE_BASE,
+                    1,
+                    2,
+                );
+                (*ctx).failure.append_chain(vec![(
+                    crate::failure::FailureRecord {
+                        kind: 2,
+                        rule: hirsel_core_contract::RUNTIME_RULE_BASE + 1,
+                        site: 2,
+                        operation_site: 1,
+                    },
+                    vec![4, 2],
+                )]);
+            }
             crate::stop::raise(ctx, stop.clone());
         });
         assert_eq!(
@@ -553,6 +595,58 @@ fn canonical_terminal_rejects_unmapped_blocked_targets() {
         );
         assert!(!complete);
         assert_eq!(rows.len(), 3, "numeric wait target must never be certified");
-        assert!(super::events::terminal(&Stop::Failed).is_none());
+    }
+}
+
+#[test]
+fn canonical_failed_stop_owns_normalized_primary_causes_and_spawn_paths() {
+    use super::events::{CanonicalItem, CanonicalOutcome, Transition};
+    for metadata in [None, Some(false), Some(true)] {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                for jitter in [false, true] {
+                    let (rows, complete) =
+                        stopped_trace_with_failures(width, reorder, jitter, Stop::Failed, metadata);
+                    assert_eq!(complete, metadata == Some(true));
+                    if complete {
+                        assert_eq!(rows.len(), 4);
+                        let end = rows.last().unwrap();
+                        assert_eq!(end.item, CanonicalItem::Terminal);
+                        assert_eq!(end.transition, Transition::Stop);
+                        assert_eq!(
+                            (end.ordinal, end.subevent, end.version, end.retirement),
+                            (3, 0, 1, 3)
+                        );
+                        let CanonicalOutcome::Failures(chain) = &end.outcome else {
+                            panic!("missing terminal failure chain");
+                        };
+                        assert_eq!(chain.len(), 2);
+                        assert_eq!(chain[0].1, Vec::<u32>::new());
+                        assert_eq!(chain[1].1, [4, 2]);
+                        assert_eq!(chain[0].0.rule, hirsel_core_contract::RUNTIME_RULES[0]);
+                        assert_eq!(chain[1].0.rule, hirsel_core_contract::RUNTIME_RULES[1]);
+                        assert_eq!((chain[0].0.site.line, chain[0].0.site.column), (17, 3));
+                        assert_eq!((chain[1].0.site.line, chain[1].0.site.column), (23, 5));
+                        assert_eq!(chain[0].0.operation.as_ref(), Some(&chain[1].0.site));
+                        assert_eq!(chain[1].0.operation.as_ref(), Some(&chain[0].0.site));
+                    } else {
+                        assert_eq!(
+                            rows.len(),
+                            3,
+                            "missing chain/table cannot certify an empty failure"
+                        );
+                    }
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
+                    }
+                }
+            }
+        }
     }
 }
