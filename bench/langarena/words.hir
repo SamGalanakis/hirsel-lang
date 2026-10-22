@@ -12,16 +12,44 @@ fn random(mut seed: u64, max: u64) -> u64 {
 
 fn step(mut s: State, iteration: u64) {
   let mut frequencies: Map[String, u32] = map.empty()
-  let words = string.split_ascii_whitespace(unique s.source)
-  for word in words {
-    let count = option.unwrap_or(map.get(frequencies, word), 0)
-    map.insert(mut frequencies, copy word, count + 1)
+  // Rust words.rs:52-55: traverse bounded tokens and update the frequency map.
+  // The existing insertion API needs global keys: own one source per step,
+  // then let stored slices share it until this timed step ends.
+  let text = unique s.source
+  let source = string.as_bytes(text)
+  let len = bytes.len(source)
+  let mut i = 0u64
+  while i < len {
+    // Match split_ascii_whitespace, including its exclusion of vertical tab.
+    while i < len && ascii.is_space(source[i]) && source[i] != 11 {
+      i += 1
+    }
+    let begin = i
+    while i < len && !(ascii.is_space(source[i]) && source[i] != 11) {
+      i += 1
+    }
+    if begin < i {
+      // ASCII delimiters and the ends of this valid string are UTF-8 boundaries.
+      let Some(a) = string.position(text, begin) else {
+        failure.check(false, TextInvariant())
+        return
+      }
+      let Some(b) = string.position(text, i) else {
+        failure.check(false, TextInvariant())
+        return
+      }
+      let word = string.slice(text, a, b)
+      // upsert's unique map would copy every distinct string key. Keep the
+      // established shared-key insert path and remove the final token probes.
+      let count = option.unwrap_or(map.get(frequencies, word), 0)
+      map.insert(mut frequencies, copy word, count + 1)
+    }
   }
   // Crystal Hash.max_by chooses the first inserted word on equal frequency.
   let mut best = ""
   let mut maximum = 0u32
-  for word in words {
-    let count = option.unwrap_or(map.get(frequencies, word), 0)
+  // Map iteration preserves first insertion; scan each distinct word once.
+  for (word, count) in frequencies {
     if count > maximum {
       best = word
       maximum = count
