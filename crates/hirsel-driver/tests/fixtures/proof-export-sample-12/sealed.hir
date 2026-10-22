@@ -1,0 +1,15 @@
+// Adapted from proof_export.rs::SEALED: real fact and opaque owner signatures.
+// list.len also requires a real exported registry operation signature.
+distinct type Percent(v: u8) where v <= 100
+pub opaque type Meters: plain + inert + noalloc_drop uses {} {
+  n: u64,
+}
+fn meters(n: u64) -> Meters {
+  Meters(n: n)
+}
+pub fn main() -> Result[(), ()] {
+  let p = Percent(100u8)
+  let xs: List[u64] = [1u64]
+  let m = meters(list.len(xs))
+  Ok(())
+}

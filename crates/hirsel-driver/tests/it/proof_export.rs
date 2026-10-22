@@ -228,7 +228,7 @@ fn a_fingerprint_forged_at_every_use_is_refused_by_re_derivation() {
     });
 }
 
-const SEALED: &str = "distinct type Percent(v: u8) where v <= 100\npub opaque type Meters: plain + inert + noalloc_drop uses {} {\n  n: u64,\n}\nfn meters(n: u64) -> Meters {\n  Meters(n: n)\n}\npub fn main() -> Result[(), ()] {\n  let p = Percent(100u8)\n  let m = meters(1u64)\n  Ok(())\n}\n";
+const SEALED: &str = include_str!("../fixtures/proof-export-sample-12/sealed.hir");
 
 fn signature<'a>(export: &'a Export, name: &str) -> &'a hirsel_proof_export::SignatureSection {
     export
@@ -541,7 +541,7 @@ fn accepted(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The signature fingerprints an import re-derived, by derivation.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Kinds {
     declared: usize,
     fact_helpers: usize,
@@ -567,6 +567,19 @@ impl Kinds {
             kinds.owner_views += usize::from(signature.owner_view.is_some());
         }
         kinds
+    }
+    fn require_all(&self) -> Result<(), String> {
+        for (kind, count) in [
+            ("declared signatures", self.declared),
+            ("fact helpers", self.fact_helpers),
+            ("owner views", self.owner_views),
+            ("registry rows", self.registry_rows),
+        ] {
+            if count == 0 {
+                return Err(format!("re-derives no {kind}"));
+            }
+        }
+        Ok(())
     }
     fn add(&mut self, other: &Self) {
         self.declared += other.declared;
@@ -604,9 +617,13 @@ fn round_trip(path: &Path) -> Result<Option<Kinds>, String> {
     let Some((text, engine)) = export_once()? else {
         return Ok(None);
     };
-    let export = engine
-        .import_tir(&text)
-        .map_err(|e| format!("import: {e}"))?;
+    // Import into a fresh interner, with no types warmed by checking/exporting.
+    let export = hirsel_proof_export::import(
+        &text,
+        &engine.proof_environment(),
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .map_err(|e| format!("fresh import: {e}"))?;
     if hirsel_proof_export::export(&export.to_input()) != text {
         return Err("re-export differs".into());
     }
@@ -619,10 +636,31 @@ fn round_trip(path: &Path) -> Result<Option<Kinds>, String> {
     Ok(Some(Kinds::of(&export)))
 }
 
-fn round_trip_all(select: impl Fn(&Path) -> bool) -> Kinds {
+// Each maintained fixture must independently cover all four derivations.
+// These are explicit paths, not discoveries: deletion must remain a failure.
+fn required_fixtures() -> Vec<PathBuf> {
+    ["tests/fixtures/proof-export-sample-12/sealed.hir"]
+        .iter()
+        .map(|path| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path))
+        .collect()
+}
+
+fn required_round_trip(path: &Path) -> Result<Kinds, String> {
+    (|| {
+        let kinds = round_trip(path)?.ok_or("required fixture is no longer accepted")?;
+        kinds.require_all()?;
+        Ok(kinds)
+    })()
+    .map_err(|error: String| format!("{}: {error}", path.display()))
+}
+
+fn round_trip_all(select: impl Fn(&Path) -> bool, required: &[PathBuf]) -> Kinds {
     let mut programs = vec![];
     accepted(&corpus(), &mut programs);
     programs.retain(|p| select(p));
+    programs.extend_from_slice(required);
+    programs.sort();
+    programs.dedup();
     let jobs = hirsel_guard::jobs();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(vec![]);
@@ -633,8 +671,14 @@ fn round_trip_all(select: impl Fn(&Path) -> bool) -> Kinds {
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(path) = programs.get(i) else { break };
-                        let result = std::panic::catch_unwind(|| round_trip(path))
-                            .unwrap_or_else(|_| Err("panicked".into()));
+                        let result = std::panic::catch_unwind(|| {
+                            if required.contains(path) {
+                                required_round_trip(path).map(Some)
+                            } else {
+                                round_trip(path)
+                            }
+                        })
+                        .unwrap_or_else(|_| Err("panicked".into()));
                         results.lock().unwrap().push((path.clone(), result));
                     }
                 })
@@ -654,13 +698,6 @@ fn round_trip_all(select: impl Fn(&Path) -> bool) -> Kinds {
             kinds.add(program);
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{} failed:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
-    assert!(exported > 0);
     eprintln!(
         "proof export: {exported} of {} selected accepted programs round-trip, re-deriving {} declared, {} fact-helper, {} owner-view and {} registry-row fingerprints",
         programs.len(),
@@ -669,10 +706,17 @@ fn round_trip_all(select: impl Fn(&Path) -> bool) -> Kinds {
         kinds.owner_views,
         kinds.registry_rows,
     );
+    assert!(
+        failures.is_empty(),
+        "{} failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    assert!(exported > 0);
     kinds
 }
 
-/// The per-push sample: about one program in sixteen, chosen by a seeded hash
+/// The per-push sample: about one program in sixty-four, chosen by a seeded hash
 /// of its corpus path, so adding a program never reshuffles the others.
 fn sampled(path: &Path) -> bool {
     const SEED: &[u8] = b"hirsel.proof-export.sample.v1";
@@ -681,29 +725,109 @@ fn sampled(path: &Path) -> bool {
         "hirsel.test.sample",
         [SEED, relative.to_string_lossy().as_bytes()],
     );
-    // The seeded 1/64 reaches no fact helper (2026-10-20): name one fact owner.
-    hash.0[0] % 64 == 0 || relative == Path::new("CT/CT-1-fact-failure-ok.hir")
+    hash.0[0] % 64 == 0
 }
 
-/// In every run of this binary: the seeded sample (1/64 of the accepted corpus),
-/// which must reach every fingerprint derivation; the full gate runs every program.
+/// The stable seeded 1/64 discovery plus mandatory category fixtures. Corpus
+/// acceptance may drift; required fixtures must check and cover every derivation.
 #[test]
 fn a_sample_of_accepted_programs_round_trips() {
-    let kinds = round_trip_all(sampled);
-    for (kind, count) in [
-        ("declared signatures", kinds.declared),
-        ("fact helpers", kinds.fact_helpers),
-        ("owner views", kinds.owner_views),
-        ("registry rows", kinds.registry_rows),
-    ] {
-        assert!(count > 0, "the sample re-derives no {kind}");
-    }
+    let kinds = round_trip_all(sampled, &required_fixtures());
+    kinds.require_all().expect("sample coverage");
+}
+
+#[test]
+fn a_required_fixture_round_trips_with_a_fresh_interner() {
+    with_compiler_stack(|| {
+        for path in required_fixtures() {
+            let kinds = required_round_trip(&path).unwrap_or_else(|error| panic!("{error}"));
+            eprintln!("required proof fixture {}: {kinds:?}", path.display());
+        }
+    });
+}
+
+#[test]
+fn a_deleted_or_rejected_required_fixture_is_refused_with_its_path() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("required.hir");
+        std::fs::write(&path, SEALED).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let error = required_round_trip(&path).unwrap_err();
+        assert!(
+            error.starts_with(&format!("{}: load:", path.display())),
+            "{error}"
+        );
+        std::fs::write(&path, "pub fn main() -> Result[(), ()] { missing() }\n").unwrap();
+        let error = required_round_trip(&path).unwrap_err();
+        assert_eq!(
+            error,
+            format!("{}: required fixture is no longer accepted", path.display())
+        );
+    });
+}
+
+#[test]
+fn a_required_fixture_that_omits_a_category_is_refused() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-fact.hir");
+        // Still an accepted distinct type and opaque owner, but no fact helper.
+        std::fs::write(&path, SEALED.replace(" where v <= 100", "")).unwrap();
+        let error = required_round_trip(&path).unwrap_err();
+        assert_eq!(
+            error,
+            format!("{}: re-derives no fact helpers", path.display())
+        );
+    });
+}
+
+#[test]
+fn required_helper_and_owner_fingerprints_cannot_be_forged() {
+    with_compiler_stack(|| {
+        let (_, export) = exported(SEALED);
+        let hash = hirsel_syntax::ContentHash::of_bytes(b"forged required fingerprint");
+        for name in ["Percent$fact$0", "Meters"] {
+            let path = named(name);
+            let mut forged = export.clone();
+            // Keep every use consistent and recompute all transport digests.
+            for signature in &mut forged.signatures {
+                if signature.path == path {
+                    signature.public.fingerprint = hash;
+                    if let Some(view) = &mut signature.owner_view {
+                        view.fingerprint = hash;
+                    }
+                }
+                for dependency in &mut signature.dependencies {
+                    if dependency.definition.path() == &path {
+                        dependency.fingerprint = hash;
+                    }
+                }
+            }
+            for definition in &mut forged.definitions {
+                if definition.path == path {
+                    definition.tir.signature_hash = hash;
+                }
+            }
+            let error = import(&hirsel_proof_export::export(&forged.to_input())).unwrap_err();
+            assert_eq!(error.at, format!("{path}.public.fingerprint"), "{error}");
+        }
+        let mut forged = export.clone();
+        let meters = forged
+            .signatures
+            .iter_mut()
+            .find(|s| s.path == named("Meters"))
+            .unwrap();
+        meters.owner_view.as_mut().unwrap().fingerprint = hash;
+        let error = import(&hirsel_proof_export::export(&forged.to_input())).unwrap_err();
+        assert_eq!(error.at, "standalone@0/Meters.owner_view", "{error}");
+    });
 }
 
 #[test]
 #[ignore = "full gate"]
 fn full_gate_every_accepted_program_round_trips() {
-    round_trip_all(|_| true);
+    round_trip_all(|_| true, &[]);
 }
 
 /// Every erased-carrier -ok fixture must import, including declarations with
