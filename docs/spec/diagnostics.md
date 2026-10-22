@@ -95,6 +95,24 @@ instantiate or transport a written sendability requirement is MODE-4 at the call
 receiving flow; the diagnostic identifies the qualified requirement and, when relevant, the
 signature's copying permission or invariant mutable contract that prevents preserving it.
 
+## Sequence prefixes
+
+Missing sequence context is LANG-2. An empty sequence cites the whole `[]` and
+explains that there is no first element; repairs show `List[u64]`, `Array[u64]`,
+and `Inline[u64, 0]` binding annotations. An undetermined first numeric literal
+or constructor keeps its existing primary site (the literal or constructor call)
+and explains that later elements cannot provide its context. Guidance shows
+complete sequence annotations and, for a numeric first element, a suffix that
+can establish the List element type. These are examples for the author's intended
+type, never a default integer type or expression type arguments.
+
+Repeat literals explain that an Array or correctly sized Inline annotation is
+required; a suffix alone cannot select their kind. A non-sequence explicit
+context is identified as such and never discarded. An invalid prerequisite
+suppresses derived sequence errors. Later heterogeneity and wrong Inline lengths
+keep LANG-7 and their existing primary sites. Human and JSON diagnostics carry
+the same guidance; no automatic edit chooses an author's kind, element type or size.
+
 ## Explicit error mappers
 
 A failed explicit `e ? mapper` keeps LANG-8 and the complete propagation expression

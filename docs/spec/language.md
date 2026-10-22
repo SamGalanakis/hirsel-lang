@@ -95,6 +95,17 @@ fn sequences() {
 }
 ```
 
+When a sequence prefix is insufficient, LANG-2 explains that prefix and gives
+annotation repairs without consulting later elements: `[]` has no first element;
+`[1, 2u64]` leaves the first numeric literal undetermined; and
+`[None(), Some("x")]` leaves the first constructor's type argument undetermined.
+The latter can be written as `let values: List[Option[String]] = [None(), Some("x")]`;
+`Array[Option[String]]` or `Inline[Option[String], 2]` are explicit alternatives.
+For the numeric example, `let values: List[u64] = [1, 2u64]` or `[1u64, 2u64]`
+works; suffixing only a later element cannot repair the prefix. A suffix on the
+first element supplies only its element type: later elements still must agree.
+A repeat needs an explicit Array or Inline kind even if its element has a suffix.
+
 `[]` and `[e; N]` retain their context requirements. No later call, binding
 annotation, destructuring pattern or allocation prohibition revises the selected
 kind or element type. An inferred List has ordinary List ownership, locality,

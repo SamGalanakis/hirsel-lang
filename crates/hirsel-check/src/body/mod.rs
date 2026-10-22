@@ -1498,6 +1498,16 @@ impl Checker<'_, '_> {
                 }
             }
             E::Sequence(cs) => {
+                let repeat = self
+                    .input
+                    .syntax
+                    .tree
+                    .repeats
+                    .iter()
+                    .any(|r| r.sequence == id);
+                if expected.is_none() {
+                    self.sequence_prefix_guidance(&cs, repeat);
+                }
                 if cs.iter().any(|c| self.invalid(self.value(*c))) {
                     self.error()
                 } else if let Some(t) = expected.filter(|t| self.element(*t).is_some()) {
@@ -1530,11 +1540,29 @@ impl Checker<'_, '_> {
                     }
                     t
                 } else {
-                    self.report(
-                        const { RuleId::of("LANG-2") },
-                        self.span(id),
-                        "sequence literal needs an expected sequence type",
-                    );
+                    let (message, help) = if expected.is_some() {
+                        (
+                            "sequence literal has a context that is not a sequence type",
+                            "help: replace the receiving type with the intended complete sequence type, such as `List[u64]`, `Array[u64]`, or `Inline[u64, 0]` for `[]`; Inline's size must equal the literal length",
+                        )
+                    } else if repeat {
+                        (
+                            "repeat sequence needs an expected Array or Inline type",
+                            Self::REPEAT_SEQUENCE_HELP,
+                        )
+                    } else if cs.is_empty() {
+                        (
+                            "empty sequence has no first element to determine its type",
+                            "help: annotate the binding, for example `let values: List[u64] = []`, `let values: Array[u64] = []`, or `let values: Inline[u64, 0] = []`; choose the intended element type and sequence kind",
+                        )
+                    } else {
+                        (
+                            "first sequence element does not determine a complete element type",
+                            Self::SEQUENCE_ANNOTATION_HELP,
+                        )
+                    };
+                    self.report(const { RuleId::of("LANG-2") }, self.span(id), message);
+                    self.diagnostics.last_mut().unwrap().notes.push(help.into());
                     self.error()
                 }
             }

@@ -478,3 +478,31 @@ fn redundant_structural_arms_are_checked_but_planned_out_of_execution() {
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].rule.as_str(), "LANG-7");
 }
+
+#[test]
+fn sequence_prefix_guidance_keeps_independent_errors_and_sites() {
+    for (expression, expected) in [
+        ("[1, 2u64]", vec![("LANG-2", "1")]),
+        ("[None(), Some(\"x\")]", vec![("LANG-2", "None()")]),
+        ("[1, true]", vec![("LANG-2", "1")]),
+        ("[1, 2]", vec![("LANG-2", "1"), ("LANG-2", "2")]),
+        ("[1u64, true]", vec![("LANG-7", "true")]),
+    ] {
+        let source = format!("fn main() {{ let unused = {expression} }}");
+        let (ds, _, map) = support::check_source(&source);
+        assert_eq!(ds.len(), expected.len(), "{source}: {ds:?}");
+        for (diagnostic, (rule, primary)) in ds.iter().zip(expected) {
+            assert_eq!(diagnostic.rule.as_str(), rule, "{source}: {ds:?}");
+            assert_eq!(map.slice(diagnostic.primary), Some(primary));
+            let prefix_help = diagnostic
+                .notes
+                .iter()
+                .any(|n| n.contains("first sequence element"));
+            assert_eq!(
+                prefix_help,
+                rule == "LANG-2" && primary != "2",
+                "{source}: {ds:?}"
+            );
+        }
+    }
+}

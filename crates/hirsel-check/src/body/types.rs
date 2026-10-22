@@ -945,6 +945,67 @@ impl Checker<'_, '_> {
                 TypeKind::Primitive(Primitive::F32 | Primitive::F64)
             )
     }
+    pub(super) const SEQUENCE_ANNOTATION_HELP: &str = "help: annotate the binding with the intended complete sequence type: `List[T]`, `Array[T]`, or `Inline[T, N]` (replace T with the element type and N with the literal length); type arguments are written in annotations, not expressions";
+    pub(super) const REPEAT_SEQUENCE_HELP: &str = "help: annotate the binding, for example `let values: Array[u64] = [1; 2]` or `let values: Inline[u64, 2] = [1; 2]`; a numeric suffix alone cannot choose the repeat sequence kind, and List does not accept repeat literals";
+
+    /// Enrich the existing first-element failure, never manufacture a second
+    /// error from recovery or use later elements to determine the type.
+    pub(super) fn sequence_prefix_guidance(&mut self, children: &[ast::ExprId], repeat: bool) {
+        let Some(first) = children.first().copied() else {
+            return;
+        };
+        if !self.invalid(self.value(first)) {
+            return;
+        }
+        // Repeat syntax wraps its value in a synthetic copy expression.
+        let first = if repeat {
+            match self.input.syntax.tree.expressions[first.0 as usize].kind {
+                ast::ExprKind::Unary {
+                    op: ast::UnaryOp::Copy,
+                    value,
+                } => value,
+                _ => first,
+            }
+        } else {
+            first
+        };
+        let span = self.span(first);
+        let kind = &self.input.syntax.tree.expressions[first.0 as usize].kind;
+        let numeric = matches!(
+            kind,
+            ast::ExprKind::Literal(ast::Literal::Integer(_) | ast::Literal::Float(_))
+        ) || matches!(kind, ast::ExprKind::Unary { op: ast::UnaryOp::Neg, value }
+                if matches!(self.input.syntax.tree.expressions[value.0 as usize].kind,
+                    ast::ExprKind::Literal(ast::Literal::Integer(_) | ast::Literal::Float(_))));
+        let constructor = matches!(kind, ast::ExprKind::Path(_))
+            || self.body.calls.iter().any(|call| {
+                call.expression == first && matches!(call.target, CallTarget::Constructor(_))
+            });
+        if !numeric && !constructor {
+            return;
+        }
+        if let Some(diagnostic) = self
+            .diagnostics
+            .iter_mut()
+            .find(|d| d.rule.as_str() == "LANG-2" && d.primary == span)
+        {
+            if repeat {
+                diagnostic
+                    .notes
+                    .push("a repeat sequence still needs a written kind and element type".into());
+                diagnostic.notes.push(Self::REPEAT_SEQUENCE_HELP.into());
+            } else {
+                diagnostic.notes.push("the first sequence element does not determine a complete element type; later elements cannot supply its missing context".into());
+                diagnostic.notes.push(Self::SEQUENCE_ANNOTATION_HELP.into());
+                if numeric {
+                    diagnostic.notes.push("help: a numeric suffix on the first element can establish List's element type, for example `[1u64, 2]`, `[-1i64, 2]`, or `[1.0f64, 2.0]`; all later elements must match. An annotation also works, for example `let values: List[u64] = [1, 2u64]`, `let values: Array[u64] = [1, 2u64]`, or `let values: Inline[u64, 2] = [1, 2u64]`".into());
+                } else {
+                    diagnostic.notes.push("help: for `[None(), Some(\"x\")]`, use `let values: List[Option[String]] = [None(), Some(\"x\")]`, `let values: Array[Option[String]] = [None(), Some(\"x\")]`, or `let values: Inline[Option[String], 2] = [None(), Some(\"x\")]`".into());
+                }
+            }
+        }
+    }
+
     pub(super) fn element(&self, t: TypeId) -> Option<TypeId> {
         match self.kind(t) {
             TypeKind::Builtin {
