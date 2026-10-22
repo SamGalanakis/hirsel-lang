@@ -1,0 +1,27 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 19
+// twin: LANG/LANG-15-borrow-cursor-json-pointer-ok.hir
+type Value = Text(String) | Object(Map[String, Value])
+
+fn child(value: Value, token: String) -> Option[Value] in value uses {} {
+  match value {
+    Object(members) => core@1/map.get(members, token),
+    _ => None(),
+  }
+}
+
+fn walk(value: Value, tokens: List[String]) -> Option[Value] in value uses {} {
+  let mut target = copy value
+  for token in tokens {
+    let Some(next) = child(target, token) else {
+      return None()
+    }
+    target = take next
+  }
+  Some(take target)
+}
+
+pub fn main() -> () {
+  let value: Value = Text("x")
+  let _ = walk(value, ["a"])
+}

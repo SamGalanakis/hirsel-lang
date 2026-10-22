@@ -50,7 +50,8 @@ pub fn insert(
     table: &LayoutTable,
     proofs: &Proofs,
 ) -> Result<LirUnit<Rc>, PassError> {
-    let unit = copy_on_write(unit.into_stage::<Rc>(), table, proofs)?;
+    let unit = lower_value_copies(unit.into_stage::<Rc>());
+    let unit = copy_on_write(unit, table, proofs)?;
     release_at_last_use(unit, table)
 }
 
@@ -107,7 +108,33 @@ pub fn insert_without_copy_on_write(
     unit: LirUnit<Placed>,
     table: &LayoutTable,
 ) -> Result<LirUnit<Rc>, PassError> {
-    release_at_last_use(unit.into_stage::<Rc>(), table)
+    release_at_last_use(lower_value_copies(unit.into_stage::<Rc>()), table)
+}
+
+/// SSA reference copies need no temporary owner or address. The Dup supplies
+/// the credit that the independently checked Recast transfers to the result.
+fn lower_value_copies(unit: LirUnit<Rc>) -> LirUnit<Rc> {
+    let mut editor = Editor::new(unit);
+    for code in &mut editor.code {
+        *code = std::mem::take(code)
+            .into_iter()
+            .flat_map(|instruction| match instruction {
+                Inst::CopyValue { result, value } => {
+                    let counted = editor.unit.types[editor.unit.values[value.index()].ty.index()]
+                        .repr
+                        == ValueRepr::Block;
+                    let mut lowered = Vec::new();
+                    if counted {
+                        lowered.push(Inst::Dup { value });
+                    }
+                    lowered.push(Inst::Recast { result, value });
+                    lowered
+                }
+                other => vec![other],
+            })
+            .collect();
+    }
+    editor.finish()
 }
 
 // ---------------------------------------------------------------------------
@@ -1977,6 +2004,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::UniqueCopy { result, .. }
             | Inst::MulAdd { result, .. }
             | Inst::ScalarUnary { result, .. }
+            | Inst::CopyValue { result, .. }
             | Inst::Copy { result, .. } => self.create(st, result),
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 self.create(st, result);
@@ -3653,6 +3681,7 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             | Inst::Hash { result, value, .. }
             | Inst::Encode { result, value, .. }
             | Inst::Decode { result, value, .. }
+            | Inst::CopyValue { result, value }
             | Inst::Recast { result, value }
             | Inst::Freeze { result, value }
             | Inst::Thaw { result, value } => {

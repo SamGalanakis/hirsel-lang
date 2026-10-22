@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+// twin: MODE/MODE-1-borrow-cursor-loop-ok.hir
+fn walk(root: List[u64], rows: List[List[u64]]) -> u64 {
+  let mut c: List[u64] in {root, rows} = root
+  for row in rows {
+    let fresh: List[List[u64]] = [[1]]
+    c = fresh[0]
+  }
+  list.len(c)
+}

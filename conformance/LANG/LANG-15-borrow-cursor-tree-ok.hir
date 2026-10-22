@@ -1,0 +1,18 @@
+// rule: LANG-15
+// expect: accept
+type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
+
+fn leaf(root: box Tree) -> u64 {
+  let mut node = root
+  while true {
+    match node {
+      Leaf(n: n) => {
+        return n;
+      },
+      Branch(left: child, right: _) => {
+        node = child
+      },
+    }
+  }
+  0
+}

@@ -60,6 +60,13 @@ loan on it, except that an identity conflict ends the brand instead
 scope conflicts with a bound loan on it, so no live value outlives what it reaches. The
 diagnostic is reported at the conflicting action.
 
+Rebinding a [borrow cursor](language.md#lang-15-bindings) writes its view-holding
+binding, not the storage reached through the view. Read loans held by ordinary aliases
+and physical data-pattern bindings protect the underlying storage independently of
+later cursor rebindings. Replacement removes only the cursor's old holding of those
+loans. Other holders, actual loans on the cursor binding (including scoped captures),
+and inherited bounds remain subject to last use and ordinary conflict rules.
+
 ```hirsel
 fn view(xs: List[u64]) -> List[u64] in xs { xs }
 
@@ -157,6 +164,11 @@ argument must be within `S`; `take x: T in x` is local to its own argument.
 **Bindings.** `let x: T in S` fixes `x`'s receiving contract
 ([LANG-15](language.md#lang-15-bindings)); `S` may name places in scope, and a binding
 named in its own relation stands for its own scope.
+
+A borrow cursor checks each incoming view's storage anchors against its fixed origin
+cover, even when the viewed content is global. Admission does not extend an origin's
+lifetime. A later view may return to any admitted parent or sibling place; it need not
+be within the cursor's immediately preceding view.
 
 **Function types and closure results.** `fn(..) -> T in S` may name that callable's
 parameters and `env`, its environment. A call through such a value replaces `env` with the
@@ -487,6 +499,10 @@ A parameter without a passing mode is borrowed: local and read-only for the call
 ([MODE-1](#mode-1-locality)). A borrowed value cannot be taken, and storing a borrowed
 resource into any storage is OWN-1.
 
+Rebinding a borrow cursor transfers a read-only view between bindings and grants no
+exclusive access or ownership. Function results and ordinary owned storage keep their
+existing copy and move requirements.
+
 Returning borrowed storage obtains an owned copy or share only when it is copyable; a
 concrete borrowed noncopyable extraction is OWN-1. For an implicit read of a selected
 result, a generic parameter occurring in a result whose relation names a borrowed `x` has
@@ -591,6 +607,10 @@ without taking) is a view: it holds a read loan on the part's place, acquires no
 does not end uniqueness. Its locality follows the owner and current content, keeping all
 source bounds. Flat parts copied from borrowed storage stay local, including through
 computed block roots.
+
+A part or physical data-pattern binding used to initialize or refill a borrow cursor is
+a borrow-only use. Its origins and access dependencies follow the underlying owner,
+including through an earlier cursor value, rather than the intermediate cursor name.
 
 Part types (record fields, variant payloads, tuple elements, `box` payloads and type
 arguments) carry no relation; a function type in a field keeps its own result relation

@@ -1,0 +1,10 @@
+// rule: OWN-3
+// expect: accept
+fn snapshots(mut a: List[u64], b: List[u64]) -> u64 {
+  let mut c: List[u64] in {a, b} = a
+  let saved = c
+  c = b
+  let answer = list.len(saved) + list.len(c)
+  list.push(mut a, 9)
+  answer
+}

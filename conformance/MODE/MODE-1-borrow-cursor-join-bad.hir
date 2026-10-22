@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-borrow-cursor-join-ok.hir
+fn choose(a: List[u64], b: List[u64], flag: bool) -> u64 {
+  let mut c: List[u64] in a = a
+  c = if flag {
+    a
+  } else {
+    b
+  }
+  list.len(c)
+}

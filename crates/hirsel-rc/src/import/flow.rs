@@ -385,16 +385,21 @@ impl Importer<'_> {
                 self.loan_map.push(LoanId(u32::MAX));
                 continue;
             }
-            let p = self.place(place)?;
-            let address = if p.fixed {
-                self.fixed_address(&p)?
-            } else if count == 1 {
-                // Prepared at the BeginLoan.
+            let address = if self.joined_root(place).is_some() {
+                // Its backing SSA value exists only when BeginLoan executes.
                 UNPREPARED
             } else {
-                return unsupported(format!(
-                    "loan {l} of a computed place begun at {count} sites"
-                ));
+                let p = self.place(place)?;
+                if p.fixed {
+                    self.fixed_address(&p)?
+                } else if count == 1 {
+                    // Prepared at the BeginLoan.
+                    UNPREPARED
+                } else {
+                    return unsupported(format!(
+                        "loan {l} of a computed place begun at {count} sites"
+                    ));
+                }
             };
             let id = self.new_loan(LoanInfo { address, mutable }, Tri::No);
             self.loan_map.push(id);
@@ -477,7 +482,8 @@ impl Importer<'_> {
                 .collect();
             for l in held {
                 let ty = self.out.slots[self.slot_for(l)?.index()].ty;
-                let p = self.value(ty, Holding::Plain);
+                let holding = self.joined_holding(l, ty)?;
+                let p = self.value(ty, holding);
                 view_phis.push((l, p));
                 views[l] = Some(p);
             }

@@ -1,0 +1,84 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 21
+// twin: LANG/LANG-15-borrow-cursor-json-pointer-ok.hir
+type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object(
+  Map[String, Value]
+)
+
+type PointerToken {
+  key: String,
+  index: Option[u64],
+}
+
+fn walk_json(document: Value, tokens: List[PointerToken]) -> Option[Value] in document {
+  let mut target = document
+  for token in tokens {
+    match target {
+      Object(members) => {
+        let mut found = false
+        for (key, child) in members {
+          if key == token.key {
+            target = copy child
+            found = true
+            break
+          }
+        }
+        if !found {
+          return None()
+        }
+      },
+      Array(items) => {
+        let Some(index) = token.index else {
+          return None()
+        }
+        if index >= list.len(items) {
+          return None()
+        }
+        target = items[index]
+      },
+      _ => {
+        return None()
+      },
+    }
+  }
+  Some(copy target)
+}
+
+fn make_document() -> Value {
+  let mut inner: Map[String, Value] = map.empty()
+  map.insert(mut inner, "b", Number("7"))
+  let mut root: Map[String, Value] = map.empty()
+  map.insert(mut root, "a", Array([Object(take inner)]))
+  Object(take root)
+}
+
+fn result_n(value: Option[Value]) -> u64 {
+  match value {
+    Some(Number(n)) => if n == "7" {
+      7
+    } else {
+      1
+    },
+    Some(_) => 2,
+    None() => 0,
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let doc = make_document()
+  let n = result_n(
+    walk_json(
+      doc,
+      [
+        PointerToken(key: "a", index: None()),
+        PointerToken(key: "0", index: Some(0)),
+        PointerToken(key: "b", index: None())
+      ]
+    )
+  )
+  if n == 7 {
+    Ok(())
+  } else {
+    Error(n)
+  }
+}

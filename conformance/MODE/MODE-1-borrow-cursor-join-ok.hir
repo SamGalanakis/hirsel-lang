@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: accept
+fn choose(a: List[u64], b: List[u64], flag: bool) -> u64 {
+  let mut c: List[u64] in {a, b} = a
+  c = if flag {
+    a
+  } else {
+    b
+  }
+  list.len(c)
+}

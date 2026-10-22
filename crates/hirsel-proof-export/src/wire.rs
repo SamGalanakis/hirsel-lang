@@ -15,12 +15,12 @@ use hirsel_syntax::{
     PatternId, SiteRef, StmtId, TypeExprId, UnaryOp, Visibility,
 };
 use hirsel_tir::{
-    Block, BlockId, Body, BodyId, CallArgument, CallReturn, Callee, Cleanup, CleanupAction,
-    CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField, Constructor, Definition,
-    Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm, MatchPattern, MatchPatternId,
-    MatchPatternKind, MatchTable, MatchTableId, Materialized, Operand, OriginBindingKind, Place,
-    PlaceId, Projection, ProtocolAssociationReceipt, Rvalue, RvalueId, Scope, ScopeId,
-    ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind, ValueNode,
+    Block, BlockId, Body, BodyId, BorrowCursor, CallArgument, CallReturn, Callee, Cleanup,
+    CleanupAction, CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField, Constructor,
+    Definition, Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm, MatchPattern,
+    MatchPatternId, MatchPatternKind, MatchTable, MatchTableId, Materialized, Operand,
+    OriginBindingKind, Place, PlaceId, Projection, ProtocolAssociationReceipt, Rvalue, RvalueId,
+    Scope, ScopeId, ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind, ValueNode,
 };
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,
@@ -991,6 +991,7 @@ snapshot_struct!(TailSite {
 } in Cx);
 snapshot_struct!(ScopedParameter { parameter, fields } in Cx);
 snapshot_enum!(CaptureContext { Scoped, OwningScoped, Escaping, Task } in Cx);
+snapshot_struct!(BorrowCursor { carrier, initializer, cover } in Cx);
 snapshot_struct!(Body {
     parameter_scope,
     locals,
@@ -1004,6 +1005,7 @@ snapshot_struct!(Body {
     parameters,
     result,
     tail_sites,
+    borrow_cursors,
     matches,
     scoped_parameters
 } in Cx);

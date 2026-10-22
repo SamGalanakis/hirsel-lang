@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-borrow-cursor-field-ok.hir
+type Pair {
+  a: List[u64],
+  b: List[u64],
+}
+
+fn f(p: Pair) -> u64 {
+  let Pair(a: first, b: _) = p
+  let mut c: List[u64] in p.a = first
+  c = p.b
+  list.len(c)
+}

@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-borrow-cursor-block-ok.hir
+fn f(a: List[u64]) -> u64 {
+  let mut c = a
+  c = {
+    let fresh: List[List[u64]] = [[1]]
+    fresh[0]
+  }
+  list.len(c)
+}

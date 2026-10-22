@@ -81,17 +81,47 @@ impl Importer<'_> {
             loan = loan.or(b.loan);
             root = b.root;
         }
-        if self.joined[root.0 as usize] {
-            return unsupported("a part of a joined view");
-        }
+        let value = if self.joined[root.0 as usize] {
+            match (
+                self.state.views[root.0 as usize],
+                self.views[root.0 as usize],
+            ) {
+                (Tri::Yes, Some(value)) => Some(value),
+                _ => {
+                    return unsupported(format!(
+                        "joined view local {} not held at {:?} (place {})",
+                        root.0, self.statement, id.0
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let slot = self.slot_for(root.0 as usize)?;
         let mut steps = Vec::new();
-        let mut fixed = true;
+        let mut fixed = value.is_none();
         let mut crosses = false;
         let mut flat = false;
         let mut layout = self.layout_of(self.out.slots[slot.index()].ty);
         let mut lowered = Vec::new();
-        for p in &projection {
+        // AddressBase::Value starts at a block's payload. Preserve the logical
+        // payload path for slot analysis, but do not dereference it twice.
+        let mut projections = projection.as_slice();
+        if value.is_some() {
+            match self.layouts.record(layout).kind {
+                LayoutKind::Box { payload } => {
+                    if projections.first() != Some(&tir::Projection::Field(0)) {
+                        return unsupported("a whole joined box as an address");
+                    }
+                    layout = payload;
+                    projections = &projections[1..];
+                    steps.push(Step::Payload);
+                }
+                LayoutKind::Block { payload } => layout = payload,
+                _ => {}
+            }
+        }
+        for p in projections {
             if let LayoutKind::Box { payload } = self.layouts.record(layout).kind {
                 if *p != tir::Projection::Field(0) {
                     return malformed("a Box projection without its payload step");
@@ -236,6 +266,7 @@ impl Importer<'_> {
                 return unsupported("a fixed flat record part at its source type");
             }
             return Ok(PlaceRef {
+                value,
                 source_place,
                 slot,
                 steps,
@@ -257,6 +288,7 @@ impl Importer<'_> {
             ));
         }
         Ok(PlaceRef {
+            value,
             source_place,
             slot,
             steps,
@@ -476,7 +508,9 @@ impl Importer<'_> {
         self.out.addresses.push(AddressInfo {
             source_place: p.source_place,
             unchecked,
-            base: AddressBase::Slot(p.slot),
+            base: p
+                .value
+                .map_or(AddressBase::Slot(p.slot), AddressBase::Value),
             projection,
             ty: p.ty,
         });
@@ -488,6 +522,7 @@ impl Importer<'_> {
         let slot = self.slot_for(local.0 as usize)?;
         let ty = self.out.slots[slot.index()].ty;
         let p = PlaceRef {
+            value: None,
             source_place: None,
             slot,
             steps: Vec::new(),
@@ -536,12 +571,33 @@ impl Importer<'_> {
     /// same operation are pending on that failure.
     pub(super) fn operand(&mut self, op: &tir::Operand) -> R<ValueId> {
         if let Some(view) = self.joined_view(op) {
-            return view;
+            let value = view?;
+            if op.usage == UseKind::Take {
+                let local = self.joined_local(op.place).expect("whole joined operand");
+                self.state.views[local] = Tri::No;
+                self.views[local] = None;
+            }
+            return Ok(value);
         }
         if let Some(view) = self.whole_joined(op.place) {
             let reaching = view?;
-            let address = self.view_address(reaching)?;
             let ty = self.value_type(reaching);
+            if matches!(
+                self.out.types[ty.index()].repr,
+                ValueRepr::Block | ValueRepr::Uncounted
+            ) {
+                let result = self.fresh(ty);
+                self.push(Inst::CopyValue {
+                    result,
+                    value: reaching,
+                });
+                self.push(Inst::Share { value: result });
+                if self.holds(result) {
+                    self.failure.pending.push(result);
+                }
+                return Ok(result);
+            }
+            let address = self.view_address(reaching)?;
             let result = self.fresh(ty);
             if self.bits(ty) {
                 self.push(Inst::Read {
@@ -589,7 +645,7 @@ impl Importer<'_> {
         if p.source.is_some() || !steps_ok {
             return None;
         }
-        self.versions[p.slot.index()]
+        p.value.or(self.versions[p.slot.index()])
     }
 
     /// The variant match tag tests proved `p` holds at its slot's current version.
@@ -634,6 +690,77 @@ impl Importer<'_> {
         })
     }
 
+    /// Follow storage aliases, including projected ones, to a joined root.
+    pub(super) fn joined_root(&self, id: tir::PlaceId) -> Option<usize> {
+        let mut root = self.body.places[id.0 as usize].root.0 as usize;
+        let mut seen = BTreeSet::new();
+        while seen.insert(root) {
+            if self.joined[root] {
+                return Some(root);
+            }
+            root = self.body.places[self.aliases[root]?.0 as usize].root.0 as usize;
+        }
+        None
+    }
+
+    /// A declaration label for a view phi, obtained from its source loans.
+    /// This is not a coverage proof: LIR independently checks every incoming
+    /// value, and finish recomputes the actual union from the emitted edges.
+    pub(super) fn joined_holding(&self, local: usize, ty: LirTypeId) -> R<Holding> {
+        if !self.owns(ty) {
+            return Ok(Holding::Plain);
+        }
+        let (assignments, _, _) = view_assignments(self.body);
+        let mut pending = vec![local];
+        let mut seen = BTreeSet::new();
+        let mut loans = BTreeSet::new();
+        while let Some(root) = pending.pop() {
+            if !seen.insert(root) {
+                continue;
+            }
+            // Transient byte slices are call-produced views. Their existing
+            // specialization forwards the checked String input's real loan;
+            // there is no Assign at the producer for this walk to follow.
+            for (&block, &source) in &self.slices.sources {
+                if let tir::Terminator::Call {
+                    returns: Some(ret), ..
+                } = &self.body.blocks[block.0 as usize].terminator
+                    && self.body.places[ret.destination.0 as usize].root.0 as usize == root
+                {
+                    if let Some(loan) = self.body.places[source.0 as usize].loan {
+                        loans.insert(self.loan(loan)?);
+                    }
+                    pending.push(self.body.places[source.0 as usize].root.0 as usize);
+                }
+            }
+            for source in &assignments[root] {
+                let place = match source {
+                    Some(
+                        ViewSource::Loaned(p)
+                        | ViewSource::Nested(p)
+                        | ViewSource::Forwarded(p)
+                        | ViewSource::Indexed(p, _)
+                        | ViewSource::Moved(p),
+                    ) => *p,
+                    None => return unsupported("owning input to a joined borrow"),
+                };
+                let source = &self.body.places[place.0 as usize];
+                if let Some(loan) = source.loan {
+                    loans.insert(self.loan(loan)?);
+                } else {
+                    // This walk follows view transport, not the construction
+                    // of an owning value protected by an established loan.
+                    pending.push(source.root.0 as usize);
+                }
+            }
+        }
+        loans
+            .first()
+            .copied()
+            .map(Holding::Borrowed)
+            .ok_or_else(|| PassError::Unsupported("a joined view without a source loan".into()))
+    }
+
     /// Follow whole-place aliases to the joined SSA view they name.
     pub(super) fn joined_local(&self, id: tir::PlaceId) -> Option<usize> {
         let mut place = &self.body.places[id.0 as usize];
@@ -653,7 +780,10 @@ impl Importer<'_> {
         let l = self.joined_local(id)?;
         Some(match (self.state.views[l], self.views[l]) {
             (Tri::Yes, Some(v)) => Ok(v),
-            _ => unsupported("a joined view not held on every path"),
+            _ => unsupported(format!(
+                "joined local {l} not held on every path at {:?}: {:?}",
+                self.statement, self.state.views[l]
+            )),
         })
     }
 
@@ -718,6 +848,7 @@ impl Importer<'_> {
         );
         let ty = self.out.slots[slot.index()].ty;
         let place = PlaceRef {
+            value: None,
             source_place: None,
             slot,
             steps: Vec::new(),
@@ -803,7 +934,10 @@ impl Importer<'_> {
             return self.flat_view(address, loan, source);
         }
         let ty = place.ty;
-        let reaching = self.reaching(place.slot)?;
+        let reaching = match place.value {
+            Some(value) => value,
+            None => self.reaching(place.slot)?,
+        };
         // A source copy shares the arena Lists the value holds (MEM-6); a
         // take this lowers as a copy is no source copy.
         let semantic_copy = usage == UseKind::Copy;
@@ -902,11 +1036,21 @@ impl Importer<'_> {
                 let holding = if self.owns(ty) {
                     match loan {
                         Some(l) => Holding::Borrowed(self.loan(l)?),
-                        None => {
-                            return unsupported(
-                                "a borrowed read of counted storage outside any loan",
-                            );
-                        }
+                        None => match self.out.values[reaching.index()].holding {
+                            Holding::Borrowed(loan) if place.value.is_some() => {
+                                Holding::Borrowed(loan)
+                            }
+                            _ => {
+                                return unsupported(format!(
+                                    "a borrowed read of counted storage outside any loan: slot {:?}, steps {:?}, reaching {:?} ({:?}), at {:?}",
+                                    place.slot,
+                                    place.steps,
+                                    reaching,
+                                    self.out.values[reaching.index()].holding,
+                                    self.statement,
+                                ));
+                            }
+                        },
                     }
                 } else {
                     Holding::Plain

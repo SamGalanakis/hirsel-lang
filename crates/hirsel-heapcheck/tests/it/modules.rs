@@ -18,3 +18,4 @@ mod revision7;
 mod shared;
 mod vectors;
 mod versions;
+mod borrow_cursor_8;

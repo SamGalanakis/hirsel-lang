@@ -302,6 +302,7 @@ mod tests {
             entry: BlockId(0),
             parameters: vec![],
             result: ty,
+            borrow_cursors: vec![],
             tail_sites: vec![],
             matches: vec![],
         };

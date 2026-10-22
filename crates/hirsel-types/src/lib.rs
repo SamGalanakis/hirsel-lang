@@ -856,9 +856,17 @@ pub struct CaptureMode {
     pub usage: UseKind,
     pub context: CaptureContext,
 }
+/// Fixed source contract for an independently checked TIR borrow cursor.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct BorrowCursorDecision {
+    pub binding: NameSite,
+    pub cover: Option<Vec<(Origin, Vec<TypeId>)>>,
+}
 /// Complete static decisions; cleanup lowering still determines ordered drops.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct OwnershipFacts {
+    pub borrow_cursors: Vec<BorrowCursorDecision>,
+    pub cursor_rebindings: Vec<ExprId>,
     /// Plain rows in the session interner; K omits their cleanup.
     pub plain_types: std::collections::HashSet<TypeId>,
     /// Rows whose values have no user-visible destruction (DROP-1): copyable

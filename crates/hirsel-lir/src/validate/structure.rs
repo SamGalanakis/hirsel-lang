@@ -337,7 +337,9 @@ fn borrowed_holders<S: Stage>(cx: &Cx<'_, S>, facts: &mut Facts) {
     }
     for inst in &u.instructions {
         match *inst {
-            Inst::Recast { result, value } | Inst::SliceView { result, value, .. } => {
+            Inst::Recast { result, value } | Inst::SliceView { result, value, .. }
+                if u.values[result.index()].holding != Holding::Owned =>
+            {
                 dependencies[result.index()].push(value)
             }
             Inst::Read {
@@ -1729,6 +1731,16 @@ impl<S: Stage> Checker<'_, '_, S> {
                     }
                 }
             }
+            Inst::CopyValue { result, value } => {
+                if self.ty(result) != self.ty(value)
+                    || !matches!(self.ty(value).repr, ValueRepr::Block | ValueRepr::Uncounted)
+                    || layouts.copy(self.layout_of(value)) != Some(CopyRecipe::Dup)
+                    || layouts.destructible(self.layout_of(value))
+                {
+                    self.add(site, K::Type("SSA block copy"));
+                }
+                self.fresh_holding(site, result);
+            }
             Inst::Copy {
                 result,
                 address,
@@ -2122,7 +2134,18 @@ impl<S: Stage> Checker<'_, '_, S> {
                 self.fresh_holding(site, result);
             }
             Inst::Recast { result, value } => {
-                self.library_only(site, Opcode::Recast);
+                let credit_alias = S::KIND >= StageKind::Rc
+                    && self.ty(result) == self.ty(value)
+                    && matches!(self.ty(value).repr, ValueRepr::Block | ValueRepr::Uncounted)
+                    && unit.values[result.index()].holding
+                        == if self.cx.owns(result) {
+                            Holding::Owned
+                        } else {
+                            Holding::Plain
+                        };
+                if !credit_alias {
+                    self.library_only(site, Opcode::Recast);
+                }
                 // The cursor's opaque source: a block over no payload.
                 let opaque = |v: ValueId| {
                     layouts
@@ -2150,13 +2173,17 @@ impl<S: Stage> Checker<'_, '_, S> {
                     && layouts.payload(self.layout_of(value)).is_some()
                     && layouts.payload(self.layout_of(value))
                         == layouts.payload(self.layout_of(result));
-                if !(borrowed || moved) {
+                if !(credit_alias || borrowed || moved) {
                     self.add(site, K::Type("recast"));
                 }
                 // The result is the same view: it rests on what the operand does.
-                facts.backing[result.index()] = match &facts.backing[value.index()] {
-                    Backing::None => Backing::Value(value),
-                    backing => backing.clone(),
+                facts.backing[result.index()] = if credit_alias && self.cx.owns(result) {
+                    Backing::None
+                } else {
+                    match &facts.backing[value.index()] {
+                        Backing::None => Backing::Value(value),
+                        backing => backing.clone(),
+                    }
                 };
             }
             Inst::UniqueCopy {
@@ -2580,6 +2607,14 @@ impl<S: Stage> Checker<'_, '_, S> {
     }
 
     fn covers(&self, facts: &Facts, loan: crate::ir::LoanId, addr: &Addr) -> bool {
+        // A projection from an already borrowed SSA value inherits its read
+        // authority. Its base is independently checked at its definition and
+        // on every incoming edge; the label alone does not prove a phi safe.
+        if let Root::Value(base) = addr.root
+            && self.cx.unit.values[base.index()].holding == Holding::Borrowed(loan)
+        {
+            return true;
+        }
         let loaned = self.cx.unit.tables.loans[loan.index()].address;
         let Some(loaned) = facts.addresses[loaned.index()].as_ref() else {
             return false;
@@ -3818,15 +3853,41 @@ impl<S: Stage> Checker<'_, '_, S> {
                 },
             })
             .collect();
-        propagate(self.cx, &facts.cfg, &mut joins, |param, arg| Join {
-            loans: param.loans.union(&arg.loans).copied().collect(),
-            sources: param.sources.union(&arg.sources).copied().collect(),
-        });
+        // A read through a borrowed SSA value inherits every possible loan
+        // of that value, not just its representative label. Solve projections
+        // and block arguments together: a projected child may feed its phi.
+        let inherited: Vec<_> = facts
+            .backing
+            .iter()
+            .enumerate()
+            .filter_map(|(v, backing)| {
+                let Backing::Value(base) = backing else {
+                    return None;
+                };
+                (matches!(unit.values[v].holding, Holding::Borrowed(_))
+                    && unit.values[v].holding == unit.values[base.index()].holding)
+                    .then_some((v, base.index()))
+            })
+            .collect();
+        loop {
+            let before = joins.clone();
+            propagate(self.cx, &facts.cfg, &mut joins, |param, arg| Join {
+                loans: param.loans.union(&arg.loans).copied().collect(),
+                sources: param.sources.union(&arg.sources).copied().collect(),
+            });
+            for &(value, base) in &inherited {
+                let loans = joins[base].loans.clone();
+                joins[value].loans.extend(loans);
+            }
+            if joins == before {
+                break;
+            }
+        }
         for (v, join) in joins.into_iter().enumerate() {
             let Holding::Borrowed(loan) = unit.values[v].holding else {
                 continue;
             };
-            if !parameter[v] {
+            if !parameter[v] && !inherited.iter().any(|(value, _)| *value == v) {
                 continue;
             }
             if join.joined() && join.loans.first() != Some(&loan) {
@@ -4384,7 +4445,8 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();
     match *inst {
-        Inst::Unary { operand, .. }
+        Inst::CopyValue { value: operand, .. }
+        | Inst::Unary { operand, .. }
         | Inst::Convert { operand, .. }
         | Inst::ScalarUnary { operand, .. } => out.push(op(operand)),
         Inst::Binary { left, right, .. }

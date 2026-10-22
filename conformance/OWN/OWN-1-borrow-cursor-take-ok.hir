@@ -1,0 +1,10 @@
+// rule: OWN-1
+// expect: accept
+fn consume(take a: List[u64]) -> u64 {
+  list.len(a)
+}
+
+fn f(a: List[u64]) -> u64 {
+  let mut c = a
+  list.len(c)
+}

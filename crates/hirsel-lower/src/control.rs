@@ -304,7 +304,18 @@ impl Builder<'_, '_> {
     ) -> Value {
         self.scope = parent;
         let result = if !self.value_owned(value) && self.outlives(value.place, scope) {
-            value
+            // A block-local alias names enclosing storage, but its name ends
+            // with this block. Export the checked storage access and its loan,
+            // rather than an access authorized by that expired alias name.
+            if self.view_named_within(value.place, scope) {
+                let mut access = self.body.places[value.place.0 as usize].clone();
+                access.binding = None;
+                let place = PlaceId(self.body.places.len() as u32);
+                self.body.places.push(access);
+                Value { place, ..value }
+            } else {
+                value
+            }
         } else {
             self.transport(value, Storage::Temporary, span)
         };
@@ -508,6 +519,13 @@ impl Builder<'_, '_> {
                 let Some(value) = value? else {
                     return Ok(());
                 };
+                if !self.decisions.cursor_rebindings.get(&place).is_empty() {
+                    if op.0.is_some() {
+                        return self.error(span, "compound cursor replacement");
+                    }
+                    self.cursor_rebind(destination.place, value, span)?;
+                    return Ok(());
+                }
                 let value = self.transport(value, Storage::Temporary, span);
                 let value = if let Some(op) = op.0 {
                     // The LHS read's mode is supplied by its checked expression.

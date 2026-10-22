@@ -1,0 +1,23 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 18
+// twin: LANG/LANG-15-borrow-cursor-readonly-ok.hir
+type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
+
+fn overwrite(mut t: box Tree) {
+  t = box Leaf(n: 0)
+}
+
+fn leaf(root: box Tree) -> u64 {
+  let mut node = root
+  while true {
+    match node {
+      Leaf(n: n) => {
+        return n;
+      },
+      Branch(left: child, right: _) => {
+        overwrite(mut node)
+      },
+    }
+  }
+  0
+}

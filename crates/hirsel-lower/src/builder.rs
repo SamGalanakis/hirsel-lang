@@ -138,6 +138,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                 entry: BlockId(0),
                 parameters: vec![],
                 result,
+                borrow_cursors: vec![],
                 tail_sites: vec![],
                 matches: vec![],
             },
@@ -511,7 +512,22 @@ impl<'a, 'b> Builder<'a, 'b> {
                 _ => return self.error(span, "join identity is not a checked binding"),
             };
             let place = self.lookup(&name, &owner, span)?;
-            let place = self.bind_origin(place, origin, OriginBindingKind::Fresh, span);
+            let root = self.root(place);
+            let cursor = self.body.borrow_cursors.iter().any(|c| c.carrier == root);
+            let place = self.bind_origin(
+                if cursor {
+                    self.roots[root.0 as usize]
+                } else {
+                    place
+                },
+                origin,
+                if cursor {
+                    OriginBindingKind::Alias
+                } else {
+                    OriginBindingKind::Fresh
+                },
+                span,
+            );
             self.bindings.set(owner, &name, place);
         }
         let fields: Vec<_> = self
@@ -940,6 +956,12 @@ impl<'a, 'b> Builder<'a, 'b> {
                 });
             }
         }
+    }
+    pub fn view_named_within(&self, place: PlaceId, scope: ScopeId) -> bool {
+        self.state
+            .views
+            .iter()
+            .any(|(named, home)| *named == place && self.within(*home, scope))
     }
     pub fn retain_view(&mut self, place: PlaceId) {
         self.state.views.push((place, self.scope));
@@ -1500,7 +1522,14 @@ impl<'a, 'b> Builder<'a, 'b> {
                 }
             }
             for loan in &state.loans {
-                if !result.loans.contains(loan) {
+                if let Some((_, home)) = result.loans.iter_mut().find(|(id, _)| *id == loan.0) {
+                    // A live view can promote its source permission to an
+                    // enclosing home. Joining paths retains that enclosing
+                    // lifetime, rather than adding a second earlier expiry.
+                    while !self.within(loan.1, *home) {
+                        *home = self.body.scopes[home.0 as usize].parent.unwrap();
+                    }
+                } else {
                     result.loans.push(*loan);
                 }
             }

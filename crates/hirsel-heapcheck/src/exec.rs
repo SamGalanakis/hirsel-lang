@@ -3976,13 +3976,24 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 );
                             }
                             (ReadMode::Borrow, Holding::Borrowed(l)) => {
-                                if f.loans[l.index()].is_none() {
-                                    return fail(
-                                        V::BorrowExpired,
-                                        format!("read under inactive {l:?}"),
-                                    );
-                                }
-                                Some(Borrow::Loan(l))
+                                let mut base = address;
+                                let inherited = loop {
+                                    match u.addresses[base.index()].base {
+                                        AddressBase::Address(parent) => base = parent,
+                                        AddressBase::Value(value)
+                                            if self.value_info(unit, value)?.holding
+                                                == info.holding =>
+                                        {
+                                            break f.values[value.index()]
+                                                .as_ref()
+                                                .and_then(|held| held.borrow);
+                                        }
+                                        _ => break None,
+                                    }
+                                };
+                                let borrow = inherited.unwrap_or(Borrow::Loan(l));
+                                self.check_borrow(f, borrow)?;
+                                Some(borrow)
                             }
                             _ => cell_borrow,
                         };
@@ -3997,6 +4008,20 @@ impl<'p, S: Stage> Machine<'p, S> {
                         )?;
                     }
                 }
+            }
+            Inst::CopyValue { result, value } => {
+                let val = self.read_use(f, value)?;
+                let ty = self.value_type(unit, value)?;
+                let (val, credited) = self.copy_value(val, ty.layout)?;
+                self.bind(
+                    f,
+                    result,
+                    Moved {
+                        val,
+                        credited,
+                        borrow: None,
+                    },
+                )?;
             }
             Inst::Copy {
                 result,

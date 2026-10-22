@@ -88,6 +88,7 @@ impl Builder {
                 entry: BlockId(0),
                 parameters: vec![],
                 result,
+                borrow_cursors: vec![],
                 tail_sites: vec![],
                 matches: vec![],
             },

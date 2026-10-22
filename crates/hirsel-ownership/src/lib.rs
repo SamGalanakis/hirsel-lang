@@ -423,6 +423,13 @@ pub fn check_ownership_with_clauses(
     for &(_, ty) in facts.physical_projections.iter().chain(&facts.field_loans) {
         published.note(t, ty);
     }
+    for cursor in &facts.borrow_cursors {
+        for (_, fields) in cursor.cover.iter().flatten() {
+            for &ty in fields {
+                published.note(t, ty);
+            }
+        }
+    }
     for &(_, ty) in &facts.physical_patterns {
         published.note(t, ty);
     }
@@ -478,6 +485,10 @@ pub fn check_ownership_with_clauses(
     facts.unique.dedup();
     facts.guarded_patterns.sort_by_key(|d| d.pattern);
     facts.guarded_patterns.dedup();
+    facts.borrow_cursors.sort_by_key(|cursor| cursor.binding);
+    facts.borrow_cursors.dedup();
+    facts.cursor_rebindings.sort();
+    facts.cursor_rebindings.dedup();
     facts.allocating_mutations.sort();
     facts.allocating_mutations.dedup();
     Ok(QueryOutput {

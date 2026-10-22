@@ -616,6 +616,49 @@ parameter gives a read-only borrow that ends at the binding's last use. A closur
 bound by `let` is scoped unless its binding has an escaping type; a closure value returned
 by a call keeps its type.
 
+A body-local `let mut` whose initializer is a read-only borrow of a non-plain type
+satisfying `data` and `copyable` is a **borrow cursor**. Its access remains read-only,
+but simple assignment to its whole name may replace the view it holds. Initializers
+otherwise keep the rules above: a relation annotation does not change a move, copy,
+construction or call result into a borrow. Parameters themselves are not borrow cursors.
+
+A cursor's receiving contract fixes its admissible origins at its declaration. With no
+written relation these are the initializer's underlying value places and inherited
+bounds, after following read-only aliases. A written relation may instead name value
+places already established in an enclosing scope; it cannot name the cursor itself or
+consist of `heap`, `env`, an arena or a scope. Each named place admits its subplaces and
+the bounds supplied by its declared relation. Inherited arena and region bounds remain
+in force. Later assignments never enlarge this contract.
+
+In `cursor = expression`, the expression is evaluated as a read-only view, with block,
+branch and match tails transparent to that use. Each possible view must be within the
+cursor's fixed origin contract and every storage origin it requires must remain live for
+all uses of that view. Owned expressions, including `copy`, `take`, constructions and
+call results, cannot replace a cursor. An origin outside the fixed contract is MODE-1,
+or PROV-4 under that rule's arena-only diagnostic condition; a non-view replacement or
+an unsupported cursor relation is LANG-15. An immutable name is still LANG-5 on
+whole-name reassignment.
+
+Rebinding evaluates and checks the new view before replacing the old one. It writes only
+the cursor binding, does not mutate, move, copy or destroy the referent, and performs no
+count operation. A failure before replacement leaves the old view installed. Projected
+writes, compound assignments and `mut` or `take` uses gain no permission from `let mut`
+on a cursor. Ordinary aliases and physical data-pattern bindings retain the view they
+received, independently of later cursor rebindings; borrows of the cursor's binding
+storage itself still conflict with a rebind.
+
+At a control-flow join the cursor may hold any view carried by an incoming path. Its
+current origin and loan sets are the union of those paths; its receiving contract is
+unchanged. Loops include their entry and all feedback paths in this check. Each
+execution of a declaration creates its own origins, and a live view cannot survive the
+end of any origin it reaches.
+
+For example, `fn size(a: List[u64]) -> u64 { let mut c = a; c = a; list.len(c) }`
+rebinds a borrowed view. In that body, `c = copy a` is LANG-15 because the replacement
+is owned; `c[0] = 1` is LANG-15 because the view grants no referent write. Adding an
+unrelated borrowed parameter `b` does not admit `c = b` without a written `in {a, b}`
+cover. An owned initializer such as `let mut c = copy a` keeps ordinary owned assignment.
+
 A binding's **receiving contract** is fixed at its declaration: a written relation
 (`let x: T in S`, [MODE-1](ownership.md#mode-1-locality)) supplies it, and otherwise the
 initializer does. A binding named in its own relation stands for its own scope, so

@@ -616,6 +616,12 @@ pub enum Inst {
         reaching: ValueId,
         mode: ReadMode,
     },
+    /// Shallow copy of a borrowed SSA block handle. RC turns this into a
+    /// Dup and a credit transfer; the reference itself has no address.
+    CopyValue {
+        result: ValueId,
+        value: ValueId,
+    },
     /// Semantic Copy before RC; Ready replaces it by bits, flat copy or Dup.
     Copy {
         result: ValueId,
@@ -1776,6 +1782,7 @@ impl Inst {
             | Inst::Hash { result, .. }
             | Inst::Encode { result, .. }
             | Inst::Decode { result, .. }
+            | Inst::CopyValue { result, .. }
             | Inst::Recast { result, .. }
             | Inst::Freeze { result, .. }
             | Inst::Thaw { result, .. }
@@ -1882,6 +1889,7 @@ impl Inst {
             | Inst::FlatClose { .. }
             | Inst::Encode { .. }
             | Inst::Decode { .. }
+            | Inst::CopyValue { .. }
             | Inst::Recast { .. }
             | Inst::Freeze { .. }
             | Inst::Thaw { .. }
@@ -1960,6 +1968,7 @@ impl Inst {
             | Inst::FlatClose { .. }
             | Inst::Encode { .. }
             | Inst::Decode { .. }
+            | Inst::CopyValue { .. }
             | Inst::Recast { .. }
             | Inst::Freeze { .. }
             | Inst::Thaw { .. }
@@ -2090,6 +2099,7 @@ impl Inst {
             | Self::Weaken { result, value }
             | Self::SeqLen { result, value }
             | Self::SeqCapacity { result, value }
+            | Self::CopyValue { result, value }
             | Self::Recast { result, value }
             | Self::Freeze { result, value }
             | Self::Thaw { result, value } => {
@@ -3038,6 +3048,7 @@ snapshot_enum!(Inst {
     Encode { result, value, codec },
     Decode { result, value, codec },
     Recast { result, value },
+    CopyValue { result, value },
     UniqueCopy { result, value, construct, deep, failure },
     Freeze { result, value },
     Thaw { result, value },

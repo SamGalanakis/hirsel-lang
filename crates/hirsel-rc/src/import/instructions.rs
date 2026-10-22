@@ -57,6 +57,7 @@ impl Importer<'_> {
 
     pub(super) fn whole(&self, slot: SlotId) -> PlaceRef {
         PlaceRef {
+            value: None,
             source_place: None,
             slot,
             steps: Vec::new(),
@@ -304,9 +305,25 @@ impl Importer<'_> {
                     self.versions[p.slot.index()] = None;
                 }
             }
-            K::EndScope(scope) => self.push(Inst::EndScope {
-                scope: ScopeId(scope.0),
-            }),
+            K::EndScope(scope) => {
+                for (local, storage) in self.body.locals.iter().enumerate() {
+                    if !self.joined[local] {
+                        continue;
+                    }
+                    let mut current = Some(storage.scope);
+                    while let Some(at) = current {
+                        if at == *scope {
+                            self.state.views[local] = Tri::No;
+                            self.views[local] = None;
+                            break;
+                        }
+                        current = self.body.scopes[at.0 as usize].parent;
+                    }
+                }
+                self.push(Inst::EndScope {
+                    scope: ScopeId(scope.0),
+                });
+            }
             K::Assign { destination, value } => {
                 let rvalue = &self.body.rvalues[value.0 as usize];
                 let p = self.place(*destination)?;

@@ -322,7 +322,10 @@ impl Importer<'_> {
             return malformed("a scalar literal pattern on a non-scalar place");
         }
         let address = self.address(&p)?;
-        let reaching = self.reaching(p.slot)?;
+        let reaching = match p.value {
+            Some(value) => value,
+            None => self.reaching(p.slot)?,
+        };
         let result = self.value(p.ty, Holding::Plain);
         self.push(Inst::Read {
             result,
@@ -344,7 +347,10 @@ impl Importer<'_> {
             return Ok(());
         }
         let address = self.address(&p)?;
-        let reaching = self.reaching(p.slot)?;
+        let reaching = match p.value {
+            Some(value) => value,
+            None => self.reaching(p.slot)?,
+        };
         let variants: Vec<u32> = match &self.record(p.ty).tag {
             Some(tag) => tag.variants.iter().map(|v| v.ordinal).collect(),
             None => return malformed("a variant pattern on a layout without a tag"),

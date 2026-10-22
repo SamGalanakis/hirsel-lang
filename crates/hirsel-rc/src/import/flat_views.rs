@@ -30,6 +30,11 @@ impl Importer<'_> {
             if disqualified[l] || !view_storage(body, l) || self.aliases[l].is_some() {
                 continue;
             }
+            // A joined view has no backing until its assignment executes;
+            // it cannot be a fixed flat-encoding alias discovered in setup.
+            if self.joined_root(*source).is_some() {
+                continue;
+            }
             let p = self.place(*source)?;
             let Some((source_ty, _)) = p.source else {
                 continue;

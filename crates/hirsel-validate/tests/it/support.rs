@@ -196,6 +196,7 @@ impl Fixture {
                     entry: BlockId(0),
                     parameters: vec![],
                     result: unit,
+                    borrow_cursors: vec![],
                     tail_sites: vec![],
                     matches: vec![],
                 }],
@@ -697,6 +698,7 @@ pub(crate) fn empty_body(f: &mut Fixture) -> Body {
         entry: BlockId(0),
         parameters: vec![],
         result: unit,
+        borrow_cursors: vec![],
         tail_sites: vec![],
         matches: vec![],
     }

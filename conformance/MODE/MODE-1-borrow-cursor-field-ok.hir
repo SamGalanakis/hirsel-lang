@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: accept
+type Pair {
+  a: List[u64],
+  b: List[u64],
+}
+
+fn f(p: Pair) -> u64 {
+  let Pair(a: first, b: _) = p
+  let mut c: List[u64] in p = first
+  c = p.b
+  list.len(c)
+}

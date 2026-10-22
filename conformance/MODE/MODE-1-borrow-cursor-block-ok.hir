@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: accept
+fn f(a: List[u64]) -> u64 {
+  let mut c = a
+  c = {
+    let alias = a
+    alias
+  }
+  list.len(c)
+}

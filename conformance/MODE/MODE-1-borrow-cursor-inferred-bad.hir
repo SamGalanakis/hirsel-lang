@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-borrow-cursor-inferred-ok.hir
+fn choose(a: List[u64], b: List[u64]) -> u64 {
+  let mut c = a
+  c = b
+  list.len(c)
+}

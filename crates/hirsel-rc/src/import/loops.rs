@@ -211,6 +211,23 @@ impl Importer<'_> {
             });
             unit.terminators.push(term);
         }
+        // A projected read inherits the base view's permission. Include that
+        // dependency in the same finite union as phi edges before choosing
+        // representative labels; initial emission labels are provisional.
+        for instruction in &unit.instructions {
+            if let Inst::Read {
+                result,
+                address,
+                mode: ReadMode::Borrow,
+                ..
+            } = *instruction
+                && let AddressBase::Value(base) = out.addresses[address.index()].base
+                && matches!(values[result.index()].holding, Holding::Borrowed(_))
+                && values[result.index()].holding == values[base.index()].holding
+            {
+                incoming.entry(result).or_default().push(base);
+            }
+        }
         join_view_holdings(&mut values, &incoming);
         unit.types = out.types;
         unit.values = values;

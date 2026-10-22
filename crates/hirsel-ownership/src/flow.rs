@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 mod causes;
 mod creation;
+mod cursors;
 mod loans;
 mod parameter_parts;
 mod state;
@@ -242,6 +243,8 @@ struct Value(std::rc::Rc<ValueData>);
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ValueData {
     /// Actual creation inputs; None is an unproved producer, never an empty environment.
+    cursor_views: cursors::Views,
+    borrowed_only: bool,
     envelope: Option<BTreeSet<usize>>,
     modes: Modes,
     usage: UseKind,
@@ -314,6 +317,8 @@ impl Value {
     }
     fn new(modes: Modes) -> Self {
         Self(std::rc::Rc::new(ValueData {
+            cursor_views: cursors::Views::default(),
+            borrowed_only: false,
             envelope: None,
             modes,
             usage: UseKind::Borrow,
@@ -667,6 +672,8 @@ impl ValueData {
                 }
             };
         }
+        self.cursor_views.join(&other.cursor_views);
+        self.borrowed_only &= other.borrowed_only;
         self.envelope = creation::join([self.envelope.clone(), other.envelope.clone()]);
         self.fresh_receipt &= other.fresh_receipt;
         self.crossing_parts.join(&other.crossing_parts);
@@ -807,10 +814,12 @@ struct SlotData {
     /// contract, which survives replacement by stronger current content, or
     /// for an alias the relation of the place it views.
     declared: Relation,
+    cursor: Option<cursors::Contract>,
 }
 impl Default for Slot {
     fn default() -> Self {
         Self::new(SlotData {
+            cursor: None,
             available: DEAD,
             value: Value::new(Modes::global()),
             declared: Relation::global(),
@@ -851,6 +860,16 @@ impl Slot {
             } else {
                 self.declared.union(&other.declared)
             };
+        }
+        if other.available & LIVE != 0 {
+            if self.available & LIVE == 0 {
+                self.cursor = other.cursor.clone();
+            } else {
+                match (&mut self.cursor, &other.cursor) {
+                    (Some(own), Some(other)) => own.join(other),
+                    _ => self.cursor = None,
+                }
+            }
         }
         self.available |= other.available;
         self.value.join(&other.value);
@@ -1017,6 +1036,7 @@ impl InitialStorage {
         self.inactive.set(
             index,
             Slot::new(SlotData {
+                cursor: None,
                 available: DEAD,
                 value: value.clone(),
                 declared: declared.clone(),
@@ -1025,6 +1045,7 @@ impl InitialStorage {
         self.owned.set(
             index,
             Slot::new(SlotData {
+                cursor: None,
                 available: LIVE,
                 value: value.clone(),
                 declared: declared.clone(),
@@ -1037,6 +1058,7 @@ impl InitialStorage {
         self.scoped.set(
             index,
             Slot::new(SlotData {
+                cursor: None,
                 available: LIVE,
                 value,
                 declared,
@@ -1281,6 +1303,7 @@ struct Checker<'a, 's> {
     field_loan_places: &'a BTreeMap<ExprId, super::properties::FieldPlace>,
     graph: &'a Graph,
     parameter_parts: parameter_parts::ParameterParts,
+    cursor_observations: cursors::Observations,
     capture_crossing_uses: &'a BTreeMap<ExprId, Vec<(usize, Vec<Projection>)>>,
     facts: &'a mut OwnershipFacts,
     introductions: &'a BTreeMap<NameSite, Vec<(NameSite, Origin, usize)>>,
@@ -1701,6 +1724,7 @@ pub(super) fn check(
     }
     let arenas = crate::arenas::Arenas::new(t, body, own);
     let parameter_parts = parameter_parts::ParameterParts::new(body, &graph, source_rows);
+    let cursor_observations = cursors::Observations::new(body, t, properties);
     let mut checker = Checker {
         t,
         arenas,
@@ -1720,6 +1744,7 @@ pub(super) fn check(
         field_loan_places,
         graph: &graph,
         parameter_parts,
+        cursor_observations,
         capture_crossing_uses,
         facts,
         introductions,
@@ -3521,6 +3546,8 @@ impl Checker<'_, '_> {
                 PassingMode::Mut => None,
                 PassingMode::Take => Some(const { RuleId::of("LANG-5") }),
             }
+        } else if !binding.mutable && place.projections.is_empty() {
+            Some(const { RuleId::of("LANG-5") })
         } else if state.slots[place.binding].value.aliased().is_some()
             && binding.usage != UseKind::Mut
         {
@@ -3593,7 +3620,11 @@ impl Checker<'_, '_> {
             self.report(
                 if call
                     && (self.capturer(state, place.binding).is_some()
-                        || self.iterated(state, place))
+                        || self.iterated(state, place)
+                        || self.lender(state, place).flatten().is_some_and(|holder| {
+                            let value = &state.slots[holder].value;
+                            value.borrowed_only && value.cursor_views.cursor_derived()
+                        }))
                 {
                     const { RuleId::of("OWN-3") }
                 } else {
@@ -4252,6 +4283,7 @@ impl Checker<'_, '_> {
                     let mut value = self.capture_value(state, expression, false, false, initial);
                     value.usage = UseKind::Take;
                     state.slots[index] = Slot::new(SlotData {
+                        cursor: None,
                         available: LIVE,
                         value: value.clone(),
                         declared: value.modes.relation.clone(),
@@ -4298,6 +4330,7 @@ impl Checker<'_, '_> {
                 context,
                 operation,
             } => {
+                let context = &self.receiving_context(state, *context);
                 let Some(mut property) = self.property(*expression) else {
                     return;
                 };
@@ -4316,6 +4349,14 @@ impl Checker<'_, '_> {
                     && slot.value.content.summary().is_empty();
                 let mut value = slot.value.clone();
                 value.project_content(&place.projections);
+                if self.cursor_observations.active
+                    && value.cursor_views == cursors::Views::default()
+                {
+                    value.cursor_views = cursors::Views::root(place.binding);
+                }
+                value
+                    .cursor_views
+                    .project(&place.projections, &self.cursor_observations);
                 let element_owner = value.element_owner().filter(|o| *o != place.binding);
                 let environment = self
                     .ty(*expression)
@@ -4751,6 +4792,7 @@ impl Checker<'_, '_> {
                     value.content = Content::default();
                 }
                 value.usage = usage;
+                value.borrowed_only = usage == UseKind::Borrow;
                 self.usage(*expression, usage);
                 self.record(*expression, &mut value);
                 state.values.insert(*expression, value);
@@ -4859,6 +4901,7 @@ impl Checker<'_, '_> {
                 children,
                 fresh,
             } => {
+                let context = &self.receiving_context(state, *context);
                 let Some(property) = self.property(*expression) else {
                     return;
                 };
@@ -5121,7 +5164,14 @@ impl Checker<'_, '_> {
                                         }
                                         SourceProjectionKind::Index(_) => Projection::Elements,
                                     };
-                                    value.project_content(&[projection]);
+                                    value.project_content(&[projection.clone()]);
+                                    value.cursor_views = children
+                                        .first()
+                                        .map(|base| self.value(state, *base).cursor_views.clone())
+                                        .unwrap_or_default();
+                                    value
+                                        .cursor_views
+                                        .project(&[projection], &self.cursor_observations);
                                 }
                             }
                         }
@@ -5192,6 +5242,12 @@ impl Checker<'_, '_> {
                     } else {
                         UseKind::Take
                     };
+                    value.borrowed_only = borrowed_projection
+                        && !copy_projection
+                        && !property.plain
+                        && children
+                            .first()
+                            .is_some_and(|base| self.value(state, *base).borrowed_only);
                     if copy_projection && !property.plain {
                         // A computed borrowed root has the same field-read
                         // receipt as a binding root: own a copy of the part.
@@ -5513,6 +5569,7 @@ impl Checker<'_, '_> {
                     let mut part = value.clone();
                     part.fresh_receipt = fresh_receipt;
                     part.project_content(&path);
+                    part.cursor_views.project(&path, &self.cursor_observations);
                     // SEM-4 binds sequence elements as places, rather than
                     // readonly aliases of a mut parameter.
                     let checked_use = self
@@ -5767,7 +5824,19 @@ impl Checker<'_, '_> {
                             self.tree.expressions[source.0 as usize].origin.span,
                             Some(index),
                         );
+                        let cursor = self.cursor_contract(
+                            state,
+                            index,
+                            &mut part,
+                            annotation,
+                            root_pattern,
+                            source,
+                        );
+                        if usage != UseKind::Borrow {
+                            part.cursor_views = cursors::Views::default();
+                        }
                         state.slots[index] = Slot::new(SlotData {
+                            cursor,
                             available: LIVE,
                             value: part.clone(),
                             // A borrowed pattern alias keeps its physical source
@@ -5837,6 +5906,9 @@ impl Checker<'_, '_> {
                         );
                         return;
                     }
+                }
+                if self.rebind_cursor(state, &place, *expression, *rhs, *operation, *compound) {
+                    return;
                 }
                 if !self.access(&place, state, *operation)
                     || !self.unlent(&place, state, *operation, false)
@@ -6057,6 +6129,7 @@ impl Checker<'_, '_> {
                         value.modes.multiplicity = Multiplicity::Once;
                     }
                     state.slots[place.binding] = Slot::new(SlotData {
+                        cursor: None,
                         available: LIVE,
                         declared: state.slots[place.binding].declared.clone(),
                         value,

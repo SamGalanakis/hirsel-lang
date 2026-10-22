@@ -481,6 +481,7 @@ fn captured_inactive_payload(present: bool) -> Fixture {
         entry: BlockId(0),
         parameters: vec![],
         result: choice,
+        borrow_cursors: vec![],
         tail_sites: vec![],
         matches: vec![],
     };

@@ -208,6 +208,30 @@ impl Builder<'_, '_> {
                         usage,
                     };
                     let _ = self.loan(&mut value, span);
+                    if let Some(claim) = self
+                        .decisions
+                        .borrow_cursors
+                        .get(&binding.site)
+                        .first()
+                        .copied()
+                        .cloned()
+                    {
+                        if stage.is_some() || !binding.mutable {
+                            return self.error(span, "invalid cursor declaration context");
+                        }
+                        value = self.cursor_binding(value, binding.ty, &claim, span)?;
+                    } else {
+                        let root = self.root(value.place);
+                        if usage == UseKind::Borrow
+                            && self.cursor_backed(value.place)
+                            && self.body.locals[root.0 as usize].storage == Storage::Temporary
+                            && !self.owned[root.0 as usize]
+                        {
+                            // Snapshot the value observed now; aliases never point
+                            // at a mutable carrier slot that a later rebind empties.
+                            value = self.transport(value, Storage::Temporary, span);
+                        }
+                    }
                     let origin = Self::binding_origin(
                         self.decisions.lexical,
                         binding.owner,

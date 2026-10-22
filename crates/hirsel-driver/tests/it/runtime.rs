@@ -92,6 +92,7 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
         entry: BlockId(0),
         parameters: vec![],
         result: unit,
+        borrow_cursors: vec![],
         tail_sites: vec![],
         matches: vec![],
     };
@@ -379,6 +380,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
             entry: BlockId(0),
             parameters: vec![LocalId(0)],
             result: owner.result,
+            borrow_cursors: vec![],
             tail_sites: vec![],
             matches: vec![MatchTable {
                 scrutinee: PlaceId(2),

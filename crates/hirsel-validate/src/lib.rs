@@ -934,6 +934,35 @@ pub fn validate_structure(definition: &Definition, t: &TypeInterner) -> Vec<Viol
         let bid = Some(BodyId(bi as u32));
         let mut refs = Vec::new();
         refs.push((None, None, "block", body.entry.0));
+        let mut cursor_carriers = BTreeSet::new();
+        for cursor in &body.borrow_cursors {
+            refs.push((None, None, "local", cursor.carrier.0));
+            refs.push((None, None, "rvalue", cursor.initializer.0));
+            for place in cursor.cover.iter().flatten() {
+                refs.push((None, None, "place", place.0));
+            }
+            let declarations = body
+                .blocks
+                .iter()
+                .flat_map(|b| &b.instructions)
+                .filter(|instruction| {
+                    matches!(instruction.kind, InstructionKind::Assign { destination, value }
+                    if value == cursor.initializer && body.places.get(destination.0 as usize)
+                        .is_some_and(|p| p.root == cursor.carrier && p.projection.is_empty()))
+                })
+                .count();
+            if !cursor_carriers.insert(cursor.carrier.0) || declarations != 1 {
+                add(
+                    bid,
+                    None,
+                    None,
+                    ViolationKind::WrongKind {
+                        entity: "borrow cursor declaration",
+                        index: cursor.carrier.0,
+                    },
+                );
+            }
+        }
         let mut type_roots = vec![body.result];
         let mut parameters = BTreeSet::new();
         for p in &body.parameters {

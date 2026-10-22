@@ -19,7 +19,8 @@ use hirsel_types::{
 /// v7 qualifies body binders and origins with their owning definition occurrence;
 /// v8 retains ordinary generic actuals in declared dictionary constant graphs;
 /// v9 transports source scoped selectors and closure classification.
-pub const TIR_VERSION: u32 = 9;
+/// v10 adds independently checked fixed-origin borrow cursor claims.
+pub const TIR_VERSION: u32 = 10;
 
 pub mod representation;
 
@@ -437,7 +438,15 @@ pub struct TailSite {
     /// Whole counted temporaries whose ownership moves into loop slots.
     pub owned_loop_arguments: Vec<(hirsel_types::ParamId, PlaceId)>,
 }
-/// A monomorphic or generic body whose TypeIds refer to Definition.types (GEN-4).
+/// A producer claim for a fixed-origin read-only cursor. Validation re-derives
+/// the borrowed declaration and checks every install independently.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct BorrowCursor {
+    pub carrier: LocalId,
+    pub initializer: RvalueId,
+    /// None infers anchors from the initial Borrow; Some names earlier values.
+    pub cover: Option<Vec<PlaceId>>,
+}
 /// A declaration-derived scoped callable path, independent of its physical passing class.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ScopedParameter {
@@ -445,6 +454,7 @@ pub struct ScopedParameter {
     pub fields: Vec<u32>,
 }
 
+/// A monomorphic or generic body whose TypeIds refer to Definition.types (GEN-4).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Body {
     /// Declaring source scope for value-parameter references, separate from storage scopes.
@@ -459,6 +469,7 @@ pub struct Body {
     pub entry: BlockId,
     pub parameters: Vec<LocalId>,
     pub result: TypeId,
+    pub borrow_cursors: Vec<BorrowCursor>,
     pub tail_sites: Vec<TailSite>,
     pub matches: Vec<MatchTable>,
     pub scoped_parameters: Vec<ScopedParameter>,
@@ -654,6 +665,7 @@ mod tests {
             entry: BlockId(0),
             parameters: vec![],
             result: unit,
+            borrow_cursors: vec![],
             tail_sites: vec![],
             matches: vec![],
         };

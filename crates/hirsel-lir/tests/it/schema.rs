@@ -766,6 +766,10 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
             reaching: v(4),
             failure: f,
         },
+        Inst::CopyValue {
+            result: v(15),
+            value: v(4),
+        },
         Inst::FlatCopy {
             result: v(16),
             address: a(0),
@@ -1965,6 +1969,7 @@ fn tir_coverage_body() -> hirsel_tir::Body {
         entry: hirsel_tir::BlockId(0),
         parameters: Vec::new(),
         result: crate::support::session().intern(hirsel_types::Type::unit()),
+        borrow_cursors: vec![],
         tail_sites: Vec::new(),
         matches: Vec::new(),
     }

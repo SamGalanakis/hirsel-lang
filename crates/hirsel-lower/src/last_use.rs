@@ -294,12 +294,29 @@ impl Builder<'_, '_> {
                 });
             }
             let mut before = needed_in[block].clone();
-            for (index, instruction) in instructions.into_iter().enumerate() {
+            for (index, mut instruction) in instructions.into_iter().enumerate() {
                 before.extend(steps[block][index].begins);
                 self.transfer_content(&mut content, &instruction.kind);
                 // The last instruction's successor is the terminator, which
                 // reads against the content before it, as here.
                 let needed = self.needed(&content, &after[index]);
+                // A cursor can retain a loop's source permission on a later
+                // iteration's zero-item path. Construction has not visited
+                // that feedback when it schedules lexical cleanup. Normal
+                // cleanup must defer these ends to the actual last use;
+                // failure cleanup still ends all permissions. V separately
+                // checks the backing owner's scope and availability.
+                if !self.body.borrow_cursors.is_empty() {
+                    match &mut instruction.kind {
+                        InstructionKind::EndLoan { loan, .. } if needed.contains(&loan.0) => {
+                            continue;
+                        }
+                        InstructionKind::RunCleanup(cleanup) => {
+                            *cleanup = self.defer_live_view_loans(*cleanup, &needed);
+                        }
+                        _ => {}
+                    }
+                }
                 let (span, on_failure) = (instruction.span, instruction.on_failure);
                 output.push(instruction);
                 let ended: Vec<u32> = before.difference(&needed).copied().collect();
@@ -324,6 +341,22 @@ impl Builder<'_, '_> {
             }
             self.body.blocks[block].instructions = output;
         }
+    }
+    fn defer_live_view_loans(&mut self, cleanup: CleanupId, needed: &BTreeSet<u32>) -> CleanupId {
+        let actions: Vec<_> = self.body.cleanup_actions(cleanup).cloned().collect();
+        if !actions.iter().any(|action| {
+            matches!(action, CleanupAction::EndLoan { loan, .. } if needed.contains(&loan.0))
+        }) {
+            return cleanup;
+        }
+        let mut head = None;
+        for action in actions.into_iter().rev() {
+            if matches!(&action, CleanupAction::EndLoan { loan, .. } if needed.contains(&loan.0)) {
+                continue;
+            }
+            head = Some(self.cleanup_node(action, head));
+        }
+        self.cleanup_root(head)
     }
     /// The places live before `step`, from those live after it.
     fn live_before(&self, live: &mut Live, step: &Step) {

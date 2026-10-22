@@ -367,6 +367,7 @@ fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_t
         entry: BlockId(0),
         parameters: vec![],
         result: unit,
+        borrow_cursors: vec![],
         tail_sites: vec![],
         matches: vec![],
     }

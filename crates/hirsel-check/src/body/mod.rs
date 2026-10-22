@@ -2177,7 +2177,7 @@ impl Checker<'_, '_> {
                     unreachable!()
                 };
                 if !self.invalid(self.value(place)) && !self.invalid(self.value(value)) {
-                    let access = self.mutable_place(place, frame);
+                    let access = self.mutable_place(place, frame, op.0.is_none());
                     if let Some(rule) = access {
                         self.report(
                             rule,
@@ -2570,7 +2570,13 @@ impl Checker<'_, '_> {
             }
         }
     }
-    fn mutable_place(&self, mut expression: ast::ExprId, _frame: usize) -> Option<RuleId> {
+    fn mutable_place(
+        &self,
+        mut expression: ast::ExprId,
+        _frame: usize,
+        simple: bool,
+    ) -> Option<RuleId> {
+        let whole = expression;
         loop {
             match self.input.syntax.tree.expressions[expression.0 as usize].kind {
                 ast::ExprKind::Index { base, .. }
@@ -2597,7 +2603,11 @@ impl Checker<'_, '_> {
                         .bindings
                         .iter()
                         .find(|b| b.binding == ResolvedName::Local(*l));
-                    if self.mut_aliases.contains(l) {
+                    // Ownership distinguishes whole view rebinding from
+                    // referent mutation. Projected/compound writes remain read-only.
+                    if self.mut_aliases.contains(l)
+                        && !(simple && expression == whole && b.is_some_and(|b| b.mutable))
+                    {
                         return Some(const { RuleId::of("LANG-15") });
                     }
                     return if b.is_some_and(|b| b.mutable) {

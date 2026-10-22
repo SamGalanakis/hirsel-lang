@@ -339,6 +339,11 @@ fn valid_ownership(syntax: &ItemSyntax, facts: &OwnershipFacts) -> bool {
             .guarded_patterns
             .iter()
             .all(|row| site(hirsel_types::NameSite::Pattern(row.pattern)))
+        && facts.cursor_rebindings.iter().copied().all(expression)
+        && facts
+            .borrow_cursors
+            .iter()
+            .all(|cursor| valid_site(syntax, cursor.binding))
         && facts.allocating_mutations.iter().copied().all(expression)
         && facts.replacements.iter().all(|(id, _, _)| expression(*id))
 }

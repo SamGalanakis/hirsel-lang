@@ -3,3 +3,6 @@ mod checks;
 mod instance_controls;
 mod salt_controls;
 mod support;
+mod borrow_cursor_8;
+mod borrow_cursor_tree_8;
+mod borrow_cursor_contracts_8;

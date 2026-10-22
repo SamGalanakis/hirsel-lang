@@ -809,6 +809,8 @@ impl State {
 /// A resolved TIR place: its slot root, validator steps and LIR projection.
 #[derive(Clone, Debug)]
 struct PlaceRef {
+    /// A joined borrowed SSA value supplies read-only backing instead of a slot.
+    value: Option<ValueId>,
     source_place: Option<u32>,
     slot: SlotId,
     steps: Vec<Step>,
@@ -1272,6 +1274,11 @@ fn import_mapped(
             im.elided_loans.insert(id);
         }
     }
+    for (local, joined) in im.joined.iter().enumerate() {
+        if *joined {
+            im.aliases[local] = None;
+        }
+    }
     im.cfg()?;
     let mut entry: Vec<Option<State>> = vec![None; body.blocks.len()];
     // Abstract states only grow (towards Maybe), so this reaches a fixpoint.
@@ -1505,55 +1512,87 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
 fn joined_views(body: &tir::Body) -> Vec<bool> {
     let (assigned, _, pinned) = view_assignments(body);
     let root = |p: &tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
-    let mut moves = Vec::new();
-    let mut forwards = Vec::new();
-    for (d, sources) in assigned.iter().enumerate() {
-        for source in sources {
-            if let Some(ViewSource::Moved(p)) = source {
-                moves.push((root(p), d));
+    // Eligibility is separate from selection. A single direct-loan temporary
+    // is a valid SSA input when an administrative relocation connects it to a
+    // join, even though by itself it would use the static-alias optimization.
+    let mut eligible: Vec<bool> = assigned
+        .iter()
+        .enumerate()
+        .map(|(local, sources)| {
+            view_storage(body, local)
+                && !pinned[local]
+                && !sources.is_empty()
+                && sources.iter().all(Option::is_some)
+        })
+        .collect();
+    let mut dependencies = vec![];
+    for (destination, sources) in assigned.iter().enumerate() {
+        for source in sources.iter().flatten() {
+            let place = match source {
+                ViewSource::Loaned(_) => continue,
+                ViewSource::Indexed(place, _) if body.places[place.0 as usize].loan.is_some() => {
+                    continue;
+                }
+                ViewSource::Moved(place)
+                | ViewSource::Forwarded(place)
+                | ViewSource::Nested(place)
+                | ViewSource::Indexed(place, _) => place,
+            };
+            dependencies.push((
+                root(place),
+                destination,
+                matches!(source, ViewSource::Moved(_)),
+            ));
+        }
+    }
+    loop {
+        let mut changed = false;
+        for &(source, destination, moving) in &dependencies {
+            if !eligible[source] && eligible[destination] {
+                eligible[destination] = false;
+                changed = true;
             }
-            if let Some(ViewSource::Forwarded(p)) = source {
-                forwards.push((root(p), d));
+            if moving && !eligible[destination] && eligible[source] {
+                eligible[source] = false;
+                changed = true;
             }
+        }
+        if !changed {
+            break;
         }
     }
     let mut joined: Vec<bool> = assigned
         .iter()
         .enumerate()
-        .map(|(l, sources)| {
-            view_storage(body, l)
-                && !pinned[l]
-                && sources.iter().all(|a| {
-                    matches!(
-                        a,
-                        Some(
-                            ViewSource::Loaned(_) | ViewSource::Moved(_) | ViewSource::Forwarded(_)
-                        )
-                    )
-                })
+        .map(|(local, sources)| {
+            eligible[local]
                 && (sources.len() > 1
                     || matches!(
                         sources.as_slice(),
-                        [Some(ViewSource::Moved(_) | ViewSource::Forwarded(_))]
+                        [Some(
+                            ViewSource::Moved(_)
+                                | ViewSource::Forwarded(_)
+                                | ViewSource::Nested(_)
+                                | ViewSource::Indexed(_, _)
+                        )]
                     ))
         })
         .collect();
-    // Each pass unjoins at least one local or stops.
     loop {
         let mut changed = false;
-        for &(source, destination) in &moves {
-            if joined[source] != joined[destination] {
-                joined[source] = false;
-                joined[destination] = false;
-                changed = true;
-            }
-        }
-        // A whole borrow forwards an existing SSA view without consuming it.
-        // It supplies no evidence for an ordinary unloaned storage read.
-        for &(source, destination) in &forwards {
-            if !joined[source] && joined[destination] {
-                joined[destination] = false;
-                changed = true;
+        for &(source, destination, moving) in &dependencies {
+            if eligible[source]
+                && eligible[destination]
+                && (joined[destination] || moving && joined[source])
+            {
+                if !joined[source] {
+                    joined[source] = true;
+                    changed = true;
+                }
+                if !joined[destination] {
+                    joined[destination] = true;
+                    changed = true;
+                }
             }
         }
         if !changed {

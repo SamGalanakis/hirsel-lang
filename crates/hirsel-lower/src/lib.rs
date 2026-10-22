@@ -7,6 +7,7 @@ hirsel_guard::install!();
 
 use hirsel_intern::work::{self, Counter};
 mod bindings;
+mod borrow_cursors;
 mod builder;
 mod checked;
 mod control;

@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-borrow-cursor-return-ok.hir
+fn f(a: List[u64]) -> List[u64] {
+  let mut c = a
+  c
+}

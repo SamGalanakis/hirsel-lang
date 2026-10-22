@@ -194,7 +194,11 @@ impl Builder<'_, '_> {
                         root: hirsel_types::OriginRoot::Expression(self.decisions.lexical, id),
                         fields: vec![].into(),
                     },
-                    OriginBindingKind::Fresh,
+                    if !self.value_owned(*value) {
+                        OriginBindingKind::Alias
+                    } else {
+                        OriginBindingKind::Fresh
+                    },
                     self.span(id)?,
                 );
             }
@@ -450,6 +454,15 @@ impl Builder<'_, '_> {
                     UnaryOp::Take | UnaryOp::Copy => {
                         if op == UnaryOp::Take {
                             self.emit(InstructionKind::EndOrigin(value.place), span);
+                        }
+                        if op == UnaryOp::Copy
+                            && self.cursor_backed(value.place)
+                            && !self.value_owned(value)
+                        {
+                            // Give an explicit owned copy a fresh source place;
+                            // the spill itself transports only the borrowed view.
+                            value.usage = UseKind::Borrow;
+                            value = self.transport(value, Storage::Temporary, span);
                         }
                         // A written ownership operation evaluates its own value.
                         // An enclosing marker consumes that prepared value; it

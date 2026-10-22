@@ -110,6 +110,7 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
                 entry: BlockId(0),
                 parameters: vec![],
                 result: nominal,
+                borrow_cursors: vec![],
                 tail_sites: vec![],
                 matches: vec![],
             }],

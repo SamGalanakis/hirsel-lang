@@ -1,0 +1,19 @@
+// rule: LANG-15
+// expect: reject LANG-5 at line 10
+// twin: LANG/LANG-15-borrow-cursor-reset-ok.hir
+type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
+
+fn reset(root: box Tree) -> u64 {
+  let node = root
+  match node {
+    Branch(left: child, right: _) => {
+      node = child
+    },
+    Leaf(n: _) => {},
+  }
+  node = root
+  match node {
+    Leaf(n: n) => n,
+    Branch(left: _, right: _) => 0,
+  }
+}

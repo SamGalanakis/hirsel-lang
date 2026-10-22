@@ -56,6 +56,8 @@ pub(super) struct Decisions<'a> {
     pub physical_projections: Table<'a, ExprId, (ExprId, TypeId)>,
     pub physical_patterns: Table<'a, PatternId, (PatternId, TypeId)>,
     pub unique: Table<'a, ExprId, UniqueDecision>,
+    pub borrow_cursors: Table<'a, NameSite, BorrowCursorDecision>,
+    pub cursor_rebindings: Table<'a, ExprId, ExprId>,
     pub replacements: Table<'a, ExprId, (ExprId, TypeId, Option<bool>)>,
     pub captures: Table<'a, (ExprId, u32), CaptureMode>,
     pub arguments: Table<'a, (ExprId, ExprId), (ExprId, ExprId, UseKind)>,
@@ -97,6 +99,8 @@ impl<'a> Decisions<'a> {
             physical_projections: Table::new(&input.ownership.physical_projections, |row| row.0),
             physical_patterns: Table::new(&input.ownership.physical_patterns, |row| row.0),
             unique: Table::new(&input.ownership.unique, |row| row.expression),
+            borrow_cursors: Table::new(&input.ownership.borrow_cursors, |row| row.binding),
+            cursor_rebindings: Table::new(&input.ownership.cursor_rebindings, |row| *row),
             replacements: Table::new(&input.ownership.replacements, |row| row.0),
             captures: Table::new(&input.ownership.captures, |row| {
                 (row.expression, row.ordinal)

@@ -379,25 +379,35 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
             views.entry(*slot).or_default().push((v, v));
         }
     }
-    // A borrowed join parameter goes stale with any view it may be: a write
-    // to the part of a slot under any of them, or the loss of a value under
-    // any of them that is still in scope at the join.
+    // Edge transfer snapshots validity before installing each parameter.
+    // Retain its actual storage/owned backing, not an alternate borrowed
+    // parameter's current incarnation (which may since have been rebound).
     let mut bases: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
     for (b, block) in unit.blocks.iter().enumerate() {
         for &p in block.parameters.get(&unit.pools.values).unwrap_or(&[]) {
             let Some(join) = &facts.joins[p.index()] else {
                 continue;
             };
-            for &source in &join.sources {
-                let mut root = source;
-                while let Backing::Value(base) = facts.backing[root.index()] {
-                    root = base;
-                    if structure::in_scope_at(cx, facts, base, BlockId(b as u32)) {
-                        bases.entry(p).or_default().push(base);
-                    }
+            let mut pending: Vec<_> = join.sources.iter().copied().collect();
+            let mut seen = BTreeSet::from([p]);
+            while let Some(source) = pending.pop() {
+                if !seen.insert(source) {
+                    continue;
                 }
-                if let Backing::Slot { slot, .. } = facts.backing[root.index()] {
-                    views.entry(slot).or_default().push((p, root));
+                match &facts.backing[source.index()] {
+                    Backing::Value(base) => pending.push(*base),
+                    Backing::Slot { slot, .. } => {
+                        views.entry(*slot).or_default().push((p, source));
+                    }
+                    Backing::None => {}
+                }
+                if let Some(join) = &facts.joins[source.index()] {
+                    pending.extend(join.sources.iter().copied());
+                }
+                if unit.values[source.index()].holding == Holding::Owned
+                    && structure::in_scope_at(cx, facts, source, BlockId(b as u32))
+                {
+                    bases.entry(p).or_default().push(source);
                 }
             }
         }
@@ -1260,49 +1270,69 @@ impl<S: Stage> Walker<'_, '_, S> {
         self.view_validity(st, cr, value)
     }
 
+    fn inherited_loan(&self, value: ValueId, loan: LoanId) -> bool {
+        matches!(self.facts.backing[value.index()], Backing::Value(base)
+            if self.holding(base) == Holding::Borrowed(loan))
+    }
+
     fn view_validity(&self, st: &State, cr: &Credits, value: ValueId) -> Option<K> {
-        if !self.cx.owns(value) {
-            if st.stale.contains(&value) {
+        // A projected loop value can feed its own phi. Visit every distinct
+        // backing once, retaining checks on all real roots of that cycle.
+        let mut pending = vec![value];
+        let mut seen = BTreeSet::new();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            if !self.cx.owns(current) {
+                if st.stale.contains(&current) {
+                    return Some(K::StaleView(value));
+                }
+                if self.facts.regions[current.index()]
+                    .iter()
+                    .any(|r| st.regions[r.index()] != Tri::Yes)
+                {
+                    return Some(if current == value {
+                        K::UseAfterRegionExit(value)
+                    } else {
+                        K::StaleView(value)
+                    });
+                }
+                continue;
+            }
+            if cr.get(&current).copied().unwrap_or(0) > 0 {
+                continue;
+            }
+            match self.holding(current) {
+                Holding::Owned => {
+                    return Some(if current == value {
+                        K::NoCredit(value)
+                    } else {
+                        K::StaleView(value)
+                    });
+                }
+                Holding::Borrowed(loan) => {
+                    let joined = self.facts.joins[current.index()]
+                        .as_ref()
+                        .is_some_and(|j| j.joined());
+                    let inherited = self.inherited_loan(current, loan);
+                    if !joined && !inherited && st.loans[loan.index()] != Tri::Yes {
+                        return Some(if current == value {
+                            K::OutsideLoan(value)
+                        } else {
+                            K::StaleView(value)
+                        });
+                    }
+                }
+                Holding::Plain => {}
+            }
+            if st.stale.contains(&current) {
                 return Some(K::StaleView(value));
             }
-            return self.facts.regions[value.index()]
-                .iter()
-                .any(|r| st.regions[r.index()] != Tri::Yes)
-                .then_some(K::UseAfterRegionExit(value));
-        }
-        if cr.get(&value).copied().unwrap_or(0) > 0 {
-            return None;
-        }
-        match self.holding(value) {
-            Holding::Owned => return Some(K::NoCredit(value)),
-            Holding::Borrowed(loan) => {
-                // A joined view's loans need not all be active: ending any of
-                // them since the join made it stale instead.
-                let joined = self.facts.joins[value.index()]
-                    .as_ref()
-                    .is_some_and(|j| j.joined());
-                if !joined && st.loans[loan.index()] != Tri::Yes {
-                    return Some(K::OutsideLoan(value));
-                }
+            pending.extend(self.bases.get(&current).into_iter().flatten().copied());
+            if let Backing::Value(base) = self.facts.backing[current.index()] {
+                pending.push(base);
             }
-            Holding::Plain => {}
-        }
-        if st.stale.contains(&value) {
-            return Some(K::StaleView(value));
-        }
-        if self
-            .bases
-            .get(&value)
-            .into_iter()
-            .flatten()
-            .any(|&base| self.view_validity(st, cr, base).is_some())
-        {
-            return Some(K::StaleView(value));
-        }
-        if let Backing::Value(base) = self.facts.backing[value.index()]
-            && self.view_validity(st, cr, base).is_some()
-        {
-            return Some(K::StaleView(value));
         }
         None
     }
@@ -2086,6 +2116,10 @@ impl<S: Stage> Walker<'_, '_, S> {
             }
             // The same view at another payload layout: it happens inside
             // the loan it carries, as a borrowed read does.
+            Inst::CopyValue { result, value } => {
+                self.borrow(site, st, cr, value);
+                self.create(site, st, cr, result);
+            }
             Inst::Recast { result, value } => {
                 if self.holding(result) == Holding::Owned {
                     self.consume(site, st, cr, value);
@@ -2312,6 +2346,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 // A borrowed read happens inside its loan.
                 if mode == crate::ir::ReadMode::Borrow
                     && let Holding::Borrowed(loan) = self.holding(result)
+                    && !self.inherited_loan(result, loan)
                     && st.loans[loan.index()] != Tri::Yes
                 {
                     self.err(site, K::OutsideLoan(result));

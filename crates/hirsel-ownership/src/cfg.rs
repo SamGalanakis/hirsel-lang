@@ -13,6 +13,7 @@ pub(super) enum Context {
     Own,
     /// An owned receiver: return, aggregate field or replacement.
     Store,
+    Replacement(usize),
     /// Sharing a selected borrowed source into the declared local result.
     ResultShare,
     Copy,
@@ -1697,7 +1698,13 @@ pub(super) fn build(
                             jobs.push(Job::Expr {
                                 entry: rhs,
                                 expression: *value,
-                                context: Context::Store,
+                                context: if op.0.is_none() {
+                                    self::place(body, *place, rows)
+                                        .filter(|p| p.projections.is_empty())
+                                        .map_or(Context::Store, |p| Context::Replacement(p.binding))
+                                } else {
+                                    Context::Store
+                                },
                                 operation: *value,
                                 escaping: true,
                                 owning: false,

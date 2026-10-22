@@ -14,6 +14,8 @@ use hirsel_types::{
 
 #[path = "authority_flow.rs"]
 mod authority_flow;
+#[path = "borrow_cursors.rs"]
+mod borrow_cursors;
 #[path = "cleanup_order.rs"]
 mod cleanup_order;
 #[path = "creation.rs"]
@@ -98,6 +100,8 @@ impl BitRows<MustFacts> {
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct State {
+    cursor_views: Rows<Option<borrow_cursors::View>>,
+    cursor_contracts: super::origin_dependencies::DependencyRows<borrow_cursors::Contract>,
     envelopes: Rows<Option<BTreeSet<usize>>>,
     /// Hypothetical replay of an edge disproved by the current tag facts.
     audit: bool,
@@ -149,6 +153,23 @@ impl State {
     /// a row equal in `base` and `other` already holds its join: only the
     /// change since `base` is visited. `join` is the case `base == self`.
     fn join_since(&mut self, base: &Self, other: &Self, model: &Model) {
+        self.cursor_views
+            .join_since(&base.cursor_views, &other.cursor_views, |a, b| {
+                match (a.as_mut(), b) {
+                    (Some(a), Some(b)) => a.join(b),
+                    (None, Some(b)) => *a = Some(b.clone()),
+                    _ => (),
+                }
+            });
+        self.cursor_contracts.union_since(
+            &base.cursor_contracts,
+            &other.cursor_contracts,
+            |a, b| {
+                a.cover.retain(|anchor| b.cover.contains(anchor));
+                a.expired.extend(b.expired.iter().cloned());
+                a.snapshot |= b.snapshot;
+            },
+        );
         self.envelopes
             .join_since(&base.envelopes, &other.envelopes, |a, b| {
                 *a = creation::join([a.clone(), b.clone()])
@@ -1115,7 +1136,15 @@ impl Model {
         arena: &dyn Fn(&Origin) -> bool,
         captures: &[super::flow_origins::CapturedOrigin],
     ) -> State {
+        let cursor_len = if body.borrow_cursors.is_empty() {
+            0
+        } else {
+            body.locals.len()
+        };
         let mut state = State {
+            cursor_views: Rows::new(None, cursor_len)
+                .with_copy_counter(Counter::ValidateCopiedRows),
+            cursor_contracts: super::origin_dependencies::DependencyRows::new(cursor_len),
             envelopes: Rows::new(None, if self.creation { body.locals.len() } else { 0 })
                 .with_copy_counter(Counter::ValidateCopiedRows),
             audit: false,
@@ -1603,8 +1632,9 @@ impl Checker<'_> {
                     continue;
                 }
                 if let Some(roots) = loop_expirations.get(&(block.0, target.0)) {
+                    edge.widen_cursors(&model, self.body);
                     for origin in roots {
-                        edge.origins.expire(origin);
+                        edge.expire_origin(origin);
                     }
                 }
                 let class = usize::from(edge.audit);
@@ -1958,6 +1988,13 @@ impl Checker<'_> {
     /// Transfers determine value identity. A binding authorizes a checked
     /// storage access; its spelling cannot replace the value's identity.
     fn storage_identity(model: &Model, state: &State, access: &Place) -> BTreeSet<Origin> {
+        if !state.cursor_views.is_empty()
+            && state.cursor_views[access.root.0 as usize]
+                .as_ref()
+                .is_some_and(|view| view.imprecise)
+        {
+            return BTreeSet::new();
+        }
         let fields: Option<Vec<_>> = access
             .projection
             .iter()
@@ -2160,7 +2197,7 @@ impl Checker<'_> {
                 (path.clone(), identities)
             })
             .collect();
-        state.origins.expire(origin);
+        state.expire_origin(origin);
         state.origins.introduce(origin);
         state.origins.identities[root] = BTreeSet::from([fresh.clone()]).into();
         state.origins.parts[root] = parts;
@@ -2325,7 +2362,7 @@ impl Checker<'_> {
             let access = &self.body.places[field.0 as usize];
             let origin = access.binding.as_ref().unwrap();
             let index = model.mapping[field.0 as usize];
-            state.origins.expire(origin);
+            state.expire_origin(origin);
             state.origins.introduce(origin);
             state.origins.ended.remove(&origin.root);
             let identity = if state.must[root].has(MustFacts::OWNED) {
@@ -2428,7 +2465,7 @@ impl Checker<'_> {
                 self.refresh_copied_prefix(model, state, &prefix, origin);
             }
             for origin in &ends {
-                state.origins.expire(origin);
+                state.expire_origin(origin);
             }
             // Old retained values stay expired; the live container can establish
             // new brands after its mutation, without changing its storage name.
@@ -2465,9 +2502,9 @@ impl Checker<'_> {
             .collect();
         self.keep_inner_relations(model, state, index, &ending);
         if let Some(origin) = &binding {
-            state.origins.expire(origin);
+            state.expire_origin(origin);
             for identity in ends {
-                state.origins.expire(&identity);
+                state.expire_origin(&identity);
             }
             if origin.fields.is_empty() {
                 state.origins.bindings.remove(&origin.root);
@@ -2475,7 +2512,7 @@ impl Checker<'_> {
             }
         }
         for owner in owners {
-            state.origins.expire(&owner);
+            state.expire_origin(&owner);
         }
     }
     /// A written take moves the value on with its contents (PROV-5: moving
@@ -3696,7 +3733,7 @@ impl Checker<'_> {
         }
         if state.places[index] & LIVE != 0 {
             for owner in (*state.origins.owners[index]).clone() {
-                state.origins.expire(&owner);
+                state.expire_origin(&owner);
             }
         }
         self.clear(model, state, place, DEAD);
@@ -4633,7 +4670,7 @@ impl Checker<'_> {
                         if origin.fields.is_empty()
                             || !self.refresh_copied_prefix(model, state, to, origin)
                         {
-                            state.origins.expire(origin);
+                            state.expire_origin(origin);
                             state.origins.introduce(origin);
                             if !origin.fields.is_empty() {
                                 // Replacing a field invalidates old parent brands.
@@ -4856,6 +4893,12 @@ impl Checker<'_> {
                     // origins its last value carried, so paths that ended
                     // different locals agree on every one they did not use.
                     for local in locals {
+                        if !state.cursor_views.is_empty() {
+                            state.cursor_views.set(local, None);
+                            state
+                                .cursor_contracts
+                                .set(local, borrow_cursors::Contract::default());
+                        }
                         for &part in &model.root_parts[local] {
                             if state.places[part] & LIVE != 0 {
                                 continue;
@@ -4940,6 +4983,8 @@ impl Checker<'_> {
                 }
                 InstructionKind::Assign { destination, value } => {
                     let rvalue = &self.body.rvalues[value.0 as usize];
+                    let cursor_view =
+                        self.cursor_assignment(model, state, *destination, *value, report);
                     self.assign_creation(model, state, *destination, rvalue);
                     if report {
                         if let Rvalue::Construct {
@@ -5355,6 +5400,9 @@ impl Checker<'_> {
                     self.set_origin_proof(model, state, *destination, origin_proof, origin_expired);
                     state.origins.owners[model.mapping[destination.0 as usize]] = origin_owners;
                     self.set_environment(model, state, *destination, &environment);
+                    if !state.cursor_views.is_empty() {
+                        state.cursor_views.set(root, cursor_view);
+                    }
                 }
                 InstructionKind::Snapshot { destination, value } => {
                     let authority = self.operand_authority(model, state, value.place);

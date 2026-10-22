@@ -743,7 +743,7 @@ impl FnEmitter<'_, '_, '_> {
                 self.dup_holders(place)?;
                 self.define(result, value)
             }
-            Inst::Drop { .. } | Inst::Unavailable { .. } => {
+            Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {
                 self.invalid("an operation outside the Ready vocabulary")
             }
         }

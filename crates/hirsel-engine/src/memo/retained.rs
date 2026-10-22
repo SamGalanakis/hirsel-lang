@@ -641,6 +641,7 @@ impl Weight {
             parameters,
             result: _,
             tail_sites,
+            borrow_cursors,
             matches,
         } = body;
         self.flat_vec(locals);
@@ -660,6 +661,11 @@ impl Weight {
         self.flat_vec(cleanup_nodes);
         self.flat_vec(parameters);
         self.vec(scoped_parameters, |w, p| w.flat_vec(&p.fields));
+        self.vec(borrow_cursors, |w, cursor| {
+            if let Some(cover) = &cursor.cover {
+                w.flat_vec(cover);
+            }
+        });
         self.vec(tail_sites, |w, site| {
             w.flat_vec(&site.owned_loop_arguments);
             match &site.kind {
@@ -702,6 +708,7 @@ mod tests {
                 entry: BlockId(0),
                 parameters: vec![],
                 result: unit,
+                borrow_cursors: vec![],
                 tail_sites: vec![],
                 matches: vec![],
             }],

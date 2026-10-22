@@ -260,6 +260,7 @@ fn frame(tree: Shadow, projection: Vec<hirsel_tir::Projection>) -> crate::frame:
         parameter_scope: hirsel_syntax::LexicalOwner::first(&path)
             .site(hirsel_types::NameSite::Item),
         scoped_parameters: Vec::new(),
+        borrow_cursors: Vec::new(),
         locals: (0..3)
             .map(|_| Local {
                 ty: unit,

@@ -1,0 +1,8 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 6
+// twin: LANG/LANG-15-borrow-cursor-project-ok.hir
+fn f(a: List[u64]) -> u64 {
+  let mut c = a
+  c[0] = 9
+  list.len(c)
+}

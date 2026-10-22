@@ -16,6 +16,11 @@ count, which is exact (MEM-11). A projection out of a borrowed value is counted 
 storage it points into is mutated or moved, and an uncounted projection is never reused or
 mutated in place.
 
+Borrow-cursor initialization and rebinding acquire and release no owning counts.
+Every uncounted view retains its underlying access and lifetime dependencies. Rebinding
+cannot permit mutation, movement or freeing of storage while another live view needs it.
+An explicit `copy cursor` remains an ordinary counted share where the type requires it.
+
 ### MEM-2: Acyclic
 
 The value graph reachable from safe code is acyclic: values are immutable once built,
