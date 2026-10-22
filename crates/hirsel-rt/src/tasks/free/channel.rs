@@ -340,16 +340,23 @@ unsafe fn close_inner(
         // Even an inert buffer's deallocation stays outside the section.
         return Ok(STATUS_OK);
     }
+    let count = left.len();
+    let image = unsafe { (*ctx).detached_images.keep(left) };
+    // The close phase can be the cut. Its unadmitted user finalizer must
+    // not start, and the task owns the ring if this save never returns.
+    super::replay::start(ctx);
     let mut status = STATUS_OK;
-    for index in 0..left.len() {
+    for index in 0..count {
+        let value = unsafe { (*ctx).detached_images.at(image, index) };
         let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
         // Finalizers can yield and open or close arbitrary other channels.
-        // This detached ring belongs to the owner, outside the object lock.
+        // Only the index and raw slot pointer cross the user call. Nested
+        // closes may grow task storage without invalidating this buffer.
         status |= unsafe {
             crate::finalize::hirsel_rt_v2_finalize(
                 ctx,
                 descriptor,
-                left.at(index),
+                value,
                 std::ptr::null(),
                 continuation.as_mut_ptr(),
                 anchor,
@@ -357,5 +364,6 @@ unsafe fn close_inner(
             )
         };
     }
+    unsafe { (*ctx).detached_images.release(image) };
     Ok(status)
 }

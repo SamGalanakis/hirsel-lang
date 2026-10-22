@@ -30,9 +30,10 @@ impl Replay {
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
     /// scopes with settled children, task-set selection, serial gates and
-    /// scalar mutex operations including kill/cause and inert destruction,
-    /// and inert scalar channels including endpoint aliases/closes; no host
-    /// requests, yielding object finalizers or general cancellation-ended waits yet.
+    /// scalar mutex operations including kill/cause and scalar channels with
+    /// endpoint aliases/closes; no host requests or general cancellation-ended
+    /// waits yet. Deterministic yielding object finalizers
+    /// must use only these admitted operations and task-owned detached images.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });

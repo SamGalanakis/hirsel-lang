@@ -9,6 +9,9 @@ use super::*;
 
 pub(crate) mod cancellation;
 pub(crate) mod channel;
+pub(crate) mod cleanup;
+#[cfg(test)]
+mod finalizer_replay_tests;
 pub(crate) mod foreign;
 pub(crate) mod gate;
 pub(crate) mod home;

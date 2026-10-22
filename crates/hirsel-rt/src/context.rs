@@ -159,6 +159,9 @@ pub struct TaskCtx {
     /// The task's measurement site while it is switched out.
     #[cfg(feature = "measurement")]
     site: u64,
+    /// Detached Free object images retained across yielding finalizers and
+    /// returned by context destruction when a stop abandons their frames.
+    pub(crate) detached_images: crate::tasks::free::cleanup::Images,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -338,6 +341,7 @@ impl TaskCtx {
             ordered_freed: Default::default(),
             #[cfg(feature = "measurement")]
             site: 0,
+            detached_images: Default::default(),
         }
     }
 

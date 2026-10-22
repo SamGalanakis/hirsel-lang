@@ -294,18 +294,22 @@ unsafe fn close_inner(
     let Some((image, descriptor)) = publication??.into_left() else {
         return Ok(STATUS_OK);
     };
+    let image = unsafe { (*ctx).detached_images.keep(image) };
+    super::replay::start(ctx);
+    let value = unsafe { (*ctx).detached_images.at(image, 0) };
     let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
     let status = unsafe {
         crate::finalize::hirsel_rt_v2_finalize(
             ctx,
             descriptor,
-            image.at(0),
+            value,
             std::ptr::null(),
             continuation.as_mut_ptr(),
             anchor,
             operation_site,
         )
     };
+    unsafe { (*ctx).detached_images.release(image) };
     Ok(status)
 }
 
