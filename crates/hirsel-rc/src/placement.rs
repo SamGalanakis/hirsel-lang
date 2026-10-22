@@ -350,8 +350,18 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                         && !lay.anchored(site.layout);
                     if region_candidate(&unit, table, site, result) {
                         sources.insert(result);
-                    } else if inline {
-                        // An inline container joins its region children.
+                    } else if inline
+                        && site
+                            .fields
+                            .get(&unit.pools.fields)
+                            .unwrap_or(&[])
+                            .iter()
+                            .any(|f| carries(unit.values[f.value.index()].ty))
+                    {
+                        // An inline container derives regional provenance from
+                        // its children. A fieldless variant (for example None
+                        // alongside Some(List)) has no such source: keep its
+                        // whole flow class counted, even when only observed.
                     } else {
                         define_foreign(result);
                     }

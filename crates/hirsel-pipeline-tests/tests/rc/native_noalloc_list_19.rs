@@ -749,3 +749,75 @@ pub(super) fn observer_failure<S>(
     unit.tables.failures.push(failure);
     id
 }
+
+// A fieldless alternative has the same owning layout as Some(List), but no
+// region provenance. Its comparison must not turn it into a regional value.
+const EMPTY_VARIANT: &str = r#"
+fn probe(yes: bool) -> bool {
+    let items: Option[List[u64]] = if yes { Some([1u64]) } else { None() }
+    items == Some([1u64])
+}
+pub fn main() -> Result[(), u64] {
+    failure.check(probe(true) && !probe(false), TextInvariant())
+    Ok(())
+}
+"#;
+
+#[test]
+fn empty_variant_observers_preserve_regional_construction_provenance() {
+    use hirsel_driver::*;
+    use hirsel_engine::*;
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let context = default_context();
+        let file = engine
+            .sources
+            .add("empty-variant.hir", EMPTY_VARIANT.into())
+            .unwrap();
+        let checked = check_progress(&mut engine, file, &context).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let entry = entry_path(&context);
+        let reference = run_observed_snapshot(
+            &mut engine,
+            &RunConfiguration {
+                entry: entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        let reference = Observation::of_reference(reference.observation.as_ref().unwrap());
+        assert_eq!(reference.exit_code, Some(0));
+        assert!(reference.failures.is_empty());
+        let snapshot = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(snapshot).unwrap();
+        let configurations: Vec<_> = matrix()
+            .into_iter()
+            .map(|mut c| {
+                c.options.validation = Validation::EveryStage;
+                c
+            })
+            .collect();
+        let directory = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("empty-variant-observers-20");
+        std::fs::create_dir_all(&directory).unwrap();
+        let tools = Toolchain::for_matrix(&directory.join("runtime"), &configurations).unwrap();
+        let mut executions = 0;
+        for (configuration, outcome) in differential(
+            &validated,
+            &entry,
+            &reference,
+            &configurations,
+            &tools,
+            &directory,
+        ) {
+            assert!(
+                matches!(outcome, Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+            executions += 1;
+        }
+        assert_eq!(executions, 8);
+    });
+}
