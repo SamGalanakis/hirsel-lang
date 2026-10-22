@@ -79,7 +79,21 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
         };
         let mut ready = Vec::new();
         for (_, _, task, token, cause, available) in candidates {
-            if unsafe { crate::host_waits::poll_home(run, token, cause, available) }? {
+            let (done, attempt) = if observing {
+                unsafe { crate::host_waits::poll_observed_home(run, token, cause, available) }?
+            } else {
+                (
+                    unsafe { crate::host_waits::poll_home(run, token, cause, available) }?,
+                    None,
+                )
+            };
+            if let Some(attempt) = attempt {
+                assert_eq!(attempt.task, task);
+                let _guard = unsafe { role::IdleGuard::new(run) };
+                let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+                super::events::record_host_attempt(s, task, &attempt.result, !retiring);
+            }
+            if done {
                 if observing {
                     // The home service borrow ends before claiming IdleGuard;
                     // a saved request still owns its completion until wake.

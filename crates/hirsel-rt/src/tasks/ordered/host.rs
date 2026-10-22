@@ -274,6 +274,8 @@ mod tests {
                         poll.completion.result
                     );
                     assert_eq!(poll.sequence, 0);
+                    assert_eq!(log.host_attempts.len(), 1);
+                    assert_eq!(log.host_attempts[0], *poll);
                     assert_eq!(log.host_completions.len(), 1);
                     assert_eq!(poll.completion, log.host_completions[0]);
                     assert_eq!(
@@ -391,6 +393,7 @@ mod tests {
                                 .all(|row| row.idle
                                     && row.retirement == log.host_polls[0].retirement)
                         );
+                        assert_eq!(log.host_attempts, log.host_polls);
                         assert_eq!(log.host_completions.len(), 4);
                         for (polled, returned) in log.host_polls.iter().zip(&log.host_completions) {
                             assert_eq!(&polled.completion, returned);
@@ -411,6 +414,120 @@ mod tests {
                     assert_eq!(&polls, reference);
                 } else {
                     reference = Some(polls);
+                }
+            }
+        }
+    }
+
+    struct RetryHost {
+        host: Host,
+        waits: u32,
+    }
+    impl Adapter for RetryHost {
+        fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+            self.host.preflight(request)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            self.host.call(request)
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            self.host.ready()
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            assert_eq!(self.host.home, std::thread::current().id());
+            self.waits += 1;
+            self.host
+                .probe
+                .now
+                .store(u64::from(self.waits) * 50, Ordering::Release);
+            assert!(self.waits <= 2, "retry never completed");
+            Ok(true)
+        }
+        fn finish(&mut self, token: u64) {
+            self.host.finish(token);
+        }
+        fn parked(&mut self, token: u64) {
+            self.host.parked(token);
+        }
+    }
+
+    #[test]
+    fn an_idle_blocked_host_retry_is_owned_before_the_completing_poll_wakes_its_task() {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let probe = Arc::new(Probe::default());
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.adapter = Some(Box::new(RetryHost {
+                    host: Host {
+                        home: std::thread::current().id(),
+                        probe: probe.clone(),
+                        cancellation: false,
+                    },
+                    waits: 0,
+                }));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        engine::enable(ctx, policy);
+                        super::super::events::enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+                        assert_eq!(
+                            crate::io::hirsel_rt_v2_clock_sleep_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                result.as_mut_ptr(),
+                                &11,
+                                &100
+                            ),
+                            STATUS_OK
+                        );
+                        assert_eq!(result.assume_init().tag, 0);
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        assert_eq!(log.host_polls.len(), 1);
+                        assert_eq!(log.host_attempts.len(), 2);
+                        let attempts = &log.host_attempts;
+                        assert_eq!(attempts[0].completion.result, Err(AdapterError::Blocked));
+                        assert_eq!(attempts[1].completion.result, Ok(Completion::Wait(Ok(()))));
+                        assert_eq!(attempts[0].sequence, 0);
+                        assert_eq!(attempts[1].sequence, 1);
+                        assert!(attempts.iter().all(|row| row.idle
+                            && row.completion.task.is_empty()
+                            && row.completion.ordinal == 0
+                            && row.retirement == attempts[0].retirement));
+                        assert_eq!(attempts[1].completion, log.host_polls[0].completion);
+                        assert_eq!(attempts[1].completion, log.host_completions[0]);
+                        assert!(
+                            attempts
+                                .iter()
+                                .all(|row| row.completion.observation.is_some())
+                        );
+                        assert!(
+                            log.canonical().is_err(),
+                            "raw attempts do not certify parked phases"
+                        );
+                        *seen.lock().unwrap() = attempts.clone();
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(probe.completed.load(Ordering::Acquire), 1);
+                assert_eq!(probe.parked.load(Ordering::Acquire), 1);
+                let attempts = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&attempts, reference);
+                } else {
+                    reference = Some(attempts);
                 }
             }
         }

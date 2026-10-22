@@ -767,6 +767,29 @@ pub(crate) unsafe fn poll_home(
     unsafe { poll_binding(binding, token, cause, ready) }
 }
 
+/// One reserved Ordered poll, with evidence only when it actually attempted
+/// the request. A not-ready/noncanceled probe returns None; Blocked is Some.
+/// # Safety
+/// As for poll_home. The returned evidence owns all completion storage and
+/// names the saved scheduler row without borrowing its TaskCtx.
+pub(crate) unsafe fn poll_observed_home(
+    run: *mut crate::context::RunShared,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+) -> Stopped<(bool, Option<CompletedHost>)> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let task = binding
+        .waits
+        .parked
+        .get(&token)
+        .and_then(|row| row.task)
+        .expect("a saved host owner");
+    let mut attempt = None;
+    let done = unsafe { poll_binding_observed(binding, token, cause, ready, Some(&mut attempt)) }?;
+    Ok((done, attempt.map(|result| CompletedHost { task, result })))
+}
+
 /// Owned evidence of a request whose poll just completed. The caller must
 /// still publish its wake before another request can remove this wait row.
 /// # Safety
@@ -977,23 +1000,29 @@ pub(crate) unsafe fn poll(
     }
     // Borrow only the home service on this bridge; copy the completion while
     // its wait row still owns it, then record after the caller regains role.
-    let (done, completion) = unsafe {
-        at_home(ctx, || -> Stopped<_> {
-            let done = poll_here(ctx, token, cause, ready)?;
-            let completion = done.then(|| completed_home((*ctx).run_ptr(), token));
-            Ok((done, completion))
+    let (done, attempt) = unsafe {
+        at_home(ctx, || {
+            poll_observed_home((*ctx).run_ptr(), token, cause, ready)
         })
     }??;
-    if let Some(completion) = completion {
+    if let Some(completion) = attempt {
         // SAFETY: the bridge returned the role; do not observe a stop while
         // this owned completion has yet to be installed in the log.
         let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
-        crate::tasks::ordered::events::record_host_poll(
+        crate::tasks::ordered::events::record_host_attempt(
             s,
             completion.task,
-            completion.result,
+            &completion.result,
             false,
         );
+        if done {
+            crate::tasks::ordered::events::record_host_poll(
+                s,
+                completion.task,
+                completion.result,
+                false,
+            );
+        }
     }
     Ok(done)
 }
@@ -1013,6 +1042,16 @@ unsafe fn poll_binding(
     token: u64,
     cause: Option<u32>,
     ready: bool,
+) -> Stopped<bool> {
+    unsafe { poll_binding_observed(binding, token, cause, ready, None) }
+}
+
+unsafe fn poll_binding_observed(
+    binding: &mut Binding,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+    mut observed: Option<&mut Option<Result<Completion, AdapterError>>>,
 ) -> Stopped<bool> {
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
@@ -1067,6 +1106,9 @@ unsafe fn poll_binding(
                     binding.adapter.call(request)
                 }
             };
+            if let Some(observed) = observed.as_mut() {
+                **observed = Some(crate::tasks::ordered::events::owned_host_result(&result));
+            }
             match result {
                 Err(AdapterError::Blocked) => return Ok(false),
                 result => {
@@ -1076,6 +1118,13 @@ unsafe fn poll_binding(
             }
         }
     };
+    if let Some(observed) = observed
+        && observed.is_none()
+    {
+        *observed = Some(crate::tasks::ordered::events::owned_host_result(
+            &completion,
+        ));
+    }
     if let Some(parked) = binding.waits.parked.get_mut(&token) {
         parked.completion = Some(completion);
     }
@@ -1196,3 +1245,6 @@ mod native_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod ordered_poll_tests;

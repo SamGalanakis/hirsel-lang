@@ -374,6 +374,8 @@ pub(super) struct Log {
     pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_requests::HostRequestValue>>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
+    /// Actual readiness retries, including Blocked; skipped probes emit none.
+    pub host_attempts: Vec<HostPollCompletion>,
     host_polled: BTreeSet<(Vec<u32>, u64)>,
     pub owner_completions: Vec<OwnerCompletion>,
     pub task_results: BTreeMap<Vec<u32>, TaskResult>,
@@ -808,6 +810,44 @@ pub(crate) fn record_host_poll(
             .len()
             .try_into()
             .expect("host poll sequence fits u64"),
+    });
+}
+
+/// Source-free evidence of one actual poll attempt, captured before any wake.
+/// Completion-only host_polls stays separate until parked phases are certified.
+pub(crate) fn record_host_attempt(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    idle: bool,
+) {
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let observation = host_values::project(result, |word| host_identity(driver, word)).ok();
+    let log = driver.events.as_mut().expect("poll evidence enabled");
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("poll follows entry");
+    let op = log.last_ops[&path];
+    assert_eq!(op, "host.request");
+    log.host_attempts.push(HostPollCompletion {
+        completion: HostCompletion {
+            task: path,
+            ordinal,
+            op,
+            result: result.clone(),
+            observation,
+        },
+        retirement,
+        idle,
+        sequence: log
+            .host_attempts
+            .len()
+            .try_into()
+            .expect("host attempt sequence fits u64"),
     });
 }
 
