@@ -4,6 +4,22 @@ impl Checker<'_> {
     /// Replacement ends a source receipt, including writes through an existing
     /// mutable iteration view. A preservation declaration keeps it instead.
     pub(super) fn forget_receipt(&mut self, value: ExprId) {
+        self.update_receipt(value, None);
+    }
+    /// A mutable hand-back can replace the old value, but its authority still
+    /// comes from this call's operands and declared environment. Retain that
+    /// source ceiling without claiming preservation of its erased type facts.
+    fn handback_receipt(&mut self, value: ExprId, call: ExprId, authority: AuthoritySummary) {
+        let receipt = self.frames.last().and_then(|frame| {
+            (authority != AuthoritySummary::Unknown).then_some((frame.owner, authority, call))
+        });
+        self.update_receipt(value, receipt);
+    }
+    fn update_receipt(
+        &mut self,
+        value: ExprId,
+        receipt: Option<(NameSite, AuthoritySummary, ExprId)>,
+    ) {
         let mut pending = vec![value];
         let mut seen = BTreeSet::new();
         while let Some(value) = pending.pop() {
@@ -17,7 +33,12 @@ impl Checker<'_> {
             if !seen.insert(key.clone()) {
                 continue;
             }
-            self.derivations.remove(&key);
+            let previous = self.derivations.remove(&key);
+            if let Some(receipt) = &receipt
+                && previous.is_some_and(|(owner, _, _)| owner == receipt.0)
+            {
+                self.derivations.insert(key.clone(), receipt.clone());
+            }
             if let Some(source) = self.iteration_sources.get(&key) {
                 pending.push(*source);
             }
@@ -1555,6 +1576,13 @@ impl Checker<'_> {
             self.pending_tasks.insert(e, span);
             self.task_values.insert(e, BTreeSet::from([e]));
         }
+        let mut handback_authority = used.clone().join(required.clone());
+        if let Uses::Only(uses) = &f.uses {
+            let sources: Vec<_> = arguments.iter().map(|a| self.used(a.value)).collect();
+            handback_authority = handback_authority.join(
+                self.scoped_authority(substitute_authority(uses, &sources, &generic_authorities)),
+            );
+        }
         // Brand invalidation happens after checking all argument obligations. Container
         // operations that mutate Slots preserve identity; a move/replacement does not.
         for (i, p) in f.parameters.iter().enumerate() {
@@ -1586,7 +1614,7 @@ impl Checker<'_> {
                                 && promise.preserve_captures
                         })
                     {
-                        self.forget_receipt(a.value);
+                        self.handback_receipt(a.value, e, handback_authority.clone());
                     }
                 }
             }

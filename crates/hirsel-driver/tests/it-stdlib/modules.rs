@@ -73,3 +73,4 @@ mod list_filled_memset_12;
 mod http_fetch_bounded_12;
 mod float_parse_scan_13;
 mod float_render_13;
+mod store_authority_14;
