@@ -18,7 +18,10 @@ fn field_text(fields: Map[String, json.Value], key: String) -> Result[
   unique String,
   AppError
 ] uses {} {
-  let Some(Text(value)) = map.get(fields, key) else {
+  let Some(field) = map.get(fields, key) else {
+    return Error(Scenario())
+  }
+  let Some(value) = json_access.as_text(field) else {
     return Error(Scenario())
   }
   Ok(unique value)

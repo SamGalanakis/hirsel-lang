@@ -81,3 +81,4 @@ mod json_patch_15;
 mod html_tokenizer_15;
 mod csv_empty_record_16;
 mod map_seed_model_16;
+mod json_value_access_16;

@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let value: std@1/json.Value = Text("false")
+  failure.check(std@1/option.is_none(std@1/json_access.as_bool(value)), TextInvariant())
+  failure.check(
+    std@1/option.is_none(std@1/json_access.number_text(value)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/option.is_none(std@1/json_access.member(value, "")),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/option.is_none(std@1/json_access.element(value, 18446744073709551615u64)),
+    TextInvariant()
+  )
+  failure.check(!std@1/json_access.is_null(value), TextInvariant())
+  Ok(())
+}

@@ -5616,6 +5616,8 @@ conformance/SEM/SEM-3-json-slice-run.hir
 conformance/SEM/SEM-3-json-typed-numbers-run.hir
 conformance/SEM/SEM-3-json-typed-reader-run.hir
 conformance/SEM/SEM-3-json-typed-serde-enum-run.hir
+conformance/SEM/SEM-3-json-value-access-16-invalid-run.hir
+conformance/SEM/SEM-3-json-value-access-16-run.hir
 conformance/SEM/SEM-3-json-writer-error-run.hir
 conformance/SEM/SEM-3-jwt-audience-run.hir
 conformance/SEM/SEM-3-jwt-eddsa-reject-run.hir

@@ -1,0 +1,74 @@
+// Adapted from serde_json src/value/{mod,index}.rs, commit
+// 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8 (MIT; see third-party/NOTICES.md).
+// Exact-variant observations use Hirsel's shallow shares related only to value.
+
+/// Select an object member; present null is Some(Null()), absence is None().
+pub fn member(value: json.Value, key: String) -> Option[json.Value] in value uses {} {
+  match value {
+    Object(fields) => core@1/map.get(fields, key),
+    _ => None(),
+  }
+}
+
+/// Select a zero-based array element; wrong variants and out-of-range return None().
+pub fn element(value: json.Value, index: u64) -> Option[json.Value] in value uses {} {
+  // Keep the selection rooted in the input, as json_pointer's array cursor does.
+  let mut selected = value
+  match value {
+    Array(items) => {
+      if index >= core@1/list.len(items) {
+        return None()
+      }
+      selected = items[index]
+    },
+    _ => {
+      return None()
+    },
+  }
+  Some(copy selected)
+}
+
+/// Text payload only; booleans and numbers are never formatted as text.
+pub fn as_text(value: json.Value) -> Option[String] in value uses {} {
+  match value {
+    Text(text) => Some(copy text),
+    _ => None(),
+  }
+}
+
+/// Number payload only, retaining its exact lexical spelling without parsing.
+pub fn number_text(value: json.Value) -> Option[String] in value uses {} {
+  match value {
+    Number(text) => Some(copy text),
+    _ => None(),
+  }
+}
+
+/// Bool payload only. The plain bool result has no source lifetime restriction.
+pub fn as_bool(value: json.Value) -> Option[bool] uses {} {
+  match value {
+    Bool(flag) => Some(flag),
+    _ => None(),
+  }
+}
+
+pub fn as_array(value: json.Value) -> Option[List[json.Value]] in value uses {} {
+  match value {
+    Array(items) => Some(copy items),
+    _ => None(),
+  }
+}
+
+pub fn as_object(value: json.Value) -> Option[Map[String, json.Value]] in value uses {} {
+  match value {
+    Object(fields) => Some(copy fields),
+    _ => None(),
+  }
+}
+
+pub fn is_null(value: json.Value) -> bool uses {} {
+  match value {
+    Null() => true,
+    _ => false,
+  }
+}

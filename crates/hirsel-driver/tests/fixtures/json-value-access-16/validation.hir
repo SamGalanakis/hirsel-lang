@@ -1,0 +1,14 @@
+fn select(value: std@1/json.Value, other: std@1/json.Value) -> Option[String] in value {
+  std@1/json_access.as_text(value)
+}
+
+pub fn main() -> Result[(), ()] {
+  let a: std@1/json.Value = Text("first")
+  let b: std@1/json.Value = Text("second")
+  let Some(text) = select(a, b) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(text == "first", TextInvariant())
+  Ok(())
+}

@@ -1331,6 +1331,12 @@
       "module": [
         "html_tokenizer"
       ]
+    },
+    {
+      "path": "json_access.hir",
+      "module": [
+        "json_access"
+      ]
     }
   ],
   "dependencies": []

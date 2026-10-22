@@ -1,0 +1,179 @@
+// serde_json value/mod.rs exact-variant/doctest vectors, 20572a6d; MIT.
+// Expected outputs are literal observations, independent of Hirsel's parser.
+fn wrong(value: std@1/json.Value, kind: u64) -> () {
+  if kind != 0 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.as_text(value)),
+      TextInvariant()
+    )
+  }
+  if kind != 1 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.number_text(value)),
+      TextInvariant()
+    )
+  }
+  if kind != 2 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.as_bool(value)),
+      TextInvariant()
+    )
+  }
+  if kind != 3 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.as_array(value)),
+      TextInvariant()
+    )
+  }
+  if kind != 4 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.as_object(value)),
+      TextInvariant()
+    )
+  }
+  if kind != 4 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.member(value, "")),
+      TextInvariant()
+    )
+  }
+  if kind != 3 {
+    failure.check(
+      std@1/option.is_none(std@1/json_access.element(value, 0)),
+      TextInvariant()
+    )
+  }
+  failure.check(std@1/json_access.is_null(value) == (kind == 5), TextInvariant())
+}
+
+fn text(value: std@1/json.Value, expected: String) -> () {
+  let Some(actual) = std@1/json_access.as_text(value) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(actual == expected, TextInvariant())
+}
+
+fn local_key(value: std@1/json.Value) -> Option[std@1/json.Value] in value {
+  let key = unique "B"
+  std@1/json_access.member(value, key)
+}
+
+pub fn main() -> Result[(), ()] {
+  let variants: List[std@1/json.Value] = [
+    Text("some string"),
+    Number("1e+02"),
+    Bool(false),
+    Array([]),
+    Object(map.empty()),
+    Null()
+  ]
+  for i in 0u64..6 {
+    wrong(variants[i], i)
+  }
+  wrong(Bool(true), 2)
+  text(variants[0], "some string")
+  let Some(number) = std@1/json_access.number_text(variants[1]) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(number == "1e+02", TextInvariant())
+  failure.check(std@1/json_access.as_bool(variants[2]) == Some(false), TextInvariant())
+  failure.check(std@1/json_access.as_bool(Bool(true)) == Some(true), TextInvariant())
+  let Some(empty_array) = std@1/json_access.as_array(variants[3]) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(list.len(empty_array) == 0, TextInvariant())
+  let Some(empty_object) = std@1/json_access.as_object(variants[4]) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(map.len(empty_object) == 0, TextInvariant())
+  let mut fields: Map[String, std@1/json.Value] = map.empty()
+  map.insert(mut fields, "A", Array([Text("a"), Text("á"), Text("à")]))
+  map.insert(mut fields, "B", Array([Text("b"), Text("b́")]))
+  map.insert(mut fields, "C", Array([Text("c"), Text("ć"), Text("ć̣"), Text("ḉ")]))
+  map.insert(mut fields, "", Null())
+  map.insert(mut fields, "雪", Text("☃"))
+  let object: std@1/json.Value = Object(take fields)
+  let Some(array) = local_key(object) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let Some(first) = std@1/json_access.element(array, 0) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let Some(last) = std@1/json_access.element(array, 1) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  text(first, "b")
+  text(last, "b́")
+  let Some(items) = std@1/json_access.as_array(array) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(list.len(items) == 2, TextInvariant())
+  failure.check(
+    std@1/option.is_none(std@1/json_access.element(array, 2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/option.is_none(std@1/json_access.element(array, 18446744073709551615u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/option.is_none(std@1/json_access.element(variants[3], 0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/option.is_none(std@1/json_access.member(object, "D")),
+    TextInvariant()
+  )
+  let Some(null) = std@1/json_access.member(object, "") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(std@1/json_access.is_null(null), TextInvariant())
+  let nulls: std@1/json.Value = Array([Null()])
+  let Some(null_element) = std@1/json_access.element(nulls, 0) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(std@1/json_access.is_null(null_element), TextInvariant())
+  let Some(snow) = std@1/json_access.member(object, "雪") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  text(snow, "☃")
+  // Two live immutable observations and another use of the original source.
+  let Some(again) = std@1/json_access.member(object, "B") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let Some(again_items) = std@1/json_access.as_array(again) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(list.len(again_items) == list.len(items), TextInvariant())
+  let Some(original) = std@1/json_access.as_object(object) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(map.len(original) == 5, TextInvariant())
+  // Explicit independent ownership permits mutation without changing the source.
+  let mut owned = unique items
+  list.push(mut owned, Bool(true))
+  failure.check(list.len(owned) == 3, TextInvariant())
+  failure.check(list.len(items) == 2, TextInvariant())
+  // A source alias remains available for immutable repeated observations.
+  let alias = copy object
+  let Some(alias_fields) = std@1/json_access.as_object(alias) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(map.len(alias_fields) == 5, TextInvariant())
+  Ok(())
+}

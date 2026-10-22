@@ -561,6 +561,49 @@ The constant `MAX_NESTING: u64 = 128` counts open arrays and objects, scalars us
 level; opening container 129 is `Nesting`. A partial tree is released through ordinary error
 cleanup.
 
+### JSON Value access
+
+The separate `std@1/json_access` module provides shallow, noncoercing observations
+of the existing `json.Value`:
+
+```text
+fn json_access.member(value: json.Value, key: String) -> Option[json.Value] in value uses {}
+fn json_access.element(value: json.Value, index: u64) -> Option[json.Value] in value uses {}
+fn json_access.as_text(value: json.Value) -> Option[String] in value uses {}
+fn json_access.number_text(value: json.Value) -> Option[String] in value uses {}
+fn json_access.as_bool(value: json.Value) -> Option[bool] uses {}
+fn json_access.as_array(value: json.Value) -> Option[List[json.Value]] in value uses {}
+fn json_access.as_object(value: json.Value) -> Option[Map[String, json.Value]] in value uses {}
+fn json_access.is_null(value: json.Value) -> bool uses {}
+```
+
+`member` accepts objects and exact string keys, including empty and Unicode keys;
+`element` accepts arrays and zero-based `u64` indices. Missing members, wrong
+containers and out-of-range indices return `None()`. A present JSON null returns
+`Some(Null())`. Each `as_*` or `number_text` returns only its exact variant payload;
+there is no string, number or boolean conversion. `number_text(Number("1e+02"))`
+returns `Some("1e+02")`, without normalization. This differs from
+`json.number_text(Bytes)`, which copies a token spelling into an owned String.
+
+Reference-bearing results are shallow shares related only to `value`, using the
+existing related-result rules; they retain no relationship to `key`. Local input
+bounds remain in force, and live results freeze the selected input against mutation.
+A global heap input supplies no bound loan, so its result can safely own a counted
+share beyond the input binding's lifetime (MODE-1, OWN-1). A counted local copy of
+borrowed input cannot be returned as though its temporary storage were the input.
+No deep copy or mutable view is returned. Callers needing independent ownership
+can explicitly request `unique` (as httpcheck does for its extracted field text).
+Plain boolean observations may outlive the source.
+
+The exact-variant matches and lookup behavior adapt serde_json
+`src/value/mod.rs:299–310,368–374,431–437,477–499,695–715` and
+`src/value/index.rs` at `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8`.
+Adaptations use separate member/element functions and `u64` indices, Hirsel's
+`in value` shallow sharing in place of Rust references, and the existing Number
+string payload in place of serde_json's numeric representation. Array selection uses
+a borrow cursor rooted in the input to preserve provenance through the indexed
+variant payload. All operations have pure capabilities (`uses {}`).
+
 `json.reader(data: Bytes) -> Reader` borrows the input through retained byte views;
 it does not build a `Value`. `peek(mut reader)` skips JSON whitespace and returns
 the next byte (zero at EOF). `next_token(mut reader)` pulls a lexical `Token`:
