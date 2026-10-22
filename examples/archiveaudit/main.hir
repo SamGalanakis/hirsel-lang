@@ -1,0 +1,516 @@
+// Walking/read-to-EOF structure: Go archive/tar/reader.go:44-130 and
+// archive/zip/reader_test.go:1656-1681, ebe2feef (BSD-3-Clause).
+// std owns the codecs; counted local input and source callbacks replace io.Reader.
+const ARCHIVE_BYTES: u64 = 1048576
+
+const MANIFEST_BYTES: u64 = 131072
+
+const MEMBERS: u64 = 128
+
+const ENTRY_BYTES: u64 = 65536
+
+const TOTAL_BYTES: u64 = 262144
+
+const CHUNK: u64 = 4096
+
+type Entry {
+  path: String,
+  kind: String,
+  size: u64,
+  sha256: String,
+}
+
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+type Report {
+  entries: List[Entry],
+  bytes: u64,
+  missing: List[String],
+  extra: List[String],
+  changed: List[String],
+}
+
+pub type AppError = Grant(GrantError) | Output(OutputError) | InvalidInput(String) | Mismatch
+
+// Reject alternate lexical spellings. Directories may retain one final '/'.
+fn path_key(name: String, directory: bool) -> Result[unique String, String] {
+  if name == "" || string.starts_with(name, "/") {
+    return Error("invalid_path")
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == 92 || byte == 58 {
+      return Error("invalid_path")
+    }
+  }
+  let raw = string.as_bytes(name)
+  let mut end = bytes.len(raw)
+  if end > 512 {
+    return Error("path_bytes_limit")
+  }
+  if directory && raw[end - 1] == 47 {
+    end -= 1
+  }
+  if end == 0 {
+    return Error("invalid_path")
+  }
+  let mut key: List[u8] = []
+  let mut start = 0u64
+  let mut i = 0u64
+  while i <= end {
+    if i == end || raw[i] == 47 {
+      let width = i - start
+      if width == 0 || width == 1 && raw[start] == 46 || width == 2 && raw[start] == 46 && raw[start + 1] == 46 {
+        return Error("invalid_path")
+      }
+      start = i + 1
+    }
+    if i < end {
+      list.push(mut key, raw[i])
+    }
+    i += 1
+  }
+  let Ok(key_text) = text.finish(take key) else {
+    return Error("invalid_path")
+  }
+  Ok(take key_text)
+}
+
+fn read_local(d: Dir, name: String, limit: u64) -> Result[unique Bytes, String] {
+  let _ = path_key(name, false)?
+  let mut Ok(f) = file.open(d, path.of(name)) else {
+    return Error("file_open")
+  }
+  let mut reader = bufio.new(CHUNK)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = limit - list.len(data) + 1
+    let count = if remaining < CHUNK {
+      remaining
+    } else {
+      CHUNK
+    }
+    let Ok(n) = bufio.file_read_more(d, mut f, mut reader, count) else {
+      return Error("file_read")
+    }
+    if n > limit - list.len(data) {
+      return Error("input_bytes_limit")
+    }
+    if n == 0 {
+      break
+    }
+    for byte in bufio.peek(reader, n) {
+      list.push(mut data, byte)
+    }
+    bufio.consume(mut reader, n)
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+fn refill(mut source: Source, mut out: List[u8], max: u64) -> Result[u64, ()] {
+  let left = bytes.len(source.data) - source.at
+  let n = if left < max {
+    left
+  } else {
+    max
+  }
+  bytes.append(mut out, bytes.slice(source.data, source.at, source.at + n))
+  source.at += n
+  Ok(n)
+}
+
+fn admit(name: String, directory: bool, size: u64, mut seen: Set[String], total: u64) -> Result[
+  (),
+  String
+] {
+  let key = path_key(name, directory)?
+  if set.contains(seen, key) {
+    return Error("duplicate_path")
+  }
+  if set.len(seen) >= MEMBERS {
+    return Error("member_count_limit")
+  }
+  if size > ENTRY_BYTES {
+    return Error("entry_bytes_limit")
+  }
+  if size > TOTAL_BYTES - total {
+    return Error("expanded_bytes_limit")
+  }
+  if directory && size != 0 {
+    return Error("directory_size")
+  }
+  set.insert(mut seen, take key)
+  Ok(())
+}
+
+fn scan_tar(take data: Bytes) -> Result[unique List[Entry], String] {
+  let mut source = Source(data: take data, at: 0)
+  let mut reader = bufio.new(CHUNK)
+  let mut archive = tar.reader(None())
+  let mut entries: List[Entry] = []
+  let mut seen: Set[String] = set.empty()
+  let mut total = 0u64
+  while true {
+    let Ok(next) = tar.next(mut archive, mut reader, mut source, refill) else {
+      return Error("tar_malformed")
+    }
+    let Some(header) = next else {
+      break
+    }
+    let directory = match header.kind {
+      Regular() => false,
+      Directory() => true,
+      _ => return Error("unsupported_member_kind"),
+    }
+    admit(header.name, directory, header.size, mut seen, total)?
+    let mut state = sha256.new()
+    let mut size = 0u64
+    while true {
+      let mut chunk: List[u8] = []
+      let Ok(n) = tar.read(
+        mut archive,
+        mut reader,
+        mut source,
+        refill,
+        mut chunk,
+        CHUNK
+      ) else {
+        return Error("tar_malformed")
+      }
+      if n == 0 {
+        break
+      }
+      if n > ENTRY_BYTES - size || n > TOTAL_BYTES - total {
+        return Error("expanded_bytes_limit")
+      }
+      size += n
+      total += n
+      sha256.update(mut state, bytes.from_list(take chunk))
+    }
+    if size != header.size {
+      return Error("tar_size")
+    }
+    list.push(
+      mut entries,
+      Entry(
+        path: unique header.name,
+        kind: if directory {
+          "directory"
+        } else {
+          "file"
+        },
+        size: size,
+        sha256: hex.encode(bytes.from_inline(sha256.finish(take state)))
+      )
+    )
+  }
+  Ok(take entries)
+}
+
+fn scan_zip(data: Bytes) -> Result[unique List[Entry], String] {
+  let Ok(members) = zip.entries(data) else {
+    return Error("zip_malformed")
+  }
+  if list.len(members) > MEMBERS {
+    return Error("member_count_limit")
+  }
+  let mut entries: List[Entry] = []
+  let mut seen: Set[String] = set.empty()
+  let mut total = 0u64
+  for member in members {
+    if member.flags & 0x41 != 0 {
+      return Error("unsupported_encryption")
+    }
+    let slash = string.ends_with(member.name, "/")
+    let mode = if member.creator >> 8 == 3 || member.creator >> 8 == 19 {
+      member.external >> 16 & 0xf000
+    } else {
+      0
+    }
+    if mode != 0 && mode != 0x8000 && mode != 0x4000 {
+      return Error("unsupported_member_kind")
+    }
+    if mode == 0x8000 && slash {
+      return Error("unsupported_member_kind")
+    }
+    let directory = slash || mode == 0x4000 || member.external & 0x10 != 0
+    admit(member.name, directory, member.size, mut seen, total)?
+    // zip.read validates CRC, exact expanded size and data descriptors.
+    // std treats a trailing slash as metadata-only. Force the ordinary read
+    // path for directories too, so their local header/method/CRC is audited.
+    let mut readable = copy member
+    if directory {
+      readable.name = ""
+    }
+    let Ok(body) = zip.read(data, readable, ENTRY_BYTES) else {
+      return Error("zip_member_malformed")
+    }
+    if bytes.len(body) != member.size {
+      return Error("zip_member_size")
+    }
+    if crc32.digest(body) != member.crc {
+      return Error("zip_member_checksum")
+    }
+    total += bytes.len(body)
+    list.push(
+      mut entries,
+      Entry(
+        path: unique member.name,
+        kind: if directory {
+          "directory"
+        } else {
+          "file"
+        },
+        size: bytes.len(body),
+        sha256: sha256.digest_hex(body)
+      )
+    )
+  }
+  Ok(take entries)
+}
+
+@noalloc
+fn entry_order(a: Entry, b: Entry) -> i32 {
+  string.compare(a.path, b.path)
+}
+
+fn scan(data: Bytes, name: String) -> Result[unique List[Entry], String] {
+  // Select explicitly by suffix: no corrupt-ZIP-to-TAR fallback.
+  let mut entries = if string.ends_with(name, ".zip") {
+    scan_zip(data)?
+  } else if string.ends_with(name, ".tar") {
+    scan_tar(unique data)?
+  } else {
+    return Error("archive_extension")
+  }
+  list.sort(mut entries, entry_order)
+  Ok(take entries)
+}
+
+fn field_text(fields: Map[String, json.Value], key: String) -> Result[
+  unique String,
+  String
+] {
+  match map.get(fields, key) {
+    Some(Text(value)) => Ok(unique value),
+    _ => Error("manifest_field"),
+  }
+}
+
+fn decode(take data: Bytes) -> Result[unique List[Entry], String] {
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error("manifest_utf8")
+  }
+  let Ok(Object(root)) = json.parse(take text) else {
+    return Error("manifest_json")
+  }
+  if map.get(root, "schema") != Some(Number("1")) {
+    return Error("manifest_schema")
+  }
+  // summary is informational; verification always recomputes it.
+  if map.len(root) != 3 || map.get(root, "summary") == None() {
+    return Error("manifest_fields")
+  }
+  let Some(Array(values)) = map.get(root, "entries") else {
+    return Error("manifest_entries")
+  }
+  if list.len(values) > MEMBERS {
+    return Error("member_count_limit")
+  }
+  let mut entries: List[Entry] = []
+  let mut seen: Set[String] = set.empty()
+  let mut total = 0u64
+  for value in values {
+    let Object(fields) = value else {
+      return Error("manifest_entry")
+    }
+    if map.len(fields) != 4 {
+      return Error("manifest_fields")
+    }
+    let name = field_text(fields, "path")?
+    let kind = field_text(fields, "type")?
+    if kind != "file" && kind != "directory" {
+      return Error("unsupported_member_kind")
+    }
+    let Some(Number(number)) = map.get(fields, "size") else {
+      return Error("manifest_size")
+    }
+    let Ok(size) = u64.parse(number) else {
+      return Error("manifest_size")
+    }
+    let digest = field_text(fields, "sha256")?
+    if string.byte_len(digest) != 64 {
+      return Error("manifest_digest")
+    }
+    let Ok(raw) = hex.decode(digest) else {
+      return Error("manifest_digest")
+    }
+    if hex.encode(raw) != digest {
+      return Error("manifest_digest")
+    }
+    if kind == "directory" && digest != sha256.digest_hex(b"") {
+      return Error("manifest_directory_digest")
+    }
+    admit(name, kind == "directory", size, mut seen, total)?
+    total += size
+    list.push(
+      mut entries,
+      Entry(path: take name, kind: take kind, size: size, sha256: take digest)
+    )
+  }
+  list.sort(mut entries, entry_order)
+  Ok(take entries)
+}
+
+fn compare(take actual: List[Entry], take expected: List[Entry]) -> Report {
+  let mut report = Report(
+    entries: copy actual,
+    bytes: 0,
+    missing: [],
+    extra: [],
+    changed: []
+  )
+  for entry in actual {
+    report.bytes += entry.size
+    let mut found = false
+    for old in expected {
+      if entry.path == old.path {
+        found = true
+        if entry.kind != old.kind || entry.size != old.size || entry.sha256 != old.sha256 {
+          list.push(mut report.changed, copy entry.path)
+        }
+      }
+    }
+    if !found {
+      list.push(mut report.extra, copy entry.path)
+    }
+  }
+  for old in expected {
+    let mut found = false
+    for entry in actual {
+      if entry.path == old.path {
+        found = true
+      }
+    }
+    if !found {
+      list.push(mut report.missing, copy old.path)
+    }
+  }
+  take report
+}
+
+fn append(mut out: List[u8], value: String) {
+  bytes.append(mut out, string.as_bytes(value))
+}
+
+fn names_json(names: List[String], mut out: List[u8]) {
+  append(mut out, "[")
+  let mut first = true
+  for name in names {
+    if !first {
+      append(mut out, ",")
+    }
+    first = false
+    json.write_text_into(name, mut out)
+  }
+  append(mut out, "]")
+}
+
+fn is_match(report: Report) -> bool {
+  list.len(report.missing) == 0 && list.len(report.extra) == 0 && list.len(
+    report.changed
+  ) == 0
+}
+
+fn encode(report: Report) -> Bytes {
+  let mut out: List[u8] = []
+  append(mut out, "{\"schema\":1,\"entries\":[")
+  let mut first = true
+  for entry in report.entries {
+    if !first {
+      append(mut out, ",")
+    }
+    first = false
+    append(mut out, "{\"path\":")
+    json.write_text_into(entry.path, mut out)
+    append(mut out, ",\"type\":")
+    json.write_text_into(entry.kind, mut out)
+    append(mut out, f",\"size\":{entry.size},\"sha256\":")
+    json.write_text_into(entry.sha256, mut out)
+    append(mut out, "}")
+  }
+  let class = if is_match(report) {
+    "ok"
+  } else {
+    "mismatch"
+  }
+  let count = list.len(report.entries)
+  append(
+    mut out,
+    f"],\"summary\":{{\"class\":\"{class}\",\"members\":{count},\"bytes\":{report.bytes},\"missing\":"
+  )
+  names_json(report.missing, mut out)
+  append(mut out, ",\"extra\":")
+  names_json(report.extra, mut out)
+  append(mut out, ",\"changed\":")
+  names_json(report.changed, mut out)
+  append(mut out, "}}\n")
+  bytes.from_list(take out)
+}
+
+fn audit(rt: Io, args: Args) -> Result[Report, String] {
+  if arg.len(args) < 2 || arg.len(args) > 3 {
+    return Error("usage")
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error("arguments")
+  }
+  if command != "manifest" && command != "verify" {
+    return Error("usage")
+  }
+  if command == "manifest" && arg.len(args) != 2 || command == "verify" && arg.len(args) != 3 {
+    return Error("usage")
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return Error("arguments")
+  }
+  let Ok(d) = io.dir(rt, path.of("input")) else {
+    return Error("directory_grant")
+  }
+  let mut expected: List[Entry] = []
+  if command == "verify" {
+    let Ok(manifest) = arg.text(args, 2) else {
+      return Error("arguments")
+    }
+    expected = decode(read_local(d, manifest, MANIFEST_BYTES)?)?
+  }
+  let entries = scan(read_local(d, name, ARCHIVE_BYTES)?, name)?
+  if command == "verify" {
+    return Ok(compare(take entries, take expected))
+  }
+  expected = copy entries
+  Ok(compare(take entries, take expected))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let output = io.stdout(rt)?
+  match audit(rt, args) {
+    Ok(report) => {
+      out.write(output, encode(report))?
+      if !is_match(report) {
+        return Error(Mismatch())
+      }
+      Ok(())
+    },
+    Error(error) => {
+      let mut out: List[u8] = []
+      append(mut out, "{\"schema\":1,\"summary\":{\"class\":\"input_error\",\"error\":")
+      json.write_text_into(error, mut out)
+      append(mut out, "}}\n")
+      out.write(output, bytes.from_list(take out))?
+      Error(InvalidInput(take error))
+    },
+  }
+}
