@@ -105,3 +105,79 @@ fn ordered_poll_observation_records_cancellation_only_when_adapter_allows_it() {
     assert_eq!(calls.load(Ordering::Relaxed), 2);
     assert_eq!(finishes.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn ordered_mixed_home_every_and_concurrent_tokens_support_binary_search_for_every_ready_owner() {
+    let ready = ordered_ready_union(
+        Ready::Every,
+        vec![9, 1, 7, 9],
+        vec![
+            ReadyHost {
+                task: 3,
+                token: CONCURRENT | 2,
+                deadline: None,
+                ready: true,
+            },
+            ReadyHost {
+                task: 4,
+                token: CONCURRENT | 1,
+                deadline: None,
+                ready: false,
+            },
+            ReadyHost {
+                task: 5,
+                token: CONCURRENT | 2,
+                deadline: None,
+                ready: true,
+            },
+        ],
+    );
+    assert_eq!(ready, Ready::Tokens(vec![1, 7, 9, CONCURRENT | 2]));
+    for token in [1, 7, 9, CONCURRENT | 2] {
+        assert!(ready.contains(token));
+    }
+    for token in [0, 2, 8, CONCURRENT | 1] {
+        assert!(!ready.contains(token));
+    }
+}
+
+#[test]
+fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_waits() {
+    let (mut binding, calls, _) = binding(true);
+    binding.waits.armed.insert(
+        3,
+        (
+            42,
+            Request::SleepUntil {
+                clock: 99,
+                deadline: 5,
+            },
+        ),
+    );
+    binding.waits.native.insert(
+        1,
+        Native {
+            request: Request::ReadStdin { stdin: 2, max: 1 },
+            task: Some(6),
+            notified: false,
+            ready: false,
+        },
+    );
+    let ready = ordered_ready_union(
+        Ready::Every,
+        binding.waits.every_tokens(),
+        vec![ReadyHost {
+            task: 4,
+            token: CONCURRENT | 1,
+            deadline: None,
+            ready: true,
+        }],
+    );
+    assert_eq!(ready, Ready::Tokens(vec![1, 3, 7, CONCURRENT | 1]));
+    // The timer is selected and attempted now, rather than being erased by
+    // conversion of the home adapter's Every snapshot.
+    assert!(expired_binding(&mut binding, &ready).unwrap().is_empty());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(expired_binding(&mut binding, &ready).unwrap(), [42]);
+    assert!(binding.waits.armed.is_empty());
+}

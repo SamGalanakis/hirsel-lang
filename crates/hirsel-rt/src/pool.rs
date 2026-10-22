@@ -1393,6 +1393,9 @@ pub(crate) fn wake(exec: &Exec) {
 /// # Safety
 /// The run retains its execs for this callback; no activity lock is held.
 pub(crate) unsafe fn wake_home(run: *mut RunShared) {
+    if let Some(io) = unsafe { (*run).ordered_io.get() } {
+        io.notify();
+    }
     if let Some(io) = unsafe { (*run).free_io.get() } {
         io.notify();
     }

@@ -1363,7 +1363,10 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
                 s,
                 task,
                 completed,
-                unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0 },
+                unsafe {
+                    (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
+                        || ordered::host::concurrent::pending(run)
+                },
                 unsafe { crate::pool::has_slot_run(run) },
             ),
         }
@@ -1379,7 +1382,8 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
             .load(std::sync::atomic::Ordering::Acquire)
             || (*run).free_mode)
             && ((*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
-                || free::host::concurrent::pending(run))
+                || free::host::concurrent::pending(run)
+                || ordered::host::concurrent::pending(run))
     } {
         unsafe { crate::pool::wake_home(run) };
     }

@@ -51,6 +51,25 @@ impl ConcurrentAdapter for Checked {
         let (result, count) = self.real.call_observed_at(token, request);
         (result, if self.hide_output_count { None } else { count })
     }
+    fn parked(&self, token: u64) {
+        let _role = self.role();
+        self.real.parked(token);
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        let _role = self.role();
+        self.real.cancellable(token)
+    }
+    fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
+        let _role = self.role();
+        self.real.ready()
+    }
+    fn readiness(&self) -> Option<crate::readiness::Readiness> {
+        self.real.readiness()
+    }
+    fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
+        let _role = self.role();
+        self.real.wait_sources()
+    }
     fn finish(&self, token: u64) {
         let _role = self.role();
         self.finished.lock().unwrap().push(token);
@@ -539,6 +558,75 @@ fn ordered_concurrent_output_canonical_traces_keep_actual_prefixes_and_refuse_un
                     reference = Some(serialized);
                 }
                 assert_eq!(*adapter.finished.lock().unwrap(), [1, 2, 3, 4]);
+            }
+        }
+    }
+}
+
+#[test]
+fn ordered_concurrent_real_virtual_timer_drives_saved_waits_identically_at_every_width() {
+    let mut reference = None;
+    for width in [1, 2, 4, 8] {
+        for reorder in [
+            hirsel_run_config::Reorder::Off,
+            hirsel_run_config::Reorder::Auto,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut real = crate::io_real::RealIo::grant(root.path()).unwrap();
+            real.clock_grants(true, false);
+            real.virtual_clock(0);
+            let adapter = Arc::new(Checked {
+                real: real
+                    .into_concurrent()
+                    .unwrap_or_else(|_| panic!("Send adapter")),
+                run: Default::default(),
+                tokens: Default::default(),
+                finished: Default::default(),
+                hide_output_count: false,
+            });
+            let setup = adapter.clone();
+            let calls = adapter.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.concurrent_adapter = Some(adapter.clone());
+            unsafe { run.use_physical_dispatch() };
+            let (outcome, trace) = run.run_traced(
+                move |ctx| unsafe {
+                    let mut policy = Policy::admit(&Default::default(), None);
+                    policy.reorder = reorder;
+                    engine::enable(ctx, policy);
+                    setup.run.store((*ctx).run_ptr(), Ordering::Release);
+                    super::super::super::events::enable(ctx);
+                    super::super::super::events::initial_host(ctx, Some(1), None);
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    let Ok(Completion::ClockGrant(Ok(clock))) =
+                        request(ctx, &*calls, Request::MonotonicClock { io: 1 }).unwrap()
+                    else {
+                        panic!("clock grant")
+                    };
+                    for deadline in [10, 20] {
+                        assert_eq!(
+                            request(ctx, &*calls, Request::SleepUntil { clock, deadline }).unwrap(),
+                            Ok(Completion::Wait(Ok(())))
+                        );
+                    }
+                    assert!(!pending((*ctx).run_ptr()));
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(log.host_polls.len(), 2);
+                    assert_eq!(log.host_attempts.len(), 2);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(*adapter.tokens.lock().unwrap(), [1, 2, 2, 3, 3]);
+            assert_eq!(*adapter.finished.lock().unwrap(), [1, 2, 3]);
+            let bytes = trace.unwrap().bytes().to_vec();
+            if let Some(reference) = &reference {
+                assert_eq!(&bytes, reference);
+            } else {
+                reference = Some(bytes);
             }
         }
     }

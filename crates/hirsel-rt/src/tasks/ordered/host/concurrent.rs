@@ -1,10 +1,24 @@
-//! Explicit admission for nonparking ConcurrentAdapter calls. General native
-//! routing, readiness and terminal cuts remain gated. io_keys owns live alias
+//! Head-owned ConcurrentAdapter calls and saved readiness waits.
+//! The existing home retirement poll owns retries; terminal cuts remain gated. io_keys owns live alias
 //! discovery; event projection receives only an owned discovery snapshot.
 use super::*;
 use crate::io::{AdapterError, Completion, Request};
 use crate::io_concurrent::ConcurrentAdapter;
 use std::collections::BTreeMap;
+
+mod service;
+pub(crate) use service::CONCURRENT;
+pub(crate) use service::{Service, pending};
+
+/// Register only generation-qualified metadata before physical save.
+/// # Safety
+/// The issuer holds the role and owns its admitted request.
+pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
+    let io = unsafe { (*ctx).run_ref().ordered_io.get().unwrap() };
+    let generation = crate::tasks::scheduler(ctx).task(task).generation;
+    let _segment = unsafe { role::Segment::new(ctx) };
+    io.park(token, task, generation);
+}
 
 type Discovery = BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>;
 type Discovered = Result<Discovery, &'static str>;
@@ -26,16 +40,14 @@ impl Drop for Owner {
 
 /// # Safety
 /// The running Ordered task owns its role, request and adapter lifetime.
-/// This admission excludes requests which may register readiness waits.
+/// Parkable requests require the run-owned service installed before execution.
 pub(crate) unsafe fn request(
     ctx: *mut TaskCtx,
     adapter: &dyn ConcurrentAdapter,
     request: Request,
 ) -> Stopped<Result<Completion, AdapterError>> {
     if crate::host_waits::may_park(&request) {
-        return Err(Stop::Refused(
-            "Ordered concurrent readiness is not admitted".into(),
-        ));
+        return unsafe { service::request(ctx, adapter, request) };
     }
     let close = matches!(request, Request::Close { .. });
     assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
@@ -132,6 +144,22 @@ fn invoke(
     Discovered,
     Result<Option<Vec<u8>>, &'static str>,
 ) {
+    let result = invoke_attempt(adapter, token, cause, request, observing);
+    adapter.finish(token);
+    result
+}
+
+fn invoke_attempt(
+    adapter: &dyn ConcurrentAdapter,
+    token: u64,
+    cause: Option<u32>,
+    request: Request,
+    observing: bool,
+) -> (
+    Result<Completion, AdapterError>,
+    Discovered,
+    Result<Option<Vec<u8>>, &'static str>,
+) {
     let bytes = observing
         .then(|| match &request {
             Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
@@ -159,7 +187,6 @@ fn invoke(
     } else {
         Ok(BTreeMap::new())
     };
-    adapter.finish(token);
     (result, discovered, output)
 }
 
@@ -187,3 +214,6 @@ fn discover(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wait_tests;

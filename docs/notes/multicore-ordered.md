@@ -253,6 +253,31 @@ language corpus gate. They do not establish the design's native speedup gate.
 Runtime controls additionally exercise role-enabled task-table growth at widths
 1 and 4 with migration. No native parallel speedup is claimed.
 
+## Concurrent saved host waits
+
+The explicitly admitted `ConcurrentAdapter` route accepts parked requests when
+`BodyRun.concurrent_adapter` supplies their run-owned service. An unowned or
+different adapter still refuses before an ordinal, token or host effect. All
+widths, including one, use the same physical saved-frame dispatcher.
+
+Each request keeps one token and ordinal across Blocked, spurious readiness and
+completion. Initial calls execute at the head; the existing retirement/home
+poll executes retries in deadline and park order. It validates generation,
+wait token and physical save, installs owned discovery and attempt/completion
+evidence, then publishes wakes. Adapter callbacks retain no scheduler role or
+parked TaskCtx borrow. Home and concurrent sources share an idle wait, and the
+combined readiness snapshot preserves armed deadlines and sorted token lookup.
+The run retains completion buffers until their owner consumes them, and finishes
+abandoned registrations before its task metadata is destroyed.
+
+Controls compare canonical traces at widths 1/2/4/8 with reorder off/auto for
+sleep and byte-input waits, including the real virtual-time readiness driver.
+Cancellation, a spurious retry, reused task rows, mixed home deadlines, and an
+external stop have focused controls. These are scoped native controls; the
+full language corpus, general terminal cuts and production activation remain
+qualification work. The normal launcher still uses its existing home route
+while the independent E1 production gate is OFF.
+
 ## Prior art and deviations
 
 - The queue and call transitions are ports of the executable checked model,

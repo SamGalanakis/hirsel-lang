@@ -320,6 +320,9 @@ pub(crate) struct RunShared {
     pub(crate) profile_output: RoleCell<Option<std::fs::File>>,
     /// Trace admission only: concurrent Shared-root provenance, never a role lookup.
     pub(crate) ordered_roots: std::sync::OnceLock<crate::ordered::root_ids::Registry>,
+    /// Ordered concurrent requests retain their adapter through saved waits.
+    pub(crate) ordered_io:
+        std::sync::OnceLock<std::sync::Arc<crate::tasks::ordered::host::concurrent::Service>>,
     /// Explicit Free host admission: owned concurrent requests and driver wake.
     pub(crate) free_io:
         std::sync::OnceLock<std::sync::Arc<crate::tasks::free::host::concurrent::Service>>,
@@ -884,6 +887,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         #[cfg(feature = "measurement")]
         profile_output: RoleCell::new(None),
         ordered_roots: Default::default(),
+        ordered_io: Default::default(),
         free_io: Default::default(),
         free_native_io: Default::default(),
         free_native_spans: Default::default(),
@@ -995,6 +999,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_destroy(ctx: *mut TaskCtx) {
     // run goes first: its tasks' contexts lie in the worker's stacks.
     unsafe {
         let home = (*ctx.run).home;
+        // All workers are quiescent; finish concurrent registrations while
+        // role and task metadata still exist for bounded adapter callbacks.
+        drop((*ctx.run).ordered_io.take());
         drop(Box::from_raw(ctx.run));
         drop(Box::from_raw(home));
     }
@@ -1029,6 +1036,7 @@ pub(crate) unsafe fn reclaim(run: *mut RunShared) {
         let holders = crate::pool::holders(&*run);
         crate::pool::forget(&mut *run);
         let (root, home) = ((*run).root_ctx, (*run).home);
+        drop((*run).ordered_io.take());
         drop(Box::from_raw(run));
         drop(Box::from_raw(root));
         drop(Box::from_raw(home));

@@ -370,6 +370,7 @@ pub(super) struct Log {
     host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
     home_phases: BTreeMap<(Vec<u32>, u64), host_phases::Phase>,
     home_requests: BTreeSet<(Vec<u32>, u64)>,
+    concurrent_requests: BTreeSet<(Vec<u32>, u64)>,
     invalid_home: BTreeSet<(Vec<u32>, u64)>,
     host_certified: BTreeSet<(Vec<u32>, u64)>,
     host_outputs: BTreeMap<(Vec<u32>, u64), Result<Option<Vec<u8>>, &'static str>>,
@@ -1561,6 +1562,19 @@ pub(crate) fn request_host(ctx: *mut TaskCtx, request: &crate::io::Request) {
     );
 }
 
+/// Parkable concurrent operations use the same entered/attempt/return phases
+/// as home waits, with their declared resource footprint and owned discovery.
+pub(crate) fn concurrent_phases(ctx: *mut TaskCtx) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path].checked_sub(1).unwrap();
+    assert!(log.concurrent_requests.insert((path, ordinal)));
+}
+
 /// Install an owned adapter discovery snapshot before projecting its result.
 /// Identity lookups ran outside this role; this window cannot suspend.
 pub(crate) fn discover_host(
@@ -1569,10 +1583,20 @@ pub(crate) fn discover_host(
     discovered: &BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
 ) -> Result<(), &'static str> {
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    discover_host_for(s, unsafe { (*ctx).task_id }, result, discovered)
+}
+
+/// Source-free discovery at a reserved poll, before any completion or wake.
+pub(crate) fn discover_host_for(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    discovered: &BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
+) -> Result<(), &'static str> {
     if !enabled(s) {
         return Ok(());
     }
-    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let path = s.task(task).path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
@@ -1591,11 +1615,9 @@ pub(crate) fn discover_host(
         result,
         discovered,
     )?;
-    assert!(
-        log.host_creations
-            .insert((path, ordinal), created)
-            .is_none()
-    );
+    let key = (path, ordinal);
+    let phased = log.concurrent_requests.contains(&key);
+    assert!(log.host_creations.insert(key, created).is_none() || phased);
     Ok(())
 }
 

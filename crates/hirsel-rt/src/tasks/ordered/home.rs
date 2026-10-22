@@ -8,7 +8,8 @@ use std::sync::atomic::Ordering;
 /// Admission loop only; no Hirsel frame runs on this home stack.
 pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if !unsafe { (*run).ordered_mode.load(Ordering::Acquire) }
-        || unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0
+        || (unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0
+            && !unsafe { super::host::concurrent::pending(run) })
     {
         return false;
     }
@@ -61,7 +62,9 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             let mut hosts: Vec<_> = hosts
                 .into_iter()
                 .filter_map(|crate::host_waits::ReadyHost { task, token, deadline, ready }| {
-                    if !readiness::saved(s, task)
+                    if (token & super::host::concurrent::CONCURRENT != 0
+                        && !unsafe { (*run).ordered_io.get().unwrap() }.valid(token, task, s.task(task).generation))
+                        || !readiness::saved(s, task)
                         || !matches!(s.task(task).wait, Some(Wait::Host { token: t }) if t == token)
                     {
                         return None;
@@ -91,7 +94,15 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                 assert_eq!(attempt.task, task);
                 let _guard = unsafe { role::IdleGuard::new(run) };
                 let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+                let discovery = attempt.discovery.map_or(Ok(()), |d| {
+                    d.and_then(|d| super::events::discover_host_for(s, task, &attempt.result, &d))
+                });
                 super::events::record_host_attempt(s, task, &attempt.result, !retiring);
+                if discovery.is_err() && done {
+                    let result = unsafe { crate::host_waits::completed_home(run, token) };
+                    super::events::record_host_poll(s, task, result.result, !retiring);
+                }
+                discovery.map_err(|e| crate::stop::Stop::Refused(e.into()))?;
             }
             if done {
                 if observing {

@@ -482,6 +482,8 @@ pub struct BodyRun {
     physical_dispatch: bool,
     pub fuel: Option<u64>,
     pub adapter: Option<Box<dyn crate::io::Adapter>>,
+    /// Explicit Ordered wait-service lifetime, retained until all workers leave.
+    pub concurrent_adapter: Option<Arc<dyn crate::io_concurrent::ConcurrentAdapter>>,
     control: std::sync::Arc<crate::stop::Control>,
     metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
 }
@@ -506,6 +508,7 @@ impl BodyRun {
             physical_dispatch: false,
             fuel: None,
             adapter: None,
+            concurrent_adapter: None,
             control: Default::default(),
             metrics: None,
         }
@@ -569,6 +572,10 @@ impl BodyRun {
         // SAFETY: the fresh root context, on this thread, before the run's code runs.
         unsafe {
             (*ctx).run().control = std::sync::Arc::clone(&self.control);
+            if let Some(adapter) = self.concurrent_adapter {
+                crate::tasks::ordered::host::concurrent::Service::install(ctx, adapter)
+                    .unwrap_or_else(|stop| panic!("concurrent Ordered admission: {stop:?}"));
+            }
             (*ctx).run().worker_metrics = self.metrics.clone();
             (*ctx).run().free_mode = self.free;
             // A single-worker physical reference uses the same dispatcher as

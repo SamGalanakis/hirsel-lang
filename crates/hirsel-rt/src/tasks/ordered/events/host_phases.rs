@@ -11,6 +11,7 @@ pub(super) struct Phase {
     parked: bool,
     returned: bool,
     valid: bool,
+    keys: Vec<(host_keys::Resource, Mode)>,
 }
 
 pub(crate) fn request_keys(ctx: *mut TaskCtx) {
@@ -130,6 +131,25 @@ impl Log {
         if rows.iter().map(|row| &row.handle).ne(result.handles.iter()) {
             return None;
         }
+        if self.concurrent_requests.contains(key) {
+            let mut resources = BTreeSet::new();
+            let mut events = Vec::new();
+            for row in rows {
+                let resource = CanonicalItem::HostResource(row.resource.clone());
+                if !self.versions.contains_key(&resource) && resources.insert(row.resource.clone())
+                {
+                    events.push((resource, CanonicalOutcome::HostResourceCreated));
+                }
+                let item = CanonicalItem::HostHandle(row.handle.clone());
+                let outcome = if self.versions.contains_key(&item) {
+                    CanonicalOutcome::HostAlias(row.clone())
+                } else {
+                    CanonicalOutcome::HostCreated(row.clone())
+                };
+                events.push((item, outcome));
+            }
+            return Some(events);
+        }
         Some(
             rows.iter()
                 .map(|row| {
@@ -168,7 +188,9 @@ impl Log {
 
     pub(super) fn start_home(&mut self, path: &[u32], ordinal: u64) {
         let key = (path.to_vec(), ordinal);
-        if !self.home_requests.contains(&key) || self.invalid_home.contains(&key) {
+        if (!self.home_requests.contains(&key) && !self.concurrent_requests.contains(&key))
+            || self.invalid_home.contains(&key)
+        {
             return;
         }
         let Some(entry) = self.host_entries.get(&key).cloned() else {
@@ -197,8 +219,16 @@ impl Log {
         let Some(created) = self.home_created_events(&key, &result) else {
             return;
         };
-        if self.host_key_observations.get(&key)
-            != Some(&Some(vec![(host_keys::Resource::Coupled, Mode::Exclusive)]))
+        let Some(keys) = self
+            .host_key_observations
+            .get(&key)
+            .and_then(Option::as_ref)
+            .cloned()
+        else {
+            return;
+        };
+        if self.home_requests.contains(&key)
+            && keys != vec![(host_keys::Resource::Coupled, Mode::Exclusive)]
         {
             return;
         }
@@ -207,16 +237,16 @@ impl Log {
             creator: path.to_vec(),
             ordinal,
         });
-        let mut events = vec![
-            (operation.clone(), CanonicalOutcome::HostRequest(request)),
+        let mut events = vec![(operation.clone(), CanonicalOutcome::HostRequest(request))];
+        events.extend(keys.iter().map(|(resource, mode)| {
             (
-                CanonicalItem::HostResource(host_keys::Resource::Coupled),
+                CanonicalItem::HostResource(resource.clone()),
                 CanonicalOutcome::HostAccess {
-                    mode: Mode::Exclusive,
+                    mode: *mode,
                     result: result.clone(),
                 },
-            ),
-        ];
+            )
+        }));
         if done {
             events.extend(created);
             events.push((operation, CanonicalOutcome::HostResult(result.clone())));
@@ -232,7 +262,8 @@ impl Log {
                         result: done.then_some(result),
                         parked: false,
                         returned: false,
-                        valid: true
+                        valid: true,
+                        keys,
                     }
                 )
                 .is_none()
@@ -302,13 +333,19 @@ impl Log {
         if done {
             phase.result = Some(result.clone());
         }
-        let mut events = vec![(
-            CanonicalItem::HostResource(host_keys::Resource::Coupled),
-            CanonicalOutcome::HostAccess {
-                mode: Mode::Exclusive,
-                result: result.clone(),
-            },
-        )];
+        let mut events = phase
+            .keys
+            .iter()
+            .map(|(resource, mode)| {
+                (
+                    CanonicalItem::HostResource(resource.clone()),
+                    CanonicalOutcome::HostAccess {
+                        mode: *mode,
+                        result: result.clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
         if done {
             events.extend(created);
             events.push((

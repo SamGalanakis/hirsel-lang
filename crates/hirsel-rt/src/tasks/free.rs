@@ -201,7 +201,9 @@ pub(super) unsafe fn after_save(
 /// The caller holds IdleGuard; no Scheduler borrow survives this call.
 pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
     if unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0
-        || unsafe { host::concurrent::pending(run) }
+        || unsafe {
+            host::concurrent::pending(run) || super::ordered::host::concurrent::pending(run)
+        }
     {
         return;
     }

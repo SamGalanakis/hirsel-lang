@@ -24,6 +24,7 @@ use crate::TaskCtx;
 use crate::id_map::IdMap;
 use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
+use crate::tasks::ordered::host::concurrent::{self as ordered_concurrent, CONCURRENT};
 
 /// Run `f` on the run's home thread, which holds the Io binding: the scheduling points of a
 /// width > 1 run run on compute workers (`crate::pool`).
@@ -88,6 +89,17 @@ pub(crate) struct Waits {
     /// Armed scope deadlines (CONC-3) by token: the scope and its timer request.
     armed: IdMap<(u32, Request)>,
 }
+impl Waits {
+    fn every_tokens(&self) -> Vec<u64> {
+        self.parked
+            .iter_unordered()
+            .map(|(token, _)| token)
+            .chain(self.armed.iter_unordered().map(|(token, _)| token))
+            .chain(self.native.iter_unordered().map(|(token, _)| token))
+            .collect()
+    }
+}
+
 struct Parked {
     request: Request,
     borrowed: Option<*mut crate::io::NetBuffer<'static>>,
@@ -737,6 +749,24 @@ pub(crate) struct ReadyHost {
 /// # Safety
 /// Home only; the policy reserves all host effects and retains no role borrow.
 pub(crate) unsafe fn ready_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+    let mut ready = if unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) } != 0
+    {
+        unsafe { ready_binding_home(run) }?
+    } else {
+        HomeReady {
+            expired: Vec::new(),
+            hosts: Vec::new(),
+        }
+    };
+    if unsafe { ordered_concurrent::pending(run) } {
+        ready
+            .hosts
+            .extend(unsafe { (*run).ordered_io.get().unwrap() }.ready()?);
+    }
+    Ok(ready)
+}
+
+unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
     let expired = expired_binding(binding, &ready)?;
@@ -778,6 +808,11 @@ pub(crate) unsafe fn poll_home(
     cause: Option<u32>,
     ready: bool,
 ) -> Stopped<bool> {
+    if token & CONCURRENT != 0 {
+        return Ok(unsafe { (*run).ordered_io.get().unwrap() }
+            .poll(token, cause, ready, false)?
+            .0);
+    }
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     unsafe { poll_binding(binding, token, cause, ready) }
 }
@@ -793,6 +828,19 @@ pub(crate) unsafe fn poll_observed_home(
     cause: Option<u32>,
     ready: bool,
 ) -> Stopped<(bool, Option<CompletedHost>)> {
+    if token & CONCURRENT != 0 {
+        let io = unsafe { (*run).ordered_io.get().unwrap() };
+        let (done, attempt) = io.poll(token, cause, ready, true)?;
+        let task = io.task(token);
+        return Ok((
+            done,
+            attempt.map(|attempt| CompletedHost {
+                task,
+                result: attempt.result,
+                discovery: Some(attempt.discovery),
+            }),
+        ));
+    }
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let task = binding
         .waits
@@ -802,7 +850,14 @@ pub(crate) unsafe fn poll_observed_home(
         .expect("a saved host owner");
     let mut attempt = None;
     let done = unsafe { poll_binding_observed(binding, token, cause, ready, Some(&mut attempt)) }?;
-    Ok((done, attempt.map(|result| CompletedHost { task, result })))
+    Ok((
+        done,
+        attempt.map(|result| CompletedHost {
+            task,
+            result,
+            discovery: None,
+        }),
+    ))
 }
 
 /// Owned evidence of a request whose poll just completed. The caller must
@@ -814,6 +869,9 @@ pub(crate) unsafe fn completed_home(
     run: *mut crate::context::RunShared,
     token: u64,
 ) -> CompletedHost {
+    if token & CONCURRENT != 0 {
+        return unsafe { (*run).ordered_io.get().unwrap() }.completed(token);
+    }
     let binding = unsafe { &*(*run).io_binding().cast::<Binding>() };
     let row = binding
         .waits
@@ -822,6 +880,7 @@ pub(crate) unsafe fn completed_home(
         .expect("a reserved host wait");
     CompletedHost {
         task: row.task.expect("a parked host owner"),
+        discovery: None,
         result: crate::tasks::ordered::events::owned_host_result(
             row.completion
                 .as_ref()
@@ -831,6 +890,12 @@ pub(crate) unsafe fn completed_home(
 }
 
 pub(crate) struct CompletedHost {
+    pub(crate) discovery: Option<
+        Result<
+            std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
+            &'static str,
+        >,
+    >,
     pub(crate) task: u32,
     pub(crate) result: Result<Completion, AdapterError>,
 }
@@ -847,6 +912,9 @@ pub(crate) unsafe fn wait_sources_home(
 /// # Safety
 /// Home only, after no running segment or runnable turn remains. No role is held.
 pub(crate) unsafe fn wait_home(run: *mut crate::context::RunShared) -> Stopped<bool> {
+    if unsafe { ordered_concurrent::pending(run) } {
+        return unsafe { (*run).ordered_io.get().unwrap().wait(run) };
+    }
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let waited = binding.adapter.wait().map_err(Stop::refusal)?;
     if let Some(stop) = unsafe { (*run).control.stopped() } {
@@ -875,6 +943,9 @@ unsafe fn disarm_here(ctx: *mut TaskCtx, token: u64) {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
 pub(crate) unsafe fn deadline(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
+    if token & CONCURRENT != 0 && unsafe { (*ctx).run_ref().ordered_io.get().is_some() } {
+        return unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.deadline(token);
+    }
     // SAFETY: caller contract.
     unsafe { crate::stop::check(ctx, at_home(ctx, || deadline_here(ctx, token))) }
 }
@@ -892,6 +963,10 @@ unsafe fn deadline_here(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` blocked.
 pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
+    if token & CONCURRENT != 0 && crate::tasks::ordered::engine::on(ctx) {
+        unsafe { ordered_concurrent::park(ctx, token, task) };
+        return;
+    }
     // SAFETY: caller contract.
     unsafe { crate::stop::check(ctx, at_home(ctx, || park_here(ctx, token, task))) }
 }
@@ -914,6 +989,9 @@ unsafe fn park_here(ctx: *mut TaskCtx, token: u64, task: u32) {
 /// # Safety
 /// The context is live; its binding, if any, has exclusive access.
 pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
+    if unsafe { ordered_concurrent::pending((*ctx).run_ptr()) } {
+        return false;
+    }
     if unsafe { (*ctx).io_data() }.is_null() {
         return true;
     }
@@ -928,14 +1006,44 @@ pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
 /// `ctx` is live and no borrow of the Binding is held.
 pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     // SAFETY: caller contract.
-    if unsafe { quiet(ctx) } {
+    if unsafe { quiet(ctx) && !ordered_concurrent::pending((*ctx).run_ptr()) } {
         return Ok(Ready::Tokens(Vec::new()));
     }
-    // SAFETY: caller contract.
+    // Concurrent callbacks must not retain the issuer's scheduler role.
+    let concurrent = unsafe { ordered_concurrent::pending((*ctx).run_ptr()) };
+    if concurrent {
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        return unsafe { at_home(ctx, || ready_here(ctx)) }?;
+    }
     unsafe { at_home(ctx, || ready_here(ctx)) }?
 }
 
 unsafe fn ready_here(ctx: *mut TaskCtx) -> Stopped<Ready> {
+    let home = unsafe { ready_binding(ctx) }?;
+    if !unsafe { ordered_concurrent::pending((*ctx).run_ptr()) } {
+        return Ok(home);
+    }
+    let home_tokens = if matches!(home, Ready::Every) {
+        unsafe { Binding::get(ctx) }.waits.every_tokens()
+    } else {
+        Vec::new()
+    };
+    let concurrent = unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.ready()?;
+    Ok(ordered_ready_union(home, home_tokens, concurrent))
+}
+
+fn ordered_ready_union(home: Ready, every: Vec<u64>, concurrent: Vec<ReadyHost>) -> Ready {
+    let mut tokens = match home {
+        Ready::Tokens(tokens) => tokens,
+        Ready::Every => every,
+    };
+    tokens.extend(concurrent.into_iter().filter(|r| r.ready).map(|r| r.token));
+    tokens.sort_unstable();
+    tokens.dedup();
+    Ready::Tokens(tokens)
+}
+
+unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Ready::Tokens(Vec::new()));
@@ -969,11 +1077,15 @@ unsafe fn ready_here(ctx: *mut TaskCtx) -> Stopped<Ready> {
 /// `ctx` is live; with no Binding bound nothing is parked.
 pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
     // SAFETY: caller contract.
-    if unsafe { quiet(ctx) } {
-        return Vec::new();
+    let mut woken = if unsafe { quiet(ctx) } {
+        Vec::new()
+    } else {
+        unsafe { crate::stop::check(ctx, at_home(ctx, || woken_here(ctx, ready))) }
+    };
+    if let Some(io) = unsafe { (*ctx).run_ref().ordered_io.get() } {
+        woken.extend(io.woken(crate::tasks::scheduler(ctx), ready));
     }
-    // SAFETY: caller contract.
-    unsafe { crate::stop::check(ctx, at_home(ctx, || woken_here(ctx, ready))) }
+    woken
 }
 
 unsafe fn woken_here(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
@@ -1009,6 +1121,27 @@ pub(crate) unsafe fn poll(
 ) -> Stopped<bool> {
     let observing =
         crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
+    if token & CONCURRENT != 0 {
+        let io = unsafe { (*ctx).run_ref().ordered_io.get().unwrap() };
+        let (done, attempt) = {
+            let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+            io.poll(token, cause, ready, observing)
+        }?;
+        if let Some(attempt) = attempt {
+            let result = attempt.result;
+            let task = io.task(token);
+            let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+            let discovery = attempt.discovery.and_then(|d| {
+                crate::tasks::ordered::events::discover_host_for(s, task, &result, &d)
+            });
+            crate::tasks::ordered::events::record_host_attempt(s, task, &result, false);
+            if done {
+                crate::tasks::ordered::events::record_host_poll(s, task, result, false);
+            }
+            discovery.map_err(|e| Stop::Refused(e.into()))?;
+        }
+        return Ok(done);
+    }
     if !observing {
         // SAFETY: caller contract; ordinary path retains no evidence.
         return unsafe { at_home(ctx, || poll_here(ctx, token, cause, ready)) }?;
@@ -1024,6 +1157,16 @@ pub(crate) unsafe fn poll(
         // SAFETY: the bridge returned the role; do not observe a stop while
         // this owned completion has yet to be installed in the log.
         let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        let discovery = completion.discovery.map_or(Ok(()), |d| {
+            d.and_then(|d| {
+                crate::tasks::ordered::events::discover_host_for(
+                    s,
+                    completion.task,
+                    &completion.result,
+                    &d,
+                )
+            })
+        });
         crate::tasks::ordered::events::record_host_attempt(
             s,
             completion.task,
@@ -1038,6 +1181,7 @@ pub(crate) unsafe fn poll(
                 false,
             );
         }
+        discovery.map_err(|e| Stop::Refused(e.into()))?;
     }
     Ok(done)
 }
@@ -1048,6 +1192,11 @@ unsafe fn poll_here(
     cause: Option<u32>,
     ready: bool,
 ) -> Stopped<bool> {
+    if token & CONCURRENT != 0 {
+        return Ok(unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }
+            .poll(token, cause, ready, false)?
+            .0);
+    }
     let binding = unsafe { Binding::get(ctx) };
     unsafe { poll_binding(binding, token, cause, ready) }
 }
