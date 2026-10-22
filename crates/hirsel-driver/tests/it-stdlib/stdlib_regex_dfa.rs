@@ -190,8 +190,9 @@ fn interpreter_driver(source: &str) -> String {
     let mut driver = head.replace("dfa_test_main()", "dfa_interpreter_matches()");
     driver.push_str("  Ok(())\n}\n");
     driver.push_str("pub fn dfa_interpreter_misc() -> Result[(), DfaTestFailure] uses {} {\n");
-    driver.push_str(&main[main.find("  if !dfa_forced_quits()").unwrap()..]);
+    driver.push_str(&main[main.find("  if !dfa_scalar_retry()").unwrap()..]);
     let sweep = &source[source.find("fn dfa_public_sweeps()").unwrap()..];
+    let sweep = &sweep[..sweep.find("\n}").unwrap() + 2];
     let declaration = sweep
         .lines()
         .find(|line| line.contains("let patterns:"))
@@ -211,5 +212,8 @@ fn interpreter_driver(source: &str) -> String {
         let list = serde_json::to_string(chunk).unwrap();
         driver.push_str(&format!("pub fn dfa_interpreter_work_{index}() -> Result[(), DfaTestFailure] uses {{}} {{\n let patterns: List[String] = {list}\n if dfa_interpreter_sweeps(patterns) {{ Ok(()) }} else {{ Error(DfaTestFailure(pattern: \"partition\", src: \"aaa/64a\", stage: {index})) }}\n}}\n"));
     }
+    assert_eq!(driver.matches("if !dfa_scalar_retry()").count(), 1);
+    assert_eq!(driver.matches("pub fn dfa_interpreter_").count(), 6);
+    assert!(!driver.contains("fn dfa_scalar_retry()"));
     driver
 }
