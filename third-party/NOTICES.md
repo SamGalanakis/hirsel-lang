@@ -226,6 +226,7 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 | Rust standard library | `library/core/src/fmt/num.rs`, `library/coretests/tests/fmt/num.rs` | `stdlib/std@1/decimal.hir`, `conformance/SEM/SEM-1-format-into-appends-run.hir` | same | MIT |
 | itoa | `src/lib.rs:264-320` digit-pair/four-digit structure for the inline formatter and decimal appender; `src/lib.rs:245-255` ASCII construction proof | `stdlib/std@1/decimal.hir`, primitive-only f-string finish | dtolnay/itoa `1577ed901354d0d7448ac162328f9dbf5183124c` | MIT OR Apache-2.0 |
 | Rust standard library | `library/std/src/collections/hash/set.rs:135-150` defer backing allocation until first insertion | `stdlib/std@1/derive.hir` lazy unknown-key tracker | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
+| SmallVec | `src/lib.rs:586-615,674-703` bounded inline storage before spill allocation | `stdlib/std@1/derive.hir` two inline unknown-key slots and hashed overflow | servo/rust-smallvec `4999262d672a92b1b6a4aab7bef43b3d788f3d83` | MIT |
 | Go standard library | `src/html/template/js.go:254-263,336-354` escaping replacement-table structure | `examples/tasks/view.hir` combined JSON/HTML attribute writer; existing JSON-then-HTML spelling retained | golang/go `c0be4674865b06f0be851e27cef93136708be506` | BSD-3-Clause |
 | Rust standard library | `library/alloc/src/fmt.rs:650-662`, `library/core/src/fmt/mod.rs:754-806` literal-size estimate and one-buffer formatting; `library/alloc/src/string.rs:1038-1040` construction from known UTF-8 | `crates/hirsel-parser/src/formats.rs`, `crates/hirsel-check/src/body/formats.rs`, `crates/hirsel-rc/src/library/bytes.rs` | rust-lang/rust `19833af7224424e8b53e288097d56b6af43d5bcf` | MIT |
 | Rust standard library | integer Display buffer formatting and integer-limit vectors | std@1 integer `to_string`/`format_into` share the decimal appender; `crates/hirsel-pipeline-tests/tests/rc/rc_append_into.rs` checks consumers that only select `to_string` | same | MIT |
@@ -322,6 +323,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - Rust standard library: Copyright (c) The Rust Project Contributors
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers
 - serde_json: Copyright (c) Serde project contributors
+- SmallVec: Copyright (c) 2018 The Servo Project Developers
 - JSONTestSuite: Copyright (c) 2016 Nicolas Seriot
 - MessagePack test-suite: Copyright (c) 2017-2018 Yusuke Kawasaki
 - saphyr: Copyright (c) 2015 Chen Yuheng; Copyright (c) 2023 Ethiraric

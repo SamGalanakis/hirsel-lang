@@ -1746,6 +1746,11 @@ pub fn remember_unknown_key(mut keys: Option[Set[String]], take key: String) -> 
   !duplicate
 }
 
+// SmallVec 4999262d672a92b1b6a4aab7bef43b3d788f3d83 (MIT/Apache-2.0),
+// src/lib.rs:586-615,674-703 keeps bounded inline
+// storage before allocating spill storage. The reader must own retained keys:
+// cursor-borrowed TextViews cannot survive the next mutable cursor operation.
+// Keep two owned spellings inline and hash only subsequent unknown keys.
 fn reader_members(
   mut w: Writer,
   names: List[String],
@@ -1763,11 +1768,13 @@ fn reader_members(
     i += 1
   }
   let keys = fresh(mut w, "keys")
+  let first_unknown = fresh(mut w, "unknown")
+  let second_unknown = fresh(mut w, "unknown")
   let first = fresh(mut w, "first")
   let key = fresh(mut w, "key")
   put(
     mut w,
-    f" let mut {keys}: Option[Set[String]] = None\n let mut {first} = true\n while true {{\n let Some({key}) = (match std@1/json.object_key(mut cursor, mut {first}) {{ Ok(k) => k, Error(_) => return Error(\"not JSON\") }}) else {{ break }}\n"
+    f" let mut {keys}: Option[Set[String]] = None\n let mut {first_unknown}: Option[String] = None\n let mut {second_unknown}: Option[String] = None\n let mut {first} = true\n while true {{\n let Some({key}) = (match std@1/json.object_key(mut cursor, mut {first}) {{ Ok(k) => k, Error(_) => return Error(\"not JSON\") }}) else {{ break }}\n"
   )
   i = 0
   for name in names {
@@ -1784,7 +1791,7 @@ fn reader_members(
   }
   put(
     mut w,
-    f" let unknown_key = std@1/json.text_owned({key})\n if !std@1/derive.remember_unknown_key(mut {keys}, take unknown_key) {{ return Error(\"not JSON\") }}\n std@1/derive.read_json(std@1/json.colon(mut cursor))?\n std@1/derive.read_json(std@1/json.skip(mut cursor))?\n }}\n"
+    f" match {first_unknown} {{\n None => {{ {first_unknown} = Some(std@1/json.text_owned({key})) }},\n Some(previous_first) => {{\n if std@1/json.text_is({key}, previous_first) {{ return Error(\"not JSON\") }}\n match {second_unknown} {{\n None => {{ {second_unknown} = Some(std@1/json.text_owned({key})) }},\n Some(previous_second) => {{\n if std@1/json.text_is({key}, previous_second) {{ return Error(\"not JSON\") }}\n let unknown_key = std@1/json.text_owned({key})\n if !std@1/derive.remember_unknown_key(mut {keys}, take unknown_key) {{ return Error(\"not JSON\") }}\n }},\n }}\n }},\n }}\n std@1/derive.read_json(std@1/json.colon(mut cursor))?\n std@1/derive.read_json(std@1/json.skip(mut cursor))?\n }}\n"
   )
   let mut arguments: List[String] = []
   i = 0

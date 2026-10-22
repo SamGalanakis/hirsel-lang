@@ -86,6 +86,19 @@ pub fn main(t: Test) -> Result[(), ()] {
     "{\"x\":1,\"\\u0078\":2}",
     "{\"x\":1,\"a\":0,\"a\":1}",
     "{\"x\":1,\"a\":0,\"\\u0061\":1}",
+    // Duplicates of either inline key, in both escaped/plain directions,
+    // before and after spilling later keys into the hashed tracker.
+    "{\"x\":1,\"a\":0,\"b\":0,\"a\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"\\u0062\":1}",
+    "{\"x\":1,\"\\u0061\":0,\"b\":0,\"a\":1}",
+    "{\"x\":1,\"a\":0,\"\\u0062\":0,\"b\":1}",
+    "{\"x\":1,\"é\":0,\"b\":0,\"\\u00e9\":1}",
+    "{\"x\":1,\"a\":0,\"𝄞\":0,\"\\uD834\\uDD1E\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"a\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"b\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"\\u0063\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"\\u0064\":1}",
+    "{\"x\":1,\"a\":0,\"b\":0,\"c\":0,\"c\" ?}",
     "{\"x\":1,\"opts\":{\"a\":0,\"\\u0061\":1}}",
     "{\"x\":1,\"opts\":{\"é\":0,\"\\u00e9\":1}}",
     "{\"x\":1,\"opts\":{\"𝄞\":0,\"\\uD834\\uDD1E\":1}}",
@@ -100,6 +113,28 @@ pub fn main(t: Test) -> Result[(), ()] {
   }
   test.equal(t, validate(b"{\"a\":0, \"\\u0061\" ?}"), Error(DuplicateKey(8)))
   test.equal(t, validate(b"{\"a\":0, \"a\":1}"), Error(DuplicateKey(8)))
+  let different_keys: List[Bytes] = [
+    b"{\"x\":1}",
+    b"{\"x\":1,\"a\":null}",
+    b"{\"x\":1,\"a\":null,\"b\":false}",
+    b"{\"x\":1,\"a\":null,\"b\":false,\"c\":[]}",
+    b"{\"x\":1,\"a\":null,\"b\":false,\"c\":[],\"d\":{\"a\":1,\"b\":2}}",
+    b"{\"a\":{},\"b\":{},\"c\":{},\"x\":1}"
+  ]
+  for data in different_keys {
+    let Ok(value) = x_from_json_bytes(data) else { return Error(()) }
+    test.equal(t, value.x, 1.0)
+  }
+  let mut wide: List[u8] = []
+  text.append(mut wide, "{\"x\":1")
+  for i in 0u64..64 { text.append(mut wide, f",\"unknown{i}\":{i}") }
+  text.append(mut wide, "}")
+  let Ok(value) = x_from_json_bytes(bytes.from_list(copy wide)) else { return Error(()) }
+  test.equal(t, value.x, 1.0)
+  let size = list.len(wide)
+  wide[size - 1] = 44
+  text.append(mut wide, "\"unknown63\":0}")
+  test.equal(t, x_from_json_bytes(bytes.from_list(take wide)), Error("not JSON"))
   test.equal(t, validate(b"{}"), Ok(()))
   test.equal(t, validate(b"{\"a\":{},\"b\":{\"a\":0}}"), Ok(()))
   let invalid: List[List[u8]] = [
@@ -153,6 +188,14 @@ fn strict_vectors_on_h_llvm_and_cranelift() {
             }
             panic!("{error}")
         });
+        // Wide unknown-field fixtures exceed the corpus's 1M-step budget.
+        loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps: Some(5_000_000),
+                call_depth: 256,
+            },
+            ..Default::default()
+        }));
         let reference = run_observed_snapshot(
             &mut loaded.engine,
             &RunConfiguration {
