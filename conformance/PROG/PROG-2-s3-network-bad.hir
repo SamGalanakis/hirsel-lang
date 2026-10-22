@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 4
+// expect: reject PROG-2 at line 5
+// twin: PROG/PROG-2-s3-network-ok.hir
 fn probe(c: s3.Client) -> Net {
   c.network
 }

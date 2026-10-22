@@ -1,0 +1,12 @@
+// rule: PROG-2
+// expect: accept
+// boundary: External Client construction uses the public fallible constructor.
+fn probe(n: Net, clock: WallClock, config: s3.Config, credentials: s3.Credentials) -> Result[
+  s3.Client,
+  s3.S3Error
+] {
+  match s3.client(n, clock, unique config, unique credentials) {
+    Ok(c) => Ok(c),
+    Error(error) => Error(error),
+  }
+}

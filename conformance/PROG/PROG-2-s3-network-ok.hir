@@ -1,0 +1,6 @@
+// rule: PROG-2
+// expect: accept
+// boundary: External callers attenuate a Client without extracting its Net.
+fn probe(c: s3.Client) -> s3.Client {
+  s3.read_only(c)
+}
