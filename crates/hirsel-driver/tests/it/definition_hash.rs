@@ -152,7 +152,7 @@ fn the_hash_is_a_pinned_function_of_content() {
         // with TIR_VERSION, the content encoding, or an edit to anything `f`
         // reaches, which includes the core types its signature's role table
         // names (core@1/Result, Unsafe, Tasks, Scope, Arena and heap).
-        const PINNED: &str = "d95ef4b2c5d70a847d125fef4793549f133e767e28186902d8f96b768352a14f";
+        const PINNED: &str = "4f584c19593107a4aae1b012d94b017627259d6059016bec5ddd2bda0e255256";
         let hash = hashes("fn f(x: u64) -> u64 { x + 1u64 }\n", &["f"])[0];
         let text: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
         assert!(
