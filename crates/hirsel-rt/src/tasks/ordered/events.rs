@@ -10,6 +10,8 @@ use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod host_values;
+
 #[cfg(test)]
 mod blocked;
 #[cfg(test)]
@@ -64,6 +66,8 @@ pub(super) struct HostCompletion {
     pub ordinal: u64,
     pub op: &'static str,
     pub result: Result<crate::io::Completion, crate::io::AdapterError>,
+    /// Initialized payload with handle words removed; missing identities reject.
+    pub observation: Option<host_values::HostValue>,
 }
 
 /// The completion's scheduling position, before its owner can be unparked.
@@ -730,6 +734,13 @@ pub(crate) fn record_host_poll(
         unreachable!()
     };
     let retirement = driver.frontier.as_ref().unwrap().retired();
+    let observation = host_values::project(&result, |word| {
+        driver
+            .objects
+            .identity(crate::ordered::objects::Kind::Capability, word)
+            .cloned()
+    })
+    .ok();
     let log = driver.events.as_mut().expect("poll evidence enabled");
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
@@ -746,6 +757,7 @@ pub(crate) fn record_host_poll(
             ordinal,
             op,
             result,
+            observation,
         },
         retirement,
         idle,
@@ -1318,6 +1330,15 @@ pub(crate) fn complete_host(
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
+    // Snapshot borrowed mappings once, before encoding the owned observation.
+    let result = owned_host_result(result);
+    let observation = host_values::project(&result, |word| {
+        driver
+            .objects
+            .identity(crate::ordered::objects::Kind::Capability, word)
+            .cloned()
+    })
+    .ok();
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
@@ -1332,14 +1353,12 @@ pub(crate) fn complete_host(
         log.completed.insert((path.clone(), ordinal)),
         "one completion per host operation"
     );
-    // A MapView can borrow host mapping storage. Copy its actual bytes while
-    // the request still owns the view, rather than retaining a native address.
-    let result = owned_host_result(result);
     log.host_completions.push(HostCompletion {
         task: path,
         ordinal,
         op,
         result,
+        observation,
     });
 }
 

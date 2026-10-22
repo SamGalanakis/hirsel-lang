@@ -259,6 +259,15 @@ mod tests {
                     assert_eq!(poll.completion.task, vec![0]);
                     assert_eq!(poll.completion.ordinal, 0);
                     assert_eq!(poll.completion.result, Ok(Completion::Wait(Ok(()))));
+                    let observed = poll.completion.observation.as_ref().unwrap();
+                    assert!(observed.handles.is_empty());
+                    assert_eq!(
+                        crate::tape_wire::decode::<Result<Completion, AdapterError>>(
+                            &observed.payload
+                        )
+                        .unwrap(),
+                        poll.completion.result
+                    );
                     assert_eq!(poll.sequence, 0);
                     assert_eq!(log.host_completions.len(), 1);
                     assert_eq!(poll.completion, log.host_completions[0]);
@@ -752,6 +761,20 @@ mod tests {
                         "no borrowed mapping address survives capture"
                     );
                     assert_eq!(view.contents(), [1, 2, 3]);
+                    let observed = log.host_completions[0].observation.as_ref().unwrap();
+                    assert!(observed.handles.is_empty());
+                    assert_eq!(
+                        crate::tape_wire::decode::<Result<Completion, AdapterError>>(
+                            &observed.payload
+                        )
+                        .unwrap(),
+                        Ok(Completion::View(crate::io::MapView::of(vec![1, 2, 3])))
+                    );
+                    assert!(log.host_completions[1].observation.is_some());
+                    assert!(
+                        log.host_completions[2].observation.is_none(),
+                        "unmapped refusal cannot export a native word"
+                    );
                     assert_eq!(log.host_completions[1].op, "host.handle_drop");
                     assert_eq!(
                         log.host_completions[2].result,
