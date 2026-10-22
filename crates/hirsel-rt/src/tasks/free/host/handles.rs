@@ -89,7 +89,26 @@ pub(super) fn fields(
         Ok(Completion::Halves(Ok((read, write)))) => Ok([Some(read), Some(write)]),
         Err(_)
         | Ok(
-            Completion::Unit(_)
+            Completion::Input(_)
+            | Completion::Env(_)
+            | Completion::Monotonic(_)
+            | Completion::Wall(_)
+            | Completion::Random(_)
+            | Completion::Signal(_)
+            | Completion::Checked(_)
+            | Completion::Paths(_)
+            | Completion::Entries(_)
+            | Completion::Metadata(_)
+            | Completion::Addresses(_)
+            | Completion::NetBytes(_)
+            | Completion::Datagram(_)
+            | Completion::Count(_)
+            | Completion::NetUnit(_)
+            | Completion::Certificates(_)
+            | Completion::Protocol(_)
+            | Completion::Address(_)
+            | Completion::Watch(_)
+            | Completion::Unit(_)
             | Completion::Size(_)
             | Completion::Bytes(_)
             | Completion::Wait(_)
@@ -356,5 +375,111 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+    use crate::io::{
+        ClockError, DirEntry, EnvError, FileKind, InputError, IoError, Metadata, RandomError,
+        SignalError,
+    };
+    use crate::net::{NetError, SocketAddr};
+    use crate::watch::WatchEvent;
+
+    #[test]
+    fn owned_scalar_directory_and_network_results_preserve_payloads_without_creations() {
+        let address = SocketAddr::of("[2001:db8::7]:4488".parse().unwrap());
+        let completions = vec![
+            Completion::Input(Ok(vec![0, 255, 3])),
+            Completion::Input(Err(InputError::Canceled(7))),
+            Completion::Env(Ok(Some("value\0λ".into()))),
+            Completion::Env(Ok(None)),
+            Completion::Env(Err(EnvError::NotGranted)),
+            Completion::Monotonic(Ok(u64::MAX)),
+            Completion::Monotonic(Err(ClockError::Unavailable)),
+            Completion::Wall(Ok(i64::MIN)),
+            Completion::Wall(Err(ClockError::OutOfRange)),
+            Completion::Random(Ok(vec![255, 0, 1, 2])),
+            Completion::Random(Err(RandomError::Unavailable)),
+            Completion::Signal(Ok(hirsel_run_schema::SignalKind::Terminate)),
+            Completion::Signal(Err(SignalError::Canceled(9))),
+            Completion::Checked(true),
+            Completion::Checked(false),
+            Completion::Paths(Ok(vec!["a/λ".into(), "b".into()])),
+            Completion::Paths(Err(IoError::PermissionDenied)),
+            Completion::Entries(Ok(vec![DirEntry {
+                path: "a/λ".into(),
+                kind: FileKind::Regular,
+            }])),
+            Completion::Entries(Err(IoError::NotDirectory)),
+            Completion::Metadata(Ok(Metadata {
+                kind: FileKind::Directory,
+                size: u64::MAX,
+                modified_unix_ns: Some(i128::MIN),
+                permissions: 0o751,
+            })),
+            Completion::Metadata(Ok(Metadata {
+                kind: FileKind::Regular,
+                size: 0,
+                modified_unix_ns: None,
+                permissions: 0,
+            })),
+            Completion::Metadata(Err(IoError::NotFound)),
+            Completion::Addresses(Ok(vec![address])),
+            Completion::Addresses(Err(NetError::NotGranted)),
+            Completion::NetBytes(Ok(vec![0, 255, 7])),
+            Completion::NetBytes(Err(NetError::NotGranted)),
+            Completion::Datagram(Ok((vec![255, 0], address, true))),
+            Completion::Datagram(Err(NetError::NotGranted)),
+            Completion::Count(Ok(u64::MAX)),
+            Completion::Count(Err(NetError::NotGranted)),
+            Completion::NetUnit(Ok(())),
+            Completion::NetUnit(Err(NetError::NotGranted)),
+            Completion::Certificates(Ok(Some(vec![0, 255, 1]))),
+            Completion::Certificates(Ok(None)),
+            Completion::Certificates(Err(NetError::NotGranted)),
+            Completion::Protocol(Ok(Some("h2".into()))),
+            Completion::Protocol(Ok(None)),
+            Completion::Protocol(Err(NetError::NotGranted)),
+            Completion::Address(Ok(address)),
+            Completion::Address(Err(NetError::NotGranted)),
+            Completion::Watch(Ok(WatchEvent::Renamed("old/λ".into(), "new".into()))),
+            Completion::Watch(Ok(WatchEvent::Overflow)),
+            Completion::Watch(Err(IoError::Canceled(3))),
+        ];
+        let mut handles = Handles::default();
+        for completion in completions {
+            let mut result = Ok(completion.clone());
+            assert!(
+                fields(&mut result).unwrap().iter().all(Option::is_none),
+                "{completion:?}"
+            );
+            let mut bytes = Vec::new();
+            Envelope {
+                result,
+                created: Vec::new(),
+            }
+            .encode(&mut bytes);
+            let decoded = crate::tape_wire::decode(&bytes).unwrap();
+            assert_eq!(handles.substitute(decoded).unwrap(), Ok(completion.clone()));
+            // A scalar observation cannot smuggle an unrelated creation into
+            // the replay map, including failed and absent result payloads.
+            assert!(
+                handles
+                    .substitute(Envelope {
+                        result: Ok(completion),
+                        created: vec![Created {
+                            path: vec![1],
+                            ordinal: 1,
+                            resource: 17
+                        }],
+                    })
+                    .is_err()
+            );
+            assert!(handles.words.is_empty());
+        }
+        assert_eq!(handles.next, 0);
     }
 }
