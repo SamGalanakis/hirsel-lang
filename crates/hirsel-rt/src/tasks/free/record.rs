@@ -90,7 +90,12 @@ impl crate::stop::Terminal for Terminal {
                 if self.recording.production {
                     match observed {
                         Some(outcome) => {
-                            crate::free_launch::terminal_bytes("native-outcome-v2", outcome, sweep)
+                            assert_eq!(
+                                *cause,
+                                Stop::Failed,
+                                "only internal failure supplies an outcome"
+                            );
+                            crate::free_launch::terminal_bytes("native-failure-v2", outcome, sweep)
                         }
                         None => crate::free_launch::terminal_bytes("native-stop-v2", cause, sweep),
                     }

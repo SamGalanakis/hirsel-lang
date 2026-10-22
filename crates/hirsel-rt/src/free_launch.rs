@@ -26,7 +26,7 @@ pub(crate) enum Session {
 
 fn binding(bytes: &[u8]) -> Result<(Recording, bool), String> {
     let bytes = bytes
-        .strip_prefix(b"F1B1")
+        .strip_prefix(b"F1B2")
         .ok_or("unsupported Free admission binding")?;
     decode(bytes)
 }
@@ -55,7 +55,7 @@ impl Session {
             (_, Some(path)) => {
                 let (file, header, _) = crate::host_launch::header(io, admitted, path, outputs)?;
                 let namespace_coupled = io.namespace_coupled();
-                let mut binding = b"F1B1".to_vec();
+                let mut binding = b"F1B2".to_vec();
                 header.encode(&mut binding);
                 namespace_coupled.encode(&mut binding);
                 record::Recording::open(file, &binding, level == RecordingLevel::Durable)
@@ -144,6 +144,7 @@ impl Session {
 pub(crate) enum Terminal {
     Stop(Stop),
     Outcome(RunOutcome),
+    Failed(RunOutcome),
 }
 
 fn terminal_payload(text: &str) -> Result<(&str, Vec<u8>), String> {
@@ -177,6 +178,13 @@ fn terminal(text: &str) -> Result<Terminal, String> {
         "native-stop-v2" => decode::<(Stop, Receipt)>(&bytes).map(|(stop, _)| Terminal::Stop(stop)),
         "native-outcome-v2" => {
             decode::<(RunOutcome, Receipt)>(&bytes).map(|(outcome, _)| Terminal::Outcome(outcome))
+        }
+        "native-failure-v2" => {
+            let (outcome, _) = decode::<(RunOutcome, Receipt)>(&bytes)?;
+            if !matches!(outcome, RunOutcome::Failed { .. }) {
+                return Err("internal Free failure needs a failed outcome".into());
+            }
+            Ok(Terminal::Failed(outcome))
         }
         _ => Err("unsupported Free terminal encoding".into()),
     }
@@ -251,7 +259,7 @@ fn validate_receipt(tape: &hirsel_free::tape::Tape, text: &str) -> Result<(), St
     }
     let receipt = match kind {
         "native-stop-v2" => decode::<(Stop, Receipt)>(&bytes)?.1,
-        "native-outcome-v2" => decode::<(RunOutcome, Receipt)>(&bytes)?.1,
+        "native-outcome-v2" | "native-failure-v2" => decode::<(RunOutcome, Receipt)>(&bytes)?.1,
         _ => return Err("unsupported terminal receipt".into()),
     };
     let mut expected: Receipt = Default::default();
@@ -307,3 +315,6 @@ mod namespace_tests;
 
 #[cfg(test)]
 mod refusal_tests;
+
+#[cfg(test)]
+mod lifetime_tests;

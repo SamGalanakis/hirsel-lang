@@ -2453,6 +2453,11 @@ pub(crate) unsafe fn execute(
     {
         match session.finish_replay() {
             Ok(Some(crate::free_launch::Terminal::Stop(stop))) => ran = Err(stop),
+            Ok(Some(crate::free_launch::Terminal::Failed(outcome))) => {
+                // FAIL-3 abandons still-owned task storage, including on replay.
+                ran = Err(crate::stop::Stop::Failed);
+                replay_outcome = Some(outcome);
+            }
             Ok(Some(crate::free_launch::Terminal::Outcome(outcome))) => {
                 ran = match &outcome {
                     RunOutcome::Returned(_) => Ok(STATUS_OK),

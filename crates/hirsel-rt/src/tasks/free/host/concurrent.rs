@@ -16,6 +16,7 @@ pub(crate) struct Service {
     driver: Option<crate::readiness::Readiness>,
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
+    opaque: Mutex<Option<opaque::Wake>>,
 }
 
 struct Row {
@@ -64,6 +65,7 @@ impl Service {
                     driver,
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
+                    opaque: Mutex::new(None),
                 }))
                 .is_ok()
         );
@@ -403,8 +405,10 @@ pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
     let io = unsafe { (*run).free_io.get().expect("concurrent admission") };
     let concurrent = io.adapter.wait_sources().map_err(Stop::refusal)?;
     let home = if unsafe { (*run).host_waits.load(Ordering::Acquire) != 0 } {
-        unsafe { crate::host_waits::wait_sources_home(run) }?
-            .ok_or_else(|| Stop::Refused("mixed wait needs home adapter source exposure".into()))?
+        match unsafe { crate::host_waits::wait_sources_home(run) }? {
+            Some(sources) => sources,
+            None => return unsafe { opaque::wait(run, io, concurrent) },
+        }
     } else {
         crate::io::WaitSources::Drivers(Vec::new())
     };
@@ -422,3 +426,5 @@ pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
     }
     Ok(waited)
 }
+
+mod opaque;

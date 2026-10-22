@@ -3119,7 +3119,9 @@ macro_rules! path_export {
             let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
             let request = Request::$request {
                 $field: unsafe { parent.read() },
-                path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+                path: crate::paths::names(ctx)
+                    .path_text(unsafe { path.read() })
+                    .to_owned(),
             };
             let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
                 return crate::STATUS_FAILURE;
@@ -3283,7 +3285,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_watch(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Watch {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
         recursive: recursive != 0,
     };
     let Ok(Completion::Handle(result)) = (unsafe { capability_call(ctx, request) }) else {
@@ -3301,12 +3305,12 @@ pub struct WatchResult {
 /// A WatchEvent's tag and its paths, as `watcher.next` returns and `test.dir_event` takes.
 fn watch_words(ctx: *mut crate::TaskCtx, event: &crate::watch::WatchEvent) -> [u64; 3] {
     use crate::watch::WatchEvent::*;
-    let binding = unsafe { Binding::get(ctx) };
+    let paths = &crate::paths::names(ctx).paths;
     match event {
-        Created(p) => [0, binding.intern_path(p), 0],
-        Modified(p) => [1, binding.intern_path(p), 0],
-        Removed(p) => [2, binding.intern_path(p), 0],
-        Renamed(a, b) => [3, binding.intern_path(a), binding.intern_path(b)],
+        Created(p) => [0, paths.intern(p), 0],
+        Modified(p) => [1, paths.intern(p), 0],
+        Removed(p) => [2, paths.intern(p), 0],
+        Renamed(a, b) => [3, paths.intern(a), paths.intern(b)],
         Overflow => [4, 0, 0],
     }
 }
@@ -3352,12 +3356,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_dir_event(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     use crate::watch::WatchEvent::*;
     let [tag, first, second] = unsafe { event.read() };
-    let binding = unsafe { Binding::get(ctx) };
+    let names = crate::paths::names(ctx);
     let event = match tag as u32 {
-        0 => Created(binding.path(first)),
-        1 => Modified(binding.path(first)),
-        2 => Removed(binding.path(first)),
-        3 => Renamed(binding.path(first), binding.path(second)),
+        0 => Created(names.path_text(first).to_owned()),
+        1 => Modified(names.path_text(first).to_owned()),
+        2 => Removed(names.path_text(first).to_owned()),
+        3 => Renamed(
+            names.path_text(first).to_owned(),
+            names.path_text(second).to_owned(),
+        ),
         4 => Overflow,
         _ => crate::fault("invalid WatchEvent tag"),
     };
@@ -3607,7 +3614,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Write {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
         bytes: unsafe { slice_bytes(owner, start, len) }.to_vec(),
     };
     let completion = unsafe { capability_call(ctx, request) };
@@ -3669,7 +3678,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_put_new(
     };
     let request = Request::PutNew {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
         bytes: unsafe { slice_bytes(owner, start, len) }.to_vec(),
         durable,
     };
@@ -4695,7 +4706,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_dir(
             .and_then(|n| n.checked_add(first))
             .unwrap_or_else(|| crate::fault("Test entry offset overflow"));
         let entry = unsafe { payload.add(offset) };
-        let path = unsafe { Binding::get(ctx) }.path(unsafe { entry.cast::<u64>().read() });
+        let path = crate::paths::names(ctx)
+            .path_text(unsafe { entry.cast::<u64>().read() })
+            .to_owned();
         let slice = unsafe { entry.add(8).cast::<crate::views::Slice>().read() };
         let bytes = unsafe { slice_bytes(slice.owner, slice.start, slice.length) }.to_vec();
         files.push((path, bytes));
@@ -4740,7 +4753,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_bytes(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Read {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
     };
     let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
@@ -5227,7 +5242,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_set_permissions(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::SetPermissions {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
         permissions,
     };
     let Ok(Completion::Unit(result)) = (unsafe { capability_call(ctx, request) }) else {
@@ -5252,8 +5269,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_rename(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Rename {
         directory: unsafe { directory.read() },
-        from: unsafe { Binding::get(ctx) }.path(unsafe { from.read() }),
-        to: unsafe { Binding::get(ctx) }.path(unsafe { to.read() }),
+        from: crate::paths::names(ctx)
+            .path_text(unsafe { from.read() })
+            .to_owned(),
+        to: crate::paths::names(ctx)
+            .path_text(unsafe { to.read() })
+            .to_owned(),
     };
     let Ok(Completion::Unit(result)) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
@@ -5281,7 +5302,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Metadata {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
     };
     let Ok(Completion::Metadata(result)) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
@@ -5320,7 +5343,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ReadDir {
         directory: unsafe { directory.read() },
-        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
     };
     let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;

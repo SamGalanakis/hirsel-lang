@@ -880,3 +880,132 @@ fn real_concurrent_files_discover_aliases_and_replay_without_mount_or_adapter() 
         }
     }
 }
+
+// A home-affine provider may keep its own blocking wait while admitting an
+// interrupt descriptor. Its drivers remain private to the home thread.
+struct OpaqueHome(crate::io_real::RealIo);
+impl crate::io::Adapter for OpaqueHome {
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+        self.0.preflight(request)
+    }
+    fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        self.0.call(request)
+    }
+    fn enter(&mut self, token: u64) {
+        self.0.enter(token);
+    }
+    fn finish(&mut self, token: u64) {
+        self.0.finish(token);
+    }
+    fn parked(&mut self, token: u64) {
+        self.0.parked(token);
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        self.0.cancellable(token)
+    }
+    fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
+        self.0.ready()
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        self.0.wait()
+    }
+    fn wake_on(&mut self, fd: std::os::fd::RawFd) -> bool {
+        self.0.wake_on(fd)
+    }
+}
+
+#[test]
+fn opaque_home_deadline_and_concurrent_sleep_wake_the_earliest_source_and_replay() {
+    use crate::io::Adapter;
+    for width in [1, 8] {
+        for durable in [false, true] {
+            for home_first in [false, true] {
+                let mut home = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
+                home.discard_history();
+                home.clock_grants(true, false);
+                home.set_cooperative(crate::readiness::Readiness::default());
+                let Completion::ClockGrant(Ok(clock)) =
+                    home.call(Request::MonotonicClock { io: 1 }).unwrap()
+                else {
+                    panic!("initial home clock")
+                };
+                let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
+                real.discard_history();
+                real.clock_grants(true, false);
+                let adapter = Arc::new(Timer {
+                    real: real
+                        .into_concurrent()
+                        .unwrap_or_else(|_| panic!("Send clock")),
+                    parks: Default::default(),
+                });
+                let mut admitted = Some(adapter.clone());
+                let observed = adapter.clone();
+                let recording =
+                    super::super::record::Recording::new(b"opaque mixed native clocks", durable);
+                let install = recording.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.adapter = Some(Box::new(OpaqueHome(home)));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        {
+                            let _segment = role::Segment::new(ctx);
+                            concurrent::Service::install(ctx, admitted.take().unwrap()).unwrap();
+                        }
+                        mixed_timer_program(ctx, Some(&*observed), clock, home_first);
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert!(adapter.parks.load(std::sync::atomic::Ordering::Acquire) > 0);
+                assert_eq!(Arc::strong_count(&adapter), 1);
+                drop(adapter);
+                let cut = recording
+                    .recorder
+                    .stop("returned", None)
+                    .unwrap()
+                    .unwrap()
+                    .0;
+                let projection = Projection::new("returned", &cut.progress, &recording.trace());
+                let bytes = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink()
+                    .bytes;
+                for width in [1, 8] {
+                    let replay = super::super::replay::Replay::new(&bytes).unwrap();
+                    let install = replay.clone();
+                    let mut run = crate::host::BodyRun::new(width, false);
+                    run.free = true;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe {
+                            install.root(ctx);
+                        },
+                        move |ctx| unsafe {
+                            let _role = role::Guard::new(ctx);
+                            mixed_timer_program(ctx, None, clock, home_first);
+                            super::super::replay::start(ctx);
+                            unreachable!("mixed timer replay beyond cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(replay.finish().unwrap(), projection);
+                }
+            }
+        }
+    }
+}
+
+mod opaque_tests;

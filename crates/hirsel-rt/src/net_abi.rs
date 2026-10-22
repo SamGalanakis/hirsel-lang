@@ -930,7 +930,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
     }
     let request = Request::UnixConnect {
         net: unsafe { n.read() },
-        path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
     };
     let Some(Completion::NetHandle(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
@@ -957,7 +959,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
     }
     let request = Request::UnixListen {
         net: unsafe { n.read() },
-        path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
+        path: crate::paths::names(ctx)
+            .path_text(unsafe { path.read() })
+            .to_owned(),
     };
     let Some(Completion::Listened(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;

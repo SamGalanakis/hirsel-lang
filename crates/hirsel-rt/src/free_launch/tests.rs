@@ -273,6 +273,8 @@ fn ordinary_free_admission_records_real_wait_stops_and_replays_bound_terminal_ou
                 let end = tape.end.as_ref().unwrap();
                 assert!(end.outcome.starts_with(if matches!(ending, 1 | 3 | 4) {
                     "native-stop-v2/"
+                } else if ending == 6 {
+                    "native-failure-v2/"
                 } else {
                     "native-outcome-v2/"
                 }));
@@ -294,6 +296,7 @@ fn ordinary_free_admission_records_real_wait_stops_and_replays_bound_terminal_ou
                     Terminal::Outcome(cause) => {
                         terminal_bytes("native-outcome-v2", &cause, &forged)
                     }
+                    Terminal::Failed(cause) => terminal_bytes("native-failure-v2", &cause, &forged),
                 };
                 assert!(validate_receipt(&tape, &corrupt).is_err());
                 for replay_width in [1, 8] {
@@ -367,7 +370,7 @@ fn ordinary_free_admission_records_real_wait_stops_and_replays_bound_terminal_ou
     }
 }
 
-fn failure_table() -> crate::isolate::FailureTable {
+pub(super) fn failure_table() -> crate::isolate::FailureTable {
     let definition = "free_production@1/main";
     let file = "fixture.hir";
     let rule = "FREE-TEST";

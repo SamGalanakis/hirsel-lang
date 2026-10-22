@@ -1047,6 +1047,26 @@ pub(crate) unsafe fn wait_sources_home(
     binding.adapter.wait_sources().map_err(Stop::refusal)
 }
 
+/// An opaque Free home provider keeps its blocking wait on home. Every
+/// concurrent/stop wake descriptor is stable until run reclamation. A provider
+/// that cannot watch one declines before entering an uninterruptible wait.
+/// # Safety
+/// Home only, idle, with no scheduler role or outstanding Binding loan.
+pub(crate) unsafe fn wait_opaque_home(
+    run: *mut crate::context::RunShared,
+    fds: &[std::os::fd::RawFd],
+) -> Stopped<bool> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    for &fd in fds {
+        if !binding.adapter.wake_on(fd) {
+            return Err(Stop::Refused(
+                "opaque mixed wait needs interruptible home wait".into(),
+            ));
+        }
+    }
+    binding.adapter.wait().map_err(Stop::refusal)
+}
+
 /// # Safety
 /// Home only, after no running segment or runnable turn remains. No role is held.
 pub(crate) unsafe fn wait_home(run: *mut crate::context::RunShared) -> Stopped<bool> {

@@ -251,11 +251,10 @@ impl Readiness {
     pub fn wake_on(&self, fd: std::os::fd::RawFd) -> Result<(), AdapterError> {
         let mut state = self.0.lock().unwrap();
         state.wakes.insert(fd as u64);
-        state
-            .fds
-            .entry(fd as u64)
-            .or_default()
-            .push((WAKE_TOKEN, libc::POLLIN));
+        let tokens = state.fds.entry(fd as u64).or_default();
+        if !tokens.iter().any(|&(token, _)| token == WAKE_TOKEN) {
+            tokens.push((WAKE_TOKEN, libc::POLLIN));
+        }
         if state.control(fd, libc::POLLIN)? {
             Ok(())
         } else {
@@ -492,6 +491,10 @@ impl Readiness {
         Ok(true)
     }
 
+    pub(crate) fn same_driver(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// One idle wait across independent driver sets. Like Rust's Unix socket
     /// poll loop, snapshot owned descriptors, release all state locks, poll
     /// against the earliest absolute deadline, and retry EINTR without extending
@@ -559,7 +562,7 @@ impl Readiness {
         Ok(true)
     }
 
-    fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
+    pub(crate) fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
         let mut state = self.0.lock().unwrap();
         state.sync()?;
         if !state.progressed_scripts().is_empty() {
@@ -605,7 +608,7 @@ impl Readiness {
     }
 }
 
-enum WaitSource {
+pub(crate) enum WaitSource {
     Ready,
     Empty,
     Driver(OwnedFd, Option<Instant>, bool),
@@ -1287,6 +1290,32 @@ mod concurrent_tests {
         assert_eq!(delivery.ready().unwrap(), [1]);
         assert!(timer.ready().unwrap().is_empty());
     }
+    #[test]
+    fn repeated_wake_registration_keeps_one_interest_and_rearms_readiness() {
+        use std::io::Write;
+        let driver = Readiness::default();
+        let (read, mut write) = UnixStream::pair().unwrap();
+        for _ in 0..8 {
+            driver.wake_on(read.as_raw_fd()).unwrap();
+        }
+        assert_eq!(
+            driver.0.lock().unwrap().fds[&(read.as_raw_fd() as u64)].len(),
+            1
+        );
+        assert!(
+            !driver.wait().unwrap(),
+            "wake-only descriptors are not progress sources"
+        );
+        let (request_read, mut request_write) = UnixStream::pair().unwrap();
+        driver.enter(7);
+        driver.await_descriptor(request_read.as_raw_fd());
+        driver.parked(7);
+        write.write_all(b"wake").unwrap();
+        request_write.write_all(b"x").unwrap();
+        assert!(driver.wait().unwrap());
+        assert_eq!(driver.ready().unwrap(), [7]);
+    }
+
     #[test]
     fn shared_idle_wait_uses_the_earliest_deadline_from_either_driver() {
         for reverse in [false, true] {
