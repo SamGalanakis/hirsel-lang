@@ -81,8 +81,9 @@ fn refused(source: &str, rule: &str) {
         else {
             panic!("expected ownership diagnostics: {error:?}")
         };
-        assert!(
-            diagnostics.iter().any(|d| d.rule.as_str() == rule),
+        assert_eq!(
+            diagnostics.first().map(|d| d.rule.as_str()),
+            Some(rule),
             "{diagnostics:?}"
         );
         eprintln!("json-pointer-8 refused ownership control: {diagnostics:?}");
@@ -108,6 +109,8 @@ pub fn main() -> () {
 
 #[test]
 fn result_cannot_mutate_document() {
+    // LANG-5 access checking rejects immutable `items` first. This alone does
+    // not prove referent safety; the live-selection control below checks that.
     refused(
         r#"
 pub fn main() -> () {
@@ -120,8 +123,73 @@ pub fn main() -> () {
   }
 }
 "#,
-        "LANG-15",
+        "LANG-5",
     );
+}
+
+#[test]
+fn owned_copy_mutation_leaves_document_unchanged() {
+    with_compiler_stack(|| {
+        let mut loaded = load_program_source(
+            &fixture(),
+            Some(
+                r#"
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let document: std@1/json.Value = Array([Text("original")])
+  let Ok(pointer) = std@1/json_pointer.parse("") else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let Some(selected) = std@1/json_pointer.get(document, pointer) else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut Array(owned) = copy selected else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  core@1/list.push(mut owned, Text("mutated"))
+  core@1/failure.check(core@1/list.len(owned) == 2u64, TextInvariant())
+  match owned[1u64] {
+    Text(s) => core@1/failure.check(s == "mutated", TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(document, pointer) {
+    Some(Array(original)) => {
+      core@1/failure.check(core@1/list.len(original) == 1u64, TextInvariant())
+      match original[0u64] {
+        Text(s) => core@1/failure.check(s == "original", TextInvariant()),
+        _ => core@1/failure.check(false, TextInvariant()),
+      }
+    },
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}
+"#,
+            ),
+        )
+        .unwrap();
+        loaded.check_for_execution().unwrap();
+        let result = run_observed_snapshot(
+            &mut loaded.engine,
+            &RunConfiguration {
+                entry: loaded.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                result.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ),
+            "{:?}",
+            result.outcome
+        );
+    });
 }
 
 #[test]

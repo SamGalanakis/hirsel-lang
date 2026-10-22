@@ -9,11 +9,12 @@ cannot close those claims. See [UNTESTABLE.md](UNTESTABLE.md) and the
   normative structural scratch levels remain decisions in the
   [spec index](../../docs/spec/index.md#unspecified). The interpreter's current
   limits are implementation controls, not invented normative budgets.
-- **Settled contract, separate current defects — MEM-6:** bounded-arena logical
+- **Settled contract, recovered concrete controls — MEM-6:** bounded-arena logical
   charges are normative in the [runtime table](../../crates/hirsel-rt/README.md#bounded-arenas).
   The old claim that all arena exhaustion boundaries awaited a table is stale.
-  Exact-cap and cleanup fixtures must still be judged against their current
-  checker outcomes; their inherited PROV-4 rows are retained until reproduced green.
+  Exact-cap, cleanup-failure, exhausted-callback and outer-exhaustion fixtures now
+  pass their unchanged expected outcomes; their inherited PROV-4 rows are retired.
+  These finite controls do not close universal accounting or cleanup oracles.
 - **Instrumented controls present — MEM-4/10:** runtime region tests cover
   unpublished relocation, publication, held-heap release, failure cleanup and the
   8 MiB idle-pool cap. These close the claim of absent controls, not every compiled

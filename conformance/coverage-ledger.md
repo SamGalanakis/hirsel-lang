@@ -33,7 +33,7 @@ implementation assignments; spec decisions remain with spec maintainers.
 
 | Former GAPS entry | Current rule and disposition | Exact witness / residual oracle | Latest owner |
 |---|---|---|---|
-| MEM-3/6 exact scratch/frame and arena boundaries (old #16) | Split: LANG-10 / MEM-3 frame and scratch tables **unspecified**; MEM-6 arena table **settled**, three current checker defects | [Normative arena table](../crates/hirsel-rt/README.md#bounded-arenas); exact source failures below. An implementation recursion limit is not a language constant | spec maintainers for tables; checker-precision / ca-integrate history for PROV-4 |
+| MEM-3/6 exact scratch/frame and arena boundaries (old #16) | Split: LANG-10 / MEM-3 frame and scratch tables **unspecified**; MEM-6 arena table **settled**, concrete checker controls recovered | [Normative arena table](../crates/hirsel-rt/README.md#bounded-arenas); exact source outcomes below. An implementation recursion limit is not a language constant | spec maintainers for tables; region/runtime maintainers for broader oracles |
 | MEM-4/10 builder publication, relocation, held children, idle cap | Resolved absence of instrumentation; broader compiled-path oracle open | Runtime `regions::{an_unpublished_builder_grows_in_place_then_relocates_with_its_contents,a_published_builder_never_grows,a_failing_exit_still_releases_every_heap_edge_and_meets_the_pool_cap}`; `arena_lists::heap_elements_of_relocated_and_copied_lists_are_released_once`. These assert physical data/counts, unlike source output | region/runtime maintainers; rss-throughput-2 retained existing pool policy |
 | MEM-5 cleanup effect pairs | Resolved static examples; open universal allocation oracle | `MEM/MEM-5-{generic,destructor-field}-cleanup-{ok,bad}.hir`; cross-definition effects stay signature-based. Instrument every early failure/cancellation and recursive generic summary separately | noalloc-contract maintainers |
 | MEM-8 full integer-lane boundaries | One bounded hole filled; universal/backend scope open | New `library::simd_add_checks_every_integer_width_and_each_lane`: 10 fitting boundary vectors + 45 overflow/underflow vectors across all three lane positions; existing schema/splat/zero-width control retained | coverage-ledger-2 for this control; vector maintainers for broader coverage |
@@ -47,24 +47,30 @@ The 8 MiB cap is a settled per-worker idle-pool bound, not a new allocation budg
 Complete layout composition, native data ABI, logical frame charges and structural
 scratch levels stay in [Unspecified](../docs/spec/index.md#unspecified).
 
-### Current arena defects
+### Recovered arena controls
 
-The 31-case selection **executed 31**, with **28 passing / 3 failing**, exit 32.
-All three are inherited checker refusals before execution, already in
-[known-failures](../tools/known-failures.tsv); none was removed or treated as
-an arena-accounting failure:
+The historical 31-case selection executed 31, with 28 passing / 3 failing.
+Those three inherited PROV-4 refusals are now recovered: the unchanged fixtures
+below passed in the frozen `2dc4df33` full-path selection (**17 executed,
+8 passing / 9 failing**) and in the launch `8464ea61` recovered-only selection
+(**8 executed, 8 passing / 0 failing**). Their stale
+[known-failures](../tools/known-failures.tsv) rows are retired.
 
-| Minimal registered program | Expected | Actual on matched baseline |
+| Minimal registered program | Expected | Current selected outcome |
 |---|---|---|
-| [MEM-6-exact-cap-fits-run.hir](MEM/MEM-6-exact-cap-fits-run.hir) | `released\nfits\n`, exit 0, exactly 300 logical bytes | PROV-4 line 18 |
-| [MEM-6-exhausted-callback-cleanup-run.hir](MEM/MEM-6-exhausted-callback-cleanup-run.hir) | `released\nout of space\n`, exit 0 | PROV-4 line 19 |
-| [MEM-6-outer-arena-exhaustion-run.hir](MEM/MEM-6-outer-arena-exhaustion-run.hir) | `outer out of space\n`, exit 0 | PROV-4 line 9 |
+| [MEM-6-exact-cap-fits-run.hir](MEM/MEM-6-exact-cap-fits-run.hir) | `released\nfits\n`, exit 0, exactly 300 logical bytes | Pass |
+| [MEM-6-exhausted-callback-cleanup-run.hir](MEM/MEM-6-exhausted-callback-cleanup-run.hir) | `released\nout of space\n`, exit 0 | Pass |
+| [MEM-6-outer-arena-exhaustion-run.hir](MEM/MEM-6-outer-arena-exhaustion-run.hir) | `outer out of space\n`, exit 0 | Pass |
 
-Each refuses an arena value as requiring heap placement. Minimal repro command:
+An exact-path check is:
 `.buck2/bin/buck2 test -c hirsel.conformance_paths=conformance/MEM/MEM-6-exact-cap-fits-run.hir //:gate-conformance-selected-shard-1`
-(substitute either other exact path to reproduce it). Latest related ownership:
-checker-precision / ca-integrate cutover history; current routing retained with
-project owner. No active integration repair is undertaken here.
+(substitute either other exact path). The same eight-case selection also passes
+`MEM-10-caller-arena-tree-run`, `MEM-6-cleanup-failure-propagates-run`,
+`PROV-4-caller-arena-tree-escape-{bad,ok}` and `DET-1-crash-torn-write-run`.
+The PROV-4 bad twin passes by its intended rejection at line 20, not acceptance.
+Only these eight stale rows are removed; the nine current DET/PROV-1 failures
+remain tracked. Finite source outcomes do not close universal memory, placement,
+cleanup or scheduler oracles.
 
 ## Destruction and failure
 
@@ -75,7 +81,7 @@ project owner. No active integration repair is undertaken here.
 | Cancellation drop traces / M2 | DROP-2/3 / CONC-3; scheduler exists, finite controls present, universal oracle open | `CONC/CONC-3-cancellation-shields-drop-run.hir`; runtime `finalizers::{finalizers_run_shielded,compiled_finalization_shields_until_its_end,compiled_handle_close_runs_shielded_and_reports_a_failing_close}`. Every injected schedule/Io implementation and allocation-free cleanup path is not proved | scheduler/cleanup maintainers; mc-ordered / mc-free for production scheduling |
 | Unsafe-FFI drop termination (old #6) | FAIL-3; resolved absence of runtime subprocess control | Runtime `finalizers::{a_failing_unsafe_ffi_finalizer_ends_the_process,a_failing_unsafe_ffi_field_ends_the_process_even_inside_a_safe_value,a_failing_derived_unsafe_ffi_finalizer_ends_the_process}`; package metadata-to-descriptor end-to-end coverage remains a separate oracle scope | FFI/runtime maintainers |
 | Failure/SourceSite/FailureKind fields (“section 22”) | FAIL-1/2 and core concurrency types; settled, source witness present | `FAIL/FAIL-2-isolate-failure-fields-run.hir`; exact all-layout ABI and all schedule cause chains remain model obligations | failure/runtime maintainers |
-| Depth / bounded OutOfSpace (old #16) | Split unspecified LANG-10/MEM-3 vs settled MEM-6 | Arena defects and unspecified table decisions above; no invented constant and no language-Depth credit for a tooling-limit test | spec maintainers / checker-precision history |
+| Depth / bounded OutOfSpace (old #16) | Split unspecified LANG-10/MEM-3 vs settled MEM-6 | Recovered arena controls and unspecified table decisions above; no invented constant and no language-Depth credit for a tooling-limit test | spec maintainers / region/runtime maintainers |
 | LANG-9 check selection and entry/capability denial (old #4) | LANG-9 / PROG-3 / CAP-1; resolved support absence | `LANG/LANG-9-native-test-check-{run,fail}.hir`; interpreter `library_launch::{invalid_and_unavailable_entries_never_query_a_body_or_partly_grant,explicitly_configured_unsafe_is_granted_and_configuration_is_deterministic}`; CLI controls below | test/launch maintainers; pk-selection for selection policy |
 | FAIL-4 reacquisition / non-sendable visibility (old #22) | Resolved for Mutex handles under current CLO-3 / CONC-2 | `FAIL/FAIL-4-owned-payload-dead-run.hir` passes with legal copied handles; interpreter `library::dead_mutex_releases_updated_payload_and_preserves_original_failure` checks updated payload release and exact original cause. This does not authorize arbitrary non-sendable captures | tasks-gaps / mutex maintainers |
 | Failure/cancellation cleanup for every frame | FAIL-3 / DROP-2; open oracle | Runtime finalizer/region controls are finite; independent frame/RC instrumentation and scheduler injection across every exit are still needed. [FAIL/UNTESTABLE.md](FAIL/UNTESTABLE.md), [DROP/UNTESTABLE.md](DROP/UNTESTABLE.md) | cleanup/scheduler maintainers; mc lanes retain their proof work |
