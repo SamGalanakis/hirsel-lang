@@ -352,6 +352,48 @@ struct LowerRecord {
     /// Present only when V actually accepted the exact stored TIR.
     verdict: Option<Vec<hirsel_validate::VRead>>,
 }
+/// Completion facts consumed by checking and source growth, independently of
+/// the checked/analyzed body. Its read set is validated before these bytes are
+/// decoded; a hit does not demand the separate Modes product.
+#[derive(Serialize, Deserialize)]
+struct PublicationRecord {
+    summary: Arc<PublishedSummary>,
+    diagnostics: Vec<Diagnostic>,
+    phases: Vec<(Diagnostic, String)>,
+    detail: DependencyReads,
+    dead_arms: Option<crate::tools::DeadArmUse>,
+    lowering: Option<lowering::LoweringUse>,
+}
+impl PublicationRecord {
+    fn valid(&self, syntax: &ItemSyntax) -> bool {
+        fn summary(value: &DefinitionSummary, syntax: &ItemSyntax) -> bool {
+            value.owner == syntax.owner().def
+                && value.frames.iter().enumerate().all(|(index, frame)| {
+                    valid_site(syntax, frame.site)
+                        && frame.parent.is_none_or(|parent| (parent as usize) < index)
+                })
+                && value.calls.iter().all(|call| {
+                    (call.owning_frame as usize) < value.frames.len()
+                        && call
+                            .target_frame
+                            .is_none_or(|frame| (frame as usize) < value.frames.len())
+                        && (call.binder.owner.def != value.owner
+                            || (call.binder.owner == syntax.owner()
+                                && valid_site(syntax, call.binder.site)))
+                })
+                && value
+                    .staged
+                    .iter()
+                    .all(|(site, _)| valid_site(syntax, *site))
+        }
+        summary(&self.summary.summary, syntax)
+            && self
+                .summary
+                .checked
+                .as_ref()
+                .is_some_and(|checked| summary(&checked.summary, syntax))
+    }
+}
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     anchors: Vec<(DefPath, u32)>,
@@ -480,12 +522,113 @@ impl EncodedWriter {
         };
         variant.bind_payload();
         entry.insert(variant);
-        self.store.put(&self.key, &entry.encode_for(&self.key));
+        self.store
+            .put_query(self.kind, &self.key, &entry.encode_for(&self.key));
         Ok(())
     }
 }
 
 impl QueryEngine {
+    pub(super) fn load_publication(&mut self, path: &DefPath) -> Option<PublishedResult> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let variant = self.stored_variant(path, QueryKind::Summary)?;
+        let record: PublicationRecord = self.decode_record(&variant.payload)?;
+        let id = DefId::intern(path);
+        let syntax = self.snapshot(path).ok()?;
+        if record.summary.definition != id
+            || record.summary.summary.owner != id
+            || record.summary.text != self.key_text(path, QueryKind::Summary).ok()?
+            || *record.summary.reads != variant.reads
+            || record.summary.checked.is_none()
+            || !record.valid(&syntax)
+        {
+            return None;
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (id, QueryKind::Summary),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        let checked = record.summary.checked.as_ref()?.clone();
+        self.record_checked_summary(
+            id,
+            checked,
+            record.summary.text,
+            record.summary.reads.clone(),
+            record.detail.clone(),
+            true,
+        );
+        self.record_summary_products(
+            record.summary.clone(),
+            record.detail,
+            true,
+            Arc::new(PhaseProducts {
+                mode_diagnostics: record.phases.clone(),
+                ..Default::default()
+            }),
+        );
+        if let Some(facts) = record.dead_arms {
+            self.front_products.dead_arms.insert(id, facts);
+        }
+        if let Some(facts) = record.lowering {
+            self.front_products.lowering_inputs.insert(id, facts);
+        }
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(PublishedResult {
+            definition: path.clone(),
+            result: Ok(PublishedDefinition {
+                summary: record.summary,
+                diagnostics: record.diagnostics,
+            }),
+            phase: Some(QueryKind::Modes),
+            diagnostic_phases: record.phases,
+            reads: Arc::new(variant.reads),
+        })
+    }
+
+    pub(super) fn store_publication(
+        &mut self,
+        outcome: &PublishedResult,
+    ) -> Result<(), QueryError> {
+        let Ok(published) = &outcome.result else {
+            return Ok(());
+        };
+        let path = &outcome.definition;
+        let id = DefId::intern(path);
+        if self.result_store.is_none()
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+            || published.summary.checked.is_none()
+            || *published.summary.reads != *outcome.reads
+        {
+            return Ok(());
+        }
+        let Some(entry) = self.summaries.get(&id).cloned() else {
+            return Ok(());
+        };
+        if !entry.consistent || self.graph.is_dirty(&entry.memo.key) {
+            return Ok(());
+        }
+        self.write_record(
+            path,
+            QueryKind::Summary,
+            &outcome.reads,
+            &PublicationRecord {
+                summary: published.summary.clone(),
+                diagnostics: published.diagnostics.clone(),
+                phases: outcome.diagnostic_phases.clone(),
+                detail: canonical_detail(entry.detail.clone()),
+                dead_arms: self.front_products.dead_arms.get(&id).cloned(),
+                lowering: self.front_products.lowering_inputs.get(&id).cloned(),
+            },
+        )
+    }
+
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions
     }
@@ -1126,6 +1269,80 @@ mod malformed_tests {
                     assert!(hit.is_none(), "fault {fault}");
                     assert_eq!(engine.store_adoptions(), 0);
                     assert!(engine.checked.is_empty());
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
+    fn invalid_compact_publications_miss_before_adoption_or_verification() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..6 {
+                let (mut engine, syntax) = fixture();
+                let path = &syntax.item.definition;
+                let summary = DefinitionSummary {
+                    owner: syntax.owner().def,
+                    frames: vec![crate::summary::Frame {
+                        site: hirsel_types::NameSite::Item,
+                        parent: None,
+                        kind: crate::summary::FrameKind::Item,
+                        generic: false,
+                        size_bindings: Box::new([]),
+                    }]
+                    .into(),
+                    calls: Box::new([]),
+                    staged: Box::new([]),
+                };
+                let mut published = PublishedSummary {
+                    definition: summary.owner,
+                    checked: Some(CheckedSummary {
+                        summary: summary.clone(),
+                        growth: Default::default(),
+                    }),
+                    summary,
+                    growth: Default::default(),
+                    reads: Arc::new(Reads::empty()),
+                    text: engine.key_text(path, QueryKind::Summary).unwrap(),
+                };
+                match fault {
+                    0 => (),
+                    1 => published.checked = None,
+                    2 => published.summary.frames[0].parent = Some(0),
+                    3 => {
+                        published.summary.frames[0].site =
+                            hirsel_types::NameSite::Expression(hirsel_syntax::ExprId(u32::MAX))
+                    }
+                    4 => published.text = ContentHash::default(),
+                    5 => published.checked.as_mut().unwrap().summary.frames[0].parent = Some(0),
+                    _ => unreachable!(),
+                }
+                let record = PublicationRecord {
+                    summary: Arc::new(published),
+                    diagnostics: vec![],
+                    phases: vec![],
+                    detail: Default::default(),
+                    dead_arms: None,
+                    lowering: None,
+                };
+                engine
+                    .write_record(path, QueryKind::Summary, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_publication(path);
+                if fault == 0 {
+                    assert_eq!(hit.is_some(), verify == crate::store::VerifyStore::Off);
+                    assert_eq!(
+                        engine.pending_store_checks.len(),
+                        usize::from(verify == crate::store::VerifyStore::Recompute)
+                    );
+                } else {
+                    assert!(hit.is_none(), "fault {fault}");
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.summaries.is_empty());
+                    assert!(engine.checked_summaries.is_empty());
                     assert!(engine.pending_store_checks.is_empty());
                 }
             }

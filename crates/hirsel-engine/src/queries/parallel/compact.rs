@@ -416,6 +416,9 @@ impl QueryEngine {
         if let Some(changes) = changes {
             self.retain_front_completion(&outcome, &changes);
         }
+        if let Err(error) = self.store_publication(&outcome) {
+            outcome.result = Err(error);
+        }
         outcome
     }
 

@@ -1922,12 +1922,23 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         pending: AtomicUsize,
         peak: AtomicUsize,
         writers: Mutex<Vec<std::thread::ThreadId>>,
+        summaries: AtomicUsize,
+        home: std::thread::ThreadId,
     }
     impl store::ResultStore for ObservedStore {
         fn get(&self, _: &store::EntryKey) -> Option<hirsel_engine::store::Bytes> {
             None
         }
         fn put(&self, _: &store::EntryKey, _: &[u8]) {
+            panic!("query publication must identify its product kind");
+        }
+        fn put_query(&self, kind: QueryKind, _: &store::EntryKey, _: &[u8]) {
+            if kind == QueryKind::Summary {
+                assert_eq!(std::thread::current().id(), self.home);
+                self.summaries.fetch_add(1, Ordering::SeqCst);
+                return;
+            }
+            assert_eq!(kind, QueryKind::Modes);
             assert!(self.pending.fetch_sub(1, Ordering::SeqCst) > 0);
             self.writers
                 .lock()
@@ -1963,6 +1974,8 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
                 pending: AtomicUsize::new(0),
                 peak: AtomicUsize::new(0),
                 writers: Mutex::new(vec![]),
+                summaries: AtomicUsize::new(0),
+                home: std::thread::current().id(),
             });
             let mut adapters = compiler_adapters();
             adapters.modes = Some(Arc::new(ObservedModes(
@@ -1998,6 +2011,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             );
             let writers = store.writers.lock().unwrap();
             assert_eq!(writers.len(), 64);
+            assert_eq!(store.summaries.load(Ordering::SeqCst), 64);
             if jobs > 1 {
                 assert!(
                     writers

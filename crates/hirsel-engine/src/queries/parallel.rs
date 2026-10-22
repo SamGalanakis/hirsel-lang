@@ -479,9 +479,7 @@ impl QueryEngine {
 
     fn compact_front_outcome(&mut self, outcome: ModeResult, release: bool) -> PublishedResult {
         let definition = DefId::intern(&outcome.definition);
-        if release {
-            self.remember_front_facts(definition);
-        }
+        self.remember_front_facts(definition);
         let result = outcome.result.and_then(|output| {
             outcome
                 .summary
@@ -508,13 +506,17 @@ impl QueryEngine {
                 self.forget(&MemoKey::new(QueryKind::Modes, definition));
             }
         }
-        PublishedResult {
+        let mut published = PublishedResult {
             definition: outcome.definition,
             result,
             phase: outcome.phase,
             reads: outcome.reads,
             diagnostic_phases: outcome.diagnostic_phases,
+        };
+        if let Err(error) = self.store_publication(&published) {
+            published.result = Err(error);
         }
+        published
     }
 
     fn front_output(
@@ -797,6 +799,10 @@ impl QueryEngine {
         let mut tasks = Vec::new();
         for (index, definition, syntax) in sources {
             let id = DefId::intern(&definition);
+            if compact && let Some(outcome) = self.load_publication(&definition) {
+                outputs[index] = Some(FrontResult::Compact(outcome));
+                continue;
+            }
             let text = match self.key_text(&definition, QueryKind::Modes) {
                 Ok(text) => text,
                 Err(error) => {
