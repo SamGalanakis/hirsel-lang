@@ -1954,6 +1954,9 @@ fn long_mantissa(mut d: internal.decimal_seq.DecimalSeq, fraction: u64, bias: i3
 
 // Number::toString fixed/scientific thresholds:
 // https://tc39.es/ecma262/#sec-numeric-types-number-tostring
+// Ryū d2s.c:314-419 (4c0618b, Apache-2.0 or BSL-1.0): count first,
+// then emit significand segments at their final positions. Hirsel uses checked
+// Inline indexing, fixed notation in [-6, 21), lowercase e and no positive sign.
 @noalloc
 pub fn render[n: size](
   significand: u64,
@@ -1961,35 +1964,18 @@ pub fn render[n: size](
   negative: bool,
   mut buffer: Inline[u8, n]
 ) -> Result[u64, scalar.FormatError] uses {} {
-  let mut digits: Inline[u8, 20] = [
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0
-  ]
-  let count = match internal.decimal.write_unsigned(
-    core@1/int.widen(significand),
-    false,
-    mut digits
-  ) {
-    Ok(count) => count,
-    Error(_) => 0,
+  let mut count: u64 = 1
+  let mut remaining = significand
+  while remaining >= 10000 {
+    count += 4
+    remaining /= 10000
+  }
+  if remaining >= 1000 {
+    count += 3
+  } else if remaining >= 100 {
+    count += 2
+  } else if remaining >= 10 {
+    count += 1
   }
   let count_i: i32 = core@1/int.narrow(count)
   let exponent = scale + count_i - 1
@@ -2032,67 +2018,80 @@ pub fn render[n: size](
   if n < length {
     return Error(BufferTooSmall)
   }
-  let mut at: u64 = 0
   if negative {
-    buffer[at] = 45
-    at += 1
-  }
-  if !scientific && exponent < 0 {
-    buffer[at] = 48
-    at += 1
-    buffer[at] = 46
-    at += 1
-    let mut zeros = -exponent - 1
-    while zeros > 0 {
-      buffer[at] = 48
-      at += 1
-      zeros -= 1
-    }
-  }
-  let mut i: u64 = 0
-  while i < count {
-    if i > 0 && (scientific && i == 1 || !scientific && exponent >= 0 && i == core@1/int.narrow(
-      exponent + 1
-    )) {
-      buffer[at] = 46
-      at += 1
-    }
-    buffer[at] = digits[i]
-    at += 1
-    i += 1
-  }
-  if !scientific && scale > 0 {
-    let mut zeros = scale
-    while zeros > 0 {
-      buffer[at] = 48
-      at += 1
-      zeros -= 1
-    }
+    buffer[0] = 45
   }
   if scientific {
+    let mut at = prefix + count
+    if count > 1 {
+      let leading = render_segment(significand, count - 1, at + 1, mut buffer)
+      buffer[prefix] = core@1/int.narrow(leading) + 48u8
+      buffer[prefix + 1] = 46
+      at += 1
+    } else {
+      buffer[prefix] = core@1/int.narrow(significand) + 48u8
+    }
     buffer[at] = 101
     at += 1
     if exponent < 0 {
       buffer[at] = 45
       at += 1
     }
-    let mut divisor: i32 = if absolute >= 100 {
-      100
-    } else if absolute >= 10 {
-      10
-    } else {
-      1
-    }
-    let mut rest = absolute
-    while divisor > 0 {
-      let digit: u8 = core@1/int.narrow(rest / divisor)
-      buffer[at] = digit + 48
+    let _ = render_segment(
+      core@1/int.narrow(absolute),
+      exponent_digits,
+      length,
+      mut buffer
+    )
+  } else if exponent < 0 {
+    buffer[prefix] = 48
+    buffer[prefix + 1] = 46
+    let start = length - count
+    let mut at = prefix + 2
+    while at < start {
+      buffer[at] = 48
       at += 1
-      rest %= divisor
-      divisor /= 10
+    }
+    let _ = render_segment(significand, count, length, mut buffer)
+  } else if scale < 0 {
+    let trailing: u64 = core@1/int.narrow(-scale)
+    let point = length - trailing - 1
+    let leading = render_segment(significand, trailing, length, mut buffer)
+    buffer[point] = 46
+    let _ = render_segment(leading, count - trailing, point, mut buffer)
+  } else {
+    let end = prefix + count
+    let _ = render_segment(significand, count, end, mut buffer)
+    let mut at = end
+    while at < length {
+      buffer[at] = 48
+      at += 1
     }
   }
-  Ok(at)
+  Ok(length)
+}
+
+// Write exactly count low digits ending at end, including leading zeros in
+// a fractional segment; return the remaining high digits. The loop has no
+// layout decisions. Unlike Ryū's pointer/table copies, use checked writes and
+// quotient/remainder arithmetic without changing the shared integer writer.
+@noalloc
+fn render_segment[n: size](value: u64, count: u64, end: u64, mut buffer: Inline[u8, n]) -> u64 uses {} {
+  let start = end - count
+  let mut at = end
+  let mut rest = value
+  while at - start >= 2 {
+    at -= 2
+    let pair = rest % 100
+    rest /= 100
+    buffer[at] = core@1/int.narrow(pair / 10) + 48u8
+    buffer[at + 1] = core@1/int.narrow(pair % 10) + 48u8
+  }
+  if at > start {
+    buffer[start] = core@1/int.narrow(rest % 10) + 48u8
+    rest /= 10
+  }
+  rest
 }
 
 @noalloc
