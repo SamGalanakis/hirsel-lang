@@ -101,12 +101,20 @@ fn ngram(a: List[u8], b: List[u8]) -> f64 {
   if list.len(a) < 4 || list.len(b) < 4 {
     return 0.0
   }
-  let mut first: Map[u32, u64] = map.empty()
+  let mut first: unique Map[u32, u64] = map.empty()
   let mut second: Map[u32, u64] = map.empty()
   for i in 0u64..list.len(a) - 3 {
     let key = gram(a, i)
-    let count = option.unwrap_or(map.get(first, key), 0)
-    map.insert(mut first, key, count + 1)
+    std@1/map.upsert(
+      mut first,
+      key,
+      fn() -> unique u64 uses {} {
+        1
+      },
+      fn(mut count: unique u64) -> () uses {} {
+        count += 1
+      }
+    )
   }
   let mut intersection = 0u64
   for i in 0u64..list.len(b) - 3 {

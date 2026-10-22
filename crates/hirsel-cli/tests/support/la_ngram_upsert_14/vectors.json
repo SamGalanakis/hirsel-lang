@@ -1,0 +1,877 @@
+[
+  {
+    "a": [],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 1,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 1,
+    "distinct_total": 3
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [
+      0,
+      1
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [
+      0,
+      1,
+      2
+    ],
+    "intersection": 0,
+    "distinct_total": 0
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "intersection": 1,
+    "distinct_total": 3
+  },
+  {
+    "a": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "b": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "intersection": 2,
+    "distinct_total": 4
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100
+    ],
+    "intersection": 1,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100
+    ],
+    "b": [
+      101,
+      102,
+      103,
+      104
+    ],
+    "intersection": 0,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100,
+      101
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100,
+      101
+    ],
+    "intersection": 2,
+    "distinct_total": 4
+  },
+  {
+    "a": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "b": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "intersection": 3,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "b": [
+      97,
+      97,
+      97,
+      97
+    ],
+    "intersection": 1,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      97,
+      97,
+      97
+    ],
+    "b": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "intersection": 1,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "b": [
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97,
+      97
+    ],
+    "intersection": 7,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      97,
+      98,
+      99,
+      97,
+      98,
+      99
+    ],
+    "b": [
+      98,
+      99,
+      97,
+      98,
+      99,
+      97,
+      98,
+      99,
+      97
+    ],
+    "intersection": 6,
+    "distinct_total": 6
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100,
+      97,
+      98,
+      99,
+      100
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100
+    ],
+    "intersection": 1,
+    "distinct_total": 5
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100,
+      97,
+      98,
+      99,
+      100
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100,
+      97,
+      98,
+      99,
+      100,
+      97,
+      98,
+      99,
+      100
+    ],
+    "intersection": 5,
+    "distinct_total": 8
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100,
+      120,
+      121,
+      122
+    ],
+    "b": [
+      120,
+      121,
+      122,
+      97,
+      98,
+      99,
+      100
+    ],
+    "intersection": 1,
+    "distinct_total": 8
+  },
+  {
+    "a": [
+      97,
+      98,
+      99,
+      100,
+      120
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100,
+      121
+    ],
+    "intersection": 1,
+    "distinct_total": 4
+  },
+  {
+    "a": [
+      0,
+      128,
+      255,
+      1
+    ],
+    "b": [
+      0,
+      128,
+      255,
+      1
+    ],
+    "intersection": 1,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      0,
+      128,
+      255,
+      1
+    ],
+    "b": [
+      1,
+      255,
+      128,
+      0
+    ],
+    "intersection": 0,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "b": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "intersection": 2,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      255,
+      255,
+      255,
+      255,
+      255,
+      255
+    ],
+    "b": [
+      255,
+      255,
+      255,
+      255,
+      255,
+      255
+    ],
+    "intersection": 3,
+    "distinct_total": 2
+  },
+  {
+    "a": [
+      195,
+      164,
+      240,
+      159,
+      152,
+      138,
+      97
+    ],
+    "b": [
+      195,
+      164,
+      240,
+      159,
+      152,
+      138,
+      97
+    ],
+    "intersection": 4,
+    "distinct_total": 8
+  },
+  {
+    "a": [
+      195,
+      164,
+      240,
+      159,
+      152,
+      138,
+      97
+    ],
+    "b": [
+      195,
+      164,
+      240,
+      159,
+      152,
+      138,
+      98
+    ],
+    "intersection": 3,
+    "distinct_total": 8
+  },
+  {
+    "a": [
+      0,
+      97,
+      98,
+      99,
+      100,
+      0,
+      97,
+      98,
+      99,
+      100
+    ],
+    "b": [
+      97,
+      98,
+      99,
+      100,
+      0,
+      97,
+      98,
+      99,
+      100,
+      0
+    ],
+    "intersection": 6,
+    "distinct_total": 10
+  },
+  {
+    "a": [
+      97,
+      98,
+      97,
+      98,
+      97,
+      98,
+      97
+    ],
+    "b": [
+      98,
+      97,
+      98,
+      97,
+      98,
+      97,
+      98
+    ],
+    "intersection": 4,
+    "distinct_total": 4
+  }
+]
