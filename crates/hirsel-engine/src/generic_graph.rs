@@ -401,77 +401,74 @@ impl QueryEngine {
     /// its definition summary. Library operations have no generic body to
     /// expand, and an edge into a definition without a summary is a dead end.
     pub fn gen5_source_graph(&mut self) -> Result<ParameterGrowth, QueryError> {
-        let edges: Vec<_> = self
-            .definition_summaries()?
-            .into_iter()
-            .flat_map(|(_, growth)| growth.edges.into_vec())
-            .collect();
+        self.refresh_source_growth()?;
+        let edges: Vec<_> = self.source_growth.edges().cloned().collect();
         Ok(ParameterGrowth {
             edges: edges.into(),
         })
     }
 }
 
-#[derive(PartialEq)]
-struct VerdictInputs {
-    revision: u64,
-    environment: QueryEnvironment,
-    limits: hirsel_interp::Limits,
-    manifest: Option<ContentHash>,
-    unavailable: Option<QueryKind>,
-}
-impl VerdictInputs {
-    fn read(engine: &QueryEngine) -> Self {
-        Self {
-            revision: engine.graph.revision().get(),
-            environment: engine.environment.clone(),
-            limits: engine.comptime_limits,
-            manifest: Some(engine.declarations.inputs().manifest_revision),
-            unavailable: engine.unavailable,
-        }
-    }
-}
-/// A program verdict, separate from every definition and package receipt.
-pub(crate) struct Verdict {
-    inputs: VerdictInputs,
-    result: Result<Vec<Diagnostic>, QueryError>,
-}
+mod source;
+pub(crate) use source::SourceGrowth;
 
 impl QueryEngine {
-    /// The program's generic-instance verdict, reused while its inputs are unchanged.
+    pub(crate) fn refresh_source_growth(&mut self) -> Result<(), QueryError> {
+        self.note_environment();
+        self.source_growth.unavailable(self.unavailable);
+        while let Some((definition, present)) = self.source_growth.pop() {
+            if !present || self.imaged(&definition.path().0.package) {
+                self.source_growth.retire(definition);
+                continue;
+            }
+            self.work.gen5_visits += 1;
+            let (summary, growth) = match self.checked_definition_summary(definition) {
+                Ok(product) => product,
+                Err(error) => {
+                    self.source_growth.invalidate(definition);
+                    return Err(error);
+                }
+            };
+            self.source_growth
+                .publish(definition, CheckedSummary { summary, growth });
+        }
+        Ok(())
+    }
+
+    /// Demand every required source root, then solve its growth components.
+    /// Native reachability does not restrict this source-language rule.
     pub fn generic_graph_diagnostics(&mut self) -> Result<Vec<Diagnostic>, QueryError> {
         check(self)
     }
 }
 pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::GenericGraph);
-    let inputs = VerdictInputs::read(engine);
-    if let Some(verdict) = &engine.generic_verdict {
-        if verdict.inputs == inputs {
-            return verdict.result.clone();
+    engine.refresh_source_growth()?;
+    let settled = engine.s1.is_empty() && engine.s1.failure_is_own();
+    let sites = engine
+        .source_growth
+        .growing_sites(&mut engine.work, settled);
+    let mut diagnostics = if let Some(cached) = engine.source_growth.table_result() {
+        cached
+    } else {
+        let generation = engine.source_growth.generation();
+        let result = crate::table_keys::check(engine)?;
+        if settled {
+            engine
+                .source_growth
+                .record_table_result(generation, result.clone());
         }
-    }
-    let result = engine.gen5_source_graph().and_then(|graph| {
-        let mut diagnostics = crate::table_keys::check(engine)?;
-        diagnostics.extend(graph.growing_sites().into_iter().map(|site| {
-            Diagnostic::error(
-                const { RuleId::of("GEN-5") },
-                site,
-                "a recursive instantiation cycle grows its type arguments",
-            )
-        }));
-        Ok(crate::select_diagnostics(
-            diagnostics,
-            Some(&engine.sources),
-        ))
-    });
-    // A query may index synthetic owners. Such a change requires a new audit;
-    // unavailable/operational results never establish this proof.
-    if inputs == VerdictInputs::read(engine) && !result.as_ref().is_err_and(|e| !e.cacheable()) {
-        engine.generic_verdict = Some(Verdict {
-            inputs,
-            result: result.clone(),
-        });
-    }
-    result
+        result
+    };
+    diagnostics.extend(sites.into_iter().map(|site| {
+        Diagnostic::error(
+            const { RuleId::of("GEN-5") },
+            site,
+            "a recursive instantiation cycle grows its type arguments",
+        )
+    }));
+    Ok(crate::select_diagnostics(
+        diagnostics,
+        Some(&engine.sources),
+    ))
 }

@@ -147,3 +147,87 @@ fn settled_summary_identity_ignores_source_and_positions_but_observes_calls() {
         }
     });
 }
+
+#[test]
+fn source_growth_refreshes_pending_roots_and_reuses_unrelated_components() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let source = "fn first[T:copyable](x:T){second((copy x,copy x))}\nfn second[U:copyable](x:U){first(x)}\nfn separate[T](x:T){separate(x)}\nfn ordinary()->u32{1u32}\n";
+        let parse = |engine: &mut QueryEngine, source: &str| {
+            let file = engine.sources.add("growth.hir", source.into()).unwrap();
+            let output = engine.parse_file(file, &default_context()).unwrap();
+            assert!(output.diagnostics.is_empty());
+        };
+        parse(&mut engine, source);
+        let original = engine.generic_graph_diagnostics().unwrap();
+        assert_eq!(original.len(), 1);
+        assert_eq!(original[0].rule.as_str(), "GEN-5");
+        let before = engine.work_stats();
+        assert_eq!(engine.generic_graph_diagnostics().unwrap(), original);
+        assert_eq!(engine.work_stats().since(before).gen5_visits, 0);
+        let body_only = source.replace("{1u32}", "{2u32}");
+        parse(&mut engine, &body_only);
+        let before = engine.work_stats();
+        let unchanged = engine.generic_graph_diagnostics().unwrap();
+        let work = engine.work_stats().since(before);
+        assert_eq!(unchanged, original);
+        assert_eq!(work.gen5_visits, 1, "{work:?}");
+        assert_eq!(work.growth_components, 0);
+        let finite = body_only.replace("second((copy x,copy x))", "second(x)");
+        parse(&mut engine, &finite);
+        let before = engine.work_stats();
+        assert!(engine.generic_graph_diagnostics().unwrap().is_empty());
+        let work = engine.work_stats().since(before);
+        assert_eq!(work.gen5_visits, 1, "{work:?}");
+        assert!(work.growth_components > 0, "{work:?}");
+        assert!(
+            work.growth_component_hits > 0,
+            "separate SCC should survive: {work:?}"
+        );
+        // Splitting and merging the formerly recursive component must update
+        // its membership before admitting a saved verdict.
+        let split = source.replace("{first(x)}", "{let _=x}");
+        parse(&mut engine, &split);
+        assert!(engine.generic_graph_diagnostics().unwrap().is_empty());
+        parse(&mut engine, source);
+        let merged = engine.generic_graph_diagnostics().unwrap();
+        assert_eq!(merged.len(), 1);
+        assert!(
+            engine
+                .sources
+                .slice(merged[0].primary)
+                .unwrap()
+                .contains("copy x")
+        );
+        // Position-only changes preserve the semantic result, with the new
+        // position product supplying the actual diagnostic location.
+        let moved = source.replace("{second", "{  second");
+        parse(&mut engine, &moved);
+        let before = engine.work_stats();
+        let errors = engine.generic_graph_diagnostics().unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_ne!(errors[0].primary, merged[0].primary);
+        assert!(
+            engine
+                .sources
+                .slice(errors[0].primary)
+                .unwrap()
+                .contains("copy x")
+        );
+        assert_eq!(engine.work_stats().since(before).growth_components, 0);
+        // Removing a root retires its old edges and the stale growing cycle.
+        let removed = moved
+            .lines()
+            .filter(|line| !line.starts_with("fn first"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Remove both mutually recursive declarations so the source remains valid.
+        let removed = removed
+            .lines()
+            .filter(|line| !line.starts_with("fn second"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse(&mut engine, &removed);
+        assert!(engine.generic_graph_diagnostics().unwrap().is_empty());
+    });
+}

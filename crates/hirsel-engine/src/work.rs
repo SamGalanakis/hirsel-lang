@@ -40,6 +40,10 @@ work_stats! {
     selection_walk_visits,
     /// Checked summaries visited to assemble the GEN-5 graph.
     gen5_visits,
+    /// Source growth component verdicts computed after topology changes.
+    growth_components,
+    /// Canonically unchanged growth components reused after topology changes.
+    growth_component_hits,
     /// Definitions examined by the package dead-arm lint.
     lint_definition_visits,
     /// Body products read by the package dead-arm lint.

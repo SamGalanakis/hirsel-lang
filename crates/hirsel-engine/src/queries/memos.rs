@@ -650,6 +650,9 @@ impl QueryEngine {
             if now == before {
                 continue;
             }
+            if !self.imaged(&path.0.package) {
+                self.source_growth.changed(id, now.is_some());
+            }
             self.front_changes.changed(id, now.is_some());
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
             let mut read = |k| changes.read(k, durability);
@@ -812,7 +815,7 @@ impl QueryEngine {
 
     /// The environment is a public input: a change since the last query marks
     /// every memo that read it.
-    pub(super) fn note_environment(&mut self) {
+    pub(crate) fn note_environment(&mut self) {
         let now = (
             self.environment.clone(),
             self.comptime_limits,
@@ -834,6 +837,7 @@ impl QueryEngine {
         let mut changes = ChangeSet::default();
         for path in paths {
             let id = DefId::intern(path);
+            self.source_growth.invalidate(id);
             self.front_changes.changed(
                 id,
                 self.declared(path) || self.staged_constants.contains_key(path),
@@ -865,6 +869,7 @@ impl QueryEngine {
             if !self.inputs.contains_key(&id) || !self.vanished.insert(id) {
                 continue;
             }
+            self.source_growth.changed(id, false);
             self.front_changes.changed(id, false);
             any = true;
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
