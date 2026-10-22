@@ -1375,11 +1375,19 @@ impl Checker<'_, '_> {
             let candidate = candidate.filter(|(s, _)| !matches!(s.kind, SignatureKind::Type(_)));
             if let Some((s, p)) = candidate {
                 let SignatureKind::Function(f) = &s.kind else {
-                    self.report(
-                        const { RuleId::of("LANG-8") },
-                        self.span(id),
+                    let mut d = self.mapper_diagnostic(
+                        id,
+                        value,
+                        frame,
+                        (error, expected),
                         "error mapper must be a unary function or variant",
                     );
+                    self.mapper_declaration(
+                        &mut d,
+                        &p,
+                        format!("`{p}` is not a function or variant mapper"),
+                    );
+                    self.diagnostics.push(d);
                     return Ok(self.error());
                 };
                 let f = self.import_function(f)?;
@@ -1391,11 +1399,23 @@ impl Checker<'_, '_> {
                     && self.infer(f.result, expected, &mut args)?
                     && args.iter().all(Option::is_some);
                 if !matches {
-                    self.report(
-                        const { RuleId::of("LANG-8") },
-                        self.span(id),
+                    let mut d = self.mapper_diagnostic(
+                        id,
+                        value,
+                        frame,
+                        (error, expected),
                         "error mapper must map the source error to the enclosing error",
                     );
+                    let actual = self.ty(TypeKind::Function(f.clone()));
+                    self.mapper_declaration(
+                        &mut d,
+                        &p,
+                        format!(
+                            "mapper `{p}` has signature `{}`",
+                            self.type_spelling(actual)
+                        ),
+                    );
+                    self.diagnostics.push(d);
                     return Ok(self.error());
                 }
                 mapper_passing = Some(f.parameters[0].passing);
@@ -1450,17 +1470,44 @@ impl Checker<'_, '_> {
                 } else {
                     None
                 };
-                if let (Some(owner), Some(i)) = (owner, variant) {
+                if let (Some(owner), Some(i)) = (&owner, variant) {
                     Some(CallTarget::Constructor(ContextualName::Variant {
-                        owner,
+                        owner: owner.clone(),
                         variant: VariantId(i as u32),
                     }))
                 } else {
-                    self.report(
-                        const { RuleId::of("LANG-8") },
-                        self.span(id),
+                    let mut d = self.mapper_diagnostic(
+                        id,
+                        value,
+                        frame,
+                        (error, expected),
                         "variant mapper needs exactly one matching error payload",
                     );
+                    if let TypeKind::Variant(vs) = self.kind(repr)
+                        && let Some(arm) = vs.iter().find(|v| v.name.as_str() == name)
+                    {
+                        let payloads = arm
+                            .fields
+                            .iter()
+                            .map(|(_, ty)| self.type_spelling(*ty))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let declaration = format!(
+                            "variant mapper `{name}({payloads})` belongs to `{}`",
+                            self.type_spelling(expected)
+                        );
+                        if let Some(owner) = &owner {
+                            self.mapper_declaration(&mut d, owner, declaration);
+                        } else {
+                            d.notes.push(declaration);
+                        }
+                        if arm.fields.is_empty() {
+                            let source = self.type_spelling(error);
+                            let target = self.type_spelling(expected);
+                            d.notes.push(format!("help: to intentionally discard the payload, declare a named helper such as `fn map_error(error: {source}) -> {target} uses {{}} {{ {name}() }}`, then use `? map_error` (choose a fresh helper name)"));
+                        }
+                    }
+                    self.diagnostics.push(d);
                     return Ok(self.error());
                 }
             }

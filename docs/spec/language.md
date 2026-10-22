@@ -416,6 +416,11 @@ a one-argument variant or function, before propagating. A type is never a mapper
 bare `C` also names a type, such as core's `Net`, `C` is the enclosing error type's variant
 ([LANG-4](#lang-4-names)). An error mapper may borrow or take its owned error; a mapper that
 requires `mut` access is LANG-8.
+The required mapper contract is `fn(SourceError) -> EnclosingError`. A nullary arm
+does not discard the source error. To do so intentionally, declare a named unary
+helper, for example `fn invalid_json(error: json.JsonError) -> CommandError uses {}
+{ InvalidJson() }`, and write `json.stringify(candidate) ? invalid_json`. The form
+after `?` is a path, so a closure literal cannot be substituted there.
 
 A plain `e?` propagates an error identical to the enclosing function's or closure literal's
 error type unchanged. Otherwise it injects the error through an arm of the enclosing error

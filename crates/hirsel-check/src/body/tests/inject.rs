@@ -3,6 +3,64 @@ use super::*;
 
 const TYPES: &str = "type ParseError = Empty()\ntype ConfigError = Missing()\n";
 
+#[test]
+fn explicit_inject_mapper_names_the_required_contract() {
+    for (arm, mapper, declaration) in [
+        ("InvalidJson()", "InvalidJson", ""),
+        ("InvalidJson(u64)", "InvalidJson", ""),
+        (
+            "InvalidJson()",
+            "convert",
+            "fn convert() -> AppError { InvalidJson() }",
+        ),
+        (
+            "InvalidJson()",
+            "convert",
+            "fn convert(e: ParseError) -> u64 { 0 }",
+        ),
+        (
+            "InvalidJson()",
+            "convert",
+            "fn convert(mut e: ParseError) -> AppError { InvalidJson() }",
+        ),
+    ] {
+        let source = format!(
+            "// café 🐑\n{TYPES}type AppError = {arm}\n{declaration}\nfn parse() -> Result[u64, ParseError] {{ Error(Empty()) }}\nfn run() -> Result[u64, AppError] {{ let n = parse() ? {mapper}\nOk(n) }}"
+        );
+        let (ds, _, map) = support::check_source(&source);
+        let [d] = &ds[..] else { panic!("{ds:?}") };
+        assert_eq!(d.rule.as_str(), "LANG-8");
+        assert_eq!(
+            map.slice(d.primary),
+            Some(format!("parse() ? {mapper}").as_str())
+        );
+        let human = d.render_human(&map);
+        assert!(human.contains("fn(ParseError) -> AppError"), "{human}");
+        assert!(
+            d.secondary
+                .iter()
+                .any(|l| map.slice(l.span) == Some("parse()") && l.message.contains("ParseError")),
+            "{d:?}"
+        );
+        assert!(
+            d.secondary
+                .iter()
+                .any(|l| map.slice(l.span) == Some("Result[u64, AppError]")
+                    && l.message.contains("AppError")),
+            "{d:?}"
+        );
+        assert!(d.fix.is_none());
+        if declaration.is_empty() && arm == "InvalidJson()" {
+            assert!(
+                human.contains(
+                    "fn map_error(error: ParseError) -> AppError uses {} { InvalidJson() }"
+                ),
+                "{human}"
+            );
+        }
+    }
+}
+
 /// Each output's try plans, in source order.
 fn tries(outputs: &[Output]) -> Vec<&TryPlan> {
     outputs.iter().flat_map(|o| &o.plans.tries).collect()

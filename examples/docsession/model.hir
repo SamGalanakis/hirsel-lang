@@ -55,6 +55,7 @@ pub fn preflight(source: String) -> Result[(), CommandError] uses {} {
   Ok(())
 }
 
+// Intentionally discard the source payload through a named unary mapper (LANG-8).
 fn invalid_json(error: json.JsonError) -> CommandError uses {} {
   InvalidJson()
 }

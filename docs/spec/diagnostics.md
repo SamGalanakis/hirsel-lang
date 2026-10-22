@@ -95,6 +95,18 @@ instantiate or transport a written sendability requirement is MODE-4 at the call
 receiving flow; the diagnostic identifies the qualified requirement and, when relevant, the
 signature's copying permission or invariant mutable contract that prevents preserving it.
 
+## Explicit error mappers
+
+A failed explicit `e ? mapper` keeps LANG-8 and the complete propagation expression
+as its primary site. It names the actual source error, the enclosing error channel,
+and the required `fn(SourceError) -> EnclosingError` signature. Labels identify the
+source expression and enclosing function or closure result annotation. The mapper
+declaration is labelled when available in the same source file; otherwise a note
+names it and its signature. Variant failures show the declared payloads. A nullary
+variant cannot discard an error payload: help may show a named unary helper that
+intentionally discards it and returns that variant, followed by `? helper`. This is
+a recipe to check, not an automatic edit or a change to the error contract.
+
 ## Causes
 
 An ownership-flow diagnostic reports a provided fact (a value's loans, locality,

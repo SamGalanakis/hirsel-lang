@@ -12,6 +12,65 @@ struct Arm {
 }
 
 impl Checker<'_, '_> {
+    /// Explain an explicit mapper without changing its primary site or verdict.
+    pub(super) fn mapper_diagnostic(
+        &self,
+        id: ast::ExprId,
+        value: ast::ExprId,
+        frame: usize,
+        errors: (TypeId, TypeId),
+        message: &str,
+    ) -> Diagnostic {
+        let [source, target] = hirsel_type_analysis::spelling::type_spellings_apart(
+            self.types,
+            [errors.0, errors.1],
+            &self.body.resolution.generic_declarations,
+            &self.input.signature.definition.path().0.package,
+            false,
+        );
+        let mut d = Diagnostic::error(const { RuleId::of("LANG-8") }, self.span(id), message);
+        d.secondary.push(hirsel_diag::Label {
+            span: self.span(value),
+            message: format!("propagates `{source}`"),
+        });
+        let signature = match self.frames[frame].owner {
+            NameSite::Item => match &self.input.syntax.item.kind {
+                ast::ItemKind::Function { signature, .. } => Some(signature),
+                _ => None,
+            },
+            NameSite::Expression(e) => match &self.input.syntax.tree.expressions[e.0 as usize].kind
+            {
+                ast::ExprKind::Closure { signature, .. } => Some(signature),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(result) = signature.and_then(|s| s.result) {
+            d.secondary.push(hirsel_diag::Label {
+                span: self.input.syntax.tree.types[result.0 as usize].origin.span,
+                message: format!("enclosing error channel is `{target}`"),
+            });
+        }
+        d.notes.push(format!(
+            "required mapper signature: `fn({source}) -> {target}`; the mapper may borrow or take the source error, but cannot require `mut`"
+        ));
+        d
+    }
+
+    pub(super) fn mapper_declaration(
+        &mut self,
+        d: &mut Diagnostic,
+        definition: &ast::DefPath,
+        message: String,
+    ) {
+        if let Some(span) = self.provider.cite_name(definition) {
+            d.secondary.push(hirsel_diag::Label { span, message });
+        } else {
+            // Imported/image declarations have no citation in this source file.
+            d.notes.push(message);
+        }
+    }
+
     /// A nominal error type: a named definition or a type parameter. A
     /// primitive (`String`, `Bytes`, `Never`), tuple, function or builtin
     /// type names no error domain, so its identity is no evidence of a role.
