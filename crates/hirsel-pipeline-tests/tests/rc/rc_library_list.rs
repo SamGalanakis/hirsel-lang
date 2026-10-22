@@ -207,10 +207,32 @@ fn agree(body: &str) -> Built {
 fn agree_with(body: &str, campaign: bool) -> Built {
     let source = source(body);
     let b = build(&source);
+    let mut definitions: Vec<_> = library_units(&b)
+        .iter()
+        .map(|unit| unit.header.definition.clone())
+        .collect();
+    // The exported integer order witnesses retain their comparison bodies in
+    // addition to the push and growth instances exercised by this program.
+    let mut expected = [
+        "$intrinsic.OrderCompare_i128",
+        "$intrinsic.OrderCompare_i16",
+        "$intrinsic.OrderCompare_i32",
+        "$intrinsic.OrderCompare_i64",
+        "$intrinsic.OrderCompare_i8",
+        "$intrinsic.OrderCompare_u128",
+        "$intrinsic.OrderCompare_u16",
+        "$intrinsic.OrderCompare_u32",
+        "$intrinsic.OrderCompare_u64",
+        "$intrinsic.OrderCompare_u8",
+        "list.push",
+        "$native.list_grow",
+    ]
+    .map(hirsel_syntax::DefPath::core);
+    definitions.sort();
+    expected.sort();
     assert_eq!(
-        library_units(&b).len(),
-        2,
-        "{source}\npush and growth instances expected"
+        definitions, expected,
+        "{source}\nlibrary instance inventory"
     );
     let h = heap(&source, &b, campaign);
     let i = reference(&source);

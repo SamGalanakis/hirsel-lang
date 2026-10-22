@@ -595,6 +595,8 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
     let template = unit_named(&l, "sum");
     let mut u = LirUnit::<Value>::new(template.header.clone());
     let root = template.types[template.values[template.parameters[0].index()].ty.index()].clone();
+    let condition =
+        template.types[template.values[template.parameters[2].index()].ty.index()].clone();
     let scalar = |kind| {
         LayoutId(
             l.table
@@ -611,10 +613,9 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
     let element = l.table.layouts[list.0 as usize].fields[0].layout;
     u.types = vec![
         root,
-        LirType {
-            repr: ValueRepr::Scalar(ScalarKind::Bool),
-            layout: scalar(ScalarKind::Bool),
-        },
+        // The declared Bool and an anonymous scalar layout have distinct
+        // identities even though both occupy one byte. Keep the ABI's type.
+        condition,
         LirType {
             repr: ValueRepr::Scalar(ScalarKind::U64),
             layout: scalar(ScalarKind::U64),
