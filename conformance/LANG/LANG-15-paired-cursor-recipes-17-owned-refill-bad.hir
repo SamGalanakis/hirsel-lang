@@ -1,0 +1,25 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 18
+// twin: LANG/LANG-15-paired-cursor-recipes-17-run.hir
+type Value = Leaf | Array(List[Value]) | Tagged(value: box Value)
+
+fn unboxed(value: box Value) -> Value in value uses {} {
+  match value {
+    Leaf() => Leaf(),
+    Array(items) => Array(copy items),
+    Tagged(value: inner) => Tagged(value: copy inner),
+  }
+}
+
+fn bad(value: Value) -> bool uses {} {
+  let mut c = value
+  match c {
+    Tagged(value: inner) => {
+      c = unboxed(inner)
+    },
+    _ => {},
+  }
+  true
+}
+
+pub fn main() -> () {}

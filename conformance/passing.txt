@@ -1744,6 +1744,12 @@ conformance/LANG/LANG-15-mut-field-resource-bad.hir
 conformance/LANG/LANG-15-mut-field-resource-ok.hir
 conformance/LANG/LANG-15-mut-field-scalar-ok.hir
 conformance/LANG/LANG-15-mut-field-scalar-run.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-box-type-bad.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-computed-pair-bad.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-escape-bad.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-owned-refill-bad.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-run.hir
+conformance/LANG/LANG-15-paired-cursor-recipes-17-stale-root-bad.hir
 conformance/LANG/LANG-15-plain-copy.hir
 conformance/LANG/LANG-15-returned-closure-keeps-type.hir
 conformance/LANG/LANG-2-alias-variant-construction-bad.hir

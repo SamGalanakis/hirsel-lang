@@ -1,0 +1,12 @@
+// rule: LANG-15
+// expect: reject MODE-1 at line 8
+// twin: LANG/LANG-15-paired-cursor-recipes-17-run.hir
+fn bad(mut a: List[u64], b: List[u64]) -> u64 uses {} {
+  let mut c: List[u64] in {a, b} = a
+  let old = c
+  c = b
+  a = [9u64]
+  old[0u64] + c[0u64]
+}
+
+pub fn main() -> () {}

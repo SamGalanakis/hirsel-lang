@@ -3,6 +3,10 @@ type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
 
 type Value = Text(String) | Array(List[Value])
 
+type PairValue = Text(String) | Leaf | Array(List[PairValue]) | Tagged(
+  value: box PairValue
+)
+
 type Pair {
   a: List[u64],
   b: List[u64],
@@ -94,6 +98,179 @@ fn transaction(a: List[u64]) -> List[u64] in a {
 }
 
 // endrecipe
+// recipe: same
+fn same(a: PairValue, b: PairValue) -> bool uses {} {
+  let mut left = a
+  let mut right = b
+  while true {
+    match left {
+      Array(xs) => match right {
+        Array(ys) => {
+          let n = core@1/list.len(xs)
+          if n != core@1/list.len(ys) {
+            return false
+          }
+          if n == 0 {
+            return true
+          }
+          let mut i = 0u64
+          while i + 1 < n {
+            if !same(xs[i], ys[i]) {
+              return false
+            }
+            i += 1
+          }
+          left = xs[n - 1]
+          right = ys[n - 1]
+        },
+        _ => return false,
+      },
+      Text(s) => return match right {
+        Text(t) => s == t,
+        _ => false,
+      },
+      Leaf() => return match right {
+        Leaf() => true,
+        _ => false,
+      },
+      Tagged(value: x) => return match right {
+        Tagged(value: y) => x == y,
+        _ => false,
+      },
+    }
+  }
+  false
+}
+
+// endrecipe
+// recipe: tag_depth
+fn tag_depth(value: box PairValue) -> u64 uses {} {
+  let mut cursor = value
+  let mut n = 0u64
+  while true {
+    match cursor {
+      Tagged(value: inner) => {
+        cursor = inner
+        n += 1
+      },
+      _ => return n,
+    }
+  }
+  n
+}
+
+// endrecipe
+// recipe: read
+fn read(a: List[u64], b: List[u64]) -> u64 uses {} {
+  let mut c: List[u64] in {a, b} = a
+  let old = c
+  c = b
+  old[0u64] + c[0u64]
+}
+
+// endrecipe
+fn paired_recipes_agree() -> bool {
+  // These are separately constructed roots, including equal tails with unequal siblings.
+  let a: PairValue = Array([Leaf(), Array([Leaf()])])
+  let b: PairValue = Array([Leaf(), Array([Leaf()])])
+  let bad: PairValue = Array([Array([]), Array([Leaf()])])
+  let empty: PairValue = Array([])
+  let other_empty: PairValue = Array([])
+  let one: PairValue = Array([Leaf()])
+  let deep: PairValue = Array([Array([Array([Leaf()])])])
+  let deep_other: PairValue = Array([Array([Array([Leaf()])])])
+  let tags: box PairValue = box Tagged(value: box Tagged(value: box Leaf()))
+  let tagged: PairValue = Tagged(value: box Leaf())
+  let tagged_other: PairValue = Tagged(value: box Leaf())
+  let tagged_bad: PairValue = Tagged(value: box Array([]))
+  let leaf: PairValue = Leaf()
+  let leaf_other: PairValue = Leaf()
+  let one_other: PairValue = Array([Leaf()])
+  let text: PairValue = Text("x")
+  let text_other: PairValue = Text("x")
+  let text_bad: PairValue = Text("y")
+  let box_leaf: box PairValue = box Leaf()
+  let box_array: box PairValue = box Array([Leaf()])
+  let alias_a: List[u64] = [3u64]
+  let alias_b: List[u64] = [7u64]
+  if !same(a, b) {
+    return false
+  }
+  if !same(b, a) {
+    return false
+  }
+  if same(a, bad) {
+    return false
+  }
+  if same(bad, a) {
+    return false
+  }
+  if !same(empty, other_empty) {
+    return false
+  }
+  if same(empty, one) {
+    return false
+  }
+  if same(one, empty) {
+    return false
+  }
+  if same(empty, leaf) {
+    return false
+  }
+  if same(leaf, empty) {
+    return false
+  }
+  if !same(leaf, leaf_other) {
+    return false
+  }
+  if !same(one, one_other) {
+    return false
+  }
+  if !same(deep, deep_other) {
+    return false
+  }
+  if same(deep, one) {
+    return false
+  }
+  if same(one, deep) {
+    return false
+  }
+  if !same(tagged, tagged_other) {
+    return false
+  }
+  if same(tagged, tagged_bad) {
+    return false
+  }
+  if same(tagged, leaf) {
+    return false
+  }
+  if same(leaf, tagged) {
+    return false
+  }
+  if !same(text, text_other) {
+    return false
+  }
+  if same(text, text_bad) {
+    return false
+  }
+  if same(text, leaf) {
+    return false
+  }
+  if !(tag_depth(box_leaf) == 0) {
+    return false
+  }
+  if !(tag_depth(tags) == 2) {
+    return false
+  }
+  if !(tag_depth(box_array) == 0) {
+    return false
+  }
+  if !(read(alias_a, alias_b) == 10) {
+    return false
+  }
+  true
+}
+
 fn recipes_agree() -> bool {
   let root = box Branch(
     left: box Branch(left: box Leaf(n: 7), right: box Leaf(n: 8)),
@@ -105,6 +282,7 @@ fn recipes_agree() -> bool {
     Text(s) => s == "seven",
     Array(_) => false,
   }
+  let paired_ok = paired_recipes_agree()
   let mut count = 0u64
   count += 1
   borrowed_tree(root) == 7 && owned_tree(root) == 7 && borrowed_tree(box Leaf(n: 3)) == 3 && text_ok && array_result(
@@ -112,7 +290,7 @@ fn recipes_agree() -> bool {
   ) == Array([]) && sibling_reset(Pair(a: [1], b: [2, 3])) == 4 && saved_snapshot(
     mut a,
     [2, 3]
-  ) == 3 && a == [1, 9] && transaction([1]) == [1, 9] && count == 1
+  ) == 3 && a == [1, 9] && transaction([1]) == [1, 9] && count == 1 && paired_ok
 }
 
 @test

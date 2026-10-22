@@ -1,0 +1,17 @@
+// rule: LANG-15
+// expect: reject MODE-1 at line 10
+// twin: LANG/LANG-15-paired-cursor-recipes-17-run.hir
+type Value = Leaf | Array(List[Value]) | Tagged(value: box Value)
+
+fn bad(a: Value, b: Value) -> bool uses {} {
+  let mut c: Value in {a, b} = a
+  match (a, b) {
+    (Array(xs), _) => {
+      c = xs[0u64]
+    },
+    _ => {},
+  }
+  c == a
+}
+
+pub fn main() -> () {}

@@ -9,7 +9,7 @@ and [snapshot loans](spec/ownership.md#own-3-exclusive-access); the
 This guide changes no rule and assumes no extra relation inference.
 
 Every `hir` block below is checked as a separate std-free package by the CLI
-recipe test. The first comment states acceptance or the current rejection rule.
+recipe tests. The `paired-cursor` blocks use the focused paired recipe harness. The first comment states acceptance or the current rejection rule.
 Accepted functions also run in the [example](../examples/borrow-cursor-recipes/main.hir).
 Rejects deliberately have no executable entry.
 
@@ -147,6 +147,193 @@ fn walk(value: Value, key: String) -> Option[Value] in value uses {} {
   let Some(next) = child(target, key) else { return None() }
   target = take next
   Some(take target)
+}
+```
+
+## Compare two Array roots with separate physical matches
+
+Each cursor starts from its own borrowed root. Match `left` and `right`
+separately so `xs` and `ys` remain physical views of their respective roots.
+Check lengths before indexing and return immediately for two empty arrays.
+Compare every non-tail sibling recursively before rebinding both cursors to
+that array's last child; a matching tail cannot hide an unequal earlier child.
+The `Tagged` arm compares boxed values structurally and returns.
+
+```hir paired-cursor
+// expect: accept
+type PairValue = Text(String) | Leaf | Array(List[PairValue]) | Tagged(value: box PairValue)
+
+fn same(a: PairValue, b: PairValue) -> bool uses {} {
+  let mut left = a
+  let mut right = b
+  while true {
+    match left {
+      Array(xs) => match right {
+        Array(ys) => {
+          let n = core@1/list.len(xs)
+          if n != core@1/list.len(ys) {
+            return false
+          }
+          if n == 0 {
+            return true
+          }
+          let mut i = 0u64
+          while i + 1 < n {
+            if !same(xs[i], ys[i]) {
+              return false
+            }
+            i += 1
+          }
+          left = xs[n - 1]
+          right = ys[n - 1]
+        },
+        _ => return false,
+      },
+      Text(s) => return match right {
+        Text(t) => s == t,
+        _ => false,
+      },
+      Leaf() => return match right {
+        Leaf() => true,
+        _ => false,
+      },
+      Tagged(value: x) => return match right {
+        Tagged(value: y) => x == y,
+        _ => false,
+      },
+    }
+  }
+  false
+}
+
+```
+
+A computed tuple `(a, b)` constructs an owned value. Destructuring it does not
+recover the original roots' physical view origins, even with `in {a, b}`:
+
+```hir paired-cursor
+// expect: reject MODE-1
+type Value = Leaf | Array(List[Value]) | Tagged(value: box Value)
+fn bad(a: Value, b: Value) -> bool uses {} {
+  let mut c: Value in {a, b} = a
+  match (a, b) {
+    (Array(xs), _) => { c = xs[0u64] },
+    _ => {},
+  }
+  c == a
+}
+```
+
+## Keep boxed-chain cursors boxed
+
+`Value` and `box Value` are different cursor types. Structural matching can
+inspect a box, but `Tagged(value: inner)` binds the existing **boxed** child.
+This cursor therefore stays `box Value` for the entire chain:
+
+```hir paired-cursor
+// expect: accept
+type PairValue = Text(String) | Leaf | Array(List[PairValue]) | Tagged(value: box PairValue)
+
+fn tag_depth(value: box PairValue) -> u64 uses {} {
+  let mut cursor = value
+  let mut n = 0u64
+  while true {
+    match cursor {
+      Tagged(value: inner) => {
+        cursor = inner
+        n += 1
+      },
+      _ => return n,
+    }
+  }
+  n
+}
+
+```
+
+Assigning that child directly to a `Value` cursor fails LANG-7:
+
+```hir paired-cursor
+// expect: reject LANG-7
+type Value = Leaf | Array(List[Value]) | Tagged(value: box Value)
+fn bad(value: Value) -> bool uses {} {
+  let mut c = value
+  match c {
+    Tagged(value: inner) => { c = inner },
+    _ => {},
+  }
+  true
+}
+```
+
+A helper returning `Value in value` still returns an owned value. The relation
+constrains its bounds; it does not return a borrow or make a call result a view.
+Reconstructing the payload with `unboxed` therefore fails LANG-15 as a refill:
+
+```hir paired-cursor
+// expect: reject LANG-15
+type Value = Leaf | Array(List[Value]) | Tagged(value: box Value)
+fn unboxed(value: box Value) -> Value in value uses {} {
+  match value {
+    Leaf() => Leaf(),
+    Array(items) => Array(copy items),
+    Tagged(value: inner) => Tagged(value: copy inner),
+  }
+}
+fn bad(value: Value) -> bool uses {} {
+  let mut c = value
+  match c {
+    Tagged(value: inner) => { c = unboxed(inner) },
+    _ => {},
+  }
+  true
+}
+```
+
+No single cursor here crosses both Array elements (`Value`) and boxed children
+(`box Value`) without reconstruction. Keep the original recursive
+[YAML equality fallback](../stdlib/std@1/yaml.hir): its owned tuple, hash lookup
+and recursive `unboxed` results retain their existing ownership and failure order.
+These recipes do not migrate that implementation or establish an RC or timing win.
+
+## Paired roots preserve the old alias
+
+After rebinding `c`, `old` still reads the first root. This returns 10 for
+`[3]` and `[7]`; it does not retarget `old` to the second root:
+
+```hir paired-cursor
+// expect: accept
+fn read(a: List[u64], b: List[u64]) -> u64 uses {} {
+  let mut c: List[u64] in {a, b} = a
+  let old = c
+  c = b
+  old[0u64] + c[0u64]
+}
+
+```
+
+The old alias keeps its loan live; rebinding the cursor does not allow a write
+to the first root before that alias's last use:
+
+```hir paired-cursor
+// expect: reject MODE-1
+fn bad(mut a: List[u64], b: List[u64]) -> u64 uses {} {
+  let mut c: List[u64] in {a, b} = a
+  let old = c
+  c = b
+  a = [9u64]
+  old[0u64] + c[0u64]
+}
+```
+
+A borrowed cursor also cannot escape as an unbounded owned result:
+
+```hir paired-cursor
+// expect: reject MODE-1
+fn bad(a: List[u64]) -> List[u64] uses {} {
+  let mut c = a
+  c = a
+  c
 }
 ```
 
@@ -338,7 +525,20 @@ The last selection runs three Rust tests: every guide block through public
 new corpus twins through the same checker, and the package's test plus executable
 entry on H, LLVM and Cranelift. It builds each standalone entry once per native
 backend and reuses that path, following [native verification](native-verification.md).
-Zero selected tests is a failure.
+The paired extension is checked by:
+
+```sh
+.buck2/bin/buck2 test //:hirsel-cli-test-cli-shard-1 -- --test-arg=paired_cursor_recipes_17
+.buck2/bin/buck2 test //:hirsel-validate-test-it -- --test-arg=borrow_cursor_contracts_8
+.buck2/bin/buck2 test -c hirsel.conformance_paths=conformance/LANG/LANG-15-paired-cursor-recipes-17- //:gate-conformance-selected-shard-1
+```
+
+It checks the eight labelled blocks (three accepted, five rejected) and their
+corpus twins, and runs the extended package on the interpreter, checked heap,
+LLVM and Cranelift. Each native entry is built once per backend and reused.
+The bounded vectors cover independent roots, empty and unequal arrays,
+unequal non-tail siblings, nested tails, boxes and saved aliases; they are not
+a proof for all inputs. Zero selected tests is a failure.
 
 Cursor rebinding itself performs no count operation. Final owned result sharing
 is a separate operation and is not included in that statement. The existing
@@ -354,3 +554,12 @@ Adaptations: reduce JSON to Text/Array; keep direct enum payload patterns; add
 an empty-array guard, enclosing-root sibling/reset, a saved view's last-use
 control, and explicit result copies with Hirsel relations. No external algorithm
 or source is ported, and no external license/notice is introduced.
+
+Paired recipe provenance: the already checked Hirsel `cursor-pair-design-16`
+separate-physical and direct-box-projection examples. The Array function's only
+semantic adaptations are the `PairValue` type name and a `Text` arm matching the
+existing example. The boxed walk and saved-alias function retain their original
+structure. Added separately
+constructed roots and boundary vectors; canonical formatting follows this repo.
+No external implementation or license notice applies. No language, compiler,
+standard-library, independent validator or public README rule changes.

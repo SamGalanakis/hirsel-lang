@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "paired_cursor_recipes_17",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "LANG-15-paired-cursor-recipes-17-computed-pair-bad.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
