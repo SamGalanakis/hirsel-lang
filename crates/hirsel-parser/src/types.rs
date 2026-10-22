@@ -372,10 +372,35 @@ impl Parser<'_> {
     }
     fn pattern_inner(&mut self) -> Parsed<PatternId> {
         if self.at("mut") {
-            return self.fail(
+            // Parsing cannot decide whether a payload is owned or borrowed, or
+            // rewrite references across guards and success/failure scopes. Offer
+            // prose only; avoid all identifiers, including later uses that a
+            // new binding could otherwise capture (as in name()'s rename help).
+            let fresh = |base| {
+                hirsel_diag::fresh_name(base, |candidate| {
+                    !self.tokens.iter().any(|token| {
+                        matches!(token.kind, TokenKind::Ident(s) if s.as_str() == candidate)
+                    })
+                })
+            };
+            let payload = fresh("pattern_value");
+            let local = fresh("mutable_value");
+            let mut diagnostic = Diagnostic::error(
                 const { RuleId::of("LANG-13") },
-                "binding-level `mut` is unsupported; put `mut` after `let`, as in `let mut (stream, _) = ...`",
+                self.span(),
+                "nested `mut` is unsupported; put `mut` on a local binding after `let`",
             );
+            diagnostic.notes.push(format!(
+                "help: bind the payload immutably as `{payload}`; for a plain value or borrowed data view, in the successful scope (after any guard) add `let mut {local} = {payload}` and update that binding's body uses to `{local}`"
+            ));
+            diagnostic.notes.push(format!(
+                "help: for an owned payload that must move into the local, use `let mut {local} = take {payload}` instead; keep the scrutinee's borrow/take mode and the failure/else path unchanged"
+            ));
+            diagnostic.notes.push(
+                "a borrowed non-plain payload stays a read-only view; `mut` does not permit mutating or taking its source. Update guard uses to the immutable pattern binding. Check the suggested names against other modules; ownership and uses are not known here, so no automatic edit is offered".into()
+            );
+            self.diagnostics.push(diagnostic);
+            return Err(());
         }
         let start = self.pos;
         let kind = if self.eat("_") {

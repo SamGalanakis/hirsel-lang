@@ -102,3 +102,86 @@ fn malformed_forms_name_the_actual_syntax_obligation() {
     let (output, _) = support::parse("type T {}\nfn f()->T\n@noalloc fn g() {}");
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
 }
+
+#[test]
+fn nested_mut_patterns_explain_two_bindings_without_an_edit() {
+    // Compare rustc tests/ui/binding/mut-in-ident-patterns.rs:24-76 at
+    // afe686de2708699b69dd31ed14be326f4e95edfc (MIT, The Rust Project
+    // Contributors; license in third-party/NOTICES.md). These Hirsel LANG-13
+    // vectors reject nested `mut`, without importing Rust match ergonomics.
+    for body in [
+        "let Ok(mut f) = result else { return }",
+        "let Some(mut n) = value else { return }",
+        "match result { Ok(mut f) => (), _ => () }",
+        "match result { Ok(mut f) if ready => (), _ => () }",
+        "if let Ok(mut f) = result {}",
+        "while let Ok(mut f) = result { break }",
+        "let (x, mut y) = pair",
+        "let Wrap(value: Some((x, mut y))) = value else { return }",
+        "match result { A(mut x) | B(x) => (), _ => () }",
+    ] {
+        let source = format!("// λ\nfn probe() {{ {body} }}\nfn later() {{}}\n");
+        let (output, sources) = support::parse(&source);
+        assert_eq!(
+            output.diagnostics.len(),
+            1,
+            "{source}: {:?}",
+            output.diagnostics
+        );
+        let d = &output.diagnostics[0];
+        assert_eq!(d.rule.as_str(), "LANG-13");
+        assert_eq!(sources.slice(d.primary), Some("mut"));
+        assert!(d.message.contains("local binding"), "{d:?}");
+        let notes = d.notes.join("\n");
+        for fragment in [
+            "let mut mutable_value = pattern_value",
+            "let mut mutable_value = take pattern_value",
+            "successful",
+            "read-only",
+            "scrutinee",
+            "guard",
+        ] {
+            assert!(notes.contains(fragment), "{fragment}: {d:?}");
+        }
+        assert!(d.fix.is_none());
+        assert!(
+            output
+                .syntax
+                .items
+                .iter()
+                .any(|item| item.item.name.as_str() == "later")
+        );
+    }
+}
+
+#[test]
+fn mutable_pattern_help_names_avoid_earlier_and_later_identifiers() {
+    let source = "fn probe(pattern_value: T) { let Ok(mut f) = result else { return }; let pattern_value_2 = f; let mutable_value = pattern_value_2; let mutable_value_2 = mutable_value }";
+    let (output, _) = support::parse(source);
+    let notes = output.diagnostics[0].notes.join("\n");
+    assert!(
+        notes.contains("let mut mutable_value_3 = pattern_value_3"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("let mut mutable_value_3 = take pattern_value_3"),
+        "{notes}"
+    );
+    assert!(output.diagnostics[0].fix.is_none());
+}
+
+#[test]
+fn top_level_let_mut_controls_still_parse() {
+    for body in [
+        "let mut n = 1; n += 1",
+        "let mut (x, y) = pair",
+        "let mut Ok(f) = result else { return }",
+    ] {
+        let (output, _) = support::parse(&format!("fn probe() {{ {body} }}"));
+        assert!(
+            output.diagnostics.is_empty(),
+            "{body}: {:?}",
+            output.diagnostics
+        );
+    }
+}

@@ -92,3 +92,4 @@ mod expired_whole_transfer;
 mod native_effects_frame_15;
 mod cursor_diagnostics_16;
 mod exit_code_16;
+mod mutable_pattern_diagnostics_17;

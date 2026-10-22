@@ -42,3 +42,4 @@ mod archiveaudit_15;
 mod cursor_diagnostics_16;
 mod exit_code_16;
 mod paired_cursor_recipes_17;
+mod mutable_pattern_diagnostics_17;
