@@ -1,6 +1,6 @@
 //! Request ownership and native recorded host phases. This foundation does
 //! admits explicit bounded host tests, home readiness and owner-side retries.
-//! General adapter routing, cancellation, resource discovery and terminal
+//! General adapter routing, parked cancellation, resource discovery and terminal
 //! activation remain gated.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};
@@ -25,6 +25,7 @@ pub(crate) struct Pending {
     attempt: u32,
     home_log: Option<Box<super::record::Task>>,
     home_token: Option<u64>,
+    canceled: Option<u32>,
     created: Vec<Created>,
 }
 
@@ -68,6 +69,7 @@ pub(crate) unsafe fn prepare_with_keys(
             attempt: 0,
             home_log: None,
             home_token: None,
+            canceled: None,
             created: Vec::new(),
         }));
     }
@@ -77,10 +79,13 @@ pub(crate) unsafe fn prepare_with_keys(
     pending.path = path;
     pending.entered = entered;
     let pending = pending as *mut Pending;
+    let s = scheduler(ctx) as *mut Scheduler;
+    let shield = unsafe { (*ctx).shield };
     super::record::publish(ctx, Phase::Entered, |writer| unsafe {
         let writer = writer.expect("a recorded host entry");
         writer.prepare(&(*pending).request);
         take_positions(&mut *pending, writer);
+        observe_cancel(&mut *pending, &mut *s, shield, writer);
     })
 }
 
@@ -248,7 +253,12 @@ pub(crate) unsafe fn request_home(
         }?;
     }
     let token = unsafe { (*pending).home_token.unwrap() };
-    if !unsafe { issue_home_with(ctx, |_| crate::host_waits::native_call_home(run, token)) }? {
+    let cause = unsafe { (*pending).canceled };
+    if !unsafe {
+        issue_home_with(ctx, |_| {
+            crate::host_waits::native_call_home(run, token, cause)
+        })
+    }? {
         return Err(Stop::Requested);
     }
     unsafe { ended(ctx) }?;
@@ -267,12 +277,13 @@ pub(crate) unsafe fn request_home(
         // only after this task's physical save; the owner issues Attempt.
         unsafe { try_block(&mut *ctx, Wait::Host { token }, false, 0) }?;
         unsafe { attempt(ctx) }?;
+        let cause = unsafe { (*pending).canceled };
         let mut encoded = None;
         {
             let _segment = unsafe { role::Segment::new(ctx) };
             unsafe {
                 crate::pool::call_home(ctx, &mut || {
-                    let result = crate::host_waits::native_call_home(run, token);
+                    let result = crate::host_waits::native_call_home(run, token, cause);
                     encoded = Some(handles::encode(&mut *pending, &result));
                     (*pending).completion = Some(result);
                 })
@@ -375,6 +386,21 @@ fn take_positions(pending: &mut Pending, writer: &mut hirsel_free::concurrent::W
     pending.positions = Some(positions);
 }
 
+fn observe_cancel(
+    pending: &mut Pending,
+    s: &mut Scheduler,
+    shield: u32,
+    writer: &mut hirsel_free::concurrent::Writer<'_, '_>,
+) {
+    if shield == 0 && crate::io_checks::cancellation_result(pending.request.buffers(), 0).is_some()
+    {
+        pending.canceled = s.canceled(shield);
+        writer.cancel(pending.canceled);
+    } else {
+        pending.canceled = None;
+    }
+}
+
 /// Wait without a section, a key lock, or an owner on the saved stack. Ending
 /// a predecessor and registering this wait both require the scheduler role,
 /// so the readiness check cannot lose an end notification before the save.
@@ -409,11 +435,14 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
             .checked_add(1)
             .expect("host attempt overflow")
     };
+    let s = scheduler(ctx) as *mut Scheduler;
+    let shield = unsafe { (*ctx).shield };
     super::record::publish(ctx, Phase::Attempt(index), |writer| unsafe {
         (*pending).attempt = index;
         let writer = writer.expect("a recorded host attempt");
         writer.ready();
         take_positions(&mut *pending, writer);
+        observe_cancel(&mut *pending, &mut *s, shield, writer);
     })?;
     unsafe { wait_keys(ctx) }
 }
@@ -510,6 +539,11 @@ pub(crate) unsafe fn replay_request(
         token.publish(ctx, Phase::Entered, || {
             let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
             host.positions = token.host_positions(&host.keys, 0)?;
+            if unsafe { (*ctx).shield } == 0
+                && crate::io_checks::cancellation_result(&host._request, 0).is_some()
+            {
+                token.cancel(None)?;
+            }
             Ok::<_, Stop>(())
         })??;
     }
@@ -551,6 +585,11 @@ pub(crate) unsafe fn replay_request(
                 host.attempt = index;
                 token.host_readiness(true)?;
                 host.positions = token.host_positions(&host.keys, index)?;
+                if unsafe { (*ctx).shield } == 0
+                    && crate::io_checks::cancellation_result(&host._request, 0).is_some()
+                {
+                    token.cancel(None)?;
+                }
                 Ok::<_, Stop>(())
             })??;
         }
@@ -613,3 +652,6 @@ mod readiness_tests;
 
 #[cfg(test)]
 mod process_tests;
+
+#[cfg(test)]
+mod cancellation_tests;

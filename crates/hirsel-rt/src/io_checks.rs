@@ -232,7 +232,32 @@ pub fn cancel(
     request: &R,
     cause: u32,
 ) -> Result<Option<C>, AdapterError> {
-    let canceled = match request {
+    let Some(canceled) = cancellation_result(request, cause) else {
+        return Ok(None);
+    };
+    let completion = adapter.preflight(request)?.unwrap_or(canceled);
+    let taken = match request {
+        R::TlsConnect { stream, .. } | R::TlsAccept { stream, .. } | R::TlsClose { stream, .. } => {
+            Some(*stream)
+        }
+        R::ChildWait { child, .. } | R::GroupWait { group: child, .. } => Some(*child),
+        R::Commit { file, .. } => Some(*file),
+        _ => None,
+    };
+    if let Some(handle) = taken {
+        match adapter.call(R::Close { handle })? {
+            C::Unit(Ok(())) => {}
+            C::Checked(false) => return Ok(Some(C::Checked(false))),
+            _ => return Err(AdapterError::InvalidCompletion),
+        }
+    }
+    Ok(Some(completion))
+}
+
+/// The existing cancellation-point classification and typed result, without
+/// an adapter borrow, argument validation, cleanup or host effect.
+pub(crate) fn cancellation_result(request: &R, cause: u32) -> Option<C> {
+    Some(match request {
         R::ReadStdin { .. } => C::Input(Err(InputError::Canceled(cause))),
         R::Print { .. } | R::PrintStderr { .. } => C::Unit(Err(IoError::Canceled(cause))),
         R::SleepUntil { .. } => C::Wait(Err(WaitError::Canceled(cause))),
@@ -288,23 +313,6 @@ pub fn cancel(
         | R::Map { .. }
         | R::Watch { .. }
         | R::WatchNext { .. } => file_completion(request, IoError::Canceled(cause)),
-        _ => return Ok(None),
-    };
-    let completion = adapter.preflight(request)?.unwrap_or(canceled);
-    let taken = match request {
-        R::TlsConnect { stream, .. } | R::TlsAccept { stream, .. } | R::TlsClose { stream, .. } => {
-            Some(*stream)
-        }
-        R::ChildWait { child, .. } | R::GroupWait { group: child, .. } => Some(*child),
-        R::Commit { file, .. } => Some(*file),
-        _ => None,
-    };
-    if let Some(handle) = taken {
-        match adapter.call(R::Close { handle })? {
-            C::Unit(Ok(())) => {}
-            C::Checked(false) => return Ok(Some(C::Checked(false))),
-            _ => return Err(AdapterError::InvalidCompletion),
-        }
-    }
-    Ok(Some(completion))
+        _ => return None,
+    })
 }

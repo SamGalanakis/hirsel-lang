@@ -143,6 +143,7 @@ unsafe fn native_count_home(run: *mut crate::context::RunShared, binding: &Bindi
 pub(crate) unsafe fn native_call_home(
     run: *mut crate::context::RunShared,
     token: u64,
+    cause: Option<u32>,
 ) -> Result<Completion, AdapterError> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let row = binding
@@ -154,6 +155,13 @@ pub(crate) unsafe fn native_call_home(
     row.ready = false;
     let request = row.request.clone();
     binding.adapter.enter(token);
+    if let Some(cause) = cause
+        && binding.adapter.cancellable(token)
+        && let Some(completion) =
+            crate::io_checks::cancel(binding.adapter.as_mut(), &request, cause)?
+    {
+        return Ok(completion);
+    }
     binding.adapter.call(request)
 }
 
