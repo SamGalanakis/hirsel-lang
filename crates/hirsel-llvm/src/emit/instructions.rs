@@ -1084,8 +1084,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let count = if let Some(length) = self.preserved_lengths[value.index()] {
                     length
                 } else {
-                    match self.value_type(value)?.repr {
-                        ValueRepr::Block => {
+                    match self.layout(self.value_type(value)?.layout)?.kind {
+                        LayoutKind::Block { .. } | LayoutKind::Box { .. } => {
                             let data = match self.layout_payload(self.value_type(value)?.layout)? {
                                 // A sequential Packed sequence counts its elements in its
                                 // first word too (MEM-13).

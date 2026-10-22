@@ -370,8 +370,8 @@ impl FnEmitter<'_, '_, '_> {
                 self.define1(result, end)
             }
             Inst::SeqLen { result, value } => {
-                let count = match self.value_type(value)?.repr {
-                    ValueRepr::Block => {
+                let count = match self.layout(self.value_type(value)?.layout)?.kind {
+                    LayoutKind::Block { .. } | LayoutKind::Box { .. } => {
                         let data = match self.layout_payload(self.value_type(value)?.layout)? {
                             // A sequential Packed sequence counts its elements in its first
                             // word too (MEM-13).

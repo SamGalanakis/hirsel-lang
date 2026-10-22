@@ -235,6 +235,23 @@ impl Classes {
     }
 }
 
+/// Instructions whose operands are only observed during this instruction:
+/// they return fresh scalar bits or check an address, never a retained view.
+/// Reads through the checked address join their non-plain result to the root
+/// below; writes and mutable loans escape the root in the written-address scan.
+/// These operations accept uncounted payloads. Header queries (IsUnique and
+/// IsWritable), codecs producing owned results, and unknown calls do not qualify.
+fn observes_payload(inst: &Inst) -> bool {
+    matches!(
+        inst,
+        Inst::Address { .. }
+            | Inst::SeqLen { .. }
+            | Inst::SeqCapacity { .. }
+            | Inst::Compare { .. }
+            | Inst::Hash { .. }
+    )
+}
+
 /// Move every frame-local block allocation into the unit's region.
 fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed>, PlaceError> {
     let lay = Lay(table);
@@ -450,10 +467,12 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                         define_foreign(v);
                     }
                     for v in crate::liveness::inst_uses(&unit, inst) {
-                        if !matches!(
-                            inst,
-                            Inst::Drop { .. } | Inst::RegionPublish { .. } | Inst::Share { .. }
-                        ) {
+                        if !observes_payload(inst)
+                            && !matches!(
+                                inst,
+                                Inst::Drop { .. } | Inst::RegionPublish { .. } | Inst::Share { .. }
+                            )
+                        {
                             escaped.insert(Node::Value(v));
                         }
                     }

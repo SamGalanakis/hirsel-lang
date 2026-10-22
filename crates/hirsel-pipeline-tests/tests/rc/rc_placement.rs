@@ -605,3 +605,65 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
         );
     }
 }
+
+/// The observer family reads payloads without keeping a reference. Capacity
+/// and Hash have no direct source spelling, so mutate the imported length read.
+#[test]
+fn payload_observers_accept_uncounted_region_operands() {
+    let source = "@noalloc fn main() -> u64 { let v: List[u64] = [1, 2]; list.len(v) }";
+    for observer in ["length", "capacity", "hash"] {
+        let (program, mut lowered) = lower_valid(source);
+        let main = lowered
+            .units
+            .iter_mut()
+            .find(|u| u.header.definition.0.name == "main")
+            .unwrap();
+        let at = main
+            .instructions
+            .iter()
+            .position(|i| matches!(i, Inst::SeqLen { .. }))
+            .unwrap();
+        let Inst::SeqLen { result, value } = main.instructions[at] else {
+            unreachable!()
+        };
+        main.instructions[at] = match observer {
+            "capacity" => Inst::SeqCapacity { result, value },
+            "hash" => {
+                let layout = main.types[main.values[value.index()].ty.index()].layout;
+                let failure = main.instructions.iter().find_map(Inst::failure).unwrap();
+                let failure = super::native_noalloc_list_19::observer_failure(main, failure);
+                Inst::Hash {
+                    result,
+                    value,
+                    layout,
+                    failure,
+                }
+            }
+            _ => main.instructions[at].clone(),
+        };
+        for regions in [true, false] {
+            let mut p = Placed_ {
+                program: program.clone(),
+                table: lowered.table.clone(),
+                units: vec![],
+                proofs: vec![],
+            };
+            for (unit, &origin) in lowered.units.iter().zip(&lowered.unit_origins) {
+                let unit = hirsel_rc::placement::place(
+                    unit.clone(),
+                    &p.table,
+                    &Options::for_instance(regions, &lowered.instances, origin),
+                )
+                .unwrap();
+                assert!(check(&p, &unit).is_empty(), "{observer}: {}", dump(&unit));
+                p.units.push(unit);
+                p.proofs
+                    .push(Proofs::for_instance(&lowered.instances, origin));
+            }
+            assert!(placements(named(&p, "main")).into_iter().any(region));
+            let run = run(&p);
+            assert_eq!(run.counters.allocations, 0, "{observer}");
+            assert_eq!(run.counters.live_heap_bytes, 0);
+        }
+    }
+}
