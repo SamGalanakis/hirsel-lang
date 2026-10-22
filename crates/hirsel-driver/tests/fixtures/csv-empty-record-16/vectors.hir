@@ -1,0 +1,55 @@
+// rust-csv 05612e87 src/writer.rs:1263-1295 (MIT; third-party/NOTICES.md).
+// Sole-empty and repeated-empty goldens are adapted; other exact-byte vectors
+// independently fix the existing Go quoting contract and the explicit policy.
+fn check(fields: List[String], delimiter: u8, legacy: Bytes, preserved: Bytes) -> () {
+  let mut config = std@1/csv.default_write_config()
+  config.delimiter = delimiter
+  let mut old: List[u8] = [65]
+  let mut defaults: List[u8] = [65]
+  let mut expected: List[u8] = [65]
+  bytes.append(mut expected, legacy)
+  failure.check(std@1/csv.write_record(fields, delimiter, mut old) == Ok(()), TextInvariant())
+  failure.check(std@1/csv.write_record_with(fields, config, mut defaults) == Ok(()), TextInvariant())
+  failure.check(old == expected && defaults == expected, TextInvariant())
+  config.preserve_single_empty = true
+  let mut out: List[u8] = [65]
+  let mut wanted: List[u8] = [65]
+  bytes.append(mut wanted, preserved)
+  failure.check(std@1/csv.write_record_with(fields, config, mut out) == Ok(()), TextInvariant())
+  failure.check(out == wanted, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let defaults = std@1/csv.default_write_config()
+  failure.check(defaults.delimiter == b',' && !defaults.preserve_single_empty, TextInvariant())
+  check([], b',', b"\n", b"\n")
+  check([""], b',', b"\n", b"\"\"\n")
+  check(["", ""], b',', b",\n", b",\n")
+  check(["", "", ""], b',', b",,\n", b",,\n")
+  check(["x"], b',', b"x\n", b"x\n")
+  check([","], b',', b"\",\"\n", b"\",\"\n")
+  check(["\""], b',', b"\"\"\"\"\n", b"\"\"\"\"\n")
+  check(["\r"], b',', b"\"\r\"\n", b"\"\r\"\n")
+  check(["\n"], b',', b"\"\n\"\n", b"\"\n\"\n")
+  check(["a\r\nb"], b',', b"\"a\r\nb\"\n", b"\"a\r\nb\"\n")
+  check(["é", "羊"], b',', b"\xc3\xa9,\xe7\xbe\x8a\n", b"\xc3\xa9,\xe7\xbe\x8a\n")
+  check([" x", "x ", "\t", "\u{2003}x", "\\."], b',',
+    b"\" x\",x ,\"\t\",\"\xe2\x80\x83x\",\"\\.\"\n",
+    b"\" x\",x ,\"\t\",\"\xe2\x80\x83x\",\"\\.\"\n")
+  check([""], b';', b"\n", b"\"\"\n")
+  check(["", ""], b';', b";\n", b";\n")
+  check([";", ","], b';', b"\";\";,\n", b"\";\";,\n")
+  check(["", "x", ""], b',', b",x,\n", b",x,\n")
+  let config = std@1/csv.WriteConfig(delimiter: b',', preserve_single_empty: true)
+  let mut out: List[u8] = []
+  failure.check(std@1/csv.write_record_with([""], config, mut out) == Ok(()), TextInvariant())
+  failure.check(out == [34, 34, 10], TextInvariant())
+  failure.check(std@1/csv.parse(text.finish_valid(copy out), std@1/csv.default_config()) == Ok([[""]]), TextInvariant())
+  failure.check(std@1/csv.write_record_with([""], config, mut out) == Ok(()), TextInvariant())
+  failure.check(bytes.from_list(copy out) == b"\"\"\n\"\"\n", TextInvariant())
+  failure.check(std@1/csv.parse(text.finish_valid(take out), std@1/csv.default_config()) == Ok([[""], [""]]), TextInvariant())
+  // Explicit limits of the policy: zero fields disappear, CRLF is normalized.
+  failure.check(std@1/csv.parse("\n", std@1/csv.default_config()) == Ok([]), TextInvariant())
+  failure.check(std@1/csv.parse("\"a\r\nb\"\n", std@1/csv.default_config()) == Ok([["a\nb"]]), TextInvariant())
+  Ok(())
+}

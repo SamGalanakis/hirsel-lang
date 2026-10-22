@@ -1,0 +1,47 @@
+// Exhaustive u8 delimiter validation, including both empty record shapes.
+pub fn main() -> Result[(), ()] {
+  let mut rejected: u64 = 0
+  let records: List[List[String]] = [[], [""], ["x"]]
+  let policies: List[bool] = [false, true]
+  for code in 0u64..256u64 {
+    let delimiter: u8 = int.narrow(code)
+    let valid = code > 0 && code < 128 && code != 10 && code != 13 && code != 34
+    let mut reader_config = std@1/csv.default_config()
+    reader_config.delimiter = delimiter
+    failure.check(
+      results.is_ok(std@1/csv.reader(reader_config)) == valid,
+      TextInvariant()
+    )
+    if !valid {
+      rejected += 1
+    }
+    for fields in records {
+      let mut legacy: List[u8] = [0, 255, 65]
+      let old = std@1/csv.write_record(fields, delimiter, mut legacy)
+      for preserve in policies {
+        let config = std@1/csv.WriteConfig(
+          delimiter: delimiter,
+          preserve_single_empty: preserve
+        )
+        let mut out: List[u8] = [0, 255, 65]
+        let outcome = std@1/csv.write_record_with(fields, config, mut out)
+        if valid {
+          failure.check(outcome == Ok(()) && old == Ok(()), TextInvariant())
+          if preserve && fields == [""] {
+            failure.check(out == [0, 255, 65, 34, 34, 10], TextInvariant())
+          } else {
+            failure.check(out == legacy, TextInvariant())
+          }
+        } else {
+          failure.check(
+            outcome == Error(InvalidDelimiter()) && old == Error(InvalidDelimiter()),
+            TextInvariant()
+          )
+          failure.check(out == [0, 255, 65] && legacy == [0, 255, 65], TextInvariant())
+        }
+      }
+    }
+  }
+  failure.check(rejected == 132, TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,23 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let delimiters: List[u8] = [0, 10, 13, 34, 128, 255]
+  let records: List[List[String]] = [[], [""], ["x"]]
+  for delimiter in delimiters {
+    for fields in records {
+      let mut out: List[u8] = [65]
+      let config = std@1/csv.WriteConfig(
+        delimiter: delimiter,
+        preserve_single_empty: true
+      )
+      failure.check(
+        std@1/csv.write_record_with(fields, config, mut out) == Error(
+          InvalidDelimiter()
+        ),
+        TextInvariant()
+      )
+      failure.check(out == [65], TextInvariant())
+    }
+  }
+  Ok(())
+}

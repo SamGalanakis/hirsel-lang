@@ -2316,7 +2316,9 @@ fn csv.reader(config: Config) -> Result[Reader, CsvError] uses {}
 fn csv.feed(mut reader: Reader, chunk: Bytes, eof: bool) -> Result[List[List[String]], CsvError] uses {}
 fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}
 fn csv.read_record[S,E](mut reader: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E]) -> Result[Option[List[String]], ReadError[E]]
+fn csv.default_write_config() -> WriteConfig uses {}
 fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[(), CsvError] uses {}
+fn csv.write_record_with(fields: List[String], config: WriteConfig, mut out: List[u8]) -> Result[(), CsvError] uses {}
 fn csv.slice_reader(text: String, config: Config) -> Result[SliceReader, CsvError] in text uses {}
 fn csv.next_record(mut reader: SliceReader) -> Result[bool, CsvError] uses {}
 fn csv.field_count(reader: SliceReader) -> u64 uses {}
@@ -2362,8 +2364,24 @@ and each individual record remains bounded by `max_record_bytes`.
 The writer follows Go `fieldNeedsQuotes`: quote fields containing delimiter,
 quote, CR or LF, fields beginning with Unicode whitespace and the PostgreSQL
 terminator `\.`. Empty fields stay unquoted, quotes are doubled, and each record
-ends with LF. As in Go, writing a single empty field produces a blank line which
-the reader skips; this representation does not round trip as a record.
+ends with LF. `write_record` keeps this behavior byte for byte: writing a single
+empty field produces a blank line which the reader skips.
+
+`WriteConfig { delimiter: u8, preserve_single_empty: bool }` controls
+`write_record_with`; `default_write_config()` selects comma and false, preserving
+all legacy bytes. With `preserve_single_empty: true`, exactly `[""]` appends
+`b"\"\"\n"` (two quote bytes and LF), which reparses as one row with one empty
+field. Zero-field records (`[]`) still append bare LF and remain indistinguishable
+from blank lines. Records with two or more fields and all other quoting,
+whitespace and newline rules are unchanged. This is not a general lossless CSV
+round-trip policy: the reader still normalizes CRLF.
+
+The opt-in decision and sole-empty goldens adapt rust-csv
+`05612e87e6e92910d40d7214b70952b8434fef9b`, `src/writer.rs:945-982,1263-1295`
+and `csv-core/src/writer.rs:366-401`. Hirsel narrows its empty-record handling to
+one empty field, behind an explicit policy to preserve Go-compatible defaults.
+A borrowed complete row and an owned growable output replace Rust's streaming
+writer/buffer state; the writer has no I/O capability or partial-write errors.
 
 `feed` returns all complete rows from its explicit chunk, allocating in proportion
 to that chunk. `parse` uses the same transitions. `read_record` parses only through
@@ -2376,11 +2394,11 @@ reader. None occurs only at clean EOF and repeated reads never refill after EOF.
 Callers should continue with read_record while it has raw lookahead; feeding
 external chunks while lookahead remains is a Syntax/state error.
 
-The writer validates the delimiter before mutating output (Strings are already
-valid UTF-8), quotes fields only for delimiter/quote/CR/LF, doubles quotes and
-emits exactly one LF. An empty field list writes a blank record. It appends to
-existing output. No file, stdin or network hook is hidden in the parser; refill
-carries the explicit source's authority, like bufio.
+Both writers validate the delimiter before mutating output (Strings are already
+valid UTF-8), apply the quoting rules above, double quotes and emit exactly one
+LF. InvalidDelimiter leaves existing output unchanged, even for empty records.
+Successful writes append to existing output. No file, stdin or network hook is
+hidden in the parser; refill carries the explicit source's authority, like bufio.
 
 ## Explicit argument flag parsing
 

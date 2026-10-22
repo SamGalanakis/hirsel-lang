@@ -11,6 +11,13 @@ pub type Config {
   max_record_bytes: u64,
 }
 
+/// Writer policy; zero fields still produce a blank line.
+@serializable
+pub type WriteConfig {
+  delimiter: u8,
+  preserve_single_empty: bool,
+}
+
 @serializable
 pub type Position {
   start_line: u64,
@@ -46,6 +53,11 @@ pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
 
 pub fn default_config() -> Config uses {} {
   Config(delimiter: b',', fields_per_record: None(), max_record_bytes: 1048576)
+}
+
+/// Comma delimiter and the legacy Go-compatible empty-field representation.
+pub fn default_write_config() -> WriteConfig uses {} {
+  WriteConfig(delimiter: b',', preserve_single_empty: false)
 }
 
 @noalloc
@@ -313,6 +325,28 @@ pub fn read_record[S, E](
     }
   }
   Ok(None())
+}
+
+// rust-csv 05612e87 src/writer.rs:945-982,1263-1295 and
+// csv-core/src/writer.rs:366-401 (MIT; third-party/NOTICES.md).
+// Adapt the empty-record terminator decision to an opt-in, one-field policy.
+// A complete borrowed row and growable output need no streaming writer state.
+/// Append a record; optionally quote a sole empty field. Zero fields stay LF.
+pub fn write_record_with(fields: List[String], config: WriteConfig, mut out: List[u8]) -> Result[
+  (),
+  CsvError
+] uses {} {
+  // Validate even the special case before appending any bytes.
+  if !delimiter_valid(config.delimiter) {
+    return Error(InvalidDelimiter())
+  }
+  if config.preserve_single_empty && core@1/list.len(fields) == 1 && fields[0] == "" {
+    core@1/list.push(mut out, b'"')
+    core@1/list.push(mut out, b'"')
+    core@1/list.push(mut out, b'\n')
+    return Ok(())
+  }
+  write_record(fields, config.delimiter, mut out)
 }
 
 pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[

@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// Sole-empty golden: rust-csv 05612e87 src/writer.rs:1263-1295 (MIT).
+pub fn main() -> Result[(), ()] {
+  let mut config = std@1/csv.default_write_config()
+  let mut out: List[u8] = []
+  failure.check(
+    std@1/csv.write_record_with([""], config, mut out) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(out == [10], TextInvariant())
+  config.preserve_single_empty = true
+  out = []
+  failure.check(
+    std@1/csv.write_record_with([""], config, mut out) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(out == [34, 34, 10], TextInvariant())
+  failure.check(
+    std@1/csv.parse(text.finish_valid(take out), std@1/csv.default_config()) == Ok(
+      [[""]]
+    ),
+    TextInvariant()
+  )
+  out = [65]
+  failure.check(
+    std@1/csv.write_record_with([], config, mut out) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/csv.write_record_with(["", ""], config, mut out) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(out == [65, 10, 44, 10], TextInvariant())
+  Ok(())
+}

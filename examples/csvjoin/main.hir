@@ -123,13 +123,9 @@ fn emit(
   }
   let mut encoded: List[u8] = []
   // At most one joined record is encoded before checking the byte budget.
-  let Ok(()) = csv.write_record(row, b',', mut encoded) else {
+  let config = csv.WriteConfig(delimiter: b',', preserve_single_empty: true)
+  let Ok(()) = csv.write_record_with(row, config, mut encoded) else {
     return Error(InvalidRead())
-  }
-  // Go's writer emits a blank line for a sole empty field; its reader skips
-  // blank lines. Preserve that one-cell record explicitly for round-tripping.
-  if list.len(row) == 1 && row[0] == "" {
-    encoded = [b'"', b'"', b'\n']
   }
   let count = list.len(encoded)
   if count > limits.output_bytes - emitted.bytes {
