@@ -17,6 +17,10 @@ fn writepart_HelloRequest_0(m: HelloRequest, mut out: List[u8]) -> () uses {} {
   if string.byte_len(m.name) != 0 {
     protobuf.put_string(1, m.name, mut out)
   }
+}
+
+@preserves_unique(out)
+fn writepart_HelloRequest_1(m: HelloRequest, mut out: List[u8]) -> () uses {} {
   if m.count != 0 {
     protobuf.put_int32(2, m.count, mut out)
   }
@@ -26,6 +30,7 @@ fn writepart_HelloRequest_0(m: HelloRequest, mut out: List[u8]) -> () uses {} {
 @preserves_unique(out)
 pub fn write_HelloRequest(m: HelloRequest, mut out: List[u8]) -> () uses {} {
   writepart_HelloRequest_0(m, mut out)
+  writepart_HelloRequest_1(m, mut out)
   protobuf.write_raw(m.unknown_fields, mut out)
 }
 
@@ -59,6 +64,21 @@ fn readpart_HelloRequest_0(
       }
       known
     },
+    _ => false,
+  }
+  let _ = depth
+  Ok(found)
+}
+
+fn readpart_HelloRequest_1(
+  mut m: HelloRequest,
+  data: Bytes,
+  mut pos: u64,
+  field: u64,
+  wire: u64,
+  depth: u64
+) -> Result[bool, protobuf.DecodeError] uses {} {
+  let found = match field {
     2 => {
       let known = if wire == 0 {
         m.count = protobuf.read_int32(data, mut pos)?
@@ -87,7 +107,8 @@ pub fn read_HelloRequest(data: Bytes, depth: u64) -> Result[
     let start = pos
     let (field, wire) = protobuf.read_tag(data, mut pos)?
     let known = match field {
-      1 | 2 => readpart_HelloRequest_0(mut m, data, mut pos, field, wire, depth)?,
+      1 => readpart_HelloRequest_0(mut m, data, mut pos, field, wire, depth)?,
+      2 => readpart_HelloRequest_1(mut m, data, mut pos, field, wire, depth)?,
       _ => false,
     }
     if !known {
@@ -108,6 +129,15 @@ fn tojsonpart_HelloRequest_0(
   if string.byte_len(m.name) != 0 {
     map.insert(mut o, "name", protobuf.json_string(m.name))
   }
+  Ok(())
+}
+
+fn tojsonpart_HelloRequest_1(
+  m: HelloRequest,
+  mut o: Map[String, json.Value],
+  r: protobuf.Registry
+) -> Result[(), protobuf.JsonError] uses {} {
+  let _ = r
   if m.count != 0 {
     map.insert(mut o, "count", protobuf.json_i32(m.count))
   }
@@ -122,6 +152,7 @@ pub fn to_json_HelloRequest(m: HelloRequest, r: protobuf.Registry) -> Result[
   let _ = r
   let mut o: Map[String, json.Value] = map.empty()
   tojsonpart_HelloRequest_0(m, mut o, r)?
+  tojsonpart_HelloRequest_1(m, mut o, r)?
   Ok(Object(take o))
 }
 
@@ -148,6 +179,22 @@ fn jsonpart_HelloRequest_0(
         m.name = protobuf.string_of(value)?
       }
     },
+    _ => (),
+  }
+  let _ = seen
+  let _ = o
+  Ok(())
+}
+
+fn jsonpart_HelloRequest_1(
+  mut m: HelloRequest,
+  mut seen: Set[u64],
+  number: u64,
+  key: String,
+  value: json.Value,
+  o: protobuf.JsonOptions
+) -> Result[(), protobuf.JsonError] uses {} {
+  match number {
     2 => {
       protobuf.first_member(mut seen, 2, key)?
       if !protobuf.is_null(value) {
@@ -174,7 +221,8 @@ pub fn from_json_HelloRequest(v: json.Value, o: protobuf.JsonOptions) -> Result[
   for (key, value) in fields {
     let number = jsonnumber_HelloRequest(key)
     match number {
-      1 | 2 => jsonpart_HelloRequest_0(mut m, mut seen, number, key, value, o)?,
+      1 => jsonpart_HelloRequest_0(mut m, mut seen, number, key, value, o)?,
+      2 => jsonpart_HelloRequest_1(mut m, mut seen, number, key, value, o)?,
       _ => protobuf.unknown_field(o, key)?,
     }
   }
