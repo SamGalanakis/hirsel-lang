@@ -1396,6 +1396,39 @@ pub(crate) fn request_host(ctx: *mut TaskCtx, request: &crate::io::Request) {
     );
 }
 
+/// Install an owned adapter discovery snapshot before projecting its result.
+/// Identity lookups ran outside this role; this window cannot suspend.
+pub(crate) fn discover_host(
+    ctx: *mut TaskCtx,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    discovered: &BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
+) -> Result<(), &'static str> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return Ok(());
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("discovery follows host entry");
+    if matches!(result, Err(crate::io::AdapterError::InvalidHandle(_))) {
+        return Ok(());
+    }
+    log.host_created(
+        ObjectId {
+            creator: path,
+            ordinal,
+        },
+        result,
+        discovered,
+    )
+    .map(|_| ())
+}
+
 /// Capture after the owned request returned, before its caller can yield.
 /// This is non-suspending and keeps the entered operation's original ordinal.
 pub(crate) fn complete_host(

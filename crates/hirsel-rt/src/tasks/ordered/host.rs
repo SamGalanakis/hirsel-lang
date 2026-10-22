@@ -3,6 +3,8 @@ use super::super::*;
 use super::engine;
 use crate::ordered::Next;
 
+pub(crate) mod concurrent;
+
 pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
     engine::at_head(ctx)?;
     let task = engine::current(ctx);

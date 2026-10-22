@@ -169,6 +169,8 @@ pub struct TaskCtx {
     pub(crate) replay_host: Option<Box<crate::tasks::free::host::ReplayHost>>,
     #[cfg(test)]
     pub(crate) ordered_charge_trace: crate::budget::stretch_trace::Local,
+    /// Owned Ordered request/result buffers retained across frontier saves.
+    pub(crate) pending_ordered_host: Option<Box<crate::tasks::ordered::host::concurrent::Pending>>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -357,6 +359,7 @@ impl TaskCtx {
             site: 0,
             detached_images: Default::default(),
             pending_host: None,
+            pending_ordered_host: None,
             replay_host: None,
             #[cfg(test)]
             ordered_charge_trace: Default::default(),
