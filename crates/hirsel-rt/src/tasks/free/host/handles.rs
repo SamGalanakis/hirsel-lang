@@ -138,7 +138,18 @@ pub(super) fn fields(
         | Ok(Completion::Listened(Ok((word, _))) | Completion::Accepted(Ok((word, _))))
         | Ok(Completion::Span { handle: word, .. }) => Ok([Some(word), None]),
         Ok(Completion::Halves(Ok((read, write)))) => Ok([Some(read), Some(write)]),
-        Err(_)
+        Err(AdapterError::InvalidHandle(_)) => Err("host refusal needs a logical handle identity"),
+        Err(
+            AdapterError::ReplayMismatch(_)
+            | AdapterError::MissingInput(_)
+            | AdapterError::UnconsumedInput(_)
+            | AdapterError::InvalidCompletion
+            | AdapterError::RecordingFailed(_)
+            | AdapterError::Blocked
+            | AdapterError::Unsupported(_)
+            | AdapterError::Signaled(_)
+            | AdapterError::Stopped,
+        )
         | Ok(
             Completion::Input(_)
             | Completion::Env(_)
@@ -801,5 +812,64 @@ mod mapping_tests {
             })))
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn handle_bearing_adapter_refusals_never_publish_physical_words() {
+        const WORD: u64 = 0x1f23_4567_89ab_cdef;
+        for width in [1, 8] {
+            let recording = super::super::super::record::Recording::new(b"host refusal", false);
+            let install = recording.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::super::enable(ctx);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    crate::stop::check(ctx, prepare(ctx, Request::Stdout { io: 1 }));
+                    assert!(crate::stop::check(ctx, claim(ctx)));
+                    let result = invoke_result(ctx, |_| Err(AdapterError::InvalidHandle(WORD)));
+                    assert!(matches!(result, Err(Stop::Refused(_))));
+                    let pending = (*ctx).pending_host.as_ref().unwrap();
+                    assert_eq!(
+                        pending.completion,
+                        Some(Err(AdapterError::InvalidHandle(WORD)))
+                    );
+                    assert!(pending.encoded.is_empty());
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            let (cut, sweep) = recording.recorder.stop("refused", None).unwrap().unwrap();
+            assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Claimed));
+            assert_eq!(sweep.in_doubt, [1]);
+            let tape = Arc::try_unwrap(recording)
+                .ok()
+                .unwrap()
+                .recorder
+                .into_sink()
+                .bytes;
+            assert!(!tape.windows(8).any(|bytes| bytes == WORD.to_le_bytes()));
+        }
+        // A crafted envelope cannot inject a native word on the replay side.
+        let mut encoded = Vec::new();
+        Envelope {
+            result: Err(AdapterError::InvalidHandle(WORD)),
+            created: Vec::new(),
+        }
+        .encode(&mut encoded);
+        let mut handles = Handles::default();
+        let value = crate::tape_wire::decode(&encoded).unwrap();
+        assert!(handles.substitute(value).is_err());
+        assert!(handles.words.is_empty());
     }
 }
