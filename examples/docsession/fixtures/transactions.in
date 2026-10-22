@@ -1,0 +1,13 @@
+SHOW
+SET {"account":{"balance":10},"keep":null}
+BEGIN
+PATCH {"account":{"balance":20},"keep":null,"added":[1,2]}
+GET /account/balance
+ROLLBACK
+SHOW
+BEGIN
+PATCH {"account":{"balance":30}}
+COMMIT
+SHOW
+QUIT
+SET "ignored"

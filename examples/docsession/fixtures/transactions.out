@@ -1,0 +1,12 @@
+{"ok":"value","value":null}
+{"ok":"set"}
+{"ok":"begin"}
+{"ok":"patch"}
+{"ok":"value","value":20}
+{"ok":"rollback"}
+{"ok":"value","value":{"account":{"balance":10},"keep":null}}
+{"ok":"begin"}
+{"ok":"patch"}
+{"ok":"commit"}
+{"ok":"value","value":{"keep":null,"account":{"balance":30}}}
+{"ok":"quit"}

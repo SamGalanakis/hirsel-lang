@@ -1,0 +1,219 @@
+// Uses shipped serde_json-derived json/json_pointer and json-patch-derived
+// json_merge_patch; provenance and adaptations are recorded in GUIDE.md.
+pub type CommandError = InvalidJson | DepthLimit | DocumentLimit | InvalidPointer | MissingPath | TransactionOpen | NoTransaction | UnknownCommand
+
+pub type Session {
+  document: json.Value,
+  snapshot: Option[json.Value],
+}
+
+pub fn new() -> Session uses {} {
+  Session(document: Null(), snapshot: None())
+}
+
+// Byte boundaries here are ASCII separators or the complete UTF-8 string.
+pub fn piece(s: String, begin: u64, end: u64) -> String in s uses {} {
+  let Some(a) = string.position(s, begin) else {
+    failure.check(false, TextInvariant())
+    return s
+  }
+  let Some(b) = string.position(s, end) else {
+    failure.check(false, TextInvariant())
+    return s
+  }
+  string.slice(s, a, b)
+}
+
+// Bounded quote/escape-aware preflight protects the recursive structural
+// parser. It intentionally does not accept/reject JSON grammar on its behalf.
+pub fn preflight(source: String) -> Result[(), CommandError] uses {} {
+  let mut depth: u64 = 0
+  let mut quoted = false
+  let mut escaped = false
+  for c in string.as_bytes(source) {
+    if quoted {
+      if escaped {
+        escaped = false
+      } else if c == 92 {
+        escaped = true
+      } else if c == 34 {
+        quoted = false
+      }
+    } else if c == 34 {
+      quoted = true
+    } else if c == 91 || c == 123 {
+      if depth == 32 {
+        return Error(DepthLimit())
+      }
+      depth += 1
+    } else if c == 93 || c == 125 {
+      if depth > 0 {
+        depth -= 1
+      }
+    }
+  }
+  Ok(())
+}
+
+fn invalid_json(error: json.JsonError) -> CommandError uses {} {
+  InvalidJson()
+}
+
+fn invalid_pointer(error: json_pointer.PointerError) -> CommandError uses {} {
+  InvalidPointer()
+}
+
+fn depth_limit(error: json_merge_patch.MergeError) -> CommandError uses {} {
+  DepthLimit()
+}
+
+fn parsed(source: String) -> Result[json.Value, CommandError] uses {} {
+  preflight(source)?
+  Ok(json.parse(unique source) ? invalid_json)
+}
+
+fn validate(candidate: json.Value) -> Result[(), CommandError] uses {} {
+  let encoded = json.stringify(candidate) ? invalid_json
+  if string.byte_len(encoded) > 65536 {
+    return Error(DocumentLimit())
+  }
+  preflight(encoded)
+}
+
+fn value_response(value: json.Value) -> Result[String, CommandError] uses {} {
+  let encoded = json.stringify(value) ? invalid_json
+  Ok(f"{{\"ok\":\"value\",\"value\":{encoded}}}")
+}
+
+pub fn error_response(error: CommandError) -> String uses {} {
+  let arm = match error {
+    InvalidJson => "InvalidJson",
+    DepthLimit => "DepthLimit",
+    DocumentLimit => "DocumentLimit",
+    InvalidPointer => "InvalidPointer",
+    MissingPath => "MissingPath",
+    TransactionOpen => "TransactionOpen",
+    NoTransaction => "NoTransaction",
+    UnknownCommand => "UnknownCommand",
+  }
+  f"{{\"error\":\"{arm}\"}}"
+}
+
+// EOF/QUIT restore the snapshot without emitting a rollback response.
+pub fn close(mut session: Session) -> () uses {} {
+  if let Some(previous) = unique session.snapshot {
+    session.document = take previous
+  }
+  session.snapshot = None()
+}
+
+pub fn execute(mut session: Session, line: String) -> Result[String, CommandError] uses {} {
+  if line == "SHOW" || line == "GET" {
+    return value_response(session.document)
+  }
+  if line == "HELP" {
+    return Ok(
+      "{\"ok\":\"help\",\"commands\":[\"SET <json>\",\"PATCH <json>\",\"GET <pointer>\",\"SHOW\",\"BEGIN\",\"COMMIT\",\"ROLLBACK\",\"HELP\",\"QUIT\"]}"
+    )
+  }
+  if line == "QUIT" {
+    close(mut session)
+    return Ok("{\"ok\":\"quit\"}")
+  }
+  if line == "BEGIN" {
+    if let Some(_) = session.snapshot {
+      return Error(TransactionOpen())
+    }
+    session.snapshot = Some(unique session.document)
+    return Ok("{\"ok\":\"begin\"}")
+  }
+  if line == "COMMIT" || line == "ROLLBACK" {
+    let Some(previous) = unique session.snapshot else {
+      return Error(NoTransaction())
+    }
+    if line == "ROLLBACK" {
+      session.document = take previous
+    }
+    session.snapshot = None()
+    return Ok(
+      if line == "COMMIT" {
+        "{\"ok\":\"commit\"}"
+      } else {
+        "{\"ok\":\"rollback\"}"
+      }
+    )
+  }
+  let size = string.byte_len(line)
+  let mut at: u64 = 0
+  let data = string.as_bytes(line)
+  while at < size && data[at] != 32 {
+    at += 1
+  }
+  if at == size {
+    return Error(UnknownCommand())
+  }
+  let command = piece(line, 0, at)
+  let operand = piece(line, at + 1, size)
+  if command == "GET" {
+    let pointer = json_pointer.parse(operand) ? invalid_pointer
+    let Some(selected) = json_pointer.get(session.document, pointer) else {
+      return Error(MissingPath())
+    }
+    return value_response(selected)
+  }
+  if command != "SET" && command != "PATCH" {
+    return Error(UnknownCommand())
+  }
+  let input = parsed(operand)?
+  let candidate = if command == "SET" {
+    take input
+  } else {
+    json_merge_patch.apply(unique session.document, input, 32) ? depth_limit
+  }
+  validate(candidate)?
+  session.document = take candidate
+  Ok(
+    if command == "SET" {
+      "{\"ok\":\"set\"}"
+    } else {
+      "{\"ok\":\"patch\"}"
+    }
+  )
+}
+
+@test
+fn transactional_candidates(t: Test) {
+  let mut s = new()
+  test.check(t, results.is_ok(execute(mut s, "SET {\"x\":null}")))
+  test.check(t, results.is_ok(execute(mut s, "BEGIN")))
+  test.check(t, results.is_error(execute(mut s, "BEGIN")))
+  test.check(t, results.is_ok(execute(mut s, "PATCH {\"x\":1}")))
+  test.check(t, results.is_error(execute(mut s, "SET [")))
+  test.check(t, results.is_ok(execute(mut s, "ROLLBACK")))
+  test.check(
+    t,
+    execute(mut s, "SHOW") == Ok("{\"ok\":\"value\",\"value\":{\"x\":null}}")
+  )
+  test.check(t, execute(mut s, "GET /x") == Ok("{\"ok\":\"value\",\"value\":null}"))
+  test.check(t, results.is_error(execute(mut s, "GET /absent")))
+  test.check(t, results.is_ok(execute(mut s, "BEGIN")))
+  test.check(t, results.is_ok(execute(mut s, "SET true")))
+  close(mut s)
+  test.check(t, execute(mut s, "GET /x") == Ok("{\"ok\":\"value\",\"value\":null}"))
+  test.check(t, results.is_ok(execute(mut s, "BEGIN")))
+  test.check(t, results.is_ok(execute(mut s, "SET false")))
+  test.check(t, results.is_ok(execute(mut s, "QUIT")))
+  test.check(t, execute(mut s, "GET /x") == Ok("{\"ok\":\"value\",\"value\":null}"))
+}
+
+@test
+fn quote_escape_preflight(t: Test) {
+  test.check(t, results.is_ok(preflight("\"[[[\\\"{\"")))
+  test.check(
+    t,
+    results.is_ok(
+      preflight("[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]")
+    )
+  )
+  test.check(t, results.is_error(preflight("[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0")))
+}

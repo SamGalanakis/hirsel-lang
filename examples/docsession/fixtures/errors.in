@@ -1,0 +1,20 @@
+COMMIT
+ROLLBACK
+BEGIN
+BEGIN
+SET {"x":null,"a/b":{"m~n":["zero","one"]}}
+SET [
+PATCH {"x":1,"x":2}
+SHOW
+GET /x
+GET /absent
+GET /a~1b/m~0n/1
+GET /a~1b/m~0n/01
+GET /a~1b/m~0n/-
+GET /a~1b/m~0n/18446744073709551616
+GET bad
+GET /~2
+WHAT
+ROLLBACK
+SHOW
+QUIT

@@ -1,0 +1,42 @@
+// Line framing follows Go bufio.ScanLines (ebe2feef, scan.go:351–368),
+// using shipped bounded stdin_read_line. See GUIDE.md for the bare-CR policy.
+pub type AppError = Grant(GrantError) | Input(bufio.ReadError[InputError]) | LineLimit | CommandLimit | Output(
+  OutputError
+)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  let mut reader = bufio.new(256)
+  let mut session = model.new()
+  let mut count: u64 = 0
+  // Includes at most two delimiter bytes, then enforces the content-byte cap.
+  while let Some(raw) = bufio.stdin_read_line(input, mut reader, 8194) ? Input {
+    let data = string.as_bytes(raw)
+    let mut end = bytes.len(data)
+    if end > 0 && data[end - 1] == 10 {
+      end -= 1
+      if end > 0 && data[end - 1] == 13 {
+        end -= 1
+      }
+    }
+    if end > 8192 {
+      return Error(LineLimit())
+    }
+    if count == 1024 {
+      return Error(CommandLimit())
+    }
+    count += 1
+    let line = model.piece(raw, 0, end)
+    let response = match model.execute(mut session, line) {
+      Ok(value) => take value,
+      Error(error) => model.error_response(error),
+    }
+    out.print(output, f"{response}\n")?
+    if line == "QUIT" {
+      break
+    }
+  }
+  model.close(mut session)
+  Ok(())
+}
