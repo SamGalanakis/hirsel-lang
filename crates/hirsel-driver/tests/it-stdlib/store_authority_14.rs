@@ -63,6 +63,9 @@ fn compaction_success_and_injected_failure_agree_on_h_llvm_and_cranelift() {
             &scratch,
         );
         assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in &outcomes {
+            eprintln!("{configuration}: {outcome:?}");
+        }
         for (configuration, outcome) in outcomes {
             assert!(
                 matches!(outcome, native::Outcome::Agree),
