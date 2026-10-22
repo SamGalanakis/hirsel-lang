@@ -1,0 +1,63 @@
+fn check(t: Test, input: Bytes, start: u64, limit: u64) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("input"), input)])
+  let mut f = file.open(d, path.of("input"))?
+  file.seek(d, mut f, start)?
+  let length = bytes.len(input) - start
+  let success = length <= limit
+  match file.read_all_bounded(d, mut f, limit) {
+    Ok(data) => {
+      test.check(t, success)
+      test.check(t, data == bytes.slice(input, start, bytes.len(input)))
+    },
+    Error(Limit()) => test.check(t, !success),
+    Error(File(e)) => return Error(take e),
+  }
+  let consumed = if success {
+    length
+  } else {
+    limit + 1
+  }
+  let mut tail: List[u8] = []
+  let _ = file.read(d, mut f, mut tail, 2)?
+  let end = if length - consumed < 2 {
+    bytes.len(input)
+  } else {
+    start + consumed + 2
+  }
+  test.check(t, bytes.from_list(take tail) == bytes.slice(input, start + consumed, end))
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let sizes: List[u64] = [0, 1, 3, 4, 5, 4095, 4096, 4097]
+  for size in sizes {
+    let mut input: List[u8] = []
+    for i in 0u64..size {
+      let byte: u8 = int.narrow(i % 251)
+      list.push(mut input, byte)
+    }
+    let data = bytes.from_list(take input)
+    check(t, data, 0, size)?
+    check(
+      t,
+      data,
+      0,
+      if size == 0 {
+        0
+      } else {
+        size - 1
+      }
+    )?
+    check(t, data, 0, size + 1)?
+  }
+  check(t, b"\x00\xff\x80x", 0, 4)?
+  check(t, b"abc", 0, 0)?
+  check(t, b"skip\x00\xfftail", 4, 2)?
+  check(t, b"skip\x00\xff", 4, 2)?
+  check(t, b"skip\x00\xff", 4, 3)?
+  check(t, b"tiny", 0, 18446744073709551615u64)?
+  check(t, b"x", 1, 0)?
+  check(t, b"abcd", 0, 4)?
+  check(t, b"abcd", 0, 5)?
+  Ok(())
+}

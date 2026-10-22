@@ -3653,6 +3653,43 @@ through the same core operation. Listing, metadata, same-grant rename and empty
 directory removal are [core operations](core-library.md#filesystem-lifecycle).
 
 
+## Bounded whole-file reads
+
+```text
+file.ReadBoundedError = Limit | File(FileError)
+fn file.read_all_bounded(d: Dir, mut f: File of d, limit: u64)
+  -> Result[unique Bytes, file.ReadBoundedError]
+```
+
+Reads from the current cursor to EOF using the existing Dir/File read authority
+and ordinary read effects. Success returns independent owned bytes, including
+empty input and input of exactly `limit` bytes. Success advances the cursor by
+the returned length and observes EOF; a cursor already beyond EOF stays there.
+The function never seeks or closes the caller's file.
+
+Each request is capped by the remaining budget and 4096 bytes. At the limit a
+separate one-byte EOF probe distinguishes exact length from excess input;
+`Limit()` consumes exactly `limit + 1` bytes from the starting cursor, leaving
+any later bytes unread. This sum describes consumption, not unchecked integer
+arithmetic: a maximum-u64 limit works on small inputs. With limit zero, even
+empty input performs the one-byte probe; nonempty input consumes one byte and
+returns `Limit()`.
+
+`File(e)` preserves the original `FileError`, including an error on the EOF
+probe. Every error discards accumulated data and returns no partial Bytes;
+the cursor retains the effects of successful reads before the error. Memory
+grows amortized with actual bytes read, with bounded read/probe scratch, and
+never reserves `limit` bytes eagerly.
+
+The request cap and EOF accumulation adapt Go's `io.LimitedReader` and `ReadAll`
+(`src/io/io.go:458–481,709–740`, revision `ebe2feef`; BSD-3-Clause (Go),
+[license](../../third-party/NOTICES.md#bsd-3-clause-license-go)). Hirsel uses its
+existing amortized List append in place of Go's growing slice chunks. Unlike
+Go ReadAll's partial-data-plus-error result, this API discards data on error;
+unlike LimitReader's silent truncation, it explicitly rejects excess input.
+Core file reads return bytes or an error separately, so data-plus-EOF/error
+vectors are represented by a successful short read followed by EOF/error.
+
 ## File copying and recursive listing
 
 ```text

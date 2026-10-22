@@ -1,0 +1,25 @@
+// Independent filesystem caller. Args: filename, limit, starting cursor.
+pub type AppError = Files(FileError) | Arguments(ArgError) | Parse(scalar.ParseError) | Grant(
+  GrantError
+) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let name = arg.text(args, 0)?
+  let limit = u64.parse(arg.text(args, 1)?)?
+  let start = u64.parse(arg.text(args, 2)?)?
+  let d = io.dir(rt, path.of("data"))?
+  let output = io.stdout(rt)?
+  let mut f = file.open(d, path.of(name))?
+  file.seek(d, mut f, start)?
+  match file.read_all_bounded(d, mut f, limit) {
+    Ok(data) => out.print(output, f"ok {hex.encode(data)}\n")?,
+    Error(Limit()) => out.print(output, "limit\n")?,
+    Error(File(FileFault(code))) => out.print(output, f"fault {code}\n")?,
+    Error(File(NotGranted())) => out.print(output, "denied\n")?,
+    Error(File(e)) => return Error(Files(take e)),
+  }
+  let mut tail: List[u8] = []
+  let _ = file.read(d, mut f, mut tail, 2)?
+  out.print(output, f"tail {hex.encode(bytes.from_list(take tail))}\n")?
+  Ok(())
+}

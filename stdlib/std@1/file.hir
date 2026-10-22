@@ -90,3 +90,36 @@ pub fn list_recursive(d: Dir, p: Path) -> Result[unique List[DirEntry], FileErro
   }
   Ok(take out)
 }
+
+// Go ebe2feef src/io/io.go:458-481 LimitedReader caps each request;
+// :709-740 ReadAll accumulates until EOF (BSD-3-Clause (Go),
+// third-party/NOTICES.md). Hirsel's amortized List append replaces Go's chunk
+// list; errors discard data and a separate probe rejects silent truncation.
+@serializable
+pub type ReadBoundedError = Limit | File(FileError)
+
+/// Reads from the current cursor, leaving the caller's file open and unseeked.
+pub fn read_all_bounded(d: Dir, mut f: File of d, limit: u64) -> Result[
+  unique Bytes,
+  ReadBoundedError
+] {
+  let mut buffer: List[u8] = []
+  let mut remaining = limit
+  while remaining != 0 {
+    let requested = if remaining < 4096 {
+      remaining
+    } else {
+      4096
+    }
+    let count = core@1/file.read(d, mut f, mut buffer, requested) ? File
+    if count == 0 {
+      return Ok(core@1/bytes.from_list(take buffer))
+    }
+    remaining -= count
+  }
+  let mut probe: List[u8] = []
+  if core@1/file.read(d, mut f, mut probe, 1) ? File != 0 {
+    return Error(Limit())
+  }
+  Ok(core@1/bytes.from_list(take buffer))
+}
