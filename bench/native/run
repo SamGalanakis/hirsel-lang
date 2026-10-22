@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build, verify all reference bytes, or collect preregistered paired samples."""
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -153,7 +154,9 @@ def collect_case(case,ps,cpu,build_data,hirsel,rng,checkpoint=None,calibration_s
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--freeze',action='store_true',help='seal current sources and fixture digests before evaluation')
+    parser.add_argument('--freeze',action='store_true',help='seal current sources against unchanged fixtures to --freeze-output')
+    parser.add_argument('--freeze-output',type=Path,help='new absolute manifest path outside the repository')
+    parser.add_argument('--manifest',type=Path,default=ROOT/'manifest.json',help='explicit sealed measurement manifest')
     parser.add_argument('--verify',action='store_true',help='all input/language/allocator timing and counter byte checks')
     parser.add_argument('--build-only',action='store_true')
     parser.add_argument('--reuse-build',type=Path,help='previous build.json; binary digests are checked')
@@ -165,8 +168,14 @@ def main():
     parser.add_argument('--hirsel',type=Path,help='N/F/J command specifications for all four configurations')
     parser.add_argument('--machine',type=Path,help='preregistered dedicated-machine declaration; local smoke otherwise')
     args=parser.parse_args()
-    if args.freeze:freeze();return
-    m=load_manifest();hirsel=json.loads(args.hirsel.read_text()) if args.hirsel else None
+    if args.freeze:
+        if args.freeze_output is None:parser.error('--freeze requires --freeze-output')
+        freeze(args.freeze_output);return
+    if args.freeze_output is not None:parser.error('--freeze-output requires --freeze')
+    manifest_bytes=args.manifest.read_bytes()
+    m=load_manifest(json.loads(manifest_bytes))
+    manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest()
+    hirsel=json.loads(args.hirsel.read_text()) if args.hirsel else None
     if hirsel:
         assert set(hirsel)<=set(HIRSEL) and hirsel,'unknown Hirsel configuration'
         for group in hirsel.values():
@@ -178,29 +187,31 @@ def main():
                     assert sha(v[key][0])==v['binary_sha256' if key=='command' else 'counter_binary_sha256']
     if args.reuse_build:
         build_data=json.loads(args.reuse_build.read_text())
-        assert build_data['source_sha256']==m['source_sha256']
-        for data in build_data['executables'].values():assert sha(data['path'])==data['sha256']
+        assert build_data.get('manifest_sha256')==manifest_sha256, 'build manifest changed'
+        assert build_data['source_sha256']==m['source_sha256'], 'build source changed'
+        for data in build_data['executables'].values():assert sha(data['path'])==data['sha256'], 'build binary changed'
     else:
         build_data=build(m);build_data['source_sha256']=m['source_sha256']
+        build_data['manifest_sha256']=manifest_sha256
         (ROOT/'build/build.json').write_text(json.dumps(build_data,indent=2)+'\n')
     if args.build_only:return
     correctness=verify(m,build_data,hirsel)
     if args.verify:
         args.output.parent.mkdir(parents=True,exist_ok=True)
-        args.output.write_text(json.dumps({'schema':1,'manifest_sha256':sha(ROOT/'manifest.json'),
-                                         'build':build_data,'correctness':correctness},indent=2)+'\n')
+        args.output.write_text(json.dumps({'schema':1,'manifest_sha256':manifest_sha256,
+                                         'manifest':m,'build':build_data,'correctness':correctness},indent=2)+'\n')
         print(f"{correctness['checks']} reference byte/counter checks; {len(correctness['failures'])} failures")
         if not correctness['passed']:raise SystemExit(1)
         return
     if not correctness['passed']:
-        args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps({'correctness':correctness},indent=2)+'\n')
+        args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps({'manifest_sha256':manifest_sha256,'manifest':m,'build':build_data,'correctness':correctness},indent=2)+'\n')
         raise SystemExit('reference correctness failed; retained report')
     cpu=args.cpu if args.cpu is not None else min(os.sched_getaffinity(0))
     assert cpu in os.sched_getaffinity(0)
     machine=json.loads(args.machine.read_text()) if args.machine else None
     cases=[c for c in m['cases'] if args.case is None or c['id'] in args.case]
     assert cases and (args.case is None or {c['id'] for c in cases}==set(args.case)),'unknown case'
-    dataset={'schema':1,'target':native_target(),'protocol':PROTOCOL,'manifest_sha256':sha(ROOT/'manifest.json'),
+    dataset={'schema':1,'target':native_target(),'protocol':PROTOCOL,'manifest_sha256':manifest_sha256,
              'manifest':m,'build':build_data,'correctness':correctness,'hardware':hardware(cpu),
              'machine':machine,'hirsel_build':hirsel,'exclusion_policy':'No automated exclusions; retain every failed, short or noisy sample. Any rerun is a separate dataset.',
              'allocator_environment':{'LD_PRELOAD':None,'MALLOC_CONF':None,'MIMALLOC_*':None,'GLIBC_TUNABLES':None},'cases':[]}

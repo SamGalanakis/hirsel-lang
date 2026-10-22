@@ -9,19 +9,20 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from suite import controlled_environment, lift_data_limit, load_manifest, participants, sha
+from suite import controlled_environment, lift_data_limit, current_manifest, load_manifest, participants, sha
 
 
 class CArenaTests(unittest.TestCase):
+    # These are current-code correctness controls, not historical measurement replay.
     def test_registration_is_binarytrees_only_and_archives_keep_their_contract(self):
-        manifest = load_manifest()
+        manifest = load_manifest(current_manifest())
         for case in manifest['cases']:
             self.assertEqual('c/arena' in participants(manifest, case), case['case'] == 'binarytrees')
         del manifest['c_arena_cases']
         self.assertTrue(all('c/arena' not in participants(manifest, c) for c in manifest['cases']))
 
     def test_arena_source_is_sealed_and_changed_source_refuses(self):
-        manifest = load_manifest()
+        manifest = load_manifest(current_manifest())
         source = 'c/binarytrees-arena.h'
         self.assertEqual(manifest['source_sha256'][source], sha(ROOT / source))
         manifest['source_sha256'][source] = '0' * 64
@@ -33,7 +34,7 @@ class CArenaTests(unittest.TestCase):
         spec = importlib.util.spec_from_loader(loader.name, loader)
         collector = importlib.util.module_from_spec(spec)
         loader.exec_module(collector)
-        manifest = load_manifest()
+        manifest = load_manifest(current_manifest())
         manifest['cases'] = [c for c in manifest['cases'] if c['case'] == 'binarytrees']
         with tempfile.TemporaryDirectory() as tmp:
             binaries = {}

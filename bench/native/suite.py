@@ -93,23 +93,42 @@ def load_manifest(m=None, check_files=True):
     assert tuple(m.get('c_arena_cases', ())) in ((), C_ARENA_CASES)
     assert m.get('binarytrees_gate') in (None, BINARYTREES_GATE), 'unknown binarytrees gate'
     if not check_files:return m
+    _validate_fixtures(m)
+    assert set(m['source_sha256'])==set(SOURCE_FILES), 'missing source'
+    for p,h in m['source_sha256'].items():
+        assert sha(ROOT/p)==h,f'source changed: {p}; freeze a new external manifest before evaluation'
+    return m
+
+def _validate_fixtures(m):
     assert m['binarytrees_gate']==BINARYTREES_GATE
     assert tuple(m['c_arena_cases'])==C_ARENA_CASES
     for c in m['cases']:
         assert sha(ROOT/c['input'])==c['input_sha256'] and sha(ROOT/c['oracle'])==c['oracle_sha256'],'fixture changed'
-        assert f"{load_generator().digest((ROOT/c['oracle']).read_bytes()):016x}"==c['checksum']
-    for p,h in m['source_sha256'].items():
-        assert sha(ROOT/p)==h,f'source changed: {p}; freeze the manifest before evaluation'
-    assert set(m['source_sha256'])==set(SOURCE_FILES)
+        assert f"{load_generator().digest((ROOT/c['oracle']).read_bytes()):016x}"==c['checksum'],'fixture checksum changed'
+
+def current_manifest():
+    """Seal current sources against the immutable case/fixture contract.
+
+    Correctness tests exercise today's code with this explicit snapshot. Replay
+    of a measurement must instead load its original seal with load_manifest.
+    Only source digests are refreshed; the template and fixtures stay unchanged.
+    """
+    m=json.loads((ROOT/'manifest.json').read_text())
+    load_manifest(m,check_files=False)
+    _validate_fixtures(m)
+    assert set(m['source_sha256'])==set(SOURCE_FILES), 'missing source'
+    m['source_sha256']={p:sha(ROOT/p) for p in SOURCE_FILES}
     return m
 
-def freeze():
-    m=json.loads((ROOT/'manifest.json').read_text())
-    m.update(schema=1,protocol=PROTOCOL,required_targets=TARGETS,languages=LANGUAGES,variants=VARIANTS,
-             hirsel_primary=PRIMARY,hirsel_configurations=HIRSEL,
-             rust_arena_cases=ARENA_CASES,c_arena_cases=C_ARENA_CASES,binarytrees_gate=BINARYTREES_GATE,arena_exclusions=arena_exclusions())
-    m['source_sha256']={p:sha(ROOT/p) for p in SOURCE_FILES}
-    (ROOT/'manifest.json').write_text(json.dumps(m,indent=2)+'\n')
+def freeze(output):
+    """Write a fresh seal to an explicit, new external file; never rewrite history."""
+    output=Path(output)
+    if not output.is_absolute() or output.resolve().is_relative_to(ROOT.parent.parent.resolve()):
+        raise ValueError('freeze output must be an absolute path outside the repository')
+    m=load_manifest(current_manifest())
+    with output.open('x') as stream:
+        stream.write(json.dumps(m,indent=2)+'\n')
+    return m
 
 def variants(m,case,language):
     return ['system','mimalloc']+(['arena'] if case['case'] in m.get(language+'_arena_cases', ()) else [])
