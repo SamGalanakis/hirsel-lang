@@ -2118,7 +2118,15 @@ pub fn special[n: size](text: String, mut buffer: Inline[u8, n]) -> Result[
 // digits and a truncated flag for the rest. Long input is still validated.
 @noalloc
 pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.ParseError] uses {} {
-  let bytes = core@1/string.as_bytes(text)
+  parse_bytes(core@1/string.as_bytes(text), fraction, bias)
+}
+
+// The same parser over a borrowed interval, for typed JSON numeric tokens.
+@noalloc
+pub fn parse_bytes(bytes: Bytes, fraction: u64, bias: i32) -> Result[
+  u64,
+  scalar.ParseError
+] uses {} {
   let length = core@1/bytes.len(bytes)
   if length == 0 {
     return Error(Invalid)

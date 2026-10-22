@@ -273,3 +273,32 @@ fn scoped_wide_duplicate_error_offsets_and_precedence() {
         include_str!("../fixtures/stdlib_json/scoped_duplicates.hir"),
     );
 }
+
+#[test]
+fn direct_json_float_scalars_do_not_allocate_temporary_number_strings() {
+    with_compiler_stack(|| {
+        let source = r#"
+type Floats { double: f64, single: f32 }
+fn floats_from_json_reader(mut cursor: std@1/json.Reader) -> Result[unique Floats, String] uses {} = comptime derive.from_json_reader(shape(Floats))
+fn floats_from_json_bytes(data: Bytes) -> Result[unique Floats, String] uses {} = comptime derive.from_json_bytes(shape(Floats))
+@preserves_unique(out)
+fn floats_json_into(value: Floats, mut out: List[u8], depth: u64) -> Result[(), std@1/json.JsonError] uses {} = comptime derive.json_into(shape(Floats))
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut out: List[u8] = []
+  list.reserve(mut out, 128)
+  for _ in 0u64..1024 {
+    let Ok(value) = floats_from_json_bytes(b"{\"double\":0.125,\"single\":0.5}") else { return Error(()) }
+    test.equal(t, value.double, 0.125)
+    test.equal(t, value.single, 0.5f32)
+    let Ok(()) = floats_json_into(value, mut out, 0) else { return Error(()) }
+    test.equal(t, list.len(out), 29u64)
+    while list.len(out) > 0 { let _ = list.pop(mut out) }
+  }
+  Ok(())
+}
+"#;
+        let report = native_measurement(source, "float-stream");
+        assert!(allocations(&report) < 128, "{report}");
+        assert_eq!(counter(&report, "live_bytes"), 0, "{report}");
+    });
+}
