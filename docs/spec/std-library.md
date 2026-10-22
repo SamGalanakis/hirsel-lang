@@ -1184,6 +1184,8 @@ fn priority_queue.empty[T](take by: @noalloc fn(T, T) -> i32 uses {}) -> unique 
 N fn priority_queue.len[T](h: priority_queue.Heap[T]) -> u64 uses {}
 fn priority_queue.push[T](mut h: unique priority_queue.Heap[T], take value: unique T) -> () uses {h, value}
 fn priority_queue.pop[T](mut h: unique priority_queue.Heap[T]) -> unique Option[T] uses {h}
+fn priority_queue.replace_top[T](mut h: unique priority_queue.Heap[T], take value: unique T) -> unique Option[T] uses {h, value}
+fn priority_queue.push_pop[T](mut h: unique priority_queue.Heap[T], take value: unique T) -> unique T uses {h, value}
 fn priority_queue.peek[T: copyable](h: priority_queue.Heap[T]) -> Option[T] in h uses {}
 fn priority_queue.from_list[T](take by: @noalloc fn(T, T) -> i32 uses {}, take input: unique List[unique T]) -> unique priority_queue.Heap[T] uses {input}
 ```
@@ -1201,6 +1203,19 @@ remaining elements are released on cleanup, including comparator failure. Pop an
 the heapsort fallback of List sort use sift kernels; reversing the priority-queue
 comparator never negates an i32.
 A fresh empty heap is unique. This surface provides no indexed update.
+
+`replace_top` inserts into an empty heap and returns `None`; otherwise it replaces
+the least element, restores heap order, and returns that old element in `Some`.
+The replacement may compare below the old minimum. `push_pop` returns its input
+unchanged when the heap is empty or the input compares less than or equal to the
+current minimum. Otherwise it replaces the root and returns the old minimum.
+Equal priorities explicitly return the input, retaining the existing root owner.
+These operations consume a unique input and transfer the returned owner exactly
+once. Retained elements follow ordinary heap cleanup. Both use one downward sift
+at most, O(log n); rejected `push_pop` is O(1). Only an empty `replace_top` may
+grow storage. If a comparator fails, normal failure cleanup releases owners;
+there is no transactional rollback promise. See the [top-k example and combined
+operation experiment](../priority-queue-combined.md).
 
 ## Ordered maps
 

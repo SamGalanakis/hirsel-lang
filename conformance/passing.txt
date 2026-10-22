@@ -6713,3 +6713,12 @@ conformance/PROV/PROV-1-regex-all-5-position-ok.hir
 conformance/OWN/OWN-2-regex-all-5-take-ok.hir
 conformance/SEM/SEM-3-binary-pipe-consume-bad.hir
 conformance/SEM/SEM-3-binary-pipe-consume-run.hir
+conformance/SEM/SEM-5-pqcombined-vectors-run.hir
+conformance/SEM/SEM-5-pqcombined-topk-run.hir
+conformance/DROP/DROP-2-pqcombined-owners-run.hir
+conformance/FAIL/FAIL-3-pqcombined-push-pop-first-fail.hir
+conformance/FAIL/FAIL-3-pqcombined-replace-first-fail.hir
+conformance/FAIL/FAIL-3-pqcombined-push-pop-late-fail.hir
+conformance/FAIL/FAIL-3-pqcombined-replace-late-fail.hir
+conformance/SEM/SEM-5-pqcombined-root-updates-run.hir
+conformance/SEM/SEM-5-pqcombined-example-run.hir

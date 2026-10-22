@@ -1,0 +1,95 @@
+// Standalone bounded experiment; see docs/priority-queue-combined.md.
+@noalloc
+fn compare(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -2147483648
+  } else if a > b {
+    2147483647
+  } else {
+    0
+  }
+}
+
+fn number(args: Args, index: u64, fallback: u64) -> u64 {
+  if arg.len(args) <= index {
+    return fallback
+  }
+  match arg.text(args, index) {
+    Ok(s) => match u64.parse(s) {
+      Ok(n) => n,
+      Error(_) => fallback,
+    },
+    Error(_) => fallback,
+  }
+}
+
+@noalloc
+fn mix(sum: u64, value: u64) -> u64 uses {} {
+  int.wrapping_add(u64.wrapping_mul(sum, 31), value)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let mode = number(args, 0, 0)
+  let k = number(args, 1, 16)
+  let n = number(args, 2, 8192)
+  let mut state = number(args, 3, 1)
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("stdout"),
+  }
+  // Diagnostic builds count this comparator with Callgrind, separately from perf.
+  let order: @noalloc fn(u64, u64) -> i32 uses {} = compare
+  let mut h: unique priority_queue.Heap[u64] = priority_queue.empty(copy order)
+  for _ in 0u64..k {
+    state = int.wrapping_add(u64.wrapping_mul(state, 6364136223846793005), 1)
+    priority_queue.push(mut h, (state >> 32) % 1024)
+  }
+  let mut sum: u64 = 0
+  for _ in 0u64..n {
+    state = int.wrapping_add(u64.wrapping_mul(state, 6364136223846793005), 1)
+    let value = (state >> 32) % 1024
+    let returned: u64 = if mode == 0 {
+      priority_queue.push_pop(mut h, value)
+    } else if mode == 1 {
+      // Explicit guarded push+pop: preserve input-returning tie semantics.
+      match priority_queue.peek(h) {
+        Some(root) => if order(value, root) <= 0 {
+          value
+        } else {
+          priority_queue.push(mut h, value)
+          match priority_queue.pop(mut h) {
+            Some(x) => x,
+            None => value,
+          }
+        },
+        None => value,
+      }
+    } else if mode == 2 {
+      match priority_queue.replace_top(mut h, value) {
+        Some(x) => x,
+        None => 0,
+      }
+    } else {
+      let old = priority_queue.pop(mut h)
+      priority_queue.push(mut h, value)
+      match old {
+        Some(x) => x,
+        None => 0,
+      }
+    }
+    sum = mix(sum, returned)
+  }
+  let count = priority_queue.len(h)
+  for _ in 0u64..count {
+    match priority_queue.pop(mut h) {
+      Some(x) => {
+        sum = mix(sum, x)
+      },
+      None => (),
+    }
+  }
+  match out.print(output, f"{sum}\n") {
+    Ok(()) => Ok(()),
+    Error(_) => Error("write"),
+  }
+}

@@ -1,0 +1,73 @@
+// rule: DROP-2
+// expect: run
+// stdout: empty
+// stdout: root
+// stdout: tie
+// stdout: small
+// stdout: first
+// stdout: second
+// stdout: retained
+resource type Item {
+  priority: i32,
+  label: String,
+  output: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.priority < b.priority {
+    -2147483648
+  } else if a.priority > b.priority {
+    2147483647
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty(compare)
+  {
+    let x = priority_queue.push_pop(
+      mut h,
+      Item(priority: 4, label: "empty\n", output: o)
+    )
+  }
+  {
+    let x = priority_queue.replace_top(
+      mut h,
+      Item(priority: 2, label: "root\n", output: o)
+    )
+  }
+  {
+    let x = priority_queue.replace_top(
+      mut h,
+      Item(priority: 3, label: "first\n", output: o)
+    )
+  }
+  {
+    let x = priority_queue.push_pop(mut h, Item(priority: 3, label: "tie\n", output: o))
+  }
+  {
+    let x = priority_queue.push_pop(
+      mut h,
+      Item(priority: 1, label: "small\n", output: o)
+    )
+  }
+  {
+    let x = priority_queue.push_pop(
+      mut h,
+      Item(priority: 5, label: "second\n", output: o)
+    )
+  }
+  {
+    let x = priority_queue.replace_top(
+      mut h,
+      Item(priority: 6, label: "retained\n", output: o)
+    )
+  }
+  Ok(())
+}

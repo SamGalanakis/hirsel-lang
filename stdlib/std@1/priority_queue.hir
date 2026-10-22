@@ -60,6 +60,37 @@ pub fn pop[T](mut h: unique Heap[T]) -> unique Option[T] uses {h} {
   }
 }
 
+// CPython 938144ef Lib/heapq.py:148-169. An empty replacement inserts
+// instead of raising IndexError; safe ownership replaces Python references.
+pub fn replace_top[T](mut h: unique Heap[T], take value: unique T) -> unique Option[T] uses {h, value} {
+  if core@1/list.len(h.items) == 0 {
+    core@1/list.push(mut h.items, take value)
+    return None()
+  }
+  let previous = replace(mut h.items[0], take value)
+  down(mut h.items, 0, h.by)
+  Some(take previous)
+}
+
+// Equal priorities return the input, preserving the existing root's owner.
+pub fn push_pop[T](mut h: unique Heap[T], take value: unique T) -> unique T uses {h, value} {
+  if core@1/list.len(h.items) == 0 {
+    return take value
+  }
+  if at_most_top(h, value) {
+    return take value
+  }
+  let previous = replace(mut h.items[0], take value)
+  down(mut h.items, 0, h.by)
+  take previous
+}
+
+// Keep the comparator's read loans inside this call before moving either owner.
+@noalloc
+fn at_most_top[T](h: Heap[T], value: T) -> bool uses {} {
+  h.by(value, h.items[0]) <= 0
+}
+
 // A copied observation is available for copyable elements; owned values
 // remain in the heap until pop transfers them.
 pub fn peek[T: copyable](h: Heap[T]) -> Option[T] in h uses {} {

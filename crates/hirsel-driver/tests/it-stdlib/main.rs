@@ -32,6 +32,7 @@ mod stdlib_nfc;
 mod stdlib_origin_work;
 mod stdlib_pathtime;
 mod stdlib_patterns;
+mod stdlib_pqcombined;
 mod stdlib_priority_queue;
 mod stdlib_schedule;
 mod stdlib_sort;

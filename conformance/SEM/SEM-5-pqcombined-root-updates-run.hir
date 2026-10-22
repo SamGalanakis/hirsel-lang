@@ -1,0 +1,62 @@
+// rule: SEM-5
+// expect: run
+// Rust f6c1107f library/alloctests/tests/collections/binary_heap.rs:152-161.
+// Go ebe2feef src/container/heap/heap_test.go:188-202 (root Fix vector).
+@noalloc
+fn by(a: i32, b: i32) -> i32 uses {} {
+  if a < b {
+    -2147483648
+  } else if a > b {
+    2147483647
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn backward(a: i32, b: i32) -> i32 uses {} {
+  by(b, a)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // Rust PeekMut decreases the maximum from 10 to 8, exposing 9.
+  let mut rust: unique priority_queue.Heap[i32] = priority_queue.from_list(
+    backward,
+    unique [2, 4, 6, 2, 1, 8, 10, 3, 5, 7, 0, 9, 1]
+  )
+  failure.check(priority_queue.replace_top(mut rust, 8) == Some(10), Bounds())
+  failure.check(priority_queue.peek(rust) == Some(9), Bounds())
+  let expected: Array[i32] = [9, 8, 8, 7, 6, 5, 4, 3, 2, 2, 1, 1, 0]
+  for value in expected {
+    failure.check(priority_queue.pop(mut rust) == Some(value), Bounds())
+  }
+  let mut go: unique priority_queue.Heap[i32] = priority_queue.empty(by)
+  for i in 0i32..20i32 {
+    priority_queue.push(mut go, 200 - i * 10)
+  }
+  failure.check(priority_queue.peek(go) == Some(10), Bounds())
+  failure.check(priority_queue.replace_top(mut go, 210) == Some(10), Bounds())
+  for i in 2i32..22i32 {
+    failure.check(priority_queue.pop(mut go) == Some(i * 10), Bounds())
+  }
+  failure.check(priority_queue.len(rust) == 0 && priority_queue.len(go) == 0, Bounds())
+  // The combined operations use the heap-owned captured comparator as well.
+  let priorities: List[i32] = [5, 3, 4, 2, 2, 8]
+  let order: @noalloc fn(u64, u64) -> i32 uses {} = fn(a: u64, b: u64) -> i32 uses {} {
+    by(priorities[a], priorities[b])
+  }
+  let mut context: unique priority_queue.Heap[u64] = priority_queue.empty(take order)
+  for i in 0u64..3u64 {
+    priority_queue.push(mut context, i)
+  }
+  failure.check(priority_queue.push_pop(mut context, 3) == 3, Bounds())
+  failure.check(priority_queue.replace_top(mut context, 4) == Some(1), Bounds())
+  failure.check(priority_queue.push_pop(mut context, 3) == 3, Bounds())
+  failure.check(priority_queue.peek(context) == Some(4), Bounds())
+  failure.check(priority_queue.push_pop(mut context, 5) == 4, Bounds())
+  let drain: Array[u64] = [2, 0, 5]
+  for id in drain {
+    failure.check(priority_queue.pop(mut context) == Some(id), Bounds())
+  }
+  Ok(())
+}

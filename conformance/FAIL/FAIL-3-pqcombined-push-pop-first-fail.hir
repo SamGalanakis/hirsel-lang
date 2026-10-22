@@ -1,0 +1,41 @@
+// rule: FAIL-3
+// expect: fail MEM-14 at line 25
+resource type Item {
+  priority: i32,
+  label: String,
+  output: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.priority < b.priority {
+    -2147483648
+  } else if a.priority > b.priority {
+    2147483647
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn checked(a: Item, b: Item) -> i32 uses {} {
+  failure.check(!(a.priority == 9 && b.priority == 1), Bounds())
+  compare(a, b)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty(checked)
+  priority_queue.push(mut h, Item(priority: 1, label: "1\n", output: o))
+  priority_queue.push(mut h, Item(priority: 2, label: "2\n", output: o))
+  priority_queue.push(mut h, Item(priority: 3, label: "3\n", output: o))
+  priority_queue.push(mut h, Item(priority: 4, label: "4\n", output: o))
+  priority_queue.push(mut h, Item(priority: 5, label: "5\n", output: o))
+  priority_queue.push(mut h, Item(priority: 6, label: "6\n", output: o))
+  priority_queue.push(mut h, Item(priority: 7, label: "7\n", output: o))
+  let x = priority_queue.push_pop(mut h, Item(priority: 9, label: "9\n", output: o))
+  Ok(())
+}
