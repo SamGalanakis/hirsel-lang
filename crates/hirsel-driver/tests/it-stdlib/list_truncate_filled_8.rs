@@ -266,39 +266,3 @@ fn impossible_reserve_preserves_fixed_shared_empty_and_packed_contents() {
         )
     });
 }
-
-#[test]
-fn packed_operations_refuse_native_readiness_with_mem13() {
-    with_compiler_stack(|| {
-        for (operation, body) in [
-            (
-                "filled",
-                "let seed: Packed[V] = Big(x: 1, y: 2); let xs = list.filled(64, take seed); failure.check(list.len(xs) == 64, Bounds());",
-            ),
-            (
-                "truncate",
-                "let mut xs: List[Packed[V]] = [Big(x: 1, y: 2)]; list.truncate(mut xs, 0); failure.check(list.len(xs) == 0, Bounds());",
-            ),
-        ] {
-            let path = fixture("SEM", "SEM-4-list-filled-truncate-run");
-            let source = format!(
-                "type V = Small(x: u8) | Big(x: u64, y: u64)\npub fn main() -> Result[(), ()] {{ {body} Ok(()) }}"
-            );
-            let mut loaded = load_program_source(&path, Some(&source)).unwrap();
-            loaded.check_for_execution().unwrap();
-            let input = loaded.engine.export_native_input().unwrap();
-            let validated = loaded.engine.import_native_input(input).unwrap();
-            let error = native::build(
-                &validated,
-                &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
-            )
-            .err()
-            .unwrap_or_else(|| panic!("{operation} unexpectedly passed Packed native readiness"));
-            assert!(error.message.contains("MEM-13"), "{operation}: {error:?}");
-            assert!(
-                error.message.contains("list.truncate"),
-                "{operation}: {error:?}"
-            );
-        }
-    });
-}

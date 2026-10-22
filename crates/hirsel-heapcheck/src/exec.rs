@@ -4308,7 +4308,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             } if self.holds_sequential(f, address)? => {
                 // A flat builder's reservation: room for `capacity` of its least
                 // element in all, its unique block kept (LIR schema revision 22).
-                let (r, block, element) = self.sequence_write(f, address, true)?;
+                let (r, mut block, element) = self.sequence_place(f, address, true)?;
                 self.closed_builder(block)?;
                 let least = match self.flat_prefixed(element)? {
                     Some((prefix, content)) => prefix.saturating_add(
@@ -4326,6 +4326,32 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .ok()
                     .map(|n| n.saturating_mul(least).saturating_add(start))
                     .ok_or_else(|| err(V::Malformed, "a reservation beyond u64"))?;
+                // Empty Packed lists use the same static empty storage as other
+                // lists. Reserve their final backing directly, without first
+                // detaching an empty header and immediately growing it again.
+                let count = self.read_scalar(block, 8)?;
+                if count == 0 && self.check_private(block).is_err() {
+                    let Cell::Data { counted, .. } = self.read_cell(r.ptr)? else {
+                        return fail(V::TypeConfusion, "an empty reservation without a holder");
+                    };
+                    let old = block;
+                    block = self.detach_block(old, need)?;
+                    let word = self.word;
+                    self.ledger.get_mut(r.ptr.alloc).extent.put_cell(
+                        r.ptr.offset,
+                        word,
+                        Cell::Data {
+                            ptr: block,
+                            counted: true,
+                            borrow: None,
+                        },
+                    );
+                    if counted && self.count_down(old)? {
+                        self.ledger.free(old.alloc)?;
+                    }
+                } else {
+                    self.check_private(block)?;
+                }
                 self.sequential_room(&r, block, start + used, need)?;
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);

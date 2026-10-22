@@ -1171,10 +1171,16 @@ impl Importer<'_> {
                 destination,
                 DestinationClass::Heap | DestinationClass::Inferred
             )
-            && matches!(
-                self.layouts.record(layout).kind,
-                LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
-            )
+            && match self.layouts.record(layout).kind {
+                LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. } => true,
+                // A flat record builder's empty allocation is also its write
+                // destination. Keep that path; only ordinary Packed lists use
+                // static empty storage here.
+                LayoutKind::Sequential { element } => {
+                    self.layouts.record(element).kind == LayoutKind::Packed
+                }
+                _ => false,
+            }
             && matches!(
                 self.layouts.record(self.layout_of(ty)).kind,
                 LayoutKind::Block { payload } if payload == layout

@@ -26,6 +26,7 @@ pub mod map;
 pub mod mapped;
 pub mod net;
 pub mod owners;
+mod packed_list_9;
 pub mod runners;
 pub mod shared;
 pub mod slots;
@@ -270,7 +271,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 26;
+pub const REVISION: u32 = 27;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

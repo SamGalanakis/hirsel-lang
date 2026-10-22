@@ -810,11 +810,28 @@ impl FnEmitter<'_, '_, '_> {
             let extent = self.saturating_add(64, false, bytes, first);
             let align = self.u64c(align);
             let context = self.context;
+            let count = self.load_ty(types::I64, data, 0);
+            let empty = self.b.ins().icmp_imm_s(IntCC::Equal, count, 0);
+            let vacant = self.b.create_block();
+            let occupied = self.b.create_block();
+            let done = self.b.create_block();
+            self.b.ins().brif(empty, vacant, &[], occupied, &[]);
+            self.b.switch_to_block(vacant);
+            let one = self.u64c(1);
+            let fresh = self.rt1(RuntimeEntry::SeqReserve, &[context, old, one, align, bytes])?;
+            let fresh_data = self.payload_of(fresh, payload)?.ptr;
+            let zero = self.u64c(0);
+            self.store_at(zero, fresh_data, 8);
+            self.store_at(fresh, place.ptr, 0);
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(occupied);
             let grown = self.rt1(
                 RuntimeEntry::BlockGrow,
                 &[context, old, keep, extent, align],
             )?;
             self.store_at(grown, place.ptr, 0);
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(done);
             return Ok(());
         }
         let Some(element) = self.sequence_element(place.layout)? else {

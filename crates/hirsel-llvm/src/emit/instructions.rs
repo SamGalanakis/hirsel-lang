@@ -1160,12 +1160,47 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         self.const_u64(first),
                     )
                     .or_else(|e| self.invalid(e))?;
+                    // An empty static sequence has no unique backing yet.
+                    // The existing sequence grow entry can reserve byte storage
+                    // once; restore Sequential's used word after its capacity
+                    // word is written. Nonempty builders keep their old path.
+                    let count = self.load_u64(data);
+                    let empty = self
+                        .builder
+                        .icmp(IntPredicate::Eq, count, self.const_u64(0));
+                    let vacant = self.module.append_block(self.function);
+                    let occupied = self.module.append_block(self.function);
+                    let done = self.module.append_block(self.function);
+                    self.builder.cond_br(empty, vacant, occupied);
+                    self.builder.position(vacant);
+                    let reserve = self.runtime(RuntimeEntry::SeqReserve)?;
+                    let fresh = self.builder.call(
+                        reserve,
+                        &[
+                            self.context,
+                            old,
+                            self.const_u64(1),
+                            self.const_u64(align),
+                            bytes,
+                        ],
+                    );
+                    let data = self.payload_of(fresh, payload)?.ptr;
+                    self.builder.store(
+                        self.const_u64(0),
+                        self.builder.offset(data, self.const_u64(8)),
+                        8,
+                    );
+                    self.store(Shape::Scalar(ScalarKind::Pointer), fresh, place);
+                    self.builder.br(done);
+                    self.builder.position(occupied);
                     let grow = self.runtime(RuntimeEntry::BlockGrow)?;
                     let grown = self.builder.call(
                         grow,
                         &[self.context, old, keep, extent, self.const_u64(align)],
                     );
                     self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
+                    self.builder.br(done);
+                    self.builder.position(done);
                     return Ok(());
                 }
                 let Some(element) = self.sequence_element(place.layout)? else {

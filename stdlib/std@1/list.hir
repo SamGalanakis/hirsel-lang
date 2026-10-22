@@ -2,11 +2,12 @@
 // f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT).
 // Source ownership primitives replace Rust's raw tail slice and clone loop.
 
-/// Reserves once, then copies the value into each initialized element.
+/// Reserves for the count, then copies the value into each initialized element.
+/// Packed elements occupy their active variant's width. Reservation uses the
+/// smallest width, so larger variants can require amortized backing growth.
 pub fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value} {
   let mut out: List[T] = []
-  // Keep both constructors and truncation on the same native storage surface.
-  // This no-op invokes the existing slot-addressable readiness requirement.
+  // Exercise the same native storage surface as truncation.
   core@1/list.truncate(mut out, 0)
   if n != 0 {
     core@1/list.reserve(mut out, n)

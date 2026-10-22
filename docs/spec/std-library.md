@@ -269,18 +269,25 @@ extent before allocation; impossible capacity raises the existing arithmetic
 failure SEM-1, and host allocation exhaustion stays environmental. See
 [core list storage primitives](core-library.md#memory-and-iteration).
 
-`truncate` retains the first `min(len, list.len(xs))` elements and the allocation's
-capacity. Ordinary mutable copy-on-write detaches aliased storage before changing it;
+`truncate` retains the first `min(len, list.len(xs))` elements. For slot-addressable
+elements it also retains the allocation's capacity. Ordinary mutable copy-on-write detaches aliased storage before changing it;
 unique storage stays in place. A length at or above the current length is a no-op, including `u64`'s
 maximum. Removed owners are released in increasing original index order. If a
 finalizer fails, the remaining tail is still released exactly once in that order
 before the failure propagates; ordinary caller cleanup then releases the retained
 prefix. Further finalizer failures follow FAIL-3 shielding. No storage is allocated
 when the list is already unique; finalizers keep their own allocation and authority effects,
-so the generic API makes no `@noalloc` promise. Work is linear in the removed tail. Both operations require slot-addressable
-native element storage. `Packed[T]` list elements are refused at native readiness
-under the existing MEM-13 walk-only restriction; the interpreter can still run them.
-Packed construction and truncation are deferred.
+so the generic API makes no `@noalloc` promise. Work is linear in the removed tail.
+
+For `Packed[T]` elements, both operations use sequential storage (MEM-13).
+Nonempty filling reserves the minimum encoded width and can grow amortized as
+larger variants are appended; zero elements allocate nothing. A shortening
+truncation walks the retained prefix twice, first measuring its encoded bytes,
+then appending them into one fresh backing allocation before replacing the
+whole list. Other aliases keep their original values. This fallback is linear
+in the retained prefix and does not preserve the original capacity, even for
+unique storage. Truncating to zero needs no new backing, and an exact or excess
+length remains a true no-op. See [Packed lists](../packed-list.md).
 
 These adapt Rust `Vec::truncate` (`alloc/src/vec/mod.rs:1801-1825`),
 `SpecFromElem` (`alloc/src/vec/spec_from_elem.rs:12-17`) and checked `RawVec`
@@ -288,8 +295,8 @@ capacity (`alloc/src/raw_vec/mod.rs:935-941`), revision
 `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`. The copyable bound replaces Rust's
 `Clone` bound; the seed is taken so its owned copies may escape the call. Pass
 `copy seed` to keep a counted seed in the caller. The source constructor uses reserved pushes rather than a specialized bulk fill.
-It invokes an empty truncation to share the existing native slot-addressable
-storage requirement without adding a type bound or a compiler hook. The native tail-drop body uses existing ownership and
+It invokes an empty truncation through the same native storage dispatch,
+without adding a type bound or a compiler hook. The native tail-drop body uses existing ownership and
 cleanup instructions rather than Rust's unsafe raw slice.
 
 ## Option and Result helpers

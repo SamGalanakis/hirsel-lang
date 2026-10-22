@@ -9,7 +9,7 @@ use hirsel_lir::stage::Value;
 
 pub static TRUNCATE: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("list.truncate"),
-    build: truncate,
+    build: super::list::truncate,
 };
 pub static POP: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("list.pop"),
@@ -242,7 +242,7 @@ fn remove(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
 // Vec::truncate's tail walk. As in list::cursor_drop, explicit cleanup
 // continues the walk after a failed finalizer before propagating to the
 // caller. The caller still owns the retained prefix and the allocation.
-fn truncate(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+pub(super) fn truncate(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let first = b.read_bits(b.parameters[1].address)?;

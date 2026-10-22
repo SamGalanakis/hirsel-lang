@@ -195,6 +195,15 @@ fn sequential(cx: &Cx<'_>) -> bool {
     })
 }
 
+/// Route only sequential Packed truncation to the walk/copy fallback.
+pub(super) fn truncate(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+    if sequential(cx) {
+        super::packed_list_9::truncate(cx)
+    } else {
+        super::collection::truncate(cx)
+    }
+}
+
 /// `list.push` of a sequential Packed sequence: the element's extent past the
 /// used bytes, the storage growing as needed (LIR schema revision 19).
 fn push_sequential(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
