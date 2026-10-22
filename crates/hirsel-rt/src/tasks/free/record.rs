@@ -6,8 +6,8 @@
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
 //! channel/task boundaries, root entry tails, thaw, mutex closes and foreign
 //! callbacks on compute, home and pool threads. A separate test-only host
-//! foundation proves request ownership and claim/withdraw phases; host keys,
-//! handles and replay remain gated. General activation requires every boundary
+//! foundation proves request ownership, claim/withdraw and bounded key epochs;
+//! adapter routing, handles and replay remain gated. General activation requires every boundary
 //! and stop to use this protocol.
 
 use crate::TaskCtx;
@@ -22,6 +22,7 @@ pub(crate) struct Recording {
     pub(crate) recorder: Recorder<Marked, crate::io::Request>,
     trace: Mutex<Vec<Stamped>>,
     requests: std::sync::atomic::AtomicU64,
+    pub(super) host_keys: crate::io_keys::KeyTable,
 }
 
 pub(crate) struct Task {
@@ -363,6 +364,7 @@ impl Recording {
             .unwrap(),
             trace: Mutex::new(Vec::new()),
             requests: std::sync::atomic::AtomicU64::new(1),
+            host_keys: Default::default(),
         })
     }
 
