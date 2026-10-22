@@ -22,23 +22,12 @@
   ],
   "dependencies": [
     {
-      "manifest": "../../../../../stdlib/std@1/hirsel.json",
+      "manifest": "../../stdlib/std@1/hirsel.json",
       "package": {
         "name": "std",
         "version": "1"
       },
       "expose": []
-<<<<<<<< HEAD:crates/hirsel-driver/tests/fixtures/list_sort/SEM-5-list-sort-stable-6-run.hir.json
-    },
-    {
-      "manifest": "../../../../../packages/fixtures/list_sort_vectors@1/hirsel.json",
-      "package": {
-        "name": "list_sort_vectors",
-        "version": "1"
-      },
-      "expose": []
-========
->>>>>>>> e2dc62f7 (Vector suites run as one program per suite or per 19M-step batch instead of 1M-step shards, so 516 SEM corpus files fold into their survivors or go, the markdown and yaml-test generators emit the batches with raised step budgets, and 15 unratcheted keeps join passing.txt.):conformance/SEM/SEM-3-markdown-commonmark-1-malformed-run.hir.json
     }
   ]
 }

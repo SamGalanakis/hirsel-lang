@@ -7,3 +7,4 @@ mod oracle;
 mod packages;
 mod runner;
 mod tour;
+mod fixture_manifest_18;
