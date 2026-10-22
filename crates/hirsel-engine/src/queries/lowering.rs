@@ -6,7 +6,7 @@ use hirsel_types::ResolvedName;
 /// Compact classification of the final mode body's check-time lowering needs.
 /// Referenced declarations are interpreted against current source/image kind;
 /// membership is never inferred from a producer fingerprint.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LoweringUse {
     constant: bool,
     comptime: bool,

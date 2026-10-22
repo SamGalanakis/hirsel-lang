@@ -53,6 +53,12 @@ pub trait ResultStore: Send + Sync {
     }
     fn get(&self, key: &EntryKey) -> Option<Bytes>;
     fn put(&self, key: &EntryKey, value: &[u8]);
+    /// Publish a query product with its domain explicit at the provider seam.
+    /// The key already binds the kind; byte-only providers share `put`.
+    fn put_query(&self, kind: QueryKind, key: &EntryKey, value: &[u8]) {
+        let _ = kind;
+        self.put(key, value);
+    }
     /// The provider name the run config selects it by (`dir@1`, ...).
     fn name(&self) -> &'static str;
 }
