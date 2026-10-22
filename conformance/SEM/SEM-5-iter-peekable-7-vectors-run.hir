@@ -1,0 +1,57 @@
+// rule: SEM-5
+// expect: run
+// Rust coretests/tests/iter/adapters/peekable.rs:5-33, f6c1107f.
+fn count(mut n: u64) -> Option[u64] {
+  let value = n
+  n += 1
+  if value < 6 {
+    Some(value)
+  } else {
+    None
+  }
+}
+
+fn resumes(mut n: u64) -> Option[u64] {
+  n += 1
+  if n == 2 {
+    None
+  } else {
+    Some(n)
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut p = std@1/peekable.new(iter.from(0u64, count))
+  failure.check(std@1/peekable.peek(p) == None, Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(0u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(0u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(1u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(2u64), Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(3u64), Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(3u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(3u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(4u64), Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(5u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(5u64), Bounds())
+  failure.check(!std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == None, Bounds())
+  failure.check(std@1/peekable.next(mut p) == None, Bounds())
+  let mut empty = std@1/peekable.new(iter.from(6u64, count))
+  failure.check(std@1/peekable.next(mut empty) == None, Bounds())
+  failure.check(!std@1/peekable.fill(mut empty), Bounds())
+  failure.check(std@1/peekable.peek(empty) == None, Bounds())
+  let mut fused = std@1/peekable.new(iter.from(0u64, resumes))
+  failure.check(std@1/peekable.next(mut fused) == Some(1u64), Bounds())
+  failure.check(!std@1/peekable.fill(mut fused), Bounds())
+  failure.check(std@1/peekable.next(mut fused) == None, Bounds())
+  failure.check(!std@1/peekable.fill(mut fused), Bounds())
+  let mut direct = std@1/peekable.new(iter.from(0u64, resumes))
+  failure.check(std@1/peekable.next(mut direct) == Some(1u64), Bounds())
+  failure.check(std@1/peekable.next(mut direct) == None, Bounds())
+  failure.check(std@1/peekable.next(mut direct) == None, Bounds())
+  Ok(())
+}

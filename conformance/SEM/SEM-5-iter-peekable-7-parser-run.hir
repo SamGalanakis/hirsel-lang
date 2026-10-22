@@ -1,0 +1,34 @@
+// rule: SEM-5
+// expect: run
+// A tiny token parser: sum number tokens until the first semicolon.
+fn token(mut index: u64) -> Option[u64] {
+  let tokens: List[u64] = [4u64, 2u64, 59u64, 9u64]
+  if index == list.len(tokens) {
+    return None
+  }
+  let value = tokens[index]
+  index += 1
+  Some(value)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut tokens = std@1/peekable.new(iter.from(0u64, token))
+  let mut total = 0u64
+  while std@1/peekable.fill(mut tokens) {
+    let stop = std@1/peekable.peek(tokens) == Some(59u64)
+    if stop {
+      break
+    }
+    match std@1/peekable.next(mut tokens) {
+      Some(value) => {
+        total += value
+      },
+      None => failure.check(false, Bounds()),
+    }
+  }
+  failure.check(total == 6, Bounds())
+  failure.check(std@1/peekable.next(mut tokens) == Some(59u64), Bounds())
+  failure.check(std@1/peekable.next(mut tokens) == Some(9u64), Bounds())
+  failure.check(!std@1/peekable.fill(mut tokens), Bounds())
+  Ok(())
+}

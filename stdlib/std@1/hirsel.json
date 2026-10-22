@@ -1193,6 +1193,12 @@
       "module": [
         "sorted"
       ]
+    },
+    {
+      "path": "peekable.hir",
+      "module": [
+        "peekable"
+      ]
     }
   ],
   "dependencies": []

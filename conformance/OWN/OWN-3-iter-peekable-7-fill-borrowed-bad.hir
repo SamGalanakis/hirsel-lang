@@ -1,0 +1,17 @@
+// rule: OWN-3
+// expect: reject MODE-1 at line 13
+// twin: OWN/OWN-3-iter-peekable-7-scoped-run.hir
+fn step(mut n: u64) -> Option[List[u64]] {
+  n += 1
+  Some([n])
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut p = std@1/peekable.new(iter.from(0u64, step))
+  let _ = std@1/peekable.fill(mut p)
+  let view = std@1/peekable.peek(p)
+  let _ = std@1/peekable.fill(mut p)
+  failure.check(view == Some([1u64]), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some([1u64]), Bounds())
+  Ok(())
+}

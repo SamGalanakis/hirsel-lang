@@ -1,0 +1,43 @@
+// rule: SEM-5
+// expect: run
+// stdout: constructed
+// stdout: pull
+// stdout: pull
+// stdout: pull
+// stdout: calls=3
+resource type Source {
+  out: Stdout,
+  calls: u64,
+}
+drop(s) {
+  failure.check(s.calls == 3, Bounds())
+  let _ = out.print(s.out, "calls=3\n")
+}
+
+fn step(mut s: Source) -> Option[u64] {
+  s.calls += 1
+  let _ = out.print(s.out, "pull\n")
+  if s.calls == 3 {
+    None
+  } else {
+    Some(7u64)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut p = std@1/peekable.new(iter.from(Source(out: stdout, calls: 0), step))
+  let _ = out.print(stdout, "constructed\n")
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(7u64), Bounds())
+  failure.check(std@1/peekable.peek(p) == Some(7u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(7u64), Bounds())
+  failure.check(std@1/peekable.next(mut p) == Some(7u64), Bounds())
+  failure.check(!std@1/peekable.fill(mut p), Bounds())
+  failure.check(!std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.peek(p) == None, Bounds())
+  failure.check(std@1/peekable.next(mut p) == None, Bounds())
+  failure.check(std@1/peekable.next(mut p) == None, Bounds())
+  Ok(())
+}

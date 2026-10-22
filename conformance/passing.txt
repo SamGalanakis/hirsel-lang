@@ -952,6 +952,11 @@ conformance/DROP/DROP-2-from-bytes-match-payloads-run.hir
 conformance/DROP/DROP-2-graphemes-body-fail.hir
 conformance/DROP/DROP-2-graphemes-body-run.hir
 conformance/DROP/DROP-2-guarded-product-take-run.hir
+conformance/DROP/DROP-2-iter-peekable-7-fill-fail.hir
+conformance/DROP/DROP-2-iter-peekable-7-fill-run.hir
+conformance/DROP/DROP-2-iter-peekable-7-next-fail.hir
+conformance/DROP/DROP-2-iter-peekable-7-next-run.hir
+conformance/DROP/DROP-2-iter-peekable-7-owned-run.hir
 conformance/DROP/DROP-2-iterator-mapped-resource-cleanup-run.hir
 conformance/DROP/DROP-2-kept-temporary-closed-run.hir
 conformance/DROP/DROP-2-kept-temporary-failure-run.hir
@@ -4030,6 +4035,9 @@ conformance/OWN/OWN-3-escaping-closure-loop-run.hir
 conformance/OWN/OWN-3-field-alias-bad.hir
 conformance/OWN/OWN-3-field-alias-ok.hir
 conformance/OWN/OWN-3-growth-cache-run.hir
+conformance/OWN/OWN-3-iter-peekable-7-fill-borrowed-bad.hir
+conformance/OWN/OWN-3-iter-peekable-7-next-borrowed-bad.hir
+conformance/OWN/OWN-3-iter-peekable-7-scoped-run.hir
 conformance/OWN/OWN-3-labelled-exit-loans-run.hir
 conformance/OWN/OWN-3-labelled-source-bad.hir
 conformance/OWN/OWN-3-labelled-source-ok.hir
@@ -6500,6 +6508,9 @@ conformance/SEM/SEM-5-equality-same-order.hir
 conformance/SEM/SEM-5-float-key-bad.hir
 conformance/SEM/SEM-5-float-key-ok.hir
 conformance/SEM/SEM-5-insertion-order.hir
+conformance/SEM/SEM-5-iter-peekable-7-counted-run.hir
+conformance/SEM/SEM-5-iter-peekable-7-parser-run.hir
+conformance/SEM/SEM-5-iter-peekable-7-vectors-run.hir
 conformance/SEM/SEM-5-keyed-read-struct-key-run.hir
 conformance/SEM/SEM-5-keyed-reads-keep-order-run.hir
 conformance/SEM/SEM-5-list-sort-bitset-records-run.hir

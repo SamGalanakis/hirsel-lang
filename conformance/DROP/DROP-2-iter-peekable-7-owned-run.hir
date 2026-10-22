@@ -1,0 +1,64 @@
+// rule: DROP-2
+// expect: run
+// stdout: cached
+// stdout: source
+// stdout: source
+// stdout: transferred
+// stdout: source
+// stdout: unpulled
+resource type Item {
+  out: Stdout,
+  name: String,
+}
+drop(item) {
+  let _ = out.print(item.out, item.name)
+  let _ = out.print(item.out, "\n")
+}
+
+resource type Source {
+  out: Stdout,
+  item: Option[Item],
+}
+drop(s) {
+  let _ = out.print(s.out, "source\n")
+}
+
+fn step(mut s: Source) -> Option[Item] {
+  replace(mut s.item, None())
+}
+
+fn discard(out: Stdout) -> () {
+  let mut p = std@1/peekable.new(
+    iter.from(Source(out: out, item: Some(Item(out: out, name: "cached"))), step)
+  )
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+}
+
+fn transfer(out: Stdout) -> Option[Item] {
+  let mut p = std@1/peekable.new(
+    iter.from(Source(out: out, item: Some(Item(out: out, name: "transferred"))), step)
+  )
+  failure.check(std@1/peekable.fill(mut p), Bounds())
+  std@1/peekable.next(mut p)
+}
+
+fn unpulled(out: Stdout) -> () {
+  let p = std@1/peekable.new(
+    iter.from(Source(out: out, item: Some(Item(out: out, name: "unpulled"))), step)
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  discard(stdout)
+  {
+    let item = transfer(stdout)
+    match item {
+      Some(value) => failure.check(value.name == "transferred", Bounds()),
+      None => failure.check(false, Bounds()),
+    }
+  }
+  unpulled(stdout)
+  Ok(())
+}

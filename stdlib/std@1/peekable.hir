@@ -1,0 +1,68 @@
+// Rust core/src/iter/adapters/peekable.rs:13-42, 216-219, f6c1107f.
+// None = Unfilled; Some(Some(item)) = Item; Some(None) = fused End.
+@captures(inner)
+pub opaque type Peekable[T]: () uses {T} {
+  inner: Iter[T],
+  cached: Option[Option[T]],
+}
+
+pub fn new[T](take it: Iter[T]) -> Peekable[T] uses {it} {
+  Peekable(inner: take it, cached: None())
+}
+
+// Fill before borrowing. A cached item or end never calls the producer again.
+pub fn fill[T](mut p: Peekable[T]) -> bool uses {p} {
+  match p.cached {
+    Some(value) => match value {
+      Some(item) => true,
+      None => false,
+    },
+    None => {
+      let value = core@1/iter.next(mut p.inner)
+      let present = match value {
+        Some(item) => true,
+        None => false,
+      }
+      p.cached = Some(take value)
+      present
+    },
+  }
+}
+
+// No implicit deep copy; the returned observation remains borrowed from p.
+pub fn peek[T: copyable](p: Peekable[T]) -> Option[T] in p uses {} {
+  match p.cached {
+    Some(value) => match value {
+      Some(item) => Some(copy item),
+      None => None(),
+    },
+    None => None(),
+  }
+}
+
+pub fn next[T](mut p: Peekable[T]) -> Option[T] uses {p} {
+  let state = match p.cached {
+    Some(value) => match value {
+      Some(item) => 1u64,
+      None => 2u64,
+    },
+    None => 0u64,
+  }
+  if state == 2 {
+    return None()
+  }
+  if state == 1 {
+    let cached = replace(mut p.cached, None())
+    return match take cached {
+      Some(value) => take value,
+      None => None(),
+    }
+  }
+  match core@1/iter.next(mut p.inner) {
+    Some(item) => Some(take item),
+    None => {
+      p.cached = Some(None())
+      None()
+    },
+  }
+}
