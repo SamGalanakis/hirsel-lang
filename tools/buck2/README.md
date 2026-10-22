@@ -192,6 +192,10 @@ python3 tools/buck2/sync.py --if-stale            # the generated build files, a
 tools/land                                           # rebase, build, Clippy, fmt, push
 ```
 
+[Landing and race retries](../../docs/landing.md) describes the exact-tree checks,
+conservative incoming-crate selection and unbounded retries with jitter.
+Every attempted tree passes build, Clippy and fmt; no retry skips a check.
+
 After each run, `tools/main-runs` runs the built `hirsel doc stdlib/std@1/hirsel.json`
 and pushes a changed `docs/api.md` straight to main. The index's export-count
 test checks the renderer; nothing compares the committed page, which only

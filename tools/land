@@ -7,7 +7,10 @@ Fetch and rebase onto origin/main (the files many lanes add to merge with the
 `hirsel` merge driver, tools/buck2/merging.py), regenerate the build files
 (`sync.py --if-stale`), build the workspace, run Clippy and check formatting
 through Buck2, then push. A push rejected because main moved goes back to the
-rebase. A red check refuses the push and prints its first error.
+rebase with full jitter and no attempt limit. Every proposed tree is checked;
+a proven unchanged graph can narrow a retry to incoming crates and their
+reverse dependencies (docs/landing.md). A red check refuses the push and
+prints its first error.
 
 Land runs no tests: the lane runs the tests its change can break, and
 tools/main-runs runs the full suite on main every hour. Each push is appended
@@ -15,10 +18,13 @@ to `hirsel-landings.jsonl` in the common git directory, from which main-runs
 names the lane of a commit.
 """
 
+import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
 import re
+import random
 import subprocess
 import sys
 import time
@@ -26,6 +32,7 @@ import time
 ROOT = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True,
                            check=True).stdout.strip())
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
+sys.dont_write_bytecode = True
 import generated  # noqa: E402
 import merging  # noqa: E402
 
@@ -37,15 +44,11 @@ CONFIG = ['-c', 'hirsel.clippy=true', '-c', 'hirsel.priority=75']
 ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true',
        'HIRSEL_VALIDATE_STAGES': '1'}
 # The workspace without tests, Clippy twins, campaign targets, the two-host
-# link build (it holds a host-wide lock) and the std image (a check that
-# takes minutes).
+# link build (it holds a host-wide lock), std image and std native object
+# generation (integration artifacts, not workspace compilation).
 BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
              ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
-             ' - rdeps(root//:, kind("_hirsel_image", root//:))')
-ATTEMPTS = 10
-# After this many lost races on clean rebases, push without rebuilding: the change passed every
-# check, and the next landing's build checks main with it, so a bad combination surfaces at once.
-UNCHECKED_AFTER = 3
+             ' - rdeps(root//:, kind("_hirsel_image", root//:) + kind("_hirsel_std_objects", root//:))')
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 LANDINGS = 'hirsel-landings.jsonl'
 # This process's own code, read before any rebase rewrites the file it was started from.
@@ -60,6 +63,14 @@ def git(*arguments):
     return subprocess.run(['git', *arguments], cwd=ROOT, capture_output=True, text=True, env=os.environ | ENV)
 
 
+def revision(name):
+    result = git('rev-parse', '--verify', name + '^{commit}')
+    value = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value):
+        raise ValueError(f'cannot resolve commit {name}: {result.stderr.strip()}')
+    return value
+
+
 def first_error(text, count=40):
     """The output from its first error line on (its tail when none is found)."""
     lines = text.splitlines()
@@ -71,32 +82,119 @@ def first_error(text, count=40):
 def check(name, command):
     started = time.monotonic()
     done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, env=os.environ | ENV)
-    say(f'{"pass" if done.returncode == 0 else "FAIL"}  {name} ({time.monotonic() - started:.0f} s)')
+    say(f'{"pass" if done.returncode == 0 else "FAIL"}  {name} ({time.monotonic() - started:.3f} s)')
     if done.returncode:
         print(first_error(done.stderr + done.stdout), flush=True)
     return done.returncode == 0
 
 
-def checks(lint=True):
-    """Generated files, the workspace build, Clippy and formatting, in that order.
+def inventory():
+    """Byte identity of the generated graph, including compile-time inputs."""
+    try:
+        return tuple(hashlib.sha256((ROOT / path).read_bytes()).digest() for path in generated.BUILD_INPUTS)
+    except OSError:
+        return None
 
-    A retry after a clean rebase passes lint=False: the change already passed Clippy and
-    formatting, and only the build can catch it combining badly with what landed meanwhile."""
+
+def checks(scope=None, previous_inventory=None):
+    """Check this tree, using only a proven unaffected complement on retries."""
     if not Path(BUCK2).exists() and not check('prepare.py', [PY, 'tools/buck2/prepare.py']):
         return False
     if not check('sync.py --if-stale', [PY, 'tools/buck2/sync.py', '--if-stale']):
         return False
-    query = subprocess.run([BUCK2, 'uquery', *CONFIG, BUILD_SET], cwd=ROOT, capture_output=True, text=True)
-    if query.returncode:
+    if scope is not None and (previous_inventory is None or inventory() != previous_inventory):
+        say('generated graph changed or unavailable; checking the full workspace')
+        scope = None
+    if scope is not None:
+        resolved = subprocess.run([BUCK2, 'uquery', *CONFIG, scope], cwd=ROOT, capture_output=True, text=True)
+        if resolved.returncode or not resolved.stdout.strip():
+            say('uncertain retry graph; checking the full workspace')
+            scope = None
+    query = subprocess.run([BUCK2, 'uquery', *CONFIG,
+                            BUILD_SET if scope is None else f'({BUILD_SET}) intersect ({scope})'],
+                           cwd=ROOT, capture_output=True, text=True)
+    if scope is not None and (query.returncode or not query.stdout.strip()):
+        say('uncertain retry build selection; checking the full workspace')
+        scope = None
+        query = subprocess.run([BUCK2, 'uquery', *CONFIG, BUILD_SET], cwd=ROOT,
+                               capture_output=True, text=True)
+    if query.returncode or not query.stdout.strip():
         say('FAIL  the build set query\n' + first_error(query.stderr))
         return False
     return (check('workspace build', [PY, 'tools/buck2/event_logs.py', 'build', *CONFIG,
                                       '--materializations', 'none', *query.stdout.split()])
-            and (not lint or (check('Clippy', [PY, 'tools/buck2/clippy.py'])
-                              and check('formatting', [PY, 'tools/buck2/fmt.py', '--check']))))
+            and check('Clippy', [PY, 'tools/buck2/clippy.py', *([] if scope is None else ['--scope', scope])])
+            and check('formatting', [PY, 'tools/buck2/fmt.py', '--check',
+                                     *([] if scope is None else ['--scope', scope])]))
 
 
-def rebase():
+def changed_paths(before, after):
+    result = git('diff', '--no-renames', '--name-only', '-z', before, after)
+    if result.returncode:
+        raise ValueError('cannot compare trees')
+    return set(result.stdout.rstrip('\0').split('\0')) - {''}
+
+
+def retry_scope(previous, base, head):
+    """Narrow only disjoint edits to existing crate src/*.rs with an unchanged lane.
+
+    Git supplies ancestry and exact blob comparisons; Buck2's rdeps supplies
+    the dependency closure, including compile-time inputs. Everything else
+    (manifest, generated input, deletion, rename, build.rs, new source, tool,
+    non-Rust file, changed lane blob or graph uncertainty) checks everything.
+    This proof lives only in this process, never in an environment/green file.
+    """
+    if previous is None:
+        return None
+    old_base, old_head = previous
+    try:
+        if git('merge-base', '--is-ancestor', old_base, base).returncode:
+            return None
+        incoming = changed_paths(old_base, base)
+        lane = changed_paths(old_base, old_head)
+        if not incoming or incoming & lane or changed_paths(old_head, head) != incoming:
+            return None
+        crates = set()
+        for path in incoming:
+            match = re.fullmatch(r'crates/([a-zA-Z0-9_-]+)/src/([a-zA-Z0-9_./-]+\.rs)', path)
+            if not match or not (ROOT / 'crates' / match[1] / 'Cargo.toml').is_file():
+                return None
+            # Only existing regular files. No new module, deletion or symlink.
+            for revision in (old_base, base):
+                entry = git('ls-tree', revision, '--', path)
+                if entry.returncode or not entry.stdout.startswith('100644 blob '):
+                    return None
+            if git('diff', '--quiet', base, head, '--', path).returncode:
+                return None
+            crates.add(match[1])
+        # Every lane path has the identical checked mode and blob after rebase.
+        if lane and git('diff', '--quiet', old_head, head, '--', *sorted(lane)).returncode:
+            return None
+        names = '|'.join(sorted(crates))
+        owners = ' + '.join(f'owner({json.dumps(path)})' for path in sorted(incoming))
+        scope = (f'rdeps(root//:, attrregexfilter(crate_root, "^crates/({names})/", root//:) '
+                 f'+ {owners})')
+        return scope
+    except (OSError, ValueError):
+        return None
+
+
+def unchanged(head):
+    current = git('rev-parse', 'HEAD')
+    status = git('status', '--porcelain')
+    return current.returncode == status.returncode == 0 and current.stdout.strip() == head and not status.stdout.strip()
+
+
+def backoff(attempt):
+    # aws-samples/aws-arch-backoff-simulator src/backoff_simulator.py:24-25,40-43:
+    # Full jitter; base=1 s, cap=30 s, exponent bounded before evaluation.
+    # Bounded wait, unbounded attempts. Never reserve a shared resource here.
+    delay = random.uniform(0, min(30.0, 2.0 ** min(attempt, 5)))
+    say(f'main moved during the checks; rebasing again after {delay:.2f} s jitter')
+    time.sleep(delay)
+
+
+def rebase(base):
     """Replay source commits; generated conflicts have no hand-written resolution.
 
     Ignored build inventories are removed from Git and sync.py regenerates
@@ -104,7 +202,7 @@ def rebase():
     sole writer, main-runs, regenerates them on main after the push. Never
     create a lane commit containing a guessed or hand-merged generated page.
     """
-    result = git('rebase', 'origin/main')
+    result = git('rebase', base)
     while result.returncode:
         conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.splitlines()
         if not conflicts or any(path not in generated.BUILD_INPUTS + generated.MAIN_WRITTEN
@@ -114,7 +212,7 @@ def rebase():
             if path in generated.BUILD_INPUTS:
                 resolved = git('rm', '-f', '--ignore-unmatch', '--', path)
             else:
-                resolved = git('restore', '--source=origin/main', '--staged', '--worktree', '--', path)
+                resolved = git('restore', f'--source={base}', '--staged', '--worktree', '--', path)
             if resolved.returncode:
                 return resolved
             say(f'resolved generated conflict in {path}; its generator owns regeneration')
@@ -126,7 +224,8 @@ def main():
     if sys.argv[1:]:
         print(__doc__, file=sys.stderr)
         return 2
-    if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+    status = git('status', '--porcelain')
+    if status.returncode or status.stdout.strip():
         say('the worktree has uncommitted changes; commit them first')
         return 1
     merging.install(ROOT)
@@ -134,49 +233,58 @@ def main():
     started = time.monotonic()
     # Kept across the re-exec into a rebased tree's own tools/land.
     first = int(os.environ.get('HIRSEL_LAND_ATTEMPT', '1'))
-    linted = os.environ.get('HIRSEL_LAND_LINTED') == '1'
-    for attempt in range(first, ATTEMPTS + 1):
+    previous = None
+    previous_inventory = None
+    for attempt in itertools.count(first):
         if (fetched := git('fetch', '-q', 'origin', 'main')).returncode:
             say('git fetch failed\n' + fetched.stderr)
             return 1
-        main_sha = git('rev-parse', 'origin/main').stdout.strip()
-        if rebase().returncode:
+        main_sha = revision('origin/main')
+        if rebase(main_sha).returncode:
             conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.split()
             git('rebase', '--abort')
             say('the rebase onto origin/main conflicts in: ' + (', '.join(conflicts) or 'see git rebase')
                 + '; rebase by hand, resolve, then run tools/land again')
             return 1
-        changed = git('diff', '--name-only', '--diff-filter=d', 'origin/main...HEAD').stdout.splitlines()
+        diff = git('diff', '--name-only', '--diff-filter=d', f'{main_sha}...HEAD')
+        if diff.returncode:
+            say('cannot inspect the lane change; refusing to push')
+            return 1
+        changed = diff.stdout.splitlines()
         if refused := generated.refusal(changed):
             print('\n'.join('land: ' + line for line in refused), flush=True)
             return 1
-        head = git('rev-parse', 'HEAD').stdout.strip()
+        head = revision('HEAD')
         if head == main_sha:
             say('nothing to land; HEAD is on origin/main')
             return 0
         # Run the rebased tree's own land, so a landed fix to it holds at once.
         if (ROOT / 'tools/land').read_bytes() != SELF:
             say('the rebased tree has another tools/land; running it')
-            os.environ.update(HIRSEL_LAND_ATTEMPT=str(attempt), HIRSEL_LAND_LINTED='1' if linted else '0')
+            os.environ.update(HIRSEL_LAND_ATTEMPT=str(attempt))
             os.execv(PY, [PY, str(ROOT / 'tools/land')])
+        if not unchanged(head):
+            say('the worktree changed before checks; refusing to push')
+            return 1
         if not check('independent line lists', [PY, 'tools/check-hot-files']):
             return 1
-        unchecked = linted and attempt >= UNCHECKED_AFTER
-        if unchecked:
-            say(f'attempt {attempt}: pushing {head[:12]} on origin/main {main_sha[:12]} without rebuilding:'
-                f' it passed every check and lost {attempt - 1} races on clean rebases')
-        else:
-            say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}'
-                + ('' if not linted else ' (build only: Clippy and formatting passed already)'))
-        if not unchecked and not checks(lint=not linted):
+        scope = retry_scope(previous, main_sha, head)
+        say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}'
+            + (' (incoming crates and reverse dependencies)' if scope else ' (full workspace)'))
+        if not checks(scope, previous_inventory):
             say('refusing to push a red tree')
             return 1
-        linted = True
-        pushed = git('push', 'origin', 'HEAD:main')
+        if not unchanged(head):
+            say('the worktree changed during checks; refusing to push')
+            return 1
+        previous = (main_sha, head)
+        previous_inventory = inventory()
+        # Push the checked commit explicitly; HEAD may never select a new tree.
+        pushed = git('push', 'origin', f'{head}:refs/heads/main')
         if pushed.returncode == 0:
             common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
             with open(common / LANDINGS, 'a') as log:
-                log.write(json.dumps(dict(landed=head, pushed=head, base=main_sha, branch=branch, unchecked_rebase=unchecked,
+                log.write(json.dumps(dict(landed=head, pushed=head, base=main_sha, branch=branch, unchecked_rebase=False,
                                           at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
                                      sort_keys=True) + '\n')
             say(f'landed {head[:12]} on main in {time.monotonic() - started:.0f} s')
@@ -184,9 +292,7 @@ def main():
         if not any(marker in pushed.stderr for marker in REJECTED):
             say('git push failed\n' + pushed.stderr)
             return 1
-        say('main moved during the checks; rebasing again')
-    say(f'main moved under {ATTEMPTS} attempts in a row')
-    return 1
+        backoff(attempt)
 
 
 if __name__ == '__main__':

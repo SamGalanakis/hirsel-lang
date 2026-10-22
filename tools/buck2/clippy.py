@@ -7,6 +7,7 @@ Clippy reported. The subtarget records diagnostics without failing, so an error-
 diagnostic fails the stage here; warnings are printed and pass, as under Cargo.
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -26,16 +27,27 @@ CONFIG = os.environ.get('HIRSEL_BUCK2_CONFIG', '').split() + ['-c', 'hirsel.clip
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--scope', help='Buck2 target query proven sufficient by tools/land')
+    args = parser.parse_args()
+    query = 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", root//:))'
+    if args.scope:
+        query = f'({query}) intersect ({args.scope})'
     targets = subprocess.run(
-        [str(BUCK2), 'uquery', *CONFIG, 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", root//:))'],
+        [str(BUCK2), 'uquery', *CONFIG, query],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout.split()
+    if not targets:
+        raise SystemExit('clippy: empty target query; refusing an unchecked aggregate')
     report = event_logs.run(
         ['build', *CONFIG, '--show-full-json-output', *[t + '[clippy.txt]' for t in targets]],
         cwd=ROOT, capture_output=True, text=True)
     sys.stderr.write(report.stderr if report.returncode else '')
     if report.returncode:
         return report.returncode
-    failed, text = diagnostics(json.loads(report.stdout or '{}'))
+    outputs = json.loads(report.stdout or '{}')
+    if set(outputs) != {t + '[clippy.txt]' for t in targets}:
+        raise SystemExit('clippy: incomplete diagnostics; refusing an unchecked aggregate')
+    failed, text = diagnostics(outputs)
     print(text, end='')
     if failed:
         print('clippy: errors in ' + ', '.join(failed), file=sys.stderr)

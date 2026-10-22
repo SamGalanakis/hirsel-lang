@@ -5,6 +5,7 @@
 rustfmt starts from each target's root file and follows its modules.
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -20,10 +21,18 @@ RUSTFMT = ROOT / 'tools/buck2/toolchains/rust-files/bin/rustfmt'
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--scope', help='Buck2 target query proven sufficient by tools/land')
+    args, rustfmt_flags = parser.parse_known_args()
+    query = 'kind("^rust_(library|binary)$", root//:)'
+    if args.scope:
+        query = f'({query}) intersect ({args.scope})'
     attributes = json.loads(subprocess.run(
-        [str(BUCK2), 'uquery', *CONFIG, 'kind("^rust_(library|binary)$", root//:)',
+        [str(BUCK2), 'uquery', *CONFIG, query,
          '--output-attribute', 'crate_root', '--output-attribute', 'edition'],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+    if not attributes:
+        raise SystemExit('fmt: empty target query; refusing an unchecked aggregate')
     roots = {}
     for target in attributes.values():
         roots.setdefault(target['edition'], set()).add(target['crate_root'])
@@ -40,7 +49,7 @@ def main():
                     roots[target['edition']].add(str(source))
     status = 0
     for edition, files in sorted(roots.items()):
-        command = [str(RUSTFMT), '--edition', edition, *sys.argv[1:], *sorted(files)]
+        command = [str(RUSTFMT), '--edition', edition, *rustfmt_flags, *sorted(files)]
         status = subprocess.run(command, cwd=ROOT).returncode or status
     return status
 

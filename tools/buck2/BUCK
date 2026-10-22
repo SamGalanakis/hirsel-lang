@@ -140,3 +140,12 @@ host_transition(
 )
 
 export_file(name = "workspace-metadata.json", mode = "reference", visibility = ["PUBLIC"])
+
+# Source inputs of the landing race regression test.
+[export_file(name = tool, src = tool, mode = "reference", visibility = ["PUBLIC"]) for tool in [
+    "event_logs.py",
+    "generated.py",
+    "merging.py",
+    "clippy.py",
+    "fmt.py",
+]]
