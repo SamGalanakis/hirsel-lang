@@ -26,6 +26,8 @@ mod entropy_waits;
 mod ergonomics;
 #[path = "cli/exit_report.rs"]
 mod exit_report;
+#[path = "cli/hello_web_readiness_8.rs"]
+mod hello_web_readiness_8;
 #[path = "cli/https.rs"]
 mod https;
 #[path = "cli/observation_view.rs"]
@@ -1032,9 +1034,8 @@ fn full_gate_hello_web_concurrent_request_read_deadline_cranelift() {
 }
 
 fn hello_web(native: bool, concurrent: bool, cranelift: bool, deadline: bool) {
-    use std::io::{BufRead, Read, Write};
-    use std::os::unix::process::CommandExt;
-    use std::process::Stdio;
+    use hello_web_readiness_8::{Server, replace_once};
+    use std::io::{Read, Write};
     use std::time::Duration;
     {
         let original = if concurrent {
@@ -1042,52 +1043,58 @@ fn hello_web(native: bool, concurrent: bool, cranelift: bool, deadline: bool) {
         } else {
             include_str!("../../../examples/hello-web/main.hir")
         };
-        let source = original
-            .replace("8080u16", "0u16")
-            .replace(
-                if concurrent {
-                    "// Accept connections until stopped.\n      while true"
-                } else {
-                    "// Accept connections until stopped.\n  while true"
-                },
-                r#"
-let bound = net.local_addr(n, listener) ? Network
+        // The existing examples own the listener, bind port zero, and publish
+        // the actual local address (Go httptest server.go:215–231,319–346).
+        let source = replace_once(original, "8080u16", "0u16");
+        let source = replace_once(
+            &source,
+            if concurrent {
+                "// Accept connections until stopped.\n      while true"
+            } else {
+                "// Accept connections until stopped.\n  while true"
+            },
+            r#"
+let bound = net.local_addr(n, LISTENER) ? Network
 let output = io.stdout(rt) ? Grant
 let _ = out.print(output, std@1/u16.to_string(bound.port))
 let _ = out.print(output, "\n")
 for i in 0u64..COUNTu64
 "#,
-            )
-            .replace(
-                "COUNTu64",
-                if deadline {
-                    "1u64"
-                } else if concurrent {
-                    "6u64"
-                } else {
-                    "3u64"
-                },
-            );
+        );
+        let source = replace_once(
+            &source,
+            "LISTENER",
+            if concurrent { "accepting" } else { "listener" },
+        );
+        let source = replace_once(
+            &source,
+            "COUNTu64",
+            if deadline {
+                "1u64"
+            } else if concurrent {
+                "6u64"
+            } else {
+                "3u64"
+            },
+        );
+        // Successful exchanges (including the held partial request) have no clock
+        // budget. Only the timeout case arms a deadline, with a peer that never finishes.
         let source = if concurrent {
-            source.replace(
-                "net.local_addr(n, listener)",
-                "net.local_addr(n, accepting)",
+            replace_once(
+                &source,
+                "config.read_timeout = Some(duration.from_parts(30, 0))",
+                if deadline {
+                    "config.read_timeout = Some(duration.from_parts(0, 500000000))"
+                } else {
+                    "config.read_timeout = None()"
+                },
             )
         } else {
             source
         };
-        // Successful exchanges (including the held partial request) have no clock
-        // budget. Only the timeout case arms a deadline, with a peer that never finishes.
-        let source = source.replace(
-            "config.read_timeout = Some(duration.from_parts(30, 0))",
-            if deadline {
-                "config.read_timeout = Some(duration.from_parts(0, 500000000))"
-            } else {
-                "config.read_timeout = None()"
-            },
-        );
         let source = if concurrent && !deadline {
-            source.replace(
+            replace_once(
+                &source,
                 "let mut config = http.default_config()",
                 "let mut config = http.default_config()\n  config.idle_timeout = None()",
             )
@@ -1101,20 +1108,8 @@ for i in 0u64..COUNTu64
             .canonicalize()
             .unwrap();
         std::fs::write(&manifest,serde_json::json!({"schema":1,"package":{"name":"hello_web","version":"1"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
-        let tasks = if concurrent {
-            serde_json::json!("tasks.cooperative@1")
-        } else {
-            serde_json::Value::Null
-        };
-        let clock = if concurrent {
-            serde_json::json!("clock.monotonic.ns@1")
-        } else {
-            serde_json::Value::Null
-        };
-        let record = run_record(
-            &path,
-            serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":tasks,"monotonic_clock":clock,"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
-        );
+        // Both examples project Tasks. Only the concurrent entry projects Clock.
+        let record = run_record(&path, hello_web_readiness_8::grants(concurrent));
         let tape = path.with_extension("tape");
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.arg("run").arg(&path).arg("--run").arg(&record);
@@ -1127,43 +1122,12 @@ for i in 0u64..COUNTu64
                 command.args(["--backend", "cranelift"]);
             }
         }
-        let child = command
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        struct Server(std::process::Child, bool);
-        impl Drop for Server {
-            fn drop(&mut self) {
-                if !self.1 {
-                    unsafe {
-                        libc_kill_group(self.0.id());
-                    }
-                }
-                let _ = self.0.wait();
-            }
-        }
-        unsafe fn libc_kill_group(pid: u32) {
-            unsafe extern "C" {
-                fn kill(pid: i32, signal: i32) -> i32;
-            }
-            unsafe {
-                kill(-(pid as i32), 9);
-            }
-        }
-        let mut server = Server(child, false);
-        let stdout = server.0.stdout.take().unwrap();
-        let (send, recv) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            let mut line = String::new();
-            let result = std::io::BufReader::new(stdout).read_line(&mut line);
-            let _ = send.send((result, line));
+        let mut server = Server::spawn(&mut command).unwrap_or_else(|e| {
+            panic!("server startup native={native} cranelift={cranelift}: {e}")
         });
-        let (_, port) = recv
-            .recv_timeout(Duration::from_secs(90))
-            .unwrap_or_else(|e| panic!("server readiness native={native}: {e}"));
-        let port: u16 = port.trim().parse().unwrap();
+        let port = server.ready(Duration::from_secs(90)).unwrap_or_else(|e| {
+            panic!("server startup native={native} cranelift={cranelift}: {e}")
+        });
         if deadline {
             let mut stalled =
                 std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -1239,19 +1203,9 @@ for i in 0u64..COUNTu64
                 assert!(response.ends_with(b"Hello, world"));
             }
         }
-        let status = server.0.wait().unwrap();
-        server.1 = true;
-        let mut stderr = String::new();
         server
-            .0
-            .stderr
-            .take()
-            .unwrap()
-            .read_to_string(&mut stderr)
-            .unwrap();
-        assert!(status.success(), "native={native}: {stderr}");
-        assert!(stderr.is_empty(), "{stderr}");
-        reader.join().unwrap();
+            .finish()
+            .unwrap_or_else(|e| panic!("server completion native={native}: {e}"));
         if deadline {
             let mut replay = Command::new(env!("CARGO_BIN_EXE_hirsel"));
             replay.arg("run").arg(&path).arg("--replay").arg(&tape);
