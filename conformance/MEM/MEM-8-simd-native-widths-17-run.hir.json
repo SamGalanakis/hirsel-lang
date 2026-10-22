@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "MEM-8-simd-native-widths-17-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

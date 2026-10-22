@@ -1,0 +1,17 @@
+// rule: MEM-8
+// expect: fail SEM-1 at line 9
+// Overflow twin: MEM/MEM-8-simd-native-widths-17-run.hir
+// Two source operations retain their own failure sites.
+fn add(a: i128, b: i128) -> bool {
+  let left: Simd[i128, 2] = simd.splat(a)
+  let right: Simd[i128, 2] = simd.splat(b)
+  let first = simd.add(left, right)
+  let second = simd.add(first, right)
+  let expected: Simd[i128, 2] = simd.splat(170141183460469231731687303715884105727i128)
+  codec.encode(second) == codec.encode(expected)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(add(170141183460469231731687303715884105726i128, 1i128), Arithmetic())
+  Ok(())
+}

@@ -42,3 +42,4 @@ mod rc_borrow_cursor_compose_13;
 mod noalloc_cleanup_model_16;
 mod flat_storage_audit_16;
 mod native_desc_cell_16;
+mod simd_native_widths_17;

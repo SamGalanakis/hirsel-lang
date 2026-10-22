@@ -2818,6 +2818,8 @@ conformance/MEM/MEM-8-fixed-width.hir
 conformance/MEM/MEM-8-positive-width-annotation-ok.hir
 conformance/MEM/MEM-8-record-lane-annotation-bad.hir
 conformance/MEM/MEM-8-record-lane-annotation-ok.hir
+conformance/MEM/MEM-8-simd-native-widths-17-overflow-fail.hir
+conformance/MEM/MEM-8-simd-native-widths-17-run.hir
 conformance/MEM/MEM-8-splat-scalar-domain-bad.hir
 conformance/MEM/MEM-8-splat-scalar-domain-ok.hir
 conformance/MEM/MEM-8-splat-width-bad.hir
