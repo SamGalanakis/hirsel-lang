@@ -7,7 +7,7 @@
 use std::path::Path;
 
 fn rendered(path: &str) -> String {
-    // Relative to this crate, so rendered paths are stable.
+    // The loader canonicalizes source paths; snapshots use this crate-relative name.
     let path = Path::new("../../conformance").join(path);
     let source = std::fs::read_to_string(&path).unwrap();
     let expected = source
@@ -22,11 +22,23 @@ fn rendered(path: &str) -> String {
         output.sources.location(first.primary).unwrap().line,
         line.parse::<u32>().unwrap()
     );
-    output
+    let canonical = path.canonicalize().unwrap();
+    for diagnostic in &output.diagnostics {
+        for span in std::iter::once(diagnostic.primary)
+            .chain(diagnostic.secondary.iter().map(|label| label.span))
+        {
+            let file = output.sources.resolve(span).file;
+            assert_eq!(output.sources.file(file).unwrap().path, canonical);
+        }
+    }
+    let rendered: String = output
         .diagnostics
         .iter()
         .map(|d| d.render_human(&output.sources))
-        .collect()
+        .collect();
+    // Replace only the verified fixture's physical name. Line/column positions,
+    // source text, label order and any other paths still compare verbatim.
+    rendered.replace(canonical.to_str().unwrap(), path.to_str().unwrap())
 }
 
 /// before: error[MODE-1]: a local value cannot be stored into global storage
