@@ -21,6 +21,25 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn keys(&self, _request: &Request) -> KeySet {
         KeySet::coupled()
     }
+    /// Checked identity of an initialized result or initial grant. Unknown is not coupled.
+    fn identity(&self, _handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        None
+    }
+    /// Enter a request-owned wait token and perform exactly one bounded attempt.
+    fn call_at(&self, _token: u64, request: Request) -> Result<Completion, AdapterError> {
+        self.call(request)
+    }
+    fn finish(&self, _token: u64) {}
+    fn parked(&self, _token: u64) {}
+    fn cancellable(&self, _token: u64) -> bool {
+        true
+    }
+    fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
+        Ok(crate::io::Ready::Tokens(Vec::new()))
+    }
+    fn readiness(&self) -> Option<crate::readiness::Readiness> {
+        None
+    }
     /// Check argument validity and authority without an effect or tape event.
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
     /// One bounded host call.
@@ -40,6 +59,23 @@ impl<A: Adapter + Send> Coupled<A> {
 }
 
 impl<A: Adapter + Send> ConcurrentAdapter for Coupled<A> {
+    fn call_at(&self, token: u64, request: Request) -> Result<Completion, AdapterError> {
+        let mut adapter = self.0.lock().unwrap();
+        adapter.enter(token);
+        adapter.call(request)
+    }
+    fn finish(&self, token: u64) {
+        self.0.lock().unwrap().finish(token);
+    }
+    fn parked(&self, token: u64) {
+        self.0.lock().unwrap().parked(token);
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        self.0.lock().unwrap().cancellable(token)
+    }
+    fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
+        self.0.lock().unwrap().ready()
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.0.lock().unwrap().preflight(request)
     }

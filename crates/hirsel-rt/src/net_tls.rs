@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// TLS material checks and handshake starts: everything of TLS that does not belong to one
 /// connection. The policy layer and every world (host, scripted, replay) reach TLS only
 /// through the engine their adapter was handed.
-pub trait TlsEngine {
+pub trait TlsEngine: Sync {
     /// Whether `name` is a valid verification/SNI name (no resolver or clock).
     fn valid_name(&self, name: &str) -> bool;
     /// Whether `pem` is a nonempty bundle of well-formed trust anchors.
@@ -98,7 +98,7 @@ pub enum Stall {
 /// One TLS connection over a socket its host provider owns, in rustls's terms. Blocking
 /// providers use the `Stream` operations; the cooperative provider drives the record layer
 /// itself across readiness waits.
-pub trait TlsSession {
+pub trait TlsSession: Send {
     fn is_handshaking(&self) -> bool;
     fn wants_write(&self) -> bool;
     /// Encrypted bytes from the socket; 0 at its end.

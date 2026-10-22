@@ -175,6 +175,7 @@ def hirsel_library(name, crate, crate_root, srcs, features, deps, manifest_dir, 
 def hirsel_binary(name, bin_name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, opt_level = None):
     env = _compile_env(package_name, crate, version, build_script)
     env["CARGO_BIN_NAME"] = bin_name
+    env["HIRSEL_SANITIZER"] = select({"root//tools/buck2:sanitizer_thread": "thread", "DEFAULT": ""})
     _rust(
         native.rust_binary,
         name = name,
@@ -470,10 +471,12 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, image = None, production = False, files_env = {}):
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, image = None, production = False, files_env = {}, sanitizer = None):
     """A script harness with the same hermetic inputs as native Rust tests.
     `files_env` names further input files as environment variables."""
     if full and not FULL_GATE:
+        return
+    if sanitizer and read_root_config("hirsel", "sanitizer", "") != sanitizer:
         return
     binary = name + "-script"
     _script_binary(name = binary, script = script)

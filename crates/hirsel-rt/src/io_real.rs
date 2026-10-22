@@ -10,23 +10,29 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::rc::Rc;
-pub struct RealIo {
+use std::sync::Arc;
+mod concurrent;
+pub use concurrent::ConcurrentIo;
+/// The home adapter, accepting custom streams with no `Send` bound.
+pub type RealIo = RealCore<LocalStreams>;
+
+/// Real host authority, providers and recording state, parameterized by stream ownership.
+/// `RealCore<SendStreams>` is `Send`; non-Send custom streams remain home-affine.
+pub struct RealCore<S: Streams> {
     state: State,
     disk: Disk,
     tape: Vec<Event>,
     fault: Option<Fault>,
-    output: Box<dyn Write>,
-    input: Input,
-    stderr: Box<dyn Write>,
+    streams: S,
     /// The recording level's gate: every request and event passes through it.
-    journal: crate::journal::Journaled,
+    journal: crate::journal::Journaled<S::Journal>,
     retain_history: bool,
     /// Last validated read/write stream. Only ordinary calls mutate stream
     /// authority; call clears both slots before executing one of them.
     live_streams: [Option<(u64, u64, u64)>; 2],
     /// The host network provider, once a net entry handed its constructor over
     /// (`Adapter::net`); without it a host network request is a tool refusal.
-    net: Option<Box<dyn NetProvider>>,
+    net: Option<Box<dyn NetProvider + Send>>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
     cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
     /// Whether the host network provider parks on that readiness (`set_cooperative_net`);
@@ -36,7 +42,7 @@ pub struct RealIo {
     test_clock: Option<crate::readiness::Readiness>,
     /// The host process provider, once a process entry handed its constructor over
     /// (`Adapter::process`); without it a host process call is a tool refusal.
-    children: Option<Box<dyn crate::process::ProcessHost>>,
+    children: Option<Box<dyn crate::process::ProcessHost + Send>>,
     /// Runner call outcomes delivered and not yet taken, by wait token (RUN-11).
     delivered: BTreeMap<u64, hirsel_run_schema::RunnerCompletion>,
     /// The admitted `io.signals` source, and the parked signal waits by token: their kinds
@@ -48,23 +54,193 @@ pub struct RealIo {
     /// A script delivered an arrival at the last idle point (no cooperative readiness).
     signal_delivered: bool,
 }
+/// Stream access used by the real adapter. Implementations are sealed to this module.
+#[doc(hidden)]
+pub trait Streams: sealed::Sealed {
+    type Journal: crate::journal::Journal;
+    fn send_journal(journal: Box<dyn crate::journal::Journal + Send>) -> Self::Journal;
+    fn net(&mut self) -> Option<&mut (dyn NetProvider + 'static)> {
+        None
+    }
+    fn install_net(&mut self, _net: Box<dyn NetProvider>) {}
+    fn children(&mut self) -> Option<&mut (dyn crate::process::ProcessHost + 'static)> {
+        None
+    }
+    fn install_children(&mut self, _host: fn() -> Box<dyn crate::process::ProcessHost>) {}
+
+    fn output(&mut self, stderr: bool) -> &mut dyn Write;
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<Option<usize>>;
+}
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Home-affine streams; explicitly Send streams may be converted at admission.
+pub struct LocalStreams {
+    output: Output,
+    input: Input,
+    stderr: Output,
+    net: Option<Box<dyn NetProvider>>,
+    children: Option<Box<dyn crate::process::ProcessHost>>,
+}
+enum Output {
+    Local(Box<dyn Write>),
+    Send(crate::host::SendSink),
+}
 enum Input {
     Blocking(Box<dyn Read>),
+    Send(Box<dyn Read + Send>, crate::io_keys::Storage),
     Cooperative(crate::host_stdin::CooperativeStdin),
 }
-impl RealIo {
-    /// Pin the explicitly admitted input stream before entry. Projections remain independent.
-    pub fn set_stdin(&mut self, input: impl Read + 'static) {
-        self.input = Input::Blocking(Box::new(input));
+/// Streams that can move to the shared real adapter.
+pub struct SendStreams {
+    output: crate::host::SendSink,
+    input: SendInput,
+    stderr: crate::host::SendSink,
+}
+enum SendInput {
+    Blocking(Box<dyn Read + Send>, crate::io_keys::Storage),
+    Cooperative(crate::host_stdin::CooperativeStdin),
+}
+impl sealed::Sealed for LocalStreams {}
+impl sealed::Sealed for SendStreams {}
+impl Streams for LocalStreams {
+    type Journal = HomeJournal;
+    fn send_journal(journal: Box<dyn crate::journal::Journal + Send>) -> HomeJournal {
+        HomeJournal::Send(journal)
     }
-    /// The interpreter's stdin: a read with no available byte is `AdapterError::Blocked`
-    /// and leaves POLLIN interest under the entered Readiness token.
+    fn net(&mut self) -> Option<&mut (dyn NetProvider + 'static)> {
+        self.net.as_deref_mut()
+    }
+    fn install_net(&mut self, net: Box<dyn NetProvider>) {
+        self.net = Some(net);
+    }
+    fn children(&mut self) -> Option<&mut (dyn crate::process::ProcessHost + 'static)> {
+        self.children.as_deref_mut()
+    }
+    fn install_children(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {
+        self.children.get_or_insert_with(host);
+    }
+
+    fn output(&mut self, stderr: bool) -> &mut dyn Write {
+        match if stderr {
+            &mut self.stderr
+        } else {
+            &mut self.output
+        } {
+            Output::Local(output) => output.as_mut(),
+            Output::Send(output) => output,
+        }
+    }
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<Option<usize>> {
+        match &mut self.input {
+            Input::Blocking(input) => input.read(bytes).map(Some),
+            Input::Send(input, _) => input.read(bytes).map(Some),
+            Input::Cooperative(input) => input.read(bytes),
+        }
+    }
+}
+impl Streams for SendStreams {
+    type Journal = Box<dyn crate::journal::Journal + Send>;
+    fn send_journal(journal: Self::Journal) -> Self::Journal {
+        journal
+    }
+
+    fn output(&mut self, stderr: bool) -> &mut dyn Write {
+        if stderr {
+            &mut self.stderr
+        } else {
+            &mut self.output
+        }
+    }
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<Option<usize>> {
+        match &mut self.input {
+            SendInput::Blocking(input, _) => input.read(bytes).map(Some),
+            SendInput::Cooperative(input) => input.read(bytes),
+        }
+    }
+}
+/// The home journal keeps its original non-Send extension point.
+#[doc(hidden)]
+pub enum HomeJournal {
+    Local(Box<dyn crate::journal::Journal>),
+    Send(Box<dyn crate::journal::Journal + Send>),
+}
+impl HomeJournal {
+    fn as_journal(&self) -> &dyn crate::journal::Journal {
+        match self {
+            Self::Local(j) => j.as_ref(),
+            Self::Send(j) => j.as_ref(),
+        }
+    }
+    fn as_journal_mut(&mut self) -> &mut dyn crate::journal::Journal {
+        match self {
+            Self::Local(j) => j.as_mut(),
+            Self::Send(j) => j.as_mut(),
+        }
+    }
+}
+impl crate::journal::Journal for HomeJournal {
+    fn records(&self) -> bool {
+        self.as_journal().records()
+    }
+    fn durable(&self) -> bool {
+        self.as_journal().durable()
+    }
+    fn prepare(&mut self, p: &crate::journal::Prepared) -> std::io::Result<()> {
+        self.as_journal_mut().prepare(p)
+    }
+    fn event(&mut self, id: Option<u64>, event: &Event) -> std::io::Result<()> {
+        self.as_journal_mut().event(id, event)
+    }
+    fn withdraw(&mut self, id: u64) -> std::io::Result<()> {
+        self.as_journal_mut().withdraw(id)
+    }
+    fn barrier(&mut self) -> std::io::Result<()> {
+        self.as_journal_mut().barrier()
+    }
+    fn pending(&self) -> usize {
+        self.as_journal().pending()
+    }
+    fn end(&mut self, outcome: &hirsel_run_schema::RunOutcome) -> std::io::Result<()> {
+        self.as_journal_mut().end(outcome)
+    }
+}
+impl RealIo {
+    /// Preserve custom home-affine journals; explicit Send journals use send_journal_to.
+    pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
+        self.journal = crate::journal::Journaled::with_destination(HomeJournal::Local(journal));
+        self.state.capture_views = self.journal.records() || self.retain_history;
+    }
+    /// A custom home provider is never silently moved to another worker.
+    pub fn set_net_provider(&mut self, provider: impl NetProvider + 'static) {
+        self.streams.net = Some(Box::new(provider));
+    }
+    /// Explicitly transportable provider; admission must configure cooperative readiness first.
+    pub fn set_send_net_provider(&mut self, provider: impl NetProvider + Send + 'static) {
+        self.net = Some(Box::new(provider));
+    }
+    /// Pin the explicitly admitted input stream before entry.
+    pub fn set_stdin(&mut self, input: impl Read + 'static) {
+        self.streams.input = Input::Blocking(Box::new(input));
+    }
+    pub fn set_send_stdin(&mut self, input: impl Read + Send + 'static) {
+        self.streams.input = Input::Send(Box::new(input), crate::io_keys::Storage::Unknown);
+    }
     pub fn set_cooperative_stdin(&mut self, input: crate::host_stdin::CooperativeStdin) {
-        self.input = Input::Cooperative(input);
+        self.streams.input = Input::Cooperative(input);
     }
     pub fn set_stderr(&mut self, output: impl Write + 'static) {
-        self.stderr = Box::new(output);
+        self.streams.stderr = Output::Local(Box::new(output));
     }
+    pub fn set_send_output(&mut self, output: crate::host::SendSink) {
+        self.streams.output = Output::Send(output);
+    }
+    pub fn set_send_stderr(&mut self, output: crate::host::SendSink) {
+        self.streams.stderr = Output::Send(output);
+    }
+}
+impl<S: Streams> RealCore<S> {
     /// Exact name grants and their admission snapshots; no later ambient lookup.
     pub fn set_env(&mut self, env: BTreeMap<String, Option<String>>) {
         self.state.env = env;
@@ -124,10 +300,6 @@ impl RealIo {
         self.clock_grants(true, false);
         self.set_cooperative(crate::readiness::Readiness::virtual_clock(ticks));
     }
-    /// Replace the host network provider, e.g. to count provider calls in tests.
-    pub fn set_net_provider(&mut self, provider: impl NetProvider + 'static) {
-        self.net = Some(Box::new(provider));
-    }
     /// Admission supplies the configured projections; recordings cannot widen them.
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {
         self.state.projections = projections;
@@ -137,9 +309,17 @@ impl RealIo {
         self.state.projections.remove("stdout");
         self.state.projections.remove("stderr");
     }
+}
+impl RealIo {
     /// The caller explicitly grants this directory. No ambient directory is consulted later.
     pub fn grant(root: &Path) -> std::io::Result<Self> {
-        Self::grant_with_output(root, std::io::sink())
+        {
+            let mut io = Self::grant_with_output(root, std::io::sink())?;
+            io.set_send_output(crate::host::SendSink::shared(Arc::new(
+                std::sync::Mutex::new(std::io::sink()),
+            )));
+            Ok(io)
+        }
     }
     /// Explicit output grant; write errors and committed prefixes enter the completion tape.
     pub fn grant_with_output(root: &Path, output: impl Write + 'static) -> std::io::Result<Self> {
@@ -189,6 +369,8 @@ impl RealIo {
                 active: String::new(),
                 active_id: 0,
                 files: BTreeMap::new(),
+                prefetched: None,
+                prefetched_output: None,
                 last_open: None,
                 partial: None,
                 next_write: 1,
@@ -199,10 +381,21 @@ impl RealIo {
             },
             tape: vec![],
             fault: None,
-            output: Box::new(output),
-            input: Input::Blocking(Box::new(std::io::empty())),
-            stderr: Box::new(std::io::sink()),
-            journal: Default::default(),
+            streams: LocalStreams {
+                output: Output::Local(Box::new(output)),
+                input: Input::Send(
+                    Box::new(std::io::empty()),
+                    crate::io_keys::Storage::Shared(0),
+                ),
+                net: None,
+                children: None,
+                stderr: Output::Send(crate::host::SendSink::shared(Arc::new(
+                    std::sync::Mutex::new(std::io::sink()),
+                ))),
+            },
+            journal: crate::journal::Journaled::unrecorded(HomeJournal::Send(Box::new(
+                crate::journal::NoJournal,
+            ))),
             retain_history: true,
             live_streams: [None; 2],
             net: None,
@@ -217,6 +410,8 @@ impl RealIo {
             signal_delivered: false,
         })
     }
+}
+impl<S: Streams> RealCore<S> {
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
     pub fn mount_pins(&self) -> Vec<(&str, &crate::host_paths::PinnedDirectory)> {
         self.disk
@@ -270,7 +465,7 @@ impl RealIo {
     }
     /// Streams ordinary completions; this tape has an unknown suffix after termination.
     pub fn record_to(&mut self, writer: crate::launch::RecordingWriter<File>) {
-        self.journal_to(Box::new(crate::journal::TapeJournal(writer)));
+        self.send_journal_to(Box::new(crate::journal::TapeJournal(writer)));
     }
     /// The cooperative readiness this run parks on, which its callee runs share (RUN-12).
     pub fn readiness(&self) -> Option<crate::readiness::Readiness> {
@@ -287,8 +482,8 @@ impl RealIo {
         }
     }
     /// Record through `journal`, the recording level the run selected.
-    pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
-        self.journal = crate::journal::Journaled::new(journal);
+    pub fn send_journal_to(&mut self, journal: Box<dyn crate::journal::Journal + Send>) {
+        self.journal = crate::journal::Journaled::with_destination(S::send_journal(journal));
         self.state.capture_views = self.journal.records() || self.retain_history;
     }
     /// The run ended with `outcome`: the recording's trailer.
@@ -505,7 +700,7 @@ impl RealIo {
         Ok(tree)
     }
 }
-impl Adapter for RealIo {
+impl<S: Streams> Adapter for RealCore<S> {
     fn net_io(
         &mut self,
         token: u64,
@@ -535,7 +730,11 @@ impl Adapter for RealIo {
             },
         };
         if inline
-            && let Some(provider) = &mut self.net
+            && let Some(provider) = self.streams.net().or_else(|| {
+                self.net
+                    .as_deref_mut()
+                    .map(|net| net as &mut dyn NetProvider)
+            })
             && let Some(result) = provider.net_io_inline(id, buffer)
         {
             return Some(result);
@@ -545,8 +744,13 @@ impl Adapter for RealIo {
         }
         Some((|| {
             let provider = self
-                .net
-                .as_mut()
+                .streams
+                .net()
+                .or_else(|| {
+                    self.net
+                        .as_deref_mut()
+                        .map(|net| net as &mut dyn NetProvider)
+                })
                 .ok_or_else(|| AdapterError::Unsupported("network provider missing".into()))?;
             loop {
                 let result = match buffer {
@@ -590,12 +794,8 @@ impl Adapter for RealIo {
                     crate::handles::Grant::Stdout
                 },
             )?;
-            let output = if stderr {
-                &mut self.stderr
-            } else {
-                &mut self.output
-            };
-            let (value, _) = write_output(output.as_mut(), bytes);
+            let output = self.streams.output(stderr);
+            let (value, _) = write_output(output, bytes);
             return Ok(Completion::Unit(value));
         }
         self.call(if stderr {
@@ -619,17 +819,24 @@ impl Adapter for RealIo {
         self.state.tls = crate::net_tls::Engine(Some(engine));
     }
     fn net(&mut self, host: crate::net_host::Provider) {
-        if self.net.is_none() {
+        if self.net.is_none() && self.streams.net().is_none() {
             let readiness = self.cooperative.as_ref().filter(|_| self.cooperative_net);
-            self.net = Some(host(readiness.map(|(readiness, _)| readiness)));
+            self.streams
+                .install_net(host(readiness.map(|(readiness, _)| readiness)));
         }
     }
     fn process(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {
-        self.children.get_or_insert_with(host);
+        if self.children.is_none() {
+            self.streams.install_children(host);
+        }
     }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
-        if let Some(net) = &mut self.net {
+        if let Some(net) = self.streams.net().or_else(|| {
+            self.net
+                .as_deref_mut()
+                .map(|net| net as &mut dyn NetProvider)
+        }) {
             net.tls_roots(pem);
         }
     }
@@ -841,7 +1048,7 @@ impl Adapter for RealIo {
         self.readiness()
     }
     fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
-        RealIo::deliver(self, token, completion);
+        RealCore::deliver(self, token, completion);
     }
     fn has_ready(&mut self) -> Result<bool, AdapterError> {
         if self.signal_delivered && !self.signal_waits.is_empty() {
@@ -893,7 +1100,7 @@ impl Adapter for RealIo {
 fn recording_failed(error: std::io::Error) -> AdapterError {
     AdapterError::RecordingFailed(error.to_string())
 }
-impl RealIo {
+impl<S: Streams> RealCore<S> {
     /// A scheduling point's ready tokens with the parked signal waits decided by what is
     /// pending, not by the wake pipe: a wait is ready exactly when an arrival among its
     /// kinds is pending. The pipe is drained here, so an arrival no wait wants never keeps
@@ -1007,9 +1214,10 @@ impl RealIo {
                 self.state.sample(&request, completion)
             }
             Request::Signals { .. } => {
-                let net: &mut dyn NetProvider = match &mut self.net {
-                    Some(net) => &mut **net,
-                    None => &mut crate::net::NoNet,
+                let net: &mut dyn NetProvider = match (self.streams.net(), &mut self.net) {
+                    (Some(net), _) => net,
+                    (_, Some(net)) => &mut **net,
+                    _ => &mut crate::net::NoNet,
                 };
                 let result = self.state.execute(&mut self.disk, net, &request, None);
                 if let Ok(Completion::Handle(Ok(_))) = &result
@@ -1036,10 +1244,7 @@ impl RealIo {
                             let len = usize::try_from(*max).unwrap_or(usize::MAX).min(64 * 1024);
                             let mut bytes = vec![0; len];
                             loop {
-                                let read = match &mut self.input {
-                                    Input::Blocking(input) => input.read(&mut bytes).map(Some),
-                                    Input::Cooperative(input) => input.read(&mut bytes),
-                                };
+                                let read = self.streams.read(&mut bytes);
                                 match read {
                                     Ok(Some(count)) => {
                                         bytes.truncate(count);
@@ -1125,10 +1330,14 @@ impl RealIo {
             _ if self.state.is_process(&request) => {
                 let directories = &self.disk.directories;
                 let cooperative = self.cooperative.as_ref().map(|(readiness, _)| readiness);
-                let children = &mut self.children;
+                let mut children = self.streams.children().or_else(|| {
+                    self.children
+                        .as_deref_mut()
+                        .map(|host| host as &mut dyn crate::process::ProcessHost)
+                });
                 let cwd = |d: u64| directories.get(&d).map(|pin| pin.as_raw_fd());
                 self.state.execute_process(
-                    &mut |call| match children {
+                    &mut |call| match &mut children {
                         Some(host) => host.call(call, &cwd, cooperative),
                         None => Err(AdapterError::InvalidCompletion),
                     },
@@ -1136,9 +1345,10 @@ impl RealIo {
                 )
             }
             _ => {
-                let net: &mut dyn NetProvider = match &mut self.net {
-                    Some(net) => &mut **net,
-                    None => &mut crate::net::NoNet,
+                let net: &mut dyn NetProvider = match (self.streams.net(), &mut self.net) {
+                    (Some(net), _) => net,
+                    (_, Some(net)) => &mut **net,
+                    _ => &mut crate::net::NoNet,
                 };
                 self.state
                     .execute(&mut self.disk, net, &request, fault.as_ref())
@@ -1169,9 +1379,10 @@ impl RealIo {
         // A Test report (a failed check_case, a scripted client's unmet Expect) is
         // the only stdout a request other than Print appends.
         if !matches!(request, Request::Print { .. }) && self.state.stdout.len() > before {
-            self.output
+            self.streams
+                .output(false)
                 .write_all(&self.state.stdout[before..])
-                .and_then(|()| self.output.flush())
+                .and_then(|()| self.streams.output(false).flush())
                 .map_err(|e| AdapterError::RecordingFailed(format!("test report: {e}")))?;
             if !self.retain_history {
                 self.state.stdout.truncate(before);
@@ -1179,11 +1390,7 @@ impl RealIo {
         }
         if matches!(request, Request::Print { .. } | Request::PrintStderr { .. }) {
             let stderr = matches!(request, Request::PrintStderr { .. });
-            let output = if stderr {
-                &mut self.stderr
-            } else {
-                &mut self.output
-            };
+            let output = self.streams.output(stderr);
             let captured = if stderr {
                 &mut self.state.stderr
             } else {
@@ -1191,7 +1398,11 @@ impl RealIo {
             };
             let before = if stderr { stderr_before } else { before };
             let bytes = &captured[before..];
-            let (value, written) = write_output(output.as_mut(), bytes);
+            let (value, written) = self
+                .disk
+                .prefetched_output
+                .take()
+                .unwrap_or_else(|| write_output(output, bytes));
             if let Err(error) = value {
                 completion = Completion::Unit(Err(error.clone()));
                 fault = Some(Fault {
@@ -1242,9 +1453,10 @@ impl RealIo {
             (Request::Open { .. } | Request::Create { .. }, Completion::Handle(Ok(id)))
                 if !fake =>
             {
-                self.disk
-                    .files
-                    .insert(*id, self.disk.last_open.take().expect("opened descriptor"));
+                self.disk.files.insert(
+                    *id,
+                    Arc::new(self.disk.last_open.take().expect("opened descriptor")),
+                );
             }
             (Request::NarrowFile { file, .. }, Completion::OptionalFile(new)) => {
                 if let Some(fd) = self.disk.files.remove(file)
@@ -1298,7 +1510,9 @@ struct Disk {
     directories: BTreeMap<u64, File>,
     active: String,
     active_id: u64,
-    files: BTreeMap<u64, File>,
+    files: BTreeMap<u64, Arc<File>>,
+    prefetched: Option<concurrent::FileResult>,
+    prefetched_output: Option<(Result<(), IoError>, usize)>,
     last_open: Option<File>,
     partial: Option<(IoError, usize)>,
     next_write: u64,
@@ -1632,6 +1846,9 @@ impl Storage for Disk {
         Ok(())
     }
     fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError> {
+        if let Some(concurrent::FileResult::Read(result)) = self.prefetched.take() {
+            return result;
+        }
         let file = self.files.get(&id).ok_or(IoError::Fault(1))?;
         let mut bytes = vec![0; max.min(65536) as usize];
         let n = loop {
@@ -1644,7 +1861,11 @@ impl Storage for Disk {
         Ok(bytes)
     }
     fn write_file(&mut self, id: u64, bytes: &[u8], all: bool) -> Result<u64, IoError> {
-        let file = self.files.get_mut(&id).ok_or(IoError::Fault(1))?;
+        if let Some(concurrent::FileResult::Write(result, partial)) = self.prefetched.take() {
+            self.partial = partial;
+            return result;
+        }
+        let mut file = self.files.get(&id).ok_or(IoError::Fault(1))?.as_ref();
         let mut written = 0;
         while written < bytes.len() {
             match file.write(&bytes[written..]) {
@@ -2381,7 +2602,7 @@ mod output_tests {
                     if stderr {
                         io.set_stderr(sink);
                     } else {
-                        io.output = Box::new(sink);
+                        io.streams.output = Output::Local(Box::new(sink));
                     }
                     if !retain {
                         io.discard_history();
@@ -2463,7 +2684,7 @@ pub(crate) mod borrowed_net_tests {
             protocol: None,
         });
         assert_eq!(
-            io.net.as_mut().unwrap().connect_addr(
+            io.streams.net.as_mut().unwrap().connect_addr(
                 stream,
                 SocketAddr {
                     ip: address.ip(),
@@ -2620,5 +2841,82 @@ pub(crate) mod borrowed_net_tests {
             io.net_io(1, net, stream, false, &mut NetBuffer::Read(&mut [])),
             Some(Ok(Err(NetError::InvalidInput)))
         );
+    }
+}
+
+impl RealIo {
+    /// Convert explicitly transportable streams, retaining the untouched home adapter on refusal.
+    #[allow(clippy::result_large_err)]
+    pub fn into_concurrent(self) -> Result<ConcurrentIo, Self> {
+        if !matches!(self.streams.output, Output::Send(_))
+            || !matches!(self.streams.stderr, Output::Send(_))
+            || matches!(self.streams.input, Input::Blocking(_))
+            || (self.net.is_some() && !self.cooperative_net)
+            || self.streams.net.is_some()
+            || self.streams.children.is_some()
+            || matches!(self.journal.destination(), HomeJournal::Local(_))
+        {
+            return Err(self);
+        }
+        let Self {
+            streams,
+            state,
+            disk,
+            tape,
+            fault,
+            journal,
+            retain_history,
+            live_streams,
+            net,
+            cooperative,
+            cooperative_net,
+            test_clock,
+            children,
+            delivered,
+            signals,
+            signal_waits,
+            current,
+            signal_delivered,
+        } = self;
+        let Output::Send(output) = streams.output else {
+            unreachable!()
+        };
+        let Output::Send(stderr) = streams.stderr else {
+            unreachable!()
+        };
+        let input = match streams.input {
+            Input::Send(input, storage) => SendInput::Blocking(input, storage),
+            Input::Cooperative(input) => SendInput::Cooperative(input),
+            Input::Blocking(_) => unreachable!(),
+        };
+        let journal = journal.map_destination(|journal| match journal {
+            HomeJournal::Send(journal) => journal,
+            HomeJournal::Local(_) => unreachable!(),
+        });
+        let core = RealCore {
+            streams: SendStreams {
+                output,
+                input,
+                stderr,
+            },
+            state,
+            disk,
+            tape,
+            fault,
+            journal,
+            retain_history,
+            live_streams,
+            net,
+            cooperative,
+            cooperative_net,
+            test_clock,
+            children,
+            delivered,
+            signals,
+            signal_waits,
+            current,
+            signal_delivered,
+        };
+        Ok(ConcurrentIo::new(core))
     }
 }

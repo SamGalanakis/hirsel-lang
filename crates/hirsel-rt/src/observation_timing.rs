@@ -14,7 +14,7 @@ use std::{
 };
 
 pub(crate) struct TimingJournal {
-    inner: Box<dyn Journal>,
+    inner: Box<dyn Journal + Send>,
     tape: PathBuf,
     output: BufWriter<File>,
     digest_offset: u64,
@@ -27,7 +27,7 @@ pub(crate) struct TimingJournal {
 }
 impl TimingJournal {
     pub(crate) fn new(
-        inner: Box<dyn Journal>,
+        inner: Box<dyn Journal + Send>,
         tape: PathBuf,
         output: File,
         capture: String,
@@ -213,7 +213,7 @@ mod tests {
     ) -> (Vec<u8>, Vec<u8>, usize) {
         let tape = root.join(name);
         let file = File::create(&tape).unwrap();
-        let journal: Box<dyn Journal> = if durable {
+        let journal: Box<dyn Journal + Send> = if durable {
             Box::new(DurableJournal::create(file, &header()).unwrap())
         } else {
             Box::new(TapeJournal(RecordingWriter::new(file, &header()).unwrap()))
@@ -221,14 +221,14 @@ mod tests {
         let mut io = RealIo::grant(root).unwrap();
         if timing {
             let output = File::create(root.join(format!("{name}.timing"))).unwrap();
-            io.journal_to(Box::new(TimingJournal::new(
+            io.send_journal_to(Box::new(TimingJournal::new(
                 journal,
                 tape.clone(),
                 output,
                 "fixture".into(),
             )));
         } else {
-            io.journal_to(journal);
+            io.send_journal_to(journal);
         }
         let mut parent = vec![0; 24];
         parent.extend_from_slice(&[1, 7, 7]);

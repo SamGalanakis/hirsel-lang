@@ -108,8 +108,9 @@ pub struct Registry {
     inodes: HashMap<(u64, u64), Key>,
     storages: HashMap<usize, Key>,
     /// Each Net's port key.
-    ports: HashMap<u64, Key>,
+    ports: HashMap<Key, Key>,
     sinks: Vec<Key>,
+    unknown_storage: bool,
 }
 
 impl Default for Registry {
@@ -121,6 +122,7 @@ impl Default for Registry {
             storages: HashMap::new(),
             ports: HashMap::new(),
             sinks: Vec::new(),
+            unknown_storage: false,
         }
     }
 }
@@ -176,7 +178,10 @@ impl Registry {
                 };
                 (key, regular)
             }
-            Storage::Unknown => (COUPLED, true),
+            Storage::Unknown => {
+                self.unknown_storage = true;
+                (COUPLED, true)
+            }
         };
         self.handles
             .insert(handle, (key, Kind::Sink { file_backed }));
@@ -184,6 +189,13 @@ impl Registry {
             self.sinks.push(key);
         }
         key
+    }
+    /// Restore an already established logical identity, e.g. a joined stream.
+    pub fn bind(&mut self, handle: u64, key: Key, kind: Kind) {
+        self.next = self
+            .next
+            .max(key.0.checked_add(1).expect("logical key space exhausted"));
+        self.handles.insert(handle, (key, kind));
     }
     /// `to` names the same resource as `from` (a narrowed file, an accepted stream's
     /// listener is not one): it keeps `from`'s key.
@@ -204,6 +216,10 @@ impl Registry {
     pub fn forget(&mut self, handle: u64) {
         self.handles.remove(&handle);
     }
+    /// Checked live discovery for a created handle; unknown resources fail closed.
+    pub fn identity(&self, handle: u64) -> Option<(Key, Kind)> {
+        self.handles.get(&handle).copied()
+    }
     fn handle(&self, handle: u64) -> (Key, Kind) {
         self.handles
             .get(&handle)
@@ -211,6 +227,7 @@ impl Registry {
             .unwrap_or((COUPLED, Kind::Other))
     }
     fn ports(&mut self, net: u64) -> Key {
+        let net = self.handle(net).0;
         if let Some(&key) = self.ports.get(&net) {
             return key;
         }
@@ -379,6 +396,9 @@ impl Registry {
                 keys.push((PLACE, X))
             }
         }
+        if self.unknown_storage && keys.iter().any(|(key, _)| *key == NAMESPACE) {
+            keys.push((COUPLED, X));
+        }
         KeySet::new(keys)
     }
 }
@@ -489,16 +509,17 @@ impl KeyTable {
             metrics,
         }
     }
-    fn cell(&self, key: Key) -> Arc<Cell> {
-        self.cells.lock().unwrap().entry(key).or_default().clone()
-    }
     /// Take `keys`' positions, in key order (a request's entered phase).
     pub fn take(&self, keys: &KeySet) -> Positions {
+        // Taking a multi-key footprint must be atomic. Otherwise a shared namespace
+        // member can acquire its resource epoch after a namespace writer that waits
+        // for that same member, forming a dependency cycle.
+        let mut cells = self.cells.lock().unwrap();
         let held = keys
             .keys()
             .iter()
             .map(|&(key, mode)| {
-                let cell = self.cell(key);
+                let cell = cells.entry(key).or_default().clone();
                 let epoch = cell.epochs.lock().unwrap().take(mode == Mode::Shared);
                 (key, mode, epoch, cell)
             })

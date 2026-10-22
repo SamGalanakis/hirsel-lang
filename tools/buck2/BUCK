@@ -6,6 +6,14 @@ declare_platforms(
     constraints = ["prelude//os:linux", "prelude//cpu:x86_64"],
 )
 
+constraint_setting(name = "sanitizer", visibility = ["PUBLIC"])
+constraint_value(name = "sanitizer_thread", constraint_setting = ":sanitizer", visibility = ["PUBLIC"])
+platform(
+    name = "thread",
+    constraint_values = ["prelude//os/constraints:linux", "prelude//cpu/constraints:x86_64", ":profile_dev", ":sanitizer_thread"],
+    visibility = ["PUBLIC"],
+)
+
 constraint_setting(name = "profile")
 
 constraint_value(name = "profile_dev", constraint_setting = ":profile", visibility = ["PUBLIC"])

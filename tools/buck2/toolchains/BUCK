@@ -9,7 +9,15 @@ load(":rust.bzl", "rust_toolchain")
 # Both trees are ignored local state that tools/buck2/bootstrap.py installs.
 rust_toolchain(
     name = "rust",
-    srcs = {p.removeprefix("rust-files/"): p for p in glob(["rust-files/**"])},
+    srcs = select({
+        "root//tools/buck2:sanitizer_thread": {
+            p.removeprefix("rust-files/"): p for p in glob(["rust-files/**"], exclude = ["rust-files/lib/rustlib/x86_64-unknown-linux-gnu/lib/*.rlib", "rust-files/lib/rustlib/x86_64-unknown-linux-gnu/lib/*.rmeta", "rust-files/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-*.so"])
+        } | {
+            "lib/rustlib/x86_64-unknown-linux-gnu/lib/" + p.removeprefix("tsan-files/"): p for p in glob(["tsan-files/*.rlib"])
+        },
+        "DEFAULT": {p.removeprefix("rust-files/"): p for p in glob(["rust-files/**"])},
+    }),
+    sanitizer = select({"root//tools/buck2:sanitizer_thread": "thread", "DEFAULT": None}),
     # The AArch64 runtime archive is the one cross-compiled target.
     target_triple = select({
         "prelude//cpu:arm64": "aarch64-unknown-linux-gnu",

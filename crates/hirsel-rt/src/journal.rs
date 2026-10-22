@@ -54,6 +54,33 @@ pub trait Journal {
     fn end(&mut self, outcome: &RunOutcome) -> io::Result<()>;
 }
 
+impl<T: Journal + ?Sized> Journal for Box<T> {
+    fn records(&self) -> bool {
+        (**self).records()
+    }
+    fn durable(&self) -> bool {
+        (**self).durable()
+    }
+    fn prepare(&mut self, prepared: &Prepared) -> io::Result<()> {
+        (**self).prepare(prepared)
+    }
+    fn event(&mut self, id: Option<u64>, event: &Event) -> io::Result<()> {
+        (**self).event(id, event)
+    }
+    fn withdraw(&mut self, id: u64) -> io::Result<()> {
+        (**self).withdraw(id)
+    }
+    fn barrier(&mut self) -> io::Result<()> {
+        (**self).barrier()
+    }
+    fn pending(&self) -> usize {
+        (**self).pending()
+    }
+    fn end(&mut self, outcome: &RunOutcome) -> io::Result<()> {
+        (**self).end(outcome)
+    }
+}
+
 /// Recording level `none`.
 pub struct NoJournal;
 impl Journal for NoJournal {
@@ -707,6 +734,14 @@ impl JournalFile for std::rc::Rc<std::cell::RefCell<SimJournalFile>> {
         self.borrow_mut().sync()
     }
 }
+impl JournalFile for std::sync::Arc<std::sync::Mutex<SimJournalFile>> {
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.lock().unwrap().append(bytes)
+    }
+    fn sync(&mut self) -> io::Result<()> {
+        self.lock().unwrap().sync()
+    }
+}
 
 /// Whether the gate lets a request through now or parks it until a barrier covers it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -726,8 +761,8 @@ struct Ticket {
 
 /// The journal gate in front of a performer: request ordinals, the issuer of each request,
 /// and group commit of `Prepared` records for requests that may park.
-pub struct Journaled {
-    journal: Box<dyn Journal>,
+pub struct Journaled<J: Journal = Box<dyn Journal>> {
+    journal: J,
     /// The default has no destination. An installed journal retains its dynamic
     /// records() contract, even when that contract changes during a run.
     absent: bool,
@@ -753,6 +788,11 @@ impl Default for Journaled {
 }
 impl Journaled {
     pub fn new(journal: Box<dyn Journal>) -> Self {
+        Self::with_destination(journal)
+    }
+}
+impl<J: Journal> Journaled<J> {
+    pub(crate) fn with_destination(journal: J) -> Self {
         Self {
             journal,
             absent: false,
@@ -764,6 +804,40 @@ impl Journaled {
             batch: 0,
             since: None,
             failed: None,
+        }
+    }
+    pub(crate) fn unrecorded(journal: J) -> Self {
+        let mut gate = Self::with_destination(journal);
+        gate.absent = true;
+        gate
+    }
+    pub(crate) fn destination(&self) -> &J {
+        &self.journal
+    }
+    pub(crate) fn map_destination<K: Journal>(self, map: impl FnOnce(J) -> K) -> Journaled<K> {
+        let Self {
+            journal,
+            absent,
+            next,
+            issues,
+            issuer,
+            tickets,
+            current,
+            batch,
+            since,
+            failed,
+        } = self;
+        Journaled {
+            journal: map(journal),
+            absent,
+            next,
+            issues,
+            issuer,
+            tickets,
+            current,
+            batch,
+            since,
+            failed,
         }
     }
     /// Keep a recording failure for the next request, which it prevents.
@@ -953,7 +1027,7 @@ mod tests {
     use super::*;
     use crate::io::{IoError, Tree};
     use hirsel_run_schema::{Failure, Returned, Site};
-    use std::{cell::RefCell, rc::Rc};
+    use std::sync::{Arc, Mutex};
 
     fn header() -> Recording {
         Recording {
@@ -982,7 +1056,7 @@ mod tests {
     }
 
     /// A run of three requests: two sequential prints and a parked one withdrawn.
-    fn run(file: Rc<RefCell<SimJournalFile>>) -> Journaled {
+    fn run(file: Arc<Mutex<SimJournalFile>>) -> Journaled {
         let mut gate = Journaled::new(Box::new(DurableJournal::create(file, &header()).unwrap()));
         gate.issuer(&[]);
         assert_eq!(gate.before(&print(b"a"), None).unwrap(), Gate::Issue);
@@ -1013,7 +1087,7 @@ mod tests {
 
     #[test]
     fn a_complete_journal_recovers_its_tape_and_outcome() {
-        let file = Rc::new(RefCell::new(SimJournalFile::default()));
+        let file = Arc::new(Mutex::new(SimJournalFile::default()));
         let mut gate = run(file.clone());
         let outcome = RunOutcome::Failed {
             primary: Failure {
@@ -1033,7 +1107,7 @@ mod tests {
             }],
         };
         gate.end(&outcome).unwrap();
-        let recovered = recover(file.borrow().bytes()).unwrap();
+        let recovered = recover(file.lock().unwrap().bytes()).unwrap();
         assert_eq!(recovered.outcome, Some(outcome));
         assert!(recovered.complete());
         assert_eq!(recovered.recording.tree, header().tree);
@@ -1041,7 +1115,7 @@ mod tests {
         assert_eq!(recovered.prepared.len(), 3);
         assert_eq!(recovered.prepared[1].task, vec![0]);
         assert_eq!(recovered.prepared[2].issue, 1);
-        assert_eq!(recovered.valid, file.borrow().bytes().len());
+        assert_eq!(recovered.valid, file.lock().unwrap().bytes().len());
     }
 
     #[test]
@@ -1103,10 +1177,10 @@ mod tests {
 
     #[test]
     fn every_record_boundary_and_torn_byte_recovers_a_valid_prefix() {
-        let file = Rc::new(RefCell::new(SimJournalFile::default()));
+        let file = Arc::new(Mutex::new(SimJournalFile::default()));
         let mut gate = run(file.clone());
         gate.end(&RunOutcome::Returned(Returned::Ok)).unwrap();
-        let bytes = file.borrow().bytes().to_vec();
+        let bytes = file.lock().unwrap().bytes().to_vec();
         let complete = recover(&bytes).unwrap();
         let header_end = MAGIC.len()
             + FRAME
@@ -1157,10 +1231,10 @@ mod tests {
 
     #[test]
     fn damage_before_the_last_record_is_corrupt_and_a_torn_last_record_is_cut() {
-        let file = Rc::new(RefCell::new(SimJournalFile::default()));
+        let file = Arc::new(Mutex::new(SimJournalFile::default()));
         let mut gate = run(file.clone());
         gate.end(&RunOutcome::Returned(Returned::Ok)).unwrap();
-        let bytes = file.borrow().bytes().to_vec();
+        let bytes = file.lock().unwrap().bytes().to_vec();
         let mut last = bytes.clone();
         *last.last_mut().unwrap() ^= 1;
         let cut = recover(&last).unwrap();
@@ -1177,20 +1251,20 @@ mod tests {
 
     #[test]
     fn the_gate_holds_parked_requests_until_a_barrier_and_bounds_the_batch() {
-        let file = Rc::new(RefCell::new(SimJournalFile::default()));
+        let file = Arc::new(Mutex::new(SimJournalFile::default()));
         let mut gate = Journaled::new(Box::new(
             DurableJournal::create(file.clone(), &header()).unwrap(),
         ));
-        let durable = file.borrow().bytes().len();
+        let durable = file.lock().unwrap().bytes().len();
         let read = |n| Request::ReadStdin { stdin: 3, max: n };
         for token in 0..BATCH_RECORDS as u64 - 1 {
             assert_eq!(gate.before(&read(token), Some(token)).unwrap(), Gate::Hold);
         }
         // Nothing reached the file: the batch is still open.
-        assert_eq!(file.borrow().bytes().len(), durable);
+        assert_eq!(file.lock().unwrap().bytes().len(), durable);
         let last = BATCH_RECORDS as u64 - 1;
         assert_eq!(gate.before(&read(last), Some(last)).unwrap(), Gate::Issue);
-        assert!(file.borrow().bytes().len() > durable);
+        assert!(file.lock().unwrap().bytes().len() > durable);
         // Only the requests that were held and whose tasks parked are released.
         for token in 0..last {
             gate.parked(token);

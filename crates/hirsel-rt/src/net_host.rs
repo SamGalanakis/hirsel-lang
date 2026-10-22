@@ -38,6 +38,14 @@ pub fn provider(readiness: Option<&crate::readiness::Readiness>) -> Box<dyn NetP
         None => Box::new(HostNet::new()),
     }
 }
+pub(crate) fn send_provider(
+    readiness: Option<&crate::readiness::Readiness>,
+) -> Box<dyn NetProvider + Send> {
+    match readiness {
+        Some(readiness) => Box::new(CooperativeNet::new(readiness.clone())),
+        None => Box::new(HostNet::new()),
+    }
+}
 
 /// Open sockets keyed by their tape-local handle.
 #[derive(Debug, Default)]

@@ -112,6 +112,10 @@ pub fn host() -> Box<dyn ProcessHost> {
     Box::new(crate::host_child::HostChildren::default())
 }
 
+pub(crate) fn send_host() -> Box<dyn ProcessHost + Send> {
+    Box::new(crate::host_child::HostChildren::default())
+}
+
 /// What a host provider performs after every check passed. Its answer is the completion
 /// the request returns, which the policy validates: in replay, the recorded one.
 pub enum HostCall<'a> {

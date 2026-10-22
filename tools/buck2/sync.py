@@ -867,7 +867,7 @@ def first_party(meta: dict) -> str:
         runtime_archives = RUNTIME_ARCHIVES if name in NATIVE_TESTS else None
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
-            return dict(data=test_data(binary, name, package_dir, src), runtime_archives=runtime_archives,
+            return dict(data=test_data(binary, name, package_dir, src), runtime_archives=None if binary == "hirsel-rt-unittest" else runtime_archives,
                         image=IMAGE if name in IMAGED_TESTS else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
@@ -975,6 +975,13 @@ def first_party(meta: dict) -> str:
                             image=IMAGE, objects="//:hirsel-std-objects", std=Raw('glob(["stdlib/std@1/**"])'), visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
                             data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
+    # Narrow real-I/O sanitizer/overlap probe: normal production dependencies only.
+    out.append("\n" + call("hirsel_binary", name="io-real-workers", bin_name="io-real-workers", crate="io_real_workers",
+                            crate_root="tools/tests/io_real_tsan.rs", srcs=["tools/tests/io_real_tsan.rs"],
+                            deps=["//:hirsel-rt", "//third-party:tempfile"], features=[],
+                            manifest_dir="crates/hirsel-rt", package_name="hirsel-rt", version="0.1.0", edition="2024"))
+    out.append("\n" + call("hirsel_script_test", name="gate-io-real-tsan", script="tools/tests/io_real_tsan.py", full=False,
+                            data=[], sanitizer="thread", files_env={"HIRSEL_IO_REAL_TSAN": ":io-real-workers"}))
     out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             image=IMAGE, runtime_archives=RUNTIME_ARCHIVES,

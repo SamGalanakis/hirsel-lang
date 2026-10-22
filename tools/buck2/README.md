@@ -801,3 +801,21 @@ from test history with `--from-history <history> --binary gate-native-changed`
 (and `gate-native-cranelift-changed`). Partial selections retain timings for
 unobserved programs. The times guide scheduling; they are not cross-session
 performance comparisons.
+
+## Real I/O ThreadSanitizer control
+
+The opt-in `thread` platform instruments the runtime and its Rust dependencies,
+using an instrumented std built by the exact compiler in `toolchain-lock.json`.
+Prepare std in this checkout, then run the eight-worker control on the pool:
+
+```sh
+HIRSEL_MEMORY_LIMIT=2G HIRSEL_JOBS=2 tools/capped python3 tools/buck2/prepare_tsan.py
+.buck2/bin/buck2 test -c hirsel.sanitizer=thread --target-platforms //tools/buck2:thread //:gate-io-real-tsan
+```
+
+Proc macros and build scripts keep the ordinary host toolchain. The generated
+`tools/buck2/toolchains/tsan-files/` is private to this checkout and never committed.
+The sanitizer child's address-space guard is lifted for shadow mappings; its
+normal pool RSS reservation still applies. The control refuses an uninstrumented
+binary. `//:io-real-workers` is also a small file-I/O probe: arguments are worker
+count (1/2/4/8) and writes per file (default 16, 64 KiB each, eight files total).

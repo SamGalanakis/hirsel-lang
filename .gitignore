@@ -44,3 +44,4 @@ __pycache__/
 /bench/micro/http/profile-*.tsv
 /bench/**/RESULTS-*
 /tools/compiler-bench/RESULTS-*
+/tools/buck2/toolchains/tsan-files/

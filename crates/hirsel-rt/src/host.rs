@@ -66,23 +66,46 @@ impl Write for Sink {
 /// [`ConcurrentAdapter`](crate::io_concurrent::ConcurrentAdapter) writes to (design §6 Io).
 /// Clones share one storage, whose identity is its logical key ([`SendSink::storage`]).
 #[derive(Clone)]
-pub struct SendSink(Arc<Mutex<dyn Write + Send>>);
+pub struct SendSink {
+    writer: Arc<Mutex<dyn Write + Send>>,
+    resource: crate::io_keys::Storage,
+}
 impl SendSink {
     pub fn new(output: impl Write + Send + 'static) -> Self {
-        Self(Arc::new(Mutex::new(output)))
+        Self {
+            writer: Arc::new(Mutex::new(output)),
+            resource: crate::io_keys::Storage::Unknown,
+        }
+    }
+    /// Explicit shared storage: distinct wrappers of the same storage keep one identity.
+    pub fn shared<W: Write + Send + 'static>(writer: Arc<Mutex<W>>) -> Self {
+        let resource = crate::io_keys::Storage::Shared(Arc::as_ptr(&writer).cast::<()>() as usize);
+        Self { writer, resource }
+    }
+    /// A pinned file sink, including aliasing through another descriptor or an open file.
+    pub fn file(file: std::fs::File) -> Self {
+        use std::os::fd::AsRawFd;
+        let resource = crate::io_keys::Storage::of_descriptor(file.as_raw_fd());
+        Self {
+            writer: Arc::new(Mutex::new(file)),
+            resource,
+        }
+    }
+    pub fn resource_storage(&self) -> crate::io_keys::Storage {
+        self.resource
     }
     /// A sink that keeps what the run writes, readable through the returned buffer.
     pub fn capture() -> (Self, SendCaptured) {
         let buffer = SendCaptured::default();
-        (Self::new(buffer.clone()), buffer)
+        (Self::shared(buffer.0.clone()), buffer)
     }
     /// The identity of this sink's storage, shared by its clones.
     pub fn storage(&self) -> usize {
-        Arc::as_ptr(&self.0).cast::<()>() as usize
+        Arc::as_ptr(&self.writer).cast::<()>() as usize
     }
     fn lock(&self) -> std::sync::MutexGuard<'_, dyn Write + Send + 'static> {
         // A writer that panicked mid-write leaves bytes, not broken invariants.
-        self.0
+        self.writer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }

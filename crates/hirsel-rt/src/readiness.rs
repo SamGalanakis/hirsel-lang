@@ -32,17 +32,17 @@
 use crate::id_map::{IdMap, IdSet};
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
-use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 #[derive(Clone, Default)]
-pub struct Readiness(Rc<RefCell<ReadyState>>, u64);
+pub struct Readiness(Arc<Mutex<ReadyState>>, u64, Arc<AtomicU64>);
 /// The token bits a run's tag occupies: above every interpreter and host wait token's
 /// counter, below the host's own token ranges (bits 62 and 63).
 const TAG_SHIFT: u32 = 48;
@@ -57,7 +57,8 @@ impl std::fmt::Debug for Readiness {
 }
 #[derive(Default)]
 struct ReadyState {
-    current: u64,
+    /// Interrupt a driver that is sleeping while a worker changes its interests.
+    wake: Option<OwnedFd>,
     /// Tagged execution runs share a driver: one run must never wait by itself.
     shared: bool,
     virtual_time: Option<u64>,
@@ -117,6 +118,27 @@ pub(crate) struct Pending {
     timer: Option<Instant>,
     virtual_timer: Option<u64>,
 }
+/// A provider's mutable request row. Dropping it publishes changed interests to the driver.
+pub(crate) struct PendingGuard<'a> {
+    state: MutexGuard<'a, ReadyState>,
+    token: u64,
+}
+impl std::ops::Deref for PendingGuard<'_> {
+    type Target = Pending;
+    fn deref(&self) -> &Pending {
+        &self.state.pending[&self.token]
+    }
+}
+impl std::ops::DerefMut for PendingGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Pending {
+        self.state.pending.get_mut(&self.token).unwrap()
+    }
+}
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.state.notify_driver();
+    }
+}
 impl Readiness {
     /// The handle of run `tag` of this execution (the root is 0) on the same readiness.
     pub fn tagged(&self, tag: u64) -> Self {
@@ -125,7 +147,11 @@ impl Readiness {
             tag << TAG_SHIFT & !TAG_MASK == 0,
             "a run tag within 14 bits"
         );
-        Self(self.0.clone(), tag << TAG_SHIFT)
+        Self(
+            self.0.clone(),
+            tag << TAG_SHIFT,
+            Arc::new(AtomicU64::new(tag << TAG_SHIFT)),
+        )
     }
     /// `token` under this run's tag. Idempotent, so a tagged token passes through.
     fn tag(&self, token: u64) -> u64 {
@@ -139,12 +165,12 @@ impl Readiness {
         token & TAG_MASK == self.1
     }
     pub(crate) fn mark_shared(&self) {
-        self.0.borrow_mut().shared = true;
+        self.0.lock().unwrap().shared = true;
     }
 
     /// No other host source or external stop descriptor needs this driver.
     pub(crate) fn exclusive_socket(&self) -> bool {
-        let state = self.0.borrow();
+        let state = self.0.lock().unwrap();
         !state.shared
             && state.wakes.is_empty()
             && state.virtual_time.is_none()
@@ -155,7 +181,7 @@ impl Readiness {
     /// Shared execution drivers always decline: another run may need to progress.
     /// Rust a7c37f9f socket/unix.rs:180-229 supplies the poll/deadline/EINTR loop.
     pub(crate) fn wait_current(&self) -> Result<bool, AdapterError> {
-        let state = self.0.borrow();
+        let state = self.0.lock().unwrap();
         if state.shared
             || !state.wakes.is_empty()
             || state.virtual_time.is_some()
@@ -163,7 +189,7 @@ impl Readiness {
         {
             return Ok(false);
         }
-        let Some(pending) = state.pending.get(&state.current) else {
+        let Some(pending) = state.pending.get(&self.2.load(Ordering::Relaxed)) else {
             return Ok(false);
         };
         let Some((fd, events)) = pending.interest else {
@@ -173,6 +199,7 @@ impl Readiness {
             return Ok(false);
         }
         let deadline = pending.deadline;
+        drop(state);
         let mut row = libc::pollfd {
             fd,
             events,
@@ -212,7 +239,7 @@ impl Readiness {
     /// a callee run), which the run reads at its next scheduling point. A run whose only
     /// remaining sources are such descriptors is still Blocked (CONC-8).
     pub fn wake_on(&self, fd: std::os::fd::RawFd) -> Result<(), AdapterError> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         state.wakes.insert(fd as u64);
         state
             .fds
@@ -230,52 +257,58 @@ impl Readiness {
     /// The delivery `token` waits for arrived: it is ready at the next scheduling point.
     pub fn deliver(&self, token: u64) {
         let token = self.tag(token);
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         if state.pending.get(&token).is_some_and(|p| p.delivery) {
             state.woken.insert(token);
         }
+        state.notify_driver();
     }
     /// The request blocked under the entered token waits on a scripted world.
     pub(crate) fn scripted(&self) {
-        let progress = self.0.borrow().progress;
+        let progress = self.0.lock().unwrap().progress;
         self.pending().scripted = Some(progress);
     }
     /// A network request completed: parked scripted waits are retried at the next
     /// scheduling point.
     pub(crate) fn progressed(&self) {
-        self.0.borrow_mut().progress += 1;
+        let mut state = self.0.lock().unwrap();
+        state.progress += 1;
+        state.notify_driver();
     }
     /// Harness-only virtual time: samples are stable while runnable work remains.
     pub(crate) fn virtual_clock(ticks: u64) -> Self {
         let readiness = Self::default();
-        readiness.0.borrow_mut().virtual_time = Some(ticks);
+        readiness.0.lock().unwrap().virtual_time = Some(ticks);
         readiness
     }
     pub(crate) fn virtual_time(&self) -> Option<u64> {
-        self.0.borrow().virtual_time
+        self.0.lock().unwrap().virtual_time
     }
-    pub(crate) fn pending(&self) -> std::cell::RefMut<'_, Pending> {
-        std::cell::RefMut::map(self.0.borrow_mut(), |state| {
-            let token = state.current;
-            state.touched.insert(token);
-            state.pending.entry(token).or_default()
-        })
+    pub(crate) fn pending(&self) -> PendingGuard<'_> {
+        let mut state = self.0.lock().unwrap();
+        let token = self.2.load(Ordering::Relaxed);
+        state.touched.insert(token);
+        state.pending.entry(token).or_default();
+        PendingGuard { state, token }
     }
 
     /// Progress already committed by the current operation, without constructing
     /// a Pending row for the usual single successful send.
     pub(crate) fn offset(&self) -> usize {
-        let state = self.0.borrow();
-        state.pending.get(&state.current).map_or(0, |p| p.offset)
+        let state = self.0.lock().unwrap();
+        state
+            .pending
+            .get(&self.2.load(Ordering::Relaxed))
+            .map_or(0, |p| p.offset)
     }
 
     /// Select the opaque operation token before asking RealIo to execute a request.
     pub fn enter(&self, token: u64) {
-        self.0.borrow_mut().current = self.tag(token);
+        self.2.store(self.tag(token), Ordering::Relaxed);
     }
     pub fn finish(&self, token: u64) {
         let token = self.tag(token);
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         // Every side index names a Pending row. A ready syscall creates none.
         let Some(pending) = state.pending.remove(&token) else {
             return;
@@ -287,12 +320,13 @@ impl Readiness {
         if let Some((fd, _)) = pending.registered {
             state.unregister(token, fd);
         }
+        state.notify_driver();
     }
     /// The task of the request blocked under `token` parked: from the next scheduling point
     /// on, [`ready`](Self::ready) reports the token when its interest is ready.
     pub fn parked(&self, token: u64) {
         let token = self.tag(token);
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let virtual_time = state.virtual_time;
         let Some(pending) = state.pending.get_mut(&token) else {
             return;
@@ -306,12 +340,14 @@ impl Readiness {
         if due {
             state.woken.insert(token);
         }
+        state.notify_driver();
     }
     /// After a packet is sent or a write is accepted, the operation must complete
     /// with its own outcome rather than report an effect-free cancellation.
     pub fn cancellable(&self, token: u64) -> bool {
         self.0
-            .borrow()
+            .lock()
+            .unwrap()
             .pending
             .get(&self.tag(token))
             .is_none_or(|p| !p.committed)
@@ -320,7 +356,7 @@ impl Readiness {
     /// ready, a deadline passed, or the token waits on nothing epoll can watch), in token
     /// order. Never blocks; each ready token's operation is re-issued by the caller.
     pub fn ready(&self) -> Result<Vec<u64>, AdapterError> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let woken = Self::poll(&mut state)?;
         let others: Vec<u64> = woken
             .members_unordered()
@@ -349,7 +385,7 @@ impl Readiness {
     /// Whether [`ready`](Self::ready) would report a token of this run now, without taking
     /// any: what epoll and the timers found waits for that scheduling point.
     pub fn has_ready(&self) -> Result<bool, AdapterError> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         let woken = Self::poll(&mut state)?;
         state.woken = woken;
         let state = &*state;
@@ -380,7 +416,7 @@ impl Readiness {
     /// deadline is recorded as the token's interest and the caller parks.
     pub(crate) fn timer(&self, deadline: u64) -> Result<bool, AdapterError> {
         if let Some(now) = self.virtual_time() {
-            let token = self.0.borrow().current;
+            let token = self.2.load(Ordering::Relaxed);
             if now >= deadline {
                 self.finish(token);
                 return Ok(true);
@@ -397,7 +433,7 @@ impl Readiness {
             return Err(AdapterError::Unsupported("host monotonic clock".into()));
         }
         let ticks = (now.tv_sec as u64) * 1_000_000_000 + now.tv_nsec as u64;
-        let token = self.0.borrow().current;
+        let token = self.2.load(Ordering::Relaxed);
         if ticks >= deadline {
             self.finish(token);
             return Ok(true);
@@ -410,7 +446,7 @@ impl Readiness {
     /// result means this provider has no external readiness source (e.g. the remaining waits
     /// are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.0.lock().unwrap();
         state.sync()?;
         if !state.progressed_scripts().is_empty() {
             return Ok(true);
@@ -442,17 +478,37 @@ impl Readiness {
                 .saturating_add(u128::from(!left.is_zero()))
                 .min(libc::c_int::MAX as u128) as libc::c_int
         });
-        let mut woken = std::mem::take(&mut state.woken);
-        if state.fds.is_empty() {
-            // SAFETY: a plain sleep; no descriptor is involved. A signal restarts it.
-            while unsafe { libc::poll(std::ptr::null_mut(), 0, timeout) } < 0 {
-                if errno() != libc::EINTR {
-                    return Err(AdapterError::Unsupported("host readiness poll".into()));
-                }
+        state.driver_wake()?;
+        // Keep epoll alive, but release the state lock across the blocking syscall.
+        // A provider's PendingGuard wakes this descriptor after changing an interest.
+        let epoll = state
+            .epoll
+            .as_ref()
+            .unwrap()
+            .try_clone()
+            .map_err(|_| AdapterError::Unsupported("host readiness epoll clone".into()))?;
+        drop(state);
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 256];
+        let n = loop {
+            // SAFETY: epoll is owned and events has room for every returned event.
+            let n = unsafe {
+                libc::epoll_wait(
+                    epoll.as_raw_fd(),
+                    events.as_mut_ptr(),
+                    events.len() as i32,
+                    timeout,
+                )
+            };
+            if n >= 0 {
+                break n as usize;
             }
-        } else {
-            state.epoll_events(timeout, &mut woken)?;
-        }
+            if errno() != libc::EINTR {
+                return Err(AdapterError::Unsupported("host readiness epoll".into()));
+            }
+        };
+        let mut state = self.0.lock().unwrap();
+        let mut woken = std::mem::take(&mut state.woken);
+        state.collect_events(&events[..n], &mut woken);
         state.woken = woken;
         Ok(true)
     }
@@ -624,23 +680,61 @@ impl ReadyState {
                 }
                 return Err(AdapterError::Unsupported("host readiness epoll".into()));
             }
-            for event in &events[..n as usize] {
-                let fd = event.u64 as libc::c_int;
-                let revents = event.events;
-                for (token, wanted) in self.fds.get(&(fd as u64)).into_iter().flatten() {
-                    let wanted =
-                        (*wanted as u16 as u32) | libc::EPOLLERR as u32 | libc::EPOLLHUP as u32;
-                    if revents & wanted != 0 {
-                        ready.insert(*token);
-                    }
-                }
-            }
+            self.collect_events(&events[..n as usize], ready);
             if (n as usize) < BATCH {
                 return Ok(());
             }
             // A full batch: take the rest without waiting.
             timeout = 0;
         }
+    }
+    fn collect_events(&self, events: &[libc::epoll_event], ready: &mut IdSet) {
+        for event in events {
+            let fd = event.u64 as libc::c_int;
+            if self
+                .wake
+                .as_ref()
+                .is_some_and(|wake| wake.as_raw_fd() == fd)
+            {
+                let mut value = 0u64;
+                // SAFETY: a live eventfd and an eight-byte writable buffer.
+                unsafe {
+                    libc::read(fd, (&mut value as *mut u64).cast(), 8);
+                }
+                continue;
+            }
+            let revents = event.events;
+            for (token, wanted) in self.fds.get(&(fd as u64)).into_iter().flatten() {
+                let wanted =
+                    (*wanted as u16 as u32) | libc::EPOLLERR as u32 | libc::EPOLLHUP as u32;
+                if revents & wanted != 0 {
+                    ready.insert(*token);
+                }
+            }
+        }
+    }
+    fn notify_driver(&self) {
+        if let Some(wake) = &self.wake {
+            let value = 1u64;
+            // SAFETY: a live nonblocking eventfd and an eight-byte input buffer.
+            unsafe {
+                libc::write(wake.as_raw_fd(), (&value as *const u64).cast(), 8);
+            }
+        }
+    }
+    fn driver_wake(&mut self) -> Result<(), AdapterError> {
+        if self.wake.is_some() {
+            return Ok(());
+        }
+        // SAFETY: no pointers; the fresh descriptor is owned immediately.
+        let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        if fd < 0 {
+            return Err(AdapterError::Unsupported("host readiness wake".into()));
+        }
+        let wake = unsafe { OwnedFd::from_raw_fd(fd) };
+        self.control(fd, libc::POLLIN)?;
+        self.wake = Some(wake);
+        Ok(())
     }
     /// Add the tokens whose deadline has passed.
     fn due(&mut self, ready: &mut IdSet) {
@@ -858,13 +952,14 @@ mod tests {
         readiness.pending().interest = Some((watched.as_raw_fd(), libc::POLLIN));
         peer.write_all(b"ready").unwrap();
         assert_eq!(readiness.wait_current(), Ok(true));
-        assert!(readiness.0.borrow().epoll.is_none());
+        assert!(readiness.0.lock().unwrap().epoll.is_none());
         let (wake, _sender) = pair();
         readiness.wake_on(wake.as_raw_fd()).unwrap();
         assert_eq!(readiness.wait_current(), Ok(false));
         readiness
             .0
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .wakes
             .remove(&(wake.as_raw_fd() as u64));
         readiness.tagged(0);
@@ -1063,5 +1158,58 @@ mod tests {
         readiness.progressed();
         assert!(readiness.wait().unwrap());
         assert_eq!(readiness.ready().unwrap(), [1]);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn sleeping_driver_releases_state_and_observes_worker_delivery() {
+        let readiness = Readiness::default();
+        readiness.enter(10);
+        {
+            let mut pending = readiness.pending();
+            pending.deadline = Some(Instant::now() + Duration::from_secs(5));
+            pending.delivery = true;
+        }
+        readiness.parked(10);
+        let worker = readiness.clone();
+        let joined = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            worker.deliver(10);
+        });
+        let start = Instant::now();
+        assert!(readiness.wait().unwrap());
+        joined.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "driver held the state lock"
+        );
+        assert_eq!(readiness.ready().unwrap(), [10]);
+    }
+}
+
+#[cfg(test)]
+mod tagged_worker_tests {
+    use super::*;
+    #[test]
+    fn tagged_runs_have_independent_entered_requests_on_one_driver() {
+        let readiness = Readiness::default();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        std::thread::scope(|scope| {
+            for tag in 0..8 {
+                let run = readiness.tagged(tag);
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    run.enter(tag + 1);
+                    barrier.wait();
+                    run.pending().offset = tag as usize + 100;
+                    assert_eq!(run.offset(), tag as usize + 100);
+                });
+            }
+        });
+        assert_eq!(readiness.0.lock().unwrap().pending.len(), 8);
     }
 }

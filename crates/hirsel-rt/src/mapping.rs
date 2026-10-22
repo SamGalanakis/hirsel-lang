@@ -129,6 +129,10 @@ pub(crate) struct Mapping {
     length: u64,
     file: File,
 }
+// SAFETY: the mapping owns its address range and descriptor; moving ownership never
+// moves the mapped pages. Access/unmap are serialized by the adapter; the signal table
+// uses atomics and the immutable bytes are not exposed through a Rust mutable reference.
+unsafe impl Send for Mapping {}
 impl Mapping {
     /// Map `file`'s first `length` bytes behind a static Bytes block.
     pub(crate) fn new(file: File, length: u64) -> Result<Self, IoError> {
@@ -216,6 +220,9 @@ impl Mapping {
             }
         }
         Ok(mapping)
+    }
+    pub(crate) fn storage(&self) -> crate::io_keys::Storage {
+        crate::io_keys::Storage::of_descriptor(self.file.as_raw_fd())
     }
     /// The address of the static block over the mapped bytes.
     pub(crate) fn block(&self) -> usize {

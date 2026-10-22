@@ -133,7 +133,7 @@ pub fn durable(
 /// output or enter a program-readable mount. Failure disables diagnostic timing.
 fn timing_journal(
     io: &mut RealIo,
-    journal: Box<dyn crate::journal::Journal>,
+    journal: Box<dyn crate::journal::Journal + Send>,
     path: std::path::PathBuf,
     outputs: &[(&str, &File)],
 ) {
@@ -150,11 +150,11 @@ fn timing_journal(
         Some((capture, output))
     });
     if let Some((capture, output)) = timing {
-        io.journal_to(Box::new(crate::observation_timing::TimingJournal::new(
+        io.send_journal_to(Box::new(crate::observation_timing::TimingJournal::new(
             journal, path, output, capture,
         )));
     } else {
-        io.journal_to(journal);
+        io.send_journal_to(journal);
     }
 }
 

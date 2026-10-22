@@ -59,6 +59,13 @@ impl CooperativeStdin {
             token: None,
         })
     }
+    pub(crate) fn storage(&self) -> crate::io_keys::Storage {
+        self.fd
+            .as_ref()
+            .map_or(crate::io_keys::Storage::Shared(0), |fd| {
+                crate::io_keys::Storage::of_descriptor(fd.as_raw_fd())
+            })
+    }
     /// This pin, holding `token` for as long as it lives.
     pub fn holding(mut self, token: crate::host::ProcessStdin) -> Self {
         self.token = Some(token);
