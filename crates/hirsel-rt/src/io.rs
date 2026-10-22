@@ -2674,7 +2674,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "Close");
-    let closed = if crate::tasks::free::host::native::enabled(ctx) {
+    let closed = if crate::tasks::free::host::native::enabled(ctx)
+        || crate::tasks::ordered::engine::on(ctx)
+    {
         unsafe {
             crate::stop::check(
                 ctx,
@@ -2886,7 +2888,9 @@ unsafe fn native_print(
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, if stderr { "PrintStderr" } else { "Print" });
-    if crate::tasks::free::host::native::enabled(ctx) {
+    if crate::tasks::free::host::native::enabled(ctx)
+        || (crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx))
+    {
         let request = if stderr {
             Request::PrintStderr {
                 stderr: handle,
@@ -2983,6 +2987,12 @@ unsafe fn native_print(
         }
     }
     let completion = unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) };
+    if ordered {
+        return unsafe {
+            crate::tasks::ordered::host::concurrent::finish_home(ctx, Ok(completion), true, false)
+        }
+        .expect("print completion");
+    }
     unsafe { crate::tasks::yield_now(&mut *ctx) };
     completion
 }
@@ -3004,6 +3014,17 @@ unsafe fn native_call(ctx: *mut crate::TaskCtx, request: Request) -> Completion 
     if crate::tasks::free::host::native::enabled(ctx) {
         return unsafe {
             crate::tasks::free::host::native::finish_result(ctx, Ok(completion), operation, parked)
+        }
+        .expect("native call has a completion");
+    }
+    if crate::tasks::ordered::engine::on(ctx) {
+        return unsafe {
+            crate::tasks::ordered::host::concurrent::finish_home(
+                ctx,
+                Ok(completion),
+                operation,
+                parked,
+            )
         }
         .expect("native call has a completion");
     }
@@ -3045,6 +3066,11 @@ pub(crate) unsafe fn capability_call(
     if crate::tasks::free::host::native::enabled(ctx) {
         return unsafe {
             crate::tasks::free::host::native::finish_result(ctx, completion, operation, parked)
+        };
+    }
+    if crate::tasks::ordered::engine::on(ctx) {
+        return unsafe {
+            crate::tasks::ordered::host::concurrent::finish_home(ctx, completion, operation, parked)
         };
     }
     if operation && !parked {

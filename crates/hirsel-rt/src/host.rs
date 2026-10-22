@@ -556,6 +556,31 @@ impl BodyRun {
         })
     }
 
+    /// A bounded callback test may wait for its known stopped worker before
+    /// inspecting the final trace. Production never waits for lingering code.
+    #[cfg(test)]
+    pub(crate) fn run_traced_after_bounded_stop(
+        self,
+        setup: impl FnOnce(*mut crate::TaskCtx),
+        body: impl FnMut(*mut crate::TaskCtx) -> u8 + Send + 'static,
+    ) -> (
+        BodyOutcome,
+        Result<crate::tasks::ordered::events::Trace, &'static str>,
+    ) {
+        self.run_impl(setup, body, |ctx, _| unsafe {
+            let run = (*ctx).run_ptr();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while crate::pool::busy(&*run) != 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "bounded stopped worker did not leave"
+                );
+                std::thread::yield_now();
+            }
+            crate::tasks::ordered::events::Trace::capture(run, 0)
+        })
+    }
+
     fn run_impl<T>(
         self,
         setup: impl FnOnce(*mut crate::TaskCtx),

@@ -40,6 +40,31 @@ pub(crate) fn request_keys(ctx: *mut TaskCtx, keys: Option<crate::io_keys::KeySe
 }
 
 impl Log {
+    pub(super) fn terminal_home_phases(
+        &self,
+    ) -> Result<BTreeMap<(Vec<u32>, u64), bool>, &'static str> {
+        self.home_phases
+            .iter()
+            .map(|(key, phase)| {
+                if !phase.valid || self.invalid_home.contains(key) {
+                    return Err("invalid terminal home phase");
+                }
+                let initial = self
+                    .host_initials
+                    .get(key)
+                    .ok_or("missing terminal first attempt")?;
+                if initial.observation.is_none()
+                    || (!phase.parked
+                        && phase.result.is_none()
+                        && initial.result != Err(AdapterError::Blocked))
+                {
+                    return Err("missing terminal host phase evidence");
+                }
+                Ok((key.clone(), phase.result.is_some()))
+            })
+            .collect()
+    }
+
     /// Home adapters declare no worker key graph: all their attempts use the
     /// existing conservative coupled domain. Names are still field-qualified;
     /// no native handle word enters the canonical result.

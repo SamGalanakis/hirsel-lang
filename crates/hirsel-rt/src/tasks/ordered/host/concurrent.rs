@@ -38,6 +38,154 @@ impl Drop for Owner {
     }
 }
 
+/// Requests stay in the task's existing owner before entry, through metadata
+/// callbacks and while a first attempt obtains its token. Only the value
+/// moved into the adapter call leaves it; a parked retry moves into its row.
+pub(crate) struct HomeRequest {
+    ctx: Option<*mut TaskCtx>,
+    local: Option<Request>,
+    local_result: Option<Result<Completion, AdapterError>>,
+}
+impl HomeRequest {
+    pub(crate) unsafe fn new(ctx: *mut TaskCtx, request: Request, ordered: bool) -> Self {
+        if ordered {
+            assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
+            unsafe {
+                (*ctx).pending_ordered_host = Some(Box::new(Pending {
+                    request: Some(request),
+                    result: None,
+                }))
+            };
+            Self {
+                ctx: Some(ctx),
+                local: None,
+                local_result: None,
+            }
+        } else {
+            Self {
+                ctx: None,
+                local: Some(request),
+                local_result: None,
+            }
+        }
+    }
+    pub(crate) fn get(&self) -> &Request {
+        match self.ctx {
+            Some(ctx) => unsafe {
+                (*ctx)
+                    .pending_ordered_host
+                    .as_ref()
+                    .unwrap()
+                    .request
+                    .as_ref()
+                    .unwrap()
+            },
+            None => self.local.as_ref().unwrap(),
+        }
+    }
+    pub(crate) fn take(&mut self, retry: bool) -> Request {
+        let slot = match self.ctx {
+            Some(ctx) => unsafe { &mut (*ctx).pending_ordered_host.as_mut().unwrap().request },
+            None => &mut self.local,
+        };
+        let request = slot.take().unwrap();
+        if retry {
+            *slot = Some(request.clone());
+        }
+        request
+    }
+    pub(crate) fn save_result(&mut self, result: Result<Completion, AdapterError>) {
+        let slot = match self.ctx {
+            Some(ctx) => unsafe { &mut (*ctx).pending_ordered_host.as_mut().unwrap().result },
+            None => &mut self.local_result,
+        };
+        assert!(slot.replace(result).is_none());
+    }
+    pub(crate) fn result(&self) -> &Result<Completion, AdapterError> {
+        match self.ctx {
+            Some(ctx) => unsafe {
+                (*ctx)
+                    .pending_ordered_host
+                    .as_ref()
+                    .unwrap()
+                    .result
+                    .as_ref()
+                    .unwrap()
+            },
+            None => self.local_result.as_ref().unwrap(),
+        }
+    }
+    pub(crate) fn take_result(&mut self) -> Result<Completion, AdapterError> {
+        match self.ctx {
+            Some(ctx) => unsafe {
+                (*ctx)
+                    .pending_ordered_host
+                    .as_mut()
+                    .unwrap()
+                    .result
+                    .take()
+                    .unwrap()
+            },
+            None => self.local_result.take().unwrap(),
+        }
+    }
+    pub(crate) unsafe fn close(
+        &mut self,
+        result: Result<Completion, AdapterError>,
+    ) -> Stopped<Result<Completion, AdapterError>> {
+        let ctx = self.ctx.expect("Ordered close owner");
+        unsafe { (*ctx).pending_ordered_host.as_mut().unwrap().result = Some(result) };
+        super::finish(ctx, Next::Keep)?;
+        Ok(unsafe {
+            (*ctx)
+                .pending_ordered_host
+                .as_mut()
+                .unwrap()
+                .result
+                .take()
+                .unwrap()
+        })
+    }
+}
+impl Drop for HomeRequest {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.ctx {
+            unsafe {
+                (*ctx).pending_ordered_host.take();
+            }
+        }
+    }
+}
+
+/// A home completion owns heap buffers even after the adapter loan ended.
+/// Keep them in TaskCtx across the post-effect yield, exactly as the worker
+/// route does; abandoned Rust continuations are never unwound.
+pub(crate) unsafe fn finish_home(
+    ctx: *mut TaskCtx,
+    completion: Result<Completion, ()>,
+    operation: bool,
+    parked: bool,
+) -> Result<Completion, ()> {
+    assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
+    unsafe {
+        (*ctx).pending_ordered_host = Some(Box::new(Pending {
+            request: None,
+            result: completion.ok().map(Ok),
+        }))
+    };
+    let _owner = Owner(ctx);
+    if operation && !parked {
+        unsafe { crate::stop::check(ctx, super::finish(ctx, Next::Yield)) };
+    } else if !operation {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
+    match unsafe { (*ctx).pending_ordered_host.as_mut().unwrap().result.take() } {
+        Some(Ok(value)) => Ok(value),
+        None => Err(()),
+        Some(Err(_)) => unreachable!("home capability conversion already checked"),
+    }
+}
+
 /// # Safety
 /// The running Ordered task owns its role, request and adapter lifetime.
 /// Parkable requests require the run-owned service installed before execution.

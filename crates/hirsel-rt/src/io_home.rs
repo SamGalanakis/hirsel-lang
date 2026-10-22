@@ -5,11 +5,53 @@
 use crate::context::RunShared;
 use crate::io::*;
 
+pub(crate) struct Snapshot {
+    pub(crate) result: Result<Completion, AdapterError>,
+    pub(crate) discovery: Option<Result<crate::host_waits::Discovery, &'static str>>,
+    pub(crate) output: Result<Option<Vec<u8>>, &'static str>,
+}
+
 pub(crate) struct HomeAdapter {
     pub(crate) adapter: *mut dyn Adapter,
     pub(crate) run: *mut RunShared,
 }
 impl HomeAdapter {
+    fn observer(&self) -> Option<u32> {
+        let ctx = crate::stop::running();
+        // Home poll callbacks already have their own source-free observer.
+        if ctx.is_null() || unsafe { (*self.run).ordered_roots.get().is_none() } {
+            return None;
+        }
+        Some(unsafe { (*ctx).task_id })
+    }
+
+    fn retain(
+        &self,
+        task: u32,
+        adapter: &dyn Adapter,
+        request: &Request,
+        result: &Result<Completion, AdapterError>,
+        count: Option<u64>,
+    ) {
+        let declared = adapter.keys(request).is_some();
+        let bytes = match request {
+            Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
+                Some(bytes.as_slice())
+            }
+            _ => None,
+        };
+        let snapshot = Snapshot {
+            result: crate::tasks::ordered::events::owned_host_result(result),
+            discovery: declared.then(|| crate::host_waits::snapshot(adapter, result)),
+            output: crate::tasks::ordered::events::retained_output(bytes, result, count),
+        };
+        assert!(
+            unsafe { (*self.run).ordered_home_results.lock().unwrap() }
+                .insert(task, snapshot)
+                .is_none()
+        );
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut dyn Adapter) -> T) -> T {
         let (mut f, mut out) = (Some(f), None);
         // SAFETY: the home loop alone dereferences the adapter. Its claim/withdraw
@@ -96,7 +138,25 @@ impl Adapter for HomeAdapter {
         stderr: bool,
         bytes: &[u8],
     ) -> (Result<Completion, AdapterError>, Option<u64>) {
-        self.with(|adapter| adapter.print_observed(handle, stderr, bytes))
+        let task = self.observer();
+        self.with(|adapter| {
+            let result = adapter.print_observed(handle, stderr, bytes);
+            if let Some(task) = task {
+                let request = if stderr {
+                    Request::PrintStderr {
+                        stderr: handle,
+                        bytes: bytes.to_vec(),
+                    }
+                } else {
+                    Request::Print {
+                        stdout: handle,
+                        bytes: bytes.to_vec(),
+                    }
+                };
+                self.retain(task, adapter, &request, &result.0, result.1);
+            }
+            result
+        })
     }
     fn print(
         &mut self,
@@ -119,7 +179,16 @@ impl Adapter for HomeAdapter {
     }
 
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
-        self.with(|adapter| adapter.call(request))
+        let this = &*self;
+        let task = self.observer();
+        let observed = task.map(|_| request.clone());
+        this.with(move |adapter| {
+            let result = adapter.call(request);
+            if let Some(task) = task {
+                this.retain(task, adapter, observed.as_ref().unwrap(), &result, None);
+            }
+            result
+        })
     }
 
     fn wants_issuer(&self) -> bool {

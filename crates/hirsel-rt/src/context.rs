@@ -325,6 +325,9 @@ pub(crate) struct RunShared {
     /// Ordered concurrent requests retain their adapter through saved waits.
     pub(crate) ordered_io:
         std::sync::OnceLock<std::sync::Arc<crate::tasks::ordered::host::concurrent::Service>>,
+    /// Trace-only bounded home results that have not transferred to their issuer.
+    pub(crate) ordered_home_results:
+        std::sync::Mutex<std::collections::BTreeMap<u32, crate::io_home::Snapshot>>,
     /// Explicit Free host admission: owned concurrent requests and driver wake.
     pub(crate) free_io:
         std::sync::OnceLock<std::sync::Arc<crate::tasks::free::host::concurrent::Service>>,
@@ -892,6 +895,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         profile_output: RoleCell::new(None),
         ordered_roots: Default::default(),
         ordered_io: Default::default(),
+        ordered_home_results: Default::default(),
         free_io: Default::default(),
         free_native_io: Default::default(),
         free_native_spans: Default::default(),

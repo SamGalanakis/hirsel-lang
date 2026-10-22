@@ -62,6 +62,8 @@ mod home_graph_tests;
 #[cfg(test)]
 mod home_prefix_tests;
 #[cfg(test)]
+mod home_terminal_tests;
+#[cfg(test)]
 mod output;
 
 #[cfg(test)]

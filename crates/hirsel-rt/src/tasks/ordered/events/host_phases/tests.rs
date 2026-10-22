@@ -276,6 +276,67 @@ fn home_wait_identity_requires_a_saved_valid_phase_without_completion() {
     );
 }
 
+#[test]
+fn ordered_host_terminal_phase_validation_preserves_missing_and_conflicting_evidence() {
+    let key = (vec![1], 0);
+    for corrupt in 0..5 {
+        let mut log = pending(Err(AdapterError::Blocked));
+        log.start_home(&[1], 0);
+        continuation(&mut log, Next::Park);
+        match corrupt {
+            0 => {
+                log.home_phases.get_mut(&key).unwrap().valid = false;
+            }
+            1 => {
+                log.host_initials.remove(&key);
+            }
+            2 => {
+                log.host_initials.get_mut(&key).unwrap().observation = None;
+            }
+            3 => {
+                log.invalid_home.insert(key.clone());
+            }
+            4 => {
+                log.host_certified.insert((vec![9], 0));
+            }
+            _ => unreachable!(),
+        }
+        let before = log.canonical.clone();
+        let phases = log.home_phases.len();
+        assert!(log.terminal_hosts().is_err());
+        assert_eq!(log.canonical, before);
+        assert_eq!(log.home_phases.len(), phases);
+        assert!(log.canonical().is_err());
+    }
+    for done in [false, true] {
+        let mut log = pending(if done {
+            Ok(Completion::Wait(Ok(())))
+        } else {
+            Err(AdapterError::Blocked)
+        });
+        log.start_home(&[1], 0);
+        if !done {
+            continuation(&mut log, Next::Park);
+        }
+        assert_eq!(
+            log.terminal_hosts().unwrap(),
+            [(
+                CanonicalItem::HostOperation(ObjectId {
+                    creator: vec![1],
+                    ordinal: 0
+                }),
+                CanonicalOutcome::HostAbandoned { completed: done },
+            )]
+        );
+        assert!(
+            !log.canonical
+                .iter()
+                .any(|event| matches!(event.outcome, CanonicalOutcome::HostFinished))
+        );
+        assert!(log.home_phases.is_empty());
+    }
+}
+
 fn grant(log: &mut Log, ordinal: u64, request: Request, result: Result<Completion, AdapterError>) {
     let mut fixture = pending(Err(AdapterError::Blocked));
     let old = (vec![1], 0);

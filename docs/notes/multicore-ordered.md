@@ -318,6 +318,33 @@ file aliases and split-direction use, and reject changed or missing metadata.
 They extend the existing host graph and saved-wait protocol; production
 activation, terminal cuts and full differential qualification remain gated.
 
+## Host terminal ownership
+
+Ordered home requests and their returned buffers use the existing task-owned
+`pending_ordered_host` across entry, metadata callbacks, token registration and
+post-effect yield. A blocked retry moves into its saved wait row. Implicit
+handle closes use the same observed boundary. Traced output uses that owned
+route; untraced borrowed output keeps its fast path.
+
+A home callback additionally retains a trace-only owned result, initialized
+discovery and exact output witness before releasing its adapter loan. This
+snapshot survives a stop that prevents the caller from reacquiring a compute
+permit. Normal initial publication releases it. Quiescent trace capture can
+publish a stopped transfer without calling the home adapter or sampling a
+parked task context. The home adapter and its non-Send state still die on the
+admission thread, and production stop returns promptly with lingering workers.
+
+A terminal boundary records `host_abandoned` with phase `blocked` or `result`
+for each fully observed unfinished host phase. It does not manufacture a caller
+`host_finished`. The entire phase batch is validated before it is closed;
+missing requests, invalid discovery and unknown output prefixes still refuse
+export. Task-local terminal ordering and first-stop budget witnesses retain
+their existing retirement path. An external Requested stop is projected only
+after workers leave; a trace request with running workers still refuses.
+Controls compare bytes at widths 1/2/4/8 and reorder off/auto for saved blocked
+requests, completed saved input, stopped home transfer, exact partial output
+and implicit close. Production Ordered remains OFF pending later gates.
+
 ## Prior art and deviations
 
 - The queue and call transitions are ports of the executable checked model,

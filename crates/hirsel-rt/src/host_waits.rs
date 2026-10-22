@@ -365,17 +365,21 @@ pub(crate) unsafe fn issue(
         return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
     }
     let ordered = crate::tasks::ordered::engine::on(ctx);
-    let print = matches!(request, Request::Print { .. } | Request::PrintStderr { .. });
+    let mut request = unsafe { ordered_concurrent::HomeRequest::new(ctx, request, ordered) };
+    let print = matches!(
+        request.get(),
+        Request::Print { .. } | Request::PrintStderr { .. }
+    );
     if ordered {
-        crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
-        crate::tasks::ordered::events::request_host(ctx, &request);
+        crate::tasks::ordered::host::begin(ctx, matches!(request.get(), Request::Close { .. }))?;
+        crate::tasks::ordered::events::request_host(ctx, request.get());
         if crate::tasks::ordered::events::observing(ctx) {
-            unsafe { observe_keys(ctx, &request) };
+            unsafe { observe_keys(ctx, request.get()) };
         }
     }
-    let close = matches!(request, Request::Close { .. });
+    let close = matches!(request.get(), Request::Close { .. });
     // SAFETY: caller contract.
-    let issued = unsafe { issue_here(ctx, request) };
+    let issued = unsafe { issue_here(ctx, &mut request) };
     // SAFETY: as above.
     unsafe { count(ctx) };
     if ordered && let Ok((result, _)) = &issued {
@@ -385,7 +389,8 @@ pub(crate) unsafe fn issue(
         }
     }
     if close && issued.is_ok() && ordered {
-        crate::tasks::ordered::host::finish(ctx, crate::ordered::Next::Keep)?;
+        let (result, parked) = issued.unwrap();
+        return unsafe { request.close(result) }.map(|result| (result, parked));
     }
     issued
 }
@@ -406,9 +411,10 @@ pub(crate) unsafe fn observe_keys(ctx: *mut TaskCtx, request: &Request) {
     crate::tasks::ordered::events::host_phases::request_keys(ctx, keys);
 }
 
-type Discovery = std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>;
+pub(crate) type Discovery =
+    std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>;
 
-fn snapshot(
+pub(crate) fn snapshot(
     adapter: &dyn crate::io::Adapter,
     result: &Result<Completion, AdapterError>,
 ) -> Result<Discovery, &'static str> {
@@ -446,23 +452,28 @@ pub(crate) unsafe fn observe_result(ctx: *mut TaskCtx, result: &Result<Completio
 
 unsafe fn issue_here(
     ctx: *mut TaskCtx,
-    request: Request,
+    request: &mut ordered_concurrent::HomeRequest,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
     if let Some(cause) = unsafe { crate::tasks::canceled(ctx) }
-        && let Some(completion) = unsafe { canceled(ctx, &request, cause) }?
+        && let Some(completion) = unsafe { canceled(ctx, request.get(), cause) }?
     {
-        let result = Ok(completion);
-        unsafe { observe_result(ctx, &result) };
-        crate::tasks::ordered::events::record_host_initial(ctx, &result);
+        request.save_result(Ok(completion));
+        unsafe { observe_result(ctx, request.result()) };
+        crate::tasks::ordered::events::record_host_initial(ctx, request.result());
         if crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx) {
-            match &request {
+            match request.get() {
                 Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
-                    crate::tasks::ordered::events::print_output(ctx, bytes, &result, Some(0))
+                    crate::tasks::ordered::events::print_output(
+                        ctx,
+                        bytes,
+                        request.result(),
+                        Some(0),
+                    )
                 }
                 _ => {}
             }
         }
-        return Ok((result, false));
+        return Ok((request.take_result(), false));
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
@@ -471,7 +482,7 @@ unsafe fn issue_here(
         binding.adapter.issuer(&task);
     }
     let binding = unsafe { Binding::get(ctx) };
-    if !may_park(&request) {
+    if !may_park(request.get()) {
         let observing =
             crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
         if observing
@@ -482,46 +493,58 @@ unsafe fn issue_here(
             | Request::PrintStderr {
                 stderr: handle,
                 bytes,
-            } = &request
+            } = request.get()
         {
-            let stderr = matches!(request, Request::PrintStderr { .. });
+            let stderr = matches!(request.get(), Request::PrintStderr { .. });
             let (result, count) = {
                 let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
                 binding.adapter.print_observed(*handle, stderr, bytes)
             };
-            unsafe { observe_result(ctx, &result) };
-            crate::tasks::ordered::events::record_host_initial(ctx, &result);
-            crate::tasks::ordered::events::print_output(ctx, bytes, &result, count);
-            return Ok((result, false));
+            request.save_result(result);
+            unsafe { observe_result(ctx, request.result()) };
+            crate::tasks::ordered::events::record_host_initial(ctx, request.result());
+            let bytes = match request.get() {
+                Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => bytes,
+                _ => unreachable!(),
+            };
+            crate::tasks::ordered::events::print_output(ctx, bytes, request.result(), count);
+            return Ok((request.take_result(), false));
         }
-        let result = binding.adapter.call(request);
-        unsafe { observe_result(ctx, &result) };
-        crate::tasks::ordered::events::record_host_initial(ctx, &result);
-        return Ok((result, false));
+        let result = {
+            let _segment = observing.then(|| unsafe { crate::tasks::role::Segment::new(ctx) });
+            binding.adapter.call(request.take(false))
+        };
+        request.save_result(result);
+        unsafe { observe_result(ctx, request.result()) };
+        crate::tasks::ordered::events::record_host_initial(ctx, request.result());
+        return Ok((request.take_result(), false));
     }
     let token = binding.waits.next;
     binding.waits.next += 1;
     binding.adapter.enter(token);
     let yielded = !matches!(
-        request,
+        request.get(),
         Request::ReadStdin { .. } | Request::WatchNext { .. }
     );
-    let retry = request.clone();
-    let result = binding.adapter.call(request);
-    unsafe { observe_result(ctx, &result) };
-    crate::tasks::ordered::events::record_host_initial(ctx, &result);
+    let observing =
+        crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
+    let result = {
+        let _segment = observing.then(|| unsafe { crate::tasks::role::Segment::new(ctx) });
+        binding.adapter.call(request.take(true))
+    };
+    request.save_result(result);
+    unsafe { observe_result(ctx, request.result()) };
+    crate::tasks::ordered::events::record_host_initial(ctx, request.result());
     // The snapshot owns the first attempt before this frame may be saved.
-    match result {
-        Err(AdapterError::Blocked) => {}
-        result => {
-            binding.adapter.finish(token);
-            return Ok((result, false));
-        }
+    if request.result() != &Err(AdapterError::Blocked) {
+        binding.adapter.finish(token);
+        return Ok((request.take_result(), false));
     }
+    drop(request.take_result());
     binding.waits.parked.insert(
         token,
         Parked {
-            request: retry,
+            request: request.take(false),
             borrowed: None,
             task: None,
             completion: None,

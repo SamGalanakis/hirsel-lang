@@ -14,6 +14,7 @@ pub(super) mod host_keys;
 pub(super) mod host_output;
 pub(crate) mod host_phases;
 mod host_requests;
+mod host_terminal;
 pub(super) use host_requests::HostAuthority;
 mod host_values;
 mod jsonl;
@@ -181,6 +182,10 @@ pub(super) enum CanonicalOutcome {
     HostResult(host_values::HostValue),
     HostFinished,
     HostWaiting,
+    /// A terminal cut owns this phase; no caller consumed a later result.
+    HostAbandoned {
+        completed: bool,
+    },
     HostOutput(Vec<u8>),
     Created(ObjectId),
     Alias(ObjectId),
@@ -829,7 +834,17 @@ pub(crate) fn record_host_initial(
     let Some(s) = s.filter(|s| enabled(s)) else {
         return;
     };
-    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    record_host_initial_for(s, unsafe { (*ctx).task_id }, result);
+    unsafe { (*(*ctx).run_ptr()).ordered_home_results.lock().unwrap() }
+        .remove(&unsafe { (*ctx).task_id });
+}
+
+fn record_host_initial_for(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+) {
+    let path = s.task(task).path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
@@ -1514,6 +1529,14 @@ pub(crate) fn print_output(
     count: Option<u64>,
 ) {
     host_output::record(ctx, host_output::project(Some(bytes), result, count));
+}
+
+pub(crate) fn retained_output(
+    bytes: Option<&[u8]>,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    count: Option<u64>,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    host_output::project(bytes, result, count)
 }
 
 /// Auxiliary domains are rooted in an existing logical resource. The owned
@@ -2608,7 +2631,14 @@ pub(super) unsafe fn terminal(ctx: *mut TaskCtx, stop: &crate::stop::Stop) -> Op
         }
         _ => CanonicalOutcome::Stopped(stop.clone().outcome()),
     };
-    Some(vec![(CanonicalItem::Terminal, outcome)])
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        return None;
+    };
+    let log = driver.events.as_mut()?;
+    let mut events = log.terminal_hosts().ok()?;
+    events.push((CanonicalItem::Terminal, outcome));
+    Some(events)
 }
 
 /// Final root status after mandatory returned-result cleanup, using the

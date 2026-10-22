@@ -15,6 +15,8 @@ struct Host {
     parked: AtomicUsize,
     cancel: bool,
     never_ready: bool,
+    stop_barrier: Option<Arc<std::sync::Barrier>>,
+    stop_completed: bool,
     driver: crate::readiness::Readiness,
 }
 impl Host {
@@ -89,6 +91,13 @@ impl ConcurrentAdapter for Host {
         let _role = self.role();
         self.finished.lock().unwrap().push(token);
         self.driver.finish(token);
+        if self.stop_completed && token == 2 {
+            unsafe {
+                (*self.run.load(Ordering::Acquire))
+                    .control
+                    .request_inside(Stop::Requested)
+            };
+        }
     }
     fn ready(&self) -> Result<Ready, AdapterError> {
         let _role = self.role();
@@ -102,7 +111,15 @@ impl ConcurrentAdapter for Host {
         Some(self.driver.clone())
     }
     fn wait_sources(&self) -> Result<WaitSources, AdapterError> {
-        let _role = self.role();
+        {
+            let _role = self.role();
+        }
+        if let Some(barrier) = &self.stop_barrier {
+            // Home reached the source wait after the owner physically saved.
+            // No role or adapter lock is held while the external host stops it.
+            barrier.wait();
+            barrier.wait();
+        }
         Ok(if self.never_ready {
             WaitSources::Drivers(vec![self.driver.clone()])
         } else {
@@ -298,4 +315,144 @@ fn ordered_concurrent_external_stop_wakes_the_driver_and_reclaims_the_saved_requ
     assert_eq!(outcome.ended, Err(Stop::Requested));
     assert_eq!(outcome.pending, 0);
     assert_eq!(*host.finished.lock().unwrap(), [1]);
+}
+
+#[test]
+fn ordered_host_terminal_external_stop_certifies_saved_wait_and_finishes_registration_once() {
+    let mut reference = None;
+    for width in [1, 2, 4, 8] {
+        for reorder in [
+            hirsel_run_config::Reorder::Off,
+            hirsel_run_config::Reorder::Auto,
+        ] {
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let host = Arc::new(Host {
+                never_ready: true,
+                stop_barrier: Some(barrier.clone()),
+                ..Default::default()
+            });
+            let setup = host.clone();
+            let calls = host.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.concurrent_adapter = Some(host.clone());
+            unsafe { run.use_physical_dispatch() };
+            let control = run.control();
+            let stopper = std::thread::spawn(move || {
+                barrier.wait();
+                control.stop();
+                barrier.wait();
+            });
+            let (outcome, trace) = run.run_traced(
+                move |ctx| init(ctx, &setup, reorder, true),
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    request(ctx, &*calls, Request::Stdin { io: 1 })
+                        .unwrap()
+                        .unwrap();
+                    let result = request(ctx, &*calls, Request::ReadStdin { stdin: 12, max: 3 });
+                    crate::stop::check(ctx, result);
+                    panic!("stopped wait resumed")
+                },
+            );
+            stopper.join().unwrap();
+            assert_eq!(outcome.ended, Err(Stop::Requested));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(*host.finished.lock().unwrap(), [1, 2]);
+            assert_eq!(host.attempts.lock().unwrap().values().sum::<usize>(), 1);
+            let trace = trace.expect("quiescent saved host terminal cut");
+            let rows: Vec<serde_json::Value> = std::str::from_utf8(trace.bytes())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(rows.last().unwrap()["item"]["kind"], "terminal");
+            assert_eq!(rows.last().unwrap()["outcome"]["kind"], "stopped");
+            assert!(
+                rows.iter()
+                    .any(|row| row["outcome"]["kind"] == "host_waiting")
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["outcome"]["kind"] == "host_result")
+                    .count(),
+                1
+            );
+            if let Some(reference) = &reference {
+                assert_eq!(trace.bytes(), reference);
+            } else {
+                reference = Some(trace.bytes().to_vec());
+            }
+        }
+    }
+}
+
+#[test]
+fn ordered_host_terminal_saved_completion_cut_keeps_bytes_before_owner_resume() {
+    let mut reference = None;
+    for width in [1, 2, 4, 8] {
+        for reorder in [
+            hirsel_run_config::Reorder::Off,
+            hirsel_run_config::Reorder::Auto,
+        ] {
+            let host = Arc::new(Host {
+                stop_completed: true,
+                ..Default::default()
+            });
+            let setup = host.clone();
+            let calls = host.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.concurrent_adapter = Some(host.clone());
+            unsafe { run.use_physical_dispatch() };
+            let (outcome, trace) = run.run_traced_after_bounded_stop(
+                move |ctx| init(ctx, &setup, reorder, true),
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    request(ctx, &*calls, Request::Stdin { io: 1 })
+                        .unwrap()
+                        .unwrap();
+                    let result = request(ctx, &*calls, Request::ReadStdin { stdin: 12, max: 3 });
+                    crate::stop::check(ctx, result);
+                    panic!("stopped saved completion returned to code")
+                },
+            );
+            assert_eq!(outcome.ended, Err(Stop::Requested));
+            assert!(outcome.pending <= 1);
+            assert_eq!(*host.finished.lock().unwrap(), [1, 2]);
+            assert_eq!(host.attempts.lock().unwrap().values().sum::<usize>(), 3);
+            let trace = trace.expect("completed saved request remains owned at cut");
+            let rows: Vec<serde_json::Value> = std::str::from_utf8(trace.bytes())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let results: Vec<_> = rows
+                .iter()
+                .filter(|row| row["outcome"]["kind"] == "host_result")
+                .collect();
+            assert_eq!(results.len(), 2);
+            let payload = results[1]["outcome"]["result"]["payload"].as_str().unwrap();
+            let mut expected = Vec::new();
+            crate::tape_wire::Wire::encode(
+                &Ok::<Completion, AdapterError>(Completion::Input(Ok(vec![0, 255, b'x']))),
+                &mut expected,
+            );
+            assert_eq!(payload, hirsel_run_schema::hex(&expected));
+            assert!(
+                rows.iter()
+                    .any(|row| row["outcome"]["kind"] == "host_abandoned"
+                        && row["outcome"]["phase"] == "result")
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["outcome"]["kind"] == "host_finished")
+                    .count(),
+                1
+            );
+            if let Some(reference) = &reference {
+                assert_eq!(trace.bytes(), reference);
+            } else {
+                reference = Some(trace.bytes().to_vec());
+            }
+        }
+    }
 }

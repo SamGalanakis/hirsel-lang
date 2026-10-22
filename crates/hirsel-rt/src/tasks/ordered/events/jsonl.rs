@@ -38,9 +38,15 @@ impl Trace {
             return Err("canonical trace has running workers");
         }
         let _role = unsafe { crate::tasks::role::IdleGuard::new(run) };
-        let scheduler = unsafe { &*(*run).tasks.get() }
-            .as_deref()
+        let scheduler = unsafe { &mut *(*run).tasks.get() }
+            .as_deref_mut()
             .ok_or("no ordered scheduler")?;
+        if let Some(stop) = unsafe { (*run).control.stopped() } {
+            let snapshots =
+                std::mem::take(&mut *unsafe { (*run).ordered_home_results.lock().unwrap() });
+            super::host_terminal::home_results(scheduler, snapshots)?;
+            super::host_terminal::external(scheduler, &stop)?;
+        }
         let Logical::Ordered(driver) = &scheduler.logical else {
             return Err("no ordered scheduler");
         };
@@ -196,6 +202,9 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
         O::HostResult(result) => json!({"kind":"host_result", "result":host(result)}),
         O::HostOutput(value) => json!({"kind":"host_output", "bytes":bytes(value)}),
         O::HostWaiting => json!({"kind":"host_waiting"}),
+        O::HostAbandoned { completed } => {
+            json!({"kind":"host_abandoned", "phase":if *completed {"result"} else {"blocked"}})
+        }
         O::HostFinished => json!({"kind":"host_finished"}),
         O::Created(id) => json!({"kind":"created", "id":object(id)}),
         O::Alias(id) => json!({"kind":"alias", "id":object(id)}),
