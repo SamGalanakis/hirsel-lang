@@ -135,7 +135,7 @@ impl CompactCompleted {
         worker: &Worker<'_>,
         types: Arc<hirsel_types::TypeInterner>,
         source: &mut impl memos::ReadSource,
-        capture_store: bool,
+        records: Option<&persistent::TypeRecords>,
     ) -> Self {
         let result = done.result();
         let diagnostics = match &result {
@@ -200,9 +200,10 @@ impl CompactCompleted {
             })
             .collect();
         // Off stores stop before Body::capture or canonical type encoding.
-        let payload = if capture_store {
+        let payload = if let Some(records) = records {
             done.modes.as_ref().and_then(|mode| {
                 persistent::capture_mode(
+                    records,
                     types,
                     worker.items,
                     &result,

@@ -26,12 +26,44 @@ impl TypeTable {
     /// interning untrusted front-end records; image/V decoders may deliberately
     /// retain dangling edges to diagnose them instead.
     pub fn valid_indices(&self) -> bool {
+        self.valid_positions(self.rows.len())
+    }
+    /// Component rows can also name a separately resolved external prefix.
+    pub fn valid_positions(&self, count: usize) -> bool {
         self.rows.iter().all(|row| {
             row.kind
                 .graph_edges()
                 .iter()
-                .all(|edge| (edge.ty.raw_index() as usize) < self.rows.len())
+                .all(|edge| (edge.ty.raw_index() as usize) < count)
         })
+    }
+    pub fn edge_positions(&self) -> Vec<Vec<u32>> {
+        self.rows
+            .iter()
+            .map(|row| {
+                row.kind
+                    .graph_edges()
+                    .iter()
+                    .map(|edge| edge.ty.raw_index())
+                    .collect()
+            })
+            .collect()
+    }
+    /// Resolve checked component positions without decoding its rows again.
+    pub fn resolve_positions(&self, ids: &[TypeId]) -> Option<Vec<Type>> {
+        if !self.valid_positions(ids.len()) {
+            return None;
+        }
+        Some(
+            self.rows
+                .iter()
+                .map(|row| {
+                    let mut row = row.clone();
+                    row.kind = row.kind.map_edges(|edge| ids[edge.raw_index() as usize]);
+                    row
+                })
+                .collect(),
+        )
     }
 }
 
@@ -249,6 +281,10 @@ impl TableBuilder {
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
+    /// Direct ids named by the encoded value, before traversing their rows.
+    pub fn roots(&self) -> &[TypeId] {
+        &self.order
+    }
     /// The table: every positioned row, then the rows they reach, each in
     /// first-encounter order, with edges written as positions.
     pub fn finish(mut self) -> TypeTable {
@@ -301,6 +337,7 @@ enum Scope {
     Encode(HashMap<TypeId, u32>),
     Grow(TableBuilder),
     Decode(Vec<TypeId>),
+    Source(Arc<dyn hirsel_intern::persist::Source<TypeId>>),
     /// Positions of a base built by `TypeTable::into_base`.
     Base(u32),
     /// Table rows, whose edges already are positions.
@@ -361,6 +398,19 @@ pub fn with_table_decoding<R>(ids: &[TypeId], f: impl FnOnce() -> R) -> R {
     scoped(Scope::Decode(ids.to_vec()), f)
 }
 
+/// Encode a component with explicitly numbered local and outgoing edges.
+pub fn with_type_positions<R>(positions: HashMap<TypeId, u32>, f: impl FnOnce() -> R) -> R {
+    scoped(Scope::Encode(positions), f)
+}
+
+/// Resolve only type positions actually consumed by the semantic decoder.
+pub fn with_type_source<R>(
+    source: Arc<dyn hirsel_intern::persist::Source<TypeId>>,
+    f: impl FnOnce() -> R,
+) -> R {
+    scoped(Scope::Source(source), f)
+}
+
 impl TypeId {
     /// A table position as an edge of a table row; never an interner id.
     fn raw(position: u32) -> Self {
@@ -394,6 +444,15 @@ impl serde::Serialize for TypeId {
 impl<'de> serde::Deserialize<'de> for TypeId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let position = u32::deserialize(deserializer)?;
+        let source = SCOPE.with_borrow(|scopes| match scopes.last() {
+            Some(Scope::Source(source)) => Some(source.clone()),
+            _ => None,
+        });
+        if let Some(source) = source {
+            return source
+                .id(position)
+                .ok_or_else(|| serde::de::Error::custom("missing type product"));
+        }
         SCOPE
             .with_borrow(|scopes| match scopes.last() {
                 Some(Scope::Decode(ids)) => Some(
