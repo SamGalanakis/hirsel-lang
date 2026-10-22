@@ -1000,3 +1000,146 @@ fn near_miss_candidates_follow_exposure_visibility_and_module_precedence() {
             .is_empty()
     );
 }
+
+#[test]
+fn missing_lookup_candidates_ignore_clients_but_track_accessible_repairs() {
+    let library = package("library", "1");
+    let context = FileContext {
+        package: library.clone(),
+        modules: vec![],
+    };
+    let segments = ["lenght".into()];
+    let revision = |candidate: &str, visibility, client: &str| {
+        let mut f = fixture(vec![
+            entry(
+                definition(library.clone(), &[], candidate),
+                Namespace::Value,
+                visibility,
+            ),
+            entry(
+                definition(package(client, "1"), &[], "length"),
+                Namespace::Value,
+                Visibility::Public,
+            ),
+        ]);
+        f.revision = ContentHash::of_bytes(client.as_bytes());
+        let (index, errors) = ManifestIndex::new(f);
+        assert!(errors.is_empty());
+        assert_eq!(
+            index.lookup_spelling(&context, None, &segments),
+            Err(LookupError::Missing)
+        );
+        index.lookup_candidates_revision(&context, None, &segments)
+    };
+    let before = revision("length", Visibility::Private, "imager");
+    assert_eq!(before, revision("length", Visibility::Private, "client"));
+    assert_ne!(before, revision("size", Visibility::Private, "client"));
+    // The owner's private names remain visible in its own diagnostic input.
+    assert_eq!(before, revision("length", Visibility::Public, "client"));
+}
+
+#[test]
+fn bounded_candidates_match_the_exhaustive_spelling_scan() {
+    let own_package = package("test", "1");
+    let library = package("library", "1");
+    let mut f = fixture(vec![]);
+    for (pkg, modules, name, visibility) in [
+        (own_package.clone(), vec![], "length", Visibility::Private),
+        (
+            own_package.clone(),
+            vec!["nested"],
+            "length",
+            Visibility::Public,
+        ),
+        (
+            own_package.clone(),
+            vec!["nested", "deep"],
+            "value",
+            Visibility::Public,
+        ),
+        (library.clone(), vec!["text"], "len", Visibility::Public),
+        (library.clone(), vec!["text"], "secret", Visibility::Private),
+        (
+            library.clone(),
+            vec!["internal"],
+            "hidden",
+            Visibility::Public,
+        ),
+    ] {
+        f.definitions.push(entry(
+            definition(pkg, &modules, name),
+            Namespace::Value,
+            visibility,
+        ));
+    }
+    f.exposures = vec![
+        DependencyExposure {
+            head: "words".into(),
+            package: library.clone(),
+            modules: vec!["text".into()],
+        },
+        DependencyExposure {
+            head: "hidden".into(),
+            package: library.clone(),
+            modules: vec!["internal".into()],
+        },
+    ];
+    let mut names = std::collections::BTreeSet::new();
+    for entry in &f.definitions {
+        names.insert(entry.definition.0.name.clone());
+        names.extend(entry.definition.0.modules.iter().cloned());
+    }
+    names.extend(f.exposures.iter().map(|e| e.head.clone()));
+    let (index, errors) = ManifestIndex::new(f);
+    assert!(errors.is_empty());
+    let ambiguous = index.with_exposures(&[
+        DependencyExposure {
+            head: "words".into(),
+            package: library.clone(),
+            modules: vec!["text".into()],
+        },
+        DependencyExposure {
+            head: "words".into(),
+            package: own_package.clone(),
+            modules: vec![],
+        },
+    ]);
+    for index in [&index, &ambiguous] {
+        for modules in [vec![], vec!["nested".into()]] {
+            let context = FileContext {
+                package: own_package.clone(),
+                modules,
+            };
+            for qualifier in [None, Some(&own_package), Some(&library)] {
+                for path in [
+                    vec!["lenght"],
+                    vec!["words", "lne"],
+                    vec!["wrods", "len"],
+                    vec!["nested", "deep", "vlaue"],
+                    vec!["hidden", "hiden"],
+                    vec!["text", "lne"],
+                ] {
+                    let segments: Vec<String> = path.into_iter().map(String::from).collect();
+                    for segment in 0..segments.len() {
+                        let expected: Vec<_> = names
+                            .iter()
+                            .filter(|name| {
+                                let mut candidate = segments.clone();
+                                candidate[segment] = (*name).clone();
+                                index
+                                    .lookup_spelling(&context, qualifier, &candidate)
+                                    .is_ok()
+                            })
+                            .cloned()
+                            .collect();
+                        assert_eq!(
+                            index.candidate_names(&context, qualifier, &segments, segment),
+                            expected,
+                            "{context:?} {qualifier:?} {segments:?} {segment}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

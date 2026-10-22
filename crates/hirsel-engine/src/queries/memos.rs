@@ -127,10 +127,16 @@ pub(crate) fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHas
         parts.iter().map(Vec::as_slice),
     )
 }
+fn missing_lookup(result: &Result<DefPath, LookupError>) -> bool {
+    matches!(
+        result,
+        Err(LookupError::Missing | LookupError::MissingMember(_))
+    )
+}
 fn manifest_value(
     result: &Result<DefPath, LookupError>,
     namespace: Option<hirsel_resolve::Namespace>,
-    manifest: ContentHash,
+    candidates: ContentHash,
 ) -> ContentHash {
     let mut parts: Vec<Vec<u8>> = vec![];
     let paths = |parts: &mut Vec<Vec<u8>>, ps: &[DefPath]| {
@@ -165,11 +171,8 @@ fn manifest_value(
     // A missing name's diagnostic also observes accessible near-name candidates.
     // The negative lookup alone can stay identical while a rename changes its
     // suggested repair. Keep successful lookups independent of unrelated names.
-    if matches!(
-        result,
-        Err(LookupError::Missing | LookupError::MissingMember(_))
-    ) {
-        parts.push(manifest.0.to_vec());
+    if missing_lookup(result) {
+        parts.push(candidates.0.to_vec());
     }
     ContentHash::of_parts(
         "hirsel.read.manifest-lookup",
@@ -186,6 +189,12 @@ pub(crate) trait ReadSource {
         context: &FileContext,
         result: &Result<DefPath, LookupError>,
     ) -> Option<hirsel_resolve::Namespace>;
+    fn lookup_candidates(
+        &mut self,
+        context: &FileContext,
+        package: Option<&hirsel_syntax::PackageId>,
+        segments: &[String],
+    ) -> ContentHash;
     fn cited(&self, path: &DefPath) -> ContentHash;
     fn candidates(&self, owner: &DefPath) -> Option<ContentHash>;
     fn environment(&self) -> ContentHash;
@@ -232,9 +241,14 @@ pub(crate) fn complete_reads(
                 package,
                 segments,
                 result,
-                manifest,
+                ..
             } => {
                 let namespace = source.namespace(context, result);
+                let candidates = if missing_lookup(result) {
+                    source.lookup_candidates(context, package.as_ref(), segments)
+                } else {
+                    ContentHash::default()
+                };
                 reads.record(
                     ReadKey::Lookup(LookupKey::of(
                         LookupSource::Manifest,
@@ -242,7 +256,7 @@ pub(crate) fn complete_reads(
                         package.as_ref(),
                         segments,
                     )),
-                    manifest_value(result, namespace, *manifest),
+                    manifest_value(result, namespace, candidates),
                 )
             }
             hirsel_types::DependencyRead::ModuleHead {
@@ -290,6 +304,17 @@ impl ReadSource for QueryEngine {
         result: &Result<DefPath, LookupError>,
     ) -> Option<hirsel_resolve::Namespace> {
         self.lookup_namespace(context, result)
+    }
+    fn lookup_candidates(
+        &mut self,
+        context: &FileContext,
+        package: Option<&hirsel_syntax::PackageId>,
+        segments: &[String],
+    ) -> ContentHash {
+        self.declarations
+            .frozen()
+            .index(context.package.clone())
+            .lookup_candidates_revision(context, package, segments)
     }
     fn cited(&self, path: &DefPath) -> ContentHash {
         self.cited_value(path)
@@ -435,11 +460,12 @@ impl QueryEngine {
                     LookupSource::Manifest => {
                         let result = self.lookup_result(&context, &qualifier, &segments);
                         let namespace = self.lookup_namespace(&context, &result);
-                        manifest_value(
-                            &result,
-                            namespace,
-                            self.declarations.inputs().manifest_revision,
-                        )
+                        let candidates = if missing_lookup(&result) {
+                            self.lookup_candidates(&context, qualifier.as_ref(), &segments)
+                        } else {
+                            ContentHash::default()
+                        };
+                        manifest_value(&result, namespace, candidates)
                     }
                     LookupSource::Head => {
                         let exposed = self

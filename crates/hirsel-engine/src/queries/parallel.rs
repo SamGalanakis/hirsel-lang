@@ -167,6 +167,16 @@ impl memos::ReadSource for FrozenReadSource<'_> {
             .entry(result.as_ref().ok()?)
             .map(|entry| entry.namespace)
     }
+    fn lookup_candidates(
+        &mut self,
+        context: &FileContext,
+        package: Option<&hirsel_syntax::PackageId>,
+        segments: &[String],
+    ) -> ContentHash {
+        self.declarations
+            .index(context.package.clone())
+            .lookup_candidates_revision(context, package, segments)
+    }
     fn cited(&self, path: &DefPath) -> ContentHash {
         self.citations.cited_text(DefId::intern(path))
     }

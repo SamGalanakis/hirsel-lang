@@ -317,11 +317,44 @@ impl ManifestIndex {
         segment: usize,
     ) -> Vec<String> {
         let mut names = BTreeSet::new();
-        for definition in self.entries.keys() {
-            names.insert(definition.path().0.name.clone());
-            names.extend(definition.path().0.modules.iter().cloned());
+        // Derive only spellings that can name a declaration. Trying every
+        // name in every module interns a Cartesian product of nonexistent
+        // DefPaths in lookup_spelling, and those ids live for the process.
+        let mut consider = |head: Option<&String>, modules: &[String], name: &String| {
+            let spelling = || head.into_iter().chain(modules).chain([name]);
+            if usize::from(head.is_some()) + modules.len() + 1 == segments.len()
+                && spelling()
+                    .zip(segments)
+                    .enumerate()
+                    .all(|(i, (a, b))| i == segment || a == b)
+            {
+                names.insert(spelling().nth(segment).expect("a path segment").clone());
+            }
+        };
+        for definition in self.entries.keys().map(|id| &id.path().0) {
+            if let Some(package) = package {
+                if definition.package == *package {
+                    consider(None, &definition.modules, &definition.name);
+                }
+                continue;
+            }
+            if definition.package == context.package {
+                consider(None, &definition.modules, &definition.name);
+                if let Some(relative) = definition.modules.strip_prefix(context.modules.as_slice())
+                {
+                    consider(None, relative, &definition.name);
+                }
+            }
+            for (head, exposed) in &*self.heads {
+                for (package, prefix) in exposed {
+                    if definition.package == *package
+                        && let Some(relative) = definition.modules.strip_prefix(prefix.as_slice())
+                    {
+                        consider(Some(head), relative, &definition.name);
+                    }
+                }
+            }
         }
-        names.extend(self.heads.keys().cloned());
         names
             .into_iter()
             .filter(|name| {
@@ -330,6 +363,29 @@ impl ManifestIndex {
                 self.lookup_spelling(context, package, &candidate).is_ok()
             })
             .collect()
+    }
+
+    /// The accessible spelling repairs a missing lookup's diagnostic observes.
+    /// Unrelated packages and physical manifest paths do not affect this input.
+    pub fn lookup_candidates_revision(
+        &self,
+        context: &FileContext,
+        package: Option<&PackageId>,
+        segments: &[String],
+    ) -> ContentHash {
+        let parts: Vec<_> = (0..segments.len())
+            .map(|segment| {
+                let names = self.candidate_names(context, package, segments, segment);
+                ContentHash::of_parts(
+                    "hirsel.lookup.segment-candidates.v1",
+                    names.iter().map(String::as_bytes),
+                )
+            })
+            .collect();
+        ContentHash::of_parts(
+            "hirsel.lookup.candidates.v1",
+            parts.iter().map(|hash| hash.0.as_slice()),
+        )
     }
 
     pub fn lookup(&self, context: &FileContext, path: &Path) -> Result<DefPath, LookupError> {
