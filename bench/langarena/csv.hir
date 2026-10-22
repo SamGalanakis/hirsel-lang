@@ -19,8 +19,8 @@ fn random(mut seed: u64) -> f64 {
   value / 139968.0
 }
 
-fn number(value: String) -> f64 {
-  let Ok(parsed) = f64.parse(value) else {
+fn number(value: Bytes) -> f64 {
+  let Ok(parsed) = f64.parse_bytes(value) else {
     check(false)
     return 0.0
   }
@@ -28,7 +28,7 @@ fn number(value: String) -> f64 {
 }
 
 fn coordinate(cursor: std@1/csv.SliceReader, index: u64) -> f64 {
-  let Some(value) = std@1/csv.get_field(cursor, index) else {
+  let Some(value) = std@1/csv.get_field_bytes(cursor, index) else {
     check(false)
     return 0.0
   }

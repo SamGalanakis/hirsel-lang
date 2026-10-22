@@ -786,3 +786,19 @@ fn slice_text(source: String, start: u64, stop: u64) -> Option[String] in source
   }
   Some(core@1/string.slice(source, first, last))
 }
+
+/// Borrow decoded field bytes without constructing String boundary positions.
+@noalloc
+pub fn get_field_bytes(r: SliceReader, index: u64) -> Option[Bytes] in r uses {} {
+  if r.failed || index >= r.count {
+    return None()
+  }
+  let span = r.fields[index]
+  if span.decoded {
+    let data = core@1/string.as_bytes(r.decoded)
+    Some(core@1/bytes.slice(data, span.start, span.end))
+  } else {
+    let data = core@1/string.as_bytes(r.text)
+    Some(core@1/bytes.slice(data, span.start, span.end))
+  }
+}

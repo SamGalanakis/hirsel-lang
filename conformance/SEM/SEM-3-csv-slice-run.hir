@@ -18,6 +18,10 @@ fn parse(text: String, config: std@1/csv.Config) -> Result[
         failure.check(false, TextInvariant())
         return Ok([])
       }
+      failure.check(
+        std@1/csv.get_field_bytes(cursor, i) == Some(string.as_bytes(value)),
+        TextInvariant()
+      )
       list.push(mut row, unique value)
     }
     failure.check(
@@ -27,6 +31,10 @@ fn parse(text: String, config: std@1/csv.Config) -> Result[
     list.push(mut rows, take row)
   }
   failure.check(std@1/csv.next_record(mut cursor) == Ok(false), TextInvariant())
+  failure.check(
+    std@1/csv.field_count(cursor) == 0 && std@1/csv.get_field_bytes(cursor, 0) == None(),
+    TextInvariant()
+  )
   Ok(take rows)
 }
 

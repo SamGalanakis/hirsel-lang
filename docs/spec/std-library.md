@@ -2252,6 +2252,7 @@ fn csv.slice_reader(text: String, config: Config) -> Result[SliceReader, CsvErro
 fn csv.next_record(mut reader: SliceReader) -> Result[bool, CsvError] uses {}
 fn csv.field_count(reader: SliceReader) -> u64 uses {}
 fn csv.get_field(reader: SliceReader, index: u64) -> Option[String] in reader uses {}
+@noalloc fn csv.get_field_bytes(reader: SliceReader, index: u64) -> Option[Bytes] in reader uses {}
 ```
 
 Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect
@@ -2281,6 +2282,8 @@ TrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API.
 width, normalized record limit and first-error positions. `next_record` returns
 true for one record and false at EOF; errors are terminal. `field_count` and
 `get_field` inspect the current record, returning zero/None after an error or EOF.
+`get_field_bytes` borrows the same decoded data directly for byte consumers such
+as `f64.parse_bytes`, without constructing String boundary positions.
 Release field views before advancing again. Unchanged fields borrow the input;
 doubled quotes and normalized CRLF share one decoded buffer per record, and
 field spans reuse their capacity. No input copy, field allocation or completed-row
