@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """tools/land against a scratch origin with fake Buck2 checks: a push rejected
 because main moved goes back to the rebase, and a red check refuses the push."""
+import fcntl
 import json
 import os
 import runpy
+import signal
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
@@ -11,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 DRIVER = '''import runpy, sys
 from unittest.mock import patch
 module = runpy.run_path('tools/land', run_name='land_test')
-with patch('time.sleep', lambda seconds: print('test: jitter', seconds, flush=True)):
+module['LandQueue'].HEARTBEAT = .05
+with patch('random.uniform', return_value=0):
     sys.exit(module['main']())
 '''
 RECORD = '''import os, pathlib, subprocess, sys
@@ -134,65 +138,160 @@ for line in sys.stdin:
         self.git(self.lane, 'commit', '-qm', 'record checks')
         return checks
 
-    def test_two_concurrent_lands_check_every_tree_and_eventually_land(self):
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 15
+        while not predicate():
+            if time.monotonic() > deadline:
+                self.fail('queue rendezvous timed out')
+            time.sleep(.02)
+
+    def queue_lanes(self):
         checks = self.recording_remote()
-        # Both clones inherit identical tools, then add independent lane changes.
-        other = self.top / 'other'
-        self.git(self.top, 'clone', '-q', str(self.lane), str(other))
-        self.git(other, 'remote', 'set-url', 'origin', str(self.origin))
-        self.git(other, 'fetch', '-q', 'origin')
-        (other / '.buck2/bin').mkdir(parents=True)
-        shutil.copy(self.lane / '.buck2/bin/buck2', other / '.buck2/bin/buck2')
-        (other / 'other.txt').write_text('other\n')
-        self.git(other, 'add', 'other.txt')
-        self.git(other, 'commit', '-qm', 'other')
-        # The two proposals contain independent changes, so either winner
-        # leaves the loser real work to rebase, check again and push.
-        (self.lane / 'first.txt').write_text('first\n')
-        self.git(self.lane, 'add', 'first.txt')
-        self.git(self.lane, 'commit', '-qm', 'first lane')
-        # A barrier ensures both initial trees pass checks before either pushes.
-        barrier = """
-if STAGE == 'fmt':
+        # Hold the first check so later, faster lands cannot overtake it.
+        with (self.lane / 'tools/buck2/fmt.py').open('a') as out:
+            out.write("""
+if pathlib.Path.cwd().name == 'lane':
     import time
-    marker = root / ('ready-' + pathlib.Path.cwd().name)
-    marker.touch()
-    deadline = time.monotonic() + 15
-    while len(list(root.glob('ready-*'))) < 2:
+    (root / 'holding').touch()
+    deadline = time.monotonic() + 20
+    while not (root / 'release').exists():
         if time.monotonic() > deadline:
-            raise SystemExit('barrier timed out')
-        time.sleep(.01)
-"""
-        # Patch only the harness's stage scripts, and commit the same barrier in both.
-        for lane in (self.lane, other):
-            with (lane / 'tools/buck2/fmt.py').open('a') as out:
-                out.write(barrier)
-            self.git(lane, 'add', 'tools/buck2/fmt.py')
-            self.git(lane, 'commit', '-qm', 'check barrier')
-        processes = [subprocess.Popen([sys.executable, '-c', DRIVER], cwd=lane,
-                                      env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                     for lane in (self.lane, other)]
-        outputs = []
-        try:
-            for proc in processes:
-                out, err = proc.communicate(timeout=30)
-                outputs.append(out)
-                self.assertEqual(proc.returncode, 0, out + err)
-        finally:
-            for proc in processes:
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.communicate()
-        self.assertEqual(sum(out.count('main moved during the checks') for out in outputs), 1)
-        self.assertEqual(sum(out.count('pass  Clippy') for out in outputs), 3)
-        self.assertEqual(sum(out.count('pass  formatting') for out in outputs), 3)
-        self.assertIn('other', self.main_log())
-        self.assertIn('first lane', self.main_log())
-        self.assertEqual(self.git(self.origin, 'show', 'main:first.txt'), 'first\n')
-        self.assertEqual(self.git(self.origin, 'show', 'main:other.txt'), 'other\n')
-        # The loser may reach pre-receive before losing the ref lock; all
-        # three checked proposals are valid, and both commits reach main.
-        self.assertGreaterEqual(len((checks / 'received').read_text().splitlines()), 2)
+            raise SystemExit('holder timed out')
+        time.sleep(.02)
+""")
+        self.git(self.lane, 'commit', '-qam', 'slow first check')
+        lanes = [self.lane]
+        # Worktrees share the queue and remote refs, just like host lanes.
+        for name in ('second', 'third'):
+            lane = self.top / name
+            self.git(self.lane, 'worktree', 'add', '-qb', name, str(lane), 'HEAD')
+            (lane / '.buck2/bin').mkdir(parents=True)
+            shutil.copy(self.lane / '.buck2/bin/buck2', lane / '.buck2/bin/buck2')
+            lanes.append(lane)
+        for i, lane in enumerate(lanes):
+            (lane / f'lane-{i}.txt').write_text(f'{i}\n')
+            self.git(lane, 'add', f'lane-{i}.txt')
+            self.git(lane, 'commit', '-qm', f'lane {i}')
+        return checks, lanes
+
+    def start_land(self, lane):
+        log = (self.top / (lane.name + '.log')).open('w+')
+        self.addCleanup(log.close)
+        proc = subprocess.Popen([sys.executable, '-c', DRIVER], cwd=lane,
+                                env=self.env, stdout=log, stderr=log, text=True)
+        def cleanup():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=10)
+        self.addCleanup(cleanup)
+        return proc, log
+
+    def finish_land(self, process):
+        proc, log = process
+        proc.wait(timeout=30)
+        log.seek(0)
+        output = log.read()
+        self.assertEqual(proc.returncode, 0, output)
+        return output
+
+    def queued(self):
+        return sorted((self.lane / '.git/land-queue').glob('[0-9]*'))
+
+    def test_three_concurrent_lands_are_fifo_and_check_exactly_their_push_base(self):
+        checks, lanes = self.queue_lanes()
+        first = self.start_land(lanes[0])
+        self.wait_for(lambda: (checks / 'holding').exists())
+        second = self.start_land(lanes[1])
+        self.wait_for(lambda: len(self.queued()) == 2)
+        third = self.start_land(lanes[2])
+        self.wait_for(lambda: len(self.queued()) == 3)
+        self.wait_for(lambda: 'queue position 3; head my-lane' in Path(third[1].name).read_text())
+        waiting = self.queued()[1]
+        before = json.loads(waiting.read_text())['heartbeat']
+        self.wait_for(lambda: json.loads(waiting.read_text())['heartbeat'] > before)
+        (checks / 'release').touch()
+        outputs = [self.finish_land(proc) for proc in (first, second, third)]
+        for out in outputs:
+            for stage in ('workspace build', 'Clippy', 'formatting'):
+                self.assertEqual(out.count('pass  ' + stage), 1, out)
+            self.assertNotIn('main moved during the checks', out)
+        self.assertIn('queue position 2; head my-lane', outputs[1])
+        self.assertIn('queue position 3; head my-lane', outputs[2])
+        received = (checks / 'received').read_text().splitlines()
+        self.assertEqual(len(received), 3)
+        self.assertEqual([self.git(self.origin, 'show', '-s', '--format=%s', sha).strip()
+                          for sha in received], ['lane 0', 'lane 1', 'lane 2'])
+        self.assertEqual(self.queued(), [])
+
+    def test_killed_holder_is_reaped_and_the_next_lane_lands(self):
+        checks, lanes = self.queue_lanes()
+        first = self.start_land(lanes[0])
+        self.wait_for(lambda: (checks / 'holding').exists())
+        second = self.start_land(lanes[1])
+        self.wait_for(lambda: len(self.queued()) == 2)
+        first[0].kill()
+        first[0].wait(timeout=10)
+        # Let the fake checker child finish too; only the holder is killed.
+        (checks / 'release').touch()
+        output = self.finish_land(second)
+        self.assertIn('reaped ticket', output)
+        self.assertIn('my-lane', output)
+        self.assertIn('dead process', output)
+        self.assertEqual(self.main_log()[0], 'lane 1')
+        self.assertEqual(self.queued(), [])
+
+    def test_expired_live_holder_resumes_without_pushing(self):
+        checks, lanes = self.queue_lanes()
+        first = self.start_land(lanes[0])
+        self.wait_for(lambda: (checks / 'holding').exists())
+        ticket = self.queued()[0]
+        before = json.loads(ticket.read_text())['heartbeat']
+        self.wait_for(lambda: json.loads(ticket.read_text())['heartbeat'] > before)
+        # Stop the process, including its heartbeat thread, while its checker
+        # blocks. It is alive but has lost its 15-minute lease when it resumes.
+        with (ticket.parent / 'lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            os.kill(first[0].pid, signal.SIGSTOP)
+            # Hold the metadata lock until it is stopped, so its heartbeat
+            # cannot race this edit or leave a stopped thread holding the lock.
+            self.wait_for(lambda: Path(f'/proc/{first[0].pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'T')
+            record = json.loads(ticket.read_text())
+            record['heartbeat'] = time.time() - 901
+            ticket.write_text(json.dumps(record))
+        second = self.start_land(lanes[1])
+        output = self.finish_land(second)
+        self.assertIn('heartbeat older than 15 minutes', output)
+        (checks / 'release').touch()
+        os.kill(first[0].pid, signal.SIGCONT)
+        first[0].wait(timeout=15)
+        first[1].seek(0)
+        refused = first[1].read()
+        self.assertEqual(first[0].returncode, 1, refused)
+        self.assertIn('queue ownership lost; refusing to push', refused)
+        self.assertEqual(len((checks / 'received').read_text().splitlines()), 1)
+        self.assertEqual(self.main_log()[0], 'lane 1')
+        self.assertEqual(self.queued(), [])
+
+    def test_reexec_preserves_ticket_and_process_identity(self):
+        other = self.top / 'other'
+        self.git(self.top, 'clone', '-q', str(self.origin), str(other))
+        with (other / 'tools/land').open('a') as out:
+            out.write('\n# Updated land on main.\n')
+        self.git(other, 'commit', '-qam', 'update land')
+        self.git(other, 'push', '-q', 'origin', 'main')
+        landed = self.land()
+        self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+        self.assertIn('rebased tree has another tools/land; running it', landed.stdout)
+        self.assertEqual(landed.stdout.count('queued ticket 00000000000000000001'), 2)
+        self.assertEqual((self.lane / '.git/land-queue/sequence').read_text().strip(), '1')
+        self.assertEqual(self.queued(), [])
+
+    def test_ticket_sequence_never_resets_when_the_queue_drains(self):
+        for sequence in (1, 2):
+            landed = self.land()
+            self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+            self.assertIn(f'queued ticket {sequence:020d}', landed.stdout)
+            self.assertEqual(self.queued(), [])
 
     def test_more_than_twenty_lost_races_recheck_all_stages_and_land(self):
         checks = self.recording_remote()
@@ -211,7 +310,7 @@ for i in range(22):
         self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
         for stage in ('workspace build', 'Clippy', 'formatting'):
             self.assertEqual(landed.stdout.count('pass  ' + stage), 23)
-        self.assertEqual(landed.stdout.count('test: jitter'), 22)
+        self.assertEqual(landed.stdout.count('main moved during the checks'), 22)
         self.assertNotIn('unchecked', landed.stdout)
 
     def test_a_red_retry_never_pushes_for_each_aggregate(self):
@@ -376,6 +475,13 @@ if not marker.exists():
 
 
 class RetryChecks(unittest.TestCase):
+    def test_pid_reuse_is_dead_even_with_a_recent_heartbeat(self):
+        queue = runpy.run_path(str(ROOT / 'tools/land'))['LandQueue']
+        record = dict(pid=os.getpid(), process_start=('previous boot', '0'), heartbeat=time.time())
+        self.assertEqual(queue.stale(queue, record), 'dead process')
+        record['process_start'] = queue.process(os.getpid())
+        self.assertIsNone(queue.stale(queue, record))
+
     def test_uncertain_graph_or_inventory_runs_full_aggregates(self):
         module = runpy.run_path(str(ROOT / 'tools/land'))
         checks = module['checks']
@@ -390,7 +496,8 @@ class RetryChecks(unittest.TestCase):
                     return True
                 def query(command, **kwargs):
                     return SimpleNamespace(returncode=0, stdout=graph if command[-1] == 'scope' else 'root//:a', stderr='')
-                with patch.dict(checks.__globals__, inventory=lambda: after, check=check), patch('subprocess.run', query):
+                with patch.dict(checks.__globals__, inventory=lambda: after, check=check), \
+                        patch('subprocess.run', query), patch('pathlib.Path.exists', return_value=True):
                     self.assertTrue(checks('scope', before))
                 scoped = [command for command in commands if '--scope' in command]
                 self.assertEqual(len(scoped), 2 if before == after and graph else 0)

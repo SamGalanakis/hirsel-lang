@@ -3,7 +3,8 @@
 
     tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
 
-Fetch and rebase onto origin/main (the files many lanes add to merge with the
+Join the common git directory's FIFO ticket queue, then fetch and rebase
+onto origin/main (the files many lanes add to merge with the
 `hirsel` merge driver, tools/buck2/merging.py), regenerate the build files
 (`sync.py --if-stale`), build the workspace, run Clippy and check formatting
 through Buck2, then push. A push rejected because main moved goes back to the
@@ -18,6 +19,8 @@ to `hirsel-landings.jsonl` in the common git directory, from which main-runs
 names the lane of a commit.
 """
 
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import itertools
 import json
@@ -27,6 +30,7 @@ import re
 import random
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True,
@@ -61,6 +65,161 @@ def say(message):
 
 def git(*arguments):
     return subprocess.run(['git', *arguments], cwd=ROOT, capture_output=True, text=True, env=os.environ | ENV)
+
+
+# Linux's generic ticket lock (include/asm-generic/ticket_spinlock.h:33-49,
+# 63-69) allocates increasing tickets and serves only the oldest. Here a
+# short flock makes allocation/publication atomic; files allow crash recovery
+# and sleeping waiters instead of a CPU spin. See docs/landing.md.
+class LandQueue:
+    EXPIRES = 15 * 60
+    HEARTBEAT = 10
+
+    def __init__(self, lane):
+        common = git('rev-parse', '--path-format=absolute', '--git-common-dir')
+        if common.returncode or not common.stdout.strip():
+            raise ValueError('cannot locate the common git directory')
+        self.directory = Path(common.stdout.strip()) / 'land-queue'
+        self.directory.mkdir(exist_ok=True)
+        self.lane = lane or ROOT.name
+        self.identity = self.process(os.getpid())
+        self.ticket = None
+        self.stop = threading.Event()
+        self.lost = threading.Event()
+        self.worker = None
+
+    @staticmethod
+    def process(pid):
+        # /proc stat's start ticks distinguish PID reuse; boot_id distinguishes
+        # reboots. Never inspect command lines. Zombies count as dead holders.
+        try:
+            fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+            if fields[0] in ('Z', 'X'):
+                return None
+            return (Path('/proc/sys/kernel/random/boot_id').read_text().strip(), fields[19])
+        except (OSError, IndexError):
+            return None
+
+    @contextmanager
+    def locked(self):
+        with (self.directory / 'lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def write(self, path, value):
+        # All writers hold locked(); readers see complete files, even at death.
+        temporary = self.directory / '.pending'
+        temporary.write_text(json.dumps(value) + '\n')
+        temporary.replace(path)
+
+    def tickets(self):
+        return sorted((p for p in self.directory.iterdir() if p.name.isdecimal()),
+                      key=lambda p: int(p.name))
+
+    def stale(self, record):
+        if self.process(record['pid']) != tuple(record['process_start']):
+            return 'dead process'
+        if time.time() - record['heartbeat'] > self.EXPIRES:
+            return 'heartbeat older than 15 minutes'
+        return None
+
+    def refresh(self):
+        if self.ticket is None or not self.ticket.exists():
+            self.lost.set()
+            return False
+        record = json.loads(self.ticket.read_text())
+        if (record['pid'] != os.getpid() or tuple(record['process_start']) != self.identity
+                or record['worktree'] != str(ROOT) or self.stale(record)):
+            self.lost.set()
+            return False
+        record['heartbeat'] = time.time()
+        self.write(self.ticket, record)
+        return True
+
+    def heartbeat(self):
+        while not self.stop.wait(self.HEARTBEAT):
+            try:
+                with self.locked():
+                    if not self.refresh():
+                        return
+            except (OSError, ValueError, KeyError):
+                self.lost.set()
+                return
+
+    def owns_head(self):
+        with self.locked():
+            return (not self.lost.is_set() and self.refresh()
+                    and self.tickets()[0] == self.ticket)
+
+    def __enter__(self):
+        try:
+            with self.locked():
+                inherited = os.environ.get('HIRSEL_LAND_TICKET', '')
+                if inherited:
+                    if not inherited.isdecimal():
+                        raise ValueError('invalid inherited queue ticket')
+                    self.ticket = self.directory / inherited
+                    if not self.refresh():
+                        raise ValueError('inherited queue ticket is no longer owned by this process')
+                else:
+                    if self.identity is None:
+                        raise ValueError('cannot determine this process start time')
+                    counter = self.directory / 'sequence'
+                    sequence = max(int(counter.read_text()) if counter.exists() else 0,
+                                   max((int(p.name) for p in self.tickets()), default=0)) + 1
+                    self.write(counter, sequence)
+                    self.ticket = self.directory / f'{sequence:020d}'
+                    now = time.time()
+                    self.write(self.ticket, dict(pid=os.getpid(), process_start=self.identity,
+                                                started=now, heartbeat=now, lane=self.lane,
+                                                worktree=str(ROOT)))
+                    os.environ['HIRSEL_LAND_TICKET'] = self.ticket.name
+                say(f'queued ticket {self.ticket.name} for {self.lane}')
+            # Waiting tickets heartbeat too: a long queue never expires a live lane.
+            self.worker = threading.Thread(target=self.heartbeat, daemon=True)
+            self.worker.start()
+            last = None
+            announced = 0
+            while True:
+                with self.locked():
+                    if self.lost.is_set() or not self.refresh():
+                        raise ValueError('queue ticket expired or was removed; refusing to land')
+                    tickets = self.tickets()
+                    while tickets[0] != self.ticket:
+                        head = tickets[0]
+                        record = json.loads(head.read_text())
+                        reason = self.stale(record)
+                        if not reason:
+                            break
+                        head.unlink()
+                        say(f'reaped ticket {head.name} for {record["lane"]}: {reason}')
+                        tickets.pop(0)
+                    position = tickets.index(self.ticket) + 1
+                    head_lane = json.loads(tickets[0].read_text())['lane']
+                    status = (position, head_lane)
+                    if status != last or time.monotonic() - announced >= 30:
+                        say(f'queue position {position}; head {head_lane}')
+                        last, announced = status, time.monotonic()
+                    if position == 1:
+                        return self
+                self.stop.wait(1)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, *ignored):
+        self.stop.set()
+        if self.worker:
+            self.worker.join()
+        with self.locked():
+            if self.ticket and self.ticket.exists():
+                record = json.loads(self.ticket.read_text())
+                if record['pid'] == os.getpid() and tuple(record['process_start']) == self.identity:
+                    self.ticket.unlink()
+        os.environ.pop('HIRSEL_LAND_TICKET', None)
 
 
 def revision(name):
@@ -230,12 +389,24 @@ def main():
         return 1
     merging.install(ROOT)
     branch = git('branch', '--show-current').stdout.strip()
+    try:
+        with LandQueue(branch) as queue:
+            return land(queue, branch)
+    except (OSError, ValueError) as error:
+        say(f'queue failed: {error}')
+        return 1
+
+
+def land(queue, branch):
     started = time.monotonic()
     # Kept across the re-exec into a rebased tree's own tools/land.
     first = int(os.environ.get('HIRSEL_LAND_ATTEMPT', '1'))
     previous = None
     previous_inventory = None
     for attempt in itertools.count(first):
+        if not queue.owns_head():
+            say('queue ownership lost; refusing to land')
+            return 1
         if (fetched := git('fetch', '-q', 'origin', 'main')).returncode:
             say('git fetch failed\n' + fetched.stderr)
             return 1
@@ -280,6 +451,9 @@ def main():
         previous = (main_sha, head)
         previous_inventory = inventory()
         # Push the checked commit explicitly; HEAD may never select a new tree.
+        if not queue.owns_head():
+            say('queue ownership lost; refusing to push')
+            return 1
         pushed = git('push', 'origin', f'{head}:refs/heads/main')
         if pushed.returncode == 0:
             common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())

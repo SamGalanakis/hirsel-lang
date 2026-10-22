@@ -6,6 +6,35 @@ Run the tests your change can break, commit it, then run:
 tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
 ```
 
+Land first joins a FIFO ticket queue shared by every worktree under
+`$(git rev-parse --git-common-dir)/land-queue/`. Only its head fetches,
+rebases, checks and pushes. A short `flock` protects an atomic sequence
+counter and atomic JSON ticket publication; increasing numeric ticket
+filenames define arrival order. A ticket keeps its place across rejected
+push retries and re-execution into an updated `tools/land`. Exiting releases
+it, including red checks and rebase conflicts. No speculative builds run.
+Waiting lanes print their position and the head's lane name when either
+changes, and at least every 30 seconds.
+
+Each ticket records its lane, worktree, PID, wall-clock start time, Linux
+process start ticks, boot ID and heartbeat. A background thread renews the
+heartbeat every 10 seconds, including during blocking checks; waiting lanes
+renew too, so a long queue does not expire them. Re-execution preserves the
+PID and ticket and restarts the heartbeat thread. The next waiter removes
+and logs a head whose process is dead (including zombies, reboot or PID
+reuse), or whose heartbeat is older than 15 minutes. Process identity uses
+`/proc/<pid>/stat` and boot ID, never command-line matching. It does not
+signal or kill another lane. A resumed holder verifies ticket ownership
+before starting an attempt and immediately before any push; a revoked or
+expired holder refuses to push.
+
+The ordering follows the increasing-ticket/acquire-head/release structure
+of Linux's [generic ticket lock](https://github.com/torvalds/linux/blob/7be4bc52fd9e0e55dc9a2e0232b89427d2c4b614/include/asm-generic/ticket_spinlock.h#L33),
+lines 33–49 and 63–69. Files and a short OS lock replace in-memory atomics;
+sleeping waiters replace spinning; process identity and heartbeats add
+recovery for abandoned tickets. These adaptations serve independent
+processes and survive a lane crash on this single Linux host.
+
 Land fetches and rebases onto a captured `origin/main` commit, regenerates
 stale build inventories, and checks the workspace build, Clippy and fmt.
 The build covers workspace compilation, including test harness compilation;
@@ -31,7 +60,9 @@ jitter algorithm from
 [aws-arch-backoff-simulator](https://github.com/aws-samples/aws-arch-backoff-simulator/blob/master/src/backoff_simulator.py#L40),
 lines 24–25 and 40–43, with a one-second base and a 30-second cap. The
 exponent is bounded before calculation because the number of retries is
-unbounded. No shared resource is held during the wait.
+unbounded. The lane retains its FIFO place during this wait; the short metadata
+lock is released. External writers that do not use the queue can still
+cause a rejected push.
 
 ## When a retry can check fewer crates
 
@@ -114,9 +145,13 @@ python3 tools/buck2/sync.py --if-stale
 
 The host setting supplies Git, which pool workers need not have.
 The test uses a bare local Git remote, real rebases and pushes, and fake
-build tools. Two concurrent lands rendezvous after checking. The remote's
-receive hook requires build, Clippy and fmt records for the exact proposed
-SHA and base; both lanes must eventually reach main. Further cases cover
+build tools. Three concurrent worktrees queue behind a deliberately slow
+first check.
+The remote's receive hook requires build, Clippy and fmt records for the
+exact proposed SHA and base; all three land once, in ticket order. Killed
+and expired live holders are reaped; a resumed holder refuses to push
+after losing its ticket. Re-execution retains the ticket and PID identity.
+Further cases cover
 22 rejected attempts, a red retry in each aggregate, worktree/HEAD edits,
 legacy lint-pass environment variables and conservative scope selection.
 The slow historical retry included native std precompilation: one
