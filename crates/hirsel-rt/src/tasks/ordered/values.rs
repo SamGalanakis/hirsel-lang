@@ -39,6 +39,10 @@ pub(super) enum Node {
         arms: Vec<Vec<Field>>,
     },
     Handle(Kind),
+    Indirect {
+        node: usize,
+        descriptor: u32,
+    },
     /// Missing metadata is never permission to inspect arbitrary bytes.
     Unsupported {
         extent: usize,
@@ -50,7 +54,7 @@ impl Node {
         match self {
             Self::Bits(bytes) => *bytes,
             Self::Bool => 1,
-            Self::Handle(_) => 8,
+            Self::Handle(_) | Self::Indirect { .. } => 8,
             Self::Fields { extent, .. }
             | Self::Variant { extent, .. }
             | Self::Unsupported { extent } => *extent,
@@ -176,6 +180,11 @@ impl Program {
                 VALUE_HANDLE if extent == 8 => {
                     Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
                 }
+                VALUE_INDIRECT if extent == 8 => {
+                    let descriptor = u32::try_from(header[3]).map_err(|_| Error::Program)?;
+                    let node = field(&[VALUE_FIELD, 0, header[3], u64::MAX, 0, 0, 0, 0])?.node;
+                    Node::Indirect { node, descriptor }
+                }
                 VALUE_UNKNOWN => Node::Unsupported { extent },
                 _ => return Err(Error::Program),
             };
@@ -210,6 +219,7 @@ impl Program {
                 Node::Bits(bytes) if !matches!(bytes, 1 | 2 | 4 | 8 | 16) => {
                     return Err(Error::Program);
                 }
+                Node::Indirect { node, .. } if *node >= nodes.len() => return Err(Error::Program),
                 Node::Fields { fields, .. } => check_fields(fields)?,
                 Node::Variant { tag, arms, .. } => {
                     if arms.is_empty() || arms.len() > WORK_MAX {
@@ -300,6 +310,16 @@ impl Program {
                     if out.len() > BYTES_MAX {
                         return Err(Error::Limit);
                     }
+                    continue;
+                }
+                Node::Indirect { node, descriptor } => {
+                    let block = unsafe { at.cast::<*const crate::Header>().read_unaligned() };
+                    if block.is_null() || unsafe { (*block).index() } != *descriptor {
+                        return Err(Error::Value);
+                    }
+                    // The typed live carrier owns this counted payload; only
+                    // initialized fields of its linked layout are traversed.
+                    work.push((*node, unsafe { block.add(1).cast() }));
                     continue;
                 }
                 Node::Fields { fields, .. } => fields,
@@ -426,6 +446,378 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn native_layouts(
+        table: &hirsel_lir::layout_types::LayoutTable,
+        rotation: usize,
+    ) -> (Vec<Vec<u64>>, Vec<crate::Layout>) {
+        use hirsel_lir::layout_types::SizeSpec;
+        let count = table.layouts.len();
+        let linked = |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+        let words: Vec<_> = table
+            .layouts
+            .iter()
+            .map(|record| {
+                hirsel_lir::handle_scan::Program::lower(record)
+                    .linked(|id| Some(linked(id)))
+                    .unwrap()
+            })
+            .collect();
+        let layouts = table
+            .layouts
+            .iter()
+            .enumerate()
+            .map(|(i, record)| crate::Layout {
+                magic: crate::LAYOUT_MAGIC,
+                version: crate::LAYOUT_VERSION,
+                size: match record.size {
+                    SizeSpec::Fixed(size) => size,
+                    _ => panic!("fixed graph fixture"),
+                },
+                align: u64::from(record.align),
+                finalizer: None,
+                steps: std::ptr::null(),
+                step_count: 0,
+                field_count: 0,
+                flags: 0,
+                logical: 0,
+                logical_count: std::ptr::null(),
+                scan: words[i].as_ptr(),
+                scan_words: words[i].len() as u64,
+            })
+            .collect();
+        (words, layouts)
+    }
+
+    #[test]
+    fn linked_indirect_values_ignore_addresses_counts_padding_and_layout_index_order() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
+        use hirsel_types::{BuiltinType, GenericArgument, Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let boolean = types.p(Primitive::Bool);
+            let number = types.p(Primitive::U64);
+            let record = types.record(&[boolean, number]);
+            let boxed = types.boxed(record);
+            let shared = types.builtin(BuiltinType::Shared, vec![GenericArgument::Type(boxed)]);
+            let pair = types.record(&[boxed, shared]);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.layout(&types.store, pair).unwrap();
+            let table = builder.finish();
+            let pair = &table.layouts[root.0 as usize];
+            let LayoutKind::Box { payload } = table.layouts[pair.fields[0].layout.0 as usize].kind
+            else {
+                panic!("box")
+            };
+            let LayoutKind::Shared { payload: frozen } =
+                table.layouts[pair.fields[1].layout.0 as usize].kind
+            else {
+                panic!("shared")
+            };
+            let mut reference = None;
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let program = unsafe {
+                    Program::from_layouts(linked(root), count as u32 + 2, |id| {
+                        &layouts[((id as usize - 2) + count - rotation) % count]
+                    })
+                }
+                .unwrap();
+                let mut first = MaybeUninit::<[u64; 3]>::uninit();
+                let mut second = MaybeUninit::<[u64; 3]>::uninit();
+                let mut frozen_value = MaybeUninit::<[u64; 2]>::uninit();
+                let mut frozen_other = MaybeUninit::<[u64; 2]>::uninit();
+                unsafe {
+                    for (block, count) in [(first.as_mut_ptr(), 1), (second.as_mut_ptr(), 79)] {
+                        let block = block.cast::<crate::Header>();
+                        block.write(crate::Header {
+                            count,
+                            descriptor: linked(payload),
+                        });
+                        block.add(1).cast::<u8>().write(1);
+                        block.add(1).cast::<u8>().add(8).cast::<u64>().write(42);
+                    }
+                    let a = first.as_ptr().cast::<crate::Header>();
+                    let b = second.as_ptr().cast::<crate::Header>();
+                    for (frozen_block, boxed) in [
+                        (frozen_value.as_mut_ptr(), a),
+                        (frozen_other.as_mut_ptr(), b),
+                    ] {
+                        let block = frozen_block.cast::<crate::Header>();
+                        block.write(crate::Header {
+                            count: 9,
+                            descriptor: linked(frozen),
+                        });
+                        block.add(1).cast::<*const crate::Header>().write(boxed);
+                    }
+                    let one = [a as u64, frozen_value.as_ptr() as u64];
+                    let other = [b as u64, frozen_other.as_ptr() as u64];
+                    let bytes = program.encode(one.as_ptr().cast(), |_, _| None).unwrap();
+                    assert_eq!(
+                        bytes,
+                        [&[1][..], &42u64.to_le_bytes(), &[1], &42u64.to_le_bytes()].concat()
+                    );
+                    assert_eq!(
+                        program.encode(other.as_ptr().cast(), |_, _| None).unwrap(),
+                        bytes
+                    );
+                    if let Some(reference) = &reference {
+                        assert_eq!(&bytes, reference);
+                    } else {
+                        reference = Some(bytes);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_boxed_message_events_own_linked_payloads_before_caller_mutation() {
+        use crate::tasks::*;
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{LayoutKind, SizeSpec, TagForm, TargetSpec};
+        use hirsel_types::{Primitive, testing::Types};
+        use std::sync::{Arc, Mutex};
+        let mut types = Types::default();
+        let boolean = types.p(Primitive::Bool);
+        let number = types.p(Primitive::U64);
+        let record = types.record(&[boolean, number]);
+        let boxed = types.boxed(record);
+        let option = types.variant(&[&[], &[boxed]]);
+        let owners = Owners::default();
+        let mut builder = LayoutBuilder::new(&TargetSpec::x86_64_unknown_linux_gnu(), &owners);
+        let root = builder.layout(&types.store, option).unwrap();
+        let table = builder.finish();
+        let option = &table.layouts[root.0 as usize];
+        let tag = option.tag.as_ref().unwrap();
+        let pointer_offset = tag.variants[1].fields[0].offset as usize;
+        let tag_offset = tag.offset as usize;
+        let explicit_tag = matches!(tag.form, TagForm::Ordinal);
+        let LayoutKind::Box { payload } =
+            table.layouts[tag.variants[1].fields[0].layout.0 as usize].kind
+        else {
+            panic!("box")
+        };
+        let SizeSpec::Fixed(extent) = option.size else {
+            panic!("fixed option")
+        };
+        let mut reference = None;
+        for rotation in [0, 1] {
+            let count = table.layouts.len();
+            let linked = |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+            let (_words, layouts) = native_layouts(&table, rotation);
+            let pointers: Vec<_> = (0..count)
+                .map(|id| &layouts[(id + count - rotation) % count] as *const crate::Layout)
+                .collect();
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = pointers.as_ptr();
+                    run.config.layout_count = pointers.len() as u32;
+                    unsafe { run.use_physical_dispatch() };
+                    let descriptor = linked(root);
+                    let payload = linked(payload);
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            let mut policy =
+                                crate::ordered::Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            super::super::events::enable(ctx);
+                        },
+                        move |ctx| unsafe {
+                            let mut endpoints = [0u64; 2];
+                            let none = vec![0u64; extent.div_ceil(8) as usize];
+                            assert_eq!(
+                                hirsel_rt_v2_channel_open(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    endpoints.as_mut_ptr(),
+                                    &0,
+                                    none.as_ptr().cast(),
+                                    descriptor
+                                ),
+                                crate::STATUS_OK
+                            );
+                            let block = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                payload,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(block).write(1);
+                            crate::alloc::payload(block).add(8).cast::<u64>().write(42);
+                            let mut image = none.clone();
+                            if explicit_tag {
+                                image
+                                    .as_mut_ptr()
+                                    .cast::<u8>()
+                                    .add(tag_offset)
+                                    .cast::<u32>()
+                                    .write(1);
+                            }
+                            image
+                                .as_mut_ptr()
+                                .cast::<u8>()
+                                .add(pointer_offset)
+                                .cast::<*mut crate::Header>()
+                                .write(block);
+                            let mut status = u32::MAX;
+                            assert_eq!(
+                                hirsel_rt_v2_channel_send(
+                                    ctx,
+                                    &mut status,
+                                    &mut endpoints[0],
+                                    image.as_mut_ptr().cast()
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(status, crate::channels::DONE);
+                            assert_eq!(image, none);
+                            let mut received = none.clone();
+                            assert_eq!(
+                                hirsel_rt_v2_channel_receive(
+                                    ctx,
+                                    0,
+                                    0,
+                                    &mut status,
+                                    &mut endpoints[1],
+                                    received.as_mut_ptr().cast()
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(status, crate::channels::DONE);
+                            assert_eq!(
+                                received
+                                    .as_ptr()
+                                    .cast::<u8>()
+                                    .add(pointer_offset)
+                                    .cast::<*mut crate::Header>()
+                                    .read(),
+                                block
+                            );
+                            crate::alloc::payload(block).add(8).cast::<u64>().write(99);
+                            received.fill(0);
+                            assert_eq!(
+                                crate::release::hirsel_rt_v2_release(
+                                    ctx,
+                                    block,
+                                    payload,
+                                    std::ptr::null(),
+                                    0,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(close_endpoint(ctx, endpoints[0], 0, 0), crate::STATUS_OK);
+                            assert_eq!(close_endpoint(ctx, endpoints[1], 0, 0), crate::STATUS_OK);
+                            let _role = role::Guard::new(ctx);
+                            super::super::engine::at_head(ctx).unwrap();
+                            let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                            let rows = log.canonical().unwrap();
+                            let expected =
+                                [1u32.to_le_bytes().as_slice(), &[1], &42u64.to_le_bytes()]
+                                    .concat();
+                            assert!(rows.iter().any(|row| row.outcome
+                                == super::super::events::CanonicalOutcome::Value {
+                                    status: 0,
+                                    payload: expected.clone()
+                                }));
+                            assert!(rows.iter().any(|row| row.outcome
+                                == super::super::events::CanonicalOutcome::Received {
+                                    status: crate::channels::DONE,
+                                    payload: Some(expected.clone())
+                                }));
+                            *seen.lock().unwrap() = rows.to_vec();
+                            crate::STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let rows = output.lock().unwrap().clone();
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indirect_values_reject_null_mismatched_descriptors_and_bounded_cycles() {
+        let program = Program::new(
+            vec![
+                Node::Indirect {
+                    node: 1,
+                    descriptor: 17,
+                },
+                Node::Bits(8),
+            ],
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { program.encode((&0u64 as *const u64).cast(), |_, _| None) },
+            Err(Error::Value)
+        );
+        let wrong = [crate::Header {
+            count: 1,
+            descriptor: 18,
+        }];
+        let pointer = wrong.as_ptr();
+        assert_eq!(
+            unsafe {
+                program.encode((&pointer as *const *const crate::Header).cast(), |_, _| {
+                    None
+                })
+            },
+            Err(Error::Value)
+        );
+        let cycle = Program::new(
+            vec![Node::Indirect {
+                node: 0,
+                descriptor: 17,
+            }],
+            0,
+        )
+        .unwrap();
+        let mut block = [0u64; 2];
+        let pointer = block.as_mut_ptr().cast::<crate::Header>();
+        unsafe {
+            pointer.write(crate::Header {
+                count: 1,
+                descriptor: 17,
+            });
+            pointer.add(1).cast::<*mut crate::Header>().write(pointer);
+        }
+        assert_eq!(
+            unsafe { cycle.encode((&pointer as *const *mut crate::Header).cast(), |_, _| None) },
+            Err(Error::Limit)
+        );
+        assert!(
+            Program::new(
+                vec![Node::Indirect {
+                    node: 1,
+                    descriptor: 17
+                }],
+                0
+            )
+            .is_err()
+        );
     }
 
     #[test]

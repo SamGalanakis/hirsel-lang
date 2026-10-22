@@ -78,7 +78,7 @@ impl Program {
                     VALUE_BITS
                 };
             }
-            LayoutKind::Unit | LayoutKind::Aggregate => {
+            LayoutKind::Unit | LayoutKind::Aggregate | LayoutKind::Frozen { .. } => {
                 self.words[at + 1] = VALUE_FIELDS;
                 for field in &record.fields {
                     self.value_field(field, u64::MAX);
@@ -113,6 +113,12 @@ impl Program {
                         self.value_field(field, u64::from(arm.ordinal));
                     }
                 }
+            }
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => {
+                self.words[at + 1] = VALUE_INDIRECT;
+                self.reference(at + 3, *payload);
             }
             LayoutKind::Handle => {
                 if let [

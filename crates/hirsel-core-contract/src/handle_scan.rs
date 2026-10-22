@@ -32,3 +32,7 @@ pub const VALUE_BOOL: u64 = 2;
 pub const VALUE_FIELDS: u64 = 3;
 pub const VALUE_VARIANT: u64 = 4;
 pub const VALUE_HANDLE: u64 = 5;
+
+/// Fixed counted pointer value (runtime ABI 40); VALUE operand3 is the linked
+/// payload layout. Headers, addresses and reference counts are not values.
+pub const VALUE_INDIRECT: u64 = 6;
