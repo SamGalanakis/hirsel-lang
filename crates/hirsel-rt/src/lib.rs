@@ -34,6 +34,7 @@ mod io_home;
 pub mod io_keys;
 pub mod io_metrics;
 pub mod io_net_script;
+mod io_observation;
 pub mod io_real;
 pub mod io_sim;
 pub mod isolate;
