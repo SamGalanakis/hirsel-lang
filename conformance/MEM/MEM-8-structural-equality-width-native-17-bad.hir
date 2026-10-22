@@ -1,0 +1,8 @@
+// rule: MEM-8
+// expect: reject MEM-8 at line 5
+// twin: MEM/MEM-8-structural-equality-native-17-run.hir
+fn add(a: i128, b: i128) -> bool {
+  let x: Simd[i128, 0] = simd.splat(a)
+  let y: Simd[i128, 2] = simd.splat(b)
+  simd.add(x, y) == x
+}

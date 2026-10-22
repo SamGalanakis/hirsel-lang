@@ -43,3 +43,4 @@ mod noalloc_cleanup_model_16;
 mod flat_storage_audit_16;
 mod native_desc_cell_16;
 mod simd_native_widths_17;
+mod native_simd_eq_17;

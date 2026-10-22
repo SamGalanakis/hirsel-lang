@@ -2825,6 +2825,8 @@ conformance/MEM/MEM-8-splat-scalar-domain-ok.hir
 conformance/MEM/MEM-8-splat-width-bad.hir
 conformance/MEM/MEM-8-splat-width-ok.hir
 conformance/MEM/MEM-8-string-lane-annotation-bad.hir
+conformance/MEM/MEM-8-structural-equality-native-17-run.hir
+conformance/MEM/MEM-8-structural-equality-width-native-17-bad.hir
 conformance/MEM/MEM-8-width-parameter.hir
 conformance/MEM/MEM-8-zero-width-annotation-bad.hir
 conformance/MEM/MEM-9-nominal-unsafe-bad.hir

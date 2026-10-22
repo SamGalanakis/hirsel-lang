@@ -1,0 +1,14 @@
+// rule: MEM-8
+// expect: run
+// GEN-1 structural data equality, SEM-2 IEEE float equality, MEM-8 vectors.
+fn add(a: i128, b: i128) -> bool {
+  let x: Simd[i128, 2] = simd.splat(a)
+  let y: Simd[i128, 2] = simd.splat(b)
+  simd.add(x, y) == x
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(add(17i128, 0i128), TextInvariant())
+  failure.check(!add(17i128, 1i128), TextInvariant())
+  Ok(())
+}

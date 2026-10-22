@@ -409,6 +409,12 @@ impl Gen<'_, '_> {
                 let count = self.u64(*count);
                 self.elements(*element, stride, left, right, count, deeper)?;
             }
+            LayoutKind::Simd { element, lanes } => {
+                // GEN-1/MEM-8: structural equality compares scalar lanes in order.
+                let stride = self.size(*element)?;
+                let count = self.u64(u64::from(*lanes));
+                self.elements(*element, stride, left, right, count, deeper)?;
+            }
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
                 let l = self.load(PTR, left);
                 let r = self.load(PTR, right);
@@ -471,7 +477,6 @@ impl Gen<'_, '_> {
             }
             LayoutKind::Opaque { .. } => self.container(layout, left, right, deeper)?,
             LayoutKind::Packed
-            | LayoutKind::Simd { .. }
             | LayoutKind::Flat
             | LayoutKind::SoaColumns { .. }
             | LayoutKind::Sequence { .. }
