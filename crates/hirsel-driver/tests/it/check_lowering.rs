@@ -38,8 +38,12 @@ fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         program
             .engine
-            .recomputed(QueryKind::Lower)
+            // Nested S1 evaluations lower helpers in worker-local caches;
+            // published Lower receipts enumerate only roots. Count physical
+            // adapter calls over all checked definitions, including helpers.
+            .recomputed(QueryKind::Check)
             .into_iter()
+            .filter(|path| program.engine.lower_adapter_calls(path) != 0)
             // A generic instance's path ends in its arguments' digest.
             .map(|path| match path.to_string().split_once("$instance$") {
                 Some((declaration, _)) => format!("{declaration}$instance"),
