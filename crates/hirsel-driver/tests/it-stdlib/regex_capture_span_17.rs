@@ -203,3 +203,16 @@ fn verify_trace_copies(root: &Path, std_root: &Path) {
         );
     }
 }
+
+// A bounded wrapper check is useful when the complete differential matrices
+// have already run from frozen production sources outside this test harness.
+#[test]
+fn capture_span_wrapper_smoke() {
+    for backend in [
+        None,
+        Some(native::Backend::Llvm),
+        Some(native::Backend::Cranelift),
+    ] {
+        check_capture(backend, &["capture_forced_limits"]);
+    }
+}
