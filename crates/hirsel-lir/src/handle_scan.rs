@@ -146,6 +146,9 @@ impl Program {
                 self.words[at + 1] = VALUE_SLICE;
                 self.reference(at + 3, *element);
             }
+            LayoutKind::Path if size == 8 => {
+                self.words[at + 1] = VALUE_PATH;
+            }
             LayoutKind::Handle => {
                 if let [
                     ScanStep::Handle {

@@ -39,6 +39,7 @@ pub(super) enum Node {
         arms: Vec<Vec<Field>>,
     },
     Handle(Kind),
+    Path,
     Indirect {
         node: usize,
         descriptor: u32,
@@ -64,7 +65,7 @@ impl Node {
             Self::Bits(bytes) => *bytes,
             Self::Bool => 1,
             Self::Slice { .. } => 24,
-            Self::Handle(_) | Self::Indirect { .. } => 8,
+            Self::Handle(_) | Self::Path | Self::Indirect { .. } => 8,
             Self::Sequence { minimum, .. } => *minimum,
             Self::Fields { extent, .. }
             | Self::Variant { extent, .. }
@@ -82,13 +83,25 @@ pub(super) enum Error {
     Limit,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct Program {
     nodes: Vec<Node>,
     root: usize,
     /// Owner layouts may differ from the view layout (including flat views).
     /// Copy immutable extent facts only; no worker/heap borrow spans encoding.
     owners: Vec<OwnerBounds>,
+    names: Option<std::sync::Arc<crate::paths::Names>>,
+}
+
+impl std::fmt::Debug for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Program")
+            .field("nodes", &self.nodes)
+            .field("root", &self.root)
+            .field("owners", &self.owners)
+            .field("names_bound", &self.names.is_some())
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -130,9 +143,13 @@ impl Program {
     /// Matching immutable descriptors and programs live for this run.
     pub(super) unsafe fn linked(ctx: *mut crate::TaskCtx, root: u32) -> Result<Self, Error> {
         unsafe {
-            Self::from_layouts(root, (*ctx).heap_ref().layout_count(), |id| {
+            let mut program = Self::from_layouts(root, (*ctx).heap_ref().layout_count(), |id| {
                 (*ctx).descriptor(id)
-            })
+            })?;
+            if program.nodes.iter().any(|node| matches!(node, Node::Path)) {
+                program.names = (*ctx).run_ref().names.clone();
+            }
+            Ok(program)
         }
     }
 
@@ -223,6 +240,7 @@ impl Program {
                     };
                     Node::Variant { extent, tag, arms }
                 }
+                VALUE_PATH if extent == 8 => Node::Path,
                 VALUE_HANDLE if extent == 8 => {
                     Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
                 }
@@ -346,6 +364,7 @@ impl Program {
             nodes,
             root,
             owners: Vec::new(),
+            names: None,
         })
     }
 
@@ -395,6 +414,24 @@ impl Program {
                         return Err(Error::Value);
                     }
                     out.push(value);
+                    continue;
+                }
+                Node::Path => {
+                    // SER-2's codec.rs Node::Path normalization: text is
+                    // semantic, while insertion order and the intern word vary.
+                    let word = unsafe { at.cast::<u64>().read_unaligned() };
+                    let names = self.names.as_ref().ok_or(Error::Unsupported)?;
+                    let text = names.paths.text(word).ok_or(Error::Value)?;
+                    if out
+                        .len()
+                        .checked_add(8)
+                        .and_then(|n| n.checked_add(text.len()))
+                        .is_none_or(|n| n > BYTES_MAX)
+                    {
+                        return Err(Error::Limit);
+                    }
+                    out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                    out.extend_from_slice(text.as_bytes());
                     continue;
                 }
                 Node::Handle(kind) => {
@@ -1487,6 +1524,255 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn path_layout(
+        target: &hirsel_lir::layout_types::TargetSpec,
+        option: bool,
+    ) -> (hirsel_lir::layout_types::LayoutTable, hirsel_lir::LayoutId) {
+        use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+        use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
+        use hirsel_types::testing::Types;
+        let path = DefPath(ItemPath {
+            package: PackageId {
+                name: "core".into(),
+                version: "1".into(),
+            },
+            modules: Vec::new(),
+            name: "Path".into(),
+        });
+        let mut owners = Owners::default();
+        owners.nominals.insert(
+            path.clone().into(),
+            OwnerRepresentation::Handle {
+                revision: ContentHash::of_bytes(b"path trace fixture"),
+                resource: false,
+            },
+        );
+        let mut types = Types::default();
+        let path = types.named(&path, Vec::new());
+        let value = if option {
+            types.variant(&[&[], &[path]])
+        } else {
+            path
+        };
+        let mut builder = LayoutBuilder::new(target, &owners);
+        let root = builder.layout(&types.store, value).unwrap();
+        (builder.finish(), root)
+    }
+
+    #[test]
+    fn linked_path_values_resolve_text_and_reject_unknown_provenance() {
+        use hirsel_lir::layout_types::TargetSpec;
+        for target in TargetSpec::executed() {
+            let (table, root) = path_layout(&target, false);
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let mut program = unsafe {
+                    Program::from_layouts(linked(root), count as u32 + 2, |id| {
+                        &layouts[((id as usize - 2) + count - rotation) % count]
+                    })
+                }
+                .unwrap();
+                assert_eq!(
+                    unsafe { program.encode((&1u64 as *const u64).cast(), |_, _| None) },
+                    Err(Error::Unsupported)
+                );
+                for noise in [0, 7] {
+                    let names = std::sync::Arc::new(crate::paths::Names::default());
+                    for i in 0..noise {
+                        names.paths.intern(&format!("/noise/{i}"));
+                    }
+                    let word = names.paths.intern("/dir/h\u{e9}llo");
+                    program.names = Some(names.clone());
+                    let text = "/dir/h\u{e9}llo";
+                    let expected = [
+                        (text.len() as u64).to_le_bytes().as_slice(),
+                        text.as_bytes(),
+                    ]
+                    .concat();
+                    assert_eq!(
+                        unsafe { program.encode((&word as *const u64).cast(), |_, _| None) }
+                            .unwrap(),
+                        expected
+                    );
+                    for unknown in [0, u64::MAX] {
+                        assert_eq!(
+                            unsafe { program.encode((&unknown as *const u64).cast(), |_, _| None) },
+                            Err(Error::Value)
+                        );
+                    }
+                    let huge = names.paths.intern(&"x".repeat(BYTES_MAX));
+                    assert_eq!(
+                        unsafe { program.encode((&huge as *const u64).cast(), |_, _| None) },
+                        Err(Error::Limit)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_path_message_events_ignore_concurrent_intern_order() {
+        use crate::tasks::*;
+        use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
+        use std::sync::{Arc, Mutex};
+        let (table, root) = path_layout(&TargetSpec::x86_64_unknown_linux_gnu(), true);
+        let option = &table.layouts[root.0 as usize];
+        let tag = option.tag.as_ref().unwrap();
+        let word_offset = tag.variants[1].fields[0].offset as usize;
+        let tag_offset = tag.offset as usize;
+        let explicit_tag = matches!(tag.form, TagForm::Ordinal);
+        let SizeSpec::Fixed(extent) = option.size else {
+            panic!("fixed path option")
+        };
+        let mut reference = None;
+        let mut physical = Vec::new();
+        for rotation in [0, 1] {
+            let count = table.layouts.len();
+            let linked = |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+            let (_words, layouts) = native_layouts(&table, rotation);
+            let pointers: Vec<_> = (0..count)
+                .map(|id| &layouts[(id + count - rotation) % count] as *const crate::Layout)
+                .collect();
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let names = Arc::new(crate::paths::Names::default());
+                    // Concurrent interning changes the physical word before the
+                    // same semantic value is delivered through the native channel.
+                    std::thread::scope(|scope| {
+                        for i in 0..width {
+                            let names = &names;
+                            scope.spawn(move || {
+                                names.paths.intern(&format!("/noise/{i}"));
+                            });
+                        }
+                    });
+                    let word = names.paths.intern("/same/path");
+                    physical.push(word);
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = pointers.as_ptr();
+                    run.config.layout_count = pointers.len() as u32;
+                    unsafe { run.use_physical_dispatch() };
+                    let descriptor = linked(root);
+                    let outcome = run.run(
+                        move |ctx| unsafe {
+                            (*ctx).run().names = Some(names);
+                            let mut policy =
+                                crate::ordered::Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            super::super::events::enable(ctx);
+                        },
+                        move |ctx| unsafe {
+                            let mut endpoints = [0u64; 2];
+                            let none = vec![0u64; extent.div_ceil(8) as usize];
+                            assert_eq!(
+                                hirsel_rt_v2_channel_open(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    endpoints.as_mut_ptr(),
+                                    &0,
+                                    none.as_ptr().cast(),
+                                    descriptor
+                                ),
+                                crate::STATUS_OK
+                            );
+                            let mut image = none.clone();
+                            if explicit_tag {
+                                image
+                                    .as_mut_ptr()
+                                    .cast::<u8>()
+                                    .add(tag_offset)
+                                    .cast::<u32>()
+                                    .write(1);
+                            }
+                            image
+                                .as_mut_ptr()
+                                .cast::<u8>()
+                                .add(word_offset)
+                                .cast::<u64>()
+                                .write(word);
+                            let mut status = u32::MAX;
+                            assert_eq!(
+                                hirsel_rt_v2_channel_send(
+                                    ctx,
+                                    &mut status,
+                                    &mut endpoints[0],
+                                    image.as_mut_ptr().cast()
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(status, crate::channels::DONE);
+                            assert_eq!(image, none);
+                            let mut received = none.clone();
+                            assert_eq!(
+                                hirsel_rt_v2_channel_receive(
+                                    ctx,
+                                    0,
+                                    0,
+                                    &mut status,
+                                    &mut endpoints[1],
+                                    received.as_mut_ptr().cast()
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(status, crate::channels::DONE);
+                            assert_eq!(
+                                received
+                                    .as_ptr()
+                                    .cast::<u8>()
+                                    .add(word_offset)
+                                    .cast::<u64>()
+                                    .read(),
+                                word
+                            );
+                            received.fill(0);
+                            assert_eq!(close_endpoint(ctx, endpoints[0], 0, 0), crate::STATUS_OK);
+                            assert_eq!(close_endpoint(ctx, endpoints[1], 0, 0), crate::STATUS_OK);
+                            let _role = role::Guard::new(ctx);
+                            super::super::engine::at_head(ctx).unwrap();
+                            let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                            let rows = log.canonical().unwrap();
+                            let expected = [
+                                1u32.to_le_bytes().as_slice(),
+                                &10u64.to_le_bytes(),
+                                b"/same/path",
+                            ]
+                            .concat();
+                            assert!(rows.iter().any(|row| row.outcome
+                                == super::super::events::CanonicalOutcome::Value {
+                                    status: 0,
+                                    payload: expected.clone()
+                                }));
+                            assert!(rows.iter().any(|row| row.outcome
+                                == super::super::events::CanonicalOutcome::Received {
+                                    status: crate::channels::DONE,
+                                    payload: Some(expected.clone())
+                                }));
+                            *seen.lock().unwrap() = rows.to_vec();
+                            crate::STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let rows = output.lock().unwrap().clone();
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
+                    }
+                }
+            }
+        }
+        assert!(physical.windows(2).any(|words| words[0] != words[1]));
     }
 
     #[test]

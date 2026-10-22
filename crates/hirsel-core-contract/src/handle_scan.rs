@@ -44,3 +44,6 @@ pub const VALUE_SEQUENCE: u64 = 7;
 /// String/Bytes view (ABI 42). VALUE operands: kind, extent (24), linked
 /// byte element layout, then zeros. Owner and start are physical provenance.
 pub const VALUE_SLICE: u64 = 8;
+
+/// Run-context Path (ABI 44); the value is its text, never the intern word.
+pub const VALUE_PATH: u64 = 9;
