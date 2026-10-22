@@ -337,7 +337,14 @@ pub(crate) unsafe fn invoke_concurrent(
     ctx: *mut TaskCtx,
     adapter: &dyn crate::io_concurrent::ConcurrentAdapter,
 ) -> Stopped<()> {
-    unsafe { invoke_result(ctx, |request| adapter.call(request.clone())) }
+    let token = unsafe { (*ctx).pending_host.as_ref().unwrap().request.id };
+    unsafe {
+        invoke_discovered(
+            ctx,
+            |request| adapter.call_at(token, request.clone()),
+            |handle| adapter.identity(handle),
+        )
+    }
 }
 
 /// Discover every initialized handle after the bounded effect. The adapter
@@ -753,3 +760,6 @@ mod process_tests;
 
 #[cfg(test)]
 mod cancellation_tests;
+
+#[cfg(test)]
+mod concurrent_tests;
