@@ -1932,7 +1932,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         fn put(&self, _: &store::EntryKey, _: &[u8]) {
             panic!("query publication must identify its product kind");
         }
-        fn put_query(&self, kind: QueryKind, _: &store::EntryKey, _: &[u8]) {
+        fn put_query(&self, kind: QueryKind, _: &store::EntryKey, _: store::Action, _: &[u8]) {
             if kind == QueryKind::Summary {
                 assert_eq!(std::thread::current().id(), self.home);
                 self.summaries.fetch_add(1, Ordering::SeqCst);

@@ -26,6 +26,7 @@ fn key(name: &str) -> EntryKey {
 }
 fn variant(sig: &str, payload: &str) -> Variant {
     Variant {
+        inputs: h("source"),
         reads: Reads::from_vec(vec![(
             ReadKey::Signature(DefId::intern(&path("dep"))),
             h(sig),
@@ -269,7 +270,7 @@ fn bound_entries_reject_wrong_keys_schema_truncation_and_damaged_records() {
     let store = MemStore::default();
     let mut entry = Entry::default();
     let mut v = variant("sig", "checked output");
-    v.bind_payload();
+    v.bind_payload(&key("a"));
     entry.insert(v);
     let bytes = entry.encode_for(&key("a"));
     store.put(&key("a"), &bytes);
@@ -301,5 +302,92 @@ fn bound_entries_reject_wrong_keys_schema_truncation_and_damaged_records() {
     entry.variants[0].reads = Reads::empty();
     store.put(&key("a"), &entry.encode_for(&key("a")));
     let mut loaded = Entry::load(&store, &key("a"));
-    assert!(loaded.variants[0].unbind_payload().is_none());
+    assert!(loaded.variants[0].unbind_payload(&key("a")).is_none());
+}
+
+#[test]
+fn logical_addresses_survive_edits_and_actions_bind_complete_inputs() {
+    let first = key("a");
+    let changed = EntryKey::new(
+        h("env"),
+        &path("a"),
+        h("changed body"),
+        QueryKind::Check,
+        LoweringPolicy::Comptime,
+    );
+    assert_eq!(
+        first.0, changed.0,
+        "logical address excludes source content"
+    );
+    let mut old = variant("signature1", "same result");
+    old.inputs = first.1;
+    let mut new = old.clone();
+    new.inputs = changed.1;
+    assert_ne!(old.action(&first), new.action(&changed));
+    new.inputs = first.1;
+    new.reads = variant("signature2", "unused").reads;
+    assert_ne!(old.action(&first), new.action(&first));
+    old.bind_payload(&first);
+    let mut entry = Entry::default();
+    entry.insert(old.clone());
+    new.inputs = changed.1;
+    new.bind_payload(&changed);
+    entry.insert(new);
+    assert_eq!(
+        entry.variants.len(),
+        2,
+        "variants retain prior source actions"
+    );
+    let store = MemStore::default();
+    store.put(&first, &entry.encode_for(&first));
+    assert_eq!(Entry::load(&store, &changed), entry);
+    assert_eq!(store.len(), 1);
+    let mut lost_inputs = old.clone();
+    lost_inputs.inputs = changed.1;
+    assert!(lost_inputs.unbind_payload(&first).is_none());
+    assert!(old.unbind_payload(&first).is_some());
+    assert_eq!(&*old.payload, b"same result");
+}
+
+#[test]
+fn directory_roots_keep_address_action_and_product_domain_distinct() {
+    let root = scratch("action-domains");
+    let store = DirStore::new(root.clone());
+    let first = key("owner");
+    let changed = EntryKey::new(
+        h("env"),
+        &path("owner"),
+        h("edited"),
+        QueryKind::Check,
+        LoweringPolicy::Comptime,
+    );
+    let mut entry = Entry::default();
+    let mut output = variant("dep", "body");
+    output.inputs = first.1;
+    output.bind_payload(&first);
+    entry.insert(output);
+    let action = entry.action(&first);
+    store.put_query(first.2, &first, action, &entry.encode_for(&first));
+    let artifact_store = hirsel_artifact_store::Store::new(root.clone());
+    let association = artifact_store
+        .lookup(hirsel_artifact_store::Address(first.0))
+        .unwrap();
+    assert_eq!(association.action, action);
+    assert_ne!(association.action.0, first.0);
+    assert_eq!(
+        association.reference.domain.kind,
+        QueryKind::Check as u32 + 16
+    );
+    assert_eq!(
+        Entry::load(&store, &changed),
+        entry,
+        "a new source action still locates the previous record"
+    );
+    let mut wrong_domain = first;
+    wrong_domain.2 = QueryKind::Summary;
+    assert!(
+        store.get(&wrong_domain).is_none(),
+        "a forged key cannot cross product domains"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }

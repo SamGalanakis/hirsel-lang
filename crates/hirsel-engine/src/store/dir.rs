@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 /// After this many bytes written in a process, the store enforces its cap.
@@ -75,18 +75,39 @@ impl DirStore {
     pub fn cap(&self) -> u64 {
         self.cap
     }
+    fn publish(&self, key: &EntryKey, action: super::Action, value: &[u8]) {
+        use hirsel_artifact_store::{Address, Domain, Store};
+        let store = Store::new(self.root.clone());
+        let write = || -> std::io::Result<()> {
+            let reference = store.put(
+                Domain {
+                    kind: key.2 as u32 + 16,
+                    schema: FORMAT,
+                },
+                value,
+            )?;
+            store.associate(Address(key.0), action, reference)
+        };
+        if write().is_ok() {
+            let before = self.written.fetch_add(value.len() as u64, Relaxed);
+            if before == 0 || before / GC_EVERY != (before + value.len() as u64) / GC_EVERY {
+                self.gc(self.cap);
+            }
+        }
+    }
 }
 
 impl ResultStore for DirStore {
     fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
         let store = hirsel_artifact_store::Store::new(self.root.clone());
         let previous = store.lookup(hirsel_artifact_store::Address(key.0))?;
-        if previous.action != hirsel_artifact_store::Action(key.0)
-            || previous.reference.domain
-                != (hirsel_artifact_store::Domain {
-                    kind: 1,
-                    schema: FORMAT,
-                })
+        // The address finds the previous action. The query validates its
+        // explicit inputs and dependency outputs before decoding its payload.
+        if previous.reference.domain
+            != (hirsel_artifact_store::Domain {
+                kind: key.2 as u32 + 16,
+                schema: FORMAT,
+            })
         {
             return None;
         }
@@ -101,24 +122,24 @@ impl ResultStore for DirStore {
         Some(bytes)
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
-        use hirsel_artifact_store::{Action, Address, Domain, Store};
-        let store = Store::new(self.root.clone());
-        let write = || -> std::io::Result<()> {
-            let reference = store.put(
-                Domain {
-                    kind: 1,
-                    schema: FORMAT,
-                },
-                value,
-            )?;
-            store.associate(Address(key.0), Action(key.0), reference)
-        };
-        if write().is_ok() {
-            let before = self.written.fetch_add(value.len() as u64, Relaxed);
-            if before == 0 || before / GC_EVERY != (before + value.len() as u64) / GC_EVERY {
-                self.gc(self.cap);
-            }
-        }
+        self.publish(
+            key,
+            super::Action(hirsel_syntax::ContentHash::of_parts(
+                "hirsel.result.raw-action.v1",
+                [key.0.0.as_slice(), key.1.0.as_slice()],
+            )),
+            value,
+        );
+    }
+    fn put_query(
+        &self,
+        kind: crate::QueryKind,
+        key: &EntryKey,
+        action: super::Action,
+        value: &[u8],
+    ) {
+        assert_eq!(kind, key.2);
+        self.publish(key, action, value);
     }
     fn name(&self) -> &'static str {
         "dir@1"
