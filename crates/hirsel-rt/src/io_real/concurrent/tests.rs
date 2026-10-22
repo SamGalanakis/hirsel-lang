@@ -207,6 +207,89 @@ fn preflight_and_failed_authority_never_touch_the_file() {
 }
 
 #[test]
+fn declared_auxiliary_domains_snapshot_real_ports_and_shared_inherited_sinks_without_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut real = RealIo::grant(temp.path()).unwrap();
+    let storage = Arc::new(Mutex::new(Vec::<u8>::new()));
+    real.set_send_output(crate::host::SendSink::shared(storage.clone()));
+    real.set_send_stderr(crate::host::SendSink::shared(storage.clone()));
+    real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+        provider: "process.spawn@1".into(),
+        rules: vec![],
+        runs: None,
+        children: None,
+    });
+    let io = real
+        .into_concurrent()
+        .unwrap_or_else(|_| panic!("Send streams"));
+    let net = handle(io.call(Request::Net { io: 1 }).unwrap());
+    let process = handle(io.call(Request::Process { io: 1 }).unwrap());
+    let connect = Request::Connect {
+        net,
+        host: "uncontacted.invalid".into(),
+        port: 1,
+        timeout: crate::net::NetTimeout::Unbounded,
+    };
+    let run = Request::ProcessRun {
+        process,
+        command: hirsel_run_schema::Command {
+            program: "not-executed".into(),
+            args: vec![],
+            directory: None,
+            env: None,
+            own_group: false,
+        },
+        stdin: vec![],
+        max_output: 1,
+        deadline: None,
+    };
+    let history = io.tape();
+    let ports = io.domains(&connect);
+    assert_eq!(ports, [(io.net_ports(net).unwrap(), net, "ports".into())]);
+    assert!(io.keys(&connect).contains(ports[0].0, Mode::Exclusive));
+    let inherited = io.domains(&run);
+    let sinks = io.registry.lock().unwrap().inherited_domains();
+    assert_eq!(inherited.len(), sinks.len());
+    for (index, (key, owner, label)) in inherited.iter().enumerate() {
+        assert_eq!(
+            (*key, *owner, label.as_str()),
+            (sinks[index], process, format!("inherited-{index}").as_str())
+        );
+        assert!(io.keys(&run).contains(*key, Mode::Exclusive));
+    }
+    let stdout = handle(io.call(Request::Stdout { io: 1 }).unwrap());
+    let stderr = handle(io.call(Request::Stderr { io: 1 }).unwrap());
+    assert_eq!(
+        io.identity(stdout).unwrap().0,
+        io.identity(stderr).unwrap().0
+    );
+    assert_eq!(
+        sinks
+            .iter()
+            .filter(|&&key| key == io.identity(stdout).unwrap().0)
+            .count(),
+        1
+    );
+    assert_eq!(io.domains(&run), inherited);
+    let mut forged_net = connect.clone();
+    let Request::Connect { net: owner, .. } = &mut forged_net else {
+        unreachable!()
+    };
+    *owner = process;
+    assert!(io.domains(&forged_net).is_empty());
+    let mut forged_process = run.clone();
+    let Request::ProcessRun { process: owner, .. } = &mut forged_process else {
+        unreachable!()
+    };
+    *owner = net;
+    assert!(io.domains(&forged_process).is_empty());
+    // Only grant projections above were issued: metadata starts no provider or process.
+    assert_eq!(&io.tape()[..history.len()], history);
+    assert_eq!(io.tape().len(), history.len() + 2);
+    assert!(storage.lock().unwrap().is_empty());
+}
+
+#[test]
 fn proc_run_is_an_event_source_and_releases_namespace_while_waiting_at_one_and_eight() {
     for width in [1, 8] {
         let temp = tempfile::tempdir().unwrap();

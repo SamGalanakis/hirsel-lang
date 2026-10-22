@@ -88,6 +88,15 @@ fn tape_header(line: Option<&str>) -> bool {
 pub(crate) struct Shared<A>(pub(crate) Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
+    fn keys(&self, request: &Request) -> Option<crate::io_keys::KeySet> {
+        self.0.borrow().keys(request)
+    }
+    fn domains(&self, request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        self.0.borrow().domains(request)
+    }
+    fn identity(&self, handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        self.0.borrow().identity(handle)
+    }
     fn print_observed(
         &mut self,
         handle: u64,

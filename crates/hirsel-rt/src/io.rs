@@ -2394,6 +2394,20 @@ pub trait Adapter {
             }
         })
     }
+    /// Optional declared issue footprint. None keeps legacy home coupling;
+    /// Some requires complete initialized-result identity observations.
+    fn keys(&self, _request: &Request) -> Option<crate::io_keys::KeySet> {
+        None
+    }
+    /// Auxiliary domains, named by a prior handle's resource and a stable label.
+    /// Aliases retain that resource's domain; raw key numbers are never names.
+    fn domains(&self, _request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        Vec::new()
+    }
+    /// A live resource identity, matching the ConcurrentAdapter graph.
+    fn identity(&self, _handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        None
+    }
     /// A synchronous print and its exact externally written prefix, when the
     /// adapter can observe it. Unknown counts remain unknown even on success.
     fn print_observed(
@@ -2933,7 +2947,18 @@ unsafe fn native_print(
     }
     let observing = ordered && crate::tasks::ordered::events::observing(ctx);
     let (result, count) = if observing {
-        crate::tasks::ordered::events::host_phases::request_keys(ctx);
+        let request = if stderr {
+            Request::PrintStderr {
+                stderr: handle,
+                bytes: bytes.to_vec(),
+            }
+        } else {
+            Request::Print {
+                stdout: handle,
+                bytes: bytes.to_vec(),
+            }
+        };
+        unsafe { crate::host_waits::observe_keys(ctx, &request) };
         let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
         unsafe { Binding::get(ctx) }
             .adapter
@@ -2948,6 +2973,7 @@ unsafe fn native_print(
     };
     if ordered {
         if observing {
+            unsafe { crate::host_waits::observe_result(ctx, &result) };
             crate::tasks::ordered::events::record_host_initial(ctx, &result);
             crate::tasks::ordered::events::print_output(ctx, bytes, &result, count);
         }

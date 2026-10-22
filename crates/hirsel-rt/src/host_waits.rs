@@ -370,7 +370,7 @@ pub(crate) unsafe fn issue(
         crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
         crate::tasks::ordered::events::request_host(ctx, &request);
         if crate::tasks::ordered::events::observing(ctx) {
-            crate::tasks::ordered::events::host_phases::request_keys(ctx);
+            unsafe { observe_keys(ctx, &request) };
         }
     }
     let close = matches!(request, Request::Close { .. });
@@ -390,6 +390,60 @@ pub(crate) unsafe fn issue(
     issued
 }
 
+pub(crate) unsafe fn observe_keys(ctx: *mut TaskCtx, request: &Request) {
+    let (keys, domains) = {
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        let adapter = &*unsafe { Binding::get(ctx) }.adapter;
+        let keys = adapter.keys(request);
+        let domains = if keys.is_some() {
+            adapter.domains(request)
+        } else {
+            Vec::new()
+        };
+        (keys, domains)
+    };
+    crate::tasks::ordered::events::request_domains(ctx, domains);
+    crate::tasks::ordered::events::host_phases::request_keys(ctx, keys);
+}
+
+type Discovery = std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>;
+
+fn snapshot(
+    adapter: &dyn crate::io::Adapter,
+    result: &Result<Completion, AdapterError>,
+) -> Result<Discovery, &'static str> {
+    if matches!(result, Err(AdapterError::InvalidHandle(_))) {
+        return Ok(Default::default());
+    }
+    let mut image = result.clone();
+    crate::io_observation::capture(&mut image).map_err(|_| "invalid home mapping")?;
+    crate::io_observation::fields(&mut image)?
+        .into_iter()
+        .flatten()
+        .map(|word| {
+            adapter
+                .identity(*word)
+                .map(|identity| (*word, identity))
+                .ok_or("created home handle has no discovered resource")
+        })
+        .collect()
+}
+
+pub(crate) unsafe fn observe_result(ctx: *mut TaskCtx, result: &Result<Completion, AdapterError>) {
+    if !crate::tasks::ordered::engine::on(ctx)
+        || !crate::tasks::ordered::events::observing(ctx)
+        || !crate::tasks::ordered::events::home_declared(ctx)
+    {
+        return;
+    }
+    let discovered = {
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        snapshot(&*unsafe { Binding::get(ctx) }.adapter, result)
+    };
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    crate::tasks::ordered::events::home_discovery(s, unsafe { (*ctx).task_id }, result, discovered);
+}
+
 unsafe fn issue_here(
     ctx: *mut TaskCtx,
     request: Request,
@@ -398,6 +452,7 @@ unsafe fn issue_here(
         && let Some(completion) = unsafe { canceled(ctx, &request, cause) }?
     {
         let result = Ok(completion);
+        unsafe { observe_result(ctx, &result) };
         crate::tasks::ordered::events::record_host_initial(ctx, &result);
         if crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx) {
             match &request {
@@ -434,11 +489,13 @@ unsafe fn issue_here(
                 let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
                 binding.adapter.print_observed(*handle, stderr, bytes)
             };
+            unsafe { observe_result(ctx, &result) };
             crate::tasks::ordered::events::record_host_initial(ctx, &result);
             crate::tasks::ordered::events::print_output(ctx, bytes, &result, count);
             return Ok((result, false));
         }
         let result = binding.adapter.call(request);
+        unsafe { observe_result(ctx, &result) };
         crate::tasks::ordered::events::record_host_initial(ctx, &result);
         return Ok((result, false));
     }
@@ -451,6 +508,7 @@ unsafe fn issue_here(
     );
     let retry = request.clone();
     let result = binding.adapter.call(request);
+    unsafe { observe_result(ctx, &result) };
     crate::tasks::ordered::events::record_host_initial(ctx, &result);
     // The snapshot owns the first attempt before this frame may be saved.
     match result {
@@ -569,6 +627,12 @@ pub(crate) unsafe fn issue_net(
     if crate::tasks::free::host::native::enabled(ctx) {
         return Ok(None);
     }
+    // Canonical capture needs owned request/result discovery. Decline before
+    // touching a borrowed provider buffer or performing its fast-path effect.
+    if crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx) {
+        return Ok(None);
+    }
+
     // Ordered host waits retain owned request/completion buffers. Borrowed
     // socket storage remains on the owned fallback until its boundary audit.
     if crate::tasks::ordered::engine::on(ctx) {
@@ -876,6 +940,7 @@ pub(crate) unsafe fn poll_observed_home(
                 task,
                 result: attempt.result,
                 discovery: Some(attempt.discovery),
+                keys: None,
             }),
         ));
     }
@@ -890,10 +955,20 @@ pub(crate) unsafe fn poll_observed_home(
     let done = unsafe { poll_binding_observed(binding, token, cause, ready, Some(&mut attempt)) }?;
     Ok((
         done,
-        attempt.map(|result| CompletedHost {
-            task,
-            result,
-            discovery: None,
+        attempt.map(|result| {
+            let request = &binding.waits.parked.get(&token).unwrap().request;
+            let keys = binding.adapter.keys(request);
+            let discovery = Some(if keys.is_some() {
+                snapshot(&*binding.adapter, &result)
+            } else {
+                Err("home retry has no declared footprint")
+            });
+            CompletedHost {
+                task,
+                result,
+                discovery,
+                keys,
+            }
         }),
     ))
 }
@@ -919,6 +994,7 @@ pub(crate) unsafe fn completed_home(
     CompletedHost {
         task: row.task.expect("a parked host owner"),
         discovery: None,
+        keys: None,
         result: crate::tasks::ordered::events::owned_host_result(
             row.completion
                 .as_ref()
@@ -928,6 +1004,7 @@ pub(crate) unsafe fn completed_home(
 }
 
 pub(crate) struct CompletedHost {
+    pub(crate) keys: Option<crate::io_keys::KeySet>,
     pub(crate) discovery: Option<
         Result<
             std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
@@ -1186,25 +1263,31 @@ pub(crate) unsafe fn poll(
     }
     // Borrow only the home service on this bridge; copy the completion while
     // its wait row still owns it, then record after the caller regains role.
-    let (done, attempt) = unsafe {
-        at_home(ctx, || {
-            poll_observed_home((*ctx).run_ptr(), token, cause, ready)
-        })
+    let (done, attempt) = {
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        unsafe {
+            at_home(ctx, || {
+                poll_observed_home((*ctx).run_ptr(), token, cause, ready)
+            })
+        }
     }??;
     if let Some(completion) = attempt {
         // SAFETY: the bridge returned the role; do not observe a stop while
         // this owned completion has yet to be installed in the log.
         let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
-        let discovery = completion.discovery.map_or(Ok(()), |d| {
-            d.and_then(|d| {
-                crate::tasks::ordered::events::discover_host_for(
-                    s,
-                    completion.task,
-                    &completion.result,
-                    &d,
-                )
-            })
-        });
+        crate::tasks::ordered::events::home_retry_keys(
+            s,
+            completion.task,
+            completion.keys.as_ref(),
+        );
+        if let Some(discovered) = completion.discovery {
+            crate::tasks::ordered::events::home_discovery(
+                s,
+                completion.task,
+                &completion.result,
+                discovered,
+            );
+        }
         crate::tasks::ordered::events::record_host_attempt(
             s,
             completion.task,
@@ -1219,7 +1302,6 @@ pub(crate) unsafe fn poll(
                 false,
             );
         }
-        discovery.map_err(|e| Stop::Refused(e.into()))?;
     }
     Ok(done)
 }

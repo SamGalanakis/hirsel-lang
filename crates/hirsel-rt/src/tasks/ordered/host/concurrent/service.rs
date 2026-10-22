@@ -219,6 +219,7 @@ impl Service {
         crate::host_waits::CompletedHost {
             task: row.task.unwrap().0,
             discovery: None,
+            keys: None,
             result: super::super::super::events::owned_host_result(
                 row.completion.as_ref().unwrap(),
             ),
@@ -277,10 +278,11 @@ pub(super) unsafe fn request(
     };
     super::super::super::events::request_host(ctx, request);
     if observing {
-        let keys = {
+        let (keys, domains) = {
             let _segment = unsafe { role::Segment::new(ctx) };
-            adapter.keys(request)
+            (adapter.keys(request), adapter.domains(request))
         };
+        super::super::super::events::request_domains(ctx, domains);
         super::super::super::events::request_keys(ctx, &keys);
         super::super::super::events::concurrent_phases(ctx);
     }

@@ -14,8 +14,15 @@ pub(super) struct Phase {
     keys: Vec<(host_keys::Resource, Mode)>,
 }
 
-pub(crate) fn request_keys(ctx: *mut TaskCtx) {
-    super::request_keys(ctx, &crate::io_keys::KeySet::coupled());
+impl Phase {
+    pub(super) fn invalidate(&mut self) {
+        self.valid = false;
+    }
+}
+
+pub(crate) fn request_keys(ctx: *mut TaskCtx, keys: Option<crate::io_keys::KeySet>) {
+    let declared = keys.is_some();
+    super::request_keys(ctx, &keys.unwrap_or_else(crate::io_keys::KeySet::coupled));
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
     let path = s.task(unsafe { (*ctx).task_id }).path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
@@ -25,7 +32,11 @@ pub(crate) fn request_keys(ctx: *mut TaskCtx) {
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
         .expect("home request follows entry");
-    assert!(log.home_requests.insert((path, ordinal)));
+    let key = (path, ordinal);
+    if declared {
+        assert!(log.home_declared.insert(key.clone()));
+    }
+    assert!(log.home_requests.insert(key));
 }
 
 impl Log {
@@ -37,7 +48,7 @@ impl Log {
         key: &(Vec<u32>, u64),
         result: &Result<crate::io::Completion, AdapterError>,
     ) -> Result<(), &'static str> {
-        if !self.home_requests.contains(key) {
+        if !self.home_requests.contains(key) || self.home_declared.contains(key) {
             return Ok(());
         }
         let result = self.discover_home_fields(key, result);
@@ -131,7 +142,7 @@ impl Log {
         if rows.iter().map(|row| &row.handle).ne(result.handles.iter()) {
             return None;
         }
-        if self.concurrent_requests.contains(key) {
+        if self.concurrent_requests.contains(key) || self.home_declared.contains(key) {
             let mut resources = BTreeSet::new();
             let mut events = Vec::new();
             for row in rows {
@@ -228,6 +239,7 @@ impl Log {
             return;
         };
         if self.home_requests.contains(&key)
+            && !self.home_declared.contains(&key)
             && keys != vec![(host_keys::Resource::Coupled, Mode::Exclusive)]
         {
             return;
@@ -238,6 +250,23 @@ impl Log {
             ordinal,
         });
         let mut events = vec![(operation.clone(), CanonicalOutcome::HostRequest(request))];
+        events.extend(
+            self.host_domains
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|resource| {
+                    !self
+                        .versions
+                        .contains_key(&CanonicalItem::HostResource((*resource).clone()))
+                })
+                .map(|resource| {
+                    (
+                        CanonicalItem::HostResource(resource.clone()),
+                        CanonicalOutcome::HostResourceCreated,
+                    )
+                }),
+        );
         events.extend(keys.iter().map(|(resource, mode)| {
             (
                 CanonicalItem::HostResource(resource.clone()),

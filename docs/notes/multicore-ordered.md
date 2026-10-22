@@ -296,6 +296,28 @@ continues through the existing print path. Native controls compare canonical
 bytes with actual output at widths 1/2/4/8, reorder off/auto and history on/off.
 Production Ordered remains OFF pending the remaining qualification gates.
 
+## Declared home resource graphs
+
+Home adapters may supply optional `keys`, `identity` and `domains` observations.
+Absent declarations preserve conservative Coupled behavior. Shared and home
+facades forward declarations without requiring a Send adapter; `Coupled<A>`
+retains its explicitly conservative concurrent contract. The Ordered observer
+copies metadata outside the scheduler role and uses the existing initialized
+result-field walk and atomic resource discovery to name aliases, split halves
+and their parents. Numeric handle and key allocation order never enters a name.
+Saved retries must retain their entered footprint; missing or conflicting
+metadata refuses export while preserving the adapter's live result.
+
+Auxiliary domains use an already discovered owner's logical resource and a
+stable label. Built-in Net port allocation and inherited process sinks expose
+those snapshots before effects; aliases and shared sinks retain one resource.
+Canonical JSONL adds the `domain` resource kind with `owner` and `label`, and
+publishes its creation before its first access. Controls vary native keys and
+handles across widths 1/2/4/8 and reorder off/auto, exercise parked discovery,
+file aliases and split-direction use, and reject changed or missing metadata.
+They extend the existing host graph and saved-wait protocol; production
+activation, terminal cuts and full differential qualification remain gated.
+
 ## Prior art and deviations
 
 - The queue and call transitions are ports of the executable checked model,

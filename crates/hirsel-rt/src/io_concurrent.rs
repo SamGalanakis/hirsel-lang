@@ -26,6 +26,11 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn keys(&self, _request: &Request) -> KeySet {
         KeySet::coupled()
     }
+    /// Auxiliary domains, named by a prior handle's resource and a stable label.
+    /// Aliases retain that resource's domain; raw key numbers are never names.
+    fn domains(&self, _request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        Vec::new()
+    }
     /// Checked identity of an initialized result or initial grant. Unknown is not coupled.
     fn identity(&self, _handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
         None

@@ -76,11 +76,15 @@ pub(crate) unsafe fn request(
     super::super::events::request_host(ctx, unsafe { &*request });
     let keys = if observing {
         let _segment = unsafe { role::Segment::new(ctx) };
-        Some(adapter.keys(unsafe { &*request }))
+        Some((
+            adapter.keys(unsafe { &*request }),
+            adapter.domains(unsafe { &*request }),
+        ))
     } else {
         None
     };
-    if let Some(keys) = keys {
+    if let Some((keys, domains)) = keys {
+        super::super::events::request_domains(ctx, domains);
         super::super::events::request_keys(ctx, &keys);
     }
     let (result, discovered, output) = {

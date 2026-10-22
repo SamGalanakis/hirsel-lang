@@ -236,6 +236,10 @@ impl Registry {
         }
         Some(KeySet::new(keys))
     }
+    /// Stable admission order of inherited sink domains, independent of keys.
+    pub(crate) fn inherited_domains(&self) -> Vec<Key> {
+        self.sinks.clone()
+    }
     fn handle(&self, handle: u64) -> (Key, Kind) {
         self.handles
             .get(&handle)

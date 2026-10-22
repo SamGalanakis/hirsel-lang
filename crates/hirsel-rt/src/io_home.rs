@@ -81,6 +81,15 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.replay_stderr())
     }
 
+    fn keys(&self, request: &Request) -> Option<crate::io_keys::KeySet> {
+        self.with(|adapter| adapter.keys(request))
+    }
+    fn domains(&self, request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        self.with(|adapter| adapter.domains(request))
+    }
+    fn identity(&self, handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        self.with(|adapter| adapter.identity(handle))
+    }
     fn print_observed(
         &mut self,
         handle: u64,

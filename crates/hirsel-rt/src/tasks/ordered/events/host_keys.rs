@@ -17,6 +17,7 @@ pub(in crate::tasks::ordered) enum Resource {
     Root,
     Place,
     Created(HostHandleId),
+    Domain { owner: Box<Resource>, label: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,6 +120,18 @@ impl super::Log {
             ordinal,
         };
         let mut events = vec![(I::HostOperation(operation.clone()), O::HostRequest(request))];
+        events.extend(
+            self.host_domains
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|resource| {
+                    !self
+                        .versions
+                        .contains_key(&I::HostResource((*resource).clone()))
+                })
+                .map(|resource| (I::HostResource(resource.clone()), O::HostResourceCreated)),
+        );
         events.extend(keys.into_iter().map(|(key, mode)| {
             (
                 I::HostResource(key),
@@ -240,6 +253,7 @@ impl super::Log {
 pub(in crate::tasks::ordered) struct Resources {
     keys: BTreeMap<Key, Resource>,
     identities: BTreeMap<Resource, Key>,
+    domains: BTreeMap<(Resource, String), Resource>,
 }
 
 impl Resources {
@@ -251,6 +265,48 @@ impl Resources {
             crate::io_keys::PLACE => Resource::Place,
             _ => return None,
         })
+    }
+
+    pub(in crate::tasks::ordered) fn domains(
+        &mut self,
+        declarations: &[(Key, Resource, String)],
+    ) -> Result<Vec<Resource>, &'static str> {
+        let mut aliases = self.domains.clone();
+        let mut bindings = BTreeMap::new();
+        let mut created = BTreeSet::new();
+        for (key, owner, label) in declarations {
+            if label.is_empty() {
+                return Err("empty host domain label");
+            }
+            let name = (owner.clone(), label.clone());
+            let known = self
+                .resource(*key)
+                .ok()
+                .or_else(|| bindings.get(key).cloned());
+            let resource = aliases
+                .get(&name)
+                .cloned()
+                .or_else(|| known.clone())
+                .unwrap_or_else(|| {
+                    let resource = Resource::Domain {
+                        owner: Box::new(owner.clone()),
+                        label: label.clone(),
+                    };
+                    created.insert(resource.clone());
+                    resource
+                });
+            if known.as_ref().is_some_and(|prior| prior != &resource)
+                || bindings
+                    .insert(*key, resource.clone())
+                    .is_some_and(|prior| prior != resource)
+            {
+                return Err("host domain changed identity");
+            }
+            aliases.insert(name, resource);
+        }
+        self.bind(&bindings.into_iter().collect::<Vec<_>>())?;
+        self.domains = aliases;
+        Ok(created.into_iter().collect())
     }
 
     /// Validate the whole discovery batch before installing any binding.
@@ -265,7 +321,7 @@ impl Resources {
             if Self::system(*key)
                 .as_ref()
                 .is_some_and(|system| system != resource)
-                || (!matches!(resource, Resource::Created(_))
+                || (!matches!(resource, Resource::Created(_) | Resource::Domain { .. })
                     && Self::system(*key).as_ref() != Some(resource))
                 || self.keys.get(key).is_some_and(|prior| prior != resource)
                 || self
@@ -498,8 +554,23 @@ mod tests {
         );
     }
 
-    struct Check;
+    struct Check {
+        read: Key,
+        write: Key,
+        calls: u8,
+    }
     impl crate::io::Adapter for Check {
+        fn keys(&self, _: &Request) -> Option<KeySet> {
+            Some(KeySet::new(vec![
+                (self.read, Mode::Exclusive),
+                (self.write, Mode::Shared),
+                (crate::io_keys::NAMESPACE, Mode::Shared),
+                (
+                    if self.calls == 0 { self.read } else { Key(199) },
+                    Mode::Shared,
+                ),
+            ]))
+        }
         fn preflight(
             &self,
             _: &Request,
@@ -513,6 +584,7 @@ mod tests {
             let Request::TestCheck { condition, .. } = request else {
                 panic!("test request")
             };
+            self.calls += 1;
             Ok(crate::io::Completion::Checked(condition))
         }
     }
@@ -537,7 +609,11 @@ mod tests {
                 let output = Arc::new(Mutex::new(Vec::new()));
                 let seen = output.clone();
                 let mut run = crate::host::BodyRun::new(width, true);
-                run.adapter = Some(Box::new(Check));
+                run.adapter = Some(Box::new(Check {
+                    read,
+                    write,
+                    calls: 0,
+                }));
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
                     move |ctx| unsafe {
@@ -561,17 +637,7 @@ mod tests {
                             .unwrap();
                     },
                     move |ctx| unsafe {
-                        for unknown in [false, true] {
-                            host::begin(ctx, false).unwrap();
-                            events::request_keys(
-                                ctx,
-                                &KeySet::new(vec![
-                                    (read, Mode::Exclusive),
-                                    (write, Mode::Shared),
-                                    (crate::io_keys::NAMESPACE, Mode::Shared),
-                                    (if unknown { Key(199) } else { read }, Mode::Shared),
-                                ]),
-                            );
+                        for _ in 0..2 {
                             let (result, parked) = crate::host_waits::issue(
                                 ctx,
                                 Request::TestCheck {
@@ -605,7 +671,7 @@ mod tests {
                         );
                         assert!(
                             log.canonical().is_err(),
-                            "declared keys do not admit unimplemented host phases"
+                            "an unknown declared key rejects the complete trace"
                         );
                         *seen.lock().unwrap() = keys;
                         crate::STATUS_OK
@@ -620,6 +686,82 @@ mod tests {
                     reference = Some(keys);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod domain_tests {
+    use super::*;
+    fn owner(ordinal: u64) -> Resource {
+        Resource::Created(HostHandleId {
+            operation: crate::ordered::footprint::ObjectId {
+                creator: vec![],
+                ordinal,
+            },
+            field: 0,
+        })
+    }
+    #[test]
+    fn auxiliary_domains_keep_labels_aliases_and_shared_inherited_sinks_without_numeric_key_identity()
+     {
+        let mut reference = None;
+        for offset in [0, 100] {
+            let mut resources = Resources::default();
+            let net = owner(1);
+            let process = owner(2);
+            let port = Key(40 + offset);
+            let sink = Key(41 + offset);
+            let created = resources
+                .domains(&[
+                    (port, net.clone(), "ports".into()),
+                    (sink, process.clone(), "stdout".into()),
+                    (sink, process.clone(), "stderr".into()),
+                ])
+                .unwrap();
+            assert_eq!(created.len(), 2);
+            assert_eq!(
+                resources
+                    .domains(&[(port, net.clone(), "ports".into())])
+                    .unwrap(),
+                []
+            );
+            let observed = resources
+                .project(&KeySet::new(vec![
+                    (port, Mode::Exclusive),
+                    (sink, Mode::Shared),
+                ]))
+                .unwrap();
+            if let Some(reference) = &reference {
+                assert_eq!(&observed, reference);
+            } else {
+                reference = Some(observed);
+            }
+            assert!(
+                resources
+                    .domains(&[(Key(42 + offset), net.clone(), "ports".into())])
+                    .is_err()
+            );
+            assert!(
+                resources
+                    .domains(&[(port, net.clone(), "".into())])
+                    .is_err()
+            );
+            // A new process may inherit a sink already named by a previous
+            // process or a returned handle; the resource remains the same.
+            assert!(
+                resources
+                    .domains(&[(sink, owner(3), "stdout".into())])
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                resources.resource(sink).unwrap(),
+                Resource::Domain {
+                    owner: Box::new(process),
+                    label: "stdout".into()
+                }
+            );
         }
     }
 }

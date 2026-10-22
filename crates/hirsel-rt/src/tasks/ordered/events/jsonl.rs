@@ -112,14 +112,17 @@ fn authority(authority: &HostAuthority) -> Value {
         HostAuthority::Created(id) => json!({"kind":"created", "handle":handle(id)}),
     }
 }
-fn resource(resource: &host_keys::Resource) -> Value {
+fn resource(key: &host_keys::Resource) -> Value {
     use host_keys::Resource as R;
-    match resource {
+    match key {
         R::Namespace => json!({"kind":"namespace"}),
         R::Coupled => json!({"kind":"coupled"}),
         R::Root => json!({"kind":"root"}),
         R::Place => json!({"kind":"place"}),
         R::Created(id) => json!({"kind":"created", "handle":handle(id)}),
+        R::Domain { owner, label } => {
+            json!({"kind":"domain", "owner":resource(owner), "label":label})
+        }
     }
 }
 fn creation(row: &host_keys::Creation) -> Value {

@@ -25,6 +25,10 @@ impl ConcurrentAdapter for Checked {
         let _role = self.role();
         self.real.keys(request)
     }
+    fn domains(&self, request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        let _role = self.role();
+        self.real.domains(request)
+    }
     fn identity(&self, word: u64) -> Option<(crate::io_keys::Key, Kind)> {
         let _role = self.role();
         self.real.identity(word)

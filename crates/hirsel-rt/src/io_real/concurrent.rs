@@ -217,6 +217,45 @@ impl ConcurrentAdapter for ConcurrentIo {
     fn keys(&self, request: &Request) -> KeySet {
         self.registry.lock().unwrap().keys(request)
     }
+    fn domains(&self, request: &Request) -> Vec<(Key, u64, String)> {
+        use Request as R;
+        let core = self.core.lock().unwrap();
+        let mut registry = self.registry.lock().unwrap();
+        match request {
+            R::Connect { net, .. }
+            | R::ConnectAddr { net, .. }
+            | R::Listen { net, .. }
+            | R::UdpBind { net, .. }
+            | R::UnixConnect { net, .. }
+            | R::UnixListen { net, .. }
+                if matches!(
+                    core.state.handles.rows.get(net),
+                    Some(crate::handles::Grant::Net { .. })
+                ) =>
+            {
+                registry
+                    .net_ports(*net)
+                    .map(|key| vec![(key, *net, "ports".into())])
+                    .unwrap_or_default()
+            }
+            R::ProcessRun { process, .. }
+            | R::ProcessSpawn { process, .. }
+            | R::ProcessPipeline { process, .. }
+                if matches!(
+                    core.state.handles.rows.get(process),
+                    Some(crate::handles::Grant::Process { .. })
+                ) =>
+            {
+                registry
+                    .inherited_domains()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, key)| (key, *process, format!("inherited-{index}")))
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
     fn identity(&self, handle: u64) -> Option<(Key, Kind)> {
         self.registry.lock().unwrap().identity(handle)
     }

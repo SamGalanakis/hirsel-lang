@@ -10,7 +10,7 @@ use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
-mod host_keys;
+pub(super) mod host_keys;
 pub(super) mod host_output;
 pub(crate) mod host_phases;
 mod host_requests;
@@ -370,6 +370,8 @@ pub(super) struct Log {
     host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
     home_phases: BTreeMap<(Vec<u32>, u64), host_phases::Phase>,
     home_requests: BTreeSet<(Vec<u32>, u64)>,
+    home_declared: BTreeSet<(Vec<u32>, u64)>,
+    host_domains: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Resource>>,
     concurrent_requests: BTreeSet<(Vec<u32>, u64)>,
     invalid_home: BTreeSet<(Vec<u32>, u64)>,
     host_certified: BTreeSet<(Vec<u32>, u64)>,
@@ -1514,6 +1516,47 @@ pub(crate) fn print_output(
     host_output::record(ctx, host_output::project(Some(bytes), result, count));
 }
 
+/// Auxiliary domains are rooted in an existing logical resource. The owned
+/// declaration snapshot contains no scheduler or adapter loan.
+pub(crate) fn request_domains(ctx: *mut TaskCtx, domains: Vec<(crate::io_keys::Key, u64, String)>) {
+    if domains.is_empty() {
+        return;
+    }
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path].checked_sub(1).unwrap();
+    let key = (path, ordinal);
+    let declarations = domains
+        .into_iter()
+        .map(|(key, owner, label)| {
+            let handle = log
+                .host_handles
+                .get(&owner)
+                .ok_or("unmapped domain owner")?;
+            let resource = log
+                .host_bindings
+                .get(handle)
+                .ok_or("missing domain owner discovery")?
+                .resource
+                .clone();
+            Ok((key, resource, label))
+        })
+        .collect::<Result<Vec<_>, &'static str>>();
+    let result = declarations.and_then(|rows| log.host_resources.domains(&rows));
+    match result {
+        Ok(created) => {
+            assert!(log.host_domains.insert(key, created).is_none());
+        }
+        Err(_) => {
+            log.invalid_home.insert(key);
+        }
+    }
+}
+
 /// Capture already discovered issue keys under the original operation ordinal.
 /// The caller must retain no adapter or home borrow across this role-owned call.
 pub(crate) fn request_keys(ctx: *mut TaskCtx, keys: &crate::io_keys::KeySet) {
@@ -1617,18 +1660,100 @@ pub(crate) fn discover_host_for(
     if matches!(result, Err(crate::io::AdapterError::InvalidHandle(_))) {
         return Ok(());
     }
+    let key = (path.clone(), ordinal);
+    if log.home_requests.contains(&key) && !log.home_declared.contains(&key) {
+        return Ok(());
+    }
     let created = log.host_created(
         ObjectId {
-            creator: path.clone(),
+            creator: path,
             ordinal,
         },
         result,
         discovered,
     )?;
-    let key = (path, ordinal);
-    let phased = log.concurrent_requests.contains(&key);
+    let phased = log.concurrent_requests.contains(&key) || log.home_declared.contains(&key);
     assert!(log.host_creations.insert(key, created).is_none() || phased);
     Ok(())
+}
+
+pub(crate) fn home_declared(ctx: *mut TaskCtx) -> bool {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &s.logical else {
+        return false;
+    };
+    let Some(log) = driver.events.as_ref() else {
+        return false;
+    };
+    log.ordinals
+        .get(&path)
+        .and_then(|o| o.checked_sub(1))
+        .is_some_and(|ordinal| log.home_declared.contains(&(path.clone(), ordinal)))
+}
+
+/// A declared parked request retains its complete logical footprint across
+/// retries. Missing or changed domains cannot certify the entered phase.
+pub(crate) fn home_retry_keys(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    keys: Option<&crate::io_keys::KeySet>,
+) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path].checked_sub(1).unwrap();
+    let key = (path, ordinal);
+    if !log.home_declared.contains(&key) {
+        return;
+    }
+    let observed = keys.and_then(|keys| log.host_resources.project(keys).ok());
+    if log.host_key_observations.get(&key) != Some(&observed) || observed.is_none() {
+        log.invalid_home.insert(key.clone());
+        if let Some(phase) = log.home_phases.get_mut(&key) {
+            phase.invalidate();
+        }
+    }
+}
+
+/// A home observer cannot change the adapter's live outcome. Invalid discovery
+/// permanently refuses certification while retaining raw result/attempt evidence.
+pub(crate) fn home_discovery(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    discovered: Result<BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>, &'static str>,
+) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_ref().unwrap();
+    let ordinal = log.ordinals[&path].checked_sub(1).unwrap();
+    let key = (path, ordinal);
+    if !log.home_declared.contains(&key) {
+        return;
+    }
+    let result = discovered.and_then(|d| discover_host_for(s, task, result, &d));
+    if result.is_err() {
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        let log = driver.events.as_mut().unwrap();
+        log.invalid_home.insert(key.clone());
+        log.host_creations.remove(&key);
+        if let Some(phase) = log.home_phases.get_mut(&key) {
+            phase.invalidate();
+        }
+    }
 }
 
 /// The explicitly admitted nonparking concurrent path has finished its effect

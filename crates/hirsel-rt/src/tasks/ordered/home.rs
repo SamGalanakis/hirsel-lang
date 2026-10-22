@@ -95,7 +95,15 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                 let _guard = unsafe { role::IdleGuard::new(run) };
                 let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
                 let discovery = attempt.discovery.map_or(Ok(()), |d| {
-                    d.and_then(|d| super::events::discover_host_for(s, task, &attempt.result, &d))
+                    if token & super::host::concurrent::CONCURRENT != 0 {
+                        d.and_then(|d| {
+                            super::events::discover_host_for(s, task, &attempt.result, &d)
+                        })
+                    } else {
+                        super::events::home_retry_keys(s, task, attempt.keys.as_ref());
+                        super::events::home_discovery(s, task, &attempt.result, d);
+                        Ok(())
+                    }
                 });
                 super::events::record_host_attempt(s, task, &attempt.result, !retiring);
                 if discovery.is_err() && done {
