@@ -4052,15 +4052,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::drops::kill(ctx, mutex_word(m))) };
     }
+    if free::mutex::live(ctx) {
+        unsafe { crate::stop::check(ctx, free::mutex::kill(ctx, mutex_word(m))) };
+        return STATUS_OK;
+    }
     let s = scheduler(ctx);
     let current = s.current;
     let path = s.task(current).path.clone();
     // SAFETY: the context is live.
     let chain = unsafe { (*ctx).failure.chain(&path) };
-    if free::mutex::live(ctx) {
-        unsafe { crate::stop::check(ctx, free::mutex::kill(ctx, mutex_word(m), chain)) };
-        return STATUS_OK;
-    }
     // SAFETY: caller contract.
     unsafe {
         let word = mutex_word(m);

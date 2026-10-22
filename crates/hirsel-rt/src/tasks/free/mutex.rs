@@ -11,6 +11,8 @@ use hirsel_free::mutex::Acquired;
 #[cfg(test)]
 mod close_tests;
 #[cfg(test)]
+mod death_tests;
+#[cfg(test)]
 mod record_tests;
 
 pub(crate) fn live(ctx: *mut TaskCtx) -> bool {
@@ -200,12 +202,15 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
 
 /// # Safety
 /// A failed mutex body holds the role and owns the empty cell.
-pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64, chain: Vec<Chained>) -> Stopped<()> {
+pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
+    unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-    // Avoid stop-aware scheduler() while this frame owns a failure chain and
-    // the detached wake list. The caller already owns the role.
+    // Capture the chain only after the replay wait, then avoid stop-aware
+    // accessors while this frame owns it or the detached wake list.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let me = s.current;
+    let chain = unsafe { (*ctx).failure.chain(&s.task(me).path) };
     let cell = s.sync.mutex(word);
     // The role also protects the failure-chain metadata through this phase.
     // Acquire the per-object lock before opening it; no syscall or user drop
@@ -243,26 +248,50 @@ pub(crate) unsafe fn close(
     anchor: u64,
     operation_site: u64,
 ) -> Stopped<u8> {
+    let status = unsafe { close_inner(ctx, word, anchor, operation_site) }?;
+    // No detached image or recorder owner survives a permanent cut save.
+    super::replay::start(ctx);
+    Ok(status)
+}
+
+/// # Safety
+/// As for close; the caller checks the cut after temporary storage drops.
+unsafe fn close_inner(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Stopped<u8> {
     super::record::begin(ctx);
+    unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+    let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let s = scheduler(ctx) as *mut Scheduler;
     let cell = unsafe { (*s).sync.mutex(word) };
     let empty = crate::channels::Ring::new(cell.element.size, 1);
     let mut state = cell.lock();
-    let publication = super::record::publish(ctx, Phase::Done, |writer| {
-        let version = state.permit.observe();
-        if let Some(writer) = writer {
-            writer.touch(
-                cell.object.get().expect("a recorded mutex identity"),
-                version,
-                0,
-                "close mutex",
-            );
-        }
-        unsafe { (*s).sync.close_locked(word, &cell, &mut state, empty) }
-    });
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let version = state.permit.observe();
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded mutex identity"),
+                    version,
+                    0,
+                    "close mutex",
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch("close mutex")?;
+            }
+            Ok(unsafe { (*s).sync.close_locked(word, &cell, &mut state, empty) })
+        },
+    );
     drop(state);
     drop(cell);
-    let Some((image, descriptor)) = publication?.into_left() else {
+    drop(replay);
+    let Some((image, descriptor)) = publication??.into_left() else {
         return Ok(STATUS_OK);
     };
     let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
@@ -284,6 +313,7 @@ pub(crate) unsafe fn close(
 /// The role is held and word names a dead mutex.
 pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
+    unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let s = scheduler(ctx) as *mut Scheduler;
     let cell = unsafe { (*s).sync.mutex(word) };
@@ -306,6 +336,7 @@ pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     drop(cell);
     drop(replay);
     unsafe { (*ctx).failure.append_chain(chain) };
+    super::replay::start(ctx);
     Ok(())
 }
 
@@ -445,7 +476,7 @@ mod tests {
                     unsafe {
                         let _role = role::Guard::new(ctx);
                         if killed {
-                            kill(ctx, word, Vec::new()).unwrap();
+                            kill(ctx, word).unwrap();
                         } else {
                             put(ctx, word, initial.as_mut_ptr().cast()).unwrap();
                         }
