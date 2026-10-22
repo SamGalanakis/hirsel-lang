@@ -30,9 +30,9 @@ impl Replay {
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
     /// scopes with settled children, task-set selection, serial gates and
-    /// scalar mutex create/take/put and channel open/send/receive only; no
-    /// host requests, mutex destruction, endpoint aliases/closes or general
-    /// cancellation-ended waits yet.
+    /// scalar mutex create/take/put and inert scalar channels, including
+    /// endpoint aliases/closes; no host requests, mutex destruction, yielding
+    /// channel finalizers or general cancellation-ended waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });

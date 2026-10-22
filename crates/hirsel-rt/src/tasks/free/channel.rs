@@ -10,6 +10,8 @@ use super::super::*;
 #[cfg(test)]
 mod close_tests;
 #[cfg(test)]
+mod endpoint_tests;
+#[cfg(test)]
 mod receive_tests;
 #[cfg(test)]
 mod tests;
@@ -58,29 +60,40 @@ pub(crate) unsafe fn dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopp
     super::record::begin(ctx);
     let s = scheduler(ctx) as *mut Scheduler;
     let channel = unsafe { (*s).channels.channel(sender, true) };
+    unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
+    let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe { (*s).channels.payload(channel) };
     let reservation = unsafe { (*s).channels.reserve_dup() };
     let word = reservation.word();
     let mut state = cell.lock();
-    let publication = super::record::publish(ctx, Phase::Done, |writer| {
-        cell.dup(&mut state);
-        let version = cell.next_event();
-        unsafe {
-            (*s).channels.initialize_dup_endpoint(reservation, channel);
-            out.write(word);
-        }
-        if let Some(writer) = writer {
-            writer.touch(
-                cell.object.get().expect("a recorded channel identity"),
-                version,
-                0,
-                "dup",
-            );
-        }
-    });
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            cell.dup(&mut state);
+            let version = cell.next_event();
+            unsafe {
+                (*s).channels.initialize_dup_endpoint(reservation, channel);
+                out.write(word);
+            }
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded channel identity"),
+                    version,
+                    0,
+                    "dup",
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch("dup")?;
+            }
+            Ok(())
+        },
+    );
     drop(state);
     drop(cell);
-    publication?;
+    drop(replay);
+    publication??;
     unsafe { try_yield(&mut *ctx) }
 }
 
@@ -259,33 +272,60 @@ pub(crate) unsafe fn close(
     anchor: u64,
     operation_site: u64,
 ) -> Stopped<u8> {
+    let status = unsafe { close_inner(ctx, word, anchor, operation_site) }?;
+    // Close keeps its worker in live execution, but its replay cut still
+    // precedes the next user segment. No detached ring or cell owner may
+    // remain on this frame when it parks permanently.
+    super::replay::start(ctx);
+    Ok(status)
+}
+
+/// # Safety
+/// As for close; the caller observes the cut after all temporary owners drop.
+unsafe fn close_inner(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Stopped<u8> {
     super::record::begin(ctx);
     let s = scheduler(ctx) as *mut Scheduler;
     let (channel, sender) = unsafe { (*s).channels.endpoint_of(word) };
+    unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
+    let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe { (*s).channels.payload(channel) };
     unsafe { (*s).channels.prepare_close() };
     let inert = cell.element.inert;
     let mut state = cell.lock();
-    let publication = super::record::publish(ctx, Phase::Done, |writer| {
-        let left = unsafe { (*s).channels.close_locked(word, &cell, &mut state) };
-        let version = cell.next_event();
-        if let Some(writer) = writer {
-            writer.touch(
-                cell.object.get().expect("a recorded channel identity"),
-                version,
-                0,
-                if sender {
-                    "close sender"
-                } else {
-                    "close receiver"
-                },
-            );
-        }
-        left
-    });
+    let outcome = if sender {
+        "close sender"
+    } else {
+        "close receiver"
+    };
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let left = unsafe { (*s).channels.close_locked(word, &cell, &mut state) };
+            let version = cell.next_event();
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded channel identity"),
+                    version,
+                    0,
+                    outcome,
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch(outcome)?;
+            }
+            Ok(left)
+        },
+    );
     drop(state);
     drop(cell);
-    let left = publication?.into_left();
+    drop(replay);
+    let left = publication??.into_left();
     // Close is Keep: it still publishes runnable receivers before returning
     // to a segment that may never yield. No stop-aware ctx accessor can
     // abandon a detached ring on this frame.
