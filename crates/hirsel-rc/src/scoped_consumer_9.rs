@@ -25,12 +25,10 @@ pub(crate) fn specialize(
     target: &hirsel_lir::TargetSpec,
     result: &mut Specializations,
 ) {
-    if !lowered.units.iter().any(|u| {
-        u.instructions.iter().any(|i| {
-            matches!(i,
-        Inst::Closure {closure,..} if u.tables.closures[closure.index()].scoped)
-        })
-    }) {
+    // Rejection only: a surviving site still needs independent source V and
+    // complete linked C, before and after its ordinary transaction.
+    let mut candidates = discover(lowered);
+    if candidates.iter().all(Vec::is_empty) {
         return;
     }
     let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
@@ -66,37 +64,18 @@ pub(crate) fn specialize(
     let baseline = lowered.instances.len();
     let mut at = 0;
     while at < lowered.units.len() {
-        let candidates: Vec<_> = lowered.units[at]
-            .instructions
-            .iter()
-            .filter_map(|i| match *i {
-                Inst::Closure {
-                    result, closure, ..
-                } => Some((result, closure)),
-                _ => None,
-            })
-            .collect();
         let mut changed = false;
-        for (root, site) in candidates {
-            let closure = &lowered.units[at].tables.closures[site.index()];
-            if !closure.scoped {
-                continue;
-            }
-            let Some(code) = closure.code else {
-                continue;
-            };
-            let captures = closure
+        for candidate in &candidates[at] {
+            let Candidate {
+                root,
+                site,
+                body,
+                aliases,
+            } = candidate;
+            let captures = lowered.units[at].tables.closures[site.index()]
                 .captures
                 .get(&lowered.units[at].pools.captures)
-                .unwrap_or(&[])
-                .to_vec();
-            if captures.iter().any(|c| {
-                c.usage != CaptureUse::Borrow
-                    && !(c.usage == CaptureUse::Copy
-                        && lowered.units[at].values[c.value.index()].holding == Holding::Plain)
-            }) {
-                continue;
-            }
+                .unwrap_or(&[]);
             let types: Vec<_> = captures
                 .iter()
                 .map(|c| {
@@ -104,24 +83,6 @@ pub(crate) fn specialize(
                         .clone()
                 })
                 .collect();
-            let symbol = lowered.units[at].tables.symbols[code.symbol.index()].clone();
-            let Some(body) = find(&lowered.units, &symbol) else {
-                continue;
-            };
-            // The ordinary capture result relation needs an independently mapped
-            // parameter relation before an address-bearing result can be lowered.
-            if lowered.table.fn_abis[code.abi.0 as usize]
-                .result
-                .as_ref()
-                .is_some_and(|r| {
-                    !matches!(
-                        lowered.table.layouts[r.layout.0 as usize].kind,
-                        LayoutKind::Scalar(_) | LayoutKind::Unit
-                    )
-                })
-            {
-                continue;
-            }
             let mut transaction = Transaction {
                 units: lowered.units.clone(),
                 table: lowered.table.clone(),
@@ -133,15 +94,14 @@ pub(crate) fn specialize(
                 active: BTreeSet::new(),
             };
             let attempt = (|| {
-                let entry = transaction.capture_body(body, &types)?;
-                let aliases = aliases(&transaction.units[at], root)?;
+                let entry = transaction.capture_body(*body, &types)?;
                 let values = captures.iter().map(|c| c.value).collect::<Vec<_>>();
-                transaction.rewrite(at, &aliases, &values, entry)?;
+                transaction.rewrite(at, aliases, &values, entry)?;
                 erase(
                     &mut transaction.units[at],
-                    &aliases,
+                    aliases,
                     &transaction.table,
-                    Some(root),
+                    Some(*root),
                 )?;
                 Ok::<_, ()>(())
             })();
@@ -154,10 +114,162 @@ pub(crate) fn specialize(
                 break;
             }
         }
-        if !changed {
+        if changed {
+            // Every summary belongs to this exact immutable lowering. A
+            // committed rewrite invalidates it, including new nested bodies.
+            candidates = discover(lowered);
+        } else {
             at += 1;
         }
     }
+}
+
+struct Candidate {
+    root: ValueId,
+    site: ClosureId,
+    body: usize,
+    aliases: BTreeSet<ValueId>,
+}
+
+fn discover(lowered: &Lowered) -> Vec<Vec<Candidate>> {
+    lowered
+        .units
+        .iter()
+        .enumerate()
+        .map(|(at, u)| {
+            u.instructions
+                .iter()
+                .filter_map(|i| {
+                    let Inst::Closure {
+                        result, closure, ..
+                    } = *i
+                    else {
+                        return None;
+                    };
+                    let (body, aliases) = preflight(lowered, at, result, closure).ok()?;
+                    Some(Candidate {
+                        root: result,
+                        site: closure,
+                        body,
+                        aliases,
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Scan immutable completed bodies and follow capture consumers, after Goose
+/// codegen_frames.h:115–154,210–235. Unlike its emission summaries, this is only
+/// a structural rejection prepass: no retained proof or signature-only cache.
+fn preflight(
+    lowered: &Lowered,
+    at: usize,
+    root: ValueId,
+    site: ClosureId,
+) -> Result<(usize, BTreeSet<ValueId>), ()> {
+    let u = &lowered.units[at];
+    let closure = &u.tables.closures[site.index()];
+    if !closure.scoped {
+        return Err(());
+    }
+    let code = closure.code.ok_or(())?;
+    let captures = closure.captures.get(&u.pools.captures).unwrap_or(&[]);
+    // There is no environment allocation to eliminate. Ordinary code-target
+    // specialization has already run, including these captureless callables.
+    if captures.is_empty()
+        && matches!(
+            lowered.table.layouts[closure.environment.0 as usize].size,
+            hirsel_lir::layout_types::SizeSpec::Fixed(0)
+        )
+    {
+        return Err(());
+    }
+
+    if captures.iter().any(|c| {
+        c.usage != CaptureUse::Borrow
+            && !(c.usage == CaptureUse::Copy && u.values[c.value.index()].holding == Holding::Plain)
+    }) {
+        return Err(());
+    }
+    let body = find(&lowered.units, &u.tables.symbols[code.symbol.index()]).ok_or(())?;
+    let captured = &lowered.units[body];
+    let abi = &lowered.table.fn_abis[captured.header.abi.0 as usize];
+    if captured.captures.len() != captures.len()
+        || abi.multiplicity != CallMultiplicity::Many
+        || !abi.nonretaining_captures.is_empty()
+        || !captured.tables.init_flags.is_empty()
+        || lowered.table.fn_abis[code.abi.0 as usize]
+            .result
+            .as_ref()
+            .is_some_and(|r| {
+                !matches!(
+                    lowered.table.layouts[r.layout.0 as usize].kind,
+                    LayoutKind::Scalar(_) | LayoutKind::Unit
+                )
+            })
+    {
+        return Err(());
+    }
+    let aliases = aliases(u, root)?;
+    preflight_uses(lowered, at, &aliases, &mut BTreeSet::new())?;
+    // Append retains the exact existing budgets and can reuse a content-derived
+    // specialization even when its owner's budget is already full.
+    Ok((body, aliases))
+}
+
+fn preflight_uses(
+    lowered: &Lowered,
+    at: usize,
+    aliases: &BTreeSet<ValueId>,
+    seen: &mut BTreeSet<(usize, u32)>,
+) -> Result<(), ()> {
+    // Bound this speculative walk by the existing transaction's global budget.
+    // Reuse can avoid appending bodies, so exhaustion here only stops looking
+    // for rejections; append still decides the exact per-owner/global limits.
+    if seen.len() >= MAX_SPECIALIZATIONS {
+        return Ok(());
+    }
+    let u = &lowered.units[at];
+    carrier_slots(u, aliases)?;
+    for call in &u.tables.calls {
+        if call.callee.value().is_some_and(|v| aliases.contains(&v)) {
+            continue;
+        }
+        let mut parameters = call
+            .arguments
+            .get(&u.pools.call_arguments)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|a| match a.value {
+                ArgumentValue::Value(v) if aliases.contains(&v) => Some(a.parameter),
+                _ => None,
+            });
+        let Some(parameter) = parameters.next() else {
+            continue;
+        };
+        if parameters.next().is_some() {
+            return Err(());
+        }
+        let Callee::Direct(symbol) = call.callee else {
+            return Err(());
+        };
+        let body = find(&lowered.units, &u.tables.symbols[symbol.index()]).ok_or(())?;
+        let consumer = &lowered.units[body];
+        if !lowered.table.fn_abis[consumer.header.abi.0 as usize]
+            .nonretaining
+            .iter()
+            .any(|p| p.parameter == parameter && p.fields.is_empty())
+        {
+            return Err(());
+        }
+        if seen.insert((body, parameter)) {
+            let root = *consumer.parameters.get(parameter as usize).ok_or(())?;
+            let aliases = self::aliases(consumer, root)?;
+            preflight_uses(lowered, body, &aliases, seen)?;
+        }
+    }
+    Ok(())
 }
 
 fn find(units: &[Unit], s: &Symbol) -> Option<usize> {
@@ -491,26 +603,8 @@ impl Transaction {
     }
 }
 
-/// Replace only the proved dead callable carriers with Unit. This is ordinary
-/// value IR, with no pointer interpretation, storage extent or runtime change.
-fn erase(
-    u: &mut Unit,
-    aliases: &BTreeSet<ValueId>,
-    table: &LayoutTable,
-    creation: Option<ValueId>,
-) -> Result<(), ()> {
-    let layout = LayoutId(
-        table
-            .layouts
-            .iter()
-            .position(|r| r.kind == LayoutKind::Unit)
-            .ok_or(())? as u32,
-    );
-    let ty = LirTypeId(u.types.len() as u32);
-    u.types.push(LirType {
-        repr: ValueRepr::Unit,
-        layout,
-    });
+/// The same structural refusal checks used by erase, without editing the body.
+fn carrier_slots(u: &Unit, aliases: &BTreeSet<ValueId>) -> Result<BTreeSet<SlotId>, ()> {
     let mut slots = BTreeSet::new();
     for inst in &u.instructions {
         match *inst {
@@ -572,6 +666,30 @@ fn erase(
             return Err(());
         }
     }
+    Ok(slots)
+}
+
+/// Replace only the proved dead callable carriers with Unit. This is ordinary
+/// value IR, with no pointer interpretation, storage extent or runtime change.
+fn erase(
+    u: &mut Unit,
+    aliases: &BTreeSet<ValueId>,
+    table: &LayoutTable,
+    creation: Option<ValueId>,
+) -> Result<(), ()> {
+    let layout = LayoutId(
+        table
+            .layouts
+            .iter()
+            .position(|r| r.kind == LayoutKind::Unit)
+            .ok_or(())? as u32,
+    );
+    let ty = LirTypeId(u.types.len() as u32);
+    u.types.push(LirType {
+        repr: ValueRepr::Unit,
+        layout,
+    });
+    let slots = carrier_slots(u, aliases)?;
     for &v in aliases {
         u.values[v.index()].ty = ty;
         u.values[v.index()].holding = Holding::Plain;

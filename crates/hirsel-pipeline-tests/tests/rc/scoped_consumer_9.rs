@@ -500,3 +500,39 @@ fn native_counted_owner_capture_preserves_one_owner() {
         }
     });
 }
+
+#[test]
+fn structural_rejection_keeps_exact_heap_lowering() {
+    for source in [
+        "fn invoke(f:fn()->String uses {})->String uses {f}{f()}\nfn main()->String{let n=3u64;invoke(fn()->String uses {}{if n==3u64{\"yes\"}else{\"no\"}})}",
+        "fn main()->u64{let n=3u64;let a=fn()->u64 uses {}{n};let b=fn()->u64 uses {}{n+1u64};let f=if true{take a}else{take b};f()}",
+        "type Owner{n:u64}\nfn invoke(take f:once fn()->u64)->u64 uses {f}{f()}\nfn main()->u64{let n:box Owner=box Owner(n:3u64);let f:once fn()->u64=fn()->u64{let owner=take n;owner.n};invoke(take f)}",
+    ] {
+        let (_, before) = lower_disabled(source);
+        let (_, after) = lower_valid(source);
+        let contents = |l: &Lowered| l.units.iter().map(|u| u.digest()).collect::<Vec<_>>();
+        assert_eq!(contents(&before), contents(&after), "{source}");
+        assert_eq!(before.table.digest(), after.table.digest(), "{source}");
+    }
+}
+
+#[test]
+fn zero_size_sites_keep_exact_existing_lowering() {
+    for source in [
+        "fn invoke(f:fn()->u64 uses {})->u64 uses {f}{f()}\nfn main()->u64{invoke(fn()->u64 uses {}{3u64})}",
+        "fn check(ok:bool)->() requires ok {}\nfn main()->u64{check(true);3u64}",
+    ] {
+        let (_, before) = lower_disabled(source);
+        let (_, after) = lower_valid(source);
+        assert_eq!(
+            before.units.iter().map(|u| u.digest()).collect::<Vec<_>>(),
+            after.units.iter().map(|u| u.digest()).collect::<Vec<_>>(),
+            "{source}"
+        );
+        assert_eq!(before.table.digest(), after.table.digest(), "{source}");
+        let observed = run(source, true);
+        assert_eq!(observed.counters.allocations, 0);
+        assert_eq!(observed.counters.frees, 0);
+        assert_eq!(observed.counters.releases, 0);
+    }
+}
