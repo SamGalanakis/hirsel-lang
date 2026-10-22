@@ -106,11 +106,11 @@ fn receive_endpoint_diagnostic_19_real_count_conflict_keeps_copy_advice() {
         snapshot(
             source,
             serde_json::json!({
-                "message": "this operation requires a unique value: `xs` is not proved unique, but a unique value is required",
+                "message": "this operation requires a unique value: `xs` lost its deep uniqueness, but a unique value is required",
                 "primary": "need(take xs)",
                 "secondary": [
                     ["take xs", "parameter mode requirement"],
-                    ["xs", "provided: `xs` may share counted storage; its current contract does not prove uniqueness"],
+                    ["copy xs", "provided: copying `xs` shares counted storage reachable from `xs`"],
                     ["need", "required: this requires a unique value (MODE-2)"]
                 ],
                 "notes": ["help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage."]
