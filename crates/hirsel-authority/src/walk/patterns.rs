@@ -295,6 +295,15 @@ impl Checker<'_> {
                 }
                 _ => false,
             };
+        // Erased state retains its selected source through an owned local;
+        // writes and calls without preservation end that receipt separately.
+        let erased_state = matches!(
+            self.t.get(received).unwrap().kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::Iter,
+                ..
+            }
+        ) || self.erased_carrier(received);
         if let Some(index) = self.binding_site_index(NameSite::Pattern(pattern)) {
             let row = &mut self.out.body.bindings[index];
             row.ty = received;
@@ -306,7 +315,7 @@ impl Checker<'_> {
             }
             self.binding_types.insert(binding_key(row), received);
             self.task_bindings.insert(binding_key(row), task_handles);
-            if !row.mutable {
+            if !row.mutable || erased_state {
                 if let Some(derivation) = derivation {
                     self.derivations.insert(binding_key(row), derivation);
                 }

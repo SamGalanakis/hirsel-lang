@@ -1,6 +1,28 @@
 use super::*;
 
 impl Checker<'_> {
+    /// Replacement ends a source receipt, including writes through an existing
+    /// mutable iteration view. A preservation declaration keeps it instead.
+    pub(super) fn forget_receipt(&mut self, value: ExprId) {
+        let mut pending = vec![value];
+        let mut seen = BTreeSet::new();
+        while let Some(value) = pending.pop() {
+            let SourceRoot::Binding { owner, binding } = &self.source_place(value).root else {
+                continue;
+            };
+            let Some(binding) = self.root_binding(*owner, binding) else {
+                continue;
+            };
+            let key = binding_key(binding);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            self.derivations.remove(&key);
+            if let Some(source) = self.iteration_sources.get(&key) {
+                pending.push(*source);
+            }
+        }
+    }
     /// A selected parameter's unknown environment is already covered by the
     /// enclosing declaration. Discharge only that exact receipt, independently
     /// of every other operand and of the callee's ambient authority.
@@ -38,11 +60,12 @@ impl Checker<'_> {
             }
             // Construction retains exactly its operands. Discharge selected
             // parameters separately so unknown erased evidence cannot hide a
-            // second operand's known authority.
+            // second operand's known authority. A `mut` access charges the
+            // same source; its hand-back promises are checked independently.
             let children = match &self.tree.expressions[value.0 as usize].kind {
                 ExprKind::Tuple(parts) | ExprKind::Sequence(parts) => Some(parts.clone()),
                 ExprKind::Unary {
-                    op: UnaryOp::Take | UnaryOp::Copy | UnaryOp::Box,
+                    op: UnaryOp::Take | UnaryOp::Copy | UnaryOp::Box | UnaryOp::Mut,
                     value,
                 } => Some(vec![*value]),
                 ExprKind::Call { arguments, .. }
@@ -1554,6 +1577,15 @@ impl Checker<'_> {
                         });
                     if !advances {
                         self.invalidate(a.value, span, p.passing == PassingMode::Mut);
+                    }
+                    if p.passing == PassingMode::Mut
+                        && !f.state_promises.iter().any(|promise| {
+                            promise.selector.parameter == ParameterRef::bound(ParamId(i as u32))
+                                && promise.selector.fields.is_empty()
+                                && promise.preserve_captures
+                        })
+                    {
+                        self.forget_receipt(a.value);
                     }
                 }
             }

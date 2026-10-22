@@ -618,3 +618,129 @@ fn generic_dictionary_uses_are_charged_at_the_caller() {
         assert_eq!(rules, if rejected { vec!["CAP-1"] } else { vec![] });
     }
 }
+
+#[test]
+fn erased_carrier_preserving_relay_charges_only_declared_source() {
+    for (uses, argument, extra, reject) in [
+        ("p", "p", false, false),
+        ("", "p", false, true),
+        ("p", "q", false, true),
+        ("p", "p", true, true),
+        ("p, out", "p", true, false),
+    ] {
+        let source = format!(
+            r#"
+@captures(inner)
+type Pipe[T] {{ inner: Iter[T] }}
+@advance_only(p)
+fn next[T](mut p: Pipe[T]{extra_parameter}) -> Option[T] uses {{p{extra_use}}} {{
+  iter.next(mut p.inner)
+}}
+@advance_only(p, q)
+fn advance(mut p: Pipe[u64], mut q: Pipe[u64], out: Stdout) -> Option[u64] uses {{{uses}}} {{
+  next(mut {argument}{extra_argument})
+}}
+"#,
+            extra_parameter = if extra { ", out: Stdout" } else { "" },
+            extra_use = if extra { ", out" } else { "" },
+            extra_argument = if extra { ", out" } else { "" },
+        );
+        let (_, out) = check_source(&source);
+        let rules: Vec<_> = out.diagnostics.iter().map(|d| d.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            if reject { vec!["CAP-1"] } else { vec![] },
+            "{source}"
+        );
+        assert!(out.failure.is_none(), "{:?}", out.failure);
+    }
+}
+
+#[test]
+fn erased_carrier_handback_requires_declared_preservation() {
+    for preserves in [false, true] {
+        let source = format!(
+            r#"
+@captures(inner)
+type Pipe[T] {{ inner: Iter[T] }}
+fn count(mut n: u64) -> Option[u64] {{ Some(n) }}
+{promise}
+fn touch(mut p: Pipe[u64]) -> () uses {{p}} {{}}
+fn need[T: inert](take value: T) -> () uses {{}} {{}}
+fn probe() -> () uses {{}} {{
+  let mut p = Pipe(inner: iter.from(0u64, count))
+  touch(mut p)
+  need(take p)
+}}
+"#,
+            promise = if preserves { "@advance_only(p)" } else { "" },
+        );
+        let (_, out) = check_source(&source);
+        let rules: Vec<_> = out.diagnostics.iter().map(|d| d.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            if preserves { vec![] } else { vec!["CLO-2"] },
+            "{source}"
+        );
+        assert!(out.failure.is_none(), "{:?}", out.failure);
+    }
+}
+
+#[test]
+fn erased_carrier_owned_transfer_retains_source_authority() {
+    for (replacement, reject) in [
+        ("", false),
+        ("cursor = take q", true),
+        ("reset(mut cursor)", true),
+        ("let _ = fail(mut cursor)", true),
+    ] {
+        let source = format!(
+            r#"
+@captures(inner)
+type Pipe[T] {{ inner: Iter[T] }}
+@advance_only(p)
+fn next[T](mut p: Pipe[T]) -> Option[T] uses {{p}} {{ iter.next(mut p.inner) }}
+fn reset(mut p: Pipe[u64]) -> () uses {{p}} {{}}
+fn fail(mut p: Pipe[u64]) -> Result[(), u64] uses {{p}} {{ Error(1u64) }}
+fn consume(take p: Pipe[u64], take q: Pipe[u64]) -> () uses {{p}} {{
+  let mut cursor = take p
+  {replacement}
+  let _ = next(mut cursor)
+  let _ = next(mut cursor)
+}}
+"#,
+        );
+        let (_, out) = check_source(&source);
+        assert!(out.failure.is_none(), "{:?}", out.failure);
+        if reject {
+            super::test_support::rejected(&out, "CAP-1");
+        } else {
+            super::test_support::clean(&out);
+        }
+    }
+}
+
+#[test]
+fn erased_carrier_inert_items_do_not_hide_file_state() {
+    let (_, out) = check_source(
+        r#"
+@captures(inner)
+type Pipe[T] { inner: Iter[T] }
+type Source { dir: Dir, file: File of .dir }
+fn read(mut s: Source) -> Option[u64] uses {s} { None }
+@captures(input)
+fn wrap[T](take input: Iter[T]) -> Pipe[T] uses {input} { Pipe(inner: take input) }
+@advance_only(p)
+fn next[T](mut p: Pipe[T]) -> Option[T] uses {p} { iter.next(mut p.inner) }
+fn need[T: inert](take value: T) -> () uses {} {}
+fn pipeline(dir: Dir, take file: File of dir) -> () uses {dir, file} {
+  let mut p = wrap(iter.from(take Source(dir: dir, file: take file), read))
+  let _ = next(mut p)
+  need(take p)
+}
+"#,
+    );
+    let rules: Vec<_> = out.diagnostics.iter().map(|d| d.rule.as_str()).collect();
+    assert_eq!(rules, vec!["CAP-2"]);
+    assert!(out.failure.is_none(), "{:?}", out.failure);
+}

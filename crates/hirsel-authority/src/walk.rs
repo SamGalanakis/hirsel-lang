@@ -142,8 +142,8 @@ pub(super) struct Checker<'a> {
     closures: super::closure_rows::ClosureRows,
     captures: super::closure_rows::OrderedRows<CaptureTable>,
     facts: BTreeMap<ExprId, AuthoritySummary>,
-    /// Immutable receipts retain the authority of their value derivation in
-    /// the creating frame. Capturing that receipt still charges its own type.
+    /// Receipts retain their value derivation in the creating frame until a
+    /// write or nonpreserving hand-back. Captures still charge their own type.
     derivations: BTreeMap<BindingKey, (NameSite, AuthoritySummary, ExprId)>,
     binding_types: BindingTypes,
     /// Borrowed captures the closure bodies being walked see as borrowed
@@ -2348,6 +2348,7 @@ impl<'a> Checker<'a> {
                         false,
                     );
                 }
+                self.forget_receipt(place);
                 self.invalidate(place, stmt.origin.span, false);
                 // The write ends brands naming the storage it replaces, the
                 // stored value's own included: it would be kept, not dropped.
