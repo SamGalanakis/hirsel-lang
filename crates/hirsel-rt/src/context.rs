@@ -167,6 +167,8 @@ pub struct TaskCtx {
     pub(crate) pending_host: Option<Box<crate::tasks::free::host::Pending>>,
     /// Replay holds request and transition buffers across admitted-prefix saves.
     pub(crate) replay_host: Option<Box<crate::tasks::free::host::ReplayHost>>,
+    #[cfg(test)]
+    pub(crate) ordered_charge_trace: crate::budget::stretch_trace::Local,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -351,6 +353,8 @@ impl TaskCtx {
             detached_images: Default::default(),
             pending_host: None,
             replay_host: None,
+            #[cfg(test)]
+            ordered_charge_trace: Default::default(),
         }
     }
 

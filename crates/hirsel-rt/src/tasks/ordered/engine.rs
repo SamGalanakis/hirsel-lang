@@ -139,6 +139,10 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
                 .ordered_memory
                 .store(driver.memory, std::sync::atomic::Ordering::Release)
         };
+        #[cfg(test)]
+        if let Some(log) = &mut driver.events {
+            super::events::charges::initialize(log, frontier.settled, driver.budgets);
+        }
         driver.fuel_initialized = true;
     }
     let fuel = driver
@@ -152,10 +156,18 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     let level = frontier.settled.level;
     unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
+    #[cfg(test)]
+    unsafe {
+        (*ctx).ordered_charge_trace.grant(grant as i64)
+    };
 }
 
 fn capture_fuel(ctx: *mut TaskCtx) {
     let word = unsafe { (*ctx).view.compiled.fuel };
+    #[cfg(test)]
+    unsafe {
+        (*ctx).ordered_charge_trace.capture(word)
+    };
     let remaining = word.max(0) as u64;
     let (task, driver) = fuel_state(ctx);
     let budgets = driver.budgets;
@@ -203,10 +215,31 @@ pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
 fn stretch(ctx: *mut TaskCtx) -> Stretch {
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
-    driver
+    #[allow(unused_mut)]
+    let mut before = driver
         .stretches
         .remove(&task)
-        .unwrap_or_else(|| Stretch::new(driver.budgets))
+        .unwrap_or_else(|| Stretch::new(driver.budgets));
+    #[cfg(test)]
+    if let Some(exact) = unsafe { (*ctx).ordered_charge_trace.take() } {
+        before.exact = exact;
+    }
+    before
+}
+
+#[inline]
+fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
+    #[cfg(test)]
+    let task = current(ctx);
+    let result = driver(ctx)
+        .frontier
+        .as_mut()
+        .unwrap()
+        .settled
+        .settle(before);
+    #[cfg(test)]
+    super::events::charges::partial(ctx, task, before, result);
+    result.map_err(Stop::BudgetExceeded)
 }
 
 /// Before taking a worker heap/pool borrow. A denied reservation leaves the
@@ -244,20 +277,24 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
         let head = driver(ctx).frontier.as_ref().unwrap().head() == Some(task);
         if head {
             let before = stretch(ctx);
-            let frontier = driver(ctx).frontier.as_mut().unwrap();
-            frontier
-                .settled
-                .settle(&before)
-                .map_err(Stop::BudgetExceeded)?;
+            settle_head(ctx, &before)?;
             let mut allocation = Stretch::new(budgets);
             allocation
                 .alloc(bytes)
                 .expect("one allocation fits an envelope");
-            frontier
-                .settled
-                .settle(&allocation)
-                .map_err(Stop::BudgetExceeded)?;
+            #[cfg(test)]
+            {
+                unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
+                if let Some(exact) = unsafe { (*ctx).ordered_charge_trace.take() } {
+                    allocation.exact = exact;
+                }
+            }
+            settle_head(ctx, &allocation)?;
         } else {
+            #[cfg(test)]
+            unsafe {
+                (*ctx).ordered_charge_trace.allocation(bytes)
+            };
             driver(ctx)
                 .stretches
                 .entry(task)
@@ -287,6 +324,11 @@ pub(crate) fn memory_charged(ctx: *mut TaskCtx, bytes: u64) {
 }
 
 pub(crate) fn memory_freed(ctx: *mut TaskCtx, bytes: u64) {
+    #[cfg(test)]
+    unsafe {
+        let word = (*ctx).view.compiled.fuel;
+        (*ctx).ordered_charge_trace.free(word, bytes);
+    }
     unsafe {
         (*ctx)
             .ordered_freed
@@ -313,13 +355,7 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
     }
     if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
         let before = stretch(ctx);
-        driver(ctx)
-            .frontier
-            .as_mut()
-            .unwrap()
-            .settled
-            .settle(&before)
-            .map_err(Stop::BudgetExceeded)?;
+        settle_head(ctx, &before)?;
     }
     fuel_in(ctx);
     Ok(())
@@ -440,13 +476,7 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
         advance(ctx)?;
         if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
             let before = stretch(ctx);
-            driver(ctx)
-                .frontier
-                .as_mut()
-                .unwrap()
-                .settled
-                .settle(&before)
-                .map_err(Stop::BudgetExceeded)?;
+            settle_head(ctx, &before)?;
             fuel_in(ctx);
             return Ok(());
         }
@@ -512,6 +542,10 @@ pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
 /// A budget settlement that already closed Frontier keeps its original cause.
 /// No callback or diagnostic publication is allowed before this gate returns.
 pub(crate) fn terminal(ctx: *mut TaskCtx, stop: &Stop) -> Stopped<()> {
+    #[cfg(test)]
+    if super::events::charges::terminal_recorded(ctx) {
+        return Ok(());
+    }
     let frontier = driver(ctx)
         .frontier
         .as_ref()
@@ -560,6 +594,17 @@ impl<F: FnOnce() -> (T, Outcome, Next), T> Backend<Command> for HeadEffect<'_, '
         retirement: crate::ordered::Retirement<'_>,
     ) {
         self.objects.record_retirement(task, op, result, retirement);
+    }
+    #[cfg(test)]
+    fn record_budget_stop(
+        &mut self,
+        task: TaskId,
+        before: &Stretch,
+        retirement: u64,
+        kind: hirsel_run_schema::BudgetKind,
+    ) {
+        self.objects
+            .record_budget_stop(task, before, retirement, kind);
     }
     fn record_continuation(&mut self, task: TaskId, retirement: crate::ordered::Retirement<'_>) {
         self.objects.record_continuation(task, retirement);

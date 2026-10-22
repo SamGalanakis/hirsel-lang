@@ -693,6 +693,17 @@ impl Backend<Command> for Objects<'_> {
         events::record(self.ctx, task, Some((op, result)), retirement);
     }
 
+    #[cfg(test)]
+    fn record_budget_stop(
+        &mut self,
+        task: TaskId,
+        before: &crate::budget::stretch::Stretch,
+        retirement: u64,
+        kind: hirsel_run_schema::BudgetKind,
+    ) {
+        events::charges::stopped(self.ctx, task, before, retirement, kind);
+    }
+
     fn record_continuation(&mut self, task: TaskId, retirement: crate::ordered::Retirement<'_>) {
         events::record(self.ctx, task, None, retirement);
     }

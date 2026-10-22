@@ -53,7 +53,7 @@ pub struct Piece {
     /// Strict record highs `(u, h)` of the running level, `h > 0` increasing.
     pub envelope: Vec<(u64, i64)>,
     /// The running level relative to the piece's start.
-    level: i64,
+    pub(super) level: i64,
 }
 
 /// A non-head turn's charges since its last retired or head point.
@@ -61,7 +61,9 @@ pub struct Piece {
 pub struct Stretch {
     budgets: Budgets,
     /// Pieces and, before each but the first, the credit event that opened it.
-    pieces: Vec<(u64, Piece)>,
+    pub(super) pieces: Vec<(u64, Piece)>,
+    #[cfg(test)]
+    pub(crate) exact: Vec<super::stretch_trace::Charge>,
 }
 
 impl Stretch {
@@ -69,9 +71,11 @@ impl Stretch {
         Stretch {
             budgets,
             pieces: vec![(0, Piece::default())],
+            #[cfg(test)]
+            exact: Vec::new(),
         }
     }
-    fn piece(&mut self) -> &mut Piece {
+    pub(super) fn piece(&mut self) -> &mut Piece {
         &mut self.pieces.last_mut().expect("a stretch has a piece").1
     }
     /// One fuel charge.
@@ -80,6 +84,10 @@ impl Stretch {
     }
     /// Owner-local compiled chunks report their consumed points in one batch.
     pub fn fuel_points(&mut self, points: u64) {
+        #[cfg(test)]
+        if points != 0 {
+            self.exact.push(super::stretch_trace::Charge::Fuel(points));
+        }
         let piece = self.piece();
         piece.fuel = piece.fuel.saturating_add(points);
     }
@@ -118,6 +126,8 @@ impl Stretch {
         }
         piece.level = level;
         piece.net = level;
+        #[cfg(test)]
+        self.exact.push(super::stretch_trace::Charge::Alloc(bytes));
         Ok(())
     }
     /// A free of `bytes` within the segment.
@@ -125,6 +135,8 @@ impl Stretch {
         let piece = self.piece();
         piece.level = piece.level.saturating_sub(bytes as i64);
         piece.net = piece.level;
+        #[cfg(test)]
+        self.exact.push(super::stretch_trace::Charge::Free(bytes));
     }
     /// A credit event of `bytes`, computed when its op commits: it opens a new piece.
     pub fn credit(&mut self, bytes: u64) -> Result<(), Pause> {
@@ -132,6 +144,8 @@ impl Stretch {
             return Err(Pause::Pieces);
         }
         self.pieces.push((bytes, Piece::default()));
+        #[cfg(test)]
+        self.exact.push(super::stretch_trace::Charge::Credit(bytes));
         Ok(())
     }
     /// The pieces, each with the credit event before it (0 for the first).

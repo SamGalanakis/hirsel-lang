@@ -27,6 +27,8 @@ use hirsel_run_schema::BudgetKind;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 pub mod stretch;
+#[cfg(test)]
+pub(crate) mod stretch_trace;
 
 /// Large blocks are charged their request rounded up to this.
 pub const LARGE_GRANULE: u64 = 4096;

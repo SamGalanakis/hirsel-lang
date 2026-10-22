@@ -650,3 +650,376 @@ fn canonical_failed_stop_owns_normalized_primary_causes_and_spawn_paths() {
         }
     }
 }
+
+struct BudgetSuffix {
+    wide: bool,
+    suffix: AtomicBool,
+}
+
+unsafe extern "C" fn budget_suffix_head(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    unsafe {
+        let [probe, atomic] = crate::alloc::payload(env).cast::<[u64; 2]>().read();
+        let probe = &*(probe as *const BudgetSuffix);
+        if probe.wide {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !probe.suffix.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "younger charge suffix never ran ahead"
+                );
+                std::thread::yield_now();
+            }
+        }
+        hirsel_rt_v2_atomic_store(ctx, &atomic, (&23u64 as *const u64).cast(), 8);
+        let _role = role::Guard::new(ctx);
+        crate::stop::check(ctx, engine::at_head(ctx));
+        unreachable!("younger budget cut must precede this child's next logical head");
+    }
+}
+
+#[test]
+fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges() {
+    use super::events::{CanonicalItem, CanonicalOutcome, Transition};
+    use crate::budget::stretch_trace::Charge;
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 16,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let wide_layout = crate::Layout { size: 64, ..layout };
+    let layouts = [&layout as *const crate::Layout, &wide_layout];
+    for fuel in [false, true] {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                for jitter in [false, true] {
+                    let probe = Arc::new(BudgetSuffix {
+                        wide: width > 1,
+                        suffix: AtomicBool::new(false),
+                    });
+                    let seen = probe.clone();
+                    let mut ctx = std::ptr::null_mut();
+                    unsafe {
+                        let mut config = crate::Config::new();
+                        config.layouts = layouts.as_ptr();
+                        config.layout_count = layouts.len() as u32;
+                        assert_eq!(
+                            crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx),
+                            0
+                        );
+                        let charge = crate::alloc::allocation_charge(ctx, 2, 16, 8);
+                        let large = crate::alloc::allocation_charge(ctx, 3, 64, 8);
+                        (*ctx).set_budgets(fuel.then_some(10), Some(2 * charge - 1));
+                        let mut policy = Policy::admit(&Default::default(), Some(2 * charge - 1));
+                        policy.speculation_bytes = 1 << 20;
+                        policy.run_ahead = 8;
+                        policy.reorder = reorder;
+                        engine::enable(ctx, policy);
+                        super::events::enable(ctx);
+                        crate::pool::start(ctx, width, true);
+                        crate::pool::free::enable(ctx);
+                        let entry: crate::stop::Entry = Box::new(move |ctx, _| {
+                            let mut atomic = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_atomic_create(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut atomic,
+                                    (&0u64 as *const u64).cast(),
+                                    8
+                                ),
+                                STATUS_OK
+                            );
+                            let mut scope = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut scope,
+                                    &0
+                                ),
+                                STATUS_OK
+                            );
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env)
+                                .cast::<[u64; 2]>()
+                                .write([Arc::as_ptr(&seen) as u64, atomic]);
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    budget_suffix_head,
+                                    env,
+                                    0
+                                ),
+                                STATUS_OK
+                            );
+                            // A physical width1 dispatcher can still execute
+                            // run-ahead continuations. Pin this reference to
+                            // its logical head without adding an operation.
+                            if !seen.wide {
+                                let _role = role::Guard::new(ctx);
+                                crate::stop::check(ctx, engine::at_head(ctx));
+                            }
+                            if jitter {
+                                for _ in 0..13 {
+                                    std::thread::yield_now();
+                                }
+                            }
+                            if fuel {
+                                (*ctx).view.compiled.fuel -= 1;
+                            }
+                            // Width1 stops at this first allocation. A younger
+                            // pure segment at widthN can run its whole suffix.
+                            let first = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            assert_eq!(
+                                crate::release::hirsel_rt_v2_release(
+                                    ctx,
+                                    first,
+                                    2,
+                                    std::ptr::null(),
+                                    0,
+                                    0
+                                ),
+                                STATUS_OK
+                            );
+                            if fuel {
+                                (*ctx).view.compiled.fuel -= 2;
+                            }
+                            let second = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                3,
+                                64,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            assert_eq!(
+                                crate::release::hirsel_rt_v2_release(
+                                    ctx,
+                                    second,
+                                    3,
+                                    std::ptr::null(),
+                                    0,
+                                    0
+                                ),
+                                STATUS_OK
+                            );
+                            assert_eq!(
+                                hirsel_rt_v2_atomic_store(
+                                    ctx,
+                                    &atomic,
+                                    (&99u64 as *const u64).cast(),
+                                    8
+                                ),
+                                STATUS_OK
+                            );
+                            seen.suffix.store(true, Ordering::Release);
+                            let _role = role::Guard::new(ctx);
+                            crate::stop::check(ctx, engine::at_head(ctx));
+                            unreachable!("younger rejected turn cannot resume");
+                        });
+                        assert_eq!(
+                            crate::stop::run_root(ctx, crate::stop::LaunchFrame::bare(entry)),
+                            Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Memory))
+                        );
+                        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                        while crate::pool::busy((*ctx).run_ref()) != 0 {
+                            assert!(
+                                std::time::Instant::now() < until,
+                                "budget cut did not quiesce"
+                            );
+                            std::thread::yield_now();
+                        }
+                        (*ctx).abandon();
+                        let s = (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap();
+                        let Logical::Ordered(driver) = &s.logical else {
+                            unreachable!()
+                        };
+                        let log = driver.events.as_ref().unwrap();
+                        let rows = log.canonical().unwrap();
+                        let end = rows.last().unwrap();
+                        assert_eq!(end.item, CanonicalItem::Terminal);
+                        assert_eq!(end.transition, Transition::Stop);
+                        assert_eq!(
+                            end.outcome,
+                            CanonicalOutcome::Stopped(
+                                hirsel_run_schema::RunOutcome::BudgetExceeded(
+                                    hirsel_run_schema::BudgetKind::Memory
+                                )
+                            )
+                        );
+                        assert_eq!(
+                            end.before.exact,
+                            if fuel {
+                                vec![Charge::Fuel(1), Charge::Alloc(charge)]
+                            } else {
+                                vec![Charge::Alloc(charge)]
+                            }
+                        );
+                        assert_eq!(
+                            rows.iter()
+                                .find(|row| row.op == "task.async" && row.subevent == 0)
+                                .unwrap()
+                                .before
+                                .exact,
+                            [Charge::Alloc(charge)],
+                            "head allocation must survive its partial settlement"
+                        );
+                        assert_eq!(log.rejected_budget_stretches.len(), 1);
+                        let rejected = &log.rejected_budget_stretches[0];
+                        if width > 1 {
+                            assert!(probe.suffix.load(Ordering::Acquire));
+                            assert!(rejected.exact.contains(&Charge::Alloc(large)));
+                            assert!(rejected.exact.contains(&Charge::Free(large)));
+                            assert!(
+                                rejected
+                                    .pieces()
+                                    .next()
+                                    .unwrap()
+                                    .1
+                                    .envelope
+                                    .last()
+                                    .unwrap()
+                                    .1
+                                    > charge as i64
+                            );
+                        } else {
+                            assert!(!probe.suffix.load(Ordering::Acquire));
+                        }
+                        let rows = rows.to_vec();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                        crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements() {
+    use crate::budget::stretch_trace::Charge;
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 16,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let layouts = [&layout as *const crate::Layout];
+    let mut reference = None;
+    for width in [1, 2, 4, 8] {
+        let output = Arc::new(std::sync::Mutex::new(None));
+        let seen = output.clone();
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                let charge = crate::alloc::allocation_charge(ctx, 2, 16, 8);
+                (*ctx).set_budgets(Some(10), Some(charge));
+                engine::enable(ctx, Policy::admit(&Default::default(), Some(charge)));
+                super::events::enable(ctx);
+            },
+            move |ctx| unsafe {
+                let mut atomic = 0;
+                assert_eq!(
+                    hirsel_rt_v2_atomic_create(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut atomic,
+                        (&0u64 as *const u64).cast(),
+                        8
+                    ),
+                    STATUS_OK
+                );
+                let charge = crate::alloc::allocation_charge(ctx, 2, 16, 8);
+                let block =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+                (*ctx).view.compiled.fuel -= 1;
+                assert_eq!(
+                    crate::release::hirsel_rt_v2_release(ctx, block, 2, std::ptr::null(), 0, 0),
+                    STATUS_OK
+                );
+                (*ctx).view.compiled.fuel -= 2;
+                assert_eq!(
+                    hirsel_rt_v2_atomic_store(ctx, &atomic, (&9u64 as *const u64).cast(), 8),
+                    STATUS_OK
+                );
+                let _role = role::Guard::new(ctx);
+                engine::at_head(ctx).unwrap();
+                let log = engine::driver(ctx).events.as_ref().unwrap();
+                let rows = log.canonical().unwrap();
+                let store = rows.last().unwrap();
+                assert_eq!(store.op, "atomic.store");
+                assert_eq!(
+                    store.before.exact,
+                    [
+                        Charge::Alloc(charge),
+                        Charge::Fuel(1),
+                        Charge::Free(charge),
+                        Charge::Fuel(2)
+                    ]
+                );
+                let piece = store.before.pieces().next().unwrap().1;
+                assert_eq!((piece.fuel, piece.net), (3, 0));
+                assert_eq!(piece.envelope, [(0, charge as i64)]);
+                *seen.lock().unwrap() = Some(rows.to_vec());
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let rows = output.lock().unwrap().take().unwrap();
+        if let Some(reference) = &reference {
+            assert_eq!(&rows, reference);
+        } else {
+            reference = Some(rows);
+        }
+    }
+}

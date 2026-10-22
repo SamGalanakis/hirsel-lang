@@ -10,6 +10,9 @@ use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+pub(super) mod charges;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Transition {
     Keep,
@@ -352,6 +355,12 @@ pub(super) struct Log {
     values: BTreeMap<u32, super::values::Program>,
     pub(super) canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
+    #[cfg(test)]
+    charges: Option<crate::budget::stretch_trace::Observer>,
+    #[cfg(test)]
+    budget_terminal: bool,
+    #[cfg(test)]
+    pub(super) rejected_budget_stretches: Vec<Stretch>,
 }
 
 /// Copy a mapped view while its backing storage is still owned by the host
@@ -795,6 +804,7 @@ impl Log {
 /// or production dispatcher is changed by installing the evidence collector.
 #[cfg(test)]
 pub(super) fn enable(ctx: *mut TaskCtx) {
+    unsafe { (*ctx).ordered_charge_trace.enable() };
     unsafe { (*ctx).run_ref() }
         .ordered_roots
         .get_or_init(Default::default);
@@ -2252,6 +2262,8 @@ pub(super) fn record(
     operation: Option<(&Operation<Command>, &Outcome)>,
     retirement: Retirement<'_>,
 ) {
+    #[cfg(test)]
+    let canonical_before = charges::retirement(ctx, task, retirement.before, retirement.credit);
     // Default execution pays no summary, path or carrier copy. The role owns
     // this lookup, even while the frontier is moved out for a bounded effect.
     // SAFETY: the bounded retirement callback already owns the role. A
@@ -2682,7 +2694,18 @@ pub(super) fn record(
             op: operation.map(|(op, _)| op.descriptor.name),
             transition: transition.clone(),
             retirement: retirement.index,
-            before: retirement.before.clone(),
+            before: {
+                #[cfg(test)]
+                {
+                    canonical_before
+                        .clone()
+                        .unwrap_or_else(|| retirement.before.clone())
+                }
+                #[cfg(not(test))]
+                {
+                    retirement.before.clone()
+                }
+            },
             credit: retirement.credit,
             native_outcome: None,
         };
