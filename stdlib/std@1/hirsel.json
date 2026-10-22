@@ -1199,6 +1199,12 @@
       "module": [
         "peekable"
       ]
+    },
+    {
+      "path": "edit_distance.hir",
+      "module": [
+        "edit_distance"
+      ]
     }
   ],
   "dependencies": []

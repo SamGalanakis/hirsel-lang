@@ -1,0 +1,103 @@
+// Port of strsim dacc84c0dc61eff0ee0ff66962bcf2e17018ad26,
+// src/lib.rs:229-266 (MIT, license retained in docs/edit-distance.md).
+// One row, with its diagonal saved before overwriting each cell.
+
+/// Resource refusal, checked in this order: total input scalars, then DP cells.
+pub type Error = ScalarLimit | CellLimit
+
+// Count without storing scalars or overflowing, including at u64::MAX.
+@noalloc
+fn count(s: String, limit: u64) -> Result[u64, Error] uses {} {
+  let mut n: u64 = 0
+  for _ in core@1/string.scalars(s) {
+    if n == limit {
+      return Error(ScalarLimit())
+    }
+    n += 1
+  }
+  Ok(n)
+}
+
+fn buffer(s: String, n: u64) -> unique List[char] uses {} {
+  let mut out: List[char] = []
+  core@1/list.reserve(mut out, n)
+  for c in core@1/string.scalars(s) {
+    core@1/list.push(mut out, c)
+  }
+  take out
+}
+
+@noalloc
+fn min(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+fn distance(outer: List[char], inner: List[char]) -> u64 uses {} {
+  let width = core@1/list.len(inner)
+  let mut row: List[u64] = []
+  core@1/list.reserve(mut row, width)
+  let mut j: u64 = 0
+  while j < width {
+    core@1/list.push(mut row, j + 1)
+    j += 1
+  }
+  let mut value = width
+  let mut i: u64 = 0
+  while i < core@1/list.len(outer) {
+    value = i + 1
+    let mut diagonal = i
+    j = 0
+    while j < width {
+      let cost: u64 = if outer[i] == inner[j] {
+        0
+      } else {
+        1
+      }
+      let substitution = diagonal + cost
+      diagonal = row[j]
+      value = min(value + 1, min(substitution, diagonal + 1))
+      row[j] = value
+      j += 1
+    }
+    i += 1
+  }
+  value
+}
+
+/// Exact unit-cost Levenshtein distance over Unicode scalar values.
+/// No normalization, grapheme segmentation or transposition is performed.
+/// `max_scalars` bounds the combined decoded input lengths and scalar buffers.
+/// `max_cells` bounds only their product, not decoding or all CPU work.
+/// ScalarLimit precedes CellLimit. Both are checked before allocating buffers
+/// or the DP row. Empty inputs still obey max_scalars and use zero DP cells.
+/// Storage: O(m+n) scalars and O(min(m,n)) u64 DP words; time O(m+n+m*n).
+pub fn levenshtein(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[
+  u64,
+  Error
+] uses {} {
+  let m = count(a, max_scalars)?
+  let n = count(b, max_scalars - m)?
+  if m == 0 {
+    return Ok(n)
+  }
+  if n == 0 {
+    return Ok(m)
+  }
+  // Division checks m*n without evaluating an overflowing product.
+  if m > max_cells / n {
+    return Error(CellLimit())
+  }
+  // Here m,n >= 1 and m+n <= max_scalars <= u64::MAX. Each DP
+  // candidate is <= max(m,n)+1 <= m+n, so additions cannot overflow.
+  let left = buffer(a, m)
+  let right = buffer(b, n)
+  if m < n {
+    Ok(distance(right, left))
+  } else {
+    Ok(distance(left, right))
+  }
+}

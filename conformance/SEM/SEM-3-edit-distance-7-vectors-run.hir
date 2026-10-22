@@ -1,0 +1,45 @@
+// rule: SEM-3
+// expect: run
+// Exact strsim vectors plus scalar, grapheme and normalization distinctions.
+pub fn main() -> Result[(), ()] {
+  failure.check(edit_distance.levenshtein("", "", 0, 0) == Ok(0), TextInvariant())
+  failure.check(
+    edit_distance.levenshtein("levenshtein", "levenshtein", 121, 22) == Ok(0),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("kitten", "sitting", 42, 13) == Ok(3),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("hello, world", "bye, world", 120, 22) == Ok(5),
+    TextInvariant()
+  )
+  failure.check(edit_distance.levenshtein("öঙ香", "abc", 9, 6) == Ok(3), TextInvariant())
+  failure.check(edit_distance.levenshtein("abc", "öঙ香", 9, 6) == Ok(3), TextInvariant())
+  failure.check(
+    edit_distance.levenshtein(
+      "The quick brown fox jumped over the angry dog.",
+      "Lorem ipsum dolor sit amet, dicta latine an eam.",
+      2208,
+      94
+    ) == Ok(37),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("", "sitting", 0, 7) == Ok(7),
+    TextInvariant()
+  )
+  failure.check(edit_distance.levenshtein("kitten", "", 0, 6) == Ok(6), TextInvariant())
+  failure.check(edit_distance.levenshtein("é", "é", 2, 3) == Ok(2), TextInvariant())
+  failure.check(edit_distance.levenshtein("👩‍💻", "", 0, 3) == Ok(3), TextInvariant())
+  failure.check(edit_distance.levenshtein("🇩🇪", "", 0, 2) == Ok(2), TextInvariant())
+  failure.check(edit_distance.levenshtein("👍🏽", "👍", 2, 3) == Ok(1), TextInvariant())
+  failure.check(edit_distance.levenshtein("ab", "ba", 4, 4) == Ok(2), TextInvariant())
+  failure.check(
+    edit_distance.levenshtein("a b", "a\tb", 9, 6) == Ok(1),
+    TextInvariant()
+  )
+  failure.check(edit_distance.levenshtein("\0", "", 0, 1) == Ok(1), TextInvariant())
+  Ok(())
+}

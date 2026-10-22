@@ -5265,6 +5265,10 @@ conformance/SEM/SEM-3-ed25519-rfc8032-verify-run.hir
 conformance/SEM/SEM-3-ed25519-seed-size-fail.hir
 conformance/SEM/SEM-3-ed25519-seed-size-run.hir
 conformance/SEM/SEM-3-ed25519-verify-reject-run.hir
+conformance/SEM/SEM-3-edit-distance-7-budgets-run.hir
+conformance/SEM/SEM-3-edit-distance-7-exhaustive-run.hir
+conformance/SEM/SEM-3-edit-distance-7-suggestions-run.hir
+conformance/SEM/SEM-3-edit-distance-7-vectors-run.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
 conformance/SEM/SEM-3-flate-bomb-run.hir

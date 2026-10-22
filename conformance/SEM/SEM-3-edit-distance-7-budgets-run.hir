@@ -1,0 +1,56 @@
+// rule: SEM-3
+// expect: run
+// Scalar refusal wins, including empty inputs; cell refusal stays explicit.
+pub fn main() -> Result[(), ()] {
+  failure.check(edit_distance.levenshtein("", "", 0, 0) == Ok(0), TextInvariant())
+  failure.check(edit_distance.levenshtein("", "💚", 0, 1) == Ok(1), TextInvariant())
+  failure.check(edit_distance.levenshtein("💚", "", 0, 1) == Ok(1), TextInvariant())
+  failure.check(
+    edit_distance.levenshtein("", "💚", 0, 0) == Error(ScalarLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("💚", "", 0, 0) == Error(ScalarLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("kitten", "sitting", 42, 13) == Ok(3),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("kitten", "sitting", 41, 13) == Error(CellLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("kitten", "sitting", 42, 12) == Error(ScalarLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("kitten", "sitting", 0, 12) == Error(ScalarLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("a", "b", 0, 2) == Error(CellLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("a", "a", 0, 2) == Error(CellLimit()),
+    TextInvariant()
+  )
+  failure.check(edit_distance.levenshtein("💚", "💚", 1, 2) == Ok(0), TextInvariant())
+  failure.check(
+    edit_distance.levenshtein("💚", "💚", 1, 1) == Error(ScalarLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    edit_distance.levenshtein("💚", "é", 18446744073709551615, 18446744073709551615) == Ok(
+      1
+    ),
+    TextInvariant()
+  )
+  let a = "kitten"
+  let b = "sitting"
+  let _ = edit_distance.levenshtein(a, b, 0, 0)
+  failure.check(a == "kitten" && b == "sitting", TextInvariant())
+  Ok(())
+}

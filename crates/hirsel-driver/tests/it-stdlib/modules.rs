@@ -1,3 +1,4 @@
+mod edit_distance_7;
 mod base64_stream_5;
 mod binary_endian_5;
 mod hex_builder_5;

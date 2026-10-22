@@ -1,0 +1,51 @@
+// rule: SEM-3
+// expect: run
+// Runnable docs example: deterministic ties in caller-provided suggestion order.
+pub type Suggestion {
+  distance: u64,
+  order: u64,
+}
+
+@noalloc
+fn compare(a: Suggestion, b: Suggestion) -> i32 uses {} {
+  if a.distance < b.distance {
+    return -1
+  }
+  if a.distance > b.distance {
+    return 1
+  }
+  if a.order < b.order {
+    return -1
+  }
+  if a.order > b.order {
+    return 1
+  }
+  0
+}
+
+pub fn suggestions(query: String, candidates: List[String]) -> Result[
+  List[Suggestion],
+  std@1/edit_distance.Error
+] uses {} {
+  let mut ranked: unique List[Suggestion] = []
+  let mut order: u64 = 0
+  for candidate in candidates {
+    let distance = std@1/edit_distance.levenshtein(query, candidate, 4096, 128)?
+    list.push(mut ranked, Suggestion(distance: distance, order: order))
+    order += 1
+  }
+  list.sort(mut ranked, compare)
+  Ok(take ranked)
+}
+
+pub fn main() -> Result[(), ()] {
+  match suggestions("cat", ["bat", "cut", "cat"]) {
+    Ok(ranked) => {
+      failure.check(ranked[0].order == 2 && ranked[0].distance == 0, TextInvariant())
+      failure.check(ranked[1].order == 0 && ranked[1].distance == 1, TextInvariant())
+      failure.check(ranked[2].order == 1 && ranked[2].distance == 1, TextInvariant())
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}
