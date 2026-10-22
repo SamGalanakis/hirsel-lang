@@ -396,6 +396,15 @@ class Route(unittest.TestCase):
 
 
 class Tiers(unittest.TestCase):
+    def test_tsan_wrapper_is_not_run_without_its_buck_inputs(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        commands = {}
+        with patch.dict(os.environ), patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            tool['stages'](lambda name, command, **_: commands.update({name: command}), 'fast')
+        self.assertFalse(any('io_real_tsan.py' in str(command) for command in commands.values()))
+        for test in (ROOT / 'tools/tests').glob('*.py'):
+            self.assertIn(f'tool tests: tools/tests/{test.name}', commands)
+
     def test_fast_build_excludes_campaigns_and_keeps_priority_40(self):
         tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
         queries, stages = [], {}
