@@ -73,11 +73,29 @@ fn command(mut t: Tape, byte: u8) {
 fn recursive_run(ops: List[Op], mut tape: Tape) {
   for op in ops {
     match op {
-      Dec() => command(mut tape, b'-'),
-      Inc() => command(mut tape, b'+'),
-      Prev() => command(mut tape, b'<'),
-      Next() => command(mut tape, b'>'),
-      Print() => command(mut tape, b'.'),
+      Dec() => {
+        tape.cells[tape.pos] = u8.wrapping_sub(tape.cells[tape.pos], 1)
+      },
+      Inc() => {
+        tape.cells[tape.pos] = u8.wrapping_add(tape.cells[tape.pos], 1)
+      },
+      Prev() => {
+        if tape.pos > 0 {
+          tape.pos -= 1
+        }
+      },
+      Next() => {
+        tape.pos += 1
+        if tape.pos >= list.len(tape.cells) {
+          list.push(mut tape.cells, 0)
+        }
+      },
+      Print() => {
+        tape.value_out = u32.wrapping_add(
+          tape.value_out << 2,
+          int.widen(tape.cells[tape.pos])
+        )
+      },
       Loop(body: body) => {
         while tape.cells[tape.pos] != 0 {
           recursive_run(body, mut tape)
