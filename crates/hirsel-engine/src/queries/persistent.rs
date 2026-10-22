@@ -678,7 +678,7 @@ impl QueryEngine {
             LoweringPolicy::Reachable,
         ))
     }
-    fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
+    pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         encode_record(self.types.clone(), &self.items, record)
     }
     fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
