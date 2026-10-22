@@ -15,7 +15,7 @@
 //! use `none@1`.
 use crate::abi_types::FnAbiId;
 use crate::emission::EmitInputs;
-use crate::ir::{Inst, LirUnit};
+use crate::ir::{ConstantValue, Inst, LirUnit};
 use crate::layout_types::LayoutId;
 use crate::stage::Ready;
 use hirsel_syntax::ContentHash;
@@ -481,8 +481,8 @@ enum TableId<'a> {
 }
 
 /// Every `LayoutId` and `FnAbiId` `unit` names, mutably, in a fixed walk order: the
-/// header's ABI, the types, the instructions, then the call, construct, closure, init
-/// flag and codec tables. Terminators and pools name none.
+/// header's ABI, the types, the instructions, then the call, construct, closure,
+/// constant, init flag and codec tables. Terminators and pools name none.
 fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) {
     f(TableId::Abi(&mut unit.header.abi));
     for ty in &mut unit.types {
@@ -511,6 +511,13 @@ fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) 
             f(TableId::Abi(&mut code.abi));
         }
         f(TableId::Layout(&mut site.environment));
+    }
+    // Descriptor constants carry a layout operand, not an ordinary u32 literal.
+    // A cached import must bind it in the consumer's table just like a type.
+    for constant in &mut tables.constants {
+        if let ConstantValue::Descriptor(layout) = &mut constant.value {
+            f(TableId::Layout(layout));
+        }
     }
     for flag in &mut tables.init_flags {
         if let Some(layout) = &mut flag.environment {
@@ -554,6 +561,11 @@ pub fn references<S>(unit: &LirUnit<S>) -> (Vec<LayoutId>, Vec<FnAbiId>) {
     for site in &unit.tables.closures {
         abis.extend(site.code.iter().map(|code| code.abi));
         layouts.insert(site.environment);
+    }
+    for constant in &unit.tables.constants {
+        if let ConstantValue::Descriptor(layout) = constant.value {
+            layouts.insert(layout);
+        }
     }
     layouts.extend(
         unit.tables

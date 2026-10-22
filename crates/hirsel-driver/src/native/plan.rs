@@ -19,6 +19,9 @@ use std::collections::{BTreeMap, BTreeSet};
 const PRODUCTION_REUSE: bool = false;
 const SCHEMA: u32 = 1;
 const MAGIC: &[u8] = b"HIRNPL01";
+#[cfg(test)]
+#[path = "seed_parity_tests.rs"]
+mod seed_parity_tests;
 thread_local! { static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 pub(super) fn recording() -> bool {
     RECORDING.get()
@@ -982,7 +985,7 @@ mod tests {
         let input = engine.export_native_input().unwrap();
         engine.import_native_input(input).unwrap()
     }
-    fn options(store: Arc<dyn ObjectStore>, jobs: usize) -> Options {
+    pub(super) fn options(store: Arc<dyn ObjectStore>, jobs: usize) -> Options {
         let mut options = Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
         options.validation = Validation::Ready;
         options.objects = Some(super::super::units::UnitObjects {
@@ -996,7 +999,7 @@ mod tests {
         });
         options
     }
-    fn count(c: hirsel_intern::timings::Count) -> u64 {
+    pub(super) fn count(c: hirsel_intern::timings::Count) -> u64 {
         hirsel_intern::timings::report()
             .counts
             .iter()

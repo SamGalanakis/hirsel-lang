@@ -1464,6 +1464,42 @@ fn a_snapshot_decodes_only_as_its_own_stage() {
 }
 
 #[test]
+fn descriptor_constants_rebind_and_participate_in_import_evidence() {
+    let table = fixture_table(&TargetSpec::x86_64_unknown_linux_gnu());
+    let mut unit = fixture_unit::<Value>(&table);
+    // Use a layout absent from all other operands so matching read and write
+    // walks alone cannot hide the omission of this constant's dependency.
+    let descriptor = LayoutId(table.layouts.len() as u32);
+    unit.tables.constants.push(ConstantData {
+        ty: LirTypeId(0),
+        value: ConstantValue::Descriptor(descriptor),
+    });
+    assert!(
+        hirsel_lir::objects::references(&unit)
+            .0
+            .contains(&descriptor)
+    );
+    let (erased, mut layouts, abis) = hirsel_lir::objects::erased(&unit);
+    let index = layouts
+        .iter()
+        .position(|id| *id == descriptor)
+        .expect("descriptor constants must be named by layout content");
+    assert_eq!(
+        erased.tables.constants.last().unwrap().value,
+        ConstantValue::Descriptor(LayoutId(index as u32))
+    );
+    let replacement = LayoutId(descriptor.0 + 7);
+    layouts[index] = replacement;
+    unit.tables.constants.last_mut().unwrap().value = ConstantValue::Descriptor(replacement);
+    assert_eq!(
+        hirsel_lir::objects::rebound(erased.clone(), &layouts, &abis).unwrap(),
+        unit
+    );
+    layouts.truncate(index);
+    assert!(hirsel_lir::objects::rebound(erased, &layouts, &abis).is_err());
+}
+
+#[test]
 fn foreign_and_stale_identities_are_rejected() {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let table = fixture_table(&target);
