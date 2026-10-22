@@ -11,7 +11,7 @@ use crate::phase::Progress;
 use crate::record::{Reader, put_varint};
 use std::collections::BTreeMap;
 
-pub const MAGIC: &[u8] = b"hirsel-free-tape 1\n";
+pub const MAGIC: &[u8] = b"hirsel-free-tape 2\n";
 const HEADER: u8 = 1;
 const FLUSH: u8 = 2;
 const STOP: u8 = 3;

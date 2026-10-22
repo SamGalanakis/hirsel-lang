@@ -48,6 +48,8 @@ pub enum Record {
     /// The task's observed cancellation changed to `cause` at an unshielded check in op `op`.
     Cancel {
         op: u64,
+        /// Zero-based unshielded check within this op, across all its phases.
+        check: u64,
         cause: Option<u32>,
     },
     /// A `scope_until` deadline expired (rather than its scope exiting first) at op `op`.
@@ -221,12 +223,15 @@ impl Encoder {
                 put_varint(out, bits);
             }
             Record::AwaitAny { op, index } => self.head(out, ANY, index, op),
-            Record::Cancel { op, cause } => self.head(
-                out,
-                CANCEL,
-                cause.map_or(0, |cause| u64::from(cause) + 1),
-                op,
-            ),
+            Record::Cancel { op, check, cause } => {
+                self.head(
+                    out,
+                    CANCEL,
+                    cause.map_or(0, |cause| u64::from(cause) + 1),
+                    op,
+                );
+                put_varint(out, u128::from(check));
+            }
             Record::Expired { op } => self.head(out, EXPIRED, 0, op),
             Record::Thaw { op, ok } => self.head(out, THAW, u64::from(ok), op),
             Record::Prepared { op, id } => {
@@ -283,6 +288,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
             ANY => Record::AwaitAny { op, index: small },
             CANCEL => Record::Cancel {
                 op,
+                check: reader.u64()?,
                 cause: match small {
                     0 => None,
                     n => Some(u32::try_from(n - 1).map_err(|_| "cause out of range")?),
@@ -319,4 +325,23 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
         });
     }
     Ok(out)
+}
+
+/// Owner-local check cursor. A changed cancellation names its check, so a
+/// later retry cannot replace an earlier unchanged observation in the same op.
+#[derive(Default)]
+pub(crate) struct CheckIndex {
+    op: u64,
+    next: u64,
+}
+impl CheckIndex {
+    pub(crate) fn peek(&self, op: u64) -> u64 {
+        if self.op == op { self.next } else { 0 }
+    }
+    pub(crate) fn take(&mut self, op: u64) -> u64 {
+        let check = self.peek(op);
+        self.op = op;
+        self.next = check.checked_add(1).expect("cancellation check overflow");
+        check
+    }
 }

@@ -12,7 +12,7 @@
 use crate::claim::{Arbiter, Request, Requests, Sweep};
 use crate::phase::{Phase, Progress};
 use crate::projection::{Event, Observed, Stamped};
-use crate::record::{Encoder, ObjectId, Record};
+use crate::record::{CheckIndex, Encoder, ObjectId, Record};
 use crate::recorder::TapeSink;
 use crate::section::{Gate, Scanned, Section, Stopped, TaskLog};
 use crate::tape::{self, End, TaskChunk};
@@ -29,6 +29,7 @@ pub struct Task {
     last: HashMap<ObjectId, u64>,
     epochs: HashMap<u32, u64>,
     canceled: Option<u32>,
+    cancel_checks: CheckIndex,
     scratch: Vec<u8>,
     /// Canonical test trace, absent in ordinary recording.
     trace: Option<Vec<Stamped>>,
@@ -427,6 +428,7 @@ fn unregistered_task(identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
         last: HashMap::new(),
         epochs: HashMap::new(),
         canceled: None,
+        cancel_checks: CheckIndex::default(),
         scratch: Vec::new(),
         trace: trace.then(Vec::new),
         spawned: 0,
@@ -548,9 +550,11 @@ impl Writer<'_, '_> {
         self.event(Event::Observed(Observed::AwaitAny(index)));
     }
     pub fn cancel(&mut self, cause: Option<u32>) {
+        let check = self.task.cancel_checks.take(self.progress.op);
         if std::mem::replace(&mut self.task.canceled, cause) != cause {
             self.record(Record::Cancel {
                 op: self.progress.op,
+                check,
                 cause,
             });
         }

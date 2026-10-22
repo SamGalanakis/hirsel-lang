@@ -16,7 +16,7 @@ use crate::claim::{Arbiter, Request, Requests, Sweep};
 use crate::keys::KeyEpochs;
 use crate::phase::{Phase, Progress};
 use crate::projection::{Event, Observed, Projection, Stamped};
-use crate::record::{Encoder, ObjectId, Record};
+use crate::record::{CheckIndex, Encoder, ObjectId, Record};
 use crate::section::{Scanned, Stopped, TaskLog};
 use crate::sync::Arc;
 use crate::tape::{self, End, TaskChunk};
@@ -57,6 +57,7 @@ struct Live {
     epochs: HashMap<u32, u64>,
     /// The cancellation its previous unshielded check observed.
     canceled: Option<u32>,
+    cancel_checks: CheckIndex,
 }
 
 /// One recording run at width 1 (slot 0).
@@ -133,6 +134,7 @@ impl<S: TapeSink> Recorder<S> {
                 last: HashMap::new(),
                 epochs: HashMap::new(),
                 canceled: None,
+                cancel_checks: CheckIndex::default(),
             },
         );
         Ok(())
@@ -235,9 +237,11 @@ impl<S: TapeSink> Recorder<S> {
     /// An unshielded cancellation check: only a change of the observed value is recorded.
     pub fn cancel_check(&mut self, task: &[u32], op: u64, observed: Option<u32>) {
         let live = self.live(task);
+        let check = live.cancel_checks.take(op);
         let changed = std::mem::replace(&mut live.canceled, observed) != observed;
         let record = changed.then_some(Record::Cancel {
             op,
+            check,
             cause: observed,
         });
         self.stage(task, record, Event::Observed(Observed::Cancel(observed)));

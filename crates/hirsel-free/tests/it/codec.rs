@@ -37,10 +37,12 @@ fn records_round_trip_and_contended_events_stay_small() {
         Record::AwaitAny { op: 901, index: 3 },
         Record::Cancel {
             op: 902,
+            check: 0,
             cause: None,
         },
         Record::Cancel {
             op: 903,
+            check: u64::MAX,
             cause: Some(2),
         },
         Record::Expired { op: 904 },
@@ -268,4 +270,115 @@ fn pending_releases_coalesce_and_dups_cancel_them() {
     assert!(pending.dup(&"t") && !pending.dup(&"u"));
     assert_eq!(pending.take(), vec![("s", 2)]);
     assert!(pending.is_empty());
+}
+
+#[test]
+fn cancellation_changes_keep_their_check_across_host_retries_and_partial_tapes() {
+    use hirsel_free::projection::{Event, Observed, Projection, Stamped};
+    use hirsel_free::replay::Replayer;
+    let checks = [
+        (Progress::new(1, Phase::Entered), None),
+        (Progress::new(1, Phase::Attempt(1)), None),
+        (Progress::new(1, Phase::Attempt(2)), Some(3)),
+        (Progress::new(1, Phase::Attempt(3)), Some(3)),
+        (Progress::new(1, Phase::Attempt(4)), None),
+        (Progress::new(1, Phase::Done), Some(5)),
+        (Progress::new(2, Phase::Entered), Some(5)),
+        (Progress::new(2, Phase::Done), None),
+    ];
+    let trace: Vec<_> = checks
+        .iter()
+        .map(|&(progress, cause)| Stamped {
+            task: vec![],
+            progress,
+            event: Event::Observed(Observed::Cancel(cause)),
+        })
+        .collect();
+    for concurrent in [false, true] {
+        let mut recorder = Recorder::new(Vec::new(), b"cancel checks", false).unwrap();
+        recorder.start(vec![]).unwrap();
+        let parallel = hirsel_free::concurrent::Recorder::<Vec<u8>>::new(
+            Vec::new(),
+            b"cancel checks",
+            1,
+            false,
+            true,
+            None,
+        )
+        .unwrap();
+        let mut worker = parallel.worker(0).unwrap();
+        let mut task = parallel.root(&mut worker).unwrap();
+        for &(progress, cause) in &checks {
+            if concurrent {
+                parallel
+                    .phase(&mut worker, &mut task, progress, |writer| {
+                        writer.cancel(cause)
+                    })
+                    .unwrap();
+                parallel.flush().unwrap().unwrap();
+            } else {
+                recorder.cancel_check(&[], progress.op, cause);
+                recorder.publish(&[], progress).unwrap();
+                recorder.flush().unwrap();
+            }
+        }
+        let bytes = if concurrent {
+            parallel.stop("returned", None).unwrap().unwrap();
+            drop(worker);
+            parallel.into_sink()
+        } else {
+            recorder.stop("returned", None).unwrap().unwrap();
+            recorder.into_sink()
+        };
+        // Every flush is a valid prefix, including immediately before and after
+        // a changed retry. The same unchanged checks must remain byte-free.
+        for length in 0..=bytes.len() {
+            let Ok(tape) = tape::parse(&bytes[..length]) else {
+                continue;
+            };
+            let Some(&cut) = tape.cut.get(&vec![]) else {
+                continue;
+            };
+            let mut replay = Replayer::new(&tape).unwrap();
+            for &(progress, cause) in &checks {
+                if !cut.admits(progress) {
+                    break;
+                }
+                assert_eq!(replay.cancel_outcome(&[], progress.op), cause);
+                assert_eq!(
+                    replay.cancel_outcome(&[], progress.op),
+                    cause,
+                    "peek is inert"
+                );
+                assert_eq!(replay.cancel_check(&[], progress.op).unwrap(), cause);
+                replay.publish(&[], progress).unwrap();
+            }
+            let outcome = if tape.end.is_some() {
+                "returned"
+            } else {
+                "truncated"
+            };
+            let expected = Projection::new(outcome, &tape.cut, &trace);
+            assert_eq!(replay.finish(&tape.cut).unwrap(), expected);
+        }
+        let tape = tape::parse(&bytes).unwrap();
+        let records = decode(&tape.logs[&vec![]]).unwrap();
+        assert_eq!(records.len(), 4, "unchanged checks record nothing");
+        assert!(matches!(
+            records[0],
+            Record::Cancel {
+                op: 1,
+                check: 2,
+                cause: Some(3)
+            }
+        ));
+        assert!(matches!(
+            records[3],
+            Record::Cancel {
+                op: 2,
+                check: 1,
+                cause: None
+            }
+        ));
+    }
 }

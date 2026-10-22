@@ -22,7 +22,7 @@
 use crate::keys::KeyEpochs;
 use crate::phase::Progress;
 use crate::projection::{Event, Observed, Projection, Stamped};
-use crate::record::{ObjectId, Record, decode};
+use crate::record::{CheckIndex, ObjectId, Record, decode};
 use crate::tape::{End, Tape};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -44,6 +44,7 @@ struct Script {
     /// This task's previous epoch on each key, as its records advance.
     epochs: HashMap<u32, u64>,
     canceled: Option<u32>,
+    cancel_checks: CheckIndex,
     events: Vec<Event>,
 }
 
@@ -352,9 +353,14 @@ impl Replayer {
     /// The cancellation an unshielded check of op `op` will observe, without consuming it.
     pub fn cancel_outcome(&self, task: &[u32], op: u64) -> Option<u32> {
         let script = self.scripts.get(task)?;
+        let check = script.cancel_checks.peek(op);
         script
             .peek(op, |r| match *r {
-                Record::Cancel { cause, .. } => Some(cause),
+                Record::Cancel {
+                    check: index,
+                    cause,
+                    ..
+                } if index == check => Some(cause),
                 _ => None,
             })
             .unwrap_or(script.canceled)
@@ -363,8 +369,13 @@ impl Replayer {
     /// The cancellation an unshielded check of op `op` observes.
     pub fn cancel_check(&mut self, task: &[u32], op: u64) -> Result<Option<u32>, Diverged> {
         let script = self.script(task)?;
+        let check = script.cancel_checks.take(op);
         if let Some(cause) = script.take(op, |r| match *r {
-            Record::Cancel { cause, .. } => Some(cause),
+            Record::Cancel {
+                check: index,
+                cause,
+                ..
+            } if index == check => Some(cause),
             _ => None,
         }) {
             script.canceled = cause;
