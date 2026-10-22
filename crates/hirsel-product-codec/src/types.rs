@@ -1,8 +1,8 @@
 //! Canonical immutable type components. Ordinary query records carry only
 //! directly used references. Decoding a reference reuses already interned
 //! components and never decodes another product's complete TypeTable.
-use crate::store::{Domain, Output, Reference, ResultStore};
 use bincode::Options;
+use hirsel_artifact_store::{Contents, Domain, Output, Reference};
 use hirsel_intern::persist::Source;
 use hirsel_syntax::ContentHash;
 use hirsel_types::{TypeId, TypeInterner, TypeTable};
@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 const DOMAIN: Domain = Domain { kind: 2, schema: 1 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(super) struct TypeRef {
+pub struct TypeRef {
     output: ContentHash,
     len: u64,
     member: u32,
@@ -38,14 +38,14 @@ struct Component {
     rows: Vec<u8>,
 }
 
-pub(crate) struct TypeRecords {
-    pub(super) types: Arc<TypeInterner>,
-    pub(super) store: Arc<dyn ResultStore>,
+pub struct TypeRecords {
+    pub types: Arc<TypeInterner>,
+    pub store: Arc<dyn Contents>,
     encoded: Mutex<HashMap<TypeId, TypeRef>>,
     decoded: Mutex<HashMap<(ContentHash, u64), Arc<[TypeId]>>>,
 }
 impl TypeRecords {
-    pub(super) fn new(types: Arc<TypeInterner>, store: Arc<dyn ResultStore>) -> Arc<Self> {
+    pub fn new(types: Arc<TypeInterner>, store: Arc<dyn Contents>) -> Arc<Self> {
         Arc::new(Self {
             types,
             store,
@@ -53,7 +53,7 @@ impl TypeRecords {
             decoded: Mutex::new(HashMap::new()),
         })
     }
-    pub(super) fn encode(&self, roots: &[TypeId]) -> Option<Vec<TypeRef>> {
+    pub fn encode(&self, roots: &[TypeId]) -> Option<Vec<TypeRef>> {
         let mut known = self.encoded.lock().unwrap_or_else(|e| e.into_inner());
         let mut nodes = Vec::new();
         let mut numbers = HashMap::new();
@@ -259,9 +259,9 @@ fn options(len: usize) -> impl Options {
         .with_limit(len as u64)
         .reject_trailing_bytes()
 }
-pub(super) struct ProductTypes {
-    pub(super) records: Arc<TypeRecords>,
-    pub(super) references: Vec<TypeRef>,
+pub struct ProductTypes {
+    pub records: Arc<TypeRecords>,
+    pub references: Vec<TypeRef>,
 }
 impl Source<TypeId> for ProductTypes {
     fn id(&self, number: u32) -> Option<TypeId> {
@@ -272,28 +272,22 @@ impl Source<TypeId> for ProductTypes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Bytes, EntryKey, MemStore};
+    use hirsel_artifact_store::{Bytes, Memory};
     use hirsel_types::{Primitive, Type, TypeKind};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Default)]
     struct Counted {
-        inner: MemStore,
+        inner: Memory,
         reads: AtomicUsize,
     }
-    impl ResultStore for Counted {
-        fn get(&self, key: &EntryKey) -> Option<Bytes> {
-            self.inner.get(key)
-        }
-        fn put(&self, key: &EntryKey, bytes: &[u8]) {
-            self.inner.put(key, bytes);
-        }
+    impl Contents for Counted {
         fn get_content(&self, reference: Reference) -> Option<Bytes> {
             self.reads.fetch_add(1, Ordering::Relaxed);
             self.inner.get_content(reference)
         }
-        fn name(&self) -> &'static str {
-            "counted-type-components"
+        fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+            self.inner.put_content(domain, bytes)
         }
     }
     fn graph(reverse: bool) -> (Arc<TypeInterner>, TypeId, TypeId, TypeId) {
