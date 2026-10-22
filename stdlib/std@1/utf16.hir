@@ -1,0 +1,78 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Adapted from Go unicode/utf16, BSD-3-Clause; see third-party/NOTICES.md.
+// ebe2feefc400f813aefdc8a036e66d2619da6649, utf16.go:36-58,77-112,125-159.
+
+/// The zero-based index of the first unpaired surrogate, in u16 code units.
+pub type DecodeError {
+  index: u64,
+}
+
+/// Encode valid String scalars into independently owned UTF-16 code units.
+/// NUL and U+FEFF are ordinary data. No byte order or BOM policy is applied.
+pub fn encode(value: String) -> unique List[u16] uses {} {
+  // Grow through checked list.push; no unchecked worst-case capacity product.
+  let mut out: List[u16] = []
+  for scalar in core@1/string.scalars(value) {
+    let code = core@1/char.to_u32(scalar)
+    if code < 0x10000u32 {
+      core@1/list.push(mut out, core@1/int.narrow(code))
+    } else {
+      let rest = code - 0x10000u32
+      core@1/list.push(mut out, core@1/int.narrow(0xd800u32 + (rest >> 10)))
+      core@1/list.push(mut out, core@1/int.narrow(0xdc00u32 + (rest & 0x3ffu32)))
+    }
+  }
+  take out
+}
+
+// Only validated BMP scalars, composed pairs or U+FFFD reach this writer.
+fn append(code: u32, mut out: List[u8]) -> () uses {} {
+  match core@1/char.from_u32(code) {
+    Some(scalar) => std@1/char.format_into(scalar, mut out),
+    None() => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+// Go's ordered scan consumes a valid pair together. On an unpaired high
+// surrogate it consumes just that unit, retrying its follower next time.
+fn decode(units: List[u16], strict: bool) -> Result[String, DecodeError] uses {} {
+  // Each append uses the existing checked UTF-8/list builder growth.
+  let mut out: List[u8] = []
+  let len = core@1/list.len(units)
+  let mut i: u64 = 0
+  while i < len {
+    let first: u32 = core@1/int.widen(units[i])
+    let mut code = first
+    if first >= 0xd800u32 && first < 0xe000u32 {
+      if first < 0xdc00u32 && len - i > 1 && units[i + 1] >= 0xdc00u16 && units[i + 1] < 0xe000u16 {
+        let second: u32 = core@1/int.widen(units[i + 1])
+        code = 0x10000u32 + ((first - 0xd800u32) << 10) + (second - 0xdc00u32)
+        i += 1
+      } else {
+        if strict {
+          return Error(DecodeError(index: i))
+        }
+        code = 0xfffdu32
+      }
+    }
+    append(code, mut out)
+    i += 1
+  }
+  Ok(text.finish_valid(take out))
+}
+
+/// Refuse the first unpaired surrogate; no partial String is returned.
+pub fn decode_strict(units: List[u16]) -> Result[String, DecodeError] uses {} {
+  decode(units, true)
+}
+
+/// Replace each unpaired surrogate with U+FFFD, preserving valid pairs.
+pub fn decode_lossy(units: List[u16]) -> String uses {} {
+  match decode(units, false) {
+    Ok(value) => take value,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}

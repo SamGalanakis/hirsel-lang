@@ -1,0 +1,22 @@
+pub fn main() -> Result[(), ()] {
+  let units = std@1/utf16.encode("A\u{10000}\0\u{feff}")
+  let orders: List[std@1/binary.ByteOrder] = [LittleEndian(), BigEndian()]
+  for order in orders {
+    let mut wire: List[u8] = []
+    for unit in units {
+      std@1/binary.append_u16(unit, order, mut wire)
+    }
+    let bytes = bytes.from_list(take wire)
+    let mut recovered: List[u16] = []
+    let mut offset: u64 = 0
+    while offset < bytes.len(bytes) {
+      match std@1/binary.read_u16(bytes, offset, order) {
+        Ok(unit) => list.push(mut recovered, unit),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+      offset += 2
+    }
+    failure.check(std@1/utf16.decode_strict(recovered) == Ok("A\u{10000}\0\u{feff}"), TextInvariant())
+  }
+  Ok(())
+}

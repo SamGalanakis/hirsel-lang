@@ -50,3 +50,4 @@ mod iter_peekable_7;
 mod line_scan_7;
 mod lru_cache_7;
 mod base32_8;
+mod utf16_8;

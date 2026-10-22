@@ -1235,6 +1235,12 @@
       "module": [
         "base32"
       ]
+    },
+    {
+      "path": "utf16.hir",
+      "module": [
+        "utf16"
+      ]
     }
   ],
   "dependencies": []
