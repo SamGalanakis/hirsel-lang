@@ -101,6 +101,9 @@ pub(crate) unsafe fn request(
             "nonparking concurrent request blocked".into(),
         ));
     }
+    // Unsupported diagnostic evidence cannot change the host operation's
+    // live result. Its entry remains pending and canonical() refuses export.
+    let _ = super::super::events::certify_host(ctx);
     unsafe {
         (*ctx).pending_ordered_host.as_mut().unwrap().result = Some(result);
     }

@@ -59,6 +59,9 @@ pub(super) enum CanonicalItem {
     CompletionRank(ObjectId),
     ScopeCancellation(ObjectId),
     HostKey(ObjectId),
+    HostOperation(ObjectId),
+    HostResource(host_keys::Resource),
+    HostHandle(HostHandleId),
 }
 
 /// The actual completion returned by an owned host request. It is retained
@@ -165,6 +168,16 @@ pub(super) struct CanonicalEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum CanonicalOutcome {
+    HostRequest(host_requests::HostRequestValue),
+    HostAccess {
+        mode: crate::io_keys::Mode,
+        result: host_values::HostValue,
+    },
+    HostResourceCreated,
+    HostCreated(host_keys::Creation),
+    HostAlias(host_keys::Creation),
+    HostResult(host_values::HostValue),
+    HostFinished,
     Created(ObjectId),
     Alias(ObjectId),
     Scalar(Vec<u8>),
@@ -350,6 +363,9 @@ pub(super) struct Log {
     pub host_key_observations:
         BTreeMap<(Vec<u32>, u64), Option<Vec<(host_keys::Resource, crate::io_keys::Mode)>>>,
     pub host_roots: BTreeMap<u64, HostAuthority>,
+    host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
+    host_certified: BTreeSet<(Vec<u32>, u64)>,
+    host_creations: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Creation>>,
     pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_requests::HostRequestValue>>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
@@ -807,7 +823,10 @@ impl Log {
                 .expect("canonical object version overflow");
             if matches!(
                 outcome,
-                CanonicalOutcome::Created(_) | CanonicalOutcome::Spawned { .. }
+                CanonicalOutcome::Created(_)
+                    | CanonicalOutcome::Spawned { .. }
+                    | CanonicalOutcome::HostCreated(_)
+                    | CanonicalOutcome::HostResourceCreated
             ) {
                 assert_eq!(*version, 1, "creation is the first object subevent");
             }
@@ -830,6 +849,8 @@ impl Log {
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
         if self.unsupported.is_empty()
+            && self.host_entries.is_empty()
+            && self.host_certified.is_empty()
             && (self.closed_blocked
                 || (self.joins.is_empty()
                     && self.scope_exits.is_empty()
@@ -1457,15 +1478,38 @@ pub(crate) fn discover_host(
     if matches!(result, Err(crate::io::AdapterError::InvalidHandle(_))) {
         return Ok(());
     }
-    log.host_created(
+    let created = log.host_created(
         ObjectId {
-            creator: path,
+            creator: path.clone(),
             ordinal,
         },
         result,
         discovered,
-    )
-    .map(|_| ())
+    )?;
+    assert!(
+        log.host_creations
+            .insert((path, ordinal), created)
+            .is_none()
+    );
+    Ok(())
+}
+
+/// The explicitly admitted nonparking concurrent path has finished its effect
+/// and owns complete snapshots. Generic home requests do not call this.
+pub(crate) fn certify_host(ctx: *mut TaskCtx) -> Result<(), &'static str> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return Ok(());
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("host certification follows entry");
+    log.certify_host(&path, ordinal)
 }
 
 /// Capture after the owned request returned, before its caller can yield.
@@ -2745,6 +2789,22 @@ pub(super) fn record(
                 unreachable!()
             };
             let log = driver.events.as_ref()?;
+            if matches!(
+                log.last_ops.get(&path),
+                Some(&"host.request" | &"host.handle_drop")
+            ) && matches!(retirement.transition, Next::Keep | Next::Yield)
+            {
+                let ordinal = log.ordinals.get(&path)?.checked_sub(1)?;
+                if log.host_certified.contains(&(path.clone(), ordinal)) {
+                    return Some(vec![(
+                        CanonicalItem::HostOperation(ObjectId {
+                            creator: path.clone(),
+                            ordinal,
+                        }),
+                        CanonicalOutcome::HostFinished,
+                    )]);
+                }
+            }
             if log.last_ops.get(&path) == Some(&"task.scope_enter") {
                 let ordinal = log.ordinals.get(&path)?.checked_sub(1)?;
                 let deadline = log
@@ -2906,6 +2966,26 @@ pub(super) fn record(
             native_outcome: None,
         };
         log.subevents(&boundary, name, events);
+    } else if operation
+        .is_some_and(|(op, _)| matches!(op.descriptor.name, "host.request" | "host.handle_drop"))
+    {
+        assert!(
+            log.host_entries
+                .insert(
+                    (path.clone(), ordinal),
+                    Boundary {
+                        task: path.clone(),
+                        ordinal,
+                        op: operation.map(|(op, _)| op.descriptor.name),
+                        transition: transition.clone(),
+                        retirement: retirement.index,
+                        before: retirement.before.clone(),
+                        credit: retirement.credit,
+                        native_outcome: None,
+                    }
+                )
+                .is_none()
+        );
     } else {
         log.unsupported.push(Unsupported {
             task: path.clone(),
@@ -2922,6 +3002,15 @@ pub(super) fn record(
     }
     if matches!(retirement.transition, Next::End) {
         log.failed_ends.remove(&path);
+    }
+    if operation.is_none()
+        && matches!(retirement.transition, Next::Keep | Next::Yield)
+        && matches!(
+            log.last_ops.get(&path),
+            Some(&"host.request" | &"host.handle_drop")
+        )
+    {
+        log.host_certified.remove(&(path.clone(), ordinal));
     }
     log.boundaries.push(Boundary {
         task: path,
@@ -3833,10 +3922,18 @@ mod tests {
                     );
                     assert_eq!(rows[0].native_outcome, Some((0, Vec::new())));
                     assert_eq!(rows[1].native_outcome, None);
+                    let rejected = log.canonical().unwrap_err();
+                    assert_eq!(rejected.len(), 2, "continuation and end remain unsupported");
                     assert_eq!(
-                        log.canonical().unwrap_err().len(),
+                        log.host_entries.len(),
+                        1,
+                        "entry awaits complete owned host evidence"
+                    );
+                    assert!(log.host_entries.contains_key(&(vec![], 0)));
+                    assert_eq!(
+                        rejected.len() + log.host_entries.len(),
                         3,
-                        "partial trace must be refused"
+                        "every partial boundary is still rejected"
                     );
                     crate::STATUS_OK
                 },

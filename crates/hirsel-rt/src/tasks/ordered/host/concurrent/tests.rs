@@ -74,7 +74,7 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
             });
             let install = adapter.clone();
             let calls = adapter.clone();
-            let output = Arc::new(Mutex::new(Vec::new()));
+            let output = Arc::new(Mutex::new((Vec::new(), Vec::new())));
             let seen = output.clone();
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
@@ -176,11 +176,30 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                     );
                     assert!(rows.iter().skip(1).all(|row| row.1.is_some()));
                     assert!(rows.iter().all(|row| row.2.is_some()));
-                    assert!(
-                        log.canonical().is_err(),
-                        "full host phase admission remains gated"
-                    );
-                    *seen.lock().unwrap() = rows;
+                    let canonical = log.canonical().expect("complete bounded host trace");
+                    assert_eq!(canonical.len(), 32);
+                    for ordinal in 0..6 {
+                        let events: Vec<_> = canonical
+                            .iter()
+                            .filter(|event| event.ordinal == ordinal)
+                            .collect();
+                        assert!(matches!(
+                            events[0].outcome,
+                            super::super::super::events::CanonicalOutcome::HostRequest(_)
+                        ));
+                        assert!(matches!(
+                            events.last().unwrap().outcome,
+                            super::super::super::events::CanonicalOutcome::HostFinished
+                        ));
+                        assert_eq!(
+                            events
+                                .iter()
+                                .map(|event| event.subevent)
+                                .collect::<Vec<_>>(),
+                            (0..events.len() as u32).collect::<Vec<_>>()
+                        );
+                    }
+                    *seen.lock().unwrap() = (rows, canonical.to_vec());
                     STATUS_OK
                 },
             );

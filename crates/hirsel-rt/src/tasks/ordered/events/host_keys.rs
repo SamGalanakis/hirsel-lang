@@ -6,6 +6,8 @@ use crate::io_keys::{Key, KeySet, Kind, Mode};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+mod canonical;
+#[cfg(test)]
 mod discovery;
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -33,6 +35,96 @@ pub(in crate::tasks::ordered) struct Creation {
 }
 
 impl super::Log {
+    /// Certify only the bounded nonparking path whose request, complete key
+    /// set, discovery and result are all present. Generic home waits keep
+    /// their unfinished boundary until their own poll protocol is supported.
+    pub(in crate::tasks::ordered) fn certify_host(
+        &mut self,
+        task: &[u32],
+        ordinal: u64,
+    ) -> Result<(), &'static str> {
+        use super::{CanonicalItem as I, CanonicalOutcome as O};
+        let key = (task.to_vec(), ordinal);
+        let boundary = self
+            .host_entries
+            .get(&key)
+            .ok_or("missing host entry")?
+            .clone();
+        let request = self
+            .host_requests
+            .get(&key)
+            .and_then(Option::as_ref)
+            .ok_or("incomplete host request authorities")?
+            .clone();
+        let keys = self
+            .host_key_observations
+            .get(&key)
+            .and_then(Option::as_ref)
+            .ok_or("incomplete host resource keys")?
+            .clone();
+        let created = self
+            .host_creations
+            .get(&key)
+            .ok_or("incomplete host creation discovery")?
+            .clone();
+        let result = self
+            .host_completions
+            .iter()
+            .find(|done| done.task == task && done.ordinal == ordinal)
+            .and_then(|done| done.observation.as_ref())
+            .ok_or("incomplete host result")?
+            .clone();
+        if created
+            .iter()
+            .map(|row| &row.handle)
+            .ne(result.handles.iter())
+        {
+            return Err("host creation evidence differs from result handles");
+        }
+        if self.host_polled.contains(&key) || boundary.transition != super::Transition::Keep {
+            return Err("parked host phases need a dedicated projection");
+        }
+        let operation = crate::ordered::footprint::ObjectId {
+            creator: task.to_vec(),
+            ordinal,
+        };
+        let mut events = vec![(I::HostOperation(operation.clone()), O::HostRequest(request))];
+        events.extend(keys.into_iter().map(|(key, mode)| {
+            (
+                I::HostResource(key),
+                O::HostAccess {
+                    mode,
+                    result: result.clone(),
+                },
+            )
+        }));
+        let mut resources = BTreeSet::new();
+        for row in created {
+            if !self
+                .versions
+                .contains_key(&I::HostResource(row.resource.clone()))
+                && resources.insert(row.resource.clone())
+            {
+                events.push((
+                    I::HostResource(row.resource.clone()),
+                    O::HostResourceCreated,
+                ));
+            }
+            let item = I::HostHandle(row.handle.clone());
+            let outcome = if self.versions.contains_key(&item) {
+                O::HostAlias(row)
+            } else {
+                O::HostCreated(row)
+            };
+            events.push((item, outcome));
+        }
+        events.push((I::HostOperation(operation), O::HostResult(result)));
+        self.subevents(&boundary, boundary.op.unwrap(), events);
+        self.host_entries.remove(&key);
+        assert!(self.host_certified.insert(key));
+        Ok(())
+    }
+
     /// The caller supplies a completed discovery snapshot, so no adapter lock,
     /// home bridge or saved context is borrowed while this table is updated.
     /// Validate all initialized fields before publishing any new identities.
