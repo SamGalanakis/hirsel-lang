@@ -511,7 +511,7 @@ pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
 /// existing log and stretch retire before the stop, just like an H boundary.
 /// A budget settlement that already closed Frontier keeps its original cause.
 /// No callback or diagnostic publication is allowed before this gate returns.
-pub(crate) fn terminal(ctx: *mut TaskCtx) -> Stopped<()> {
+pub(crate) fn terminal(ctx: *mut TaskCtx, stop: &Stop) -> Stopped<()> {
     let frontier = driver(ctx)
         .frontier
         .as_ref()
@@ -519,7 +519,12 @@ pub(crate) fn terminal(ctx: *mut TaskCtx) -> Stopped<()> {
     if frontier.is_stopped() || frontier.head().is_none() {
         return Ok(());
     }
-    let (_, progress) = head_effect(ctx, "stop", || ((), Next::Stop))?;
+    let (_, progress) = head_canonical(
+        ctx,
+        "stop",
+        || ((), Next::Stop),
+        |_| super::events::terminal(stop),
+    )?;
     assert_eq!(progress, Progress::Stopped);
     Ok(())
 }

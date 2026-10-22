@@ -403,3 +403,156 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
         }
     }
 }
+
+/// Observe after actual stop publication and worker shutdown. The launcher
+/// retains the run; no stopped entry or parked TaskCtx is sampled for evidence.
+fn stopped_trace(
+    width: u32,
+    reorder: hirsel_run_config::Reorder,
+    jitter: bool,
+    stop: Stop,
+) -> (Vec<super::events::CanonicalEvent>, bool) {
+    let mut ctx = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+            0
+        );
+        let mut policy = Policy::admit(&Default::default(), None);
+        policy.reorder = reorder;
+        engine::enable(ctx, policy);
+        super::events::enable(ctx);
+        crate::pool::start(ctx, width, true);
+        crate::pool::free::enable(ctx);
+        let expected = stop.clone();
+        let entry: crate::stop::Entry = Box::new(move |ctx, _| {
+            let mut atomic = 0;
+            assert_eq!(
+                hirsel_rt_v2_atomic_create(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut atomic,
+                    (&0u64 as *const u64).cast(),
+                    8,
+                ),
+                STATUS_OK
+            );
+            if jitter {
+                for _ in 0..13 {
+                    std::thread::yield_now();
+                }
+            }
+            assert_eq!(
+                hirsel_rt_v2_atomic_store(ctx, &atomic, (&23u64 as *const u64).cast(), 8,),
+                STATUS_OK
+            );
+            let mut value = 0u64;
+            assert_eq!(
+                hirsel_rt_v2_atomic_load(ctx, &atomic, (&mut value as *mut u64).cast(), 8),
+                STATUS_OK
+            );
+            assert_eq!(value, 23);
+            crate::stop::raise(ctx, stop.clone());
+        });
+        assert_eq!(
+            crate::stop::run_root(ctx, crate::stop::LaunchFrame::bare(entry)),
+            Err(expected)
+        );
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::pool::busy((*ctx).run_ref()) != 0 {
+            assert!(
+                std::time::Instant::now() < until,
+                "stopped root did not save"
+            );
+            std::thread::yield_now();
+        }
+        (*ctx).abandon();
+        let s = (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap();
+        let Logical::Ordered(driver) = &s.logical else {
+            unreachable!()
+        };
+        let log = driver.events.as_ref().unwrap();
+        let result = (log.canonical.clone(), log.canonical().is_ok());
+        crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        result
+    }
+}
+
+#[test]
+fn canonical_terminal_causes_follow_the_actual_stop_cut_across_widths() {
+    use super::events::{CanonicalItem, CanonicalOutcome, Transition};
+    use hirsel_run_schema::{BudgetKind, Environmental, ExecutionDiagnostic, SignalKind, Site};
+    let stops = [
+        Stop::Refused("terminal fixture".into()),
+        Stop::Diverged("missing fixture input".into()),
+        Stop::Environmental(Environmental::CodecLimit),
+        Stop::Environmental(Environmental::Output("closed fixture sink".into())),
+        Stop::Signaled(SignalKind::Terminate),
+        Stop::BudgetExceeded(BudgetKind::Memory),
+        Stop::BudgetExceeded(BudgetKind::Fuel),
+        Stop::UndefinedBehavior(ExecutionDiagnostic {
+            rule: "INT-UB".into(),
+            site: Site {
+                file: "terminal.hir".into(),
+                line: 7,
+                ..Default::default()
+            },
+            message: "unchecked addition overflow".into(),
+        }),
+    ];
+    for stop in stops {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                for jitter in [false, true] {
+                    let (rows, complete) = stopped_trace(width, reorder, jitter, stop.clone());
+                    assert!(complete);
+                    assert_eq!(rows.len(), 4);
+                    let end = rows.last().unwrap();
+                    assert_eq!(end.item, CanonicalItem::Terminal);
+                    assert_eq!(
+                        end.outcome,
+                        CanonicalOutcome::Stopped(stop.clone().outcome())
+                    );
+                    assert_eq!(end.transition, Transition::Stop);
+                    assert_eq!(
+                        (end.ordinal, end.subevent, end.version, end.retirement),
+                        (3, 0, 1, 3)
+                    );
+                    assert_eq!(
+                        rows[2].outcome,
+                        CanonicalOutcome::Scalar(23u64.to_le_bytes().to_vec())
+                    );
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_terminal_rejects_unmapped_blocked_targets() {
+    for width in [1, 2, 4, 8] {
+        let (rows, complete) = stopped_trace(
+            width,
+            hirsel_run_config::Reorder::Auto,
+            false,
+            Stop::Blocked(vec![hirsel_run_schema::Wait {
+                spawn_path: vec![],
+                site: Default::default(),
+                kind: "receive".into(),
+                targets: vec![0xfeed],
+            }]),
+        );
+        assert!(!complete);
+        assert_eq!(rows.len(), 3, "numeric wait target must never be certified");
+        assert!(super::events::terminal(&Stop::Failed).is_none());
+    }
+}

@@ -41,6 +41,7 @@ pub(super) struct Boundary {
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum CanonicalItem {
     Root,
+    Terminal,
     SharedRoot(crate::ordered::root_ids::SharedRootId),
     Object(ObjectId),
     Cancellation(Vec<u32>),
@@ -216,6 +217,7 @@ pub(super) enum CanonicalOutcome {
     TaskFailed {
         failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
     },
+    Stopped(hirsel_run_schema::RunOutcome),
     RootEnd {
         status: u8,
         result: Option<Vec<u8>>,
@@ -2064,6 +2066,22 @@ pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option
             op: Some("task.await_any"),
         });
     }
+}
+
+/// Capture only terminal causes whose schema already excludes physical identities.
+/// Blocked targets need the same typed object mapping as their wait operations;
+/// Failed needs its immutable failure chain. Neither can certify a scalar stop.
+pub(super) fn terminal(stop: &crate::stop::Stop) -> Option<Subevents> {
+    if matches!(
+        stop,
+        crate::stop::Stop::Blocked(_) | crate::stop::Stop::Failed
+    ) {
+        return None;
+    }
+    Some(vec![(
+        CanonicalItem::Terminal,
+        CanonicalOutcome::Stopped(stop.clone().outcome()),
+    )])
 }
 
 /// Final root status after mandatory returned-result cleanup, using the

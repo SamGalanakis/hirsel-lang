@@ -299,7 +299,7 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
         && stop != Stop::Requested
     {
         let role = unsafe { crate::tasks::role::Guard::new(ctx) };
-        let stop = match crate::tasks::ordered::engine::terminal(ctx) {
+        let stop = match crate::tasks::ordered::engine::terminal(ctx, &stop) {
             Ok(()) => stop,
             Err(earlier) => earlier,
         };
