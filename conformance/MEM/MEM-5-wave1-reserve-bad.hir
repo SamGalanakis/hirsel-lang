@@ -1,7 +1,10 @@
 // rule: MEM-5
 // expect: reject MEM-5 at line 6
-// twin: MEM/MEM-14-wave1-reserve-unaddressable-run.hir
+// twin: SEM/SEM-4-wave1-primitives-run.hir
 @noalloc
 fn example(mut xs: List[u64]) -> () {
   list.reserve(mut xs, 10)
 }
+// The twin reserves small capacities in ordinary allocating code, including an
+// empty List[u64]. Here @noalloc rejects the same primitive call; the impossible
+// reservation independently retains its SEM-1 failure control.
