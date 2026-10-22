@@ -31,26 +31,8 @@ pub(crate) fn specialize(
     if candidates.iter().all(Vec::is_empty) {
         return;
     }
-    let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
-    for (p, s) in &program.signatures {
-        signatures.insert(hirsel_syntax::DefId::intern(p), (**s).clone());
-    }
-    for definition in program
-        .definitions
-        .values()
-        .filter(|d| !d.bodies.is_empty())
-    {
-        if !hirsel_validate::qualify_scoped_transport(
-            definition,
-            &program.types,
-            &signatures,
-            &mut vec![],
-        )
-        .violations
-        .is_empty()
-        {
-            return;
-        }
+    if !source_qualifies(program) {
+        return;
     }
     let manifest = hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned());
     let operations = program.operation_registry();
@@ -122,6 +104,64 @@ pub(crate) fn specialize(
             at += 1;
         }
     }
+}
+
+/// Reconstruct the defining package's source views from existing owner input.
+/// Native export seals public opaque signatures but retains their layout shape.
+/// Only ordinary non-carrier nominals are complete with that shape restored:
+/// capability ceilings and carrier selectors need a fuller declaration and
+/// therefore keep the original conservative refusal. V still checks every body.
+fn source_qualifies(program: &Program) -> bool {
+    let packages: BTreeSet<_> = program
+        .definitions
+        .values()
+        .filter(|d| !d.bodies.is_empty())
+        .map(|d| &d.path.path().0.package)
+        .collect();
+    for package in packages {
+        let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
+        for (path, signature) in &program.signatures {
+            let mut view = (**signature).clone();
+            if &path.0.package == package
+                && view.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                && let hirsel_types::SignatureKind::Type(declaration) = &mut view.kind
+                && declaration.representation.is_none()
+                && declaration.capability.is_none()
+                && declaration.captures.is_none()
+                && let Some(hirsel_layout::layout::OwnerRepresentation::Defined(owner)) = program
+                    .owners
+                    .nominals
+                    .get(&hirsel_syntax::DefId::intern(path))
+                && owner.definition == *path
+                && owner.generics == declaration.generics
+                && owner.layout_promises == declaration.layout
+                && owner.resource == declaration.resource
+                && owner.finalizer.as_ref().map(|(path, _)| path) == declaration.drop.as_ref()
+                && owner.unsafe_ffi_package == view.metadata.unsafe_ffi
+            {
+                declaration.representation = Some(owner.private_shape);
+            }
+            signatures.insert(hirsel_syntax::DefId::intern(path), view);
+        }
+        for definition in program
+            .definitions
+            .values()
+            .filter(|d| !d.bodies.is_empty() && &d.path.path().0.package == package)
+        {
+            if !hirsel_validate::qualify_scoped_transport(
+                definition,
+                &program.types,
+                &signatures,
+                &mut vec![],
+            )
+            .violations
+            .is_empty()
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 struct Candidate {
