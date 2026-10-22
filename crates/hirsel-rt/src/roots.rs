@@ -235,7 +235,9 @@ pub(crate) unsafe fn consume(ctx: &mut TaskCtx, block: *mut Header) -> bool {
             let ctx = std::ptr::from_mut(ctx);
             if (*(*ctx).descriptor((*block).index())).flags & crate::LAYOUT_MUTEX_ROOT != 0 {
                 // A mutex's yielding finalizers belong to its original owner.
-                return crate::tasks::ordered::drops::root_release(ctx, || take(&mut *ctx, block));
+                return crate::tasks::ordered::drops::root_release(ctx, block, || {
+                    take(&mut *ctx, block)
+                });
             }
             crate::tasks::ordered::drops::shared_release(ctx, block);
             return false;

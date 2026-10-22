@@ -172,6 +172,9 @@ pub(super) enum CanonicalOutcome {
         rank: Option<u64>,
     },
     Failures(Vec<(hirsel_run_schema::Failure, Vec<u32>)>),
+    RootReleased {
+        last: bool,
+    },
     Released {
         kind: u64,
         leftovers: Vec<Vec<u8>>,
@@ -6267,6 +6270,9 @@ mod tests {
                                     crate::STATUS_OK
                                 );
                                 assert_eq!(payload, [0; 2]);
+                                crate::roots::hirsel_rt_v2_root_dup(ctx, mutex as *mut crate::Header);
+                                assert_eq!(crate::roots::hirsel_rt_v2_root_drop(
+                                    ctx, mutex as *mut crate::Header, 0, 0), crate::STATUS_OK);
                                 assert_eq!(
                                     crate::roots::hirsel_rt_v2_root_drop(
                                         ctx,
@@ -6296,6 +6302,12 @@ mod tests {
                                     .cloned()
                                     .collect();
                                 assert_eq!(rows.len(), if decoded { 4 } else { 2 });
+                                let releases: Vec<_> = log.canonical.iter().filter(|row| row.op == "root.release").collect();
+                                assert_eq!(releases.len(), 2);
+                                assert_eq!(releases[0].outcome, CanonicalOutcome::RootReleased { last: false });
+                                assert_eq!(releases[1].outcome, CanonicalOutcome::RootReleased { last: true });
+                                assert_eq!(releases[0].item, releases[1].item);
+                                assert!(releases.iter().all(|row| row.transition == Transition::Keep));
                                 let channel = CanonicalItem::Object(ObjectId {
                                     creator: vec![],
                                     ordinal: 0,
@@ -6313,6 +6325,11 @@ mod tests {
                                     );
                                 }
                                 if decoded {
+                                    assert!(log.canonical().is_ok(), "initialized closes and mutex root releases form a complete prefix");
+                                    assert_eq!(releases[1].item, rows[3].item);
+                                    let release = log.canonical.iter().position(|row| row == releases[1]).unwrap();
+                                    let close = log.canonical.iter().position(|row| row == &rows[3]).unwrap();
+                                    assert!(release < close, "last root is recorded before payload cleanup");
                                     let encode = |value: u64| {
                                         [1u32.to_le_bytes().as_slice(), &value.to_le_bytes()]
                                             .concat()

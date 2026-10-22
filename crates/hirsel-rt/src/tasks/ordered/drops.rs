@@ -260,8 +260,32 @@ pub(super) unsafe fn plain_images(
 /// walk happens after restoring Frontier and is owned by the releasing task.
 /// # Safety
 /// The caller owns the role and one exact root credit; action cannot suspend.
-pub(crate) unsafe fn root_release(ctx: *mut TaskCtx, action: impl FnOnce() -> bool) -> bool {
-    let result = engine::head_effect(ctx, "root.release", || (action(), Next::Keep));
+pub(crate) unsafe fn root_release(
+    ctx: *mut TaskCtx,
+    block: *mut Header,
+    action: impl FnOnce() -> bool,
+) -> bool {
+    let result = engine::head_canonical(
+        ctx,
+        "root.release",
+        || (action(), Next::Keep),
+        |died| {
+            // The root decrement does not release storage: the original owner
+            // walks/finalizes only after this bounded observer has returned.
+            let word = unsafe { crate::alloc::payload(block).cast::<u64>().read() };
+            // Frontier is owned by the bounded callback. A stop-aware
+            // scheduler lookup here could abandon it before restoration.
+            let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+            let Logical::Ordered(driver) = &s.logical else {
+                return None;
+            };
+            let object = driver.objects.identity(Kind::Mutex, word)?.clone();
+            Some(vec![(
+                super::events::CanonicalItem::Object(object),
+                super::events::CanonicalOutcome::RootReleased { last: *died },
+            )])
+        },
+    );
     let (died, progress) = unsafe { crate::stop::check(ctx, result) };
     assert!(matches!(progress, Progress::Absorbed(_)));
     died
