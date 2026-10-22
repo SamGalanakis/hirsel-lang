@@ -5,6 +5,8 @@ hirsel_guard::install!();
 
 #[path = "../src/execution_policy.rs"]
 mod execution_policy;
+#[path = "support/tasks_cache.rs"]
+mod tasks_cache;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;
 use std::{
     path::PathBuf,
@@ -2441,15 +2443,16 @@ impl Drop for Running {
 /// examples/tasks built once per test process with LLVM, shared by the native tests
 /// that launch the server.
 fn tasks_llvm() -> &'static PathBuf {
-    static EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    EXE.get_or_init(|| {
+    // Keep both the executable and its private cache alive for every consumer.
+    static EXE: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> = std::sync::OnceLock::new();
+    &EXE.get_or_init(|| {
         let dir_scratch = tempfile::Builder::new()
             .prefix("hirsel-example-")
             .tempdir()
             .unwrap();
         let dir = dir_scratch.path().to_path_buf();
         let exe = dir.join("tasks");
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        let output = tasks_cache::compiler(&dir_scratch)
             .args(["build", "--backend", "llvm"])
             .arg(repository_manifest("examples/tasks/hirsel.json"))
             .arg("-o")
@@ -2457,17 +2460,17 @@ fn tasks_llvm() -> &'static PathBuf {
             .output()
             .unwrap();
         assert!(output.status.success(), "build tasks: {output:?}");
-        let _ = dir_scratch.keep();
-        exe
+        (dir_scratch, exe)
     })
+    .1
 }
 
 fn tasks_end_to_end(native: bool) {
-    let dir = std::env::temp_dir().join(format!(
-        "hirsel-example-{}-{}-tasks-e2e",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-tasks-e2e-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
     let server = repository_manifest("examples/tasks/hirsel.json");
@@ -2596,7 +2599,6 @@ fn tasks_end_to_end(native: bool) {
             "board-00000000000000000008.json"
         ]
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -2617,13 +2619,12 @@ fn tasks_end_to_end_llvm() {
 /// peaks near 1 GB; the bound is the compiler's own peak RSS.
 #[test]
 fn tasks_e2e_client_builds_with_llvm_in_bounded_memory() {
-    let dir = std::env::temp_dir().join(format!(
-        "hirsel-example-{}-{}-tasks-e2e-build",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-tasks-e2e-build-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path();
+    let output = tasks_cache::compiler(&dir_scratch)
         .args([
             "build",
             "--timings=json",
@@ -2645,7 +2646,6 @@ fn tasks_e2e_client_builds_with_llvm_in_bounded_memory() {
         "the LLVM build of the e2e client peaked at {} MiB",
         peak >> 20
     );
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The gRPC greeter calls its own Greeter service over a real TCP connection in the
@@ -2761,11 +2761,11 @@ fn tasks_event_streams_hold_no_board_llvm() {
     const TASKS: u64 = 2000;
     const STREAMS: usize = 200;
     const GROWTH: u64 = 24 << 20;
-    let dir = std::env::temp_dir().join(format!(
-        "hirsel-example-{}-{}-tasks-streams",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-tasks-streams-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
     let tasks: Vec<serde_json::Value> = (1..=TASKS)
@@ -2874,7 +2874,6 @@ fn tasks_event_streams_hold_no_board_llvm() {
     );
     drop(streams);
     assert!(server.finish("server").success());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// examples/ledger-service (docs/replay-a-service.md): a store at a `sim@1` place, its
