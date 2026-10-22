@@ -11,6 +11,7 @@ use hirsel_free::phase::Progress;
 use std::sync::Arc;
 pub(crate) mod concurrent;
 pub(super) mod handles;
+pub(crate) mod native;
 use handles::{Created, Envelope};
 
 pub(crate) struct Pending {
@@ -774,3 +775,6 @@ mod cancellation_tests;
 
 #[cfg(test)]
 mod concurrent_tests;
+
+#[cfg(test)]
+mod native_tests;

@@ -343,6 +343,10 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    if crate::tasks::free::host::native::enabled(ctx) {
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
+    }
     let ordered = crate::tasks::ordered::engine::on(ctx);
     if ordered {
         crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;

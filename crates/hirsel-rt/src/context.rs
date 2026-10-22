@@ -315,6 +315,8 @@ pub(crate) struct RunShared {
     /// Explicit Free host admission: owned concurrent requests and driver wake.
     pub(crate) free_io:
         std::sync::OnceLock<std::sync::Arc<crate::tasks::free::host::concurrent::Service>>,
+    /// Explicit native Free host routing; production admission remains gated.
+    pub(crate) free_native_io: std::sync::atomic::AtomicBool,
 }
 
 impl RunShared {
@@ -868,6 +870,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         profile_output: RoleCell::new(None),
         ordered_roots: Default::default(),
         free_io: Default::default(),
+        free_native_io: Default::default(),
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };

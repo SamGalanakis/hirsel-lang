@@ -382,6 +382,13 @@ impl Token {
         }
         self.shared.handles.lock().unwrap().substitute(envelope)
     }
+    pub(super) fn host_clock_keys(
+        &self,
+        request: &crate::io::Request,
+    ) -> Stopped<crate::io_keys::KeySet> {
+        super::host::native::replay_clock_keys(&self.shared.handles.lock().unwrap(), request)
+    }
+
     pub(super) fn host_identity(
         &self,
         word: u64,
