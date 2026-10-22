@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2233 exported definitions; 972 variants.
+2235 exported definitions; 972 variants.
 
 ## Types and roots
 
@@ -10965,6 +10965,16 @@ References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2
 - `@preserves_unique(m) pub fn map.update[K: key, V]( mut m: unique Map[K, V], k: K, change: fn(mut value: unique V) -> () uses {} ) -> bool uses {}`
 
 References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmap_2fupdate_5fvalue"></a>
+
+- `pub fn map.update_value[K: key, V: copyable]( mut m: Map[K, V], k: K, change: fn(mut value: V) -> () uses {} ) -> bool uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-core_401_2fmap_2fupdate_5fvalue_5fwith"></a>
+
+- `fn map.update_value_with[K: key, V: copyable](mut m: Map[K, V], k: K, change: fn(mut value: V) -> () uses {}) -> bool uses {}`
 
 <a id="def-core_401_2fmap_2fupdate_5fwith"></a>
 
