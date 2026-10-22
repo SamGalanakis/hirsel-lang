@@ -4180,7 +4180,10 @@ impl Checker<'_, '_> {
             && !matches!(declared.binding, ResolvedName::Parameter(_))
             && !self.taken_storage(state, binding)
             && !self.arenas.global(&value.modes.relation)
-            && value.sources().next().is_none()
+            // A join retains each incoming alias as a Bound obligation.
+            // Those bounds do not turn an all-borrowed view into an owner;
+            // read_through still lends every one of its underlying sources.
+            && (value.borrowed_only || value.sources().next().is_none())
             && value.reached().iter().any(|root| *root != binding)
             && self.property(result).is_some_and(|p| p.data)
     }
@@ -4750,10 +4753,18 @@ impl Checker<'_, '_> {
                             value.modes.sendability = Sendability::NotSendable;
                         }
                     }
-                    value.set_alias(
+                    // A projection through a borrowed view still reaches its
+                    // underlying storage. Naming the intermediate pattern slot
+                    // here would retain a dead arm-local source after descent.
+                    let alias = if usage == UseKind::Borrow && value.borrowed_only {
+                        value
+                            .alias()
+                            .or(Some((place.binding, Site::Expression(*expression))))
+                    } else {
                         (usage != UseKind::Copy)
-                            .then_some((place.binding, Site::Expression(*expression))),
-                    );
+                            .then_some((place.binding, Site::Expression(*expression)))
+                    };
+                    value.set_alias(alias);
                     if *context == Context::Mut
                         && state.slots[place.binding].value.modes.uniqueness == Uniqueness::Unique
                     {

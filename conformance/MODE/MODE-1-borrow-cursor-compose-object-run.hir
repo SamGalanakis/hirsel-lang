@@ -1,0 +1,64 @@
+// rule: MODE-1
+// expect: run
+type Value = Text(String) | Array(List[Value]) | Object(Map[String, Value])
+
+fn descend(value: Value, tokens: List[String], at: u64) -> Option[Value] in value {
+  let mut target = value
+  let mut pos = at
+  while pos < list.len(tokens) {
+    match target {
+      Object(members) => {
+        let Some(child) = map.get(members, tokens[pos]) else {
+          return None()
+        }
+        return descend(child, tokens, pos + 1)
+      },
+      Array(items) => {
+        if list.len(items) == 0 {
+          return None()
+        }
+        target = items[0]
+        pos += 1
+      },
+      _ => {
+        return None()
+      },
+    }
+  }
+  Some(copy target)
+}
+
+fn make() -> Value {
+  let mut inner: Map[String, Value] = map.empty()
+  map.insert(mut inner, "b", Text("yes"))
+  let mut outer: Map[String, Value] = map.empty()
+  map.insert(mut outer, "a", Array([Array([Object(take inner)])]))
+  Object(take outer)
+}
+
+fn score(value: Option[Value]) -> u64 {
+  match value {
+    Some(Text(t)) => if t == "yes" {
+      1
+    } else {
+      0
+    },
+    _ => 0,
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let a = score(descend(Text("yes"), [], 0))
+  let b = score(descend(Array([Text("yes")]), ["0"], 0))
+  let c = score(descend(Array([Array([Text("yes")])]), ["0", "0"], 0))
+  let d = score(descend(make(), ["a", "0", "0", "b"], 0))
+  let absent: u64 = match descend(make(), ["missing"], 0) {
+    None() => 1,
+    _ => 0,
+  }
+  if a + b + c + d + absent == 5 {
+    Ok(())
+  } else {
+    Error(a + b + c + d + absent)
+  }
+}

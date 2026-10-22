@@ -1,0 +1,63 @@
+// rule: MODE-1
+// expect: run
+type Value = Text(String) | Array(List[Value])
+
+fn view(a: Value) -> Value in a {
+  copy a
+}
+
+fn walk(value: Value, steps: u64) -> Value in value {
+  let mut target = value
+  let mut i = 0u64
+  while i < steps {
+    match target {
+      Array(items) => {
+        target = items[0]
+      },
+      _ => {
+        break
+      },
+    }
+    i += 1
+  }
+  view(target)
+}
+
+fn written(value: Value, steps: u64) -> Value in value {
+  let mut target: Value in value = value
+  let mut i = 0u64
+  while i < steps {
+    match target {
+      Array(items) => {
+        target = items[0]
+      },
+      _ => {
+        break
+      },
+    }
+    i += 1
+  }
+  let saved = target
+  view(saved)
+}
+
+fn score(value: Value) -> u64 {
+  match value {
+    Text(t) => string.byte_len(t),
+    _ => 0,
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let a = score(walk(Text("abc"), 0))
+  let b = score(walk(Array([Text("abc")]), 1))
+  let c = score(walk(Array([Array([Text("abc")])]), 2))
+  let d = score(written(Text("abc"), 0))
+  let e = score(written(Array([Text("abc")]), 1))
+  let f = score(written(Array([Array([Text("abc")])]), 2))
+  if a + b + c + d + e + f == 18 {
+    Ok(())
+  } else {
+    Error(a + b + c + d + e + f)
+  }
+}

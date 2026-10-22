@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: run
+fn view(a: List[u64]) -> List[u64] in a {
+  a
+}
+
+fn f(a: List[u64], b: List[u64], flag: bool) -> List[u64] in {a, b} {
+  let mut c: List[u64] in {a, b} = a
+  if flag {
+    c = b
+  }
+  view(c)
+}
+
+pub fn main() -> Result[(), u64] {
+  if list.len(f([1], [2, 3], true)) == 2 && list.len(f([1], [2, 3], false)) == 1 {
+    Ok(())
+  } else {
+    Error(1)
+  }
+}

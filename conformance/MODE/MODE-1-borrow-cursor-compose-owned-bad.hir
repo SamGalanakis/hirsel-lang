@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 10
+// twin: MODE/MODE-1-borrow-cursor-compose-loop-run.hir
+fn view(a: List[u64]) -> List[u64] in a {
+  a
+}
+
+fn f(a: List[u64]) -> List[u64] in a {
+  let c = copy a
+  view(c)
+}

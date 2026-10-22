@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-borrow-cursor-compose-join-run.hir
+fn view(a: List[u64]) -> List[u64] in a {
+  a
+}
+
+fn f(a: List[u64], b: List[u64], flag: bool) -> List[u64] in a {
+  let mut c: List[u64] in {a, b} = a
+  if flag {
+    c = b
+  }
+  // The cursor cover does not widen the caller-visible result relation.
+  view(c)
+}

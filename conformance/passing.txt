@@ -1716,6 +1716,8 @@ conformance/LANG/LANG-15-borrow-binding-readonly-ok.hir
 conformance/LANG/LANG-15-borrow-binding.hir
 conformance/LANG/LANG-15-borrow-cursor-call-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-call-ok.hir
+conformance/LANG/LANG-15-borrow-cursor-env-bad.hir
+conformance/LANG/LANG-15-borrow-cursor-env-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-loop-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-match-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-field-match-write-bad.hir
@@ -2826,6 +2828,11 @@ conformance/MODE/MODE-1-arena-only-unnamed-taken-copy-bad.hir
 conformance/MODE/MODE-1-borrow-capture-function-element-call-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-block-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-block-ok.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-foreign-bad.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-join-run.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-loop-run.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-object-run.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-owned-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-field-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-field-match-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-field-ok.hir
@@ -7085,5 +7092,3 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
-conformance/LANG/LANG-15-borrow-cursor-env-bad.hir
-conformance/LANG/LANG-15-borrow-cursor-env-ok.hir
