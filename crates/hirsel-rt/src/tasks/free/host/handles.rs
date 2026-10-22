@@ -100,7 +100,13 @@ pub(super) fn fields(
             | Completion::Listened(Err(_))
             | Completion::Accepted(Err(_))
             | Completion::Spawned(Err(_))
-            | Completion::Halves(Err(_)),
+            | Completion::Halves(Err(_))
+            | Completion::Process(_)
+            | Completion::Pipeline(_)
+            | Completion::ChildUnit(_)
+            | Completion::ChildBytes(_)
+            | Completion::ChildExit(_)
+            | Completion::GroupExit(_),
         ) => Ok([None, None]),
         _ => Err("host result needs an unsupported logical handle codec"),
     }
