@@ -5513,6 +5513,20 @@ impl Checker<'_, '_> {
                     .get(pattern)
                     .map(|&row| &self.body.patterns[row])
                     .and_then(|row| row.annotation.map(|written| (written, row.ty)));
+                // A written cursor cover is a prerequisite of the binding's
+                // receiving modes. Check a simple declaration before those
+                // modes can mistake a malformed cover for global storage.
+                let mut written_cursor = annotation
+                    .filter(|(written, _)| written.relation)
+                    .and_then(|_| {
+                        self.body
+                            .bindings
+                            .iter()
+                            .position(|binding| binding.site == NameSite::Pattern(*pattern))
+                    })
+                    .map(|index| {
+                        self.cursor_contract(state, index, &mut value, annotation, *pattern, source)
+                    });
                 if !test {
                     if let Some((written, declared)) = annotation {
                         let annotated = declared;
@@ -5930,14 +5944,16 @@ impl Checker<'_, '_> {
                             self.tree.expressions[source.0 as usize].origin.span,
                             Some(index),
                         );
-                        let cursor = self.cursor_contract(
-                            state,
-                            index,
-                            &mut part,
-                            annotation,
-                            root_pattern,
-                            source,
-                        );
+                        let cursor = written_cursor.take().unwrap_or_else(|| {
+                            self.cursor_contract(
+                                state,
+                                index,
+                                &mut part,
+                                annotation,
+                                root_pattern,
+                                source,
+                            )
+                        });
                         if usage != UseKind::Borrow {
                             part.cursor_views = cursors::Views::default();
                         }
@@ -6012,6 +6028,19 @@ impl Checker<'_, '_> {
                         );
                         return;
                     }
+                }
+                // A failed borrowed binding has no valid cursor contract. Its
+                // later whole-name refills cannot establish cover judgments;
+                // RHS availability/access/copying were checked by their uses.
+                let expected = &state.slots[place.binding].value;
+                if expected.invalid
+                    && expected.borrowed_only
+                    && expected.aliased().is_some()
+                    && self.body.bindings[place.binding].mutable
+                    && place.projections.is_empty()
+                    && !*compound
+                {
+                    return;
                 }
                 if self.rebind_cursor(state, &place, *expression, *rhs, *operation, *compound) {
                     return;

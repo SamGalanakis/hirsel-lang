@@ -386,9 +386,13 @@ impl Checker<'_, '_> {
                     "a cursor cover must name earlier enclosing value places",
                 );
                 part.invalid = true;
+                return None;
             }
             cover = allowed;
             explicit = Some(origins);
+        }
+        if part.invalid {
+            return None;
         }
         if !part.cursor_views.within(&cover) {
             self.diagnostic(
@@ -397,6 +401,7 @@ impl Checker<'_, '_> {
                 "the initial view is outside the cursor's fixed origin cover",
             );
             part.invalid = true;
+            return None;
         }
         part.cursor_views.lineages.insert(index);
         cover.lineages.insert(index);

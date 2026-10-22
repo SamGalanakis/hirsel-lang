@@ -195,3 +195,98 @@ fn cursor_diagnostics_16_deterministic_across_session_salts() {
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|run| run == &runs[0]));
 }
+
+fn check_recovery(source: &str, expected: &[(&str, &str)]) {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("cursor.hir", source.into()).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        let actual: Vec<_> = output
+            .diagnostics
+            .iter()
+            .map(|d| (d.rule.as_str(), output.sources.slice(d.primary).unwrap()))
+            .collect();
+        assert_eq!(actual, expected, "{source}");
+        for d in &output.diagnostics {
+            let json = d.to_json(&output.sources);
+            let human = d.render_human(&output.sources);
+            assert_eq!(json["rule"], d.rule.as_str());
+            assert_eq!(json["message"], d.message);
+            assert_eq!(json["severity"], "error");
+            let at = output.sources.resolve(d.primary);
+            assert_eq!(json["primary"]["start"], at.start);
+            assert_eq!(json["primary"]["end"], at.end);
+            assert!(human.contains(d.rule.as_str()), "{human}");
+            assert!(human.contains(&d.message), "{human}");
+            assert!(!human.contains("rooted in )"), "{human}");
+        }
+        let warm = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert_eq!(
+            warm.diagnostics
+                .iter()
+                .map(|d| d.to_json(&warm.sources))
+                .collect::<Vec<_>>(),
+            output
+                .diagnostics
+                .iter()
+                .map(|d| d.to_json(&output.sources))
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
+fn cursor_diagnostics_16_invalid_cover_recovery() {
+    check_recovery(
+        "fn f(a:List[u64])->u64 {let mut c:List[u64] in env=a; c=a; list.len(c)}",
+        &[("LANG-15", "a")],
+    );
+    check_recovery(
+        "fn f(a:List[u64])->u64 {let alias=a; let mut c:List[u64] in env=alias; c=a; list.len(c)}",
+        &[("LANG-15", "alias")],
+    );
+    for cover in ["env", "{env,a}", "heap"] {
+        check_recovery(
+            &format!(
+                "fn f(a:List[u64],b:List[u64])->u64 {{let mut c:List[u64] in {cover}=a; c=b; c=a; c=copy b; list.len(c)}}"
+            ),
+            &[("LANG-15", "a")],
+        );
+    }
+    check_recovery(
+        "fn f(a:List[u64],b:List[u64])->u64 {let mut c:List[u64] in b=a; c=b; c=a; list.len(c)}",
+        &[("MODE-1", "a")],
+    );
+}
+
+#[test]
+fn cursor_diagnostics_16_invalid_cover_prerequisites() {
+    check_recovery(
+        "fn f(a:List[u64])->u64 {let mut c:List[u64] in {heap,a}=a; c=a; list.len(c)}",
+        &[("LANG-7", "=")],
+    );
+    for (cover, rule) in [
+        ("missing", "LANG-4"),
+        ("a.nope", "LANG-4"),
+        ("later", "LANG-2"),
+    ] {
+        check_recovery(
+            &format!(
+                "fn f(a:List[u64])->u64 {{let mut c:List[u64] in {cover}=a; let later=a; c=a; list.len(c)}}"
+            ),
+            &[(rule, &format!("List[u64] in {cover}"))],
+        );
+    }
+    check_recovery(
+        "fn f(a:List[u64])->u64{let mut c:List[u64] in a=a;c=a;list.len(c)}",
+        &[],
+    );
+    check_recovery(
+        "fn f(a:List[u64],b:List[u64])->u64 {let mut c:List[u64] in env=a; c=take b; list.len(c)}",
+        &[("LANG-15", "a"), ("OWN-1", "take b")],
+    );
+    check_recovery(
+        "fn f(a:List[u64],b:List[u64])->u64 {let mut c:List[u64] in env=a; c=a; let independent=take b; list.len(c)+list.len(independent)}",
+        &[("LANG-15", "a"), ("OWN-1", "take b")],
+    );
+}

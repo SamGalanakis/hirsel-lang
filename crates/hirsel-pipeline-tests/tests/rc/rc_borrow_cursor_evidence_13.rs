@@ -39,12 +39,37 @@ fn borrow_cursor_evidence_13_environment_diagnostic_preserves_ordinary_bindings(
             "MODE-1",
         ),
     ] {
-        let error = match try_compile(&format!("{source}\nfn main()->u64 {{0}}")) {
-            Ok(_) => panic!("unexpectedly accepted: {source}"),
-            Err(error) => error,
-        };
-        assert!(error.contains(rule), "expected {rule}: {error}");
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                hirsel_driver::compiler_adapters(),
+            );
+            let file = engine
+                .sources
+                .add("cursor.hir", format!("{source}\nfn main()->u64 {{0}}"))
+                .unwrap();
+            let output =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            let rules: Vec<_> = output.diagnostics.iter().map(|d| d.rule.as_str()).collect();
+            assert_eq!(rules, [rule], "{source}: {:?}", output.diagnostics);
+        });
     }
+}
+
+#[test]
+fn borrow_cursor_evidence_13_environment_diagnostic_repair_lowers() {
+    let (program, lowered) = lower_valid(
+        "fn f(a:List[u64])->u64{let mut c:List[u64] in a=a;c=a;list.len(c)}\nfn main()->u64 {f([1])}",
+    );
+    let definition = &program.definitions[&path("f")];
+    assert_eq!(
+        definition.bodies[definition.entry.0 as usize]
+            .borrow_cursors
+            .len(),
+        1
+    );
+    assert!(!lowered.units.is_empty());
 }
 
 #[test]
