@@ -534,7 +534,11 @@ fn read_wire(stream: &UnixStream) -> Option<([u8; 4], serde_json::Value, Vec<Own
         }
         bytes.extend(&more[..n]);
     }
-    let value: serde_json::Value = serde_json::from_slice(&bytes[8..8 + length]).ok()?;
+    let value: serde_json::Value = if &bytes[..4] == candidate::MAGIC {
+        hirsel_driver::candidate::protocol::decode_wire_frame(&bytes[8..8 + length]).ok()?
+    } else {
+        serde_json::from_slice(&bytes[8..8 + length]).ok()?
+    };
     if value["identity"].as_str()? != identity() {
         return None;
     }

@@ -2,8 +2,30 @@
 //! handles follow rust-analyzer 3131751e ide/src/lib.rs:192-202,238-252; this
 //! adapter keeps old snapshots alive instead of globally cancelling them.
 use super::*;
+mod v2;
 use serde_json::{Value, json};
 use std::sync::Condvar;
+
+/// Preserve permissive v1 JSON; v2 must not overwrite duplicate request fields.
+pub fn decode_frame(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    let value: Value = serde_json::from_slice(bytes)?;
+    if value["version"] == 2 {
+        hirsel_engine::decode_unique_json(bytes)
+    } else {
+        Ok(value)
+    }
+}
+
+/// Transport preserves a decoded v2 identity so duplicate keys receive an
+/// InvalidRequest reply on the latched connection. No overwritten field can
+/// reach candidate dispatch. Invalid UTF-8/JSON remains a framing refusal.
+pub fn decode_wire_frame(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    let mut value: Value = serde_json::from_slice(bytes)?;
+    if value["version"] == 2 && hirsel_engine::decode_unique_json(bytes).is_err() {
+        value["__invalid_json"] = json!(true);
+    }
+    Ok(value)
+}
 
 pub const VERSION: u64 = 1;
 pub const FRAME_BYTES: usize = 8 << 20;
@@ -29,6 +51,7 @@ struct Queue {
 }
 type SharedQueue = Arc<(Mutex<Queue>, Condvar)>;
 pub struct Connection {
+    version: Option<u64>,
     workspace: CandidateWorkspace,
     root: PathBuf,
     bases: BTreeMap<u64, BaseLease>,
@@ -73,6 +96,7 @@ impl Connection {
                 }
             })?;
         Ok(Self {
+            version: None,
             workspace,
             root,
             bases: BTreeMap::new(),
@@ -83,23 +107,38 @@ impl Connection {
             worker: Some(worker),
         })
     }
+    /// The connection's supported version, or v1 before negotiation.
+    pub fn version(&self) -> u64 {
+        self.version.unwrap_or(VERSION)
+    }
     pub fn exhausted(&self) -> bool {
         self.requests >= CONNECTION_REQUESTS
     }
     pub fn handle(&mut self, request: &Value) -> Value {
         if self.exhausted() && matches!(request["op"].as_str(), Some("capture" | "head" | "submit"))
         {
-            return failure("ResourceLimit");
+            return json!({"version":self.version.unwrap_or(VERSION),"error":"ResourceLimit"});
         }
         self.requests = self.requests.saturating_add(1);
-        if request["version"].as_u64() != Some(VERSION) {
-            return failure("UnsupportedVersion");
+        let offered = request["version"].as_u64();
+        if self.version.is_none() && matches!(offered, Some(1 | 2)) {
+            self.version = offered;
         }
-        match self.dispatch(request) {
-            Ok(value) => json!({"version":VERSION,"ok":value}),
-            Err(error) => failure(&error),
+        let version = self.version.unwrap_or(VERSION);
+        if offered != Some(version) || !matches!(version, 1 | 2) {
+            return json!({"version":version,"error":"UnsupportedVersion"});
+        }
+        let result = if version == 2 {
+            self.dispatch_v2(request)
+        } else {
+            self.dispatch(request)
+        };
+        match result {
+            Ok(value) => json!({"version":version,"ok":value}),
+            Err(error) => json!({"version":version,"error":error}),
         }
     }
+
     fn allocate(&mut self) -> Result<u64, String> {
         if self.bases.len() + self.candidates.len() >= HANDLES {
             return Err("ResourceLimit".into());
@@ -321,20 +360,20 @@ impl Connection {
 pub fn failure(error: &str) -> Value {
     json!({"version":VERSION,"error":error})
 }
-fn string<'a>(v: &'a Value, field: &str) -> Result<&'a str, String> {
+pub(super) fn string<'a>(v: &'a Value, field: &str) -> Result<&'a str, String> {
     v[field]
         .as_str()
         .ok_or_else(|| format!("InvalidRequest: {field}"))
 }
-fn number(v: &Value, field: &str) -> Result<u64, String> {
+pub(super) fn number(v: &Value, field: &str) -> Result<u64, String> {
     v[field]
         .as_u64()
         .ok_or_else(|| format!("InvalidRequest: {field}"))
 }
-fn hex(hash: ContentHash) -> String {
+pub(super) fn hex(hash: ContentHash) -> String {
     hash.0.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn parse_hash(s: &str) -> Result<ContentHash, String> {
+pub(super) fn parse_hash(s: &str) -> Result<ContentHash, String> {
     if s.len() != 64 || !s.is_ascii() {
         return Err("InvalidRequest: digest".into());
     }
@@ -511,7 +550,7 @@ mod tests {
         let f = Fixture::new();
         let mut c = f.connection();
         assert_eq!(
-            c.handle(&json!({"version":2,"op":"capture","entry":"hirsel.json"}))["error"],
+            c.handle(&json!({"version":3,"op":"capture","entry":"hirsel.json"}))["error"],
             "UnsupportedVersion"
         );
         let base = call(&mut c, json!({"op":"capture","entry":"hirsel.json"}));

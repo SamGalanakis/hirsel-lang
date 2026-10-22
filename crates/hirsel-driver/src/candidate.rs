@@ -3,6 +3,7 @@
 //! 89d5d5b internal/project/session.go:1393-1425 with generations and receipts.
 mod edits;
 pub mod protocol;
+pub mod v2;
 pub use edits::{ByteEdit, EditError};
 use hirsel_engine::loader_inputs::{
     CaptureInputs, FrozenInputs, InputLimit, InputLimits, InputUnavailable, LoaderInputs,
@@ -157,9 +158,18 @@ pub struct CheckReceipt {
     pub dependencies: DependencyDelta,
     pub head: HeadFreshness,
     pub disk: DiskFreshness,
+    _selection: Option<Arc<v2::Selection>>,
+    _namespace: Option<v2::NamespaceLease>,
+    _input_charge: Option<Arc<Charge>>,
     _charge: Arc<Charge>,
     _observation_charge: Option<Arc<Charge>>,
     _dependency_charge: Option<Arc<Charge>>,
+}
+impl CheckReceipt {
+    /// V2 selected closure facts, derived by the ordinary graph loader.
+    pub fn selection_v2(&self) -> Option<&serde_json::Value> {
+        self._selection.as_ref().map(|s| &s.facts)
+    }
 }
 #[derive(Clone, Debug)]
 pub enum CandidateResult {
@@ -289,6 +299,9 @@ struct Inputs {
     checked: Mutex<Option<Arc<CheckedEvidence>>>,
     token: BaseToken,
     frozen: FrozenInputs,
+    namespace: Option<v2::NamespaceLease>,
+    selection: Option<Arc<v2::Selection>>,
+    _selection_charge: Option<Arc<Charge>>,
     sources: Arc<BTreeMap<SourceKey, Source>>,
     scope: CheckedScope,
     entry: PathBuf,
@@ -358,9 +371,11 @@ enum WorkState {
     Queued,
     Running,
     Complete(Arc<Snapshot>),
+    Failed(Arc<Snapshot>),
     Stopping,
 }
 struct Snapshot {
+    selection: Option<Arc<v2::Selection>>,
     completion: Completion,
     phase: Option<hirsel_engine::QueryKind>,
     verdict: Verdict,
@@ -409,6 +424,7 @@ struct PromotionRecord {
 struct State {
     head: Option<Arc<Inputs>>,
     requests: BTreeMap<CandidateId, RequestRecord>,
+    requests_v2: BTreeMap<CandidateId, v2::RequestRecord>,
     works: BTreeMap<ContentHash, Weak<Work>>,
     promotions: BTreeMap<CandidateId, PromotionRecord>,
     generation: u64,
@@ -417,6 +433,8 @@ struct State {
 struct Workspace {
     id: u64,
     compiler: Compiler,
+    config: CompileConfig,
+    namespace_budget: v2::LeaseBudget,
     images: hirsel_engine::StdImages,
     environment: ContentHash,
     limits: Limits,
@@ -476,6 +494,8 @@ impl CandidateWorkspace {
             inner: Arc::new(Workspace {
                 id: WORKSPACES.fetch_add(1, Ordering::Relaxed),
                 compiler,
+                config,
+                namespace_budget: v2::LeaseBudget::new(limits.bytes),
                 images: hirsel_engine::StdImages::of(images),
                 environment,
                 limits,
@@ -483,6 +503,7 @@ impl CandidateWorkspace {
                 state: Mutex::new(State {
                     head: None,
                     requests: BTreeMap::new(),
+                    requests_v2: BTreeMap::new(),
                     works: BTreeMap::new(),
                     promotions: BTreeMap::new(),
                     generation: 0,
@@ -592,6 +613,9 @@ impl CandidateWorkspace {
                     inputs: digest,
                 },
                 frozen,
+                namespace: None,
+                selection: None,
+                _selection_charge: None,
                 sources: Arc::new(sources),
                 scope,
                 entry: entry.clone(),
@@ -625,6 +649,9 @@ impl CandidateWorkspace {
         request: CandidateRequest,
     ) -> Result<CandidateLease, RequestError> {
         let w = &self.inner;
+        if base.inputs.namespace.is_some() {
+            return Err(RequestError::UnknownBase);
+        }
         let mut request = request;
         request.priority = Priority::Background;
         for file in &mut request.edits {
@@ -759,6 +786,9 @@ impl CandidateWorkspace {
                         inputs: digest,
                     },
                     frozen,
+                    namespace: None,
+                    selection: None,
+                    _selection_charge: None,
                     sources: Arc::new(sources),
                     scope: base.inputs.scope.clone(),
                     entry: base.inputs.entry.clone(),
@@ -852,7 +882,7 @@ impl CandidateWorkspace {
         }
         let completed = {
             let work = waiter.work.state.lock().unwrap();
-            if let WorkState::Complete(snapshot) = &*work {
+            if let WorkState::Complete(snapshot) | WorkState::Failed(snapshot) = &*work {
                 Some(snapshot.clone())
             } else {
                 None
@@ -915,6 +945,10 @@ impl CandidateWorkspace {
                 && !matches!(*state, WorkState::Stopping)
             {
                 WorkState::Complete(snapshot)
+            } else if waiter.work.inputs.namespace.is_some() {
+                // Keep terminal evidence for a waiter whose metadata publication
+                // met backpressure. New requests must compute afresh.
+                WorkState::Failed(snapshot)
             } else {
                 WorkState::Stopping
             };
@@ -1005,8 +1039,11 @@ impl CandidateWorkspace {
                     checked: Mutex::new(self.checked_evidence(receipt)),
                     token: token.clone(),
                     frozen: candidate.frozen.clone(),
+                    namespace: candidate.namespace.clone(),
+                    selection: receipt._selection.clone(),
+                    _selection_charge: receipt._selection.as_ref().map(|_| receipt._charge.clone()),
                     sources: candidate.sources.clone(),
-                    scope: candidate.scope.clone(),
+                    scope: receipt.scope.clone(),
                     entry: candidate.entry.clone(),
                     _charge: candidate._charge.clone(),
                     _parent: candidate._parent.clone(),
@@ -1102,8 +1139,15 @@ impl CandidateWorkspace {
         let parent = waiter.parent_inputs.checked.lock().unwrap().clone();
         let child_identity = snapshot.products.as_ref().map(|products| CheckedIdentity {
             inputs: waiter.work.inputs.token.inputs,
-            compiler_environment: self.inner.environment,
-            scope: waiter.work.inputs.scope.clone(),
+            compiler_environment: if waiter.work.inputs.namespace.is_some() {
+                v2::environment(&self.inner)
+            } else {
+                self.inner.environment
+            },
+            scope: snapshot
+                .selection
+                .as_ref()
+                .map_or_else(|| waiter.work.inputs.scope.clone(), |s| s.scope.clone()),
             products: products.digest,
         });
         let (dependencies, dependency_charge) = match (&parent, &child_identity, &snapshot.products)
@@ -1125,15 +1169,25 @@ impl CandidateWorkspace {
                 None,
             ),
         };
-        let receipt = Arc::new(CheckReceipt {
+        let mut receipt = CheckReceipt {
             id: waiter.id,
             base: waiter.parent.clone(),
             candidate_inputs: waiter.work.inputs.token.inputs,
-            compiler_environment: self.inner.environment,
-            scope: waiter.work.inputs.scope.clone(),
+            compiler_environment: if waiter.work.inputs.namespace.is_some() {
+                v2::environment(&self.inner)
+            } else {
+                self.inner.environment
+            },
+            scope: snapshot
+                .selection
+                .as_ref()
+                .map_or_else(|| waiter.work.inputs.scope.clone(), |s| s.scope.clone()),
             completion: snapshot.completion.clone(),
             incomplete: (snapshot.completion != Completion::Complete).then(|| IncompleteProgress {
-                uncompleted_packages: waiter.work.inputs.scope.packages.clone(),
+                uncompleted_packages: snapshot.selection.as_ref().map_or_else(
+                    || waiter.work.inputs.scope.packages.clone(),
+                    |s| s.scope.packages.clone(),
+                ),
                 phase: snapshot.phase,
             }),
             verdict: snapshot.verdict,
@@ -1142,12 +1196,29 @@ impl CandidateWorkspace {
             failure_class: snapshot.failure_class,
             checked_products: snapshot.products.clone(),
             dependencies,
+            _selection: snapshot.selection.clone(),
+            _namespace: waiter.work.inputs.namespace.clone(),
+            _input_charge: waiter
+                .work
+                .inputs
+                .namespace
+                .as_ref()
+                .map(|_| waiter.work.inputs._charge.clone()),
             _dependency_charge: dependency_charge,
             head: HeadFreshness::CurrentAt(waiter.parent.generation),
             disk: DiskFreshness::Unobserved,
             _charge: snapshot._charge.clone(),
             _observation_charge: None,
-        });
+        };
+        if waiter.work.inputs.namespace.is_some() {
+            receipt._observation_charge = Some(
+                self.inner
+                    .budget
+                    .reserve(receipt_metadata_bytes(&receipt))
+                    .ok_or(RequestError::ResourceLimit)?,
+            );
+        }
+        let receipt = Arc::new(receipt);
         let mut state = waiter.state.lock().unwrap();
         match &*state {
             WaiterState::Complete(receipt) => {
@@ -1168,7 +1239,7 @@ impl CandidateWorkspace {
                 // an implicit second compilation. Existing receipts remain immutable.
                 if receipt.completion == Completion::Complete
                     && waiter.work.inputs.token.inputs == waiter.parent.inputs
-                    && waiter.work.inputs.frozen == waiter.parent_inputs.frozen
+                    && v2::same_inputs(&waiter.work.inputs, &waiter.parent_inputs)
                 {
                     let mut checked = waiter.parent_inputs.checked.lock().unwrap();
                     if checked.is_none() {
@@ -1251,7 +1322,11 @@ impl CandidateWorkspace {
             id: waiter.id,
             base: waiter.parent.clone(),
             candidate_inputs: waiter.work.inputs.token.inputs,
-            compiler_environment: self.inner.environment,
+            compiler_environment: if waiter.work.inputs.namespace.is_some() {
+                v2::environment(&self.inner)
+            } else {
+                self.inner.environment
+            },
             scope: waiter.work.inputs.scope.clone(),
             completion: Completion::Incomplete(reason),
             incomplete: Some(IncompleteProgress {
@@ -1268,6 +1343,14 @@ impl CandidateWorkspace {
             },
             head: HeadFreshness::CurrentAt(waiter.parent.generation),
             disk: DiskFreshness::Unobserved,
+            _selection: None,
+            _namespace: waiter.work.inputs.namespace.clone(),
+            _input_charge: waiter
+                .work
+                .inputs
+                .namespace
+                .as_ref()
+                .map(|_| waiter.work.inputs._charge.clone()),
             _charge: waiter._charge.clone(),
             _dependency_charge: None,
             _observation_charge: Some(
@@ -1289,6 +1372,7 @@ impl CandidateWorkspace {
     }
     fn control_snapshot(&self, reason: IncompleteReason) -> Result<Snapshot, RequestError> {
         Ok(Snapshot {
+            selection: None,
             completion: Completion::Incomplete(reason),
             phase: None,
             verdict: Verdict::Undecided,
@@ -1318,18 +1402,30 @@ impl CandidateWorkspace {
         let computed = hirsel_engine::with_compiler_stack(|| -> Result<Snapshot, ToolError> {
             w.state.lock().unwrap().counters.frozen_loads += 1;
             let load_started = std::time::Instant::now();
-            let mut program =
-                match w
-                    .compiler
+            let mut program = match if let Some(namespace) = &inputs.namespace {
+                namespace.load(&w.compiler, w.config.clone(), false)
+            } else {
+                w.compiler
                     .load_program_inputs(&inputs.entry, &inputs.frozen, &w.images, true)
-                {
-                    Ok(program) => program,
-                    Err(error) => return Ok(snapshot_error(error, charge.clone(), true)),
-                };
+            } {
+                Ok(program) => program,
+                Err(error) => return Ok(snapshot_error(error, charge.clone(), true)),
+            };
             w.state.lock().unwrap().counters.load_nanos += nanos(load_started);
             #[cfg(test)]
             if let Some(hook) = *w.before_check.lock().unwrap() {
                 hook(&mut program);
+            }
+            let selection = inputs
+                .namespace
+                .as_ref()
+                .map(|_| Arc::new(v2::Selection::of(&program)));
+            if inputs.namespace.is_some() {
+                if let Err(error) = program.parse_sources() {
+                    let mut snapshot = snapshot_error(error, charge.clone(), false);
+                    snapshot.selection = selection;
+                    return Ok(snapshot);
+                }
             }
             let check_started = std::time::Instant::now();
             let result = program.check(LoweringPolicy::Comptime);
@@ -1356,6 +1452,7 @@ impl CandidateWorkspace {
                         None
                     };
                     Ok(Snapshot {
+                        selection: selection.clone(),
                         phase: if complete {
                             None
                         } else {
@@ -1402,6 +1499,7 @@ impl CandidateWorkspace {
             drop(state);
             let mut snapshot =
                 snapshot.unwrap_or_else(|error| snapshot_error(error, charge.clone(), false));
+            snapshot.selection = selection;
             if limit {
                 snapshot.completion = Completion::Incomplete(IncompleteReason::ResourceLimit);
                 snapshot.verdict = Verdict::Undecided;
@@ -1415,7 +1513,20 @@ impl CandidateWorkspace {
             Err(error) => snapshot_error(error, charge.clone(), false),
         };
         drop(charge);
-        let bytes = source_map_bytes(&snapshot.output.sources)
+        let bytes = snapshot
+            .selection
+            .as_ref()
+            .map_or(0, |s| s.retained_bytes())
+            + if inputs.namespace.is_some() {
+                snapshot
+                    .loader_error
+                    .as_ref()
+                    .map_or(0, |text| text.capacity())
+                    + v2::ffi_bytes(&snapshot.output.unsafe_ffi)
+            } else {
+                0
+            }
+            + source_map_bytes(&snapshot.output.sources)
             + 2048
             + snapshot
                 .output
@@ -1592,6 +1703,7 @@ fn snapshot_error(error: ToolError, charge: Arc<Charge>, loader: bool) -> Snapsh
         ),
     };
     Snapshot {
+        selection: None,
         completion,
         phase,
         verdict,

@@ -58,7 +58,8 @@ pub(super) fn serve(
         let reply =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| connection.handle(&value)));
         let failed = reply.is_err();
-        let reply = reply.unwrap_or_else(|_| protocol::failure("ToolFailure"));
+        let reply =
+            reply.unwrap_or_else(|_| json!({"version":connection.version(),"error":"ToolFailure"}));
         if write_frame(&mut stream, &reply).is_err() {
             return Ok(());
         }
@@ -71,7 +72,10 @@ pub(super) fn serve(
             return Ok(());
         };
         if &magic != MAGIC || !fds.is_empty() {
-            let _ = write_frame(&mut stream, &protocol::failure("InvalidFrame"));
+            let _ = write_frame(
+                &mut stream,
+                &json!({"version":connection.version(),"error":"InvalidFrame"}),
+            );
             return Ok(());
         }
         value = next;
@@ -95,7 +99,10 @@ fn write_frame(stream: &mut UnixStream, value: &Value) -> std::io::Result<()> {
     let mut frame = Frame(Vec::new());
     if serde_json::to_writer(&mut frame, value).is_err() {
         frame.0.clear();
-        serde_json::to_writer(&mut frame, &protocol::failure("FrameLimit"))?;
+        serde_json::to_writer(
+            &mut frame,
+            &json!({"version":value["version"].as_u64().unwrap_or(1),"error":"FrameLimit"}),
+        )?;
     }
     stream.write_all(MAGIC)?;
     stream.write_all(&(frame.0.len() as u32).to_le_bytes())?;
@@ -126,7 +133,7 @@ fn read_reply(stream: &mut UnixStream) -> std::io::Result<Value> {
 /// Transport errors are terminal; there is no disk-check fallback.
 pub(super) fn client(args: &[OsString]) -> u8 {
     if args.len() != 2 || args[0] != "--workspace" {
-        eprintln!("usage: hirsel candidate --workspace <dir>  # version-1 JSON lines on stdin");
+        eprintln!("usage: hirsel candidate --workspace <dir>  # versioned JSON lines on stdin");
         return 2;
     }
     match client_inner(Path::new(&args[1])) {
@@ -164,7 +171,8 @@ fn client_inner(root: &Path) -> std::io::Result<()> {
                 "candidate request exceeds frame limit",
             ));
         }
-        let mut request: Value = serde_json::from_slice(&line).map_err(std::io::Error::other)?;
+        let mut request: Value =
+            protocol::decode_wire_frame(&line).map_err(std::io::Error::other)?;
         if !request.is_object() {
             return Err(std::io::Error::other("candidate request must be an object"));
         }

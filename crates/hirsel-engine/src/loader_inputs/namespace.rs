@@ -183,6 +183,14 @@ struct Namespace {
 /// Owned immutable snapshot. No parent chain, disk adapter, cwd or env lookup.
 #[derive(Clone)]
 pub struct NamespaceLease(Arc<Namespace>);
+impl std::fmt::Debug for NamespaceLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NamespaceLease")
+            .field("digest", &self.digest())
+            .field("usage", &self.usage())
+            .finish()
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CaptureError {
     InvalidPlan(String),
@@ -1023,7 +1031,91 @@ impl NamespaceLease {
             ],
         )
     }
-    /// One bounded query; callers bound their own inspection page sizes.
+    /// Explicit bounded host observation, independent of frozen loading and
+    /// check eligibility. Missing nodes are differences; I/O failure is incomplete.
+    pub fn observe_disk(&self) -> io::Result<Vec<PathBuf>> {
+        let source = DiskCapture;
+        let mut differences = vec![];
+        let mut bytes_left = self.0.limits.bytes;
+        for (path, node) in &self.0.state.nodes {
+            if matches!(node, Node::Ancestor(_)) {
+                continue;
+            }
+            let facts = match source.facts(path) {
+                Ok(facts) => facts,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    differences.push(path.clone());
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let equal = if facts.kind != node.kind() {
+                false
+            } else {
+                match node {
+                    Node::File { bytes, .. } => {
+                        let actual = source.read(path, bytes_left)?;
+                        bytes_left = bytes_left.checked_sub(actual.len()).ok_or_else(limit)?;
+                        *bytes == actual
+                    }
+                    Node::Directory { children, .. } => {
+                        let actual = source.directory(path, bytes_left)?;
+                        let charge = actual.iter().map(|e| e.name.len() + 128).sum::<usize>();
+                        bytes_left = bytes_left.checked_sub(charge).ok_or_else(limit)?;
+                        actual
+                            .into_iter()
+                            .map(|e| {
+                                e.name
+                                    .into_string()
+                                    .map(|name| (name, e.kind))
+                                    .map_err(|_| invalid("non-UTF-8 name"))
+                            })
+                            .collect::<io::Result<BTreeMap<_, _>>>()?
+                            == *children
+                    }
+                    Node::Symlink { target, .. } => {
+                        source.read_link(path, self.0.limits.bytes)? == *target
+                    }
+                    Node::Opaque { .. } => true,
+                    _ => unreachable!(),
+                }
+            };
+            if !equal {
+                differences.push(path.clone());
+            }
+        }
+        for (operation, expected) in &self.0.state.failures {
+            let current = match source.failed_probe(operation, bytes_left) {
+                Ok(()) => None,
+                Err(error) => Some(IoFailure::capture(error)),
+            };
+            if current.as_ref() != Some(expected) {
+                differences.push(operation.path().to_owned());
+            }
+        }
+        differences.sort();
+        differences.dedup();
+        Ok(differences)
+    }
+    /// Pure admission fact for a missing regular-file leaf. Does not grant
+    /// directory creation or expose an unclosed ancestor as writable coverage.
+    pub fn can_create(&self, key: &Key) -> io::Result<bool> {
+        let path = self.path_for_key(key)?;
+        Ok(matches!(
+            self.0.state.nodes.get(path.parent().unwrap()),
+            Some(Node::Directory { editable: true, .. })
+        ))
+    }
+    /// Resolve an inspection key to its captured physical spelling, without I/O.
+    pub fn path_for_key(&self, key: &Key) -> io::Result<PathBuf> {
+        let root = self
+            .0
+            .state
+            .roots
+            .get(&key.root)
+            .ok_or_else(|| unavailable(Operation::Metadata(PathBuf::from(&key.root))))?;
+        edit_path(root, &key.path)
+    }
     pub fn inspect(&self, root: &str, relative: &str) -> io::Result<Inspection> {
         let root = self
             .0

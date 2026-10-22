@@ -123,6 +123,12 @@ impl QueryEngine {
             .as_ref()
             .is_some_and(|adopted| adopted.image.package() == package)
     }
+    /// Exact immutable image actually selected by this engine, if any.
+    pub fn selected_image(&self) -> Option<(&PackageId, ContentHash)> {
+        self.image
+            .as_ref()
+            .map(|a| (a.image.package(), a.image.key()))
+    }
     /// The adopted image declaring `path`.
     pub(crate) fn image_of(&self, path: &DefPath) -> Option<&Arc<StdImage>> {
         self.image

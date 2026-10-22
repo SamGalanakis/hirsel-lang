@@ -152,3 +152,107 @@ fn candidate_transport_receipts_duplicates_cancel_and_no_disk_mutation() {
     assert!(server.0.wait().unwrap().success());
     std::fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn candidate_v2_transport_atomic_create_manifest_and_connection_latch() {
+    let root = std::env::temp_dir().join(format!(
+        "hirsel-candidate-v2-cli-{}-{}",
+        std::process::id(),
+        super::NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(root.join("mods")).unwrap();
+    let original = "pub fn main()->u64{1}\n";
+    std::fs::write(root.join("main.hir"), original).unwrap();
+    std::fs::write(root.join("hirsel.json"),r#"{"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+    let mut server = Process(
+        command(&root)
+            .args(["serve", "--workspace", ".", "--idle", "1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = String::new();
+    BufReader::new(server.0.stderr.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert!(ready.contains("serving"), "{ready}");
+    let mut client = Process(
+        command(&root)
+            .args(["candidate", "--workspace", "."])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut input = client.0.stdin.take().unwrap();
+    let mut output = BufReader::new(client.0.stdout.take().unwrap());
+    writeln!(input, "{{\"version\":2,\"op\":\"head\",\"op\":\"head\"}}").unwrap();
+    input.flush().unwrap();
+    let mut invalid = String::new();
+    output.read_line(&mut invalid).unwrap();
+    let invalid: Value = serde_json::from_str(&invalid).unwrap();
+    assert_eq!(invalid["version"], 2);
+    assert!(
+        invalid["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("InvalidRequest")
+    );
+
+    let mut exchange = |request: Value| -> Value {
+        writeln!(input, "{request}").unwrap();
+        input.flush().unwrap();
+        let mut line = String::new();
+        assert!(output.read_line(&mut line).unwrap() > 0);
+        serde_json::from_str(&line).unwrap()
+    };
+    let base = exchange(
+        json!({"version":2,"op":"capture","entry":"hirsel.json","roots":[{"id":"app","path":"","editable":true}]}),
+    );
+    assert!(base.get("ok").is_some(), "{base}");
+    let base = base["ok"].clone();
+    assert_eq!(
+        exchange(json!({"version":1,"op":"head"}))["error"],
+        "UnsupportedVersion"
+    );
+    let facts = exchange(
+        json!({"version":2,"op":"inspect","base":base["base"],"paths":[{"root":"app","path":"mods/new.hir"},{"root":"app","path":"main.hir"},{"root":"app","path":"hirsel.json"}]}),
+    );
+    let facts = facts["ok"]["nodes"].as_array().unwrap();
+    let manifest = json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]},{"path":"mods/new.hir","module":["new"]}],"dependencies":[],"entry":{"module":[],"name":"main"}});
+    let request = json!({"version":2,"op":"submit","base":base["base"],"token":base["token"],"id":1,"edits":[
+        {"kind":"create_source","path":{"root":"app","path":"mods/new.hir"},"expected":facts[0]["expected"],"text":"pub fn value()->u64{2}\n"},
+        {"kind":"replace_source","path":{"root":"app","path":"main.hir"},"expected":facts[1]["expected"],"text":"pub fn main()->u64{new.value()}\n"},
+        {"kind":"manifest","action":"replace","path":{"root":"app","path":"hirsel.json"},"expected":facts[2]["expected"],"text":manifest.to_string()},
+    ]});
+    let submitted = exchange(request);
+    let lease = submitted["ok"]["lease"].as_u64().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let receipt = loop {
+        let r = exchange(json!({"version":2,"op":"result","lease":lease}));
+        if r["ok"]["pending"] != true {
+            break r;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    };
+    assert_eq!(receipt["ok"]["verdict"], "Pass", "{receipt}");
+    assert_eq!(receipt["ok"]["scope_complete"], true);
+    assert_eq!(
+        exchange(json!({"version":2,"op":"promote","id":1,"lease":lease,"base":base["base"]}))["ok"]
+            ["promotion"],
+        "Promoted"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("main.hir")).unwrap(),
+        original
+    );
+    assert!(!root.join("mods/new.hir").exists());
+    drop(exchange);
+    drop(input);
+    assert!(client.0.wait().unwrap().success());
+    assert!(server.0.wait().unwrap().success());
+    std::fs::remove_dir_all(root).unwrap();
+}

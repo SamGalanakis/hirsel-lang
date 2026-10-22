@@ -1265,6 +1265,13 @@ fn package_value(v: &Value) -> Result<PackageId, ToolError> {
     })
 }
 
+/// Strict JSON for negotiated input protocols and package selection. Unlike
+/// Value's decoder, rejects duplicate keys at every nesting depth.
+#[doc(hidden)]
+pub fn decode_unique_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    serde_json::from_slice::<UniqueJson>(bytes).map(|value| value.0)
+}
+
 // serde_json::Value alone permits duplicate object keys by overwriting them.
 // Package selection must reject ambiguous input instead.
 struct UniqueJson(Value);
