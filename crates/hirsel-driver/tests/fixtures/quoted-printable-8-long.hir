@@ -1,0 +1,28 @@
+// Bounded harness: Go's incidental bufio 4096-byte limit is not this API's limit.
+pub fn main() -> Result[(), ()] {
+  let mut raw: List[u8] = []
+  let mut i: u64 = 0
+  while i < 5000 {
+    list.push(mut raw, b'x')
+    i += 1
+  }
+  let data = bytes.from_list(take raw)
+  failure.check(std@1/quoted_printable.decode(data) == Ok(copy data), TextInvariant())
+  let encoded = std@1/quoted_printable.encode(data)
+  failure.check(
+    std@1/quoted_printable.decode(string.as_bytes(encoded)) == Ok(copy data),
+    TextInvariant()
+  )
+  let mut bad: List[u8] = []
+  i = 0
+  while i < bytes.len(data) {
+    list.push(mut bad, data[i])
+    i += 1
+  }
+  list.push(mut bad, 0u8)
+  failure.check(
+    std@1/quoted_printable.decode(bytes.from_list(take bad)) == Error(InvalidByte(5000)),
+    TextInvariant()
+  )
+  Ok(())
+}

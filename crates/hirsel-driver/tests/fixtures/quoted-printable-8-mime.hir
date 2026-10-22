@@ -1,0 +1,24 @@
+// Complete independent MIME message: headers belong to the caller.
+pub fn main() -> Result[(), ()] {
+  let headers = "MIME-Version: 1.0\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n"
+  let body = b"report\x00=\r\n\xff \t"
+  let encoded = std@1/quoted_printable.encode(body)
+  failure.check(encoded == "report=00=3D=0D=0A=FF =09", TextInvariant())
+  let mut message: List[u8] = []
+  std@1/text.append(mut message, headers)
+  std@1/text.append(mut message, encoded)
+  let complete = std@1/text.finish_valid(take message)
+  failure.check(
+    complete == "MIME-Version: 1.0\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nreport=00=3D=0D=0A=FF =09",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/quoted_printable.decode(string.as_bytes(encoded)) == Ok(body),
+    TextInvariant()
+  )
+  failure.check(
+    headers == "MIME-Version: 1.0\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n",
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,47 @@
+// Go reader_test.go TestExhaustive, short length=4 alphabet and skip rules.
+// Its independent outcome counts are 935 OK, 61 soft errors, 26 hex, 3 EOF.
+pub fn main() -> Result[(), ()] {
+  let alpha = b"0A \r\n="
+  let mut ok: u64 = 0
+  let mut soft: u64 = 0
+  let mut hex: u64 = 0
+  let mut eof: u64 = 0
+  let mut n: u64 = 0
+  while n < 1296 {
+    let mut value = n
+    let mut raw: List[u8] = []
+    let mut i: u64 = 0
+    while i < 4 {
+      list.push(mut raw, alpha[value % 6])
+      value /= 6
+      i += 1
+    }
+    let data = bytes.from_list(take raw)
+    n += 1
+    if data[3] == b'=' || data[0] == b'=' && data[1] == b'=' || data[1] == b'=' && data[2] == b'=' || data[2] == b'=' && data[3] == b'=' {
+      continue
+    }
+    match std@1/quoted_printable.decode(data) {
+      Ok(_) => {
+        ok += 1
+      },
+      Error(InvalidSoftBreak(_)) => {
+        soft += 1
+      },
+      Error(InvalidHex(_)) => {
+        hex += 1
+      },
+      Error(UnexpectedEof(_)) => {
+        eof += 1
+      },
+      Error(_) => failure.check(false, TextInvariant()),
+    }
+    let encoded = std@1/quoted_printable.encode(data)
+    failure.check(
+      std@1/quoted_printable.decode(string.as_bytes(encoded)) == Ok(data),
+      TextInvariant()
+    )
+  }
+  failure.check(ok == 935 && soft == 61 && hex == 26 && eof == 3, TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,180 @@
+// Copyright 2012, 2015 The Go Authors. All rights reserved.
+// Adapted from golang/go d934b909f6a50247e2a2e9b89de02cdcef93a163
+// src/mime/quotedprintable/writer.go:31-168 and reader.go:30-140.
+// BSD-3-Clause; see third-party/NOTICES.md and docs/quoted-printable.md.
+
+/// Original zero-based input byte offsets. Errors never contain partial output.
+@serializable
+pub type DecodeError = InvalidByte(u64) | InvalidHex(u64) | UnexpectedEof(u64) | InvalidSoftBreak(
+  u64
+)
+
+fn token_width(b: u8, last: bool) -> u64 uses {} {
+  if b >= b'!' && b <= b'~' && b != b'=' || (b == b' ' || b == b'\t') && !last {
+    1
+  } else {
+    3
+  }
+}
+
+/// Go Writer binary mode: preserves every byte, including CR and LF.
+/// Uppercase escapes stay whole; soft-broken lines have at most 76 columns.
+pub fn encode(data: Bytes) -> unique String uses {} {
+  let len = bytes.len(data)
+  // Count the complete output before reserving. No unchecked size expansion.
+  let mut size: u64 = 0
+  let mut column: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    let width = token_width(data[i], i == len - 1)
+    let additional = if column + width > 75 {
+      width + 3
+    } else {
+      width
+    }
+    core@1/failure.check(size <= 18446744073709551615u64 - additional, TextInvariant())
+    size += additional
+    if column + width > 75 {
+      column = 0
+    }
+    column += width
+    i += 1
+  }
+  let digits = string.as_bytes("0123456789ABCDEF")
+  let mut out: List[u8] = []
+  list.reserve(mut out, size)
+  column = 0
+  i = 0
+  while i < len {
+    let b = data[i]
+    let width = token_width(b, i == len - 1)
+    if column + width > 75 {
+      list.push(mut out, b'=')
+      list.push(mut out, b'\r')
+      list.push(mut out, b'\n')
+      column = 0
+    }
+    if width == 1 {
+      list.push(mut out, b)
+    } else {
+      let high: u64 = core@1/int.widen(b >> 4)
+      let low: u64 = core@1/int.widen(b & 15u8)
+      list.push(mut out, b'=')
+      list.push(mut out, digits[high])
+      list.push(mut out, digits[low])
+    }
+    column += width
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn discard(b: u8) -> bool uses {} {
+  b == b' ' || b == b'\t' || b == b'\r' || b == b'\n'
+}
+
+// Go appends the preserved newline after trimming. A virtual suffix avoids
+// copying a long line, while retaining offsets into the original input.
+fn line_byte(data: Bytes, pos: u64, end: u64, newline: u64) -> u8 uses {} {
+  if pos < end {
+    data[pos]
+  } else if newline == 2 && pos == end {
+    b'\r'
+  } else {
+    b'\n'
+  }
+}
+
+/// Go Reader compatibility, including literal equals and permissive newlines.
+/// See docs/quoted-printable.md; this is not a strict RFC 2045 validator.
+pub fn decode(data: Bytes) -> Result[unique Bytes, DecodeError] uses {} {
+  let len = bytes.len(data)
+  let mut out: List[u8] = []
+  let mut start: u64 = 0
+  while start < len {
+    let mut next = start
+    while next < len && data[next] != b'\n' {
+      next += 1
+    }
+    let has_lf = next < len
+    if has_lf {
+      next += 1
+    }
+    let has_cr = has_lf && next - start >= 2 && data[next - 2] == b'\r'
+    let mut end = next
+    while end > start && discard(data[end - 1]) {
+      end -= 1
+    }
+    let soft = end > start && data[end - 1] == b'='
+    let mut bad_soft = false
+    let mut equals: u64 = 0
+    let mut newline: u64 = 0
+    if soft {
+      equals = end - 1
+      let mut tail = end
+      while tail < next && (data[tail] == b' ' || data[tail] == b'\t') {
+        tail += 1
+      }
+      end -= 1
+      let valid_tail = tail < next && data[tail] == b'\n' || next - tail >= 2 && data[tail] == b'\r' && data[tail + 1] == b'\n'
+      // EOF is observed by Go only for an unterminated physical line.
+      bad_soft = !valid_tail && !(tail == next && end > start && !has_lf)
+    } else if has_lf {
+      newline = if has_cr {
+        2
+      } else {
+        1
+      }
+    }
+    let logical_end = end + newline
+    let mut pos = start
+    while pos < logical_end {
+      let mut b = line_byte(data, pos, end, newline)
+      if b == b'=' {
+        if logical_end - pos < 3 {
+          if logical_end - pos >= 2 {
+            let following = line_byte(data, pos + 1, end, newline)
+            if following != b'\r' && following != b'\n' {
+              list.push(mut out, b'=')
+              pos += 1
+              continue
+            }
+          }
+          return Error(UnexpectedEof(pos))
+        }
+        let high_byte = line_byte(data, pos + 1, end, newline)
+        let low_byte = line_byte(data, pos + 2, end, newline)
+        let high = ascii.digit_value_radix(high_byte, 16)
+        let low = ascii.digit_value_radix(low_byte, 16)
+        match (high, low) {
+          (Some(h), Some(l)) => {
+            b = h * 16u8 + l
+            pos += 2
+          },
+          _ => {
+            if high_byte == b'\r' || high_byte == b'\n' {
+              let offset = if pos + 1 < end {
+                pos + 1
+              } else {
+                next - newline
+              }
+              return Error(InvalidHex(offset))
+            }
+          // Go treats malformed/short escapes as literal equals whenever
+          // the following byte is neither CR nor LF.
+          },
+        }
+      } else if b != b'\t' && b != b'\r' && b != b'\n' && b < 0x80 && (b < b' ' || b > b'~') {
+        return Error(InvalidByte(pos))
+      }
+      list.push(mut out, b)
+      pos += 1
+    }
+    // Go surfaces a pending line error only after decoding the line itself.
+    if bad_soft {
+      return Error(InvalidSoftBreak(equals))
+    }
+    start = next
+  }
+  Ok(bytes.from_list(take out))
+}

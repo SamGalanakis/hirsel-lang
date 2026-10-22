@@ -1247,6 +1247,12 @@
       "module": [
         "json_merge_patch"
       ]
+    },
+    {
+      "path": "quoted_printable.hir",
+      "module": [
+        "quoted_printable"
+      ]
     }
   ],
   "dependencies": []

@@ -291,6 +291,8 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 | Go standard library | `src/strings/strings_test.go:453-473` SplitN table, adapted to Rust limits and valid UTF-8/nonempty-separator contracts; `strings.go:274-314` comparison | `SEM-3-string-splitn-5-go-run.hir`, driver `string_splitn_5.rs` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Serde | `serde_derive/src/de.rs:25–75` per-nominal expansion structure; `test_suite/tests/test_annotations.rs:425–462` unknown-before-known/nested-sequence vector | `tools/json-hooks`, `examples/typed-json-kit/main.hir` (existing Hirsel hooks only; extended JSON nested-value vector) | serde-rs/serde `0db9b3b504bcb0a7fa9cf001429869519afd3e9a` | MIT |
 
+| Go standard library | `src/mime/quotedprintable/writer.go:31-168`, `reader.go:30-140`, `writer_test.go:22-118`, `reader_test.go:21-96`: binary token wrapping, compatible line decoder and vectors; whole-buffer/atomic/offset adaptations documented in `docs/quoted-printable.md` | `stdlib/std@1/quoted_printable.hir`, driver `quoted_printable_8.rs` | golang/go `d934b909f6a50247e2a2e9b89de02cdcef93a163` | BSD-3-Clause (Go) |
+
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
 ## Copyright notices
