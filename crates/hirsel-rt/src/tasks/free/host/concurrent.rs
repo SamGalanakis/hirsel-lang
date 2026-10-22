@@ -149,8 +149,30 @@ pub(crate) unsafe fn request(
         let _segment = unsafe { role::Segment::new(ctx) };
         io.adapter.keys(&request)
     };
-    unsafe { prepare_with_keys(ctx, request.clone(), keys) }?;
-    let token = unsafe { (*ctx).pending_host.as_ref().unwrap().request.id };
+    unsafe { request_with_keys(ctx, request, keys) }
+}
+
+/// # Safety
+/// As request; the admitted key footprint was validated outside the role.
+pub(super) unsafe fn request_with_keys(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+) -> Stopped<Result<Completion, AdapterError>> {
+    let io = unsafe {
+        &**(*ctx)
+            .run_ref()
+            .free_io
+            .get()
+            .expect("concurrent host admission")
+    };
+    // Move every buffer into Pending before begin may reject an admitted cut.
+    // Clone only from that stable owner after preparation has returned.
+    unsafe { prepare_with_keys(ctx, request, keys) }?;
+    let (token, request) = {
+        let pending = unsafe { (*ctx).pending_host.as_ref().unwrap() };
+        (pending.request.id, pending.request.buffers().clone())
+    };
     let wait = io.register(token, request);
     if !unsafe { claim(ctx) }? {
         return Err(Stop::Requested);
@@ -177,6 +199,32 @@ pub(crate) unsafe fn request(
     }
     io.finish(wait);
     unsafe { complete_result(ctx) }
+}
+
+/// Validate the whole supported footprint before any prepared record or effect.
+/// # Safety
+/// The owner holds the role and its request buffers; the adapter is admitted.
+pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stopped<KeySet> {
+    let io = unsafe {
+        (*ctx)
+            .run_ref()
+            .free_io
+            .get()
+            .expect("concurrent host admission")
+    };
+    let _segment = unsafe { role::Segment::new(ctx) };
+    let expected = super::native::request_keys(request, |word| {
+        io.adapter
+            .identity(word)
+            .ok_or_else(|| Stop::Refused("unmapped live host resource".into()))
+    })
+    .map_err(|_| Stop::Refused("native host request metadata is not admitted".into()))?;
+    if expected != io.adapter.keys(request) {
+        return Err(Stop::Refused(
+            "native host footprint has unadmitted domains".into(),
+        ));
+    }
+    Ok(expected)
 }
 
 /// # Safety

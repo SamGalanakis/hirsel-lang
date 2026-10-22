@@ -2650,8 +2650,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "Close");
-    let binding = unsafe { Binding::get(ctx) };
-    let closed = binding.adapter.call(Request::Close { handle });
+    let closed = if crate::tasks::free::host::native::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                crate::host_waits::issue(ctx, Request::Close { handle }),
+            )
+        }
+        .0
+    } else {
+        let binding = unsafe { Binding::get(ctx) };
+        binding.adapter.call(Request::Close { handle })
+    };
     // SAFETY: a close runs in a release, which holds nothing a stop must drop.
     unsafe { crate::tasks::leave_home(ctx) };
     match closed {
@@ -2922,6 +2932,12 @@ unsafe fn native_call(ctx: *mut crate::TaskCtx, request: Request) -> Completion 
             }),
         )
     };
+    if crate::tasks::free::host::native::enabled(ctx) {
+        return unsafe {
+            crate::tasks::free::host::native::finish_result(ctx, Ok(completion), operation, parked)
+        }
+        .expect("native call has a completion");
+    }
     if operation && !parked {
         unsafe { crate::tasks::yield_now(&mut *ctx) };
     } else if !operation {
@@ -2957,6 +2973,11 @@ pub(crate) unsafe fn capability_call(
             }),
         )
     };
+    if crate::tasks::free::host::native::enabled(ctx) {
+        return unsafe {
+            crate::tasks::free::host::native::finish_result(ctx, completion, operation, parked)
+        };
+    }
     if operation && !parked {
         unsafe { crate::tasks::yield_now(&mut *ctx) };
     } else if !operation {
@@ -3000,6 +3021,7 @@ macro_rules! path_export {
             parent: *const u64,
             path: *const u64,
         ) -> u8 {
+            let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
             let request = Request::$request {
                 $field: unsafe { parent.read() },
                 path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),

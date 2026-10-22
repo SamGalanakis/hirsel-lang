@@ -201,11 +201,11 @@ fn native_clock_abi_records_concurrent_requests_and_replays_without_a_binding() 
 #[test]
 fn native_clock_replay_requires_mapped_metadata_and_refuses_other_requests() {
     let handles = handles::Handles::default();
-    assert!(native::replay_clock_keys(&handles, &Request::Monotonic { clock: 77 }).is_err());
-    assert!(native::replay_clock_keys(&handles, &Request::Close { handle: 77 }).is_err());
-    assert!(native::replay_clock_keys(&handles, &Request::MonotonicClock { io: 2 }).is_err());
+    assert!(native::replay_keys(&handles, &Request::Monotonic { clock: 77 }).is_err());
+    assert!(native::replay_keys(&handles, &Request::Close { handle: 77 }).is_err());
+    assert!(native::replay_keys(&handles, &Request::MonotonicClock { io: 2 }).is_err());
     assert!(
-        native::replay_clock_keys(
+        native::replay_keys(
             &handles,
             &Request::Print {
                 stdout: 1,
@@ -215,7 +215,7 @@ fn native_clock_replay_requires_mapped_metadata_and_refuses_other_requests() {
         .is_err()
     );
     assert_eq!(
-        native::replay_clock_keys(&handles, &Request::MonotonicClock { io: 1 }).unwrap(),
+        native::replay_keys(&handles, &Request::MonotonicClock { io: 1 }).unwrap(),
         KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)])
     );
 }

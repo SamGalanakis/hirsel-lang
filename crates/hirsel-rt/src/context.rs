@@ -165,6 +165,8 @@ pub struct TaskCtx {
     /// A native Free request retains its buffers and late completion even
     /// when its task's host-call frame is abandoned after a terminal cut.
     pub(crate) pending_host: Option<Box<crate::tasks::free::host::Pending>>,
+    /// Native Free result across its post-effect quantum, owned outside Rust frames.
+    pub(crate) native_host_result: Option<Box<Result<crate::io::Completion, ()>>>,
     /// Replay holds request and transition buffers across admitted-prefix saves.
     pub(crate) replay_host: Option<Box<crate::tasks::free::host::ReplayHost>>,
     #[cfg(test)]
@@ -360,6 +362,7 @@ impl TaskCtx {
             detached_images: Default::default(),
             pending_host: None,
             pending_ordered_host: None,
+            native_host_result: None,
             replay_host: None,
             #[cfg(test)]
             ordered_charge_trace: Default::default(),
