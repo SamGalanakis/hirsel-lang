@@ -355,7 +355,17 @@ struct LowerRecord {
 struct Envelope {
     anchors: Vec<(DefPath, u32)>,
     table: TypeTable,
+    #[serde(serialize_with = "serialize_payload")]
     payload: Vec<u8>,
+}
+
+fn serialize_payload<S: serde::Serializer>(
+    payload: &[u8],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // bincode 1.3.3 ser/mod.rs:132-135 writes the same length and bytes as
+    // Vec<u8>, in one bulk write. Keep the bounded Vec decoder unchanged.
+    serializer.serialize_bytes(payload)
 }
 
 fn encode_record<T: Serialize>(
@@ -924,6 +934,77 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    // The pre-bulk codec, including its original Vec<u8> serialization.
+    #[derive(Serialize, Deserialize)]
+    struct LegacyEnvelope {
+        anchors: Vec<(DefPath, u32)>,
+        table: TypeTable,
+        payload: Vec<u8>,
+    }
+
+    #[test]
+    fn bulk_payload_preserves_legacy_envelope_bytes_and_bounded_decoding() {
+        use bincode::Options;
+        let (engine, syntax) = fixture();
+        let unit = engine.types.intern(hirsel_types::Type::unit());
+        let bytes = engine
+            .encode_record(&(unit, syntax.item.origin.span))
+            .unwrap();
+        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        assert!(!envelope.anchors.is_empty());
+        assert!(!envelope.table.is_empty());
+        // Include bincode 1.3.3 tests/test.rs:565-572's byte equality vector,
+        // every byte value, and payloads spanning multiple copy chunks.
+        for payload in [
+            vec![],
+            vec![0],
+            b"abc\0123".to_vec(),
+            (0..=255).collect(),
+            vec![0xa5; 65_537],
+            vec![0xff; 1 << 20],
+        ] {
+            envelope.payload = payload;
+            let legacy = LegacyEnvelope {
+                anchors: envelope.anchors.clone(),
+                table: envelope.table.clone(),
+                payload: envelope.payload.clone(),
+            };
+            let old = bincode::serialize(&legacy).unwrap();
+            let new = bincode::serialize(&envelope).unwrap();
+            assert_eq!(old, new);
+            let options = bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_limit(old.len() as u64)
+                .reject_trailing_bytes();
+            let decoded: Envelope = options.deserialize(&old).unwrap();
+            assert_eq!(decoded.payload, legacy.payload);
+            let decoded: LegacyEnvelope = options.deserialize(&new).unwrap();
+            assert_eq!(decoded.payload, envelope.payload);
+            assert!(
+                options
+                    .deserialize::<Envelope>(&old[..old.len() - 1])
+                    .is_err()
+            );
+            let mut trailing = old;
+            trailing.push(0);
+            assert!(options.deserialize::<Envelope>(&trailing).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_envelope_records_relocate_types_and_anchors() {
+        let (engine, syntax) = fixture();
+        let unit = engine.types.intern(hirsel_types::Type::unit());
+        let record = (unit, syntax.item.origin.span);
+        let bytes = engine.encode_record(&record).unwrap();
+        // Decode the current writer using the legacy layout, then write with
+        // the old serializer and consume through the production decoder.
+        let legacy: LegacyEnvelope = bincode::deserialize(&bytes).unwrap();
+        let old = bincode::serialize(&legacy).unwrap();
+        assert_eq!(old, bytes);
+        assert_eq!(engine.decode_record::<(TypeId, Span)>(&old), Some(record));
+    }
 
     fn fixture() -> (QueryEngine, Arc<ItemSyntax>) {
         let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default())
