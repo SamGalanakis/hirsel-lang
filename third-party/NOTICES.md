@@ -1566,3 +1566,11 @@ license reproduced above. See `docs/base32.md` for adaptations.
 | Go standard library | `src/net/netip/netip.go:1363-1394,1406-1484` prefix parsing, masking, containment and overlap; `netip_test.go:1526-1618,1673-1739` vectors | `stdlib/std@1/cidr.hir`, driver `cidr_8.rs` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go), full license above |
 
 Rust bounded tape hashing: `crates/hirsel-rt/src/observation_timing.rs` adapts the fixed-buffer, EOF and interrupted-read structure from rust-lang/rust `1a2c4797ef2570bd76ca5dee34449169bc7dc457`, `library/alloc/src/io/copy/generic.rs:232-254`, with short-read and size vectors from `library/alloctests/tests/io/copy.rs:6-14,16-30`. MIT (Rust), copyright The Rust Project Developers; the Rust MIT license above applies. SHA-256 receives each chunk instead of an output writer; a 64 KiB initialized buffer uses stable Read rather than read_buf.
+
+ASCII85 body port: Copyright 2009 The Go Authors. All rights reserved.
+`stdlib/std@1/ascii85.hir` and `crates/hirsel-driver/tests/fixtures/ascii85-9/`
+adapt Go `src/encoding/ascii85/ascii85.go:27-83,173-239` and
+`ascii85_test.go:18-43,147-167` at
+`ebe2feefc400f813aefdc8a036e66d2619da6649`, under the BSD-3-Clause (Go)
+license reproduced above. See `docs/ascii85.md` for the ownership, capacity,
+forward digit emission and explicit wrapping adaptations.

@@ -1,0 +1,617 @@
+// Copyright 2009 The Go Authors. All rights reserved.
+// Go encoding/ascii85 @ ebe2feef; fixed independent expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/ascii85.decode(b"v") == Error(CorruptInput(0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!z!!!!!!!!!") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"y") == Error(CorruptInput(0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"<~z~>") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z~>") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"~>") == Error(CorruptInput(0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"HelloWor}d") == Error(CorruptInput(8u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"4)+k&C#VzJ4br>0wv%Yp") == Error(CorruptInput(8u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"! \x00\x0a") == Error(CorruptInput(4u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z!") == Error(CorruptInput(2u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!!!!! \x0a!\x00") == Error(CorruptInput(9u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b" \x00!\x09z") == Error(CorruptInput(4u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!!!!!\x80") == Error(CorruptInput(5u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z \x0a\xff") == Error(CorruptInput(3u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zv") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zv") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zw") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zx") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zy") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z{") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z|") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z}") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z~") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x7f") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x80") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x81") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x82") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x83") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x84") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x85") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x86") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x87") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x88") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x89") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8a") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8b") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8c") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8d") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8e") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x8f") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x90") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x91") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x92") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x93") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x94") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x95") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x96") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x97") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x98") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x99") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9a") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9b") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9c") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9d") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9e") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\x9f") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xa9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xaa") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xab") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xac") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xad") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xae") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xaf") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xb9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xba") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xbb") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xbc") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xbd") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xbe") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xbf") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xc9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xca") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xcb") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xcc") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xcd") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xce") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xcf") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xd9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xda") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xdb") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xdc") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xdd") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xde") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xdf") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xe9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xea") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xeb") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xec") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xed") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xee") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xef") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf0") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf1") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf2") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf3") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf4") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf5") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf6") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf7") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf8") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xf9") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xfa") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xfb") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xfc") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xfd") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xfe") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"z\xff") == Error(CorruptInput(1u64)),
+    TextInvariant()
+  )
+  Ok(())
+}

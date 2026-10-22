@@ -61,3 +61,4 @@ mod varint_7;
 mod toposort_8;
 mod json_pointer_8;
 mod union_find_9;
+mod ascii85_9;

@@ -1,0 +1,35 @@
+// Copyright 2009 The Go Authors. All rights reserved.
+// Go encoding/ascii85 @ ebe2feef; fixed independent expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/ascii85.decode(b"HelloWorld") == Ok(b"{\xdd\xcb\xd3\xaa\xe7\xf0\xbf"),
+    TextInvariant()
+  )
+  failure.check(std@1/ascii85.decode(b"uuuuu") == Ok(b"\x08x\x0e\xc4"), TextInvariant())
+  failure.check(std@1/ascii85.decode(b"uu") == Ok(b"\x08"), TextInvariant())
+  failure.check(std@1/ascii85.decode(b"uuu") == Ok(b"\x08x"), TextInvariant())
+  failure.check(std@1/ascii85.decode(b"uuuu") == Ok(b"\x08x\x0e"), TextInvariant())
+  failure.check(
+    std@1/ascii85.decode(b"s8W-!") == Ok(b"\xff\xff\xff\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"s8W-\"") == Ok(b"\x00\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(std@1/ascii85.decode(b"t!!!!") == Ok(b"\x02?\x05c"), TextInvariant())
+  failure.check(
+    std@1/ascii85.decode(b"uuuuu!!!!!") == Ok(b"\x08x\x0e\xc4\x00\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"zzuuuuu") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x08x\x0e\xc4"
+    ),
+    TextInvariant()
+  )
+  failure.check(std@1/ascii85.decode(b"!u") == Ok(b"\x03"), TextInvariant())
+  failure.check(std@1/ascii85.decode(b"!!u") == Ok(b"\x00\x09"), TextInvariant())
+  failure.check(std@1/ascii85.decode(b"!!!u") == Ok(b"\x00\x00\x1c"), TextInvariant())
+  Ok(())
+}

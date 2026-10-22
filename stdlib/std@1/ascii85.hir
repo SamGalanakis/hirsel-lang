@@ -1,0 +1,135 @@
+// Copyright 2009 The Go Authors. All rights reserved.
+// Port of encoding/ascii85/ascii85.go:27-83,173-239 at ebe2feef (BSD-3-Clause).
+// See docs/ascii85.md for adaptations and third-party/NOTICES.md for the license.
+@serializable
+pub type DecodeError = CorruptInput(u64)
+
+pub fn encode(data: Bytes) -> unique String uses {} {
+  let len = core@1/bytes.len(data)
+  let remainder = len % 4
+  let tail: u64 = if remainder == 0 {
+    0
+  } else {
+    remainder + 1
+  }
+  core@1/failure.check(len / 4 <= (18446744073709551615u64 - tail) / 5, TextInvariant())
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, len / 4 * 5 + tail)
+  let mut i: u64 = 0
+  while i < len {
+    let used: u64 = if len - i >= 4 {
+      4
+    } else {
+      len - i
+    }
+    // Pack a big-endian quantum, filling the short tail with zero bytes.
+    let mut value: u32 = 0
+    let mut j: u64 = 0
+    while j < 4 {
+      let byte: u32 = if j < used {
+        core@1/int.widen(data[i + j])
+      } else {
+        0
+      }
+      value = value << 8 | byte
+      j += 1
+    }
+    if value == 0 && used == 4 {
+      core@1/list.push(mut out, b'z')
+    } else {
+      // Go fills the five digits backwards. Divisors emit the same digits
+      // forwards without an intermediate mutable buffer.
+      let mut divisor: u32 = 52200625
+      j = 0
+      while j < used + 1 {
+        let digit: u8 = core@1/int.narrow(value / divisor % 85u32)
+        core@1/list.push(mut out, b'!' + digit)
+        divisor /= 85u32
+        j += 1
+      }
+    }
+    i += used
+  }
+  // Only '!'..'u' and 'z' were emitted, so UTF-8 construction is valid.
+  text.finish_valid(take out)
+}
+
+@noalloc
+fn accumulate(value: u32, digit: u32) -> u32 uses {} {
+  // Go uses uint32 arithmetic even for oversized/noncanonical quanta.
+  core@1/int.wrapping_add(core@1/int.wrapping_mul(value, 85u32), digit)
+}
+
+pub fn decode(data: Bytes) -> Result[unique Bytes, DecodeError] uses {} {
+  let len = core@1/bytes.len(data)
+  // Each non-space symbol emits at most one byte, except z emits four.
+  // Count an upper bound without multiplying the whole input length.
+  let mut size: u64 = 0
+  for byte in data {
+    let extra: u64 = if byte <= b' ' {
+      0
+    } else if byte == b'z' {
+      4
+    } else {
+      1
+    }
+    size = match core@1/int.checked_add(size, extra) {
+      Some(next) => next,
+      None() => {
+        core@1/failure.check(false, TextInvariant())
+        0
+      },
+    }
+  }
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
+  let mut value: u32 = 0
+  let mut count: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    let byte = data[i]
+    let at = i
+    i += 1
+    if byte <= b' ' {
+      continue
+    } else if byte == b'z' && count == 0 {
+      count = 5
+      value = 0
+    } else if byte >= b'!' && byte <= b'u' {
+      let digit: u32 = core@1/int.widen(byte - b'!')
+      value = accumulate(value, digit)
+      count += 1
+    } else {
+      return Error(CorruptInput(at))
+    }
+    if count == 5 {
+      let mut j: u64 = 0
+      while j < 4 {
+        let shift: u32 = core@1/int.narrow(24u64 - j * 8)
+        core@1/list.push(mut out, core@1/int.narrow(value >> shift & 255u32))
+        j += 1
+      }
+      value = 0
+      count = 0
+    }
+  }
+  if count == 1 {
+    return Error(CorruptInput(len))
+  }
+  if count > 1 {
+    // Restore truncated digits with the largest base85 digit, including
+    // the explicit modulo-2^32 behavior of the full-quantum recurrence.
+    let mut j = count
+    while j < 5 {
+      value = accumulate(value, 84u32)
+      j += 1
+    }
+    j = 0
+    while j < count - 1 {
+      let shift: u32 = core@1/int.narrow(24u64 - j * 8)
+      core@1/list.push(mut out, core@1/int.narrow(value >> shift & 255u32))
+      j += 1
+    }
+  }
+  Ok(core@1/bytes.from_list(take out))
+}

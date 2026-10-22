@@ -1,0 +1,229 @@
+// Copyright 2009 The Go Authors. All rights reserved.
+// Go encoding/ascii85 @ ebe2feef; fixed independent expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/ascii85.decode(
+      b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f "
+    ) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"\x00\x01\x09\x0a\x0d\x1f ") == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b" \x00z\x0a!!\x09!!\x0d!\x1f") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"\x00!\x01!\x02\x09\x0d\x0a ") == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x00!\x01!\x02!\x03!\x04z\x05!\x06!\x07\x0a") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x00!\x00!\x00!\x00!\x00z\x00!!\x00") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x01!\x01!\x01!\x01!\x01z\x01!!\x01") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x02!\x02!\x02!\x02!\x02z\x02!!\x02") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x03!\x03!\x03!\x03!\x03z\x03!!\x03") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x04!\x04!\x04!\x04!\x04z\x04!!\x04") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x05!\x05!\x05!\x05!\x05z\x05!!\x05") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x06!\x06!\x06!\x06!\x06z\x06!!\x06") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x07!\x07!\x07!\x07!\x07z\x07!!\x07") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x08!\x08!\x08!\x08!\x08z\x08!!\x08") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x09!\x09!\x09!\x09!\x09z\x09!!\x09") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0a!\x0a!\x0a!\x0a!\x0az\x0a!!\x0a") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0b!\x0b!\x0b!\x0b!\x0bz\x0b!!\x0b") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0c!\x0c!\x0c!\x0c!\x0cz\x0c!!\x0c") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0d!\x0d!\x0d!\x0d!\x0dz\x0d!!\x0d") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0e!\x0e!\x0e!\x0e!\x0ez\x0e!!\x0e") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x0f!\x0f!\x0f!\x0f!\x0fz\x0f!!\x0f") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x10!\x10!\x10!\x10!\x10z\x10!!\x10") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x11!\x11!\x11!\x11!\x11z\x11!!\x11") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x12!\x12!\x12!\x12!\x12z\x12!!\x12") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x13!\x13!\x13!\x13!\x13z\x13!!\x13") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x14!\x14!\x14!\x14!\x14z\x14!!\x14") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x15!\x15!\x15!\x15!\x15z\x15!!\x15") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x16!\x16!\x16!\x16!\x16z\x16!!\x16") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x17!\x17!\x17!\x17!\x17z\x17!!\x17") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x18!\x18!\x18!\x18!\x18z\x18!!\x18") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x19!\x19!\x19!\x19!\x19z\x19!!\x19") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1a!\x1a!\x1a!\x1a!\x1az\x1a!!\x1a") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1b!\x1b!\x1b!\x1b!\x1bz\x1b!!\x1b") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1c!\x1c!\x1c!\x1c!\x1cz\x1c!!\x1c") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1d!\x1d!\x1d!\x1d!\x1dz\x1d!!\x1d") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1e!\x1e!\x1e!\x1e!\x1ez\x1e!!\x1e") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"!\x1f!\x1f!\x1f!\x1f!\x1fz\x1f!!\x1f") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/ascii85.decode(b"! ! ! ! ! z !! ") == Ok(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1295,6 +1295,12 @@
       "module": [
         "union_find"
       ]
+    },
+    {
+      "path": "ascii85.hir",
+      "module": [
+        "ascii85"
+      ]
     }
   ],
   "dependencies": []

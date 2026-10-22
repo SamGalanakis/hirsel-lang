@@ -1,0 +1,18 @@
+// Copyright 2009 The Go Authors. All rights reserved.
+// Go encoding/ascii85 @ ebe2feef; fixed independent expectations.
+pub fn main() -> Result[(), ()] {
+  let mut bytes: List[u8] = []
+  let mut n: u64 = 0
+  while n <= 65 {
+    let data = core@1/bytes.from_list(copy bytes)
+    let encoded = std@1/ascii85.encode(data)
+    failure.check(
+      std@1/ascii85.decode(core@1/string.as_bytes(encoded)) == Ok(data),
+      TextInvariant()
+    )
+    let byte: u8 = core@1/int.narrow((n * 73 + 19) % 256)
+    core@1/list.push(mut bytes, byte)
+    n += 1
+  }
+  Ok(())
+}
