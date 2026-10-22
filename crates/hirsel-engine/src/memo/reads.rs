@@ -67,6 +67,8 @@ pub enum LookupSource {
     Provider,
     Manifest,
     Head,
+    /// Accessible spelling repairs, observed only by missing-name diagnostics.
+    Candidates,
 }
 
 /// One name lookup: the file context it ran in and the path it spelled.
@@ -408,6 +410,9 @@ impl Reads {
     }
     /// The canonical persisted encoding.
     pub fn encode(&self, out: &mut Vec<u8>) {
+        // Version 2 separates lookup identity from diagnostic spelling repairs.
+        // Reject pre-separation receipts even when they contain no new tags.
+        out.extend(b"HRD2");
         out.extend((self.0.len() as u32).to_le_bytes());
         for (key, value) in self.0.iter() {
             key.encode(out);
@@ -415,6 +420,9 @@ impl Reads {
         }
     }
     pub fn decode(input: &mut &[u8]) -> Option<Reads> {
+        if take(input, 4)? != b"HRD2" {
+            return None;
+        }
         let count = take_u32(input)? as usize;
         let mut reads = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
@@ -428,7 +436,7 @@ impl Reads {
     pub fn digest(&self) -> ContentHash {
         let mut bytes = vec![];
         self.encode(&mut bytes);
-        ContentHash::of_parts("hirsel.reads.v1", [bytes.as_slice()])
+        ContentHash::of_parts("hirsel.reads.v2", [bytes.as_slice()])
     }
 }
 
@@ -540,6 +548,7 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
                 0 => LookupSource::Provider,
                 1 => LookupSource::Manifest,
                 2 => LookupSource::Head,
+                3 => LookupSource::Candidates,
                 _ => return None,
             };
             let package = PackageKey(Symbol::intern(take_text(input)?));
@@ -768,6 +777,44 @@ mod tests {
         assert_eq!(lookup.context(), context);
         assert_eq!(lookup.segments(), vec!["x".to_string(), "y".to_string()]);
         assert_eq!(lookup.qualifier(), None);
+    }
+
+    #[test]
+    fn diagnostic_lookup_reads_are_distinct_and_reject_old_encodings() {
+        let context = FileContext {
+            package: def("owner").path().0.package.clone(),
+            modules: vec!["m".into()],
+        };
+        let segments = ["missing".into()];
+        let identity = ReadKey::Lookup(LookupKey::of(
+            LookupSource::Manifest,
+            &context,
+            None,
+            &segments,
+        ));
+        let candidates = ReadKey::Lookup(LookupKey::of(
+            LookupSource::Candidates,
+            &context,
+            None,
+            &segments,
+        ));
+        let reads =
+            Reads::from_vec(vec![(identity, h("absent")), (candidates, h("repairs"))]).unwrap();
+        assert_eq!(reads.len(), 2);
+        let mut bytes = vec![];
+        reads.encode(&mut bytes);
+        assert_eq!(&bytes[..4], b"HRD2");
+        assert_eq!(Reads::decode(&mut bytes.as_slice()), Some(reads));
+        // The old encoding began directly with the row count.
+        assert!(Reads::decode(&mut &bytes[4..]).is_none());
+        assert!(Reads::decode(&mut &[0u8; 4][..]).is_none());
+        let mut unknown = [ReadKind::Lookup as u8, 4];
+        assert!(decode_key(&mut unknown.as_slice()).is_none());
+        unknown[1] = LookupSource::Candidates as u8;
+        assert!(
+            decode_key(&mut unknown.as_slice()).is_none(),
+            "truncated lookup"
+        );
     }
 
     #[test]

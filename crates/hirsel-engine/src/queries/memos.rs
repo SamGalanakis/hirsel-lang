@@ -136,7 +136,6 @@ fn missing_lookup(result: &Result<DefPath, LookupError>) -> bool {
 fn manifest_value(
     result: &Result<DefPath, LookupError>,
     namespace: Option<hirsel_resolve::Namespace>,
-    candidates: ContentHash,
 ) -> ContentHash {
     let mut parts: Vec<Vec<u8>> = vec![];
     let paths = |parts: &mut Vec<Vec<u8>>, ps: &[DefPath]| {
@@ -167,12 +166,6 @@ fn manifest_value(
             parts.push(b"provider".to_vec());
             diagnostics_value(&mut parts, ds);
         }
-    }
-    // A missing name's diagnostic also observes accessible near-name candidates.
-    // The negative lookup alone can stay identical while a rename changes its
-    // suggested repair. Keep successful lookups independent of unrelated names.
-    if missing_lookup(result) {
-        parts.push(candidates.0.to_vec());
     }
     ContentHash::of_parts(
         "hirsel.read.manifest-lookup",
@@ -244,11 +237,26 @@ pub(crate) fn complete_reads(
                 ..
             } => {
                 let namespace = source.namespace(context, result);
-                let candidates = if missing_lookup(result) {
-                    source.lookup_candidates(context, package.as_ref(), segments)
-                } else {
-                    ContentHash::default()
-                };
+                // Only the resolver product that emits a missing-name
+                // diagnostic observes spelling repairs. Later phases inherit
+                // its typed reads; replaying resolver detail must not add new
+                // candidate dependencies to successful reservation probes.
+                let diagnostics = observed
+                    .products
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|resolution| !resolution.output.diagnostics.is_empty());
+                if diagnostics && missing_lookup(result) {
+                    reads.record(
+                        ReadKey::Lookup(LookupKey::of(
+                            LookupSource::Candidates,
+                            context,
+                            package.as_ref(),
+                            segments,
+                        )),
+                        source.lookup_candidates(context, package.as_ref(), segments),
+                    );
+                }
                 reads.record(
                     ReadKey::Lookup(LookupKey::of(
                         LookupSource::Manifest,
@@ -256,7 +264,7 @@ pub(crate) fn complete_reads(
                         package.as_ref(),
                         segments,
                     )),
-                    manifest_value(result, namespace, candidates),
+                    manifest_value(result, namespace),
                 )
             }
             hirsel_types::DependencyRead::ModuleHead {
@@ -460,12 +468,10 @@ impl QueryEngine {
                     LookupSource::Manifest => {
                         let result = self.lookup_result(&context, &qualifier, &segments);
                         let namespace = self.lookup_namespace(&context, &result);
-                        let candidates = if missing_lookup(&result) {
-                            self.lookup_candidates(&context, qualifier.as_ref(), &segments)
-                        } else {
-                            ContentHash::default()
-                        };
-                        manifest_value(&result, namespace, candidates)
+                        manifest_value(&result, namespace)
+                    }
+                    LookupSource::Candidates => {
+                        self.lookup_candidates(&context, qualifier.as_ref(), &segments)
                     }
                     LookupSource::Head => {
                         let exposed = self
@@ -725,12 +731,24 @@ impl QueryEngine {
         self.apply_changes(&changes);
     }
 
-    /// A name appeared, disappeared or changed kind or visibility: every
-    /// lookup may observe it.
+    /// A name appeared, disappeared or changed kind or visibility. Mark only
+    /// lookup receipts whose observed value changed: frozen workers cannot
+    /// deep-verify a conservative mark and would otherwise repeat body work.
     fn mark_lookups(&mut self, changes: &mut ChangeSet) {
         for key in self.graph.read_keys() {
-            if key.kind() == crate::memo::ReadKind::Lookup {
-                changes.read(key, self.durability_of(&key));
+            if let ReadKey::Lookup(_) = key {
+                let Some(owner) = self.graph.subscribers(&key).next().map(|memo| memo.def) else {
+                    continue;
+                };
+                let value = self.observe(owner.path(), &key);
+                let changed = self.graph.subscribers(&key).any(|memo| {
+                    self.memo_reads(memo.def.path(), memo.kind)
+                        .and_then(|reads| reads.get(&key))
+                        != value
+                });
+                if changed {
+                    changes.read(key, self.durability_of(&key));
+                }
             }
         }
     }

@@ -174,3 +174,93 @@ fn shadowed_root_values_do_not_enter_the_semantic_revision() {
         assert_eq!(first, engine.semantic_program_revision(&entry).unwrap());
     });
 }
+
+#[test]
+fn memo_reads_and_invalidations_stay_with_their_engine_and_package() {
+    with_compiler_stack(|| {
+        let source = "type Word = u8\nfn f(x:Word) -> Word { x }\n";
+        let mut left = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut right = QueryEngine::new(default_environment(), compiler_adapters());
+        assert!(check(&mut left, source).diagnostics.is_empty());
+        let before = counts(&left, "f");
+        let kinds = [
+            QueryKind::Resolve,
+            QueryKind::Signature,
+            QueryKind::Check,
+            QueryKind::Modes,
+            QueryKind::Lower,
+        ];
+        let reads = kinds.map(|kind| left.memo_reads(&path("f"), kind).unwrap().clone());
+        let syntax = left.parse_definition(&path("f")).unwrap().value;
+        let tir = left.lower_to_tir(&path("f")).unwrap().value;
+        for (round, word) in ["u16", "u32", "u64"].into_iter().enumerate() {
+            // Same file/package/definition spellings, deliberately different types.
+            assert!(
+                check(&mut right, &source.replace("u8", word))
+                    .diagnostics
+                    .is_empty()
+            );
+            assert_eq!(counts(&left, "f"), before);
+            let mut context = default_context();
+            context.package.name = format!("unrelated{round}");
+            let file = left
+                .sources
+                .add(format!("other{round}.hir"), "fn x() {}\n".into())
+                .unwrap();
+            left.parse_file(file, &context).unwrap();
+            assert!(
+                check(&mut left, &format!("fn z() {{}}\n{source}"))
+                    .diagnostics
+                    .is_empty()
+            );
+            assert_eq!(counts(&left, "f"), before);
+            for (kind, old) in kinds.into_iter().zip(&reads) {
+                assert_eq!(left.memo_reads(&path("f"), kind), Some(old));
+            }
+            let current = left.parse_definition(&path("f")).unwrap().value;
+            assert!(std::sync::Arc::ptr_eq(&syntax, &current));
+            assert_eq!(syntax.owner(), current.owner());
+            assert_eq!(left.lower_to_tir(&path("f")).unwrap().value, tir);
+        }
+        // A related type must invalidate the dependent signature and body.
+        let changed = source.replace("u8", "u16");
+        assert!(check(&mut left, &changed).diagnostics.is_empty());
+        assert!(counts(&left, "f")[1] > before[1]);
+        assert!(counts(&left, "f")[2] > before[2]);
+        assert!(counts(&left, "f")[4] > before[4]);
+        let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+        assert!(check(&mut fresh, &changed).diagnostics.is_empty());
+        assert_eq!(
+            hirsel_lower::print::definition(&left.lower_to_tir(&path("f")).unwrap().value),
+            hirsel_lower::print::definition(&fresh.lower_to_tir(&path("f")).unwrap().value)
+        );
+        let right_before = counts(&right, "f");
+        let file = left.sources.add("same.hir", "fn x() {}\n".into()).unwrap();
+        left.parse_file(file, &default_context()).unwrap();
+        let Err(QueryError::Diagnostics(ds)) = left.check_definition(&path("f")) else {
+            panic!("same-module x must reserve the parameter name")
+        };
+        assert_eq!(ds[0].rule.as_str(), "LANG-4");
+        right.check_definition(&path("f")).unwrap();
+        assert_eq!(counts(&right, "f"), right_before);
+    });
+}
+
+#[test]
+fn a_missing_reference_rechecks_when_its_exact_name_is_declared() {
+    with_compiler_stack(|| {
+        let source = "fn f() -> u8 { missed() }\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        assert!(!check(&mut engine, source).diagnostics.is_empty());
+        let before = counts(&engine, "f");
+        let fixed = format!("{source}fn missed() -> u8 {{ 1u8 }}\n");
+        assert!(check(&mut engine, &fixed).diagnostics.is_empty());
+        assert!(counts(&engine, "f")[0] > before[0]);
+        let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+        assert!(check(&mut fresh, &fixed).diagnostics.is_empty());
+        assert_eq!(
+            hirsel_lower::print::definition(&engine.lower_to_tir(&path("f")).unwrap().value),
+            hirsel_lower::print::definition(&fresh.lower_to_tir(&path("f")).unwrap().value)
+        );
+    });
+}
