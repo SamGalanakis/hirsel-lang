@@ -1374,9 +1374,10 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         unsafe { crate::pool::free::schedule_saved(run, task, owner) };
     }
     if unsafe {
-        (*run)
+        ((*run)
             .ordered_mode
             .load(std::sync::atomic::Ordering::Acquire)
+            || (*run).free_mode)
             && (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
     } {
         unsafe { crate::pool::wake_home(run) };

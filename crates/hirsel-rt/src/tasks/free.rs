@@ -71,10 +71,18 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if replay::at_cut(ctx) {
         park_final(ctx);
     }
-    // This experimental policy supports runtime waits only. Its home/driver
-    // readiness bridge is not activated; no table borrow crosses a bridge.
+    // Runtime polling performs no adapter effects. Home observes readiness
+    // and cancellation with no role or parked-context borrow.
     unsafe { super::readiness::poll_free(scheduler(ctx)) };
     unsafe { dispatch_ready(ctx) };
+    if ctx
+        .run_ref()
+        .host_waits
+        .load(std::sync::atomic::Ordering::Acquire)
+        != 0
+    {
+        unsafe { crate::pool::wake_home(ctx.run_ptr()) };
+    }
     let s = scheduler(ctx);
     let me = s.current;
     let row = s.task(me);

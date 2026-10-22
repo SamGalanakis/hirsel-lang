@@ -1,7 +1,7 @@
-//! Request ownership and native recorded host phases. This foundation does
-//! admits explicit bounded host tests, home readiness and owner-side retries.
-//! General adapter routing, parked cancellation, resource discovery and terminal
-//! activation remain gated.
+//! Request ownership and native recorded host phases. This foundation
+//! admits explicit bounded host tests, home readiness, cancellation and retries.
+//! General adapter routing, resource discovery and terminal activation remain
+//! gated.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};
 use crate::io_keys::{KeySet, Mode, Positions};

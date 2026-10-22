@@ -195,12 +195,15 @@ pub(crate) unsafe fn native_notified_home(run: *mut crate::context::RunShared, t
 /// return native token notifications. No request is reissued on this stack.
 /// # Safety
 /// Home only; no scheduler role or parked context is borrowed.
-pub(crate) unsafe fn native_ready_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+pub(crate) unsafe fn native_ready_home(
+    run: *mut crate::context::RunShared,
+    canceled: &[u64],
+) -> Stopped<HomeReady> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
-    native_ready_binding(binding)
+    native_ready_binding(binding, canceled)
 }
 
-fn native_ready_binding(binding: &mut Binding) -> Stopped<HomeReady> {
+fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<HomeReady> {
     assert!(
         binding.waits.parked.is_empty(),
         "Free native requests use owner-side attempts"
@@ -215,7 +218,12 @@ fn native_ready_binding(binding: &mut Binding) -> Stopped<HomeReady> {
         .native
         .iter_unordered()
         .filter_map(|(token, row)| {
-            (ready.contains(token) || binding.adapter.injected_wait(&row.request)).then_some(token)
+            (ready.contains(token)
+                || binding.adapter.injected_wait(&row.request)
+                || (canceled.contains(&token)
+                    && binding.adapter.cancellable(token)
+                    && crate::io_checks::cancellation_result(&row.request, 0).is_some()))
+            .then_some(token)
         })
         .collect();
     for token in available {
@@ -1132,16 +1140,26 @@ mod native_tests {
                 ready: false,
             },
         );
-        assert!(native_ready_binding(&mut binding).unwrap().hosts.is_empty());
+        assert!(
+            native_ready_binding(&mut binding, &[])
+                .unwrap()
+                .hosts
+                .is_empty()
+        );
         binding.waits.native.get_mut(&7).unwrap().task = Some(3);
         // The adapter has already consumed its one ready edge.
         for _ in 0..2 {
-            let snapshot = native_ready_binding(&mut binding).unwrap();
+            let snapshot = native_ready_binding(&mut binding, &[]).unwrap();
             assert_eq!(snapshot.hosts.len(), 1);
             assert_eq!(snapshot.hosts[0].task, 3);
             assert!(snapshot.hosts[0].ready);
         }
         binding.waits.native.get_mut(&7).unwrap().notified = true;
-        assert!(native_ready_binding(&mut binding).unwrap().hosts.is_empty());
+        assert!(
+            native_ready_binding(&mut binding, &[])
+                .unwrap()
+                .hosts
+                .is_empty()
+        );
     }
 }

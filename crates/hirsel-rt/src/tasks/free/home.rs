@@ -13,7 +13,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return false;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (scopes, waits, idle) = {
+    let (scopes, waits, canceled, idle) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -55,14 +55,21 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 readiness::saved(s, task as u32).then_some((task as u32, row.generation, token))
             })
             .collect::<Vec<_>>();
-        (scopes, waits, idle)
+        let canceled = waits
+            .iter()
+            .filter_map(|&(task, _, token)| {
+                let shield = s.task(task).shield();
+                s.canceled_task(task, shield).map(|_| token)
+            })
+            .collect::<Vec<_>>();
+        (scopes, waits, canceled, idle)
     };
     if scopes.is_empty() && waits.is_empty() {
         return false;
     }
     // The home thread serializes this call with all worker home bridges.
     // Never retain the scheduler role while an adapter blocks or calls back.
-    let result = unsafe { poll_home(run, idle) };
+    let result = unsafe { poll_home(run, idle, &canceled) };
     let _guard = unsafe { role::IdleGuard::new(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return true;
@@ -128,14 +135,14 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
 unsafe fn poll_home(
     run: *mut RunShared,
     idle: bool,
+    canceled: &[u64],
 ) -> crate::stop::Stopped<(crate::host_waits::HomeReady, bool)> {
-    loop {
-        let ready = unsafe { crate::host_waits::native_ready_home(run) }?;
-        if !idle || !ready.expired.is_empty() || ready.hosts.iter().any(|host| host.ready) {
-            return Ok((ready, true));
-        }
-        if !unsafe { crate::host_waits::wait_home(run) }? {
-            return Ok((ready, false));
-        }
+    let ready = unsafe { crate::host_waits::native_ready_home(run, canceled) }?;
+    if !idle || !ready.expired.is_empty() || ready.hosts.iter().any(|host| host.ready) {
+        return Ok((ready, true));
     }
+    // A deadline or another source can change cancellation while home waits.
+    // Return to the role snapshot before deciding which owners to wake.
+    let sources = unsafe { crate::host_waits::wait_home(run) }?;
+    Ok((ready, sources))
 }
