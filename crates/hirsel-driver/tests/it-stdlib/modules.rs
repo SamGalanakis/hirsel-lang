@@ -71,3 +71,4 @@ mod cli_interspersed_11;
 mod file_read_bounded_11;
 mod list_filled_memset_12;
 mod http_fetch_bounded_12;
+mod float_parse_scan_13;

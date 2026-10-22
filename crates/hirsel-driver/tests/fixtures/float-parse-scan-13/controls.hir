@@ -1,0 +1,100 @@
+// Rust core f6c1107f coretests/tests/num/dec2flt/parse.rs:11-76 (MIT).
+// Hirsel requires digits on both sides of a dot and rejects leading plus.
+pub fn main(t: Test) -> Result[(), ()] {
+  let malformed: List[String] = [
+    "",
+    "-",
+    "+1",
+    ".1",
+    "1.",
+    "-.1",
+    "1.e3",
+    ".1e3",
+    ".e",
+    "1e",
+    "e4",
+    "e",
+    ".12e",
+    "321.e",
+    "32.12e+",
+    "12.32e-",
+    "1e+-1",
+    "1e--1",
+    "1e++1",
+    " 1",
+    "1 ",
+    "1\n",
+    "1_0",
+    "0x1",
+    "1.2.3",
+    "1e1.0",
+    "nan",
+    "Infinity",
+    "0e999999999999999999999999999r",
+    "-0.000x",
+    "1\u{0}"
+  ]
+  for text in malformed {
+    test.equal(t, f64.parse(text), Error(Invalid))
+    test.equal(t, f32.parse(text), Error(Invalid))
+    test.equal(t, f64.parse_bytes(string.as_bytes(text)), Error(Invalid))
+    test.equal(t, f32.parse_bytes(string.as_bytes(text)), Error(Invalid))
+  }
+  // INVALID_INSERTIONS
+  test.equal(t, f64.parse_bytes(b"1\xff"), Error(Invalid))
+  test.equal(t, f32.parse_bytes(b"1\xff"), Error(Invalid))
+  // JSON's own grammar rejects leading zeros and nonfinite values separately.
+  let json_invalid: List[String] = [
+    "+1",
+    "01",
+    ".1",
+    "1.",
+    "NaN",
+    "inf",
+    "1e",
+    "1e+",
+    "1 2"
+  ]
+  for text in json_invalid {
+    let mut reader = json.reader(string.as_bytes(text))
+    match json.skip(mut reader) {
+      Error(_) => (),
+      Ok(_) => test.check(t, json.finish_reader(mut reader) != Ok(())),
+    }
+  }
+  let json_valid: List[String] = ["0", "-0", "0.125", "1e+2", "1E-2"]
+  for text in json_valid {
+    let mut reader = json.reader(string.as_bytes(text))
+    test.equal(t, json.skip(mut reader), Ok(()))
+    test.equal(t, json.finish_reader(mut reader), Ok(()))
+  }
+  // CSV fields are borrowed bytes; numeric syntax is still the scalar syntax.
+  let mut csv_reader = match csv.slice_reader(
+    "-0,1.25,+1,.1,1.,1e+2\n",
+    csv.default_config()
+  ) {
+    Ok(cursor) => take cursor,
+    Error(_) => return Error(()),
+  }
+  test.equal(t, csv.next_record(mut csv_reader), Ok(true))
+  for at in 2u64..5u64 {
+    let Some(field) = csv.get_field_bytes(csv_reader, at) else {
+      return Error(())
+    }
+    test.equal(t, f64.parse_bytes(field), Error(Invalid))
+    test.equal(t, f32.parse_bytes(field), Error(Invalid))
+  }
+  let Some(zero) = csv.get_field_bytes(csv_reader, 0) else {
+    return Error(())
+  }
+  let Ok(zero_value) = f64.parse_bytes(zero) else {
+    return Error(())
+  }
+  test.equal(t, core@1/f64.bits(zero_value), 9223372036854775808u64)
+  let Some(number) = csv.get_field_bytes(csv_reader, 1) else {
+    return Error(())
+  }
+  test.equal(t, f64.parse_bytes(number), Ok(1.25))
+  // BIT_VECTORS
+  Ok(())
+}

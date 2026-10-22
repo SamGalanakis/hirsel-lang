@@ -2138,40 +2138,61 @@ pub fn parse_bytes(bytes: Bytes, fraction: u64, bias: i32) -> Result[
     0
   }
   let start = at
-  let mut integer_digits: u64 = 0
-  let mut fractional_digits: u64 = 0
-  let mut significant: u64 = 0
-  // The first 19 significant digits, exact in a u64.
+  // Rust core f6c1107f dec2flt/parse.rs:55-76 (MIT): accumulate exactly
+  // through the nineteenth significant digit, then only validate/count digits.
+  // Separate integer/fraction phases retain Hirsel's required integer and
+  // nonempty fraction. Checked byte loads and the original fallback bounds stay.
+  while at < length && bytes[at] == 48 {
+    at += 1
+  }
+  let integer_significant_start = at
   let mut leading: u64 = 0
-  let mut dot: bool = false
-  while at < length {
+  while at < length && leading < 1000000000000000000 {
     let byte = bytes[at]
-    if byte == 46 && !dot {
-      if integer_digits == 0 {
-        return Error(Invalid)
-      }
-      dot = true
-      at += 1
-      continue
-    }
     if byte < 48 || byte > 57 {
       break
     }
-    if dot {
-      fractional_digits += 1
-    } else {
-      integer_digits += 1
-    }
-    if byte != 48 || significant > 0 {
-      significant += 1
-      if significant <= 19 {
-        leading = leading * 10 + core@1/int.widen(byte - 48)
-      }
-    }
+    leading = leading * 10 + core@1/int.widen(byte - 48)
     at += 1
   }
-  if at == start || integer_digits == 0 || dot && fractional_digits == 0 {
+  if leading >= 1000000000000000000 {
+    while at < length && bytes[at] >= 48 && bytes[at] <= 57 {
+      at += 1
+    }
+  }
+  let integer_digits = at - start
+  let mut significant = at - integer_significant_start
+  if integer_digits == 0 {
     return Error(Invalid)
+  }
+  let mut fractional_digits: u64 = 0
+  if at < length && bytes[at] == 46 {
+    at += 1
+    let fractional_start = at
+    if significant == 0 {
+      while at < length && bytes[at] == 48 {
+        at += 1
+      }
+    }
+    let fractional_significant_start = at
+    while at < length && leading < 1000000000000000000 {
+      let byte = bytes[at]
+      if byte < 48 || byte > 57 {
+        break
+      }
+      leading = leading * 10 + core@1/int.widen(byte - 48)
+      at += 1
+    }
+    if leading >= 1000000000000000000 {
+      while at < length && bytes[at] >= 48 && bytes[at] <= 57 {
+        at += 1
+      }
+    }
+    fractional_digits = at - fractional_start
+    significant += at - fractional_significant_start
+    if fractional_digits == 0 {
+      return Error(Invalid)
+    }
   }
   let digits_end = at
   let mut decimal_exponent: i128 = 0
