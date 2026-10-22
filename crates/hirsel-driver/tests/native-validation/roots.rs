@@ -7,7 +7,7 @@
 use super::*;
 use hirsel_lir::ir::{AddressBase, BlockKind, Inst, LirUnit, ReadMode};
 use hirsel_lir::layout_types::LayoutTable;
-use hirsel_lir::stage::Rc;
+use hirsel_lir::stage::{Rc, Stage};
 use hirsel_lir::validate::{Inputs, ViolationKind};
 use hirsel_rc::insert::{Editor, Proofs};
 use hirsel_rc::instance::Program;
@@ -74,7 +74,11 @@ fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>) {
     (program, table, rc)
 }
 
-fn check(program: &Program, table: &LayoutTable, unit: &LirUnit<Rc>) -> Vec<ViolationKind> {
+fn check<S: Stage>(
+    program: &Program,
+    table: &LayoutTable,
+    unit: &LirUnit<S>,
+) -> Vec<ViolationKind> {
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
@@ -189,18 +193,37 @@ fn ready_only_rejects_existing_rc_root_faults() {
 
 #[test]
 fn ready_only_rejects_a_resource_released_before_its_cleanup_anchor() {
-    use hirsel_lir::ir::{Holding, MaskRef};
     let source = "resource type R { text: String }\ndrop(x) { let _ = 1u8 / 0u8 }\nfn probe() { let r = box R(text: \"value\") }\n";
+    rejects_early_resource_release(source);
+}
+
+#[test]
+fn dynamic_resource_list_replacement_still_rejects_early_owner_release() {
+    rejects_early_resource_release(
+        "resource type R {}\ndrop(x) {}\nfn probe() {\n  let mut xs: List[R] = [R()]\n  let i: u64 = 0\n  xs[i] = R()\n}\n",
+    );
+}
+
+fn rejects_early_resource_release(source: &str) {
+    use hirsel_lir::ir::{Holding, MaskRef};
     let (program, table, rc) = rc_probe(source);
     let instances = lower_valid(source).1.instances;
     let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
+    let control = hirsel_rc::ready::ready(rc.clone(), &table, &finalizers).unwrap();
+    let errors = check(&program, &table, &control);
+    assert!(errors.is_empty(), "valid resource cleanup: {errors:?}");
     let mut ed = Editor::new(rc);
     let (b, i) = ed
         .code
         .iter()
         .enumerate()
         .flat_map(|(b, code)| code.iter().enumerate().map(move |(i, inst)| (b, i, inst)))
-        .find_map(|(b, i, inst)| matches!(inst, Inst::Drop { .. }).then_some((b, i)))
+        .find_map(|(b, i, inst)| {
+            // End the original owner before its lexical cleanup, not a
+            // replacement's already displaced reference at its instruction.
+            (ed.unit.blocks[b].kind == BlockKind::Cleanup && matches!(inst, Inst::Drop { .. }))
+                .then_some((b, i))
+        })
         .expect("resource drop");
     let Inst::Drop {
         address,
@@ -273,9 +296,7 @@ fn ready_only_rejects_a_resource_released_before_its_cleanup_anchor() {
     let mutant = ed.finish();
     let ladder = check(&program, &table, &mutant);
     assert!(
-        ladder
-            .iter()
-            .any(|v| matches!(v, ViolationKind::ResourceOutsideAnchor(_))),
+        ladder.contains(&ViolationKind::ResourceOutsideAnchor(value)),
         "{ladder:?}"
     );
     let ready = hirsel_rc::ready::ready(mutant, &table, &finalizers).unwrap();
@@ -295,7 +316,23 @@ fn ready_only_rejects_a_resource_released_before_its_cleanup_anchor() {
     assert!(
         errors
             .iter()
-            .any(|v| matches!(v.kind, ViolationKind::ResourceOutsideAnchor(_))),
+            .any(|v| v.kind == ViolationKind::ResourceOutsideAnchor(value)),
         "Ready did not reject the resource lifetime fault: {errors:?}; ladder: {ladder:?}"
     );
+}
+
+#[test]
+fn dynamic_resource_list_replacement_keeps_its_cleanup_anchors() {
+    for index in [0, 7] {
+        let source = format!(
+            "resource type R {{}}\ndrop(x) {{}}\nfn probe() {{\n  let mut xs: List[R] = [R()]\n  let i: u64 = {index}\n  xs[i] = R()\n}}\n"
+        );
+        let (program, table, rc) = rc_probe(&source);
+        assert!(check(&program, &table, &rc).is_empty());
+        let instances = lower_valid(&source).1.instances;
+        let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
+        let ready = hirsel_rc::ready::ready(rc, &table, &finalizers).unwrap();
+        let errors = check(&program, &table, &ready);
+        assert!(errors.is_empty(), "index {index}: {errors:?}");
+    }
 }

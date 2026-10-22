@@ -25,7 +25,7 @@
 //! Liveness, initialization and loans are this module's own analyses; the
 //! stage validator replays ownership independently and never reads them.
 use crate::PassError;
-use crate::import::STATE_RELEASE;
+use crate::import::{INSTRUCTION_DROP, STATE_RELEASE};
 use crate::paths::{PathId, Paths, Tris};
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
@@ -4803,7 +4803,10 @@ fn detach(
     let (body, site) = anchor_site(&ed.unit, anchor);
     let release = ed.cleanup_anchor(CleanupAnchor {
         body,
-        cleanup: STATE_RELEASE,
+        // The detach installs a new holder and drops the displaced reference
+        // at this instruction, on the normal path. STATE_RELEASE is reserved
+        // for synthesized failure cleanup, not replacement-local destruction.
+        cleanup: INSTRUCTION_DROP,
         action: displaced.0,
         site,
     });
