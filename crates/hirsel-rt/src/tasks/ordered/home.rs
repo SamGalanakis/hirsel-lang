@@ -56,7 +56,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             let _guard = unsafe { role::IdleGuard::new(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             for scope in expired {
-                s.expire(scope);
+                super::events::expire(s, scope);
             }
             let mut hosts: Vec<_> = hosts
                 .into_iter()

@@ -45,6 +45,7 @@ pub(super) enum CanonicalItem {
     Cancellation(Vec<u32>),
     CompletionRank(ObjectId),
     ScopeCancellation(ObjectId),
+    HostKey(ObjectId),
 }
 
 /// The actual completion returned by an owned host request. It is retained
@@ -175,6 +176,11 @@ pub(super) enum CanonicalOutcome {
         kind: u64,
         leftovers: Vec<Vec<u8>>,
     },
+    DeadlineArmed {
+        deadline: u64,
+        armed: bool,
+    },
+    DeadlineExpired,
     GateWaiting,
     GateAcquired,
     GateReleased,
@@ -290,6 +296,14 @@ struct ScopeExitEvidence {
     cancellations: Subevents,
 }
 
+struct DeadlineEvidence {
+    path: Vec<u32>,
+    ordinal: u64,
+    scope: ObjectId,
+    clock: Option<ObjectId>,
+    at: u64,
+}
+
 #[derive(Default)]
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
@@ -308,6 +322,8 @@ pub(super) struct Log {
     receiving: BTreeSet<Vec<u32>>,
     gate_waiting: BTreeMap<Vec<u32>, (u32, u64)>,
     gates: BTreeMap<u32, ObjectId>,
+    deadlines: BTreeMap<u32, DeadlineEvidence>,
+    arming: BTreeSet<Vec<u32>>,
     receive_entries: BTreeMap<Vec<u32>, Option<Subevents>>,
     receive_results: BTreeMap<(Vec<u32>, u64), (u32, Option<Vec<u8>>)>,
     joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
@@ -340,6 +356,220 @@ pub(crate) fn owned_host_result(
         )),
         value => value.clone(),
     }
+}
+
+/// Deadline scopes are created in the head's bounded entry, before the
+/// home-affine arm call. A missing clock identity cannot certify that call.
+pub(super) fn deadline_scope(
+    ctx: *mut TaskCtx,
+    word: u64,
+    clock: u64,
+    at: u64,
+) -> Option<Subevents> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return None;
+    }
+    let owner = unsafe { (*ctx).task_id };
+    let path = s.tasks[owner as usize].as_ref().unwrap().path.clone();
+    let cause = s
+        .canceled_task(owner, unsafe { (*ctx).shield })
+        .map_or(0, |cause| cause + 1);
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let clock = driver
+        .objects
+        .identity(crate::ordered::objects::Kind::Capability, clock)
+        .cloned();
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals.get(&path).copied().unwrap_or(0);
+    let scope = ObjectId {
+        creator: path.clone(),
+        ordinal,
+    };
+    assert!(log.scopes.insert(word, scope.clone()).is_none());
+    assert!(log.arming.insert(path.clone()));
+    log.deadlines.insert(
+        word as u32,
+        DeadlineEvidence {
+            path: path.clone(),
+            ordinal,
+            scope: scope.clone(),
+            clock,
+            at,
+        },
+    );
+    Some(vec![
+        (
+            CanonicalItem::Object(scope.clone()),
+            CanonicalOutcome::Created(scope.clone()),
+        ),
+        (
+            CanonicalItem::CompletionRank(scope.clone()),
+            CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec()),
+        ),
+        (
+            CanonicalItem::ScopeCancellation(scope),
+            CanonicalOutcome::Scalar(0u32.to_le_bytes().to_vec()),
+        ),
+        (
+            CanonicalItem::Cancellation(path),
+            CanonicalOutcome::Scalar(cause.to_le_bytes().to_vec()),
+        ),
+    ])
+}
+
+/// The arm call returned with no policy borrow held. Capture its result
+/// before immediate expiry or the entry's Yield can publish cancellation.
+pub(super) fn deadline_armed(ctx: *mut TaskCtx, scope: u32, armed: bool) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let evidence = &log.deadlines[&scope];
+    let path = evidence.path.clone();
+    let ordinal = evidence.ordinal;
+    assert!(log.arming.remove(&path));
+    let Some(clock) = evidence.clock.clone() else {
+        log.unsupported.push(Unsupported {
+            task: path,
+            ordinal,
+            op: Some("task.scope_enter"),
+        });
+        return;
+    };
+    let events = vec![
+        (
+            CanonicalItem::HostKey(clock),
+            CanonicalOutcome::DeadlineArmed {
+                deadline: evidence.at,
+                armed,
+            },
+        ),
+        (
+            CanonicalItem::Object(evidence.scope.clone()),
+            CanonicalOutcome::Unit,
+        ),
+    ];
+    let boundary = Boundary {
+        task: path,
+        ordinal,
+        op: None,
+        transition: Transition::Keep,
+        retirement,
+        before,
+        credit: 0,
+        native_outcome: None,
+    };
+    log.subevents(&boundary, "task.scope_enter", events);
+}
+
+/// Apply real expiry once and capture all cancellation targets at that exact
+/// poll position. Idle callers hold only Scheduler; parked contexts are unused.
+pub(crate) fn expire(s: &mut super::super::Scheduler, scope: u32) {
+    if !enabled(s) {
+        s.expire(scope);
+        return;
+    }
+    if s.scopes[scope as usize]
+        .as_ref()
+        .unwrap()
+        .deadline
+        .as_ref()
+        .unwrap()
+        .expired
+    {
+        return;
+    }
+    let owner = s.scope(scope).owner;
+    let mut roots = s.scope(scope).children.clone();
+    let inner: Vec<_> = s
+        .task(owner)
+        .scopes
+        .iter()
+        .skip_while(|&&id| id != scope)
+        .skip(1)
+        .copied()
+        .collect();
+    for inner in inner {
+        roots.extend(s.scope(inner).children.clone());
+    }
+    let mut targets = BTreeSet::new();
+    for root in roots {
+        targets.extend(s.prepare_cancel(root));
+    }
+    s.expire(scope);
+    let mut cancellations: Subevents = targets
+        .into_iter()
+        .map(|task| {
+            let row = s.tasks[task as usize].as_ref().unwrap();
+            (
+                CanonicalItem::Cancellation(row.path.clone()),
+                CanonicalOutcome::Scalar(
+                    row.canceled
+                        .cause()
+                        .map_or(0, |cause| cause + 1)
+                        .to_le_bytes()
+                        .to_vec(),
+                ),
+            )
+        })
+        .collect();
+    cancellations.push((
+        CanonicalItem::Cancellation(s.tasks[owner as usize].as_ref().unwrap().path.clone()),
+        CanonicalOutcome::Scalar(
+            s.canceled_task(owner, 0)
+                .map_or(0, |cause| cause + 1)
+                .to_le_bytes()
+                .to_vec(),
+        ),
+    ));
+    cancellations.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let evidence = &log.deadlines[&scope];
+    let mut events = vec![
+        (
+            CanonicalItem::Object(evidence.scope.clone()),
+            CanonicalOutcome::DeadlineExpired,
+        ),
+        (
+            CanonicalItem::ScopeCancellation(evidence.scope.clone()),
+            CanonicalOutcome::Scalar(
+                s.scopes[scope as usize]
+                    .as_ref()
+                    .unwrap()
+                    .canceled
+                    .cause()
+                    .map_or(0, |cause| cause + 1)
+                    .to_le_bytes()
+                    .to_vec(),
+            ),
+        ),
+    ];
+    events.extend(cancellations);
+    let boundary = Boundary {
+        task: evidence.path.clone(),
+        ordinal: evidence.ordinal,
+        op: None,
+        transition: Transition::Keep,
+        retirement,
+        before,
+        credit: 0,
+        native_outcome: None,
+    };
+    log.subevents(&boundary, "task.scope_enter", events);
 }
 
 /// First outer entry mints the gate's creator identity at retirement. Native
@@ -525,6 +755,7 @@ impl Log {
             && self.awaiting.is_empty()
             && self.receiving.is_empty()
             && self.gate_waiting.is_empty()
+            && self.arming.is_empty()
         {
             Ok(&self.canonical)
         } else {
@@ -2249,6 +2480,17 @@ pub(super) fn record(
                 unreachable!()
             };
             let log = driver.events.as_ref()?;
+            if log.last_ops.get(&path) == Some(&"task.scope_enter") {
+                let ordinal = log.ordinals.get(&path)?.checked_sub(1)?;
+                let deadline = log
+                    .deadlines
+                    .values()
+                    .find(|deadline| deadline.path == path && deadline.ordinal == ordinal)?;
+                return Some(vec![(
+                    CanonicalItem::Object(deadline.scope.clone()),
+                    CanonicalOutcome::Unit,
+                )]);
+            }
             if log.last_ops.get(&path) == Some(&"task.await_any") {
                 return await_any_subevents(log, &path, false);
             }

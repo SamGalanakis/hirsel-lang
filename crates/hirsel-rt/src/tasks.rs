@@ -1580,7 +1580,7 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     let ready = unsafe { crate::host_waits::ready(ctx) }?;
     // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
     for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
-        scheduler(ctx).expire(scope);
+        ordered::events::expire(scheduler(ctx), scope);
     }
     for task in unsafe { crate::host_waits::woken(ctx, &ready) } {
         scheduler(ctx).wake(task);

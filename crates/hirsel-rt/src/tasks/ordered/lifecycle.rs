@@ -105,24 +105,35 @@ pub(crate) unsafe fn scope_enter_until(
     deadline: *const [u64; 2],
 ) -> Stopped<u8> {
     let [clock, at] = unsafe { deadline.read() };
-    let ((index, generation), progress) = engine::head_effect(ctx, "task.scope_enter", || {
-        (
-            open_scope(
-                ctx,
-                Some(ScopeDeadline {
-                    token: None,
-                    expired: false,
-                }),
-            ),
-            Next::Keep,
-        )
-    })?;
+    let ((index, generation), progress) = engine::head_canonical(
+        ctx,
+        "task.scope_enter",
+        || {
+            (
+                open_scope(
+                    ctx,
+                    Some(ScopeDeadline {
+                        token: None,
+                        expired: false,
+                    }),
+                ),
+                Next::Keep,
+            )
+        },
+        |&(index, generation)| {
+            super::events::deadline_scope(ctx, handle(index, generation), clock, at)
+        },
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     // No Frontier/Scheduler borrow spans this home bridge. The row remains
     // owned by this head and cannot be observed by a retirement poll yet.
-    match unsafe { crate::host_waits::arm(ctx, index, clock, at) }? {
-        Some(token) => scheduler(ctx).scope(index).deadline.as_mut().unwrap().token = Some(token),
-        None => scheduler(ctx).expire(index),
+    let token = unsafe { crate::host_waits::arm(ctx, index, clock, at) }?;
+    if let Some(token) = token {
+        scheduler(ctx).scope(index).deadline.as_mut().unwrap().token = Some(token);
+    }
+    super::events::deadline_armed(ctx, index, token.is_some());
+    if token.is_none() {
+        super::events::expire(scheduler(ctx), index);
     }
     let word = handle(index, generation);
     engine::driver(ctx).objects.inert(Kind::Scope, word);
