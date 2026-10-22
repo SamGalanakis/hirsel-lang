@@ -205,6 +205,16 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
         .map(|(key, _)| *key)
         .collect();
     affected.extend(&newly_created);
+    // A changed definition may attempt a query that fails without retaining
+    // a memo (for example Lower after a signature edit makes its body invalid).
+    // That physical work still belongs to the changed definition's affected
+    // set, even though neither retained snapshot can inventory the record.
+    affected.extend(
+        touched_memos
+            .iter()
+            .filter(|memo| changed.contains(&memo.def))
+            .copied(),
+    );
     report.add(
         format!("{} [reference observations]", scenario.name),
         if missing.is_empty() {
