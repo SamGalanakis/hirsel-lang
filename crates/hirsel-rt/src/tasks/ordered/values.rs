@@ -25,6 +25,101 @@ pub(super) enum Tag {
     NonNull { offset: usize, nullary: u32 },
 }
 
+impl Tag {
+    /// # Safety
+    /// The validated tag bytes of the live value at `at` are initialized.
+    unsafe fn ordinal(&self, at: *const u8) -> u32 {
+        unsafe {
+            match self {
+                Self::Ordinal { offset } => at.add(*offset).cast::<u32>().read_unaligned(),
+                Self::NonNull { offset, nullary } => {
+                    if at.add(*offset).cast::<u64>().read_unaligned() == 0 {
+                        *nullary
+                    } else {
+                        1 - nullary
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Same live-count/capacity layout as alloc::allocate_sequence. Only the
+/// initialized prefix is read; spare element storage remains untouched.
+unsafe fn sequence_count(
+    at: *const u8,
+    capacity: usize,
+    minimum: usize,
+    offset: usize,
+    stride: usize,
+    budget: usize,
+) -> Result<usize, Error> {
+    if capacity < minimum {
+        return Err(Error::Value);
+    }
+    let count =
+        usize::try_from(unsafe { at.cast::<u64>().read_unaligned() }).map_err(|_| Error::Value)?;
+    let reserved = usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
+        .map_err(|_| Error::Value)?;
+    if count > budget {
+        return Err(Error::Limit);
+    }
+    let end = count
+        .checked_mul(stride)
+        .and_then(|bytes| offset.checked_add(bytes))
+        .ok_or(Error::Value)?;
+    let reserved_end = reserved
+        .checked_mul(stride)
+        .and_then(|bytes| offset.checked_add(bytes))
+        .ok_or(Error::Value)?;
+    if count > reserved || reserved_end > capacity || end > capacity || end > isize::MAX as usize {
+        return Err(Error::Value);
+    }
+    Ok(count)
+}
+
+struct EntryWalk<'a> {
+    descriptor: u32,
+    minimum: usize,
+    offset: usize,
+    stride: usize,
+    tag: &'a Tag,
+    fields: &'a [Field],
+}
+
+fn entry_walk(nodes: &[Node], root: usize) -> Result<EntryWalk<'_>, Error> {
+    let Some(Node::Indirect { node, descriptor }) = nodes.get(root) else {
+        return Err(Error::Program);
+    };
+    let Some(Node::Sequence {
+        minimum,
+        offset,
+        stride,
+        node,
+    }) = nodes.get(*node)
+    else {
+        return Err(Error::Program);
+    };
+    let Some(Node::Variant { tag, arms, .. }) = nodes.get(*node) else {
+        return Err(Error::Program);
+    };
+    if arms.len() != 2 || !arms[0].is_empty() || arms[1].len() != 1 {
+        return Err(Error::Program);
+    }
+    let pair = &arms[1][0];
+    if !matches!(nodes.get(pair.node), Some(Node::Fields { fields, .. }) if fields.len() == 2) {
+        return Err(Error::Program);
+    }
+    Ok(EntryWalk {
+        descriptor: *descriptor,
+        minimum: *minimum,
+        offset: *offset,
+        stride: *stride,
+        tag,
+        fields: &arms[1],
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Node {
     Bits(usize),
@@ -53,6 +148,11 @@ pub(super) enum Node {
     Slice {
         byte: usize,
     },
+    Entries {
+        extent: usize,
+        entries: Field,
+        live: Field,
+    },
     /// Missing metadata is never permission to inspect arbitrary bytes.
     Unsupported {
         extent: usize,
@@ -67,7 +167,8 @@ impl Node {
             Self::Slice { .. } => 24,
             Self::Handle(_) | Self::Path | Self::Indirect { .. } => 8,
             Self::Sequence { minimum, .. } => *minimum,
-            Self::Fields { extent, .. }
+            Self::Entries { extent, .. }
+            | Self::Fields { extent, .. }
             | Self::Variant { extent, .. }
             | Self::Unsupported { extent } => *extent,
         }
@@ -240,6 +341,11 @@ impl Program {
                     };
                     Node::Variant { extent, tag, arms }
                 }
+                VALUE_ENTRIES => Node::Entries {
+                    extent,
+                    entries: field(&[VALUE_FIELD, header[3], header[4], u64::MAX, 0, 0, 0, 0])?,
+                    live: field(&[VALUE_FIELD, header[5], header[6], u64::MAX, 0, 0, 0, 0])?,
+                },
                 VALUE_PATH if extent == 8 => Node::Path,
                 VALUE_HANDLE if extent == 8 => {
                     Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
@@ -335,6 +441,13 @@ impl Program {
                     {
                         return Err(Error::Program);
                     }
+                }
+                Node::Entries { entries, live, .. } => {
+                    check_fields(&[entries.clone(), live.clone()])?;
+                    if !matches!(nodes.get(live.node), Some(Node::Bits(8))) {
+                        return Err(Error::Program);
+                    }
+                    entry_walk(&nodes, entries.node)?;
                 }
                 Node::Fields { fields, .. } => check_fields(fields)?,
                 Node::Variant { tag, arms, .. } => {
@@ -451,6 +564,63 @@ impl Program {
                     }
                     continue;
                 }
+                Node::Entries { entries, live, .. } => {
+                    let shape = entry_walk(&self.nodes, entries.node)?;
+                    let owner = unsafe {
+                        at.add(entries.offset)
+                            .cast::<*const crate::Header>()
+                            .read_unaligned()
+                    };
+                    if owner.is_null() || unsafe { (*owner).index() } != shape.descriptor {
+                        return Err(Error::Value);
+                    }
+                    let capacity = usize::try_from(unsafe { (*owner).capacity() })
+                        .map_err(|_| Error::Value)?;
+                    let payload = unsafe { owner.add(1).cast::<u8>() };
+                    let count = unsafe {
+                        sequence_count(
+                            payload,
+                            capacity,
+                            shape.minimum,
+                            shape.offset,
+                            shape.stride,
+                            WORK_MAX.saturating_sub(visited + work.len()),
+                        )?
+                    };
+                    visited += count;
+                    let live = unsafe { at.add(live.offset).cast::<u64>().read_unaligned() };
+                    if live > count as u64 {
+                        return Err(Error::Value);
+                    }
+                    out.extend_from_slice(&live.to_le_bytes());
+                    let mut observed = 0u64;
+                    // Codec container walk, preserving insertion order for both
+                    // Map and Set (core-library); skip holes without payload reads.
+                    for i in (0..count).rev() {
+                        let entry = unsafe { payload.add(shape.offset + i * shape.stride) };
+                        match unsafe { shape.tag.ordinal(entry) } {
+                            0 => (),
+                            1 => {
+                                observed += 1;
+                                for field in shape.fields.iter().rev() {
+                                    work.push((
+                                        field.node,
+                                        unsafe { entry.add(field.offset) },
+                                        None,
+                                    ));
+                                }
+                            }
+                            _ => return Err(Error::Value),
+                        }
+                    }
+                    if live != observed {
+                        return Err(Error::Value);
+                    }
+                    if visited + work.len() > WORK_MAX {
+                        return Err(Error::Limit);
+                    }
+                    continue;
+                }
                 Node::Slice { .. } => {
                     // Same byte range as codec.rs::text_bytes; the physical
                     // owner and start never enter the canonical value.
@@ -526,31 +696,16 @@ impl Program {
                     node,
                 } => {
                     let capacity = capacity.ok_or(Error::Value)?;
-                    if capacity < *minimum {
-                        return Err(Error::Value);
-                    }
-                    let count = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
-                        .map_err(|_| Error::Value)?;
-                    let reserved = unsafe { at.add(8).cast::<u64>().read_unaligned() };
-                    if count > WORK_MAX.saturating_sub(visited + work.len()) {
-                        return Err(Error::Limit);
-                    }
-                    let end = count
-                        .checked_mul(*stride)
-                        .and_then(|bytes| offset.checked_add(bytes))
-                        .ok_or(Error::Value)?;
-                    let reserved_end = usize::try_from(reserved)
-                        .ok()
-                        .and_then(|count| count.checked_mul(*stride))
-                        .and_then(|bytes| offset.checked_add(bytes))
-                        .ok_or(Error::Value)?;
-                    if count as u64 > reserved
-                        || reserved_end > capacity
-                        || end > capacity
-                        || end > isize::MAX as usize
-                    {
-                        return Err(Error::Value);
-                    }
+                    let count = unsafe {
+                        sequence_count(
+                            at,
+                            capacity,
+                            *minimum,
+                            *offset,
+                            *stride,
+                            WORK_MAX.saturating_sub(visited + work.len()),
+                        )?
+                    };
                     out.extend_from_slice(&(count as u64).to_le_bytes());
                     for i in (0..count).rev() {
                         work.push((*node, unsafe { at.add(offset + i * stride) }, None));
@@ -559,20 +714,7 @@ impl Program {
                 }
                 Node::Fields { fields, .. } => fields,
                 Node::Variant { tag, arms, .. } => {
-                    let ordinal = unsafe {
-                        match tag {
-                            Tag::Ordinal { offset } => {
-                                at.add(*offset).cast::<u32>().read_unaligned()
-                            }
-                            Tag::NonNull { offset, nullary } => {
-                                if at.add(*offset).cast::<u64>().read_unaligned() == 0 {
-                                    *nullary
-                                } else {
-                                    1 - *nullary
-                                }
-                            }
-                        }
-                    };
+                    let ordinal = unsafe { tag.ordinal(at) };
                     let arm = arms.get(ordinal as usize).ok_or(Error::Value)?;
                     out.extend_from_slice(&ordinal.to_le_bytes());
                     arm
@@ -1997,6 +2139,580 @@ mod tests {
                                 let log =
                                     super::super::engine::driver(ctx).events.as_ref().unwrap();
                                 let rows = log.canonical().unwrap();
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Value {
+                                        status: 0,
+                                        payload: expected.clone()
+                                    }));
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Received {
+                                        status: crate::channels::DONE,
+                                        payload: Some(expected.clone())
+                                    }));
+                                *seen.lock().unwrap() = rows.to_vec();
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct ContainerShape {
+        root: hirsel_lir::LayoutId,
+        message: hirsel_lir::LayoutId,
+        payload: hirsel_lir::LayoutId,
+        entries: hirsel_lir::LayoutId,
+        metadata: hirsel_lir::LayoutId,
+        extent: u64,
+        entry_offset: usize,
+        stride: usize,
+        pair_offset: usize,
+        key_offset: usize,
+        value_offset: usize,
+        tag: Option<(usize, hirsel_lir::layout_types::TagForm)>,
+        sorted: bool,
+        set: bool,
+    }
+
+    fn container_layout(
+        target: &hirsel_lir::layout_types::TargetSpec,
+        family: u32,
+    ) -> (hirsel_lir::layout_types::LayoutTable, ContainerShape) {
+        use hirsel_layout::layout::{Container, LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{LayoutKind, SizeSpec};
+        use hirsel_syntax::{ContentHash, DefPath};
+        use hirsel_tir::RepresentationRecord;
+        use hirsel_types::{
+            BuiltinType, GenericArgument, GenericParameter, Primitive, testing::Types,
+        };
+        let (name, kind, container) = match family {
+            0 => ("Map", BuiltinType::Map, Container::Map),
+            1 => ("Set", BuiltinType::Set, Container::Set),
+            2 => ("SortedMap", BuiltinType::SortedMap, Container::SortedMap),
+            _ => unreachable!(),
+        };
+        let mut types = Types::default();
+        let key = types.param(0);
+        let value = if family == 1 {
+            types.unit()
+        } else {
+            types.param(1)
+        };
+        let pair = types.tuple(&[key, value]);
+        let entry = if family == 2 {
+            pair
+        } else {
+            types.variant(&[&[], &[pair]])
+        };
+        let entries = types.list(entry);
+        let word = types.p(Primitive::U64);
+        let metadata = types.list(word);
+        // Port the live owner shape in hirsel-rc/src/library/owners.rs:248-315.
+        let private_shape = if family == 2 {
+            types.record(&[entries])
+        } else {
+            types.record(&[entries, metadata, metadata, word])
+        };
+        let mut owners = Owners::default();
+        owners.containers.insert(
+            container,
+            RepresentationRecord {
+                definition: DefPath::core(name),
+                representation_revision: ContentHash::of_bytes(name.as_bytes()),
+                generics: (0..if family == 1 { 1 } else { 2 })
+                    .map(|i| GenericParameter::Type {
+                        name: format!("T{i}").into(),
+                        bounds: Vec::new().into(),
+                    })
+                    .collect(),
+                private_shape,
+                layout_promises: Default::default(),
+                resource: false,
+                finalizer: None,
+                unsafe_ffi_package: false,
+            },
+        );
+        let boolean = types.p(Primitive::Bool);
+        let value = types.record(&[boolean, word]);
+        let arguments = if family == 1 {
+            vec![GenericArgument::Type(word)]
+        } else {
+            vec![GenericArgument::Type(word), GenericArgument::Type(value)]
+        };
+        let root = types.builtin(kind, arguments);
+        let message = types.variant(&[&[], &[root]]);
+        let mut builder = LayoutBuilder::new(target, &owners);
+        let root = builder.layout(&types.store, root).unwrap();
+        let message = builder.layout(&types.store, message).unwrap();
+        let metadata = builder.layout(&types.store, metadata).unwrap();
+        let table = builder.finish();
+        hirsel_lir::layout_validate::validate_table(&table, target).unwrap();
+        let payload = |id: hirsel_lir::LayoutId| match table.layouts[id.0 as usize].kind {
+            LayoutKind::Block { payload } => payload,
+            _ => panic!("counted block"),
+        };
+        let payload_id = payload(root);
+        let container = &table.layouts[payload_id.0 as usize];
+        let entries = payload(container.fields[0].layout);
+        let LayoutKind::Sequence { element } = table.layouts[entries.0 as usize].kind else {
+            panic!("sequence")
+        };
+        let entry = &table.layouts[element.0 as usize];
+        let SizeSpec::Fixed(stride) = entry.size else {
+            panic!("fixed entry")
+        };
+        let (pair, pair_offset) = if family == 2 {
+            (element, 0)
+        } else {
+            let pair = &entry.tag.as_ref().unwrap().variants[1].fields[0];
+            (pair.layout, pair.offset as usize)
+        };
+        let pair = &table.layouts[pair.0 as usize];
+        let SizeSpec::Fixed(extent) = container.size else {
+            panic!("fixed container")
+        };
+        let shape = ContainerShape {
+            root,
+            message,
+            payload: payload_id,
+            entries,
+            metadata: payload(metadata),
+            extent,
+            entry_offset: hirsel_lir::layout::sequence_elements_offset(entry).unwrap() as usize,
+            stride: stride as usize,
+            pair_offset,
+            key_offset: pair.fields[0].offset as usize,
+            value_offset: pair.fields[1].offset as usize,
+            tag: entry
+                .tag
+                .as_ref()
+                .map(|tag| (tag.offset as usize, tag.form)),
+            sorted: family == 2,
+            set: family == 1,
+        };
+        (table, shape)
+    }
+
+    /// Write only the logical live data and the tags of holes. Other bytes may
+    /// be uninitialized, including pair payloads of None slots.
+    unsafe fn fill_container_entries(
+        owner: *mut crate::Header,
+        shape: ContainerShape,
+        holes: bool,
+    ) {
+        use hirsel_lir::layout_types::TagForm;
+        unsafe {
+            let count = if holes && !shape.sorted { 3 } else { 2 };
+            let at = crate::alloc::payload(owner);
+            at.cast::<u64>().write(count);
+            at.add(8).cast::<u64>().write(
+                ((*owner).capacity() as usize - shape.entry_offset) as u64 / shape.stride as u64,
+            );
+            for i in 0..count as usize {
+                let slot = at.add(shape.entry_offset + i * shape.stride);
+                let hole = holes && !shape.sorted && i == 1;
+                if let Some((offset, form)) = shape.tag {
+                    match form {
+                        TagForm::Ordinal => slot.add(offset).cast::<u32>().write(u32::from(!hole)),
+                        TagForm::Niche { .. } if hole => slot.add(offset).cast::<u64>().write(0),
+                        TagForm::Niche { .. } => (),
+                        _ => panic!("optional entry tag"),
+                    }
+                }
+                if !hole {
+                    let logical = usize::from(i != 0);
+                    let pair = slot.add(shape.pair_offset);
+                    pair.add(shape.key_offset)
+                        .cast::<u64>()
+                        .write(if (logical == 0) == shape.sorted { 3 } else { 9 });
+                    if !shape.set {
+                        pair.add(shape.value_offset).write(logical as u8);
+                        pair.add(shape.value_offset + 8)
+                            .cast::<u64>()
+                            .write(if logical == 0 { 42 } else { 99 });
+                    }
+                }
+            }
+        }
+    }
+
+    fn expected_container(shape: ContainerShape) -> Vec<u8> {
+        let mut bytes = 2u64.to_le_bytes().to_vec();
+        let keys = if shape.sorted { [3u64, 9] } else { [9u64, 3] };
+        for (i, key) in keys.into_iter().enumerate() {
+            bytes.extend_from_slice(&key.to_le_bytes());
+            if !shape.set {
+                bytes.push(i as u8);
+                bytes.extend_from_slice(&(if i == 0 { 42u64 } else { 99 }).to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn linked_container_values_skip_holes_hashes_indices_and_padding() {
+        use hirsel_lir::layout_types::TargetSpec;
+        for target in TargetSpec::executed() {
+            for family in 0..3 {
+                let (table, shape) = container_layout(&target, family);
+                let expected = expected_container(shape);
+                for rotation in [0, 1] {
+                    let count = table.layouts.len();
+                    let linked =
+                        |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                    let (_words, layouts) = native_layouts(&table, rotation);
+                    let mut pointers = vec![
+                        &crate::text::hirsel_rt_v2_bytes_descriptor.0 as *const crate::Layout,
+                        &crate::io::hirsel_rt_v2_file_walk_descriptor.0,
+                    ];
+                    pointers.extend((0..count).map(|id| {
+                        &layouts[(id + count - rotation) % count] as *const crate::Layout
+                    }));
+                    let program = unsafe {
+                        Program::from_layouts(linked(shape.root), pointers.len() as u32, |id| {
+                            pointers[id as usize]
+                        })
+                    }
+                    .unwrap();
+                    let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+                    let mut view = crate::alloc::View::new();
+                    unsafe { heap.bind(&mut view) };
+                    for holes in [false, true] {
+                        unsafe {
+                            let (root, _) = heap.allocate(linked(shape.payload), shape.extent, 8);
+                            let (entries, _) = heap.allocate(
+                                linked(shape.entries),
+                                (shape.entry_offset + 5 * shape.stride) as u64,
+                                8,
+                            );
+                            fill_container_entries(entries, shape, holes);
+                            let root_at = crate::alloc::payload(root);
+                            root_at.cast::<*mut crate::Header>().write(entries);
+                            let mut metadata = Vec::new();
+                            if !shape.sorted {
+                                // Private metadata words differ across representations.
+                                for (field, seed) in [
+                                    (1, if holes { 7 } else { 91 }),
+                                    (2, if holes { 13 } else { 67 }),
+                                ] {
+                                    let (block, _) = heap.allocate(linked(shape.metadata), 48, 8);
+                                    let at = crate::alloc::payload(block);
+                                    at.cast::<u64>().write(4);
+                                    at.add(8).cast::<u64>().write(4);
+                                    for i in 0..4 {
+                                        at.add(16 + i * 8).cast::<u64>().write(seed + i as u64);
+                                    }
+                                    root_at
+                                        .add(field * 8)
+                                        .cast::<*mut crate::Header>()
+                                        .write(block);
+                                    metadata.push(block);
+                                }
+                                root_at.add(24).cast::<u64>().write(2);
+                            }
+                            let observed = program
+                                .encode((&root as *const *mut crate::Header).cast(), |_, _| None)
+                                .unwrap();
+                            assert_eq!(observed, expected);
+                            for block in metadata {
+                                heap.free(block);
+                            }
+                            heap.free(entries);
+                            heap.free(root);
+                            assert_eq!(
+                                observed, expected,
+                                "owned bytes outlive every backing allocation"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn container_values_reject_inconsistent_live_counts_tags_and_bounds() {
+        use hirsel_lir::layout_types::{TagForm, TargetSpec};
+        let (table, shape) = container_layout(&TargetSpec::x86_64_unknown_linux_gnu(), 0);
+        let count = table.layouts.len();
+        let linked = |id: hirsel_lir::LayoutId| id.0 + 2;
+        let (_words, layouts) = native_layouts(&table, 0);
+        let program = unsafe {
+            Program::from_layouts(linked(shape.root), count as u32 + 2, |id| {
+                &layouts[id as usize - 2]
+            })
+        }
+        .unwrap();
+        let mut pointers = vec![&layouts[0] as *const crate::Layout; 2];
+        pointers.extend(layouts.iter().map(|layout| layout as *const crate::Layout));
+        let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+        let mut view = crate::alloc::View::new();
+        unsafe {
+            heap.bind(&mut view);
+            let (root, _) = heap.allocate(linked(shape.payload), shape.extent, 8);
+            let (entries, _) = heap.allocate(
+                linked(shape.entries),
+                (shape.entry_offset + 5 * shape.stride) as u64,
+                8,
+            );
+            let at = crate::alloc::payload(root);
+            at.cast::<*mut crate::Header>().write(entries);
+            fill_container_entries(entries, shape, true);
+            let encode =
+                || program.encode((&root as *const *mut crate::Header).cast(), |_, _| None);
+            for live in [0u64, 1, 3, u64::MAX] {
+                at.add(24).cast::<u64>().write(live);
+                assert_eq!(encode(), Err(Error::Value));
+            }
+            at.add(24).cast::<u64>().write(2);
+            let Some((offset, TagForm::Ordinal)) = shape.tag else {
+                panic!("integer optional entry has ordinal tag")
+            };
+            crate::alloc::payload(entries)
+                .add(shape.entry_offset + offset)
+                .cast::<u32>()
+                .write(7);
+            assert_eq!(encode(), Err(Error::Value));
+            fill_container_entries(entries, shape, true);
+            crate::alloc::payload(entries)
+                .cast::<u64>()
+                .write(WORK_MAX as u64 + 1);
+            assert_eq!(encode(), Err(Error::Limit));
+            fill_container_entries(entries, shape, true);
+            crate::alloc::payload(entries)
+                .add(8)
+                .cast::<u64>()
+                .write(u64::MAX);
+            assert_eq!(encode(), Err(Error::Value));
+            fill_container_entries(entries, shape, true);
+            let descriptor = (*entries).descriptor;
+            (*entries).descriptor = 0;
+            assert_eq!(encode(), Err(Error::Value));
+            (*entries).descriptor = descriptor;
+            at.cast::<*mut crate::Header>().write(std::ptr::null_mut());
+            assert_eq!(encode(), Err(Error::Value));
+            heap.free(entries);
+            heap.free(root);
+        }
+    }
+
+    #[test]
+    fn native_container_message_events_own_live_values_before_backing_release() {
+        use crate::tasks::*;
+        use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
+        use std::sync::{Arc, Mutex};
+        for family in 0..3 {
+            let (table, shape) = container_layout(&TargetSpec::x86_64_unknown_linux_gnu(), family);
+            let option = &table.layouts[shape.message.0 as usize];
+            let tag = option.tag.as_ref().unwrap();
+            let value_offset = tag.variants[1].fields[0].offset as usize;
+            let tag_offset = tag.offset as usize;
+            let explicit_tag = matches!(tag.form, TagForm::Ordinal);
+            let SizeSpec::Fixed(extent) = option.size else {
+                panic!("fixed map option")
+            };
+            let mut reference = None;
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let pointers: Vec<_> = (0..count)
+                    .map(|id| &layouts[(id + count - rotation) % count] as *const crate::Layout)
+                    .collect();
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = pointers.as_ptr();
+                        run.config.layout_count = pointers.len() as u32;
+                        unsafe { run.use_physical_dispatch() };
+                        let descriptor = linked(shape.message);
+                        let root_index = linked(shape.payload);
+                        let entry_index = linked(shape.entries);
+                        let metadata_index = linked(shape.metadata);
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy =
+                                    crate::ordered::Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                super::super::events::enable(ctx);
+                            },
+                            move |ctx| unsafe {
+                                let mut endpoints = [0u64; 2];
+                                let none = vec![0u64; extent.div_ceil(8) as usize];
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_open(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        endpoints.as_mut_ptr(),
+                                        &0,
+                                        none.as_ptr().cast(),
+                                        descriptor
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let root = crate::alloc::hirsel_rt_v2_alloc(
+                                    ctx,
+                                    root_index,
+                                    shape.extent,
+                                    8,
+                                    crate::alloc::DOMAIN_HEAP,
+                                    0,
+                                );
+                                let entries = crate::alloc::hirsel_rt_v2_alloc(
+                                    ctx,
+                                    entry_index,
+                                    (shape.entry_offset + 5 * shape.stride) as u64,
+                                    8,
+                                    crate::alloc::DOMAIN_HEAP,
+                                    0,
+                                );
+                                fill_container_entries(entries, shape, width > 1);
+                                let at = crate::alloc::payload(root);
+                                at.cast::<*mut crate::Header>().write(entries);
+                                let mut metadata = Vec::new();
+                                if !shape.sorted {
+                                    for field in 1..3 {
+                                        let block = crate::alloc::allocate_sequence(
+                                            ctx,
+                                            metadata_index,
+                                            4,
+                                            8,
+                                            8,
+                                        );
+                                        for i in 0..4 {
+                                            crate::alloc::payload(block)
+                                                .add(16 + i * 8)
+                                                .cast::<u64>()
+                                                .write(width as u64 * 17 + i as u64 + field as u64);
+                                        }
+                                        at.add(field * 8).cast::<*mut crate::Header>().write(block);
+                                        metadata.push(block);
+                                    }
+                                    at.add(24).cast::<u64>().write(2);
+                                }
+                                let mut image = none.clone();
+                                if explicit_tag {
+                                    image
+                                        .as_mut_ptr()
+                                        .cast::<u8>()
+                                        .add(tag_offset)
+                                        .cast::<u32>()
+                                        .write(1);
+                                }
+                                image
+                                    .as_mut_ptr()
+                                    .cast::<u8>()
+                                    .add(value_offset)
+                                    .cast::<*mut crate::Header>()
+                                    .write(root);
+                                let mut status = u32::MAX;
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_send(
+                                        ctx,
+                                        &mut status,
+                                        &mut endpoints[0],
+                                        image.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                assert_eq!(image, none);
+                                let mut received = none.clone();
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_receive(
+                                        ctx,
+                                        0,
+                                        0,
+                                        &mut status,
+                                        &mut endpoints[1],
+                                        received.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                assert_eq!(
+                                    received
+                                        .as_ptr()
+                                        .cast::<u8>()
+                                        .add(value_offset)
+                                        .cast::<*mut crate::Header>()
+                                        .read(),
+                                    root
+                                );
+                                // The event must already own the original logical entry bytes.
+                                crate::alloc::payload(entries)
+                                    .add(shape.entry_offset + shape.pair_offset + shape.key_offset)
+                                    .cast::<u64>()
+                                    .write(1000);
+                                received.fill(0);
+                                for block in metadata {
+                                    assert_eq!(
+                                        crate::release::hirsel_rt_v2_release(
+                                            ctx,
+                                            block,
+                                            metadata_index,
+                                            std::ptr::null(),
+                                            0,
+                                            0
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                assert_eq!(
+                                    crate::release::hirsel_rt_v2_release(
+                                        ctx,
+                                        entries,
+                                        entry_index,
+                                        std::ptr::null(),
+                                        0,
+                                        0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    crate::release::hirsel_rt_v2_release(
+                                        ctx,
+                                        root,
+                                        root_index,
+                                        std::ptr::null(),
+                                        0,
+                                        0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[0], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[1], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                let _role = role::Guard::new(ctx);
+                                super::super::engine::at_head(ctx).unwrap();
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows = log.canonical().unwrap();
+                                let expected =
+                                    [1u32.to_le_bytes().as_slice(), &expected_container(shape)]
+                                        .concat();
                                 assert!(rows.iter().any(|row| row.outcome
                                     == super::super::events::CanonicalOutcome::Value {
                                         status: 0,

@@ -106,6 +106,34 @@ impl Program {
                     self.value_field(field, u64::MAX);
                 }
             }
+            LayoutKind::Opaque { owner }
+                if [
+                    hirsel_syntax::DefPath::core("Map"),
+                    hirsel_syntax::DefPath::core("Set"),
+                ]
+                .contains(owner)
+                    && record.fields.len() == 4
+                    && record
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .all(|(i, f)| f.ordinal as usize == i) =>
+            {
+                // The codec's core Map/Set representation: entries, index,
+                // cached hashes, live count. Only live entries are semantic.
+                self.words[at + 1] = VALUE_ENTRIES;
+                self.words[at + 3] = record.fields[0].offset;
+                self.reference(at + 4, record.fields[0].layout);
+                self.words[at + 5] = record.fields[3].offset;
+                self.reference(at + 6, record.fields[3].layout);
+            }
+            LayoutKind::Opaque { owner }
+                if *owner == hirsel_syntax::DefPath::core("SortedMap")
+                    && record.fields.len() == 1 =>
+            {
+                self.words[at + 1] = VALUE_FIELDS;
+                self.value_field(&record.fields[0], u64::MAX);
+            }
             LayoutKind::Inline { element, count } if *count <= 65_536 => {
                 let stride = if *count == 0 { 0 } else { size / count };
                 if stride.checked_mul(*count) != Some(size) {

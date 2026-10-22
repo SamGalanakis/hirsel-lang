@@ -47,3 +47,8 @@ pub const VALUE_SLICE: u64 = 8;
 
 /// Run-context Path (ABI 44); the value is its text, never the intern word.
 pub const VALUE_PATH: u64 = 9;
+
+/// Map/Set payload (ABI 46): live entries only, in insertion order. VALUE
+/// operands: kind, extent, entries-offset, linked entries-layout, live-offset,
+/// linked live-count layout, zero. Hash/index fields are not value metadata.
+pub const VALUE_ENTRIES: u64 = 10;
