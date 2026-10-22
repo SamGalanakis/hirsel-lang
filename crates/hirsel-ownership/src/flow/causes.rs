@@ -17,6 +17,16 @@ pub(super) struct Trace {
     moves: Vec<(usize, ExprId, usize)>,
     /// (binding, operation site, roots of the written value) for every write.
     writes: Vec<(usize, Span, Vec<usize>)>,
+    uniqueness: BTreeMap<(usize, usize), UniqueStep>,
+}
+#[derive(Default)]
+struct UniqueStep {
+    /// A restored/replaced/dead value cuts the backwards walk.
+    cut: bool,
+    /// A later possible share must not hide an earlier loss when the input
+    /// was already aliased (including at a loop's fixed point).
+    already_aliased: bool,
+    losses: Vec<(Span, String)>,
 }
 /// An explanation whose remaining sites need the trace.
 pub(super) struct Pending {
@@ -27,6 +37,8 @@ pub(super) struct Pending {
     pub moved: Option<(usize, usize)>,
     /// A local binding holding content installed from `root`: (binding, root).
     pub installed: Option<(usize, usize)>,
+    /// The storage and failed node, for diagnostic-only uniqueness tracing.
+    pub uniqueness: Option<(usize, usize)>,
 }
 impl From<Explanation> for Pending {
     fn from(explanation: Explanation) -> Self {
@@ -35,6 +47,7 @@ impl From<Explanation> for Pending {
             temporary: None,
             moved: None,
             installed: None,
+            uniqueness: None,
         }
     }
 }
@@ -49,6 +62,273 @@ pub(super) struct Provenance {
 }
 
 impl Checker<'_, '_> {
+    /// Inspect a transfer only in a failed graph's replay. These are candidate
+    /// losses, not new flow facts: loop inputs may already be aliased.
+    fn uniqueness_step(
+        &self,
+        binding: usize,
+        op: &Op,
+        before: &State,
+        after: &State,
+    ) -> UniqueStep {
+        let (name, _) = self.binding_site(binding);
+        let old = &before.slots[binding].value;
+        let new = &after.slots[binding].value;
+        let mut step = UniqueStep {
+            cut: before.slots[binding].available != LIVE
+                || after.slots[binding].available != LIVE
+                || new.modes.uniqueness == Uniqueness::Unique,
+            already_aliased: old.modes.uniqueness != Uniqueness::Unique,
+            ..UniqueStep::default()
+        };
+        if step.cut {
+            return step;
+        }
+        match op {
+            Op::Use { expression, .. } => {
+                if let Some(source) = place(self.body, *expression, self.source_rows) {
+                    let mut owners = BTreeSet::from([source.binding]);
+                    let mut next = before.slots[source.binding].value.element_owner();
+                    while let Some(owner) = next.filter(|owner| owners.insert(*owner)) {
+                        next = before.slots[owner].value.element_owner();
+                    }
+                    if owners.contains(&binding)
+                        && self.value(after, *expression).usage == UseKind::Copy
+                        && self
+                            .property(*expression)
+                            .is_some_and(|p| !p.plain && !p.flat && !p.shared)
+                    {
+                        let span = self
+                            .tree
+                            .expressions
+                            .iter()
+                            .find_map(|e| match e.kind {
+                                ExprKind::Unary {
+                                    op: UnaryOp::Copy,
+                                    value,
+                                } if value == *expression => Some(e.origin.span),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| self.span_of(*expression));
+                        let part = self.spelled(*expression).unwrap_or_else(|| name.clone());
+                        step.losses.push((
+                            span,
+                            format!(
+                                "copying `{part}` shares counted storage reachable from `{name}`"
+                            ),
+                        ));
+                    }
+                }
+            }
+            Op::Call {
+                expression,
+                callee,
+                arguments,
+                requirements,
+                ..
+            } => {
+                let result = self.value(after, *expression);
+                if self
+                    .property(*expression)
+                    .is_some_and(|p| !p.plain && !p.flat && !p.shared)
+                    && result
+                        .content
+                        .summary()
+                        .bindings(Kind::Read)
+                        .any(|root| root == binding)
+                {
+                    step.losses.push((self.span_of(*expression), format!("the counted result of this call may share `{name}` while the result or a derived value lives")));
+                }
+                for (argument, requirement) in arguments.iter().zip(requirements) {
+                    let Some(requirement) = requirement else {
+                        continue;
+                    };
+                    if requirement.passing != PassingMode::Mut
+                        || requirement.modes.uniqueness == Uniqueness::Unique
+                        || self.callee_preserves_state(*callee, requirement.parameter, false)
+                        || !place(self.body, argument.value, self.source_rows).is_some_and(|p| {
+                            p.binding == binding
+                                && (p.projections.is_empty()
+                                    || !self
+                                        .property(argument.value)
+                                        .is_some_and(|p| p.plain || p.shared))
+                        })
+                    {
+                        continue;
+                    }
+                    if !self.callee_preserves_unique(*callee, requirement.parameter) {
+                        let part = self.spelled(argument.value).unwrap_or_else(|| name.clone());
+                        step.losses.push((self.span_of(*expression), format!("this plain `mut` handback through `{part}` may install counted shares in `{name}`")));
+                    } else {
+                        for (input, row) in arguments.iter().zip(requirements) {
+                            let Some(row) = row else { continue };
+                            let ledger = self
+                                .callee_definition(*callee)
+                                .is_some_and(|path| path.package_is("core", "1"));
+                            let supplier = match row.passing {
+                                PassingMode::Take => true,
+                                PassingMode::Mut => ledger,
+                                PassingMode::Borrow => {
+                                    ledger && !self.callee_unretained(*callee, row.parameter)
+                                }
+                            };
+                            if !supplier
+                                || input.value == argument.value
+                                || self
+                                    .property(input.value)
+                                    .is_some_and(|p| p.plain || p.handle_root)
+                                || self.entry_value(before, input.value).modes.uniqueness
+                                    == Uniqueness::Unique
+                            {
+                                continue;
+                            }
+                            // Name the written parameter rather than guessing a
+                            // Map key/value position from a function's spelling.
+                            let parameter = self
+                                .ty(*callee)
+                                .and_then(|t| self.t.get(t))
+                                .and_then(|t| match &t.kind {
+                                    TypeKind::Function(f) => {
+                                        f.parameters.get(row.parameter).and_then(|p| p.name.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| format!("argument {}", row.parameter + 1));
+                            let source = self.aliased_source(before, input.value);
+                            let site = if matches!(
+                                self.tree.expressions[input.value.0 as usize].kind,
+                                ExprKind::Unary {
+                                    op: UnaryOp::Copy | UnaryOp::Take,
+                                    ..
+                                }
+                            ) {
+                                input.value
+                            } else {
+                                source
+                            };
+                            step.losses.push((self.span_of(site), format!("the `{parameter}` input may share counted storage; this call therefore does not hand `{name}` back deeply unique")));
+                        }
+                    }
+                }
+            }
+            Op::Write {
+                place: target,
+                value,
+                operation,
+                ..
+            } => {
+                if let Some(target) =
+                    place(self.body, *target, self.source_rows).filter(|p| p.binding == binding)
+                {
+                    if !target.projections.is_empty() && old.modes.uniqueness == Uniqueness::Unique
+                    {
+                        step.losses.push((
+                            self.span_of(*value),
+                            format!(
+                                "this stored part may share counted storage reachable from `{name}`"
+                            ),
+                        ));
+                    } else if target.projections.is_empty() {
+                        // A replacement starts a new value's history. An
+                        // unproved RHS is not evidence against its initializer.
+                        step.cut = true;
+                        step.losses.push((
+                            *operation,
+                            format!("this replacement does not prove `{name}` deeply unique"),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        step
+    }
+
+    fn reachable(&self, from: usize, target: usize) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut pending = self.graph.nodes[from].next.clone();
+        while let Some(node) = pending.pop() {
+            if node == target {
+                return true;
+            }
+            if seen.insert(node) {
+                pending.extend(&self.graph.nodes[node].next);
+            }
+        }
+        false
+    }
+
+    /// Walk only aliased predecessors of the failed input, stopping at a
+    /// restoration or replacement. Multiple paths remain explicitly possible.
+    fn uniqueness_causes(&self, trace: &Trace, binding: usize, target: usize) -> Vec<Fact<Cause>> {
+        let (name, span) = self.binding_site(binding);
+        let mut predecessors = vec![vec![]; self.graph.nodes.len()];
+        for (id, node) in self.graph.nodes.iter().enumerate() {
+            for &next in &node.next {
+                predecessors[next].push(id);
+            }
+        }
+        let mut pending = predecessors[target].clone();
+        let mut seen = BTreeSet::new();
+        let mut losses = vec![];
+        let mut looped = false;
+        let mut uncertain = false;
+        let mut joined = false;
+        while let Some(node) = pending.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            let Some(step) = trace.uniqueness.get(&(binding, node)) else {
+                continue;
+            };
+            joined |= predecessors[node].len() > 1;
+            if !step.losses.is_empty() {
+                looped |= self.reachable(target, node);
+                uncertain |= step.already_aliased;
+                losses.extend(step.losses.iter().cloned());
+                if !step.already_aliased {
+                    continue;
+                }
+            }
+            if !step.cut {
+                pending.extend(&predecessors[node]);
+            }
+        }
+        losses.sort_by_key(|(span, description)| (span.start, span.end, description.clone()));
+        losses.dedup();
+        let merged = looped || uncertain || losses.len() > 1 || losses.is_empty() && joined;
+        let mut facts: Vec<_> = losses
+            .into_iter()
+            .map(|(span, description)| {
+                Fact::new(Cause::UniquenessLoss, span, &[&name, &description])
+            })
+            .collect();
+        if merged {
+            let description = if looped {
+                format!(
+                    "`{name}` reaches this merge with possible sharing from a previous iteration; the initializer alone does not establish uniqueness here"
+                )
+            } else if joined {
+                format!(
+                    "control-flow paths merge without one proved loss operation for `{name}`; its current value is not proved deeply unique"
+                )
+            } else {
+                format!(
+                    "the incoming value of `{name}` was already not proved unique; these later possible shares do not establish one original loss operation"
+                )
+            };
+            facts.push(Fact::new(
+                Cause::UniquenessMerge,
+                self.graph.nodes[target].span,
+                &[&name, &description],
+            ));
+        }
+        if facts.is_empty() {
+            facts.push(Fact::new(Cause::Aliased, span, &[&name]));
+        }
+        facts
+    }
+
     pub(super) fn span_of(&self, expression: ExprId) -> Span {
         self.tree.expressions[expression.0 as usize].origin.span
     }
@@ -282,6 +562,7 @@ impl Checker<'_, '_> {
             temporary: provenance.temporary,
             moved: None,
             installed: provenance.installed,
+            uniqueness: None,
         }
     }
     /// A temporary result of a closure literal call, read without the closure
@@ -451,7 +732,7 @@ impl Checker<'_, '_> {
     fn needs_trace(&self) -> bool {
         self.explanations
             .iter()
-            .any(|(_, p)| p.moved.is_some() || p.installed.is_some())
+            .any(|(_, p)| p.moved.is_some() || p.installed.is_some() || p.uniqueness.is_some())
     }
     /// Recover trace sites for this graph's explanations, then render them.
     pub(super) fn explain(&mut self, initial: State, live: &LiveSets) {
@@ -460,6 +741,10 @@ impl Checker<'_, '_> {
         }
         if self.needs_trace() {
             let explanations = std::mem::take(&mut self.explanations);
+            let bindings: BTreeSet<_> = explanations
+                .iter()
+                .filter_map(|(_, p)| p.uniqueness.map(|(b, _)| b))
+                .collect();
             self.emit = false;
             let inputs = solve(self, initial, live);
             self.trace = Some(Trace::default());
@@ -467,7 +752,19 @@ impl Checker<'_, '_> {
                 if let Some(mut input) = input {
                     self.node = id;
                     let graph = self.graph;
+                    let before = (!bindings.is_empty()).then(|| input.clone());
                     self.transfer(&graph.nodes[id].op, &mut input);
+                    if let Some(before) = before {
+                        for &binding in &bindings {
+                            let step =
+                                self.uniqueness_step(binding, &graph.nodes[id].op, &before, &input);
+                            self.trace
+                                .as_mut()
+                                .unwrap()
+                                .uniqueness
+                                .insert((binding, id), step);
+                        }
+                    }
                 }
             }
             self.explanations = explanations;
@@ -486,6 +783,9 @@ impl Checker<'_, '_> {
             })
             .collect();
         for (index, mut pending) in std::mem::take(&mut self.explanations) {
+            if let Some((binding, node)) = pending.uniqueness {
+                pending.explanation.provided = self.uniqueness_causes(&trace, binding, node);
+            }
             if let Some(site) = pending.temporary {
                 let fact = match site {
                     Site::Expression(e) => Fact::new(Cause::Temporary, self.span_of(e), &[]),

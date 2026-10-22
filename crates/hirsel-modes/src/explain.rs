@@ -105,6 +105,8 @@ pub enum Cause {
     LastUse,
     BlockBinding,
     Sendable,
+    UniquenessLoss,
+    UniquenessMerge,
 }
 impl Cause {
     /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
@@ -125,7 +127,7 @@ impl Cause {
             Unbranded => "brand erased",
             IdentityEnded => "identity ended",
             Lent | ArgumentLoan | Iterated | MutLend => "loan on place",
-            Aliased => "share or copy that ended uniqueness",
+            Aliased | UniquenessLoss | UniquenessMerge => "share or copy that ended uniqueness",
             Placed | ScopedPlacement => "arena placement",
             Temporary => "temporary",
             Holds => "stored at a place",
@@ -242,6 +244,8 @@ impl Cause {
                 "`{0}` is not proved unique",
                 "`{0}` may share counted storage; its current contract does not prove uniqueness",
             ),
+            UniquenessLoss => ("`{0}` lost its deep uniqueness", "{1}"),
+            UniquenessMerge => ("`{0}` is not proved deeply unique on every path", "{1}"),
             Noncopyable => (
                 "`{0}` cannot be copied",
                 "`{0}` has a noncopyable type: it holds a resource, handle, once function or arena",
@@ -1314,9 +1318,11 @@ mod tests {
             LastUse,
             BlockBinding,
             Sendable,
+            UniquenessLoss,
+            UniquenessMerge,
         ];
         let seen: std::collections::BTreeSet<_> = kinds.iter().map(|kind| *kind as usize).collect();
-        assert_eq!(seen, (0..=Sendable as usize).collect());
+        assert_eq!(seen, (0..=UniquenessMerge as usize).collect());
         let (provided, _) = spec_table();
         for kind in kinds {
             assert!(

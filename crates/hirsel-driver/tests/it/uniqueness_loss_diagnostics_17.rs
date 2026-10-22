@@ -1,0 +1,371 @@
+//! MODE-2 explanations follow failed-flow facts; verdicts and primary sites stay fixed.
+use hirsel_driver::*;
+use hirsel_engine::*;
+
+const KEY: &str = r#"// λ counted key
+pub fn main() -> Result[(), ()] {
+  let key = f"word"
+  let mut counts: unique Map[String, u32] = map.empty()
+  map.insert(mut counts, copy key, 1)
+  std@1/map.update(mut counts, key, fn(mut n: unique u32) -> () uses {} { n += 1 })
+  Ok(())
+}
+"#;
+
+const LOOP: &str = r#"fn probe(take ops: List[u64]) {
+  let mut m: unique Map[u64,List[u64]] = map.empty()
+  for tag in ops {
+    if tag == 0 { map.insert(mut m, 0, [1]); let _ = map.get(m,0) }
+    else { let _ = map.remove(mut m,0) }
+    for (_,value) in m { let _ = unique value; break }
+  }
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+const BRANCH: &str = r#"fn probe(b: bool) {
+  let mut m: unique Map[String,u64] = map.empty()
+  let k = f"word"
+  if b { map.insert(mut m, copy k, 1) }
+  else { map.insert(mut m, copy k, 2) }
+  let _ = map.remove(mut m,k)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+const HANDBACK: &str = r#"fn edit(mut m: Map[u64,u64]) {}
+fn probe() {
+  let mut m: unique Map[u64,u64] = map.empty()
+  edit(mut m)
+  let _ = map.remove(mut m,0)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+const LOOKUP: &str = r#"fn probe() {
+  let mut m: unique Map[u64,List[u64]] = map.empty()
+  map.insert(mut m, 0, [1])
+  let saved = map.get(m,0)
+  map.remove(mut m,0)
+  let _ = saved
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+const LOOKUP_ENDED: &str = r#"fn probe() {
+  let mut m: unique Map[u64,List[u64]] = map.empty()
+  map.insert(mut m, 0, [1])
+  let saved = map.get(m,0)
+  let _ = saved
+  let _ = map.remove(mut m,0)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+const PLAIN: &str = r#"// λ counted key
+pub fn main() -> Result[(), ()] {
+  let key = 1u64
+  let mut counts: unique Map[u64, u32] = map.empty()
+  map.insert(mut counts, copy key, 1)
+  std@1/map.update(mut counts, key, fn(mut n: unique u32) -> () uses {} { n += 1 })
+  Ok(())
+}
+"#;
+
+const KEY_REPAIR: &str = r#"// λ counted key
+pub fn main() -> Result[(), ()] {
+  let key = f"word"
+  let mut counts: unique Map[String, u32] = map.empty()
+  map.insert(mut counts, unique copy key, 1)
+  std@1/map.update(mut counts, key, fn(mut n: unique u32) -> () uses {} { n += 1 })
+  Ok(())
+}
+"#;
+
+const HANDBACK_REPAIR: &str = r#"fn edit(mut m: Map[u64,u64]) {}
+fn probe() {
+  let mut m: unique Map[u64,u64] = map.empty()
+  edit(mut m)
+  m = unique m
+  let _ = map.remove(mut m,0)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }
+"#;
+
+fn checked(source: &str) -> CheckOutput {
+    let mut engine = crate::source_std::engine();
+    let file = engine.sources.add("loss.hir", source.into()).unwrap();
+    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    let warm = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|d| d.to_json(&output.sources))
+            .collect::<Vec<_>>(),
+        warm.diagnostics
+            .iter()
+            .map(|d| d.to_json(&warm.sources))
+            .collect::<Vec<_>>()
+    );
+    output
+}
+
+fn rejected(source: &str, rule: &str, primary: &str, causes: &[&str], message: &str) {
+    let output = checked(source);
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == hirsel_diag::Severity::Error)
+        .collect();
+    assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+    let d = errors[0];
+    eprintln!("{}", d.render_human(&output.sources));
+    assert_eq!(d.rule.as_str(), rule);
+    assert_eq!(output.sources.slice(d.primary), Some(primary));
+    let at = output.sources.resolve(d.primary);
+    let start = source.find(primary).unwrap();
+    assert_eq!(
+        (at.start as usize, at.end as usize),
+        (start, start + primary.len())
+    );
+    assert!(d.message.contains(message), "{d:?}");
+    assert!(!d.message.contains("map.empty()"));
+    assert!(d.fix.is_none());
+    for &cause in causes {
+        let labels: Vec<_> = d
+            .secondary
+            .iter()
+            .filter(|l| output.sources.slice(l.span) == Some(cause))
+            .collect();
+        assert!(
+            !labels.is_empty(),
+            "missing {cause}: {:?}",
+            d.to_json(&output.sources)
+        );
+        for label in labels {
+            let at = output.sources.resolve(label.span);
+            assert_eq!(&source[at.start as usize..at.end as usize], cause);
+            assert!(d.render_human(&output.sources).contains(&label.message));
+        }
+    }
+    assert!(
+        d.secondary
+            .iter()
+            .all(|l| output.sources.slice(l.span) != Some("map.empty()"))
+    );
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_copied_counted_inputs_and_plain_twins() {
+    with_compiler_stack(|| {
+        rejected(
+            KEY,
+            "MODE-2",
+            "std@1/map.update(mut counts, key, fn(mut n: unique u32) -> () uses {} { n += 1 })",
+            &["copy key"],
+            "lost its deep uniqueness",
+        );
+        let value = "fn probe() { let value: List[u64] = [1u64]; let mut m: unique Map[u64,List[u64]] = map.empty(); map.insert(mut m, 0, copy value); let _ = map.remove(mut m,0) }";
+        rejected(
+            value,
+            "MODE-2",
+            "map.remove(mut m,0)",
+            &["copy value"],
+            "lost its deep uniqueness",
+        );
+        for source in [KEY_REPAIR, PLAIN, LOOKUP_ENDED, HANDBACK_REPAIR] {
+            let output = checked(source);
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.severity != hirsel_diag::Severity::Error),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_loop_branch_and_handback() {
+    with_compiler_stack(|| {
+        rejected(
+            LOOP,
+            "MODE-2",
+            "map.remove(mut m,0)",
+            &["map.get(m,0)"],
+            "not proved deeply unique",
+        );
+        let output = checked(LOOP);
+        assert!(
+            output.diagnostics[0]
+                .secondary
+                .iter()
+                .any(|l| l.message.contains("previous iteration"))
+        );
+        rejected(
+            BRANCH,
+            "MODE-2",
+            "map.remove(mut m,k)",
+            &["copy k"],
+            "not proved deeply unique",
+        );
+        let output = checked(BRANCH);
+        assert_eq!(
+            output.diagnostics[0]
+                .secondary
+                .iter()
+                .filter(|l| output.sources.slice(l.span) == Some("copy k"))
+                .count(),
+            2
+        );
+        rejected(
+            HANDBACK,
+            "MODE-2",
+            "map.remove(mut m,0)",
+            &["edit(mut m)"],
+            "lost its deep uniqueness",
+        );
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_existing_verdicts_and_fresh_replacements() {
+    with_compiler_stack(|| {
+        // A live lookup's exclusive-access diagnostic precedes MODE-2.
+        rejected(
+            LOOKUP,
+            "MODE-1",
+            "map.remove(mut m,0)",
+            &["saved"],
+            "borrowed",
+        );
+        let take = "type V2 { name: String }\nfn migrate(take config: V2) -> Result[unique V2, ()] { Ok(take config) }";
+        let output = checked(take);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        assert_eq!(output.diagnostics[0].rule.as_str(), "MODE-2");
+        assert_eq!(
+            output.sources.slice(output.diagnostics[0].primary),
+            Some("Ok(take config)")
+        );
+        let fresh = "fn edit(mut m: Map[u64,u64]) {}\nfn probe() { let mut m: unique Map[u64,u64] = map.empty(); edit(mut m); m = map.empty(); let _ = map.remove(mut m,0) }";
+        let prior = "fn probe() { let mut m: unique Map[u64,List[u64]] = map.empty(); map.insert(mut m, 0, [1]); let saved = copy m; let _ = map.get(m,0); let _ = map.remove(mut m,0); let _ = saved }";
+        rejected(
+            prior,
+            "MODE-2",
+            "map.remove(mut m,0)",
+            &["copy m", "map.get(m,0)"],
+            "not proved deeply unique",
+        );
+        let plain_part = "type State { n: u64, items: List[u64] }\nfn edit(mut n: u64) {}\nfn need(mut s: unique State) {}\nfn probe() { let mut s: unique State = State(n: 0, items: [1]); let saved = copy s; edit(mut s.n); need(mut s); let _ = saved }";
+        let output = checked(plain_part);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        let d = &output.diagnostics[0];
+        assert_eq!(d.rule.as_str(), "MODE-2");
+        assert_eq!(output.sources.slice(d.primary), Some("need(mut s)"));
+        assert!(
+            d.secondary
+                .iter()
+                .any(|l| output.sources.slice(l.span) == Some("copy s"))
+        );
+        assert!(
+            d.secondary
+                .iter()
+                .all(|l| output.sources.slice(l.span) != Some("edit(mut s.n)"))
+        );
+        let output = checked(fresh);
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != hirsel_diag::Severity::Error),
+            "{:?}",
+            output.diagnostics
+        );
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_checked_repairs_execute() {
+    with_compiler_stack(|| {
+        // One executable exercises both deep-copy repairs plus no-share plain
+        // keys. Each native backend builds once for the complete fixture.
+        let source = r#"
+pub fn main() -> Result[(), ()] {
+  let key = f"word"
+  let mut m: unique Map[String,u32] = map.empty()
+  map.insert(mut m, unique copy key, 1)
+  let changed = std@1/map.update(mut m, key, fn(mut n: unique u32) -> () uses {} { n += 1 })
+  if !changed || map.get(m,key) != Some(2) { return Error(()) }
+  let mut plain: unique Map[u64,u64] = map.empty()
+  map.insert(mut plain, 1, 7)
+  let saved = copy plain
+  plain = unique plain
+  if map.remove(mut plain,1) != Some(7) || map.get(saved,1) != Some(7) { return Error(()) }
+  Ok(())
+}
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.hir");
+        std::fs::write(&path, source).unwrap();
+        let mut program = load_program(&path).unwrap();
+        program.check_for_execution().unwrap();
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let execution =
+            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        let reference = native::Observation::of_reference(execution.observation.as_ref().unwrap());
+        assert_eq!(reference.exit_code, Some(0), "{reference:?}");
+        assert!(reference.failures.is_empty());
+        let input = program.engine.export_native_input().unwrap();
+        let validated = program.engine.import_native_input(input).unwrap();
+        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+        let configurations = vec![
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Heap { campaign: false },
+            },
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Native {
+                    opt: native::OptLevel::Speed,
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+            native::Configuration {
+                options,
+                engine: native::Engine::Cranelift {
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+        ];
+        let scratch = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("uniqueness-loss-diagnostics-17");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let toolchain =
+            native::Toolchain::for_matrix(&scratch.join("runtime"), &configurations).unwrap();
+        let outcomes = native::differential(
+            &validated,
+            &program.entry,
+            &reference,
+            &configurations,
+            &toolchain,
+            &scratch,
+        );
+        assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in outcomes {
+            assert!(
+                matches!(outcome, native::Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+        }
+    });
+}

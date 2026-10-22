@@ -4186,6 +4186,7 @@ impl Checker<'_, '_> {
                         temporary: ended.iter().map(|(_, site)| *site).min(),
                         moved: None,
                         installed: None,
+                        uniqueness: None,
                     }
                 },
             );
@@ -8148,11 +8149,14 @@ impl Checker<'_, '_> {
                 const { RuleId::of("MODE-2") },
                 primary,
                 "this operation requires a unique value",
-                |_| {
-                    Explanation::default()
+                |c| {
+                    let mut pending: causes::Pending = Explanation::default()
                         .provided(Fact::new(Cause::Aliased, provided, &[]))
                         .required(Fact::new(Requirement::Unique, context.span, &[]))
-                        .into()
+                        .into();
+                    pending.uniqueness = place(c.body, expression, c.source_rows)
+                        .map(|place| (place.binding, c.node));
+                    pending
                 },
             );
         } else if required.multiplicity == Multiplicity::Many

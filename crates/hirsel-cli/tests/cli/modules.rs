@@ -44,3 +44,4 @@ mod exit_code_16;
 mod paired_cursor_recipes_17;
 mod mutable_pattern_diagnostics_17;
 mod schema_hook_diagnostics_17;
+mod uniqueness_loss_diagnostics_17;

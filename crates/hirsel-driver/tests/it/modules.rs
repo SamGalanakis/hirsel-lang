@@ -96,3 +96,4 @@ mod mutable_pattern_diagnostics_17;
 mod arena_effect_charge_17;
 mod schema_hook_diagnostics_17;
 mod image_restore_17;
+mod uniqueness_loss_diagnostics_17;
