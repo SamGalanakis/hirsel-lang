@@ -276,6 +276,49 @@ fn a_forged_or_foreign_program_descriptor_assignment_is_rejected() {
     hirsel_llvm::emit_glue(&valid).unwrap();
 }
 
+/// Stale or forged keys must not let physically different descriptors share a cell.
+#[test]
+fn different_registry_layouts_cannot_share_an_index_cell() {
+    use hirsel_lir::{LayoutId, LayoutKeys, descriptor_registry::DescriptorRegistry};
+    let mut program = scalar_program(&x86());
+    let table = &mut program.table.table;
+    let original = LayoutId(0);
+    let duplicate = LayoutId(table.layouts.len() as u32);
+    table
+        .layouts
+        .push(table.layouts[original.0 as usize].clone());
+    let keys = LayoutKeys::new(table);
+    assert_eq!(keys.key(original), keys.key(duplicate));
+    // Keep the old key while replacing the row with another valid physical layout.
+    let different = table
+        .layouts
+        .iter()
+        .find(|r| r.size != table.layouts[0].size)
+        .unwrap()
+        .clone();
+    table.layouts[duplicate.0 as usize] = different;
+    table.layouts[duplicate.0 as usize].key.instance = Some(hash("forged distinct layout"));
+    let codes = failure_codes();
+    let glue = hirsel_lir::glue::UnitGlue::default();
+    let inputs = hirsel_lir::emission::GlueInputs {
+        target: &program.table.target,
+        layouts: table,
+        keys: &keys,
+        registry: DescriptorRegistry::new(table, &program.finalizers),
+        finalizers: &program.finalizers,
+        glue: &glue,
+        failures: &codes,
+        statics: &program.statics,
+        callbacks: &[],
+        foreign: &hirsel_lir::emission::NO_FOREIGN,
+        aliasing_unstated: false,
+    };
+    assert!(matches!(
+        hirsel_llvm::emit_glue(&inputs),
+        Err(CodegenError::Glue { what }) if what.contains("two registry layouts share the cell")
+    ));
+}
+
 /// A uniqueness query must stay a count read, including at O0: it must never
 /// acquire an opaque runtime call that clobbers surrounding sequence facts.
 #[test]
