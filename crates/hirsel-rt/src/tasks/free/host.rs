@@ -2,7 +2,7 @@
 //! not admit general host operations: logical handle mapping, adapter routing
 //! and completion replay must wrap it before production activation.
 use super::super::*;
-use crate::io::{Completion, Request};
+use crate::io::{AdapterError, Completion, Request};
 use crate::io_keys::{KeySet, Mode, Positions};
 use crate::tape_wire::Wire;
 use hirsel_free::claim::Claim;
@@ -14,7 +14,7 @@ pub(crate) struct Pending {
     request: Arc<hirsel_free::claim::Request<Request>>,
     path: Vec<u32>,
     entered: Progress,
-    completion: Option<Completion>,
+    completion: Option<Result<Completion, AdapterError>>,
     encoded: Vec<u8>,
     keys: KeySet,
     names: Vec<(u32, String)>,
@@ -107,6 +107,23 @@ pub(crate) unsafe fn invoke(
     ctx: *mut TaskCtx,
     call: impl FnOnce(&Request) -> Completion,
 ) -> Stopped<()> {
+    unsafe { invoke_result(ctx, |request| Ok(call(request))) }
+}
+
+/// # Safety
+/// As for invoke. The ConcurrentAdapter promises one bounded call; its owned
+/// request clone does not escape into a Hirsel frame or a suspended callback.
+pub(crate) unsafe fn invoke_concurrent(
+    ctx: *mut TaskCtx,
+    adapter: &dyn crate::io_concurrent::ConcurrentAdapter,
+) -> Stopped<()> {
+    unsafe { invoke_result(ctx, |request| adapter.call(request.clone())) }
+}
+
+unsafe fn invoke_result(
+    ctx: *mut TaskCtx,
+    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+) -> Stopped<()> {
     crate::stop::observe(ctx)?;
     let pending = unsafe { (*ctx).pending_host.as_deref().unwrap() } as *const Pending;
     assert_eq!(
@@ -137,7 +154,10 @@ pub(crate) unsafe fn invoke(
 pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
     let index = unsafe { (*pending).attempt };
-    super::record::publish(ctx, Phase::Ended(index), |_| unsafe {
+    super::record::publish(ctx, Phase::Ended(index), |writer| unsafe {
+        writer
+            .expect("a recorded host observation")
+            .observation(&(*pending).encoded);
         (*pending)
             .positions
             .take()
@@ -206,10 +226,26 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// The owner holds the role; its call returned and Ended was published.
 pub(crate) unsafe fn complete(ctx: *mut TaskCtx) -> Stopped<Completion> {
+    unsafe { complete_result(ctx) }?.map_err(Stop::refusal)
+}
+
+/// # Safety
+/// As for complete. A Blocked adapter result needs readiness and another
+/// attempt, so only a returned completion or terminal adapter error is Done.
+pub(crate) unsafe fn complete_result(
+    ctx: *mut TaskCtx,
+) -> Stopped<Result<Completion, AdapterError>> {
     let pending = unsafe { (*ctx).pending_host.as_deref().unwrap() } as *const Pending;
     assert!(
         unsafe { (*pending).positions.is_none() },
         "end positions before completion"
+    );
+    assert!(
+        !matches!(
+            unsafe { &(*pending).completion },
+            Some(Err(AdapterError::Blocked))
+        ),
+        "Blocked needs another bounded attempt"
     );
     super::record::publish(ctx, Phase::Done, |writer| unsafe {
         writer

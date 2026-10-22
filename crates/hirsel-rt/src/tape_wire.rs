@@ -268,6 +268,21 @@ macro_rules! wire_enum {
     (@decode $name:ident $input:ident) => { Wire::decode($input)? };
 }
 
+// Free host observations and final results retain adapter outcomes as data.
+// Tags are append-only; ordinary cooperative payloads are unchanged.
+wire_enum!(crate::io::AdapterError {
+    0 => InvalidHandle(v0),
+    1 => ReplayMismatch(v0),
+    2 => MissingInput(v0),
+    3 => UnconsumedInput(v0),
+    4 => InvalidCompletion,
+    5 => RecordingFailed(v0),
+    6 => Blocked,
+    7 => Unsupported(v0),
+    8 => Signaled(v0),
+    9 => Stopped
+});
+
 wire_enum!(crate::io::IoError {
     0 => Fault(v0),
     1 => Canceled(v0),
@@ -889,6 +904,33 @@ wire_struct!(crate::journal::Prepared {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn free_adapter_error_tags_roundtrip_and_reject_unknown_variants() {
+        use crate::io::AdapterError::*;
+        let errors = [
+            InvalidHandle(17),
+            ReplayMismatch(18),
+            MissingInput(19),
+            UnconsumedInput(20),
+            InvalidCompletion,
+            RecordingFailed("disk".into()),
+            Blocked,
+            Unsupported("provider".into()),
+            Signaled(hirsel_run_schema::SignalKind::Terminate),
+            Stopped,
+        ];
+        for (tag, error) in errors.into_iter().enumerate() {
+            let mut bytes = Vec::new();
+            error.encode(&mut bytes);
+            assert_eq!(&bytes[..4], &(tag as u32).to_le_bytes());
+            assert_eq!(decode::<crate::io::AdapterError>(&bytes).unwrap(), error);
+            bytes.push(0);
+            assert!(decode::<crate::io::AdapterError>(&bytes).is_err());
+        }
+        assert!(decode::<crate::io::AdapterError>(&10u32.to_le_bytes()).is_err());
+        assert!(decode::<crate::io::AdapterError>(&[6, 0, 0]).is_err());
+    }
+
     #[test]
     fn fixed_integer_vectors_and_bad_lengths() {
         // Bincode 1.3 fixed-int vectors: LE scalar, u64 byte-span count,

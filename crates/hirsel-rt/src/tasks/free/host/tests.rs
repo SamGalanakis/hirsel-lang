@@ -404,3 +404,237 @@ fn native_host_epochs_release_workers_and_end_before_readiness_attempts() {
         }
     }
 }
+
+struct ConcurrentHost {
+    home: std::thread::ThreadId,
+    recording: Arc<super::super::record::Recording>,
+    run: std::sync::atomic::AtomicPtr<crate::context::RunShared>,
+    calls: std::sync::atomic::AtomicU32,
+    stop_inside: bool,
+    retry: bool,
+    refuse: bool,
+}
+
+impl crate::io_concurrent::ConcurrentAdapter for ConcurrentHost {
+    fn keys(&self, _: &Request) -> KeySet {
+        KeySet::coupled()
+    }
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Ok(None)
+    }
+    fn call(&self, request: Request) -> Result<Completion, AdapterError> {
+        assert_ne!(
+            std::thread::current().id(),
+            self.home,
+            "direct adapter stays on compute"
+        );
+        let guard = unsafe { role::IdleGuard::try_new(self.run.load(Ordering::Acquire)) };
+        assert!(guard.is_some(), "bounded call retains no scheduler role");
+        drop(guard);
+        let Request::Print { stdout: 17, bytes } = request else {
+            panic!("typed request")
+        };
+        assert_eq!(bytes, vec![42; 4096]);
+        let call = self.calls.fetch_add(1, Ordering::AcqRel);
+        // The call can cut synchronously: there is no recorder section alive.
+        if self.stop_inside {
+            let (cut, sweep) = self
+                .recording
+                .recorder
+                .stop("stopped", None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Claimed));
+            assert_eq!(sweep.in_doubt, [1]);
+            assert!(sweep.withdrawn.is_empty());
+            assert_eq!(bytes[4095], 42, "cut retains the adapter's owned buffers");
+        } else {
+            // A claimed call may start after the terminal cut; a closed
+            // recorder correctly returns no further flush.
+            let _ = self.recording.recorder.flush().unwrap();
+        }
+        if self.retry && call == 0 {
+            Err(AdapterError::Blocked)
+        } else if self.refuse {
+            Err(AdapterError::Unsupported("native refusal".into()))
+        } else {
+            Ok(Completion::Unit(Ok(())))
+        }
+    }
+}
+
+#[test]
+fn native_concurrent_adapter_observations_retry_refusal_and_late_completion() {
+    use crate::io_concurrent::ConcurrentAdapter;
+    for width in [1, 8] {
+        for durable in [false, true] {
+            for kind in 0..7 {
+                let recording =
+                    super::super::record::Recording::new(b"concurrent host result", durable);
+                let install = recording.clone();
+                let adapter = Arc::new(ConcurrentHost {
+                    home: std::thread::current().id(),
+                    recording: recording.clone(),
+                    run: Default::default(),
+                    calls: 0.into(),
+                    stop_inside: kind == 3,
+                    retry: kind == 1,
+                    refuse: kind == 2,
+                });
+                let observed = adapter.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        observed.run.store((*ctx).run_ptr(), Ordering::Release);
+                        let request = Request::Print {
+                            stdout: 17,
+                            bytes: vec![42; 4096],
+                        };
+                        assert_eq!(observed.preflight(&request), Ok(None));
+                        let keys = observed.keys(&request);
+                        crate::stop::check(ctx, prepare_with_keys(ctx, request, keys));
+                        if kind == 4 {
+                            let (_, sweep) = observed
+                                .recording
+                                .recorder
+                                .stop("stopped", None)
+                                .unwrap()
+                                .unwrap();
+                            assert_eq!(sweep.withdrawn, [1]);
+                            assert!(sweep.in_doubt.is_empty());
+                            let claimed = claim(ctx);
+                            assert!(matches!(claimed, Err(Stop::Requested) | Ok(false)));
+                            crate::stop::check(ctx, Err::<(), _>(Stop::Requested));
+                            unreachable!();
+                        }
+                        assert!(crate::stop::check(ctx, claim(ctx)));
+                        if kind == 5 {
+                            let (_, sweep) = observed
+                                .recording
+                                .recorder
+                                .stop("stopped", None)
+                                .unwrap()
+                                .unwrap();
+                            assert_eq!(sweep.in_doubt, [1]);
+                            assert!(sweep.withdrawn.is_empty());
+                        }
+                        crate::stop::check(ctx, invoke_concurrent(ctx, &*observed));
+                        crate::stop::check(ctx, ended(ctx));
+                        if kind == 1 {
+                            assert_eq!(
+                                (*ctx).pending_host.as_ref().unwrap().completion,
+                                Some(Err(AdapterError::Blocked))
+                            );
+                            assert!((*ctx).pending_host.as_ref().unwrap().positions.is_none());
+                            crate::stop::check(ctx, attempt(ctx));
+                            crate::stop::check(ctx, invoke_concurrent(ctx, &*observed));
+                            crate::stop::check(ctx, ended(ctx));
+                        }
+                        if kind == 6 {
+                            let (_, sweep) = observed
+                                .recording
+                                .recorder
+                                .stop("stopped", None)
+                                .unwrap()
+                                .unwrap();
+                            assert_eq!(sweep.in_doubt, [1]);
+                            assert!(sweep.withdrawn.is_empty());
+                        }
+                        let result = crate::stop::check(ctx, complete_result(ctx));
+                        assert_eq!(
+                            result,
+                            if kind == 2 {
+                                Err(AdapterError::Unsupported("native refusal".into()))
+                            } else {
+                                Ok(Completion::Unit(Ok(())))
+                            }
+                        );
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(
+                    adapter.calls.load(Ordering::Acquire),
+                    if kind == 4 {
+                        0
+                    } else if kind == 1 {
+                        2
+                    } else {
+                        1
+                    }
+                );
+                if kind >= 3 {
+                    assert_eq!(outcome.ended, Err(Stop::Requested));
+                } else {
+                    assert_eq!(outcome.ended, Ok(STATUS_OK));
+                    recording.recorder.stop("returned", None).unwrap().unwrap();
+                }
+                drop(adapter);
+                let bytes = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink()
+                    .bytes;
+                let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+                let records = hirsel_free::record::decode(&parsed.logs[&Vec::new()]).unwrap();
+                let observations: Vec<Result<Completion, AdapterError>> = records
+                    .iter()
+                    .filter_map(|record| {
+                        if let hirsel_free::record::Record::Observation { bytes, .. } = record {
+                            Some(crate::tape_wire::decode(bytes).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let completed: Vec<Result<Completion, AdapterError>> = records
+                    .iter()
+                    .filter_map(|record| {
+                        if let hirsel_free::record::Record::Completion { bytes, .. } = record {
+                            Some(crate::tape_wire::decode(bytes).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if kind >= 3 {
+                    assert_eq!(observations.len(), usize::from(kind == 6));
+                    assert!(completed.is_empty());
+                    assert_eq!(
+                        parsed.cut[&Vec::new()],
+                        Progress::new(
+                            1,
+                            match kind {
+                                4 => Phase::Entered,
+                                6 => Phase::Ended(0),
+                                _ => Phase::Claimed,
+                            }
+                        )
+                    );
+                } else {
+                    let expected = if kind == 2 {
+                        Err(AdapterError::Unsupported("native refusal".into()))
+                    } else {
+                        Ok(Completion::Unit(Ok(())))
+                    };
+                    assert_eq!(completed, vec![expected.clone()]);
+                    assert_eq!(
+                        observations,
+                        if kind == 1 {
+                            vec![Err(AdapterError::Blocked), expected]
+                        } else {
+                            vec![expected]
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
