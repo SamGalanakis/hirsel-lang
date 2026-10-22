@@ -1763,6 +1763,7 @@ fn trailers(r: Request) -> List[Header]
 fn header(headers: List[Header], name: String) -> Option[String] uses {}
 fn decode_content(headers: List[Header], body: Bytes, limit: u64) -> Result[unique Bytes, HttpError] uses {}
 fn fetch(n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes]) -> Result[Response, HttpError]
+fn fetch_bounded(n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes], limit: u64) -> Result[Response, HttpError]
 ```
 
 `default_config()` is 3 redirects, no timeouts, 64 KiB of head, 100 headers, user agent
@@ -1799,6 +1800,21 @@ it drops the stream.
 - `fetch` is the one-shot form: method, URL, headers and an optional body, returning the
   whole response with a body limit of 10 MiB. With `status_as_error`, a final 4xx or 5xx
   status is `Status(code)`.
+- `fetch_bounded` is the same one-shot lifecycle with an explicit final `limit`.
+  Its raw body is bounded by the smaller of `limit` and `config.max_body_bytes`;
+  existing transport framing checks remain in force. When automatic decompression
+  applies, each decoded stage is bounded by `limit`, independently of the raw
+  bound. Exceeding either bound returns `BodyTooLarge()` without a partial
+  `Response`; zero admits only an empty body. Exact-limit bodies succeed after
+  checking completion (the reader probes one byte beyond the bound). Head,
+  framing, redirect and transport errors retain their existing timing; configured
+  status errors precede body reading and decoding. Every exit drops the one-shot
+  request and its connection. `fetch` retains its fixed 10 MiB read/decode limit,
+  and `client_fetch` retains its existing `max_body_bytes` policy.
+
+For example, `http.fetch_bounded(n, config, Get(), url, [], None(), 65536)`
+replaces `request` / `send_bodiless` / `receive_head` / `read_all(..., 65536)`
+when the caller wants the one-shot status and redirect policy.
 
 Content-Length and chunked framing are supported in both directions, with the rejections of
 `http_wire.framing`. No `accept-encoding` is sent unless `decompress` is set (below). **Redirects** happen only for bodiless
@@ -1889,10 +1905,12 @@ serialization errors are `Json(json.JsonError)`. Decoding does not require a res
 Content-Type and leaves the original response available through the borrowed argument.
 
 **Content codings** follow Go's Transport compression, as an explicit opt-in.
-With `decompress` true and no caller `accept-encoding` header, `fetch` and
-`client_fetch` send `accept-encoding: gzip, deflate` and pass a nonempty response
-body through `decode_content`, bounded by the same limit as the raw body (10 MiB
-for `fetch`, `max_body_bytes` for a client). The decoded `Response` omits
+With `decompress` true and no caller `accept-encoding` header, `fetch`,
+`fetch_bounded` and `client_fetch` send `accept-encoding: gzip, deflate` and pass a
+nonempty response body through `decode_content`. The decoded limit is 10 MiB for
+`fetch`, the explicit `limit` for `fetch_bounded`, and `max_body_bytes` for a client.
+`fetch_bounded` additionally bounds the raw body by `config.max_body_bytes`.
+The decoded `Response` omits
 `content-encoding` and `content-length`. A caller that sends its own
 `accept-encoding` receives the body as sent, and an empty body (HEAD, 204, 304,
 Content-Length 0) is returned unchanged. Decoding follows status handling, and a

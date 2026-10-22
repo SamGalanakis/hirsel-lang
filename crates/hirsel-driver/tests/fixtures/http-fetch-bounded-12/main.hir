@@ -1,0 +1,65 @@
+// Compact dogfood9-style bounded one-shot caller; existing app is unchanged.
+// Args: URL, limit, Config.max_body_bytes, decode mode, status policy, API.
+pub type AppError = Http(http.HttpError) | Arguments(ArgError) | Parse(
+  scalar.ParseError
+) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let url = arg.text(args, 0)?
+  let limit = u64.parse(arg.text(args, 1)?)?
+  let mut config = http.default_config()
+  config.max_body_bytes = u64.parse(arg.text(args, 2)?)?
+  let coding = arg.text(args, 3)?
+  config.decompress = coding != "off"
+  config.status_as_error = arg.text(args, 4)? == "error"
+  config.read_timeout = Some(duration.from_parts(0, 50000000))
+  let api = arg.text(args, 5)?
+  let n = io.net(rt)?
+  let output = io.stdout(rt)?
+  let headers: List[http.Header] = if coding == "caller" {
+    [http.Header(name: "Accept-Encoding", value: "gzip")]
+  } else {
+    []
+  }
+  let outcome = if api == "legacy" {
+    http.fetch(n, config, Get(), url, headers, None())
+  } else {
+    http.fetch_bounded(n, config, Get(), url, headers, None(), limit)
+  }
+  match take outcome {
+    Ok(response) => {
+      let size = bytes.len(response.body)
+      let text = if size <= 4097 {
+        hex.encode(response.body)
+      } else {
+        for byte in response.body {
+          failure.check(byte == 120, TextInvariant())
+        }
+        "all-x"
+      }
+      let encoded = if option.is_some(http.header(response.headers, "content-encoding")) {
+        "encoded"
+      } else {
+        "plain"
+      }
+      out.print(
+        output,
+        f"ok {response.status} {size} {text} {encoded} {response.url}\n"
+      )?
+    },
+    Error(BodyTooLarge()) => out.print(output, "BodyTooLarge\n")?,
+    Error(Status(code)) => out.print(output, f"Status {code}\n")?,
+    Error(Truncated()) => out.print(output, "Truncated\n")?,
+    Error(Chunk()) => out.print(output, "Chunk\n")?,
+    Error(Malformed(ContentLength())) => out.print(output, "ContentLength\n")?,
+    Error(UnsupportedContentEncoding()) => out.print(
+      output,
+      "UnsupportedContentEncoding\n"
+    )?,
+    Error(Decode(Checksum())) => out.print(output, "Checksum\n")?,
+    Error(Net(NotGranted())) => out.print(output, "NotGranted\n")?,
+    Error(Net(TimedOut())) => out.print(output, "TimedOut\n")?,
+    Error(error) => return Error(Http(take error)),
+  }
+  Ok(())
+}

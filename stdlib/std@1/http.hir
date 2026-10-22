@@ -1245,6 +1245,39 @@ pub fn fetch(
   headers: List[Header],
   body: Option[Bytes]
 ) -> Result[Response, HttpError] {
+  http_fetch(n, config, method, url, headers, body, 10485760, 10485760)
+}
+
+/// One-shot fetch with an explicit raw and decoded body limit. Config's
+/// max_body_bytes is an additional raw-body bound; decoding uses `limit`.
+/// A zero limit admits only an empty body. Status errors precede body reads.
+pub fn fetch_bounded(
+  n: Net,
+  config: Config,
+  method: Method,
+  url: String,
+  headers: List[Header],
+  body: Option[Bytes],
+  limit: u64
+) -> Result[Response, HttpError] {
+  let raw_limit = if config.max_body_bytes < limit {
+    config.max_body_bytes
+  } else {
+    limit
+  }
+  http_fetch(n, config, method, url, headers, body, raw_limit, limit)
+}
+
+fn http_fetch(
+  n: Net,
+  config: Config,
+  method: Method,
+  url: String,
+  headers: List[Header],
+  body: Option[Bytes],
+  raw_limit: u64,
+  decoded_limit: u64
+) -> Result[Response, HttpError] {
   let (sent, decoding) = http_offer_codings(config, headers)
   let mut r = request(n, config, method, url, sent)?
   match body {
@@ -1255,7 +1288,7 @@ pub fn fetch(
   if config.status_as_error && head.status >= 400 && head.status <= 599 {
     return Error(Status(head.status))
   }
-  let data = read_all(mut r, 10485760)?
+  let data = read_all(mut r, raw_limit)?
   let response = Response(
     status: head.status,
     headers: unique head.headers,
@@ -1263,7 +1296,7 @@ pub fn fetch(
     url: unique r.url
   )
   if decoding {
-    return http_decoded(take response, 10485760)
+    return http_decoded(take response, decoded_limit)
   }
   Ok(take response)
 }

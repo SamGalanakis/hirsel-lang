@@ -70,3 +70,4 @@ mod json_reader_11;
 mod cli_interspersed_11;
 mod file_read_bounded_11;
 mod list_filled_memset_12;
+mod http_fetch_bounded_12;

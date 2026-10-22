@@ -1,0 +1,127 @@
+fn peer(take response: Bytes) -> NetPeer {
+  NetPeer(
+    address: "example.com",
+    port: 80,
+    resolves_to: [],
+    tls: Plain(),
+    connections: [Open([Send(take response), Close()])]
+  )
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.read_timeout = Some(duration.from_parts(0, 1))
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(b"HTTP/1.1 200 OK\r\n\r\nab"), Stall()])]
+      )
+    ],
+    []
+  )
+  // At the exact limit a failed completion probe must retain the transport error.
+  test.check(
+    t,
+    http.fetch_bounded(n, config, Get(), "http://example.com", [], None(), 2) == Error(
+      Net(TimedOut())
+    )
+  )
+  let truncated = test.net(
+    t,
+    [peer(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nab")],
+    []
+  )
+  test.check(
+    t,
+    http.fetch_bounded(truncated, config, Get(), "http://example.com", [], None(), 2) == Error(
+      Truncated()
+    )
+  )
+  let malformed = test.net(
+    t,
+    [peer(b"HTTP/1.1 500 Error\r\nContent-Length: no\r\n\r\n")],
+    []
+  )
+  test.check(
+    t,
+    http.fetch_bounded(malformed, config, Get(), "http://example.com", [], None(), 0) == Error(
+      Malformed(ContentLength())
+    )
+  )
+  let n2 = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\ncontent-length: 3\r\n\r\n"
+              ),
+              Expect(b"req"),
+              Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let response = http.fetch_bounded(
+    n2,
+    config,
+    Post(),
+    "http://example.com",
+    [],
+    Some(b"req"),
+    18446744073709551615
+  )?
+  test.check(t, response.body == b"ok" && response.status == 200)
+  // Legacy read/decode policy is independent of a small Config raw-body value.
+  config.max_body_bytes = 0
+  let legacy = test.net(
+    t,
+    [peer(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")],
+    []
+  )
+  test.check(
+    t,
+    http.fetch(legacy, config, Get(), "http://example.com", [], None())?.body == b"ok"
+  )
+  let small = test.net(t, [peer(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")], [])
+  test.check(
+    t,
+    http.fetch_bounded(small, config, Get(), "http://example.com", [], None(), 100) == Error(
+      BodyTooLarge()
+    )
+  )
+  config.decompress = true
+  let head = test.net(
+    t,
+    [peer(b"HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 99\r\n\r\n")],
+    []
+  )
+  let empty = http.fetch_bounded(
+    head,
+    config,
+    Head(),
+    "http://example.com",
+    [],
+    None(),
+    0
+  )?
+  test.check(
+    t,
+    empty.body == b"" && http.header(empty.headers, "content-encoding") == Some("br")
+  )
+  Ok(())
+}
