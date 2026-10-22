@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "package": {"name": "native_verification_9", "version": "1"},
+  "entry": {"module": [], "name": "main"},
+  "sources": [{"path": "main.hir", "module": []}],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {"name": "std", "version": "1"},
+      "expose": []
+    }
+  ]
+}

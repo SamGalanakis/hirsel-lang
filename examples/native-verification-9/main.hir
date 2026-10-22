@@ -1,0 +1,18 @@
+pub type AppError = Usage | Arguments(ArgError) | Files(FileError) | Utf8 | Grant(
+  GrantError
+) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) != 1 {
+    return Error(Usage())
+  }
+  let label = arg.text(args, 0)?
+  let data = io.dir(rt, path.of("data"))?
+  let bytes = file.read_bytes(data, path.of("input.txt"))?
+  let text = match string.from_bytes(take bytes) {
+    Ok(s) => take s,
+    Error(_) => return Error(Utf8()),
+  }
+  out.print(io.stdout(rt)?, f"{label}:{text}")?
+  Ok(())
+}

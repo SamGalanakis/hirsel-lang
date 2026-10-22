@@ -989,6 +989,11 @@ def first_party(meta: dict) -> str:
                             args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-portable-manifest-integration/hirsel"],
                             bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, runtime_archives=RUNTIME_ARCHIVES,
                             data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
+    out.append("\n" + call("hirsel_script_test", name="test-native-verification-9", script="tools/tests/native_verification_9.py", full=False,
+                            args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-native-verification-9/hirsel"],
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
+                            runtime_archives=RUNTIME_ARCHIVES,
+                            data=Raw('glob(["tools/tests/native_verification_9.py", "docs/native-verification.md", "examples/native-verification-9/**", "stdlib/**"])')))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],
