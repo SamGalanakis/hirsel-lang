@@ -1,0 +1,121 @@
+// Adapted from serde_json src/value/mod.rs:259–264,779–800,
+// 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8 (MIT/Apache-2.0).
+// Split validated token decoding from repeated read-only traversal.
+
+/// Owned decoded RFC6901 reference tokens. No source-text borrow is retained.
+pub opaque type Pointer: copyable + inert + noalloc_drop uses {} {
+  tokens: List[String],
+}
+
+/// Zero-based UTF-8 byte offsets in the original pointer. InvalidEscape points
+/// at the tilde, including a trailing tilde. Fragment form is not accepted.
+pub type PointerError = MissingSlash(u64) | InvalidEscape(u64)
+
+/// Parses the string form (not a URI fragment). Decode each escape once:
+/// ~01 is the literal token ~1. Every token owns its UTF-8 bytes.
+pub fn parse(pointer: String) -> Result[Pointer, PointerError] uses {} {
+  let data = core@1/string.as_bytes(pointer)
+  let size = core@1/bytes.len(data)
+  let mut tokens: List[String] = []
+  if size == 0 {
+    return Ok(Pointer(tokens: take tokens))
+  }
+  if data[0] != 47 {
+    return Error(MissingSlash(0))
+  }
+  let mut pos: u64 = 1
+  while true {
+    let mut token: List[u8] = []
+    while pos < size && data[pos] != 47 {
+      let c = data[pos]
+      if c == 126 {
+        let at = pos
+        pos += 1
+        if pos == size || data[pos] != 48 && data[pos] != 49 {
+          return Error(InvalidEscape(at))
+        }
+        core@1/list.push(
+          mut token,
+          if data[pos] == 48 {
+            126u8
+          } else {
+            47u8
+          }
+        )
+      } else {
+        core@1/list.push(mut token, c)
+      }
+      pos += 1
+    }
+    // Replacing ASCII escape pairs preserves the input string's valid UTF-8.
+    let decoded = match std@1/text.finish(take token) {
+      Ok(s) => s,
+      Error(_) => {
+        core@1/failure.check(false, TextInvariant())
+        ""
+      },
+    }
+    core@1/list.push(mut tokens, take decoded)
+    if pos == size {
+      break
+    }
+    pos += 1
+  }
+  Ok(Pointer(tokens: take tokens))
+}
+
+// serde_json parse_index, with a target-independent checked u64 accumulator.
+// A token is an index only when it is 0 or [1-9][0-9]*. '-' never appends.
+@noalloc
+fn index(token: String) -> Option[u64] uses {} {
+  let data = core@1/string.as_bytes(token)
+  let size = core@1/bytes.len(data)
+  if size == 0 || size != 1 && data[0] == 48 {
+    return None()
+  }
+  let mut acc: u64 = 0
+  for c in data {
+    if c < 48 || c > 57 {
+      return None()
+    }
+    let digit: u64 = core@1/int.widen(c - 48)
+    if acc > (18446744073709551615u64 - digit) / 10 {
+      return None()
+    }
+    acc = acc * 10 + digit
+  }
+  Some(acc)
+}
+
+// Hirsel's local child freezes its source. Descend with borrowed parameters,
+// keeping ancestors live instead of rebinding a cursor to its own borrowed child.
+fn descend(value: json.Value, tokens: List[String], at: u64) -> Option[json.Value] in value uses {} {
+  if at == core@1/list.len(tokens) {
+    return Some(copy value)
+  }
+  match value {
+    Object(members) => {
+      let Some(child) = core@1/map.get(members, tokens[at]) else {
+        return None()
+      }
+      descend(child, tokens, at + 1)
+    },
+    Array(items) => {
+      let Some(index_at) = index(tokens[at]) else {
+        return None()
+      }
+      if index_at >= core@1/list.len(items) {
+        return None()
+      }
+      descend(items[index_at], tokens, at + 1)
+    },
+    _ => None(),
+  }
+}
+
+/// Borrows the selected value from value, never from pointer. Empty selects
+/// the complete value. Missing members, invalid/missing array indexes and
+/// scalar descent return None. No mutation or deep copy is performed.
+pub fn get(value: json.Value, pointer: Pointer) -> Option[json.Value] in value uses {} {
+  descend(value, pointer.tokens, 0)
+}

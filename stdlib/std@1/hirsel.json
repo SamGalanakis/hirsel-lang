@@ -1283,6 +1283,12 @@
       "module": [
         "toposort"
       ]
+    },
+    {
+      "path": "json_pointer.hir",
+      "module": [
+        "json_pointer"
+      ]
     }
   ],
   "dependencies": []

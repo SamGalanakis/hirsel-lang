@@ -1,0 +1,185 @@
+// RFC6901 object/pointers ported from serde_json tests/test.rs:1830–1864
+// 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8 (MIT/Apache-2.0).
+fn pointer(source: String) -> std@1/json_pointer.Pointer uses {} {
+  match std@1/json_pointer.parse(source) {
+    Ok(p) => p,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      pointer("")
+    },
+  }
+}
+
+fn selected_text(value: std@1/json.Value, path: String, expected: String) -> () uses {} {
+  let Some(child) = std@1/json_pointer.get(value, pointer(path)) else {
+    core@1/failure.check(false, TextInvariant())
+    return
+  }
+  match child {
+    Text(s) => core@1/failure.check(s == expected, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+fn selected_number(value: std@1/json.Value, path: String, expected: String) -> () uses {} {
+  match std@1/json_pointer.get(value, pointer(path)) {
+    Some(Number(n)) => core@1/failure.check(n == expected, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let Ok(value) = std@1/json.parse(
+    "{\"foo\": [\"bar\", \"baz\"], \"\": 0, \"a/b\": 1, \"c%d\": 2, \"e^f\": 3, \"g|h\": 4, \"i\\\\j\": 5, \"k\\\"l\": 6, \" \": 7, \"m~n\": 8, \"~1\": \"once\", \"é😀\": {\"é\": \"decomposed\"}, \"%2F\": \"percent\", \"nul\\u0000\": \"zero\", \"00\": \"object\", \"-\": \"dash\"}"
+  ) else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  selected_text(value, "/foo/0", "bar")
+  selected_text(value, "/foo/1", "baz")
+  selected_number(value, "/", "0")
+  selected_number(value, "/a~1b", "1")
+  selected_number(value, "/c%d", "2")
+  selected_number(value, "/e^f", "3")
+  selected_number(value, "/g|h", "4")
+  selected_number(value, "/i\\j", "5")
+  selected_number(value, "/k\"l", "6")
+  selected_number(value, "/ ", "7")
+  selected_number(value, "/m~0n", "8")
+  selected_text(value, "/~01", "once")
+  selected_text(value, "/é😀/é", "decomposed")
+  selected_text(value, "/%2F", "percent")
+  selected_text(value, "/nul\u{0}", "zero")
+  selected_text(value, "/00", "object")
+  selected_text(value, "/-", "dash")
+  let Some(root) = std@1/json_pointer.get(value, pointer("")) else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  match root {
+    Object(m) => core@1/failure.check(core@1/map.len(m) == 16, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  let Some(array) = std@1/json_pointer.get(value, pointer("/foo")) else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  match array {
+    Array(xs) => core@1/failure.check(core@1/list.len(xs) == 2, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/unknown")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/e^f/ertz")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/00")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/01")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/+1")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/-")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/-1")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/2")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/1.0")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/18446744073709551615")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/18446744073709551616")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/999999999999999999999999999999999")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/é😀/é")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("/foo/0/x")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.get(value, pointer("//x")) {
+    None() => (),
+    Some(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  // Independent nested agent configuration; exact numeric spelling is the oracle.
+  let Ok(config) = std@1/json.parse(
+    "{\"agents\":[{\"transport/http\":{\"retry~delay\":1.2300E+004}}]}"
+  ) else {
+    core@1/failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  selected_number(config, "/agents/0/transport~1http/retry~0delay", "1.2300E+004")
+  // Pointer outlives owned input, and a selection outlives the pointer itself.
+  let owned = {
+    let input = std@1/string.join(["/agents/0", "/transport~1http/retry~0delay"], "")
+    pointer(input)
+  }
+  let selected = {
+    let p = copy owned
+    std@1/json_pointer.get(config, p)
+  }
+  match selected {
+    Some(Number(n)) => core@1/failure.check(n == "1.2300E+004", TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("abc") {
+    Error(MissingSlash(at)) => core@1/failure.check(at == 0, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("#/foo") {
+    Error(MissingSlash(at)) => core@1/failure.check(at == 0, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("/~") {
+    Error(InvalidEscape(at)) => core@1/failure.check(at == 1, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("/a~2") {
+    Error(InvalidEscape(at)) => core@1/failure.check(at == 2, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("/é/~x") {
+    Error(InvalidEscape(at)) => core@1/failure.check(at == 4, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("/a/~0~") {
+    Error(InvalidEscape(at)) => core@1/failure.check(at == 5, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  match std@1/json_pointer.parse("/~/x") {
+    Error(InvalidEscape(at)) => core@1/failure.check(at == 1, TextInvariant()),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

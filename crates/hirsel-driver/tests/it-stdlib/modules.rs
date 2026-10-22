@@ -59,3 +59,4 @@ mod cidr_8;
 mod jaro_similarity_10;
 mod varint_7;
 mod toposort_8;
+mod json_pointer_8;
