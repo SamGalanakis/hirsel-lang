@@ -231,3 +231,39 @@ fn source_growth_refreshes_pending_roots_and_reuses_unrelated_components() {
         assert!(engine.generic_graph_diagnostics().unwrap().is_empty());
     });
 }
+
+#[test]
+fn front_store_retains_prior_actions_at_one_logical_address() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(Observed::default());
+            let source = "fn value()->u32{1u32}\nfn caller()->u32{value()}\n";
+            let (_, outputs) = publish(store.clone(), source, jobs);
+            assert!(outputs.iter().all(|o| o.result.is_ok()));
+            let count = store.inner.len();
+            assert_eq!(count, 4, "Modes and Summary are separate domains");
+            let changed = source.replace("{1u32}", "{2u32}");
+            let (edited, outputs) = publish(store.clone(), &changed, jobs);
+            assert!(outputs.iter().all(|o| o.result.is_ok()));
+            assert_eq!(
+                store.inner.len(),
+                count,
+                "body edits do not allocate new addresses"
+            );
+            let value = outputs
+                .iter()
+                .find(|o| o.definition.0.name == "value")
+                .unwrap();
+            assert!(edited.recompute_count(&value.definition, QueryKind::Modes) > 0);
+            store.writes.store(0, Ordering::Relaxed);
+            let (reverted, outputs) = publish(store.clone(), source, jobs);
+            assert!(outputs.iter().all(|o| o.result.is_ok()));
+            assert_eq!(reverted.store_adoptions(), 2);
+            assert_eq!(
+                store.writes.load(Ordering::Relaxed),
+                0,
+                "original action remains available"
+            );
+        }
+    });
+}

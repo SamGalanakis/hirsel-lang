@@ -27,6 +27,7 @@ mod expected_tests {
             observed.push(Arc::downgrade(&payload));
             let expected = Expected::capture(
                 Variant {
+                    inputs: ContentHash::default(),
                     reads: Reads::empty(),
                     payload: payload.into(),
                 },
@@ -517,13 +518,18 @@ impl EncodedWriter {
         }
         let mut entry = StoredEntry::load(&*self.store, &self.key);
         let mut variant = Variant {
+            inputs: self.key.1,
             reads: reads.clone(),
             payload: payload.into(),
         };
-        variant.bind_payload();
+        variant.bind_payload(&self.key);
         entry.insert(variant);
-        self.store
-            .put_query(self.kind, &self.key, &entry.encode_for(&self.key));
+        self.store.put_query(
+            self.kind,
+            &self.key,
+            entry.action(&self.key),
+            &entry.encode_for(&self.key),
+        );
         Ok(())
     }
 }
@@ -731,10 +737,14 @@ impl QueryEngine {
         let store = self.result_store.clone()?;
         let key = self.store_key(path, kind)?;
         let mut entry = StoredEntry::load(&*store, &key);
-        entry
-            .variants
-            .retain_mut(|variant| variant.unbind_payload().is_some());
-        let hit = entry.hit(|read| self.observe(path, read)).cloned();
+        entry.variants.retain(|variant| variant.inputs == key.1);
+        let hit = entry
+            .hit(|read| self.observe(path, read))
+            .cloned()
+            .and_then(|mut variant| {
+                variant.unbind_payload(&key)?;
+                Some(variant)
+            });
         if hit.is_none() {
             timings::count(Count::StoreMisses);
         }

@@ -145,6 +145,7 @@ mod tests {
             let weak = Arc::downgrade(&payload);
             let expected = Expected::capture(
                 Variant {
+                    inputs: hirsel_syntax::ContentHash::default(),
                     reads: Reads::empty(),
                     payload: payload.into(),
                 },
@@ -175,6 +176,7 @@ mod tests {
         let mut backing = Weak::new();
         let payload = vec![1; CHUNK + 1];
         let record = || Variant {
+            inputs: hirsel_syntax::ContentHash::default(),
             reads: Reads::empty(),
             payload: payload.clone().into(),
         };
@@ -208,6 +210,7 @@ mod tests {
         let mut backing = Weak::new();
         let expected = Expected::capture(
             Variant {
+                inputs: hirsel_syntax::ContentHash::default(),
                 reads: reads(1),
                 payload: b"body".as_slice().into(),
             },
