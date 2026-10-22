@@ -1,8 +1,5 @@
-type Status {
-  url: String,
-}
-
-pub fn main(t: Test) {
-  let tasks = test.tasks(t)
-  let (tx, rx): (Sender[Status], Receiver[Status]) = channel.open(tasks)
+pub type Status { url: String }
+pub fn main(tasks: Tasks, mut incoming: Receiver[unique Status], mut rows: List[Status]) -> Result[(), ChannelError] {
+  list.push(mut rows, channel.receive(tasks, mut incoming)?)
+  Ok(())
 }

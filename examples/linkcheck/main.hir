@@ -77,7 +77,7 @@ fn check(n: Net, tasks: Tasks, clock: MonotonicClock, urls: List[String], jobs: 
         }
         let mut incoming = take rx
         for i in 0u64..count {
-          let row: unique Status = channel.receive(tasks, mut incoming)?
+          let row = channel.receive(tasks, mut incoming)?
           list.push(mut rows, take row)
         }
         while let Some(i) = task.await_any(s, pending) {

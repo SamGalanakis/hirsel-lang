@@ -286,6 +286,11 @@ Expected:
 ```
 <!-- /tour -->
 
+The [wc2 ownership recipes](../examples/wc2/FRICTION.md#current-executable-recipes)
+show checked `@preserves_unique` helper promises, whole-record handback and
+explicit `unique` row copies. Native loans do not infer helper contracts, and
+taking a sequence still lends its counted elements during iteration.
+
 ## Errors and variant mappers
 
 Expected failures are ordinary `Result[T, E]` values. `parse(text) ? Input`
@@ -1302,6 +1307,15 @@ Expected:
 7
 ```
 <!-- /tour -->
+
+For counted channel payloads, declare both endpoints with a sendable contract,
+for example `Sender[unique Status]` and `Receiver[unique Status]`. When appending
+a receive into `List[Status]`, bind `let row = channel.receive(tasks, mut incoming)?`
+first, then `list.push(mut rows, take row)`. The inferred local preserves the owned
+unique payload through `?`; a direct append lets the destination impose a weaker
+payload type that conflicts with the mutable receiver contract. An explicit
+`: unique Status` on that local is optional. [Linkcheck's complete recipe](../examples/linkcheck/FRICTION.md#receive-first-then-weaken-the-owned-row)
+shows the send, receive, storage and task join together.
 
 To wait for several children, add their handles to a `TaskSet` and hand it to
 `task.all`, which returns every result in the order they were added, or the
