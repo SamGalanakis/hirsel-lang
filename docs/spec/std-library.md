@@ -5160,8 +5160,10 @@ remaining fields.
 For a log prefix whose detail field itself contains separators:
 
 ```hirsel
-let fields = string.splitn("INFO|worker|path=a|query=b|detail=c||", "|", 3)
-// ["INFO", "worker", "path=a|query=b|detail=c||"]
+fn split_log_fields() {
+  let fields = string.splitn("INFO|worker|path=a|query=b|detail=c||", "|", 3)
+  // ["INFO", "worker", "path=a|query=b|detail=c||"]
+}
 ```
 
 Executable examples and ownership controls live in
