@@ -36,6 +36,70 @@ fn vectors() {
     with_compiler_stack(|| interpret(&fixture("vectors"), 20_000_000));
 }
 
+#[test]
+fn corpus_import_and_error_twins() {
+    with_compiler_stack(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-3-utf8-stream-5-run.hir");
+        // Keep the corpus's explicit dependency: native corpus preparation uses
+        // the package loader only when this exact sidecar exists.
+        assert!(path.with_extension("hir.json").is_file());
+        let twin = r#"pub fn main() -> Result[(), ()] {
+          let mut truncated = std@1/utf8.decoder(Strict())
+          failure.check(std@1/utf8.feed(mut truncated, b"A\xe2\x82", false) == Ok("A"), TextInvariant())
+          failure.check(std@1/utf8.pending_bytes(truncated) == 2, TextInvariant())
+          failure.check(std@1/utf8.feed(mut truncated, b"", true) == Error(IncompleteSequence(1)), TextInvariant())
+          failure.check(std@1/utf8.offset(truncated) == 3, TextInvariant())
+          failure.check(std@1/utf8.pending_bytes(truncated) == 0, TextInvariant())
+          failure.check(std@1/utf8.status(truncated) == Failed(), TextInvariant())
+          let mut malformed = std@1/utf8.decoder(Strict())
+          failure.check(std@1/utf8.feed(mut malformed, b"A\xe2\x82", false) == Ok("A"), TextInvariant())
+          failure.check(std@1/utf8.feed(mut malformed, b"B", true) == Error(InvalidSequence(1)), TextInvariant())
+          failure.check(std@1/utf8.offset(malformed) == 3, TextInvariant())
+          failure.check(std@1/utf8.pending_bytes(malformed) == 0, TextInvariant())
+          failure.check(std@1/utf8.status(malformed) == Failed(), TextInvariant())
+          let mut lossy = std@1/utf8.decoder(Lossy())
+          failure.check(std@1/utf8.feed(mut lossy, b"A\xe2\x82", false) == Ok("A"), TextInvariant())
+          failure.check(std@1/utf8.feed(mut lossy, b"B", true) == Ok("�B"), TextInvariant())
+          failure.check(std@1/utf8.offset(lossy) == 4, TextInvariant())
+          failure.check(std@1/utf8.status(lossy) == Finished(), TextInvariant())
+          Ok(())
+        }"#;
+        let errors = GeneratedProgram::new("corpus-errors", twin);
+        for path in [&path, &errors.0] {
+            let mut loaded = load_program(path).unwrap();
+            loaded.check_for_execution().unwrap();
+            let config = RunConfiguration {
+                entry: loaded.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let checked =
+                run_observed_checked(&mut loaded.engine, &config, SimulationConfig::default())
+                    .unwrap();
+            assert!(matches!(
+                checked.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ));
+            let expected = native::Observation::of_reference(checked.observation.as_ref().unwrap());
+            let input = loaded.engine.export_native_input().unwrap();
+            let validated = loaded.engine.import_native_input(input.clone()).unwrap();
+            let ready = native::build(
+                &validated,
+                &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
+            )
+            .unwrap();
+            let heap =
+                native::run_heap(&ready, &loaded.entry, &native::Sites::new(&input)).unwrap();
+            assert_eq!(heap.observation, expected);
+        }
+        // Existing llvm/cranelift tests cover the unchanged corpus original.
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            native_fixture(&errors.0, backend);
+        }
+    });
+}
+
 fn native_fixture(path: &Path, backend: native::Backend) {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
