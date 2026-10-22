@@ -88,6 +88,14 @@ fn tape_header(line: Option<&str>) -> bool {
 pub(crate) struct Shared<A>(pub(crate) Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
+    fn print_observed(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        self.0.borrow_mut().print_observed(handle, stderr, bytes)
+    }
     fn print(
         &mut self,
         handle: u64,

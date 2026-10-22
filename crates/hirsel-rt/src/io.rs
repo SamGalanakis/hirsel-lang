@@ -2394,6 +2394,16 @@ pub trait Adapter {
             }
         })
     }
+    /// A synchronous print and its exact externally written prefix, when the
+    /// adapter can observe it. Unknown counts remain unknown even on success.
+    fn print_observed(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        (self.print(handle, stderr, bytes), None)
+    }
     /// Live adapters may execute a borrowed network operation. None declines before
     /// any effect; record/replay and scripted adapters use ordinary owned requests.
     fn net_io(
@@ -2921,11 +2931,30 @@ unsafe fn native_print(
     if ordered {
         crate::tasks::ordered::events::request_print(ctx, handle, stderr, bytes);
     }
-    let result = unsafe { Binding::get(ctx) }
-        .adapter
-        .print(handle, stderr, bytes);
+    let observing = ordered && crate::tasks::ordered::events::observing(ctx);
+    let (result, count) = if observing {
+        crate::tasks::ordered::events::host_phases::request_keys(ctx);
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        unsafe { Binding::get(ctx) }
+            .adapter
+            .print_observed(handle, stderr, bytes)
+    } else {
+        (
+            unsafe { Binding::get(ctx) }
+                .adapter
+                .print(handle, stderr, bytes),
+            None,
+        )
+    };
     if ordered {
+        if observing {
+            crate::tasks::ordered::events::record_host_initial(ctx, &result);
+            crate::tasks::ordered::events::print_output(ctx, bytes, &result, count);
+        }
         crate::tasks::ordered::events::complete_host(ctx, false, &result);
+        if observing {
+            let _ = crate::tasks::ordered::events::certify_host(ctx);
+        }
     }
     let completion = unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) };
     unsafe { crate::tasks::yield_now(&mut *ctx) };

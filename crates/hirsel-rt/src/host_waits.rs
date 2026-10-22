@@ -365,6 +365,7 @@ pub(crate) unsafe fn issue(
         return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
     }
     let ordered = crate::tasks::ordered::engine::on(ctx);
+    let print = matches!(request, Request::Print { .. } | Request::PrintStderr { .. });
     if ordered {
         crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
         crate::tasks::ordered::events::request_host(ctx, &request);
@@ -379,6 +380,9 @@ pub(crate) unsafe fn issue(
     unsafe { count(ctx) };
     if ordered && let Ok((result, _)) = &issued {
         crate::tasks::ordered::events::complete_host(ctx, close, result);
+        if print && crate::tasks::ordered::events::observing(ctx) {
+            let _ = crate::tasks::ordered::events::certify_host(ctx);
+        }
     }
     if close && issued.is_ok() && ordered {
         crate::tasks::ordered::host::finish(ctx, crate::ordered::Next::Keep)?;
@@ -395,6 +399,14 @@ unsafe fn issue_here(
     {
         let result = Ok(completion);
         crate::tasks::ordered::events::record_host_initial(ctx, &result);
+        if crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx) {
+            match &request {
+                Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
+                    crate::tasks::ordered::events::print_output(ctx, bytes, &result, Some(0))
+                }
+                _ => {}
+            }
+        }
         return Ok((result, false));
     }
     let binding = unsafe { Binding::get(ctx) };
@@ -405,6 +417,27 @@ unsafe fn issue_here(
     }
     let binding = unsafe { Binding::get(ctx) };
     if !may_park(&request) {
+        let observing =
+            crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
+        if observing
+            && let Request::Print {
+                stdout: handle,
+                bytes,
+            }
+            | Request::PrintStderr {
+                stderr: handle,
+                bytes,
+            } = &request
+        {
+            let stderr = matches!(request, Request::PrintStderr { .. });
+            let (result, count) = {
+                let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+                binding.adapter.print_observed(*handle, stderr, bytes)
+            };
+            crate::tasks::ordered::events::record_host_initial(ctx, &result);
+            crate::tasks::ordered::events::print_output(ctx, bytes, &result, count);
+            return Ok((result, false));
+        }
         let result = binding.adapter.call(request);
         crate::tasks::ordered::events::record_host_initial(ctx, &result);
         return Ok((result, false));

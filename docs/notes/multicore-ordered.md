@@ -278,6 +278,24 @@ full language corpus, general terminal cuts and production activation remain
 qualification work. The normal launcher still uses its existing home route
 while the independent E1 production gate is OFF.
 
+## Exact home output prefixes
+
+`Adapter::print_observed` adds an optional exact written-byte count to the
+existing bounded borrowed print. Its default preserves `print` and reports an
+unknown count. RealIo uses the existing counted write/flush loop in both its
+borrowed fast path and recording path; validated SimIo replay observes the
+recorded prefix without consuming a mismatched input. Shared/home facades
+forward both the completion and count while keeping non-Send adapters on home.
+
+Ordered trace capture copies only the observed visible prefix before yield.
+It certifies full writes, partial write errors, zero writes, flush errors and
+validated cancellation with the same owned request/result identities. Missing,
+out-of-range or completion-inconsistent counts remain unexportable. Neither a
+successful completion nor an error supplies an inferred count. Untraced output
+continues through the existing print path. Native controls compare canonical
+bytes with actual output at widths 1/2/4/8, reorder off/auto and history on/off.
+Production Ordered remains OFF pending the remaining qualification gates.
+
 ## Prior art and deviations
 
 - The queue and call transitions are ports of the executable checked model,

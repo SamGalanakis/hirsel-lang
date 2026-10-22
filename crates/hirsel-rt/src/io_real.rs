@@ -780,6 +780,31 @@ impl<S: Streams> Adapter for RealCore<S> {
         })())
     }
 
+    fn print_observed(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        if !self.retain_history && !self.journal.records() && self.fault.is_none() {
+            if let Err(error) = self.state.expect(
+                handle,
+                if stderr {
+                    crate::handles::Grant::Stderr
+                } else {
+                    crate::handles::Grant::Stdout
+                },
+            ) {
+                return (Err(error), None);
+            }
+            let (value, written) = write_output(self.streams.output(stderr), bytes);
+            return (Ok(Completion::Unit(value)), Some(written as u64));
+        }
+        self.disk.observed_output = None;
+        let result = self.print(handle, stderr, bytes);
+        (result, self.disk.observed_output.take())
+    }
+
     fn print(
         &mut self,
         handle: u64,

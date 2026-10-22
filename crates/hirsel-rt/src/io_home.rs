@@ -81,6 +81,14 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.replay_stderr())
     }
 
+    fn print_observed(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        self.with(|adapter| adapter.print_observed(handle, stderr, bytes))
+    }
     fn print(
         &mut self,
         handle: u64,

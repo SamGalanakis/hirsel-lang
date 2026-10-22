@@ -1504,6 +1504,16 @@ pub(crate) fn request_print(ctx: *mut TaskCtx, handle: u64, stderr: bool, bytes:
     request_host(ctx, &request);
 }
 
+/// Capture only the actual output witness before the caller can yield.
+pub(crate) fn print_output(
+    ctx: *mut TaskCtx,
+    bytes: &[u8],
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    count: Option<u64>,
+) {
+    host_output::record(ctx, host_output::project(Some(bytes), result, count));
+}
+
 /// Capture already discovered issue keys under the original operation ordinal.
 /// The caller must retain no adapter or home borrow across this role-owned call.
 pub(crate) fn request_keys(ctx: *mut TaskCtx, keys: &crate::io_keys::KeySet) {

@@ -58,6 +58,8 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
 }
 
 #[cfg(test)]
+mod home_prefix_tests;
+#[cfg(test)]
 mod output;
 
 #[cfg(test)]

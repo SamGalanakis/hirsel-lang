@@ -235,6 +235,25 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn print_observed(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        let before = if stderr {
+            self.state.stderr.len()
+        } else {
+            self.state.stdout.len()
+        };
+        let result = self.print(handle, stderr, bytes);
+        let after = if stderr {
+            self.state.stderr.len()
+        } else {
+            self.state.stdout.len()
+        };
+        (result, Some((after - before) as u64))
+    }
     fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
         self.state.tls = crate::net_tls::Engine(Some(engine));
     }
