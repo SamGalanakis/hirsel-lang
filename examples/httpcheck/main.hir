@@ -1,0 +1,401 @@
+// Go net/http/client_test.go:63–148 and httptest/server.go:266–310,
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; Go Authors).
+// See README.md for independent vectors, notices and semantic adaptations.
+pub type AppError = Scenario | Transport | Assertion | Output | Authority
+
+type Step {
+  method: http.Method,
+  url: String,
+  headers: List[http.Header],
+  body: Option[Bytes],
+  status: u16,
+  expected_headers: List[http.Header],
+  contains: Option[String],
+  pointers: List[(json_pointer.Pointer, json.Value)],
+}
+
+fn field_text(fields: Map[String, json.Value], key: String) -> Result[
+  unique String,
+  AppError
+] uses {} {
+  let Some(Text(value)) = map.get(fields, key) else {
+    return Error(Scenario())
+  }
+  Ok(unique value)
+}
+
+fn headers(wire: json.Value) -> Result[unique List[http.Header], AppError] uses {} {
+  let Array(items) = wire else {
+    return Error(Scenario())
+  }
+  if list.len(items) > 32 {
+    return Error(Scenario())
+  }
+  let mut decoded: List[http.Header] = []
+  for item in items {
+    let Object(fields) = item else {
+      return Error(Scenario())
+    }
+    if map.len(fields) != 2 {
+      return Error(Scenario())
+    }
+    let name = field_text(fields, "name")?
+    let value = field_text(fields, "value")?
+    if string.byte_len(name) > 256 || string.byte_len(value) > 4096 {
+      return Error(Scenario())
+    }
+    list.push(mut decoded, http.Header(name: take name, value: take value))
+  }
+  let Ok(()) = http.validate_headers(decoded) else {
+    return Error(Scenario())
+  }
+  Ok(take decoded)
+}
+
+fn method(name: String) -> Result[http.Method, AppError] uses {} {
+  match name {
+    "GET" => Ok(Get()),
+    "HEAD" => Ok(Head()),
+    "POST" => Ok(Post()),
+    "PUT" => Ok(Put()),
+    "DELETE" => Ok(Delete()),
+    "PATCH" => Ok(Patch()),
+    "OPTIONS" => Ok(Options()),
+    _ => Error(Scenario()),
+  }
+}
+
+fn decode(raw: String) -> Result[unique List[Step], AppError] uses {} {
+  if string.byte_len(raw) > 65536 {
+    return Error(Scenario())
+  }
+  let Ok(value) = json.parse(unique raw) else {
+    return Error(Scenario())
+  }
+  let Object(root) = value else {
+    return Error(Scenario())
+  }
+  if map.len(root) != 1 {
+    return Error(Scenario())
+  }
+  let Some(Array(items)) = map.get(root, "steps") else {
+    return Error(Scenario())
+  }
+  if list.len(items) == 0 || list.len(items) > 16 {
+    return Error(Scenario())
+  }
+  let mut steps: List[Step] = []
+  for item in items {
+    let Object(fields) = item else {
+      return Error(Scenario())
+    }
+    for (key, _) in fields {
+      if key != "method" && key != "url" && key != "headers" && key != "body" && key != "expect" {
+        return Error(Scenario())
+      }
+    }
+    let verb = method(field_text(fields, "method")?)?
+    let url = field_text(fields, "url")?
+    if string.byte_len(url) > 4096 {
+      return Error(Scenario())
+    }
+    // The shipped parser and HTTP host/target conversion validate without dialing.
+    let Ok(parsed) = uri.parse(url) else {
+      return Error(Scenario())
+    }
+    let scheme = string.ascii_lower(parsed.scheme)
+    if scheme != "http" && scheme != "https" || parsed.user != None() || parsed.password != None() || parsed.fragment != None() || parsed.port == Some(
+      0u16
+    ) {
+      return Error(Scenario())
+    }
+    let Ok(host) = http.host_header(parsed) else {
+      return Error(Scenario())
+    }
+    let target = string.as_bytes(http.request_target(parsed))
+    for i in 0u64..bytes.len(target) {
+      if target[i] <= 32 || target[i] == 127 {
+        return Error(Scenario())
+      }
+    }
+    let Some(header_value) = map.get(fields, "headers") else {
+      return Error(Scenario())
+    }
+    let sent = headers(header_value)?
+    // Framing and routing belong to the HTTP client, never scenario headers.
+    for h in sent {
+      let name = string.ascii_lower(h.name)
+      if name == "host" || name == "content-length" || name == "transfer-encoding" || name == "connection" || name == "expect" || name == "trailer" {
+        return Error(Scenario())
+      }
+    }
+    let body: Option[Bytes] = match map.get(fields, "body") {
+      None() => None(),
+      Some(Text(s)) => {
+        if string.byte_len(s) > 16384 || verb == Head() {
+          return Error(Scenario())
+        }
+        Some(unique string.as_bytes(s))
+      },
+      _ => return Error(Scenario()),
+    }
+    // Budget encoded wire data plus a conservative fixed framing allowance.
+    let mut request_bytes = bytes.len(target) + string.byte_len(host) + 2048
+    for h in sent {
+      request_bytes += string.byte_len(h.name) + string.byte_len(h.value) + 4
+    }
+    if let Some(data) = body {
+      request_bytes += bytes.len(data)
+    }
+    if request_bytes > 32768 {
+      return Error(Scenario())
+    }
+    let Some(Object(expected)) = map.get(fields, "expect") else {
+      return Error(Scenario())
+    }
+    for (key, _) in expected {
+      if key != "status" && key != "headers" && key != "contains" && key != "json" {
+        return Error(Scenario())
+      }
+    }
+    let Some(Number(code)) = map.get(expected, "status") else {
+      return Error(Scenario())
+    }
+    let Ok(status) = u16.parse(code) else {
+      return Error(Scenario())
+    }
+    if status < 100 || status > 599 {
+      return Error(Scenario())
+    }
+    let wanted = match map.get(expected, "headers") {
+      Some(v) => headers(v)?,
+      None() => [],
+    }
+    let contains = match map.get(expected, "contains") {
+      Some(Text(s)) => Some(unique s),
+      None() => None(),
+      _ => return Error(Scenario()),
+    }
+    let mut pointers: List[(json_pointer.Pointer, json.Value)] = []
+    if let Some(predicates) = map.get(expected, "json") {
+      let Array(checks) = predicates else {
+        return Error(Scenario())
+      }
+      if list.len(checks) > 32 {
+        return Error(Scenario())
+      }
+      for check in checks {
+        let Object(parts) = check else {
+          return Error(Scenario())
+        }
+        if map.len(parts) != 2 {
+          return Error(Scenario())
+        }
+        let path = field_text(parts, "pointer")?
+        let Ok(pointer) = json_pointer.parse(path) else {
+          return Error(Scenario())
+        }
+        let Some(equal) = map.get(parts, "equals") else {
+          return Error(Scenario())
+        }
+        list.push(mut pointers, (take pointer, unique equal))
+      }
+    }
+    list.push(
+      mut steps,
+      Step(
+        method: verb,
+        url: take url,
+        headers: take sent,
+        body: take body,
+        status: status,
+        expected_headers: take wanted,
+        contains: take contains,
+        pointers: take pointers
+      )
+    )
+  }
+  Ok(unique steps)
+}
+
+fn exchange(n: Net, tasks: Tasks, clock: MonotonicClock, step: Step) -> Result[
+  http.Response,
+  AppError
+] {
+  let Ok(at) = time.deadline(clock, time.Duration(nanoseconds: 2000000000)) else {
+    return Error(Transport())
+  }
+  match task.scope_until(
+    tasks,
+    Deadline(clock: clock, at: at),
+    fn(s: Scope) -> Result[http.Response, http.HttpError] {
+      let mut config = http.default_config()
+      config.max_redirects = 0
+      config.max_head_bytes = 16384
+      config.max_headers = 64
+      config.max_body_bytes = 65536
+      config.status_as_error = false
+      config.decompress = false
+      config.connect_timeout = Some(time.Duration(nanoseconds: 2000000000))
+      config.read_timeout = Some(time.Duration(nanoseconds: 2000000000))
+      config.write_timeout = Some(time.Duration(nanoseconds: 2000000000))
+      http.fetch_bounded(
+        n,
+        config,
+        step.method,
+        step.url,
+        step.headers,
+        step.body,
+        65536
+      )
+    }
+  ) {
+    Finished(Ok(response)) => Ok(take response),
+    _ => Error(Transport()),
+  }
+}
+
+fn assertions(step: Step, response: http.Response) -> Result[
+  unique List[String],
+  AppError
+] uses {} {
+  let mut failures: List[String] = []
+  if response.status != step.status {
+    list.push(mut failures, "status")
+  }
+  // Each header predicate means any matching field; never join Set-Cookie or
+  // discard later duplicate fields. Header names alone are ASCII insensitive.
+  for expected in step.expected_headers {
+    let mut found = false
+    for actual in response.headers {
+      if string.ascii_lower(actual.name) == string.ascii_lower(expected.name) && actual.value == expected.value {
+        found = true
+      }
+    }
+    if !found {
+      list.push(mut failures, "header")
+    }
+  }
+  if let Some(needle) = step.contains {
+    let Ok(body) = string.from_bytes(unique response.body) else {
+      return Error(Transport())
+    }
+    if !string.contains(body, needle) {
+      list.push(mut failures, "contains")
+    }
+  }
+  if list.len(step.pointers) > 0 {
+    let Ok(body) = string.from_bytes(unique response.body) else {
+      return Error(Transport())
+    }
+    let Ok(value) = json.parse(take body) else {
+      return Error(Transport())
+    }
+    for (pointer, expected) in step.pointers {
+      if json_pointer.get(value, pointer) != Some(expected) {
+        list.push(mut failures, "json")
+      }
+    }
+  }
+  Ok(take failures)
+}
+
+fn row(index: u64, state: String, failures: List[String], mut rendered: List[u8]) uses {} {
+  text.append(mut rendered, "{\"step\":")
+  u64.format_into(index, mut rendered)
+  text.append(mut rendered, ",\"result\":")
+  json.write_text_into(state, mut rendered)
+  text.append(mut rendered, ",\"failures\":[")
+  let mut first = true
+  for failure in failures {
+    if !first {
+      text.append(mut rendered, ",")
+    }
+    first = false
+    json.write_text_into(failure, mut rendered)
+  }
+  text.append(mut rendered, "]}\n")
+}
+
+fn summary(passed: u64, failed: u64, errors: u64, skipped: u64, mut rendered: List[u8]) uses {} {
+  text.append(mut rendered, "{\"summary\":{\"passed\":")
+  u64.format_into(passed, mut rendered)
+  text.append(mut rendered, ",\"failed\":")
+  u64.format_into(failed, mut rendered)
+  text.append(mut rendered, ",\"errors\":")
+  u64.format_into(errors, mut rendered)
+  text.append(mut rendered, ",\"skipped\":")
+  u64.format_into(skipped, mut rendered)
+  text.append(mut rendered, "}}\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Error(Authority())
+  }
+  let mut rendered: List[u8] = []
+  let decoded = if arg.len(args) == 1 {
+    match arg.text(args, 0) {
+      Ok(raw) => decode(raw),
+      Error(_) => Error(Scenario()),
+    }
+  } else {
+    Error(Scenario())
+  }
+  let Ok(steps) = decoded else {
+    text.append(mut rendered, "{\"result\":\"scenario_error\"}\n")
+    summary(0, 0, 1, 0, mut rendered)
+    let Ok(()) = out.write(output, bytes.from_list(take rendered)) else {
+      return Error(Output())
+    }
+    return Error(Scenario())
+  }
+  // Obtain all authority before the first request. No implicit grants.
+  let granted = (io.net(rt), io.tasks(rt), io.monotonic_clock(rt))
+  let mut passed: u64 = 0
+  let mut failed: u64 = 0
+  let mut errors: u64 = 0
+  let mut skipped: u64 = 0
+  let mut index: u64 = 0
+  for step in steps {
+    if errors > 0 {
+      row(index, "skipped", [], mut rendered)
+      skipped += 1
+    } else {
+      let checked = match granted {
+        (Ok(n), Ok(tasks), Ok(clock)) => match exchange(n, tasks, clock, step) {
+          Ok(response) => assertions(step, response),
+          Error(e) => Error(e),
+        },
+        _ => Error(Transport()),
+      }
+      match checked {
+        Error(_) => {
+          row(index, "transport_error", [], mut rendered)
+          errors += 1
+        },
+        Ok(failures) => {
+          if list.len(failures) == 0 {
+            row(index, "pass", failures, mut rendered)
+            passed += 1
+          } else {
+            row(index, "assertion_failure", failures, mut rendered)
+            failed += 1
+          }
+        },
+      }
+    }
+    index += 1
+  }
+  summary(passed, failed, errors, skipped, mut rendered)
+  let Ok(()) = out.write(output, bytes.from_list(take rendered)) else {
+    return Error(Output())
+  }
+  if errors > 0 {
+    return Error(Transport())
+  }
+  if failed > 0 {
+    return Error(Assertion())
+  }
+  Ok(())
+}
