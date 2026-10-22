@@ -158,16 +158,14 @@ fn dir_store_round_trips_rejects_corruption_and_collects_lru() {
     store.put(&key("a"), &[1; 1000]);
     store.put(&key("b"), &[2; 1000]);
     assert_eq!(&*store.get(&key("a")).unwrap(), &[1; 1000][..]);
-    assert!(
-        std::fs::read_dir(root.join("tmp"))
-            .unwrap()
-            .next()
-            .is_none(),
-        "temp files are renamed away"
-    );
     // Corrupt b on disk: a miss that deletes it.
-    let hex = key("b").hex();
-    let file = root.join(&hex[..2]).join(&hex);
+    let artifacts = hirsel_artifact_store::Store::new(root.clone());
+    let file = artifacts.output_path(
+        artifacts
+            .lookup(hirsel_artifact_store::Address(key("b").0))
+            .unwrap()
+            .reference,
+    );
     let mut bytes = std::fs::read(&file).unwrap();
     *bytes.last_mut().unwrap() ^= 1;
     std::fs::write(&file, bytes).unwrap();
@@ -176,16 +174,22 @@ fn dir_store_round_trips_rejects_corruption_and_collects_lru() {
     // LRU: c is written, then a is read, so c is the oldest.
     store.put(&key("c"), &[3; 1000]);
     let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-    let hex = key("c").hex();
+    let reference = artifacts
+        .lookup(hirsel_artifact_store::Address(key("c").0))
+        .unwrap()
+        .reference;
     std::fs::File::options()
         .append(true)
-        .open(root.join(&hex[..2]).join(&hex))
+        .open(artifacts.output_path(reference))
         .unwrap()
         .set_modified(old)
         .unwrap();
-    let report = store.gc(1100);
-    assert_eq!(report.entries, 2);
-    assert_eq!(report.removed, 1);
+    // Two roots plus two live outputs and the dangling corrupt root.
+    // The new format accounts for its roots as well as output bytes.
+    let report = store.gc(1400);
+    assert_eq!(report.entries, 5);
+    assert!(report.removed >= 2);
+    assert!(report.bytes - report.removed_bytes <= 1400);
     assert!(store.get(&key("c")).is_none());
     assert!(store.get(&key("a")).is_some());
     assert_eq!(store.gc(u64::MAX).removed, 0);
@@ -244,14 +248,13 @@ fn dir_concurrent_handles_publish_complete_records_during_eviction() {
     let store = DirStore::new(root.clone());
     store.put(&key("shared"), b"complete");
     assert_eq!(&*store.get(&key("shared")).unwrap(), b"complete");
-    assert!(
-        std::fs::read_dir(root.join("tmp"))
+    let artifacts = hirsel_artifact_store::Store::new(root.clone());
+    let path = artifacts.output_path(
+        artifacts
+            .lookup(hirsel_artifact_store::Address(key("shared").0))
             .unwrap()
-            .next()
-            .is_none()
+            .reference,
     );
-    let hex = key("shared").hex();
-    let path = root.join(&hex[..2]).join(&hex);
     let bytes = std::fs::read(&path).unwrap();
     // Every truncated header/payload and a damaged checksum is a miss.
     for cut in 0..bytes.len() {

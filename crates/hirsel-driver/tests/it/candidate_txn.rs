@@ -602,13 +602,13 @@ fn store_fault_checks(candidate: bool) -> String {
         backing: MemStore,
         mode: AtomicUsize,
         substitutions: AtomicUsize,
-        records: Mutex<Vec<(EntryKey, Arc<[u8]>)>>,
+        records: Mutex<Vec<(EntryKey, hirsel_engine::store::Bytes)>>,
     }
     impl ResultStore for FaultStore {
-        fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>> {
+        fn get(&self, key: &EntryKey) -> Option<hirsel_engine::store::Bytes> {
             let bytes = self.backing.get(key)?;
             match self.mode.load(Ordering::Acquire) {
-                1 => Some(Arc::from(&b"corrupt candidate store frame"[..])),
+                1 => Some(b"corrupt candidate store frame".as_slice().into()),
                 2 => {
                     let other = self
                         .records
@@ -622,7 +622,7 @@ fn store_fault_checks(candidate: bool) -> String {
                     }
                     other.or(Some(bytes))
                 }
-                3 => Some(Arc::from(&bytes[..bytes.len() / 2])),
+                3 => Some(bytes[..bytes.len() / 2].into()),
                 4 => {
                     let mut damaged = bytes.to_vec();
                     *damaged.last_mut().unwrap() ^= 1;
@@ -654,7 +654,7 @@ fn store_fault_checks(candidate: bool) -> String {
         fn put(&self, key: &EntryKey, bytes: &[u8]) {
             self.backing.put(key, bytes);
             if self.mode.load(Ordering::Acquire) == 0 {
-                self.records.lock().unwrap().push((*key, Arc::from(bytes)));
+                self.records.lock().unwrap().push((*key, bytes.into()));
             }
         }
         fn name(&self) -> &'static str {

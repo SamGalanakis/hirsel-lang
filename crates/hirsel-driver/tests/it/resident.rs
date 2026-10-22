@@ -546,7 +546,7 @@ fn disabled_result_provider_skips_store_work_for_scalar_and_frozen_queries() {
         fn enabled(&self) -> bool {
             false
         }
-        fn get(&self, _: &store::EntryKey) -> Option<Arc<[u8]>> {
+        fn get(&self, _: &store::EntryKey) -> Option<hirsel_engine::store::Bytes> {
             panic!("off provider read")
         }
         fn put(&self, _: &store::EntryKey, _: &[u8]) {
@@ -1924,7 +1924,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         writers: Mutex<Vec<std::thread::ThreadId>>,
     }
     impl store::ResultStore for ObservedStore {
-        fn get(&self, _: &store::EntryKey) -> Option<Arc<[u8]>> {
+        fn get(&self, _: &store::EntryKey) -> Option<hirsel_engine::store::Bytes> {
             None
         }
         fn put(&self, _: &store::EntryKey, _: &[u8]) {

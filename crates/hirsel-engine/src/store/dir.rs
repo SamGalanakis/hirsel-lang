@@ -1,17 +1,12 @@
-//! `dir@1`: one checksummed file per entry under
-//! `$XDG_CACHE_HOME/hirsel/results-v<N>`. Writes go to a temp file that is
-//! renamed into place, so readers never see a partial entry and no lock is
-//! taken. A size cap (2 GiB by default) is enforced by evicting the least
-//! recently used entries by mtime; a hit refreshes its entry's mtime.
-use super::{EntryKey, ResultStore, frame, unframe};
+//! Front query namespace in the shared artifact store. Hits retain mapped
+//! ranges; no second payload allocation is made before checking query reads.
+use super::{EntryKey, ResultStore};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::SystemTime;
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 /// After this many bytes written in a process, the store enforces its cap.
@@ -67,60 +62,15 @@ impl DirStore {
     pub fn root(&self) -> &Path {
         &self.root
     }
-    fn path(&self, key: &EntryKey) -> PathBuf {
-        let hex = key.hex();
-        self.root.join(&hex[..2]).join(&hex)
-    }
-
-    /// Evicts least recently used entries until the store is within `cap`,
-    /// and removes temp files a crashed writer left behind.
+    /// Collect immutable outputs and action roots with bounded scratch.
     pub fn gc(&self, cap: u64) -> GcReport {
-        let mut report = GcReport::default();
-        let mut files: Vec<(SystemTime, u64, PathBuf)> = vec![];
-        let Ok(shards) = fs::read_dir(&self.root) else {
-            return report;
-        };
-        for shard in shards.flatten() {
-            let shard = shard.path();
-            if shard.file_name().is_some_and(|n| n == "tmp") {
-                for stale in fs::read_dir(&shard).into_iter().flatten().flatten() {
-                    let old = stale
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age.as_secs() > 3600);
-                    if old {
-                        let _ = fs::remove_file(stale.path());
-                    }
-                }
-                continue;
-            }
-            for file in fs::read_dir(&shard).into_iter().flatten().flatten() {
-                if let Ok(meta) = file.metadata()
-                    && meta.is_file()
-                {
-                    let time = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                    files.push((time, meta.len(), file.path()));
-                }
-            }
+        let report = hirsel_artifact_store::Store::new(self.root.clone()).collect(cap);
+        GcReport {
+            entries: report.entries,
+            bytes: report.bytes,
+            removed: report.removed,
+            removed_bytes: report.removed_bytes,
         }
-        report.entries = files.len() as u64;
-        report.bytes = files.iter().map(|f| f.1).sum();
-        // Oldest first; ties by path, so the order does not depend on readdir.
-        files.sort();
-        let mut total = report.bytes;
-        for (_, len, path) in files {
-            if total <= cap {
-                break;
-            }
-            if fs::remove_file(&path).is_ok() {
-                total -= len;
-                report.removed += 1;
-                report.removed_bytes += len;
-            }
-        }
-        report
     }
     pub fn cap(&self) -> u64 {
         self.cap
@@ -128,60 +78,44 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
-    fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>> {
-        let path = self.path(key);
-        let bytes = fs::read(&path).ok()?;
-        match unframe(&bytes) {
-            Some(payload) => {
-                // Refresh the LRU clock; failure only ages the entry.
-                if let Ok(file) = fs::File::options().append(true).open(&path) {
-                    let _ = file.set_modified(SystemTime::now());
-                }
-                Some(payload.into())
-            }
-            None => {
-                let _ = fs::remove_file(&path);
-                None
-            }
+    fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
+        let store = hirsel_artifact_store::Store::new(self.root.clone());
+        let previous = store.lookup(hirsel_artifact_store::Address(key.0))?;
+        if previous.action != hirsel_artifact_store::Action(key.0)
+            || previous.reference.domain
+                != (hirsel_artifact_store::Domain {
+                    kind: 1,
+                    schema: FORMAT,
+                })
+        {
+            return None;
         }
+        let bytes = match store.get(previous.reference) {
+            Some(bytes) => bytes,
+            None => {
+                let _ = fs::remove_file(store.output_path(previous.reference));
+                return None;
+            }
+        };
+        store.touch(hirsel_artifact_store::Address(key.0), previous.reference);
+        Some(bytes)
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
-        let path = self.path(key);
-        let temp_dir = self.root.join("tmp");
-        let framed = frame(value);
+        use hirsel_artifact_store::{Action, Address, Domain, Store};
+        let store = Store::new(self.root.clone());
         let write = || -> std::io::Result<()> {
-            use std::io::Write;
-            // Separate handles in this process share a publication sequence.
-            // create_new also refuses leftovers from an earlier PID lifetime.
-            static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::create_dir_all(&temp_dir)?;
-            let temp = temp_dir.join(format!(
-                "{}.{}.{}",
-                key.hex(),
-                std::process::id(),
-                NEXT_TEMP.fetch_add(1, Relaxed)
-            ));
-            let mut file = fs::File::options()
-                .write(true)
-                .create_new(true)
-                .open(&temp)?;
-            if let Err(error) = file.write_all(&framed) {
-                let _ = fs::remove_file(&temp);
-                return Err(error);
-            }
-            drop(file);
-            fs::rename(&temp, &path).inspect_err(|_| {
-                let _ = fs::remove_file(&temp);
-            })
+            let reference = store.put(
+                Domain {
+                    kind: 1,
+                    schema: FORMAT,
+                },
+                value,
+            )?;
+            store.associate(Address(key.0), Action(key.0), reference)
         };
-        // A failed write is a later miss, never a compile failure.
         if write().is_ok() {
-            let before = self.written.fetch_add(framed.len() as u64, Relaxed);
-            // Short-lived CLI processes must not bypass collection forever.
-            // Afterwards allow at most one interval of slack per active handle.
-            let interval = GC_EVERY.min(self.cap.max(1));
-            if before == 0 || (before + framed.len() as u64) / interval != before / interval {
+            let before = self.written.fetch_add(value.len() as u64, Relaxed);
+            if before == 0 || before / GC_EVERY != (before + value.len() as u64) / GC_EVERY {
                 self.gc(self.cap);
             }
         }
