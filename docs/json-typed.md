@@ -34,3 +34,7 @@ serde-derived Rust reference. `bench/micro/typed-session` runs these alongside
 the unchanged dynamic JSON row and 10k-task restart in a single seeded,
 interleaved ten-round session. See [the measured report](../bench/micro/reports/json-typed-2026-10-21.md)
 for counts and residual attribution.
+
+The [owned-result follow-up](../bench/micro/reports/json-owned-results-2026-10-22.md)
+removes the final typed graph copy. Its matched instruction-only session reduces
+restart to 2.421× Rust; the original 1.5× goal remains open.
