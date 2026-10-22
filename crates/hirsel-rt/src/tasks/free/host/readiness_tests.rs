@@ -8,16 +8,41 @@ struct Probe {
     waits: AtomicU32,
     parks: AtomicU32,
     finishes: AtomicU32,
+    delivered: std::sync::atomic::AtomicBool,
+    cut: std::sync::Mutex<Option<hirsel_free::concurrent::Cut>>,
 }
 struct Home {
     thread: std::thread::ThreadId,
     probe: Arc<Probe>,
     available: bool,
     token: Option<u64>,
-    advance: bool,
+    mode: u8,
     affine: std::rc::Rc<()>,
 }
 impl Home {
+    fn stop(&self) {
+        let (cut, sweep) = self
+            .probe
+            .recording
+            .recorder
+            .stop("stopped", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sweep.in_doubt, [1]);
+        assert!(sweep.withdrawn.is_empty());
+        assert_eq!(
+            cut.progress[&Vec::new()],
+            Progress::new(
+                1,
+                if self.mode == 2 {
+                    Phase::Ended(0)
+                } else {
+                    Phase::Attempt(2)
+                }
+            )
+        );
+        *self.probe.cut.lock().unwrap() = Some(cut);
+    }
     fn check(&self) {
         assert_eq!(std::thread::current().id(), self.thread);
         assert_eq!(std::rc::Rc::strong_count(&self.affine), 1);
@@ -52,6 +77,9 @@ impl crate::io::Adapter for Home {
             Err(AdapterError::Blocked)
         } else {
             assert_eq!(self.probe.waits.load(Ordering::Acquire), 2);
+            if self.mode == 3 {
+                self.stop();
+            }
             Ok(Completion::Wait(Ok(())))
         }
     }
@@ -76,8 +104,11 @@ impl crate::io::Adapter for Home {
         // source. Every blocked observation and physical save already exists.
         self.probe.recording.recorder.flush().unwrap().unwrap();
         self.probe.waits.fetch_add(1, Ordering::Release);
-        self.available = self.advance;
-        Ok(self.advance)
+        if self.mode == 2 {
+            self.stop();
+        }
+        self.available = self.mode != 0;
+        Ok(self.mode != 0)
     }
     fn finish(&mut self, token: u64) {
         self.check();
@@ -104,7 +135,10 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
     crate::pool::set_compute_grant(1);
     for width in [1, 8] {
         for durable in [false, true] {
-            for advance in [false, true] {
+            // No source, complete after two wakes, stop while parked, or
+            // stop inside the final bounded call before its Ended publication.
+            for mode in 0..4 {
+                let advance = mode == 1;
                 let recording =
                     super::super::record::Recording::new(b"native home readiness", durable);
                 let install = recording.clone();
@@ -115,6 +149,8 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                     waits: 0.into(),
                     parks: 0.into(),
                     finishes: 0.into(),
+                    delivered: false.into(),
+                    cut: std::sync::Mutex::new(None),
                 });
                 let observed = probe.clone();
                 let mut run = crate::host::BodyRun::new(width, false);
@@ -124,7 +160,7 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                     probe: probe.clone(),
                     available: false,
                     token: None,
-                    advance,
+                    mode,
                     affine: std::rc::Rc::new(()),
                 }));
                 unsafe { run.use_physical_dispatch() };
@@ -147,6 +183,7 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                                 KeySet::coupled(),
                             ),
                         );
+                        observed.delivered.store(true, Ordering::Release);
                         assert_eq!(result, Ok(Completion::Wait(Ok(()))));
                         assert_eq!((*ctx).run_ref().host_waits.load(Ordering::Acquire), 0);
                         STATUS_OK
@@ -155,38 +192,45 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                 assert_eq!(outcome.pending, 0);
                 assert_eq!(
                     probe.calls.load(Ordering::Acquire),
-                    if advance { 3 } else { 1 }
+                    if mode == 1 || mode == 3 { 3 } else { 1 }
                 );
                 assert_eq!(
                     probe.parks.load(Ordering::Acquire),
-                    if advance { 2 } else { 1 }
+                    if mode == 1 || mode == 3 { 2 } else { 1 }
                 );
                 assert_eq!(
                     probe.waits.load(Ordering::Acquire),
-                    if advance { 2 } else { 1 }
+                    if mode == 1 || mode == 3 { 2 } else { 1 }
                 );
                 assert_eq!(probe.finishes.load(Ordering::Acquire), u32::from(advance));
                 if advance {
                     assert_eq!(outcome.ended, Ok(STATUS_OK));
+                } else if mode >= 2 {
+                    assert_eq!(outcome.ended, Err(Stop::Requested));
                 } else {
                     assert!(
                         matches!(outcome.ended, Err(Stop::Blocked(_))),
                         "{outcome:?}"
                     );
                 }
+                assert_eq!(probe.delivered.load(Ordering::Acquire), advance);
+                let cause = if advance {
+                    "returned"
+                } else if mode >= 2 {
+                    "stopped"
+                } else {
+                    "blocked"
+                };
+                let cut = if mode >= 2 {
+                    assert!(recording.recorder.stop("stopped", None).unwrap().is_none());
+                    probe.cut.lock().unwrap().take().unwrap()
+                } else {
+                    recording.recorder.stop(cause, None).unwrap().unwrap().0
+                };
                 drop(probe);
-                let cut = recording
-                    .recorder
-                    .stop(if advance { "returned" } else { "blocked" }, None)
-                    .unwrap()
-                    .unwrap()
-                    .0;
                 let trace = recording.trace();
-                let expected = hirsel_free::projection::Projection::new(
-                    if advance { "returned" } else { "blocked" },
-                    &cut.progress,
-                    &trace,
-                );
+                let expected =
+                    hirsel_free::projection::Projection::new(cause, &cut.progress, &trace);
                 let sink = Arc::try_unwrap(recording)
                     .ok()
                     .unwrap()
@@ -199,14 +243,14 @@ fn native_home_readiness_retries_on_saved_owner_and_replays_without_adapter() {
                         .iter()
                         .filter(|r| matches!(r, hirsel_free::record::Record::Blocked { .. }))
                         .count(),
-                    if advance { 2 } else { 1 }
+                    if mode == 1 || mode == 3 { 2 } else { 1 }
                 );
                 assert_eq!(
                     records
                         .iter()
                         .filter(|r| matches!(r, hirsel_free::record::Record::Ready { .. }))
                         .count(),
-                    if advance { 2 } else { 0 }
+                    if mode == 1 || mode == 3 { 2 } else { 0 }
                 );
                 let mut ends = sink.marks.clone();
                 ends.push(sink.bytes.len());
