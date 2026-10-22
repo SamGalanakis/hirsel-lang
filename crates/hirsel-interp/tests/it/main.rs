@@ -21,3 +21,5 @@ mod scalars;
 mod structural;
 #[path = "../support/mod.rs"]
 mod support;
+
+mod interp_immediate_cost_6;

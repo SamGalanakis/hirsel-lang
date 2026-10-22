@@ -4334,6 +4334,7 @@ fn complete_immediate(
     returns: Option<CallReturn>,
 ) -> Result<bool, Error> {
     let OperationResult::Complete {
+        value,
         arguments: updates,
         consumed,
         released,
@@ -4355,11 +4356,10 @@ fn complete_immediate(
             return Err(invalid("operation transferred an argument it does not own"));
         }
     }
-    let OperationResult::Complete { value, .. } =
-        std::mem::replace(result, OperationResult::returned(Value::Unit))
-    else {
-        unreachable!()
-    };
+    // Only the returned payload moves into the caller. Keep the empty update
+    // and release vectors, and the consumed ordinals, in their original result
+    // rather than moving and replacing the entire completion.
+    let value = std::mem::replace(value, Value::Unit);
     for &(index, place) in mut_places {
         let value = std::mem::replace(&mut arguments[index], Value::Unit);
         frame.put(place, Some(value), Shadow::default())?;
