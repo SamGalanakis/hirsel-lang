@@ -1112,6 +1112,7 @@ pub(super) fn created_completion(shape: usize, word: u64) -> Completion {
             trace: [0x42; 16],
             span: [0x24; 8],
         },
+        8 => Completion::Halves(Ok((word, word + 1))),
         _ => unreachable!(),
     }
 }
@@ -1123,7 +1124,7 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
         0x2f23_4567_89ab_cdef,
         0x3f23_4567_89ab_cdef,
     ];
-    for (shape, durable) in (0..8).flat_map(|shape| [false, true].map(|durable| (shape, durable))) {
+    for (shape, durable) in (0..9).flat_map(|shape| [false, true].map(|durable| (shape, durable))) {
         let recording =
             super::super::record::Recording::new(b"native logical host handles", durable);
         let install = recording.clone();
@@ -1139,13 +1140,18 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                 let _role = role::Guard::new(ctx);
                 for (index, word) in WORDS.into_iter().enumerate() {
                     let resource = crate::io_keys::Key(if index < 2 { 17 } else { 18 });
+                    let resources = [resource, resource];
                     crate::stop::check(
                         ctx,
-                        prepare_created(
+                        prepare_creations(
                             ctx,
-                            Request::Stdout { io: 1 },
+                            if shape == 8 {
+                                Request::NetSplit { net: 1, stream: 2 }
+                            } else {
+                                Request::Stdout { io: 1 }
+                            },
                             KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
-                            resource,
+                            &resources[..if shape == 8 { 2 } else { 1 }],
                         ),
                     );
                     assert!(crate::stop::check(ctx, claim(ctx)));
@@ -1189,7 +1195,7 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
             .recorder
             .into_sink()
             .bytes;
-        for word in WORDS {
+        for word in WORDS.into_iter().flat_map(|word| [word, word + 1]) {
             assert!(
                 !bytes.windows(8).any(|window| window == word.to_le_bytes()),
                 "host word entered the tape"
@@ -1201,18 +1207,30 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
             .iter()
             .filter_map(|record| {
                 if let hirsel_free::record::Record::Completion { bytes, .. } = record {
-                    crate::tape_wire::decode::<Envelope>(bytes).unwrap().created
+                    Some(crate::tape_wire::decode::<Envelope>(bytes).unwrap().created)
                 } else {
                     None
                 }
             })
+            .flatten()
             .collect();
         assert_eq!(
             created
                 .iter()
                 .map(|created| (created.path.clone(), created.ordinal, created.resource))
                 .collect::<Vec<_>>(),
-            vec![(vec![], 1, 17), (vec![], 2, 17), (vec![], 3, 18)]
+            (0..3)
+                .flat_map(|index| {
+                    let count = if shape == 8 { 2 } else { 1 };
+                    (0..count).map(move |field| {
+                        (
+                            vec![],
+                            index * count + field + 1,
+                            if index < 2 { 17 } else { 18 },
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
         );
         for width in [1, 2, 8] {
             let replay = super::super::replay::Replay::new(&bytes).unwrap();
@@ -1229,16 +1247,35 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                             ctx,
                             replay_request(
                                 ctx,
-                                Request::Stdout { io: 1 },
+                                if shape == 8 {
+                                    Request::NetSplit { net: 1, stream: 2 }
+                                } else {
+                                    Request::Stdout { io: 1 }
+                                },
                                 KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
                             ),
                         );
                         let mut completion = completion;
-                        let local = *handles::handle(&mut completion).unwrap().unwrap();
+                        let local = *handles::fields(&mut completion)
+                            .unwrap()
+                            .into_iter()
+                            .flatten()
+                            .next()
+                            .unwrap();
                         assert_eq!(completion, Ok(created_completion(shape, local)));
                         assert!(!WORDS.contains(&local));
                         let resource = crate::stop::check(ctx, replay_created_key(ctx, local));
                         assert_eq!(resource.0, if index < 2 { 17 } else { 18 });
+                        for word in handles::fields(&mut completion)
+                            .unwrap()
+                            .into_iter()
+                            .flatten()
+                        {
+                            assert_eq!(
+                                crate::stop::check(ctx, replay_created_key(ctx, *word)),
+                                resource
+                            );
+                        }
                         let completion = crate::stop::check(
                             ctx,
                             replay_request(

@@ -23,7 +23,7 @@ pub(crate) struct Pending {
     positions: Option<Positions>,
     attempt: u32,
     home_log: Option<Box<super::record::Task>>,
-    created: Option<Created>,
+    created: Vec<Created>,
 }
 
 /// # Safety
@@ -65,7 +65,7 @@ pub(crate) unsafe fn prepare_with_keys(
             positions: None,
             attempt: 0,
             home_log: None,
-            created: None,
+            created: Vec::new(),
         }));
     }
     super::record::begin(ctx);
@@ -90,14 +90,34 @@ pub(crate) unsafe fn prepare_created(
     keys: KeySet,
     resource: crate::io_keys::Key,
 ) -> Stopped<()> {
+    unsafe { prepare_creations(ctx, request, keys, &[resource]) }
+}
+
+/// Reserve one identity per initialized result handle, in field order. Split
+/// endpoints may share a resource, but always receive distinct handle identities.
+/// # Safety
+/// As for prepare_created; resources come from admitted live alias discovery.
+pub(crate) unsafe fn prepare_creations(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+    resources: &[crate::io_keys::Key],
+) -> Stopped<()> {
     unsafe { prepare_with_keys(ctx, request, keys) }?;
-    let ordinal = super::record::reserve_host_handle(ctx);
+    let ordinals: Vec<_> = resources
+        .iter()
+        .map(|_| super::record::reserve_host_handle(ctx))
+        .collect();
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
-    pending.created = Some(Created {
-        path: pending.path.clone(),
-        ordinal,
-        resource: resource.0,
-    });
+    pending.created = resources
+        .iter()
+        .zip(ordinals)
+        .map(|(resource, ordinal)| Created {
+            path: pending.path.clone(),
+            ordinal,
+            resource: resource.0,
+        })
+        .collect();
     Ok(())
 }
 

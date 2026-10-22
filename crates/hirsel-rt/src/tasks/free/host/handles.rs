@@ -12,7 +12,7 @@ pub(in crate::tasks::free) struct Created {
 
 pub(in crate::tasks::free) struct Envelope {
     pub(in crate::tasks::free) result: Result<Completion, AdapterError>,
-    pub(in crate::tasks::free) created: Option<Created>,
+    pub(in crate::tasks::free) created: Vec<Created>,
 }
 impl Wire for Created {
     fn encode(&self, out: &mut Vec<u8>) {
@@ -46,16 +46,21 @@ pub(in crate::tasks::free) fn encode(
     result: &Result<Completion, AdapterError>,
 ) -> Stopped<()> {
     let mut canonical = result.clone();
-    let created =
-        if let Some(word) = handle(&mut canonical).map_err(|error| Stop::Refused(error.into()))? {
-            let created = pending.created.clone().ok_or_else(|| {
-                Stop::Diverged("host handle creation needs a declared resource".into())
-            })?;
+    let fields = fields(&mut canonical).map_err(|error| Stop::Refused(error.into()))?;
+    let count = fields.iter().flatten().count();
+    let created = if count == 0 {
+        Vec::new()
+    } else {
+        if count != pending.created.len() {
+            return Err(Stop::Diverged(
+                "host handle creation needs one declared resource per field".into(),
+            ));
+        }
+        for word in fields.into_iter().flatten() {
             *word = 0;
-            Some(created)
-        } else {
-            None
-        };
+        }
+        pending.created.clone()
+    };
     pending.encoded.clear();
     Envelope {
         result: canonical,
@@ -65,12 +70,12 @@ pub(in crate::tasks::free) fn encode(
     Ok(())
 }
 
-/// The initialized handle field in an admitted result. Keep this exhaustive
+/// The initialized handle fields in an admitted result. Keep this exhaustive
 /// allow-list common to recording and replay: unsupported results must never
 /// leak a host word just because they lack creation metadata.
-pub(super) fn handle(
+pub(super) fn fields(
     result: &mut Result<Completion, AdapterError>,
-) -> Result<Option<&mut u64>, &'static str> {
+) -> Result<[Option<&mut u64>; 2], &'static str> {
     match result {
         Ok(
             Completion::Handle(Ok(word))
@@ -80,7 +85,8 @@ pub(super) fn handle(
             | Completion::Spawned(Ok(word)),
         )
         | Ok(Completion::Listened(Ok((word, _))) | Completion::Accepted(Ok((word, _))))
-        | Ok(Completion::Span { handle: word, .. }) => Ok(Some(word)),
+        | Ok(Completion::Span { handle: word, .. }) => Ok([Some(word), None]),
+        Ok(Completion::Halves(Ok((read, write)))) => Ok([Some(read), Some(write)]),
         Err(_)
         | Ok(
             Completion::Unit(_)
@@ -93,8 +99,9 @@ pub(super) fn handle(
             | Completion::NetHandle(Err(_))
             | Completion::Listened(Err(_))
             | Completion::Accepted(Err(_))
-            | Completion::Spawned(Err(_)),
-        ) => Ok(None),
+            | Completion::Spawned(Err(_))
+            | Completion::Halves(Err(_)),
+        ) => Ok([None, None]),
         _ => Err("host result needs an unsupported logical handle codec"),
     }
 }
@@ -111,31 +118,54 @@ impl Handles {
         envelope: Envelope,
     ) -> Stopped<Result<Completion, AdapterError>> {
         let mut result = envelope.result;
-        let word = handle(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
-        match (word, envelope.created) {
-            (Some(word), Some(created)) if *word == 0 && created.ordinal != 0 => {
-                let identity = (created.path.clone(), created.ordinal);
-                let local = if let Some(&local) = self.identities.get(&identity) {
-                    if self.words[&local] != created {
-                        return Err(Stop::Diverged("host creation changed resource".into()));
-                    }
-                    local
-                } else {
-                    self.next =
-                        self.next.max(1).checked_add(1).ok_or_else(|| {
-                            Stop::Diverged("replay handle space exhausted".into())
-                        })?;
-                    let local = self.next;
-                    self.identities.insert(identity, local);
-                    self.words.insert(local, created);
-                    local
-                };
-                *word = local;
-            }
-            (Some(_), _) | (_, Some(_)) => {
+        let fields = fields(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
+        if fields.iter().flatten().count() != envelope.created.len() {
+            return Err(Stop::Diverged("invalid logical host creation count".into()));
+        }
+        // Validate every field before changing the table, so a corrupt second
+        // field cannot install even the first identity.
+        for (index, (word, created)) in fields.iter().flatten().zip(&envelope.created).enumerate() {
+            if **word != 0
+                || created.ordinal == 0
+                || envelope.created[..index]
+                    .iter()
+                    .any(|prior| prior.path == created.path && prior.ordinal == created.ordinal)
+            {
                 return Err(Stop::Diverged("invalid logical host creation".into()));
             }
-            (_, None) => {}
+            if let Some(&local) = self
+                .identities
+                .get(&(created.path.clone(), created.ordinal))
+                && self.words[&local] != *created
+            {
+                return Err(Stop::Diverged("host creation changed resource".into()));
+            }
+        }
+        let new_count = envelope
+            .created
+            .iter()
+            .filter(|created| {
+                !self
+                    .identities
+                    .contains_key(&(created.path.clone(), created.ordinal))
+            })
+            .count() as u64;
+        self.next
+            .max(1)
+            .checked_add(new_count)
+            .ok_or_else(|| Stop::Diverged("replay handle space exhausted".into()))?;
+        for (word, created) in fields.into_iter().flatten().zip(envelope.created) {
+            let identity = (created.path.clone(), created.ordinal);
+            let local = if let Some(&local) = self.identities.get(&identity) {
+                local
+            } else {
+                self.next = self.next.max(1) + 1;
+                let local = self.next;
+                self.identities.insert(identity, local);
+                self.words.insert(local, created);
+                local
+            };
+            *word = local;
         }
         Ok(result)
     }
@@ -153,11 +183,11 @@ mod tests {
     fn envelope(path: &[u32], ordinal: u64, resource: u32) -> Envelope {
         Envelope {
             result: Ok(Completion::Handle(Ok(0))),
-            created: Some(Created {
+            created: vec![Created {
                 path: path.to_vec(),
                 ordinal,
                 resource,
-            }),
+            }],
         }
     }
     fn word(result: Result<Completion, AdapterError>) -> u64 {
@@ -176,14 +206,20 @@ mod tests {
             Completion::Listened(Err(crate::net::NetError::NotGranted)),
             Completion::Accepted(Err(crate::net::NetError::NotGranted)),
             Completion::Spawned(Err(hirsel_run_schema::ProcessFailure::NotGranted)),
+            Completion::Halves(Err(crate::net::NetError::NotGranted)),
         ];
         let mut handles = Handles::default();
         for completion in failures {
-            assert!(handle(&mut Ok(completion.clone())).unwrap().is_none());
+            assert!(
+                fields(&mut Ok(completion.clone()))
+                    .unwrap()
+                    .iter()
+                    .all(Option::is_none)
+            );
             let mut bytes = Vec::new();
             Envelope {
                 result: Ok(completion.clone()),
-                created: None,
+                created: Vec::new(),
             }
             .encode(&mut bytes);
             let decoded = crate::tape_wire::decode(&bytes).unwrap();
@@ -202,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_handle_shapes_and_noncanonical_words_refuse() {
+    fn unsupported_handle_counts_and_noncanonical_words_refuse() {
         let mut handles = Handles::default();
         for shape in 0..8 {
             let result = Ok(super::super::tests::created_completion(shape, 99));
@@ -210,7 +246,7 @@ mod tests {
                 handles
                     .substitute(Envelope {
                         result: result.clone(),
-                        created: None
+                        created: Vec::new()
                     })
                     .is_err()
             );
@@ -227,11 +263,54 @@ mod tests {
             handles
                 .substitute(Envelope {
                     result: Ok(Completion::Halves(Ok((99, 100)))),
-                    created: None
+                    created: Vec::new()
                 })
                 .is_err()
         );
         assert!(handles.words.is_empty());
+    }
+
+    fn pair(second_ordinal: u64, second_resource: u32) -> Envelope {
+        let mut created = envelope(&[], 1, 17).created;
+        created.extend(envelope(&[], second_ordinal, second_resource).created);
+        Envelope {
+            result: Ok(Completion::Halves(Ok((0, 0)))),
+            created,
+        }
+    }
+
+    #[test]
+    fn split_validates_all_fields_before_mapping_and_reuses_both_identities() {
+        let mut handles = Handles::default();
+        for mut invalid in [pair(0, 17), pair(1, 17), pair(2, 17)] {
+            if invalid.created[1].ordinal == 2 {
+                invalid.result = Ok(Completion::Halves(Ok((0, 99))));
+            }
+            assert!(handles.substitute(invalid).is_err());
+            assert!(handles.words.is_empty());
+        }
+        let original = handles.substitute(pair(2, 17)).unwrap();
+        let Ok(Completion::Halves(Ok((read, write)))) = original else {
+            panic!("halves")
+        };
+        assert_ne!(read, write);
+        assert_eq!(
+            handles.resource(read).unwrap(),
+            handles.resource(write).unwrap()
+        );
+        assert_eq!(handles.substitute(pair(2, 17)).unwrap(), original);
+        assert!(handles.substitute(pair(2, 18)).is_err());
+        assert_eq!(handles.words.len(), 2);
+        assert_eq!(handles.resource(write).unwrap().0, 17);
+        assert_eq!(handles.substitute(pair(2, 17)).unwrap(), original);
+        let mut independent = Handles::default();
+        let Ok(Completion::Halves(Ok((read, write)))) =
+            independent.substitute(pair(2, 18)).unwrap()
+        else {
+            panic!("halves")
+        };
+        assert_eq!(independent.resource(read).unwrap().0, 17);
+        assert_eq!(independent.resource(write).unwrap().0, 18);
     }
 
     #[test]
@@ -255,7 +334,7 @@ mod tests {
             handles
                 .substitute(Envelope {
                     result: Ok(Completion::Handle(Ok(99))),
-                    created: None
+                    created: Vec::new()
                 })
                 .is_err()
         );
@@ -263,11 +342,11 @@ mod tests {
             handles
                 .substitute(Envelope {
                     result: Ok(Completion::Unit(Ok(()))),
-                    created: Some(Created {
+                    created: vec![Created {
                         path: vec![],
                         ordinal: 1,
                         resource: 17
-                    })
+                    }]
                 })
                 .is_err()
         );

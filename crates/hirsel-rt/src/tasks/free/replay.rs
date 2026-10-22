@@ -373,8 +373,8 @@ impl Token {
     ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
         if envelope
             .created
-            .as_ref()
-            .is_some_and(|created| created.path != self.path)
+            .iter()
+            .any(|created| created.path != self.path)
         {
             return Err(Stop::Diverged(
                 "host creation belongs to a different task".into(),
