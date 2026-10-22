@@ -1,0 +1,75 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go find_test.go:91
+  check(
+    "ab$",
+    "abcab",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 3, end: 5))])]
+  )?
+  // Go find_test.go:92
+  check(
+    "(aa)*$",
+    "a",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 1, end: 1)), None()])]
+  )?
+  // Go find_test.go:93
+  check("(?:.|(?:.a))", "", 18446744073709551615, [])?
+  // Go find_test.go:94
+  check(
+    "(?:A(?:A|a))",
+    "Aa",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 2))])]
+  )?
+  // Go find_test.go:95
+  check(
+    "(?:A|(?:A|a))",
+    "a",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  // Go find_test.go:96
+  check(
+    "(a){0}",
+    "",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 0)), None()])]
+  )?
+  // Go find_test.go:97
+  check("(?-s)(?:(?:^).)", "\n", 18446744073709551615, [])?
+  // Go find_test.go:98
+  check(
+    "(?s)(?:(?:^).)",
+    "\n",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  Ok(())
+}

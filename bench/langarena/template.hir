@@ -1,5 +1,6 @@
 // langarena: Template::Parse
-// langarena-blocked: Template::Regex | regex lacks a cursor-based non-overlapping match iterator and capture replacement
+// langarena: Template::Regex
+// Regex substitution: upstream template.rs:118-183; ordered capture VM.
 // LangArena 3c9f84d rust/src/benchmarks/template.rs:39-115,201-262.
 // The parser retains all single-brace literals and trims double-brace keys.
 type State {
@@ -7,6 +8,7 @@ type State {
   vars: Map[String, String],
   rendered: String,
   total: u32,
+  regex: Option[regex.Regex],
 }
 
 fn part(data: Bytes, start: u64, end: u64) -> String {
@@ -18,6 +20,21 @@ fn part(data: Bytes, start: u64, end: u64) -> String {
 }
 
 fn step(mut s: State, iteration: u64) {
+  if let Some(re) = s.regex {
+    let Ok(rendered) = regex.replace_all_func(
+      re,
+      s.source,
+      s.vars,
+      substitute,
+      18446744073709551615
+    ) else {
+      check(false)
+      return
+    }
+    s.total = u32.wrapping_add(s.total, int.narrow(string.byte_len(rendered)))
+    s.rendered = take rendered
+    return
+  }
   let data = string.as_bytes(s.source)
   let len = bytes.len(data)
   let mut rendered: List[u8] = []
@@ -115,7 +132,15 @@ pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
       source: text.finish_valid(take source),
       vars: take vars,
       rendered: "",
-      total: 0
+      total: 0,
+      regex: if name == "Template::Regex" {
+        let Ok(re) = regex.compile("\\{\\{(.*?)\\}\\}", 1000) else {
+          return Error("invalid template regex")
+        }
+        Some(take re)
+      } else {
+        None()
+      }
     ),
     step,
     checksum
@@ -124,3 +149,14 @@ pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
 
 fn check(ok: bool) -> ()
   requires ok {}
+
+fn substitute(vars: Map[String, String], source: String, captures: regex.Captures) -> String uses {} {
+  let Some(span) = captures.spans[1] else {
+    return ""
+  }
+  let key = string.trim(part(string.as_bytes(source), span.start, span.end))
+  match map.get(vars, key) {
+    Some(value) => unique value,
+    None() => "",
+  }
+}

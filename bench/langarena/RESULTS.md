@@ -505,6 +505,9 @@ Consumed Hirsel source SHA-256: `f0ab7d1b9fc2647b80d8c4d562fcd309fce507c689fb7d8
 
 ## Port 2: regex blockers
 
+These are the historical port-2 blockers. The 2026-10-22 capture/flags port
+below resolves both.
+
 - **Template::Regex — blocked.** `std@1/regex` has `find` and `is_match`, but
   lacks cursor-based non-overlapping match iteration and capture replacement.
   Upstream `rust/src/benchmarks/template.rs:118-183` replaces every
@@ -577,3 +580,44 @@ split API consumes its input. The LCG's integer range mapping uses exact integer
 arithmetic; exhaustive comparison over every seed state agrees with the upstream
 floating calculation for all range bounds in these workloads. No benchmark
 algorithms, workload sizes or configured warmup counts were replaced.
+
+
+## Regex capture/flags port validation (2026-10-22)
+
+Etc::LogParser and Template::Regex are implemented using std regex's ordered
+Pike VM. Both upstream configurations pass their checksums natively with LLVM
+release builds. The benchmark algorithms, workload sizes and warmup counts are
+unchanged. No comparison campaign or runtime ratio is claimed by this lane.
+
+| Task | Status | test.js checksum | run.js checksum | Runtime H/R | Instructions H/R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Etc::LogParser | pass | 117 | 2439432 | — | — |
+| Template::Regex | pass | 1554169905 | 3554506535 | — | — |
+
+LogParser follows upstream `rust/src/benchmarks/log_parser.rs:13-177`: the
+same generated log, thirteen independent scans, per-pattern map counts and
+wrapping sum. Regex compilation stays outside measured iterations.
+Template::Regex follows `template.rs:118-183`, including the lazy
+`\{\{(.*?)\}\}` pattern, trimmed capture-one keys, missing keys replaced by
+empty text and accumulated rendered-byte checksums. The callback receives an
+explicit borrowed map and returns an owned String under Hirsel's ownership
+rules. Both matching paths retain original-input offsets; no suffix is copied.
+
+The std additions port Go `ebe2feef`: `i/m/s/U` flags and scopes, numbered/named
+capture spans, expansion, literal and expanded replacement, and a callback
+replacement adapter. [The API notes](../../docs/regex.md) list every Go
+deviation and its reason; [the vector report](../../reports/regex-captures-vectors.md)
+records all imported and excluded upstream rows. The original port-2 blocker
+rows above record their historical comparison session, rather than results
+for these new implementations.
+
+Reproduce correctness checks from the repository root:
+
+```sh
+python3 bench/langarena/build.py
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/test.js Etc::LogParser
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/run.js Etc::LogParser
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/test.js Template::Regex
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/run.js Template::Regex
+.buck2/bin/buck2 test //:gate-langarena
+```

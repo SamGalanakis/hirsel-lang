@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(
+  pattern: String,
+  input: String,
+  replacement: String,
+  expected: String,
+  literal: bool
+) -> Result[(), ()] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  let actual = if literal {
+    regex.replace_all_literal(re, input, replacement, 1000000)
+  } else {
+    regex.replace_all(re, input, replacement, 1000000)
+  }
+  failure.check(actual == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go all_test.go:240
+  check("a+", "banana", "($0)", "b($0)n($0)n($0)", true)?
+  // Go all_test.go:241
+  check("a+", "banana", "(${0})", "b(${0})n(${0})n(${0})", true)?
+  // Go all_test.go:242
+  check("a+", "banana", "(${0})$0", "b(${0})$0n(${0})$0n(${0})$0", true)?
+  // Go all_test.go:243
+  check("a+", "banana", "(${0})$0", "b(${0})$0n(${0})$0n(${0})$0", true)?
+  // Go all_test.go:244
+  check("hello, (.+)", "hello, world", "goodbye, ${1}", "goodbye, ${1}", true)?
+  // Go all_test.go:245
+  check(
+    "hello, (?P<noun>.+)",
+    "hello, world",
+    "goodbye, $noun!",
+    "goodbye, $noun!",
+    true
+  )?
+  // Go all_test.go:246
+  check(
+    "hello, (?P<noun>.+)",
+    "hello, world",
+    "goodbye, ${noun}",
+    "goodbye, ${noun}",
+    true
+  )?
+  // Go all_test.go:247
+  check("(?P<x>hi)|(?P<x>bye)", "hi", "$x$x$x", "$x$x$x", true)?
+  Ok(())
+}

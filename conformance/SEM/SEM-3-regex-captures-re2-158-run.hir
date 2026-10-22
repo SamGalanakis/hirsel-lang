@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:2527
+  check("^(?:^(foo\\$)$)", "", 1, [])?
+  // Go re2-search.txt:2528
+  check("^(?:^(foo\\$)$)", "foo$bar", 1, [])?
+  // Go re2-search.txt:2530
+  check("(?:^(foo\\$)$)$", "", 1, [])?
+  // Go re2-search.txt:2531
+  check("(?:^(foo\\$)$)$", "foo$bar", 1, [])?
+  // Go re2-search.txt:2537
+  check("(foo\\$)", "", 1, [])?
+  // Go re2-search.txt:2538
+  check(
+    "(foo\\$)",
+    "foo$bar",
+    1,
+    [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 0, end: 4)), Some(regex.Span(start: 0, end: 4))]
+      )
+    ]
+  )?
+  // Go re2-search.txt:2540
+  check("^(?:(foo\\$))$", "", 1, [])?
+  // Go re2-search.txt:2541
+  check("^(?:(foo\\$))$", "foo$bar", 1, [])?
+  Ok(())
+}

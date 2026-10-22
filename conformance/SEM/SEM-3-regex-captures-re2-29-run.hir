@@ -1,0 +1,45 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:457
+  check("abc", "", 1, [])?
+  // Go re2-search.txt:458
+  check("abc", "XABCY", 1, [])?
+  // Go re2-search.txt:460
+  check("^(?:abc)$", "", 1, [])?
+  // Go re2-search.txt:461
+  check("^(?:abc)$", "XABCY", 1, [])?
+  // Go re2-search.txt:463
+  check("^(?:abc)", "", 1, [])?
+  // Go re2-search.txt:464
+  check("^(?:abc)", "XABCY", 1, [])?
+  // Go re2-search.txt:466
+  check("(?:abc)$", "", 1, [])?
+  // Go re2-search.txt:467
+  check("(?:abc)$", "XABCY", 1, [])?
+  Ok(())
+}

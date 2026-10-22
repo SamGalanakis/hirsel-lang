@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:1785
+  check("\\B(foo|fo)\\B", "", 1, [])?
+  // Go re2-search.txt:1786
+  check(
+    "\\B(foo|fo)\\B",
+    "xfooo",
+    1,
+    [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 1, end: 4)), Some(regex.Span(start: 1, end: 4))]
+      )
+    ]
+  )?
+  // Go re2-search.txt:1788
+  check("^(?:\\B(foo|fo)\\B)$", "", 1, [])?
+  // Go re2-search.txt:1789
+  check("^(?:\\B(foo|fo)\\B)$", "xfooo", 1, [])?
+  // Go re2-search.txt:1791
+  check("^(?:\\B(foo|fo)\\B)", "", 1, [])?
+  // Go re2-search.txt:1792
+  check("^(?:\\B(foo|fo)\\B)", "xfooo", 1, [])?
+  // Go re2-search.txt:1794
+  check("(?:\\B(foo|fo)\\B)$", "", 1, [])?
+  // Go re2-search.txt:1795
+  check("(?:\\B(foo|fo)\\B)$", "xfooo", 1, [])?
+  Ok(())
+}

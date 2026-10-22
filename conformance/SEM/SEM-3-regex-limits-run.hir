@@ -41,7 +41,8 @@ pub fn main() -> Result[(), ()] {
   failure.check(regex.find(adversary, input, 10000) == Ok(None()), TextInvariant())
   // Each call owns its queue; exhausting one search never changes a compiled Regex.
   failure.check(regex.is_match(adversary, "aaaab", 10000) == Ok(true), TextInvariant())
-  let empty = match regex.compile("()*", 4) {
+  too_large("()*", 5)
+  let empty = match regex.compile("()*", 6) {
     Ok(re) => take re,
     Error(_) => return Error(()),
   }

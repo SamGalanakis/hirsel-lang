@@ -30,6 +30,7 @@ mod stdlib_pathtime;
 mod stdlib_patterns;
 mod stdlib_pqcombined;
 mod stdlib_priority_queue;
+mod stdlib_regex_captures;
 mod stdlib_schedule;
 mod stdlib_sort;
 mod stdlib_substring;

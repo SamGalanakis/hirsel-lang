@@ -1,11 +1,31 @@
 // Thompson compiler and ordered Pike queues adapted from Go regexp/syntax
 // {parse,compile,prog}.go and regexp/exec.go. No backtracking optimization.
+// Go ebe2feef: syntax/parse.go:1137 (flags/names), syntax/compile.go:178
+// (capture instructions), exec.go:314 (ordered capture threads), regexp.go:596
+// (replacement), :1184 (Expand), unicode/letter.go:354 (SimpleFold).
 // Copyright 2010-2011 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
 @serializable
 pub type CompileError = Syntax(u64) | ProgramTooLarge
 
 @serializable
-pub type MatchError = WorkLimit()
+pub type MatchError = WorkLimit | InvalidCaptures
+
+// Submatch zero is the whole match; None distinguishes an unmatched group
+// from an empty match. All spans are UTF-8 byte offsets in the original text.
+pub type Captures {
+  spans: List[Option[Span]],
+}
+
+pub type Flags {
+  fold_case: bool,
+  multiline: bool,
+  dot_newline: bool,
+  ungreedy: bool,
+}
+
+pub fn default_flags() -> Flags uses {} {
+  Flags(fold_case: false, multiline: false, dot_newline: false, ungreedy: false)
+}
 
 @serializable
 pub type Span {
@@ -14,7 +34,9 @@ pub type Span {
 }
 
 // Primitive kinds: 0 jump, 1 scalar class, 2 dot, 3 begin, 4 end,
-// 5 word boundary, 6 non-boundary. Tree-only: 7 concat, 8 alternate, 9 repeat.
+// 5 word boundary, 6 non-boundary. Tree-only: 7 concat, 8 alternate, 9 repeat,
+// 17 capture. VM: 10 split, 11 match, 12 capture, 13 folded class, 14 dot-all,
+// 15 begin-line, 16 end-line.
 type Node {
   kind: u8,
   ranges: List[(u32, u32)],
@@ -29,7 +51,7 @@ type Node {
   nullable: bool,
 }
 
-// VM-only: 10 split, 11 match. x is the preferred branch.
+// x is the preferred branch; capture instructions store the slot number in y.
 type Inst {
   kind: u8,
   x: u64,
@@ -41,6 +63,7 @@ type Inst {
 pub opaque type Regex: copyable + inert + noalloc_drop uses {} {
   code: List[Inst],
   entry: u64,
+  names: List[String],
 }
 
 type Input {
@@ -54,11 +77,14 @@ type Context {
   sequence: Option[u64],
   atom: Option[u64],
   repeated: bool,
+  flags: Flags,
+  capture: u64,
 }
 
 type Tree {
   nodes: List[Node],
   limit: u64,
+  names: List[String],
 }
 
 fn scalar_width(c: char) -> u64 uses {} {
@@ -90,8 +116,15 @@ fn empty_node(kind: u8) -> Node uses {} {
   )
 }
 
-fn context() -> Context uses {} {
-  Context(alternatives: None(), sequence: None(), atom: None(), repeated: false)
+fn context(flags: Flags, capture: u64) -> Context uses {} {
+  Context(
+    alternatives: None(),
+    sequence: None(),
+    atom: None(),
+    repeated: false,
+    flags: flags,
+    capture: capture
+  )
 }
 
 // The next pattern scalar; None past the end.
@@ -303,7 +336,7 @@ fn append_ranges(mut out: List[(u32, u32)], node: Node) -> () uses {} {
   }
 }
 
-fn bracket(mut cursor: Input) -> Result[Node, CompileError] uses {} {
+fn bracket(mut cursor: Input, folded: bool) -> Result[Node, CompileError] uses {} {
   let mut node = empty_node(1)
   if peek(cursor) == Some('^') {
     node.negated = true
@@ -311,7 +344,12 @@ fn bracket(mut cursor: Input) -> Result[Node, CompileError] uses {} {
   }
   let mut first = true
   while peek(cursor) != Some(']') || first {
-    let item = class_item(mut cursor)?
+    let mut item = class_item(mut cursor)?
+    // Fold the positive shorthand before complementing it for bracket union.
+    if folded && core@1/list.len(item.ranges) == 4 {
+      core@1/list.push(mut item.ranges, (383, 383))
+      core@1/list.push(mut item.ranges, (8490, 8490))
+    }
     first = false
     if peek(cursor) == Some('-') && peek_second(cursor) != None() && peek_second(cursor) != Some(
       ']'
@@ -399,7 +437,7 @@ fn repeat_form(cursor: Input) -> bool uses {} {
   false
 }
 
-fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char) -> Result[
+fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char, ungreedy: bool) -> Result[
   u64,
   CompileError
 ] uses {} {
@@ -431,8 +469,9 @@ fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char) -> Result[
       return Error(syntax(cursor))
     }
   }
+  node.lazy = ungreedy
   if peek(cursor) == Some('?') {
-    node.lazy = true
+    node.lazy = !node.lazy
     cursor.at += 1
   }
   let child_size = tree.nodes[atom].size
@@ -460,7 +499,10 @@ fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char) -> Result[
   add_node(mut tree, take node)
 }
 
-fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses {} {
+fn parse(pattern: String, limit: u64, initial_flags: Flags) -> Result[
+  (Tree, u64),
+  CompileError
+] uses {} {
   let mut cursor = Input(scalars: [], offsets: [], at: 0)
   let mut byte: u64 = 0
   for c in core@1/string.scalars(pattern) {
@@ -469,8 +511,8 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
     byte += scalar_width(c)
   }
   core@1/list.push(mut cursor.offsets, byte)
-  let mut tree = Tree(nodes: [], limit: limit)
-  let mut contexts: List[Context] = [context()]
+  let mut tree = Tree(nodes: [], limit: limit, names: [""])
+  let mut contexts: List[Context] = [context(initial_flags, 0)]
   let mut depth: u64 = 0
   while cursor.at < core@1/list.len(cursor.scalars) {
     let c = cursor.scalars[cursor.at]
@@ -478,24 +520,112 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
     cursor.at += 1
     if c == '(' {
       flush(mut tree, mut contexts[depth])?
+      let mut flags = copy contexts[depth].flags
+      let mut capture = core@1/list.len(tree.names)
+      let mut name = ""
       if peek(cursor) == Some('?') {
         cursor.at += 1
-        if peek(cursor) != Some(':') {
-          return Error(syntax(cursor))
+        capture = 0
+        if peek(cursor) == Some('P') || peek(cursor) == Some('<') {
+          if peek(cursor) == Some('P') {
+            cursor.at += 1
+          }
+          if peek(cursor) != Some('<') {
+            return Error(syntax(cursor))
+          }
+          cursor.at += 1
+          let mut builder: List[u8] = []
+          while let Some(n) = peek(cursor) {
+            if n == '>' {
+              break
+            }
+            if !ascii_alnum(n) && n != '_' {
+              return Error(syntax(cursor))
+            }
+            core@1/list.push(
+              mut builder,
+              match ascii_byte(n) {
+                Some(b) => b,
+                None() => 0,
+              }
+            )
+            cursor.at += 1
+          }
+          if core@1/list.len(builder) == 0 || peek(cursor) != Some('>') {
+            return Error(syntax(cursor))
+          }
+          cursor.at += 1
+          name = text.finish_valid(take builder)
+          capture = core@1/list.len(tree.names)
+        } else {
+          let mut enabled = true
+          let mut any = false
+          let mut after_minus = false
+          while let Some(flag) = peek(cursor) {
+            if flag == ':' || flag == ')' {
+              break
+            }
+            cursor.at += 1
+            if flag == '-' && enabled {
+              enabled = false
+            } else if flag == 'i' || flag == 'm' || flag == 's' || flag == 'U' {
+              any = true
+              if !enabled {
+                after_minus = true
+              }
+              if flag == 'i' {
+                flags.fold_case = enabled
+              }
+              if flag == 'm' {
+                flags.multiline = enabled
+              }
+              if flag == 's' {
+                flags.dot_newline = enabled
+              }
+              if flag == 'U' {
+                flags.ungreedy = enabled
+              }
+            } else {
+              return Error(Syntax(cursor.offsets[cursor.at - 1]))
+            }
+          }
+          if !enabled && !after_minus {
+            return Error(syntax(cursor))
+          }
+          if peek(cursor) == Some(')') && any {
+            cursor.at += 1
+            contexts[depth].flags = take flags
+            continue
+          }
+          if peek(cursor) != Some(':') {
+            return Error(syntax(cursor))
+          }
+          cursor.at += 1
         }
-        cursor.at += 1
+      }
+      if capture != 0 {
+        core@1/list.push(mut tree.names, take name)
       }
       depth += 1
       if depth < core@1/list.len(contexts) {
-        contexts[depth] = context()
+        contexts[depth] = context(flags, capture)
       } else {
-        core@1/list.push(mut contexts, context())
+        core@1/list.push(mut contexts, context(flags, capture))
       }
     } else if c == ')' {
       if depth == 0 {
         return Error(Syntax(at))
       }
-      let group = finish_context(mut tree, mut contexts[depth])?
+      let mut group = finish_context(mut tree, mut contexts[depth])?
+      let capture = contexts[depth].capture
+      if capture != 0 {
+        let mut node = empty_node(17)
+        node.left = group
+        node.right = capture
+        node.nullable = tree.nodes[group].nullable
+        node.size = sum(tree.nodes[group].size, 2, tree.limit)?
+        group = add_node(mut tree, take node)?
+      }
       depth -= 1
       contexts[depth].atom = Some(group)
       contexts[depth].repeated = false
@@ -514,13 +644,19 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
       let Some(atom) = contexts[depth].atom else {
         return Error(Syntax(at))
       }
-      let repeated = repetition(mut tree, mut cursor, atom, c)?
+      let repeated = repetition(
+        mut tree,
+        mut cursor,
+        atom,
+        c,
+        contexts[depth].flags.ungreedy
+      )?
       contexts[depth].atom = Some(repeated)
       contexts[depth].repeated = true
     } else {
       flush(mut tree, mut contexts[depth])?
-      let node = if c == '[' {
-        bracket(mut cursor)?
+      let mut node = if c == '[' {
+        bracket(mut cursor, contexts[depth].flags.fold_case)?
       } else if c == '\\' {
         escaped(mut cursor, false)?
       } else {
@@ -539,6 +675,19 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
           core@1/list.push(mut node.ranges, single(c))
         }
         take node
+      }
+      let flags = contexts[depth].flags
+      if node.kind == 1 && flags.fold_case {
+        node.kind = 13
+      }
+      if node.kind == 2 && flags.dot_newline {
+        node.kind = 14
+      }
+      if c == '^' && flags.multiline {
+        node.kind = 15
+      }
+      if c == '$' && flags.multiline {
+        node.kind = 16
       }
       let atom = add_node(mut tree, take node)?
       contexts[depth].atom = Some(atom)
@@ -603,10 +752,17 @@ fn split(mut code: List[Inst], preferred: u64, other: u64, lazy: bool) -> u64 us
 }
 
 pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileError] uses {} {
+  compile_flags(pattern, default_flags(), max_instructions)
+}
+
+pub fn compile_flags(pattern: String, flags: Flags, max_instructions: u64) -> Result[
+  Regex,
+  CompileError
+] uses {} {
   if max_instructions == 0 {
     return Error(ProgramTooLarge())
   }
-  let (tree, root) = parse(pattern, max_instructions)?
+  let (tree, root) = parse(pattern, max_instructions, flags)?
   let mut code: List[Inst] = []
   emit(mut code, 11, 0, 0, [], false)
   let mut stack: List[Frame] = [frame(root, 0)]
@@ -617,7 +773,7 @@ pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileE
     let current = copy stack[top]
     let node = tree.nodes[current.node]
     let mut child: Option[Frame] = None()
-    if node.kind < 7 {
+    if node.kind < 7 || node.kind >= 13 && node.kind <= 16 {
       entry = emit(
         mut code,
         node.kind,
@@ -627,6 +783,15 @@ pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileE
         node.negated
       )
       depth -= 1
+    } else if node.kind == 17 {
+      if current.phase == 0 {
+        stack[top].phase = 1
+        let end = emit(mut code, 12, current.target, node.right * 2 + 1, [], false)
+        child = Some(frame(node.left, end))
+      } else {
+        entry = emit(mut code, 12, entry, node.right * 2, [], false)
+        depth -= 1
+      }
     } else if node.kind == 7 || node.kind == 8 {
       if current.phase == 0 {
         stack[top].phase = 1
@@ -722,7 +887,7 @@ pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileE
       depth += 1
     }
   }
-  Ok(Regex(code: take code, entry: entry))
+  Ok(Regex(code: take code, entry: entry, names: copy tree.names))
 }
 
 fn spend(mut left: u64) -> Result[(), MatchError] uses {} {
@@ -744,6 +909,7 @@ fn word(scalar: Option[char]) -> bool uses {} {
 type Thread {
   pc: u64,
   start: u64,
+  slots: List[Option[u64]],
 }
 
 // Ordered epsilon closure, deduplicated by instruction for each scalar boundary.
@@ -758,27 +924,37 @@ fn add(
   mut ready: List[Thread],
   mut work: u64
 ) -> Result[bool, MatchError] uses {} {
-  let mut stack: List[Thread] = [copy seed]
+  charge_slots(seed.slots, mut work)?
+  let mut stack: List[Thread] = [unique seed]
   let mut depth: u64 = 1
   while depth != 0 {
     spend(mut work)?
     depth -= 1
     let thread = copy stack[depth]
+    charge_slots(thread.slots, mut work)?
     if seen[thread.pc] != at + 1 {
       seen[thread.pc] = at + 1
       let inst = re.code[thread.pc]
-      if inst.kind == 1 || inst.kind == 2 || inst.kind == 11 {
+      if inst.kind == 1 || inst.kind == 2 || inst.kind == 11 || inst.kind == 13 || inst.kind == 14 {
         core@1/list.push(mut ready, copy thread)
         if inst.kind == 11 {
           return Ok(true)
         }
       } else {
-        let allowed = inst.kind == 0 || inst.kind == 10 || inst.kind == 3 && at == 0 || inst.kind == 4 && next == None() || inst.kind == 5 && word(
+        charge_slots(thread.slots, mut work)?
+        let mut slots = copy thread.slots
+        if inst.kind == 12 && core@1/list.len(slots) != 0 {
+          slots[inst.y] = Some(at)
+        }
+        let allowed = inst.kind == 12 || inst.kind == 15 && (at == 0 || previous == Some(
+          '\n'
+        )) || inst.kind == 16 && (next == None() || next == Some('\n')) || inst.kind == 0 || inst.kind == 10 || inst.kind == 3 && at == 0 || inst.kind == 4 && next == None() || inst.kind == 5 && word(
           previous
         ) != word(next) || inst.kind == 6 && word(previous) == word(next)
         if allowed {
           if inst.kind == 10 {
-            let other = Thread(pc: inst.y, start: thread.start)
+            charge_slots(slots, mut work)?
+            let other = Thread(pc: inst.y, start: thread.start, slots: copy slots)
             if depth < core@1/list.len(stack) {
               stack[depth] = take other
             } else {
@@ -786,7 +962,7 @@ fn add(
             }
             depth += 1
           }
-          let first = Thread(pc: inst.x, start: thread.start)
+          let first = Thread(pc: inst.x, start: thread.start, slots: take slots)
           if depth < core@1/list.len(stack) {
             stack[depth] = take first
           } else {
@@ -801,15 +977,25 @@ fn add(
 }
 
 fn accepts(inst: Inst, c: char, mut work: u64) -> Result[bool, MatchError] uses {} {
-  if inst.kind == 2 {
-    return Ok(c != '\n')
+  if inst.kind == 2 || inst.kind == 14 {
+    return Ok(inst.kind == 14 || c != '\n')
   }
-  let cp = core@1/char.to_u32(c)
+  let initial = core@1/char.to_u32(c)
+  let mut cp = initial
   let mut found = false
-  for (lo, hi) in inst.ranges {
-    spend(mut work)?
-    if lo <= cp && cp <= hi {
-      found = true
+  while true {
+    for (lo, hi) in inst.ranges {
+      spend(mut work)?
+      if lo <= cp && cp <= hi {
+        found = true
+      }
+    }
+    if found || inst.kind != 13 {
+      break
+    }
+    cp = simple_fold(cp, mut work)?
+    if cp == initial {
+      break
     }
   }
   Ok(found != inst.negated)
@@ -819,6 +1005,8 @@ type Machine {
   seen: List[u64],
   seeds: List[Thread],
   matched: Option[Span],
+  captures: Captures,
+  capture: bool,
   at: u64,
   previous: Option[char],
   work: u64,
@@ -851,7 +1039,11 @@ fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
   if !queued_match && machine.matched == None() {
     add(
       re,
-      Thread(pc: re.entry, start: at),
+      Thread(
+        pc: re.entry,
+        start: at,
+        slots: empty_slots(re, machine.capture, mut machine.work)?
+      ),
       at,
       machine.previous,
       next_scalar,
@@ -866,6 +1058,9 @@ fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
     let inst = re.code[thread.pc]
     if inst.kind == 11 {
       machine.matched = Some(Span(start: thread.start, end: at))
+      if machine.capture {
+        machine.captures = captured(thread, at, mut machine.work)?
+      }
       break
     }
     let accepted = match next_scalar {
@@ -873,7 +1068,11 @@ fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
       None() => false,
     }
     if accepted {
-      core@1/list.push(mut next, Thread(pc: inst.x, start: thread.start))
+      charge_slots(thread.slots, mut machine.work)?
+      core@1/list.push(
+        mut next,
+        Thread(pc: inst.x, start: thread.start, slots: copy thread.slots)
+      )
     }
   }
   let Some(c) = next_scalar else {
@@ -896,6 +1095,8 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
     seen: [],
     seeds: [],
     matched: None(),
+    captures: Captures(spans: []),
+    capture: false,
     at: 0,
     previous: None(),
     work: work_limit
@@ -922,16 +1123,18 @@ pub fn is_match(re: Regex, text: String, work_limit: u64) -> Result[bool, MatchE
   }
 }
 
-// Restart the existing ordered VM at an original-input scalar boundary.
+// Restart the existing ordered VM at an original-source_input scalar boundary.
 // Queue initialization and every VM step draw from the caller's single budget.
-fn find_from(re: Regex, subject: Input, start: u64, mut work: u64) -> Result[
-  Option[Span],
+fn find_from(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64) -> Result[
+  (Option[Span], Captures),
   MatchError
 ] uses {} {
   let mut machine = Machine(
     seen: [],
     seeds: [],
     matched: None(),
+    captures: Captures(spans: []),
+    capture: capture,
     at: subject.offsets[start],
     previous: if start == 0 {
       None()
@@ -955,17 +1158,17 @@ fn find_from(re: Regex, subject: Input, start: u64, mut work: u64) -> Result[
     }
     if step(re, next, mut machine)? {
       work = machine.work
-      return Ok(copy machine.matched)
+      return Ok((copy machine.matched, copy machine.captures))
     }
     cursor += 1
   }
   work = machine.work
-  Ok(copy machine.matched)
+  Ok((copy machine.matched, copy machine.captures))
 }
 
 // Go ebe2feef regexp/regexp.go:746-802 (matches, formerly allMatches),
 // :948-958 (allIndex), :1098-1107 (FindAllIndex/FindAllStringIndex).
-// Preserve pos/prevMatchEnd/accept progression on the original input.
+// Preserve pos/prevMatchEnd/accept progression on the original source_input.
 pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> Result[
   List[Span],
   MatchError
@@ -988,7 +1191,8 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
   while pos <= core@1/list.len(subject.scalars) {
-    let Some(span) = find_from(re, subject, pos, mut work)? else {
+    let (matched, _) = find_from(re, subject, pos, false, mut work)?
+    let Some(span) = matched else {
       return Ok(take matches)
     }
     let mut accept = true
@@ -1014,4 +1218,349 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
     }
   }
   Ok(take matches)
+}
+
+pub fn num_subexp(re: Regex) -> u64 uses {} {
+  core@1/list.len(re.names) - 1
+}
+
+pub fn subexp_names(re: Regex) -> List[String] uses {} {
+  unique re.names
+}
+
+fn empty_slots(re: Regex, capture: bool, mut work: u64) -> Result[
+  List[Option[u64]],
+  MatchError
+] uses {} {
+  let mut slots: List[Option[u64]] = []
+  if capture {
+    let mut i = 0u64
+    while i < core@1/list.len(re.names) * 2 {
+      spend(mut work)?
+      core@1/list.push(mut slots, None())
+      i += 1
+    }
+  }
+  Ok(take slots)
+}
+
+fn captured(thread: Thread, at: u64, mut work: u64) -> Result[Captures, MatchError] uses {} {
+  let mut spans: List[Option[Span]] = [Some(Span(start: thread.start, end: at))]
+  let mut i = 2u64
+  while i < core@1/list.len(thread.slots) {
+    spend(mut work)?
+    core@1/list.push(
+      mut spans,
+      match (thread.slots[i], thread.slots[i + 1]) {
+        (Some(a), Some(b)) => Some(Span(start: a, end: b)),
+        _ => None(),
+      }
+    )
+    i += 2
+  }
+  Ok(Captures(spans: take spans))
+}
+
+fn make_subject(text: String, mut work: u64) -> Result[Input, MatchError] uses {} {
+  let mut source_input = Input(scalars: [], offsets: [], at: 0)
+  let mut byte = 0u64
+  for c in core@1/string.scalars(text) {
+    spend(mut work)?
+    core@1/list.push(mut source_input.scalars, c)
+    core@1/list.push(mut source_input.offsets, byte)
+    byte += scalar_width(c)
+  }
+  spend(mut work)?
+  core@1/list.push(mut source_input.offsets, byte)
+  Ok(take source_input)
+}
+
+pub fn find_captures(re: Regex, text: String, work_limit: u64) -> Result[
+  Option[Captures],
+  MatchError
+] uses {} {
+  let mut work = work_limit
+  let source_input = make_subject(text, mut work)?
+  let (matched, captures) = find_from(re, source_input, 0, true, mut work)?
+  match matched {
+    Some(_) => Ok(Some(take captures)),
+    None() => Ok(None()),
+  }
+}
+
+// Go regexp.go:746-802: same original-source_input empty-match progression as find_all.
+pub fn find_all_captures(re: Regex, text: String, max_matches: u64, work_limit: u64) -> Result[
+  List[Captures],
+  MatchError
+] uses {} {
+  let mut matches: List[Captures] = []
+  if max_matches == 0 {
+    return Ok(take matches)
+  }
+  let mut work = work_limit
+  let source_input = make_subject(text, mut work)?
+  let mut pos = 0u64
+  let mut previous_end: Option[u64] = None()
+  while pos <= core@1/list.len(source_input.scalars) {
+    let (matched, captures) = find_from(re, source_input, pos, true, mut work)?
+    let Some(span) = matched else {
+      return Ok(take matches)
+    }
+    let mut accept = true
+    if span.end == source_input.offsets[pos] {
+      if previous_end == Some(span.start) {
+        accept = false
+      }
+      spend(mut work)?
+      pos += 1
+    } else {
+      while source_input.offsets[pos] < span.end {
+        spend(mut work)?
+        pos += 1
+      }
+    }
+    previous_end = Some(span.end)
+    if accept {
+      core@1/list.push(mut matches, take captures)
+      if core@1/list.len(matches) == max_matches {
+        return Ok(take matches)
+      }
+    }
+  }
+  Ok(take matches)
+}
+
+fn append_bytes(mut dst: List[u8], src: Bytes, start: u64, end: u64, mut work: u64) -> Result[
+  (),
+  MatchError
+] uses {} {
+  let mut i = start
+  while i < end {
+    spend(mut work)?
+    core@1/list.push(mut dst, src[i])
+    i += 1
+  }
+  Ok(())
+}
+
+fn boundary(src: Bytes, at: u64) -> bool uses {} {
+  at == core@1/bytes.len(src) || at < core@1/bytes.len(src) && (src[at] < 128 || src[at] >= 192)
+}
+
+fn append_capture(
+  mut dst: List[u8],
+  src: Bytes,
+  captures: Captures,
+  index: u64,
+  mut work: u64
+) -> Result[(), MatchError] uses {} {
+  if index < core@1/list.len(captures.spans) {
+    if let Some(span) = captures.spans[index] {
+      if span.start > span.end || !boundary(src, span.start) || !boundary(src, span.end) {
+        return Error(InvalidCaptures())
+      }
+      append_bytes(mut dst, src, span.start, span.end, mut work)?
+    }
+  }
+  Ok(())
+}
+
+// Go regexp.go:1184-1270: maximal names, leading-zero handling, malformed
+// dollar syntax left verbatim, and the first participating duplicate name.
+fn expand_into(
+  re: Regex,
+  mut dst: List[u8],
+  template: String,
+  src: String,
+  captures: Captures,
+  mut work: u64
+) -> Result[(), MatchError] uses {} {
+  let source_input = make_subject(template, mut work)?
+  let data = core@1/string.as_bytes(template)
+  let source = core@1/string.as_bytes(src)
+  let mut at = 0u64
+  while at < core@1/list.len(source_input.scalars) {
+    spend(mut work)?
+    if source_input.scalars[at] != '$' {
+      append_bytes(
+        mut dst,
+        data,
+        source_input.offsets[at],
+        source_input.offsets[at + 1],
+        mut work
+      )?
+      at += 1
+      continue
+    }
+    at += 1
+    if at < core@1/list.len(source_input.scalars) && source_input.scalars[at] == '$' {
+      core@1/list.push(mut dst, b'$')
+      at += 1
+      continue
+    }
+    let saved = at
+    let brace = at < core@1/list.len(source_input.scalars) && source_input.scalars[at] == '{'
+    if brace {
+      at += 1
+    }
+    let begin = at
+    let mut number: Option[u64] = Some(0u64)
+    while at < core@1/list.len(source_input.scalars) {
+      spend(mut work)?
+      let c = source_input.scalars[at]
+      if !expansion_name(c, mut work)? {
+        break
+      }
+      number = match (number, ascii_byte(c)) {
+        (Some(n), Some(b)) => match ascii.digit_value(b) {
+          Some(d) => if n < 100000000 {
+            Some(n * 10 + core@1/int.widen(d))
+          } else {
+            None()
+          },
+          None() => None(),
+        },
+        _ => None(),
+      }
+      at += 1
+    }
+    let end = at
+    if begin == end || brace && (at == core@1/list.len(source_input.scalars) || source_input.scalars[at] != '}') {
+      core@1/list.push(mut dst, b'$')
+      at = saved
+      continue
+    }
+    if brace {
+      at += 1
+    }
+    if end - begin > 1 && source_input.scalars[begin] == '0' {
+      number = None()
+    }
+    if let Some(index) = number {
+      append_capture(mut dst, source, captures, index, mut work)?
+    } else {
+      let mut i = 0u64
+      while i < core@1/list.len(re.names) {
+        spend(mut work)?
+        let name = core@1/string.as_bytes(re.names[i])
+        let size = source_input.offsets[end] - source_input.offsets[begin]
+        let mut equal = core@1/bytes.len(name) == size
+        let mut j = 0u64
+        while equal && j < size {
+          spend(mut work)?
+          equal = name[j] == data[source_input.offsets[begin] + j]
+          j += 1
+        }
+        if equal && i < core@1/list.len(captures.spans) && captures.spans[i] != None() {
+          append_capture(mut dst, source, captures, i, mut work)?
+          break
+        }
+        i += 1
+      }
+    }
+  }
+  Ok(())
+}
+
+// Appends to dst, like Go Expand. A WorkLimit may leave an appended prefix.
+pub fn expand(
+  re: Regex,
+  mut dst: List[u8],
+  template: String,
+  src: String,
+  captures: Captures,
+  work_limit: u64
+) -> Result[(), MatchError] uses {} {
+  let mut work = work_limit
+  expand_into(re, mut dst, template, src, captures, mut work)
+}
+
+fn replace[T](
+  re: Regex,
+  src: String,
+  replacement: String,
+  mode: u8,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64
+) -> Result[String, MatchError] uses {} {
+  let mut work = work_limit
+  let source_input = make_subject(src, mut work)?
+  let data = core@1/string.as_bytes(src)
+  let mut dst: List[u8] = []
+  let mut pos = 0u64
+  let mut last_end = 0u64
+  while pos <= core@1/list.len(source_input.scalars) {
+    let (matched, captures) = find_from(re, source_input, pos, mode != 1, mut work)?
+    let Some(span) = matched else {
+      break
+    }
+    append_bytes(mut dst, data, last_end, span.start, mut work)?
+    if span.end > last_end || span.start == 0 {
+      if mode == 2 {
+        let value = callback(state, src, captures)
+        let bytes = core@1/string.as_bytes(value)
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else if mode == 1 {
+        let bytes = core@1/string.as_bytes(replacement)
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else {
+        expand_into(re, mut dst, replacement, src, captures, mut work)?
+      }
+    }
+    last_end = span.end
+    // Go replaceAll advances at least one scalar from the search position.
+    spend(mut work)?
+    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == source_input.offsets[pos] {
+      pos += 1
+    } else {
+      while source_input.offsets[pos] < span.end {
+        spend(mut work)?
+        pos += 1
+      }
+    }
+  }
+  append_bytes(mut dst, data, last_end, core@1/bytes.len(data), mut work)?
+  Ok(text.finish_valid(take dst))
+}
+
+pub fn replace_all(re: Regex, src: String, replacement: String, work_limit: u64) -> Result[
+  String,
+  MatchError
+] uses {} {
+  replace(re, src, replacement, 0, (), unused_replacement, work_limit)
+}
+
+pub fn replace_all_literal(re: Regex, src: String, replacement: String, work_limit: u64) -> Result[
+  String,
+  MatchError
+] uses {} {
+  replace(re, src, replacement, 1, (), unused_replacement, work_limit)
+}
+
+fn charge_slots(slots: List[Option[u64]], mut work: u64) -> Result[(), MatchError] uses {} {
+  let size = core@1/list.len(slots)
+  if size > work {
+    return Error(WorkLimit())
+  }
+  work -= size
+  Ok(())
+}
+
+fn unused_replacement(state: (), src: String, captures: Captures) -> String uses {} {
+  ""
+}
+
+// Callback work is the caller's responsibility; matching and copied output
+// share work_limit. Callback output is literal, as with Go ReplaceAllFunc.
+pub fn replace_all_func[T](
+  re: Regex,
+  src: String,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64
+) -> Result[String, MatchError] uses {} {
+  replace(re, src, "", 2, state, callback, work_limit)
 }

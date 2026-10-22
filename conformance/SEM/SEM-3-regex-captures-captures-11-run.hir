@@ -1,0 +1,103 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go find_test.go:119
+  check("(?i)\\W", "s", 18446744073709551615, [])?
+  // Go find_test.go:122
+  check(
+    "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\{\\|\\}\\~",
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 31))])]
+  )?
+  // Go find_test.go:124
+  check(
+    "[\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\{\\|\\}\\~]+",
+    "!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 31))])]
+  )?
+  // Go find_test.go:126
+  check(
+    "\\`",
+    "`",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  // Go find_test.go:127
+  check(
+    "[\\`]+",
+    "`",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  // Go find_test.go:137
+  check(
+    ".",
+    "qwertyuiopasdfghjklzxcvbnm1234567890",
+    18446744073709551615,
+    [
+      regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))]),
+      regex.Captures(spans: [Some(regex.Span(start: 1, end: 2))]),
+      regex.Captures(spans: [Some(regex.Span(start: 2, end: 3))]),
+      regex.Captures(spans: [Some(regex.Span(start: 3, end: 4))]),
+      regex.Captures(spans: [Some(regex.Span(start: 4, end: 5))]),
+      regex.Captures(spans: [Some(regex.Span(start: 5, end: 6))]),
+      regex.Captures(spans: [Some(regex.Span(start: 6, end: 7))]),
+      regex.Captures(spans: [Some(regex.Span(start: 7, end: 8))]),
+      regex.Captures(spans: [Some(regex.Span(start: 8, end: 9))]),
+      regex.Captures(spans: [Some(regex.Span(start: 9, end: 10))]),
+      regex.Captures(spans: [Some(regex.Span(start: 10, end: 11))]),
+      regex.Captures(spans: [Some(regex.Span(start: 11, end: 12))]),
+      regex.Captures(spans: [Some(regex.Span(start: 12, end: 13))]),
+      regex.Captures(spans: [Some(regex.Span(start: 13, end: 14))]),
+      regex.Captures(spans: [Some(regex.Span(start: 14, end: 15))]),
+      regex.Captures(spans: [Some(regex.Span(start: 15, end: 16))]),
+      regex.Captures(spans: [Some(regex.Span(start: 16, end: 17))]),
+      regex.Captures(spans: [Some(regex.Span(start: 17, end: 18))]),
+      regex.Captures(spans: [Some(regex.Span(start: 18, end: 19))]),
+      regex.Captures(spans: [Some(regex.Span(start: 19, end: 20))]),
+      regex.Captures(spans: [Some(regex.Span(start: 20, end: 21))]),
+      regex.Captures(spans: [Some(regex.Span(start: 21, end: 22))]),
+      regex.Captures(spans: [Some(regex.Span(start: 22, end: 23))]),
+      regex.Captures(spans: [Some(regex.Span(start: 23, end: 24))]),
+      regex.Captures(spans: [Some(regex.Span(start: 24, end: 25))]),
+      regex.Captures(spans: [Some(regex.Span(start: 25, end: 26))]),
+      regex.Captures(spans: [Some(regex.Span(start: 26, end: 27))]),
+      regex.Captures(spans: [Some(regex.Span(start: 27, end: 28))]),
+      regex.Captures(spans: [Some(regex.Span(start: 28, end: 29))]),
+      regex.Captures(spans: [Some(regex.Span(start: 29, end: 30))]),
+      regex.Captures(spans: [Some(regex.Span(start: 30, end: 31))]),
+      regex.Captures(spans: [Some(regex.Span(start: 31, end: 32))]),
+      regex.Captures(spans: [Some(regex.Span(start: 32, end: 33))]),
+      regex.Captures(spans: [Some(regex.Span(start: 33, end: 34))]),
+      regex.Captures(spans: [Some(regex.Span(start: 34, end: 35))]),
+      regex.Captures(spans: [Some(regex.Span(start: 35, end: 36))])
+    ]
+  )?
+  Ok(())
+}

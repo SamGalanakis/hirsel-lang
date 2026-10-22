@@ -1211,6 +1211,12 @@
       "module": [
         "bitset"
       ]
+    },
+    {
+      "path": "regex_fold.hir",
+      "module": [
+        "regex"
+      ]
     }
   ],
   "dependencies": []

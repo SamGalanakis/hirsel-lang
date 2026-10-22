@@ -3362,17 +3362,41 @@ follow the existing core contracts and replay unchanged.
 
 ```text
 pub type regex.CompileError = Syntax(u64) | ProgramTooLarge
-pub type regex.MatchError = WorkLimit()
+pub type regex.MatchError = WorkLimit() | InvalidCaptures()
 pub type regex.Span { start: u64, end: u64 }
 fn regex.compile(pattern: String, max_instructions: u64) -> Result[regex.Regex, regex.CompileError] uses {}
 fn regex.find(re: regex.Regex, text: String, work_limit: u64) -> Result[Option[regex.Span], regex.MatchError] uses {}
 fn regex.is_match(re: regex.Regex, text: String, work_limit: u64) -> Result[bool, regex.MatchError] uses {}
 fn regex.find_all(re: regex.Regex, text: String, max_matches: u64, work_limit: u64) -> Result[List[regex.Span], regex.MatchError] uses {}
+pub type regex.Captures { spans: List[Option[regex.Span]] }
+pub type regex.Flags { fold_case: bool, multiline: bool, dot_newline: bool, ungreedy: bool }
+fn regex.default_flags() -> regex.Flags uses {}
+fn regex.compile_flags(pattern: String, flags: regex.Flags, max_instructions: u64) -> Result[regex.Regex, regex.CompileError] uses {}
+fn regex.find_captures(re: regex.Regex, text: String, work_limit: u64) -> Result[Option[regex.Captures], regex.MatchError] uses {}
+fn regex.find_all_captures(re: regex.Regex, text: String, max_matches: u64, work_limit: u64) -> Result[List[regex.Captures], regex.MatchError] uses {}
+fn regex.num_subexp(re: regex.Regex) -> u64 uses {}
+fn regex.subexp_names(re: regex.Regex) -> List[String] uses {}
+fn regex.expand(re: regex.Regex, mut dst: List[u8], template: String, src: String, captures: regex.Captures, work_limit: u64) -> Result[(), regex.MatchError] uses {}
+fn regex.replace_all(re: regex.Regex, src: String, replacement: String, work_limit: u64) -> Result[String, regex.MatchError] uses {}
+fn regex.replace_all_literal(re: regex.Regex, src: String, replacement: String, work_limit: u64) -> Result[String, regex.MatchError] uses {}
+fn regex.replace_all_func[T](re: regex.Regex, src: String, state: T, callback: fn(T, String, regex.Captures) -> String uses {}, work_limit: u64) -> Result[String, regex.MatchError] uses {}
+
 ```
+
+Captures use original-input byte offsets. Submatch zero is the whole match;
+unmatched groups are `None()`, distinct from a participating empty span.
+Replacement expands maximal `$name` / `${name}`, numeric groups and `$$`;
+missing groups expand to empty, malformed dollar syntax stays literal, and
+duplicate names use the first participating group. Literal/callback replacements
+copy their result verbatim. Caller-created invalid spans return `InvalidCaptures()`.
+Matching, capture storage, decoding and output copying share one work budget;
+callback computation remains the caller's responsibility. `expand` may append a
+prefix before reporting a limit. See [the API and Go deviations](../regex.md).
 
 The fixed dialect operates on Unicode scalars. It supports literal scalars, `.`,
 `^`, `$`, `\A`, `\z`, bracket ranges and negation (`[a-z]`, `[^a-z]`),
-structural groups `(...)` and `(?:...)`, alternation `|`, and repetitions `*`,
+capturing groups `(...)`, named groups `(?P<name>...)` / `(?<name>...)`,
+noncapturing `(?:...)`, alternation `|`, and repetitions `*`,
 `+`, `?`, `{n}`, `{n,}`, `{n,m}`. Counts are unsigned decimal; a maximum must
 be at least its minimum. Repetitions are greedy unless followed by `?`.
 Empty groups and alternatives are valid. A bracket's initial `]` is literal;
@@ -3385,9 +3409,11 @@ HT, LF, FF, CR and space (excluding VT, following Go regexp). Uppercase
 `\D`, `\W`, `\S` complement these classes, including inside brackets.
 `\b` and `\B` assert an ASCII word boundary or its absence outside brackets.
 Dot excludes LF. Anchors are absolute text boundaries, so `$` does not match
-before a trailing LF. There are no flags, captures, backreferences,
-lookaround, property or POSIX named classes, octal/hex escapes, replacement
-language or native regex hook. An unescaped `{` begins a repetition only when
+before a trailing LF by default. Flags `i`, `m`, `s`, and `U` (inline, scoped,
+or supplied through `compile_flags`) enable Unicode simple folding, line
+anchors, dot including LF, and default ungreedy repetitions respectively.
+Backreferences, lookaround, property/POSIX classes, octal/hex escapes and
+native regex hooks remain unsupported. An unescaped `{` begins a repetition only when
 the complete `{n}`, `{n,}` or `{n,m}` form follows, with no leading zeroes
 except the count `0` itself (Go's rule). Otherwise it is literal: `a{2`,
 `a{,2}` and `a{01}` match their own spelling. Complete repeats with reversed
@@ -3408,7 +3434,7 @@ limit) memory and explicit parser/compiler stacks.
 and each repetition's greediness. `Span.start` is inclusive, `end` exclusive;
 both are byte offsets relative to the supplied String, on scalar boundaries.
 Empty matches, including EOF, return equal offsets. Groups affect structure
-and priority but expose no captures. `is_match` applies the same search and
+and priority; `find_captures` additionally exposes submatch spans. `is_match` applies the same search and
 work budget, returning whether a span exists. Searches never change Regex and
 own their queues; a WorkLimit error leaves it reusable.
 
@@ -3423,8 +3449,8 @@ each ready instruction examined, and each character-class range tested.
 Literal matching tests its one range. Input uses the existing lazy `string.scalars` view. Queue and
 range iteration cannot continue after the next charged step would exceed the
 budget: the call returns WorkLimit without a partial span. This accounting is
-deterministic and independent of wall time or host regex behavior. Queue
-memory is O(compiled size); work is bounded by the caller even on adversarial
+deterministic and independent of wall time or host regex behavior. Whole-match queue
+memory is O(compiled size); capturing queues additionally scale with group count; work is bounded by the caller even on adversarial
 alternation, nested repetition or nullable cycles.
 
 `find_all` returns at most `max_matches` nonoverlapping, leftmost-first whole

@@ -1,0 +1,170 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef regexp/all_test.go:448-459; unicode/letter_test.go:402-438.
+fn compiled(pattern: String) -> Result[regex.Regex, ()] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  Ok(take re)
+}
+
+pub fn main() -> Result[(), ()] {
+  let re = compiled("(?P<foo>.*)(?P<bar>(a)b)(?P<foo>.*)a")?
+  failure.check(regex.num_subexp(re) == 4, TextInvariant())
+  failure.check(
+    regex.subexp_names(re) == ["", "foo", "bar", "", "foo"],
+    TextInvariant()
+  )
+  let fold = compiled("(?i)[a-z]+")?
+  failure.check(regex.is_match(fold, "Kſ", 10000) == Ok(true), TextInvariant())
+  failure.check(
+    regex.is_match(compiled("(?i)[^a-z]")?, "Kſ", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)[\\W]")?, "Kſ", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)Σ")?, "ς", 10000) == Ok(true),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)ß")?, "ẞ", 10000) == Ok(true),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)i")?, "İı", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i:ab)c")?, "ABc", 10000) == Ok(true),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i:ab)c")?, "ABC", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)a(?-i)b")?, "Ab", 10000) == Ok(true),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?i)a(?-i)b")?, "AB", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.find(compiled("(?m)^b$")?, "a\nb\nc", 10000) == Ok(
+      Some(regex.Span(start: 2, end: 3))
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?m)\\Ab")?, "a\nb", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?m)b\\z")?, "b\na", 10000) == Ok(false),
+    TextInvariant()
+  )
+  failure.check(
+    regex.is_match(compiled("(?s).")?, "\n", 10000) == Ok(true),
+    TextInvariant()
+  )
+  failure.check(
+    regex.find(compiled("(?U)a+")?, "aaa", 10000) == Ok(
+      Some(regex.Span(start: 0, end: 1))
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    regex.find(compiled("(?U)a+?")?, "aaa", 10000) == Ok(
+      Some(regex.Span(start: 0, end: 3))
+    ),
+    TextInvariant()
+  )
+  let mut flags = regex.default_flags()
+  flags.fold_case = true
+  let Ok(configured) = regex.compile_flags("bot", flags, 100) else {
+    return Error(())
+  }
+  failure.check(regex.is_match(configured, "BOT", 10000) == Ok(true), TextInvariant())
+  let named = compiled("(?<name>é)(a)?")?
+  let Ok(Some(caps)) = regex.find_captures(named, "xé", 10000) else {
+    return Error(())
+  }
+  let mut output: List[u8] = []
+  text.append(mut output, "prefix:")
+  regex.expand(
+    named,
+    mut output,
+    "$0/${name}/$2/$$/$01/${missing}/$1x/${1}x",
+    "xé",
+    caps,
+    10000
+  ) ? invalid_match
+  failure.check(
+    text.finish_valid(take output) == "prefix:é/é//$////éx",
+    TextInvariant()
+  )
+  failure.check(
+    regex.find_captures(named, "xé", 0) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  failure.check(regex.find_all_captures(named, "xé", 0, 0) == Ok([]), TextInvariant())
+  failure.check(
+    regex.replace_all(named, "xé", "$1", 0) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  let mut unicode_name: List[u8] = []
+  regex.expand(named, mut unicode_name, "$𐥀", "xé", caps, 10000) ? invalid_match
+  failure.check(text.finish_valid(take unicode_name) == "", TextInvariant())
+  let plain = compiled("a")?
+  let long = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  failure.check(
+    regex.replace_all(plain, "a", long, 400) == Ok(copy long),
+    TextInvariant()
+  )
+  failure.check(
+    regex.replace_all(plain, "aaa", long, 400) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  let mut invalid: List[u8] = []
+  failure.check(
+    regex.expand(
+      named,
+      mut invalid,
+      "$0",
+      "é",
+      regex.Captures(spans: [Some(regex.Span(start: 1, end: 2))]),
+      10000
+    ) == Error(InvalidCaptures()),
+    TextInvariant()
+  )
+  failure.check(
+    regex.expand(
+      named,
+      mut invalid,
+      "$0",
+      "é",
+      regex.Captures(spans: [Some(regex.Span(start: 0, end: 99))]),
+      10000
+    ) == Error(InvalidCaptures()),
+    TextInvariant()
+  )
+  failure.check(
+    regex.replace_all_func(compiled("(a)")?, "aba", (), echo_capture, 10000) == Ok(
+      "[a]b[a]"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}
+
+fn invalid_match(e: regex.MatchError) -> () {
+  ()
+}
+
+fn echo_capture(state: (), source: String, caps: regex.Captures) -> String uses {} {
+  "[a]"
+}

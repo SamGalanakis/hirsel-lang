@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:3615
+  check("^(?:ab*)", "", 1, [])?
+  // Go re2-search.txt:3616
+  check(
+    "^(?:ab*)",
+    "a",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  // Go re2-search.txt:3618
+  check("(?:ab*)$", "", 1, [])?
+  // Go re2-search.txt:3619
+  check(
+    "(?:ab*)$",
+    "a",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])]
+  )?
+  // Go re2-search.txt:3737
+  check("\\w*I\\w*", "", 1, [])?
+  // Go re2-search.txt:3738
+  check(
+    "\\w*I\\w*",
+    "Inc.",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 3))])]
+  )?
+  // Go re2-search.txt:3740
+  check("^(?:\\w*I\\w*)$", "", 1, [])?
+  // Go re2-search.txt:3741
+  check("^(?:\\w*I\\w*)$", "Inc.", 1, [])?
+  Ok(())
+}

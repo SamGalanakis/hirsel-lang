@@ -1,0 +1,42 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(
+  pattern: String,
+  input: String,
+  replacement: String,
+  expected: String,
+  literal: bool
+) -> Result[(), ()] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  let actual = if literal {
+    regex.replace_all_literal(re, input, replacement, 1000000)
+  } else {
+    regex.replace_all(re, input, replacement, 1000000)
+  }
+  failure.check(actual == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go all_test.go:171
+  check("^[a-c]*$", "abcdabc", "x", "abcdabc", false)?
+  // Go all_test.go:172
+  check("^[a-c]*", "abc", "x", "x", false)?
+  // Go all_test.go:173
+  check("[a-c]*$", "abc", "x", "x", false)?
+  // Go all_test.go:174
+  check("^[a-c]*$", "abc", "x", "x", false)?
+  // Go all_test.go:175
+  check("^[a-c]*", "dabce", "x", "xdabce", false)?
+  // Go all_test.go:176
+  check("[a-c]*$", "dabce", "x", "dabcex", false)?
+  // Go all_test.go:177
+  check("^[a-c]*$", "dabce", "x", "dabce", false)?
+  // Go all_test.go:178
+  check("^[a-c]*", "", "x", "x", false)?
+  Ok(())
+}

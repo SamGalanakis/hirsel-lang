@@ -5,7 +5,7 @@ pub fn main() -> Result[(), ()] {
   let mut builder: List[u8] = []
   let mut i: u64 = 0
   while i < 512 {
-    text.append(mut builder, "(")
+    text.append(mut builder, "(?:")
     i += 1
   }
   text.append(mut builder, "a")

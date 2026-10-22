@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(
+  pattern: String,
+  input: String,
+  replacement: String,
+  expected: String,
+  literal: bool
+) -> Result[(), ()] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  let actual = if literal {
+    regex.replace_all_literal(re, input, replacement, 1000000)
+  } else {
+    regex.replace_all(re, input, replacement, 1000000)
+  }
+  failure.check(actual == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go all_test.go:248
+  check("(?P<x>hi)|(?P<x>bye)", "bye", "$x$x$x", "$x$x$x", true)?
+  // Go all_test.go:249
+  check("(?P<x>hi)|(?P<x>bye)", "hi", "$xyz", "$xyz", true)?
+  // Go all_test.go:250
+  check("(?P<x>hi)|(?P<x>bye)", "hi", "${x}yz", "${x}yz", true)?
+  // Go all_test.go:251
+  check("(?P<x>hi)|(?P<x>bye)", "hi", "hello $$x", "hello $$x", true)?
+  // Go all_test.go:252
+  check("a+", "aaa", "${oops", "${oops", true)?
+  // Go all_test.go:253
+  check("a+", "aaa", "$$", "$$", true)?
+  // Go all_test.go:254
+  check("a+", "aaa", "$", "$", true)?
+  Ok(())
+}

@@ -1,0 +1,55 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:2975
+  check("^(?:[^0-9]+)", "", 1, [])?
+  // Go re2-search.txt:2976
+  check(
+    "^(?:[^0-9]+)",
+    "abc123",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 3))])]
+  )?
+  // Go re2-search.txt:2978
+  check("(?:[^0-9]+)$", "", 1, [])?
+  // Go re2-search.txt:2979
+  check("(?:[^0-9]+)$", "abc123", 1, [])?
+  // Go re2-search.txt:3113
+  check("(?i)[@-A]+", "", 1, [])?
+  // Go re2-search.txt:3114
+  check(
+    "(?i)[@-A]+",
+    "@AaB",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 3))])]
+  )?
+  // Go re2-search.txt:3116
+  check("^(?:(?i)[@-A]+)$", "", 1, [])?
+  // Go re2-search.txt:3117
+  check("^(?:(?i)[@-A]+)$", "@AaB", 1, [])?
+  Ok(())
+}

@@ -1,0 +1,50 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:3343
+  check("^(?:d[ex][fy]$)", "", 1, [])?
+  // Go re2-search.txt:3344
+  check("^(?:d[ex][fy]$)", "abcdef", 1, [])?
+  // Go re2-search.txt:3346
+  check("(?:d[ex][fy]$)$", "", 1, [])?
+  // Go re2-search.txt:3347
+  check(
+    "(?:d[ex][fy]$)$",
+    "abcdef",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 3, end: 6))])]
+  )?
+  // Go re2-search.txt:3353
+  check("d[ex][fy]$", "", 1, [])?
+  // Go re2-search.txt:3354
+  check("d[ex][fy]$", "abcdeff", 1, [])?
+  // Go re2-search.txt:3356
+  check("^(?:d[ex][fy]$)$", "", 1, [])?
+  // Go re2-search.txt:3357
+  check("^(?:d[ex][fy]$)$", "abcdeff", 1, [])?
+  Ok(())
+}

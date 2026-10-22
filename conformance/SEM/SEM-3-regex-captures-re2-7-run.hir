@@ -1,0 +1,55 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go re2-search.txt:105
+  check("h.*o", "", 1, [])?
+  // Go re2-search.txt:106
+  check(
+    "h.*o",
+    "hello\ngoodbye\n",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 5))])]
+  )?
+  // Go re2-search.txt:108
+  check("^(?:h.*o)$", "", 1, [])?
+  // Go re2-search.txt:109
+  check("^(?:h.*o)$", "hello\ngoodbye\n", 1, [])?
+  // Go re2-search.txt:111
+  check("^(?:h.*o)", "", 1, [])?
+  // Go re2-search.txt:112
+  check(
+    "^(?:h.*o)",
+    "hello\ngoodbye\n",
+    1,
+    [regex.Captures(spans: [Some(regex.Span(start: 0, end: 5))])]
+  )?
+  // Go re2-search.txt:114
+  check("(?:h.*o)$", "", 1, [])?
+  // Go re2-search.txt:115
+  check("(?:h.*o)$", "hello\ngoodbye\n", 1, [])?
+  Ok(())
+}

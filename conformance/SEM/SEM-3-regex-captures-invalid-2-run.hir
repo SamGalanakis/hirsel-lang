@@ -1,0 +1,16 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+
+pub fn main() -> Result[(), ()] {
+  // Go syntax/parse_test.go:499
+  failure.check(
+    match regex.compile("(?i)[a-Z]", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

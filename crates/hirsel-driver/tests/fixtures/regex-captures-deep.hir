@@ -1,0 +1,27 @@
+// Capturing depth deliberately exceeds the 1M corpus execution budget.
+pub fn main() -> Result[(), ()] {
+  let mut pattern: List[u8] = []
+  for i in 0u64..512 {
+    text.append(mut pattern, "(")
+  }
+  text.append(mut pattern, "a")
+  for i in 0u64..512 {
+    text.append(mut pattern, ")")
+  }
+  let Ok(re) = regex.compile(text.finish_valid(take pattern), 1026) else {
+    return Error(())
+  }
+  failure.check(regex.num_subexp(re) == 512, TextInvariant())
+  failure.check(
+    regex.find_captures(re, "a", 100) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  let Ok(Some(caps)) = regex.find_captures(re, "a", 10000000) else {
+    return Error(())
+  }
+  failure.check(list.len(caps.spans) == 513, TextInvariant())
+  for span in caps.spans {
+    failure.check(span == Some(regex.Span(start: 0, end: 1)), TextInvariant())
+  }
+  Ok(())
+}

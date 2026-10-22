@@ -1,0 +1,72 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+
+pub fn main() -> Result[(), ()] {
+  // Go syntax/parse_test.go:488
+  failure.check(
+    match regex.compile("(?P<name>a", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:489
+  failure.check(
+    match regex.compile("(?P<name>", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:491
+  failure.check(
+    match regex.compile("(?P<x y>a)", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:492
+  failure.check(
+    match regex.compile("(?P<>a)", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:493
+  failure.check(
+    match regex.compile("(?<name>a", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:494
+  failure.check(
+    match regex.compile("(?<name>", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:496
+  failure.check(
+    match regex.compile("(?<x y>a)", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Go syntax/parse_test.go:497
+  failure.check(
+    match regex.compile("(?<>a)", 10000) {
+      Error(Syntax(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

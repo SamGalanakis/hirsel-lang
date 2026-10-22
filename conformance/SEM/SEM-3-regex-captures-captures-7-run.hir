@@ -1,0 +1,105 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef capture/flag/replacement vectors (BSD-3-Clause).
+// RE2 data Copyright 2009 The RE2 Authors (BSD-3-Clause).
+fn check(pattern: String, input: String, maximum: u64, expected: List[regex.Captures]) -> Result[
+  (),
+  ()
+] {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(())
+  }
+  failure.check(
+    regex.find_all_captures(re, input, maximum, 1000000) == Ok(expected),
+    TextInvariant()
+  )
+  if maximum != 0 {
+    let first: Option[regex.Captures] = if list.len(expected) == 0 {
+      None()
+    } else {
+      Some(copy expected[0])
+    }
+    failure.check(regex.find_captures(re, input, 1000000) == Ok(first), TextInvariant())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Go find_test.go:81
+  check(
+    ".(.)",
+    "abcd",
+    18446744073709551615,
+    [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 0, end: 2)), Some(regex.Span(start: 1, end: 2))]
+      ),
+      regex.Captures(
+        spans: [Some(regex.Span(start: 2, end: 4)), Some(regex.Span(start: 3, end: 4))]
+      )
+    ]
+  )?
+  // Go find_test.go:82
+  check(
+    "ab*",
+    "abbaab",
+    18446744073709551615,
+    [
+      regex.Captures(spans: [Some(regex.Span(start: 0, end: 3))]),
+      regex.Captures(spans: [Some(regex.Span(start: 3, end: 4))]),
+      regex.Captures(spans: [Some(regex.Span(start: 4, end: 6))])
+    ]
+  )?
+  // Go find_test.go:83
+  check(
+    "a(b*)",
+    "abbaab",
+    18446744073709551615,
+    [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 0, end: 3)), Some(regex.Span(start: 1, end: 3))]
+      ),
+      regex.Captures(
+        spans: [Some(regex.Span(start: 3, end: 4)), Some(regex.Span(start: 4, end: 4))]
+      ),
+      regex.Captures(
+        spans: [Some(regex.Span(start: 4, end: 6)), Some(regex.Span(start: 5, end: 6))]
+      )
+    ]
+  )?
+  // Go find_test.go:86
+  check(
+    "ab$",
+    "cab",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 1, end: 3))])]
+  )?
+  // Go find_test.go:87
+  check("axxb$", "axxcb", 18446744073709551615, [])?
+  // Go find_test.go:88
+  check(
+    "data",
+    "daXY data",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 5, end: 9))])]
+  )?
+  // Go find_test.go:89
+  check(
+    "da(.)a$",
+    "daXY data",
+    18446744073709551615,
+    [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 5, end: 9)), Some(regex.Span(start: 7, end: 8))]
+      )
+    ]
+  )?
+  // Go find_test.go:90
+  check(
+    "zx+",
+    "zzx",
+    18446744073709551615,
+    [regex.Captures(spans: [Some(regex.Span(start: 1, end: 3))])]
+  )?
+  Ok(())
+}
