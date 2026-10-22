@@ -64,3 +64,4 @@ mod union_find_9;
 mod ascii85_9;
 mod stdlib_csv_slice;
 mod base64_perf_8;
+mod list_truncate_filled_8;

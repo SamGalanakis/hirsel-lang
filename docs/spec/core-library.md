@@ -234,6 +234,7 @@ fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]
 N fn list.len[T](xs: List[T]) -> u64
 N fn array.len[T](xs: Array[T]) -> u64
 @preserves_unique(xs) fn list.push[T](mut xs: List[T], take value: T) -> ()
+@preserves_unique(xs) fn list.truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
 N fn list.pop[T](mut xs: unique List[T]) -> Option[T]
 N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
 N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()
@@ -1473,9 +1474,20 @@ mutation, failing MEM-14 otherwise; it moves the selected element out and shifts
 stably. `list.swap` checks `a`, then `b`, against `len` before any mutation, failing MEM-14
 otherwise; equal valid indices are a no-op. `list.reserve` ensures a total capacity of at
 least `capacity`, preserving every element and its order. Capacity is unobservable except
-through allocation. Ordinary `mut` copy-on-write applies to `reserve`; `pop`, `remove` and
+through allocation. An impossible capacity fails SEM-1 before allocation: logical
+`capacity * element_size` must fit `2^62 - 65` bytes (the runtime extent limit
+`2^62 - 1` with 64 bytes of sequence metadata/alignment headroom). Native code
+also checks the minimum physical stride, including padding/encoding. Zero-sized
+elements do not overflow this count check. Host exhaustion is environmental.
+Ordinary `mut` copy-on-write applies to `reserve`; `pop`, `remove` and
 `swap` require unique storage and allocate nothing. Removed elements belong to the caller
-and are never finalized by the operation.
+and are never finalized by the operation. `list.truncate` uses ordinary mutable copy-on-write and
+keeps the prefix and capacity, and drops the tail in increasing original index
+order, including the remaining tail after a failed finalizer, before propagating.
+A requested length at or above the current length is a no-op. Truncation of unique storage allocates
+no storage itself, but invokes the elements' finalizers with their own effects. Sequential Packed
+lists are refused by native `list.truncate` under the existing MEM-13 walk-only
+availability boundary.
 
 **The failure primitive.** `type CheckRule = Arithmetic() | TextInvariant() | Bounds()`, and
 `failure.check(condition, rule)` evaluates its arguments left to right. True has no effect;

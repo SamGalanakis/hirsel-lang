@@ -196,6 +196,7 @@ fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]
 N fn list.len[T](xs: List[T]) -> u64
 N fn array.len[T](xs: Array[T]) -> u64
 @preserves_unique(xs) fn list.push[T](mut xs: List[T], take value: T) -> ()
+@preserves_unique(xs) fn list.truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
 N fn list.pop[T](mut xs: unique List[T]) -> Option[T]
 N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
 N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()

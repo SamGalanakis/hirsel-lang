@@ -1,3 +1,22 @@
+// Rust alloc/src/vec/mod.rs:1801-1825 and spec_from_elem.rs:12-17,
+// f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT).
+// Source ownership primitives replace Rust's raw tail slice and clone loop.
+
+/// Reserves once, then copies the value into each initialized element.
+pub fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value} {
+  let mut out: List[T] = []
+  // Keep both constructors and truncation on the same native storage surface.
+  // This no-op invokes the existing slot-addressable readiness requirement.
+  core@1/list.truncate(mut out, 0)
+  if n != 0 {
+    core@1/list.reserve(mut out, n)
+    for i in 0u64..n {
+      core@1/list.push(mut out, copy value)
+    }
+  }
+  take out
+}
+
 // Collection algorithms use ordinary source calls and ownership.
 @noalloc
 pub fn reverse[T](mut xs: unique List[T]) -> () {

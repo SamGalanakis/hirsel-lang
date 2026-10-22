@@ -650,7 +650,7 @@ straight-line distribution region; normal and failure paths empty it before a
 join. The new opcode owner fills the marked Defuse arm beside FinalizeEnd and
 independently checks that region invariant in C; no phase guard is introduced.
 
-Wave-1 list pop/remove/swap/reserve are generic library bodies in library/collection.rs. Bounds are checked before mutation; remove rotates the selected element to the tail before extraction, keeping every failure-capable address step over initialized storage. library/failure.rs implements the finite CheckRule switch at the source call anchor.
+List truncate and wave-1 pop/remove/swap/reserve are generic library bodies in library/collection.rs. Bounds are checked before mutation; remove rotates the selected element to the tail before extraction, keeping every failure-capable address step over initialized storage. library/failure.rs implements the finite CheckRule switch at the source call anchor.
 
 Import maps TIR Box `Field(0)` to an explicit native `Payload` step; native
 Box storage contains the payload directly. Nested steps retain each physical
@@ -712,3 +712,9 @@ Closure specialization retains the call's original forwarding policy.
 Operation-value forwarding bodies retain the library carrier but derive their
 primitive call ABI independently from its declaration. Hidden source codes are
 therefore carried only by primitive exports that declare them (TaskSpawn).
+
+`list.truncate` walks the removed tail forwards, with separate normal and
+failure-cleanup loops adapted from the consuming cursor's drop body. The tail
+is retired before propagating a finalizer failure, leaving the prefix and
+capacity to the caller. `reserve` checks logical capacity and physical minimum
+stride against the runtime extent limit before requesting storage (SEM-1).

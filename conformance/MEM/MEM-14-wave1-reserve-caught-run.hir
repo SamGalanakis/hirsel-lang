@@ -1,0 +1,105 @@
+// rule: MEM-14
+// expect: run
+// stdout: fixed
+// stdout: shared
+// stdout: empty
+// stdout: packed
+// stdout: caught
+// Impossible capacity is rejected before mutation, even with aliases or Packed.
+resource type Fixed {
+  xs: List[u64],
+  saved: List[u64],
+  out: Stdout,
+  label: String,
+}
+drop(x) {
+  failure.check(x.xs == x.saved, Bounds())
+  match out.print(x.out, x.label) {
+    Ok(_) => (),
+    Error(_) => failure.check(false, Bounds()),
+  }
+}
+
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+resource type Flat {
+  xs: List[Packed[Choice]],
+  out: Stdout,
+}
+drop(x) {
+  failure.check(list.len(x.xs) == 1, Bounds())
+  for item in x.xs {
+    failure.check(item.Large.value == 7 && item.Large.extra == 2, Bounds())
+  }
+  match out.print(x.out, "packed\n") {
+    Ok(_) => (),
+    Error(_) => failure.check(false, Bounds()),
+  }
+}
+
+fn caught(take status: Result[(), Failure]) {
+  match take status {
+    Error(f) => failure.check(f.rule == "SEM-1", Bounds()),
+    Ok(_) => failure.check(false, Bounds()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  caught(
+    task.isolate(
+      tasks,
+      fn() -> () {
+        let mut xs: List[u64] = []
+        list.push(mut xs, 1)
+        list.push(mut xs, 2)
+        let mut watch = Fixed(xs: take xs, saved: [1, 2], out: stdout, label: "fixed\n")
+        list.reserve(mut watch.xs, 18446744073709551615u64)
+      }
+    )
+  )
+  caught(
+    task.isolate(
+      tasks,
+      fn() -> () {
+        let mut xs: List[u64] = []
+        list.push(mut xs, 1)
+        list.push(mut xs, 2)
+        let saved = copy xs
+        let mut watch = Fixed(
+          xs: take xs,
+          saved: take saved,
+          out: stdout,
+          label: "shared\n"
+        )
+        list.reserve(mut watch.xs, 9223372036854775808u64)
+      }
+    )
+  )
+  caught(
+    task.isolate(
+      tasks,
+      fn() -> () {
+        let mut watch = Fixed(xs: [], saved: [], out: stdout, label: "empty\n")
+        list.reserve(mut watch.xs, 18446744073709551615u64)
+      }
+    )
+  )
+  caught(
+    task.isolate(
+      tasks,
+      fn() -> () {
+        let mut xs: List[Packed[Choice]] = []
+        list.push(mut xs, Large(value: 7, extra: 2))
+        let mut watch = Flat(xs: take xs, out: stdout)
+        list.reserve(mut watch.xs, 18446744073709551615u64)
+      }
+    )
+  )
+  match out.print(stdout, "caught\n") {
+    Ok(_) => (),
+    Error(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

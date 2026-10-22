@@ -252,6 +252,46 @@ signature works for the others:
   across sources (`random.u64`, `random.below`, `random.bytes` and `prng.u64`,
   `prng.below`, `prng.bytes`).
 
+## List construction and truncation
+
+```hirsel
+fn list.filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}
+@preserves_unique(xs) fn list.truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
+```
+
+`filled` evaluates `n` and its taken seed `value` once, reserves capacity before copying, and
+returns exactly `n` copies of `value`. Copies of counted values share their owners
+under ordinary copy-on-write semantics; no user clone callback runs. The fresh
+outer list needs one native allocation for a nonempty, nonzero-size element
+sequence of slot-addressable elements, with no intermediate list or geometric growth. An empty list uses no
+allocation. Reservation checks the logical byte count and the native storage
+extent before allocation; impossible capacity raises the existing arithmetic
+failure SEM-1, and host allocation exhaustion stays environmental. See
+[core list storage primitives](core-library.md#memory-and-iteration).
+
+`truncate` retains the first `min(len, list.len(xs))` elements and the allocation's
+capacity. Ordinary mutable copy-on-write detaches aliased storage before changing it;
+unique storage stays in place. A length at or above the current length is a no-op, including `u64`'s
+maximum. Removed owners are released in increasing original index order. If a
+finalizer fails, the remaining tail is still released exactly once in that order
+before the failure propagates; ordinary caller cleanup then releases the retained
+prefix. Further finalizer failures follow FAIL-3 shielding. No storage is allocated
+when the list is already unique; finalizers keep their own allocation and authority effects,
+so the generic API makes no `@noalloc` promise. Work is linear in the removed tail. Both operations require slot-addressable
+native element storage. `Packed[T]` list elements are refused at native readiness
+under the existing MEM-13 walk-only restriction; the interpreter can still run them.
+Packed construction and truncation are deferred.
+
+These adapt Rust `Vec::truncate` (`alloc/src/vec/mod.rs:1801-1825`),
+`SpecFromElem` (`alloc/src/vec/spec_from_elem.rs:12-17`) and checked `RawVec`
+capacity (`alloc/src/raw_vec/mod.rs:935-941`), revision
+`f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`. The copyable bound replaces Rust's
+`Clone` bound; the seed is taken so its owned copies may escape the call. Pass
+`copy seed` to keep a counted seed in the caller. The source constructor uses reserved pushes rather than a specialized bulk fill.
+It invokes an empty truncation to share the existing native slot-addressable
+storage requirement without adding a type bound or a compiler hook. The native tail-drop body uses existing ownership and
+cleanup instructions rather than Rust's unsafe raw slice.
+
 ## Option and Result helpers
 
 `option` and `results` adapt Rust core Option/Result helpers. Queries borrow;

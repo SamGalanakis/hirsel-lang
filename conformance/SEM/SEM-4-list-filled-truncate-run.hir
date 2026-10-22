@@ -1,0 +1,34 @@
+// rule: SEM-4
+// expect: run
+// Rust alloctests/tests/vec.rs:548-559, 2327-2338, 2803-2807.
+pub fn main() -> Result[(), ()] {
+  failure.check(list.filled(0, 1u64) == [], Bounds())
+  failure.check(list.filled(1, 1u64) == [1], Bounds())
+  failure.check(list.filled(2, 1u64) == [1, 1], Bounds())
+  failure.check(list.filled(3, 1u64) == [1, 1, 1], Bounds())
+  let mut xs = list.filled(8, 0u8)
+  failure.check(list.len(xs) == 8 && xs[7] == 0, Bounds())
+  xs[0] = 9
+  list.truncate(mut xs, 18446744073709551615u64)
+  failure.check(list.len(xs) == 8 && xs[0] == 9, Bounds())
+  list.truncate(mut xs, 8)
+  list.truncate(mut xs, 3)
+  failure.check(xs == [9u8, 0, 0], Bounds())
+  list.truncate(mut xs, 0)
+  list.truncate(mut xs, 0)
+  list.push(mut xs, 7)
+  failure.check(xs == [7u8], Bounds())
+  let mut shared: List[u64] = [1, 2, 3]
+  let alias = copy shared
+  list.truncate(mut shared, 18446744073709551615u64)
+  failure.check(shared == alias, Bounds())
+  list.truncate(mut shared, 1)
+  failure.check(shared == [1] && alias == [1, 2, 3], Bounds())
+  let seed: List[u64] = [1, 2]
+  let mut rows = list.filled(3, copy seed)
+  rows[0][0] = 9
+  failure.check(seed == [1, 2] && rows[1] == [1, 2] && rows[2] == [1, 2], Bounds())
+  let units = list.filled(3, ())
+  failure.check(list.len(units) == 3, Bounds())
+  Ok(())
+}

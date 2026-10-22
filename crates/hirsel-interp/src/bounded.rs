@@ -537,3 +537,12 @@ pub(crate) fn copy<'a>(
     }
     Ok(total)
 }
+
+/// The logical element size of an operation type actual. Its rows and checked
+/// nominal representations use the runtime's shared type interner.
+pub(crate) fn operation_size(call: &crate::OperationCall<'_>, ty: TypeId) -> Result<u64, Error> {
+    let resolve = resolver(call.runtime);
+    Logical::new(&resolve)
+        .size(ty, &Scope::root(call.types))
+        .map_err(logical_error)
+}

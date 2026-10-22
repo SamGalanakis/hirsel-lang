@@ -1,0 +1,29 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 13
+resource type Item {
+  n: u64,
+  label: String,
+  out: Stdout,
+}
+drop(x) {
+  match out.print(x.out, x.label) {
+    Ok(_) => (),
+    Error(_) => failure.check(false, Bounds()),
+  }
+  failure.check(x.n != 2, Arithmetic())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let mut xs: unique List[Item] = unique [
+    Item(n: 1, label: "A\n", out: out),
+    Item(n: 2, label: "B\n", out: out),
+    Item(n: 3, label: "C\n", out: out),
+    Item(n: 4, label: "D\n", out: out)
+  ]
+  list.truncate(mut xs, 1)
+  out.print(out, "unreachable\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

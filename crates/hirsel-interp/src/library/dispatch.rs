@@ -2103,7 +2103,41 @@ primary_operations! { library, call, context, name, a, value;
                 Err(e) => error(Value::Bytes(e.into_bytes())),
             },
     Primitive: "list.len" | "array.len" => u64_value(collection::len(arg(a, 0)?)?),
+    Primitive: "list.truncate" => {
+        let len = index(arg(a, 1)?)?;
+        let Value::Sequence { kind: BuiltinType::List, elements, .. } = arg(a, 0)? else {
+            return Err(invalid("list.truncate requires List"));
+        };
+        if len >= elements.len() {
+            Value::Unit
+        } else {
+            let mut kept = call.arguments[0].clone();
+            let Value::Sequence { elements, .. } = &mut kept else { unreachable!() };
+            // Complete.released is a cleanup stack, drained high to low even
+            // when one release fails. Reverse the tail for ascending drops.
+            let mut released = Vec::new();
+            while elements.len() > len {
+                released.push(elements.pop().flatten().ok_or_else(|| invalid("dead list element"))?);
+            }
+            return Ok(Some(OperationResult::Complete {
+                value: Value::Unit, arguments: vec![(0, kept)],
+                consumed: vec![], released,
+            }));
+        }
+    },
     Primitive: "list.pop" | "list.remove" | "list.swap" | "list.reserve" => {
+        if name == "list.reserve" {
+            let [GenericArgument::Type(element)] = call.generics else {
+                return Err(invalid("list.reserve type actual"));
+            };
+            let size = crate::bounded::operation_size(&call, *element)?;
+            // Same logical count ceiling as the native library body: the
+            // runtime's 2^62-1 extent limit with 64 bytes for metadata/alignment.
+            let capacity = int(arg(call.arguments, 1)?)?.bits() as u64;
+            if size != 0 && capacity > ((i64::MAX as u64 / 2) - 64) / size {
+                return Ok(Some(OperationResult::Failed(fail(&call, context, "SEM-1", "list capacity overflow"))));
+            }
+        }
         let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
         let a = &*rest;
         let Value::Sequence { kind: BuiltinType::List, elements, .. } = list else {

@@ -968,6 +968,8 @@ conformance/DROP/DROP-2-labelled-cursor-cleanup-run.hir
 conformance/DROP/DROP-2-labelled-exit-cleanup-run.hir
 conformance/DROP/DROP-2-list-block-owned-run.hir
 conformance/DROP/DROP-2-list-sort-owned-run.hir
+conformance/DROP/DROP-2-list-truncate-failure.hir
+conformance/DROP/DROP-2-list-truncate-order-run.hir
 conformance/DROP/DROP-2-loop-break.hir
 conformance/DROP/DROP-2-loop-continue.hir
 conformance/DROP/DROP-2-map-cursor-empty-join-run.hir
@@ -2459,6 +2461,7 @@ conformance/MEM/MEM-14-wave1-partition-callback-fail.hir
 conformance/MEM/MEM-14-wave1-partition-callback-run.hir
 conformance/MEM/MEM-14-wave1-remove-fail.hir
 conformance/MEM/MEM-14-wave1-remove-run.hir
+conformance/MEM/MEM-14-wave1-reserve-caught-run.hir
 conformance/MEM/MEM-14-wave1-reserve-unaddressable-run.hir
 conformance/MEM/MEM-14-wave1-sort-callback-fail.hir
 conformance/MEM/MEM-14-wave1-sort-callback-run.hir
@@ -4871,6 +4874,7 @@ conformance/SEM/SEM-1-https-client-unix-socket-run.hir
 conformance/SEM/SEM-1-int-bit-primitives-run.hir
 conformance/SEM/SEM-1-int-sub-mul-named-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir
+conformance/SEM/SEM-1-list-filled-capacity-failure.hir
 conformance/SEM/SEM-1-min-remainder.hir
 conformance/SEM/SEM-1-mixed-width-add-bad.hir
 conformance/SEM/SEM-1-mixed-width-add-ok.hir
@@ -6712,6 +6716,7 @@ conformance/SEM/SEM-4-iterator-mut.hir
 conformance/SEM/SEM-4-iterator-resume-after-break.hir
 conformance/SEM/SEM-4-iterator-take.hir
 conformance/SEM/SEM-4-list-borrow.hir
+conformance/SEM/SEM-4-list-filled-truncate-run.hir
 conformance/SEM/SEM-4-list-mut.hir
 conformance/SEM/SEM-4-list-take.hir
 conformance/SEM/SEM-4-map-call-source.hir

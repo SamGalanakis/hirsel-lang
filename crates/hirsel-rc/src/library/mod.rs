@@ -78,6 +78,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &failure::CHECK,
     &bytes::APPEND_FROM_HISTORY,
     &bytes::REPLACE_RANGE,
+    &collection::TRUNCATE,
     &collection::POP,
     &collection::REMOVE,
     &collection::SWAP,
@@ -269,7 +270,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 25;
+pub const REVISION: u32 = 26;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

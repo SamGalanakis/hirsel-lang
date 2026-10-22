@@ -99,6 +99,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "$intrinsic.OrderCompare_i32"
             | "$intrinsic.OrderCompare_i64"
             | "$intrinsic.OrderCompare_i128"
+            | "list.truncate"
             | "list.pop"
             | "list.remove"
             | "list.swap"
@@ -2544,6 +2545,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "iter.next",
     "list.len",
     "list.push",
+    "list.truncate",
     "list.pop",
     "list.remove",
     "list.swap",
