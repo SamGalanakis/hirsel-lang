@@ -260,6 +260,8 @@ pub(crate) unsafe fn release(
         )?;
         return Ok(STATUS_OK);
     }
+    engine::at_head(ctx)?;
+    super::events::prepare_cancel_all(ctx, unsafe { scope.read() }, unsafe { set.read() });
     let name = if cancel {
         "task.cancel_all"
     } else {
@@ -286,10 +288,8 @@ pub(crate) unsafe fn release(
         };
         engine::head_continuation(ctx, || {
             let s = scheduler(ctx);
-            if cancel {
-                s.cancel(child, CANCEL_REQUESTED);
-            }
-            s.task(child).detached = true;
+            let me = s.current;
+            super::events::cancel_all_member(s, me, child);
             ((), Next::Keep)
         })?;
         if scheduler(ctx).task(child).state == State::Holding {
@@ -337,7 +337,10 @@ pub(crate) unsafe fn release(
     }
     if cancel {
         engine::head_continuation(ctx, || {
-            scheduler(ctx).close_set(set);
+            let s = scheduler(ctx);
+            let me = s.current;
+            s.close_set(set);
+            super::events::cancel_all_closed(s, me);
             ((), Next::Keep)
         })?;
     }

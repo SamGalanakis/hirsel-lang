@@ -157,6 +157,10 @@ pub(super) enum CanonicalOutcome {
         expired: bool,
         failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
     },
+    BulkCanceling {
+        members: Vec<ObjectId>,
+    },
+    Closed,
     BulkDetaching {
         members: Vec<ObjectId>,
     },
@@ -235,6 +239,14 @@ struct BulkDetachEvidence {
     next: usize,
 }
 
+struct CancelAllEvidence {
+    scope: ObjectId,
+    set: ObjectId,
+    members: Vec<ObjectId>,
+    effect: Option<Subevents>,
+    closed: bool,
+}
+
 struct ScopeExitEvidence {
     scope: ObjectId,
     members: Vec<ObjectId>,
@@ -259,6 +271,7 @@ pub(super) struct Log {
     scope_exits: BTreeMap<Vec<u32>, ScopeExitEvidence>,
     bulk_detaches: BTreeMap<Vec<u32>, BulkDetachEvidence>,
     current_retirement: u64,
+    cancel_all: BTreeMap<Vec<u32>, CancelAllEvidence>,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -378,6 +391,7 @@ impl Log {
             && self.joins.is_empty()
             && self.scope_exits.is_empty()
             && self.bulk_detaches.is_empty()
+            && self.cancel_all.is_empty()
         {
             Ok(&self.canonical)
         } else {
@@ -892,6 +906,114 @@ pub(super) fn complete_bulk_detach(s: &mut super::super::Scheduler, caller: Task
     );
 }
 
+pub(super) fn prepare_cancel_all(ctx: *mut TaskCtx, scope_word: u64, set_word: u64) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let owner = unsafe { (*ctx).task_id };
+    let path = s.task(owner).path.clone();
+    let scope = s.scope_handle(scope_word);
+    let set = s.set_handle(set_word, scope);
+    let words: Vec<_> = s.set(set).members.iter().flatten().copied().collect();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let evidence = log
+        .scopes
+        .get(&scope_word)
+        .cloned()
+        .zip(log.sets.get(&set_word).cloned())
+        .and_then(|(scope, set)| {
+            let members = words
+                .iter()
+                .map(|word| log.tasks.get(word).cloned())
+                .collect::<Option<Vec<_>>>()?;
+            Some(CancelAllEvidence {
+                scope,
+                set,
+                members,
+                effect: None,
+                closed: false,
+            })
+        });
+    if let Some(evidence) = evidence {
+        assert!(log.cancel_all.insert(path, evidence).is_none());
+    }
+}
+
+/// Record cancellation and detach together in the actual bounded member
+/// effect. A resumed rest cannot rewrite its already-observed first cause.
+pub(super) fn cancel_all_member(s: &mut super::super::Scheduler, owner: u32, child: u32) {
+    let events = cancel_observed(s, child, super::super::CANCEL_REQUESTED);
+    s.task(child).detached = true;
+    let Some(mut events) = events else {
+        return;
+    };
+    let path = s.task(owner).path.clone();
+    let word = super::super::handle(child, s.task(child).generation);
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    if let Some(pending) = log.cancel_all.get_mut(&path) {
+        let Some(child) = log.tasks.get(&word).cloned() else {
+            return;
+        };
+        events.push((CanonicalItem::Object(child), CanonicalOutcome::Detached));
+        assert!(pending.effect.replace(events).is_none());
+    }
+}
+
+/// Closing is a real final continuation; its event is consumed by that same
+/// continuation's record callback before complete trace admission is allowed.
+pub(super) fn cancel_all_closed(s: &mut super::super::Scheduler, owner: u32) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(owner).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    if let Some(pending) = driver.events.as_mut().unwrap().cancel_all.get_mut(&path) {
+        pending.closed = true;
+        assert!(
+            pending
+                .effect
+                .replace(vec![(
+                    CanonicalItem::Object(pending.set.clone()),
+                    CanonicalOutcome::Closed
+                )])
+                .is_none()
+        );
+    }
+}
+
+fn cancel_all_subevents(log: &mut Log, path: &[u32], initial: bool) -> Option<Subevents> {
+    let pending = log.cancel_all.get_mut(path)?;
+    if initial {
+        return Some(vec![
+            (
+                CanonicalItem::Object(pending.scope.clone()),
+                CanonicalOutcome::Alias(pending.set.clone()),
+            ),
+            (
+                CanonicalItem::Object(pending.set.clone()),
+                CanonicalOutcome::BulkCanceling {
+                    members: pending.members.clone(),
+                },
+            ),
+        ]);
+    }
+    Some(pending.effect.take().unwrap_or_else(|| {
+        vec![(
+            CanonicalItem::Object(pending.set.clone()),
+            CanonicalOutcome::Unit,
+        )]
+    }))
+}
+
 /// Retain scope membership in spawn order before saved waits and reverse
 /// cleanup calls can vacate child rows. Missing identities remain unsupported.
 pub(super) fn prepare_scope_exit(ctx: *mut TaskCtx, scope_word: u64) {
@@ -1311,192 +1433,217 @@ pub(super) fn record(
             then_yield: *then_yield,
         },
     };
-    let canonical = operation.and_then(|(op, result)| {
-        if let Some(events) = &result.canonical {
-            return Some(events.clone());
-        }
-        if matches!(
-            op.payload,
-            Command::Head {
-                name: "task.check_canceled"
-            }
-        ) {
-            assert_eq!(
-                result.image.len(),
-                4,
-                "cancellation has a captured u32 result"
-            );
-            return Some(vec![(
-                CanonicalItem::Cancellation(path.clone()),
-                CanonicalOutcome::Scalar(result.image.clone()),
-            )]);
-        }
-        let Logical::Ordered(driver) = &s.logical else {
+    let cancel_all = {
+        let Logical::Ordered(driver) = &mut s.logical else {
             unreachable!()
         };
-        let log = driver.events.as_ref().unwrap();
-        match &op.payload {
-            Command::ScopeEnter { .. } => {
-                let object = ObjectId {
-                    creator: path.clone(),
-                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
-                };
-                return Some(vec![
-                    (
-                        CanonicalItem::Object(object.clone()),
-                        CanonicalOutcome::Created(object.clone()),
-                    ),
-                    (
-                        CanonicalItem::CompletionRank(object),
-                        CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec()),
-                    ),
-                ]);
+        let log = driver.events.as_mut().unwrap();
+        if matches!(
+            operation.map(|(op, _)| &op.payload),
+            Some(Command::Head {
+                name: "task.cancel_all"
+            })
+        ) {
+            cancel_all_subevents(log, &path, true)
+        } else if operation.is_none() && log.last_ops.get(&path) == Some(&"task.cancel_all") {
+            cancel_all_subevents(log, &path, false)
+        } else {
+            None
+        }
+    };
+    let canonical = cancel_all.or_else(|| {
+        operation.and_then(|(op, result)| {
+            if let Some(events) = &result.canonical {
+                return Some(events.clone());
             }
-            Command::Head {
-                name: "task.scope_exit",
-            } => return scope_exit_subevents(log, &path, true),
-            Command::Head { name: "task.join" } => return join_subevents(log, &path),
-            Command::Head { name: "task.end" } => {
-                return end_subevents(s, task, false, matches!(retirement.transition, Next::Hold));
-            }
-            Command::TaskSpawn { .. } => {
-                let word = u64::from_ne_bytes(
-                    result
-                        .image
-                        .as_slice()
-                        .try_into()
-                        .expect("spawn returns task word"),
-                );
-                let child = s.tasks[word as u32 as usize]
-                    .as_ref()
-                    .expect("installed child");
-                assert_eq!(child.generation, (word >> 32) as u32);
-                let index = child.scope.expect("child scope");
-                let scope = s.scopes[index as usize].as_ref().expect("installed scope");
-                let scope = log
-                    .scopes
-                    .get(&super::super::handle(index, scope.generation))?
-                    .clone();
-                let object = ObjectId {
-                    creator: path.clone(),
-                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
-                };
-                let inherited = result
-                    .inheritance
-                    .expect("spawn fixed its parent cancellation read");
-                return Some(vec![
-                    (
-                        CanonicalItem::Object(object.clone()),
-                        CanonicalOutcome::Spawned {
-                            scope: scope.clone(),
-                            path: child.path.clone(),
-                        },
-                    ),
-                    (
-                        CanonicalItem::Object(scope),
-                        CanonicalOutcome::Alias(object),
-                    ),
-                    (
-                        CanonicalItem::Cancellation(path.clone()),
-                        CanonicalOutcome::Scalar(
-                            inherited
-                                .map_or(0, |cause| cause + 1)
-                                .to_le_bytes()
-                                .to_vec(),
-                        ),
-                    ),
-                    (
-                        CanonicalItem::Cancellation(child.path.clone()),
-                        CanonicalOutcome::Scalar(
-                            child
-                                .canceled
-                                .cause()
-                                .map_or(0, |cause| cause + 1)
-                                .to_le_bytes()
-                                .to_vec(),
-                        ),
-                    ),
-                ]);
-            }
-            Command::TaskSetCreate { .. } => {
-                let object = ObjectId {
-                    creator: path.clone(),
-                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
-                };
-                return Some(vec![(
-                    CanonicalItem::Object(object.clone()),
-                    CanonicalOutcome::Created(object),
-                )]);
-            }
-            Command::TaskSetAdd { set, child, .. } => {
-                let object = log.sets.get(set)?.clone();
-                let child = log.tasks.get(child)?.clone();
-                return Some(vec![
-                    (CanonicalItem::Object(object), CanonicalOutcome::Unit),
-                    (CanonicalItem::Object(child), CanonicalOutcome::Unit),
-                ]);
-            }
-            Command::TaskSetClose { set } => {
-                return Some(vec![(
-                    CanonicalItem::Object(log.sets.get(set)?.clone()),
-                    CanonicalOutcome::Unit,
-                )]);
-            }
-            Command::Head {
-                name: "task.set_has",
-            } => {
-                assert_eq!(result.image.len(), 9, "set_has captures its set and bool");
-                let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
-                return Some(vec![(
-                    CanonicalItem::Object(log.sets.get(&set)?.clone()),
-                    CanonicalOutcome::Scalar(vec![result.image[8]]),
-                )]);
-            }
-            Command::Head {
-                name: "task.set_take",
-            } => {
+            if matches!(
+                op.payload,
+                Command::Head {
+                    name: "task.check_canceled"
+                }
+            ) {
                 assert_eq!(
                     result.image.len(),
-                    16,
-                    "set_take captures its set and returned task"
+                    4,
+                    "cancellation has a captured u32 result"
                 );
-                let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
-                let child = u64::from_ne_bytes(result.image[8..].try_into().unwrap());
-                let object = log.sets.get(&set)?.clone();
-                let child = log.tasks.get(&child)?.clone();
-                return Some(vec![
-                    (
-                        CanonicalItem::Object(object),
-                        CanonicalOutcome::Alias(child.clone()),
-                    ),
-                    (
-                        CanonicalItem::Object(child.clone()),
-                        CanonicalOutcome::Alias(child),
-                    ),
-                ]);
+                return Some(vec![(
+                    CanonicalItem::Cancellation(path.clone()),
+                    CanonicalOutcome::Scalar(result.image.clone()),
+                )]);
             }
-            _ => {}
-        }
-        let items: std::collections::BTreeSet<_> = op
-            .footprint
-            .reads
-            .iter()
-            .chain(&op.footprint.writes)
-            .collect();
-        let [Item::Object(item)] = items.into_iter().collect::<Vec<_>>().as_slice() else {
-            return None;
-        };
-        let outcome = match &op.payload {
-            Command::AtomicCreate { .. }
-            | Command::MutexCreate { .. }
-            | Command::ChannelOpen { .. } => CanonicalOutcome::Created(item.clone()),
-            Command::SenderDup { .. } => CanonicalOutcome::Alias(item.clone()),
-            Command::AtomicLoad { .. } => CanonicalOutcome::Scalar(result.image.clone()),
-            Command::AtomicStore { .. } => CanonicalOutcome::Unit,
-            _ => return None,
-        };
-        assert_eq!(result.status, 0);
-        Some(vec![(CanonicalItem::Object(item.clone()), outcome)])
+            let Logical::Ordered(driver) = &s.logical else {
+                unreachable!()
+            };
+            let log = driver.events.as_ref().unwrap();
+            match &op.payload {
+                Command::ScopeEnter { .. } => {
+                    let object = ObjectId {
+                        creator: path.clone(),
+                        ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                    };
+                    return Some(vec![
+                        (
+                            CanonicalItem::Object(object.clone()),
+                            CanonicalOutcome::Created(object.clone()),
+                        ),
+                        (
+                            CanonicalItem::CompletionRank(object),
+                            CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec()),
+                        ),
+                    ]);
+                }
+                Command::Head {
+                    name: "task.scope_exit",
+                } => return scope_exit_subevents(log, &path, true),
+                Command::Head { name: "task.join" } => return join_subevents(log, &path),
+                Command::Head { name: "task.end" } => {
+                    return end_subevents(
+                        s,
+                        task,
+                        false,
+                        matches!(retirement.transition, Next::Hold),
+                    );
+                }
+                Command::TaskSpawn { .. } => {
+                    let word = u64::from_ne_bytes(
+                        result
+                            .image
+                            .as_slice()
+                            .try_into()
+                            .expect("spawn returns task word"),
+                    );
+                    let child = s.tasks[word as u32 as usize]
+                        .as_ref()
+                        .expect("installed child");
+                    assert_eq!(child.generation, (word >> 32) as u32);
+                    let index = child.scope.expect("child scope");
+                    let scope = s.scopes[index as usize].as_ref().expect("installed scope");
+                    let scope = log
+                        .scopes
+                        .get(&super::super::handle(index, scope.generation))?
+                        .clone();
+                    let object = ObjectId {
+                        creator: path.clone(),
+                        ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                    };
+                    let inherited = result
+                        .inheritance
+                        .expect("spawn fixed its parent cancellation read");
+                    return Some(vec![
+                        (
+                            CanonicalItem::Object(object.clone()),
+                            CanonicalOutcome::Spawned {
+                                scope: scope.clone(),
+                                path: child.path.clone(),
+                            },
+                        ),
+                        (
+                            CanonicalItem::Object(scope),
+                            CanonicalOutcome::Alias(object),
+                        ),
+                        (
+                            CanonicalItem::Cancellation(path.clone()),
+                            CanonicalOutcome::Scalar(
+                                inherited
+                                    .map_or(0, |cause| cause + 1)
+                                    .to_le_bytes()
+                                    .to_vec(),
+                            ),
+                        ),
+                        (
+                            CanonicalItem::Cancellation(child.path.clone()),
+                            CanonicalOutcome::Scalar(
+                                child
+                                    .canceled
+                                    .cause()
+                                    .map_or(0, |cause| cause + 1)
+                                    .to_le_bytes()
+                                    .to_vec(),
+                            ),
+                        ),
+                    ]);
+                }
+                Command::TaskSetCreate { .. } => {
+                    let object = ObjectId {
+                        creator: path.clone(),
+                        ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                    };
+                    return Some(vec![(
+                        CanonicalItem::Object(object.clone()),
+                        CanonicalOutcome::Created(object),
+                    )]);
+                }
+                Command::TaskSetAdd { set, child, .. } => {
+                    let object = log.sets.get(set)?.clone();
+                    let child = log.tasks.get(child)?.clone();
+                    return Some(vec![
+                        (CanonicalItem::Object(object), CanonicalOutcome::Unit),
+                        (CanonicalItem::Object(child), CanonicalOutcome::Unit),
+                    ]);
+                }
+                Command::TaskSetClose { set } => {
+                    return Some(vec![(
+                        CanonicalItem::Object(log.sets.get(set)?.clone()),
+                        CanonicalOutcome::Unit,
+                    )]);
+                }
+                Command::Head {
+                    name: "task.set_has",
+                } => {
+                    assert_eq!(result.image.len(), 9, "set_has captures its set and bool");
+                    let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
+                    return Some(vec![(
+                        CanonicalItem::Object(log.sets.get(&set)?.clone()),
+                        CanonicalOutcome::Scalar(vec![result.image[8]]),
+                    )]);
+                }
+                Command::Head {
+                    name: "task.set_take",
+                } => {
+                    assert_eq!(
+                        result.image.len(),
+                        16,
+                        "set_take captures its set and returned task"
+                    );
+                    let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
+                    let child = u64::from_ne_bytes(result.image[8..].try_into().unwrap());
+                    let object = log.sets.get(&set)?.clone();
+                    let child = log.tasks.get(&child)?.clone();
+                    return Some(vec![
+                        (
+                            CanonicalItem::Object(object),
+                            CanonicalOutcome::Alias(child.clone()),
+                        ),
+                        (
+                            CanonicalItem::Object(child.clone()),
+                            CanonicalOutcome::Alias(child),
+                        ),
+                    ]);
+                }
+                _ => {}
+            }
+            let items: std::collections::BTreeSet<_> = op
+                .footprint
+                .reads
+                .iter()
+                .chain(&op.footprint.writes)
+                .collect();
+            let [Item::Object(item)] = items.into_iter().collect::<Vec<_>>().as_slice() else {
+                return None;
+            };
+            let outcome = match &op.payload {
+                Command::AtomicCreate { .. }
+                | Command::MutexCreate { .. }
+                | Command::ChannelOpen { .. } => CanonicalOutcome::Created(item.clone()),
+                Command::SenderDup { .. } => CanonicalOutcome::Alias(item.clone()),
+                Command::AtomicLoad { .. } => CanonicalOutcome::Scalar(result.image.clone()),
+                Command::AtomicStore { .. } => CanonicalOutcome::Unit,
+                _ => return None,
+            };
+            assert_eq!(result.status, 0);
+            Some(vec![(CanonicalItem::Object(item.clone()), outcome)])
+        })
     });
     let canonical = canonical.or_else(|| {
         if operation.is_none() {
@@ -1646,6 +1793,13 @@ pub(super) fn record(
             ordinal,
             op: operation.map(|(op, _)| op.descriptor.name),
         });
+    }
+    if log
+        .cancel_all
+        .get(&path)
+        .is_some_and(|pending| pending.closed)
+    {
+        log.cancel_all.remove(&path);
     }
     log.boundaries.push(Boundary {
         task: path,
@@ -3083,7 +3237,11 @@ mod tests {
                 let saved = {
                     let _role = unsafe { role::Guard::new(ctx) };
                     let s = scheduler(ctx);
-                    matches!(s.task(0).wait, Some(Wait::Exit { .. })) && readiness::saved(s, 0)
+                    (if wait == 2 {
+                        matches!(s.task(0).wait, Some(Wait::Drain { .. }))
+                    } else {
+                        matches!(s.task(0).wait, Some(Wait::Exit { .. }))
+                    }) && readiness::saved(s, 0)
                 };
                 if saved {
                     break;
@@ -3894,6 +4052,263 @@ mod tests {
                                     log.unsupported
                                         .iter()
                                         .all(|row| row.op != Some("task.detach_all"))
+                                );
+                                assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
+                                *seen.lock().unwrap() = rows;
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cancel_all_events_keep_causes_and_saved_drain_under_one_ordinal() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 32,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let image = crate::Layout {
+            size: 16,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &image];
+        for count in [0usize, 2] {
+            for running in [false, true] {
+                let mut reference = None;
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let cleanup = Arc::new(Mutex::new(Vec::<u64>::new()));
+                        let order = cleanup.clone();
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = layouts.as_ptr();
+                        run.config.layout_count = 2;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy = Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                enable(ctx);
+                                install_value(ctx, 3, received_integer_program());
+                            },
+                            move |ctx| unsafe {
+                                let mut scope = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_enter(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut scope,
+                                        &0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut children = [0; 2];
+                                for (index, child) in children.iter_mut().enumerate().take(count) {
+                                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                                        ctx,
+                                        2,
+                                        32,
+                                        8,
+                                        crate::alloc::DOMAIN_HEAP,
+                                        0,
+                                    );
+                                    crate::alloc::payload(env).cast::<[u64; 4]>().write([
+                                        Arc::as_ptr(&order) as u64,
+                                        index as u64,
+                                        if running { 2 } else { 0 },
+                                        1,
+                                    ]);
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_spawn(
+                                            ctx,
+                                            0,
+                                            0,
+                                            std::ptr::null_mut(),
+                                            child,
+                                            &scope,
+                                            scope_trace_child,
+                                            env,
+                                            0
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                let mut set = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_set(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut set,
+                                        &scope
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                for member in (0..count).rev() {
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_add(
+                                            ctx,
+                                            &scope,
+                                            &mut set,
+                                            &mut children[member]
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                assert_eq!(
+                                    hirsel_rt_v2_task_cancel_all(ctx, 0, 0, &scope, &mut set),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                                    crate::STATUS_OK
+                                );
+                                let cleaned = order.lock().unwrap();
+                                if count == 0 {
+                                    assert!(cleaned.is_empty());
+                                } else if running {
+                                    let mut members = cleaned.clone();
+                                    members.sort_unstable();
+                                    assert_eq!(members, [0, 1]);
+                                } else {
+                                    assert_eq!(*cleaned, [1, 0]);
+                                }
+                                drop(cleaned);
+                                let _role = role::Guard::new(ctx);
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| row.op == "task.cancel_all")
+                                    .cloned()
+                                    .collect();
+                                assert!(rows.len() >= 4 + count * 2);
+                                let ordinal = 2 + 2 * count as u64;
+                                assert!(
+                                    rows.iter()
+                                        .all(|row| row.task.is_empty() && row.ordinal == ordinal)
+                                );
+                                for (index, row) in rows.iter().enumerate() {
+                                    assert_eq!(row.subevent as usize, index);
+                                }
+                                let set_id = ObjectId {
+                                    creator: vec![],
+                                    ordinal: 1 + count as u64,
+                                };
+                                assert_eq!(
+                                    rows[0].outcome,
+                                    CanonicalOutcome::Alias(set_id.clone())
+                                );
+                                assert_eq!(rows[1].item, CanonicalItem::Object(set_id.clone()));
+                                let members: Vec<_> = (0..count)
+                                    .rev()
+                                    .map(|index| ObjectId {
+                                        creator: vec![],
+                                        ordinal: 1 + index as u64,
+                                    })
+                                    .collect();
+                                assert_eq!(
+                                    rows[1].outcome,
+                                    CanonicalOutcome::BulkCanceling {
+                                        members: members.clone()
+                                    }
+                                );
+                                assert_eq!(rows[1].transition, Transition::Keep);
+                                let detached: Vec<_> = rows
+                                    .iter()
+                                    .filter(|row| row.outcome == CanonicalOutcome::Detached)
+                                    .collect();
+                                assert_eq!(detached.len(), count);
+                                for (row, member) in detached.iter().zip(&members) {
+                                    assert_eq!(row.item, CanonicalItem::Object(member.clone()));
+                                    assert_eq!(row.transition, Transition::Keep);
+                                }
+                                let causes: Vec<_> = rows
+                                    .iter()
+                                    .filter(|row| {
+                                        matches!(row.item, CanonicalItem::Cancellation(_))
+                                    })
+                                    .collect();
+                                assert_eq!(causes.len(), count);
+                                for (row, index) in causes.iter().zip((0..count).rev()) {
+                                    assert_eq!(
+                                        row.item,
+                                        CanonicalItem::Cancellation(vec![index as u32])
+                                    );
+                                    assert_eq!(
+                                        row.outcome,
+                                        CanonicalOutcome::Scalar(1u32.to_le_bytes().to_vec())
+                                    );
+                                }
+                                let parks = rows
+                                    .iter()
+                                    .filter(|row| row.transition == Transition::Park)
+                                    .count();
+                                assert_eq!(parks, usize::from(running && count != 0));
+                                let calls: Vec<_> = rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if let Transition::Call {
+                                            members,
+                                            then_yield,
+                                        } = &row.transition
+                                        {
+                                            assert!(!then_yield);
+                                            Some(members.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                if !running && count != 0 {
+                                    assert_eq!(calls, [vec![vec![1]], vec![vec![0]]]);
+                                } else {
+                                    assert!(calls.is_empty());
+                                }
+                                assert_eq!(
+                                    rows.last().unwrap().item,
+                                    CanonicalItem::Object(set_id)
+                                );
+                                assert_eq!(rows.last().unwrap().outcome, CanonicalOutcome::Closed);
+                                assert_eq!(rows.last().unwrap().transition, Transition::Keep);
+                                let set_rows: Vec<_> =
+                                    rows.iter().filter(|row| row.item == rows[1].item).collect();
+                                for pair in set_rows.windows(2) {
+                                    assert_eq!(pair[1].version, pair[0].version + 1);
+                                }
+                                assert!(log.cancel_all.is_empty());
+                                assert!(
+                                    log.unsupported
+                                        .iter()
+                                        .all(|row| row.op != Some("task.cancel_all"))
                                 );
                                 assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
                                 *seen.lock().unwrap() = rows;
