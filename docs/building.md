@@ -283,9 +283,10 @@ LIR does not retain a separate span for every scalar instruction. Generated
 Cranelift helpers and thunks have no source rows. These are line tables, without
 local-variable descriptions.
 
-A debug build writes its debug information beside the executable as
-`<build-id>.debug`, which the executable's `.gnu_debuglink` names; gdb finds it
-there. Keep the two files together.
+A debug build keeps DWARF in the executable. GDB and LLDB read it directly;
+there is no debug sidecar or post-link objcopy pass. For packaging, a separate
+explicit `llvm-objcopy --only-keep-debug` / `--strip-debug --add-gnu-debuglink`
+operation can split the executable after building.
 
 Artifact source names are logical: `<package>@<version>/<manifest-relative path>`
 (for example `std@1/json.hir`), including profiling strings and failure locations
@@ -312,14 +313,14 @@ run
 
 To check remapping manually, build with `--debug` for each backend, start gdb
 from a directory outside the checkout, set the substitution above, and confirm
-`list` shows the source line and `run` reaches the breakpoint. The split debug
-file must stay beside the executable. The two-root CLI regression compares
-executables and split debug files and verifies logical DWARF and failure paths.
+`list` shows the source line and `run` reaches the breakpoint. The two-root CLI
+regression compares executables including embedded debug information and verifies
+logical DWARF and failure paths.
 
 ```sh
 gdb -batch -ex 'break hello.hir:3' -ex run ./hello-clif
-llvm-dwarfdump --verify ./<build-id>.debug
-llvm-dwarfdump --debug-line ./<build-id>.debug
+llvm-dwarfdump --verify ./hello-clif
+llvm-dwarfdump --debug-line ./hello-clif
 ```
 
 Use an executable source line for the breakpoint. Cross-target line tables can
@@ -933,3 +934,14 @@ reach. Install the `hirsel-std.objects` directory beside `hirsel` with its prech
 
 The timing counts `native imports`, `import hits` and `import misses` distinguish
 fresh SSA import from replay; `units` counts the placement-to-Ready pipelines run.
+
+Link input digests are read once per file state and shared by native planning and
+link command construction. Disposable `file-digests-v1` receipts live in the
+private native cache. Reuse requires path, device, inode, mode, size, nanosecond
+mtime and ctime to match; files changed in the last two seconds are re-read.
+A miss verifies all bytes and checks metadata again after reading. This assumes
+a local filesystem with coherent ctime updates, like Git's stat cache; receipts
+are private to the current user and are not accepted as portable cache artifacts.
+Both existing digest encodings are accumulated in one read to preserve build IDs
+and native-plan identities. Missing, malformed or non-private receipts disable
+reuse. Removing the digest cache changes performance only.

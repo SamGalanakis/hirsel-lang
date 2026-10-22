@@ -30,8 +30,8 @@ pub struct Toolchain {
     /// The link kit (`HIRSEL_LINK_KIT`): every link input besides the program,
     /// its runtime archive and foreign libraries.
     pub kit: PathBuf,
-    /// Link the debug-bearing runtime archive and split each executable's debug
-    /// information into `<build-id>.debug` beside it (`hirsel build --debug`).
+    /// Link the debug-bearing runtime archive and keep DWARF in the executable
+    /// (`hirsel build --debug`), ready for gdb and lldb without post-link copies.
     pub debug_info: bool,
     /// Launch executables (other than under a wrapper) through the glibc floor
     /// release's own loader and libraries in `<dir>/<triple>/`
@@ -1141,8 +1141,7 @@ pub fn link_runnable(
     Ok(linked.runnable())
 }
 
-/// A standalone executable `dir/program` and, for a `debug_info` toolchain, its
-/// `<build-id>.debug` beside it.
+/// A standalone executable `dir/program`, including DWARF for a `debug_info` toolchain.
 pub(crate) fn link_standalone(
     program: &ReadyProgram,
     entry: &DefPath,
@@ -1647,7 +1646,6 @@ fn link_launcher(
             Ok(image) => {
                 return Ok(Linked {
                     path: image.path.clone(),
-                    debug: None,
                     image: Some(image),
                 });
             }
@@ -1682,14 +1680,10 @@ fn link_launcher(
         unwind: true,
         foreign: &foreign,
     };
-    let (mut command, build_id) = link.command(&toolchain.lld, &executable)?;
+    let (mut command, _) = link.command(&toolchain.lld, &executable)?;
     checked(StageName::Link, &mut command)?;
-    let debug = debug
-        .then(|| split_debug(toolchain, &executable, &build_id))
-        .transpose()?;
     Ok(Linked {
         path: executable,
-        debug,
         image: None,
     })
 }
@@ -1715,11 +1709,9 @@ fn executable_reason(
     None
 }
 
-/// A linked file and, for a `debug_info` toolchain, its split debug information; or the
-/// program's image.
+/// A linked file with embedded DWARF when requested, or the program's image.
 pub(crate) struct Linked {
     pub path: PathBuf,
-    pub debug: Option<PathBuf>,
     pub image: Option<super::runner::Image>,
 }
 
@@ -1748,43 +1740,6 @@ pub(crate) fn runtime_archive<'a>(
             format!("no debug runtime archive for {triple}"),
         )
     })
-}
-
-/// The file name of an executable's split debug information.
-pub(crate) fn debug_file_name(build_id: &[u8; 20]) -> String {
-    let hex: String = build_id.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{hex}.debug")
-}
-
-/// Move `executable`'s debug information into `<build-id>.debug` beside it,
-/// which its `.gnu_debuglink` names (with the file's CRC), as debuggers look it up.
-pub(crate) fn split_debug(
-    toolchain: &Toolchain,
-    executable: &Path,
-    build_id: &[u8; 20],
-) -> Result<PathBuf, NativeError> {
-    let objcopy = toolchain.lld.with_file_name("llvm-objcopy");
-    let debug = executable.with_file_name(debug_file_name(build_id));
-    let run = |args: &[&std::ffi::OsStr]| {
-        let mut command = Command::new(&objcopy);
-        command.env_clear().args(args).current_dir(
-            executable.parent().ok_or_else(|| {
-                NativeError::new(StageName::Link, "an executable has no directory")
-            })?,
-        );
-        if let Some(tree) = objcopy.parent().and_then(Path::parent) {
-            command.env("LD_LIBRARY_PATH", tree.join("lib"));
-        }
-        checked(StageName::Link, &mut command)
-    };
-    // objcopy runs in the file's directory, so it names both files by their names alone,
-    // which also keeps the link to the file name, never this directory.
-    let (file, debug_name) = (executable.file_name().unwrap(), debug.file_name().unwrap());
-    run(&["--only-keep-debug".as_ref(), file, debug_name])?;
-    let mut link = std::ffi::OsString::from("--add-gnu-debuglink=");
-    link.push(debug_name);
-    run(&["--strip-debug".as_ref(), &link, file])?;
-    Ok(debug)
 }
 
 /// The files `links` name, in order: a library the kit provides (`c`, `m`,

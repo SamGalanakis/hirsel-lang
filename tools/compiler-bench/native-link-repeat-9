@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Ten seeded, isolated one-body link cells; no compiler builds or wall ratios.
+
+Reuse incremental-profile-9's fixture, independent-output oracles and PMU parser.
+Before/after debug and release are interleaved. `profile` separately records
+instruction samples, descendant argv and Callgrind allocation boundaries.
+"""
+import argparse
+from collections import Counter
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import random
+import shutil
+import statistics
+import subprocess
+
+
+def load(path):
+    loader = importlib.machinery.SourceFileLoader('link_repeat_base', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['matrix', 'profile'])
+    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--before', required=True, type=Path)
+    parser.add_argument('--after', required=True, type=Path)
+    parser.add_argument('--env', required=True, type=Path)
+    parser.add_argument('--work', required=True, type=Path)
+    parser.add_argument('--freeze', type=Path, action='append', default=[])
+    parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=20261022)
+    parser.add_argument('--cpu', type=int, default=6)
+    args = parser.parse_args()
+    base = load(args.root/'tools/compiler-bench/incremental-profile-9')
+    args.cli = args.before
+    args.freeze += [args.after.parent, args.before.parent, Path(__file__)]
+    runner = base.Runner(args)
+    runner.report['profiles'] = ['debug (default Cranelift O0)', 'release (default LLVM optimized)']
+    runner.report['sample_scope'] = 'one first body edit per independently warmed namespace'
+    cells = [(version, profile) for version in ['before', 'after'] for profile in ['debug', 'release']]
+    order = random.Random(args.seed)
+
+    def command(profile, source, binary):
+        return [runner.cli, 'build', '--'+profile, '--timings=json', source, '-o', binary]
+
+    def oracle(profile, source, binary, env, directory):
+        fresh_env = env | {'HIRSEL_DAEMON': 'off', 'HIRSEL_RESULTS': 'none@1',
+                           'HIRSEL_OBJECTS': 'none@1', 'HIRSEL_NATIVE_CACHE': str(directory/'fresh-native')}
+        _, checked = runner.call('oracle-check', [runner.cli, 'check', source], fresh_env)
+        assert not checked.stdout and not checked.stderr
+        _, interpreted = runner.call('oracle-interpreter', [runner.cli, 'run', source, '--grants', runner.grants], fresh_env)
+        assert interpreted.stdout == b'6\n' and not interpreted.stderr
+        fresh = directory/'fresh-program'
+        runner.call('oracle-fresh-build', command(profile, source, fresh), fresh_env)
+        for path in [binary, fresh]:
+            _, ran = runner.call('oracle-execute', [path, '--hirsel-grants', runner.grants], env)
+            assert ran.stdout == b'6\n' and not ran.stderr
+        assert base.sha(binary) == base.sha(fresh), 'warm/fresh binary mismatch'
+        sidecars = sorted(directory.glob('*.debug'))
+        runner.report.setdefault('parity', []).append({'warm': str(binary), 'fresh': str(fresh),
+            'sha256': base.sha(binary), 'sidecars': {p.name: base.sha(p) for p in sidecars}})
+
+    try:
+        if args.mode == 'matrix':
+            for round_number in range(args.rounds):
+                shuffled = cells.copy()
+                order.shuffle(shuffled)
+                for version, profile in shuffled:
+                    runner.cli = getattr(args, version).resolve()
+                    directory = base.namespace(runner.work, version, round_number, profile)
+                    source = runner.fixture(directory)
+                    original = source.read_text()
+                    env = runner.environment(directory)
+                    binary = directory/'program'
+                    runner.call('prepare-'+version+'-'+profile, command(profile, source, binary), env)
+                    with base.edit(source, base.variants(original)['body']):
+                        row, _ = runner.call('body-'+version+'-'+profile, command(profile, source, binary), env, counted=True)
+                        row |= {'version': version, 'profile': profile, 'round': round_number,
+                                'source_sha256': base.sha(source)}
+                        assert row['timings']['counts']['object misses'] == (1 if profile == 'debug' else 2), row['timings']['counts']
+                        oracle(profile, source, binary, env, directory)
+                    assert source.read_text() == original
+                    print(f'pass round={round_number} {version} {profile}', flush=True)
+            runner.report['medians'] = []
+            for version, profile in cells:
+                rows = [r for r in runner.report['attempts'] if r.get('version') == version and r.get('profile') == profile]
+                assert len(rows) == args.rounds
+                runner.report['medians'].append({'version': version, 'profile': profile,
+                    **{key: statistics.median(r['perf']['counts'][key] for r in rows) for key in ['instructions', 'cycles']},
+                    'link_interval_share_observation': statistics.median(
+                        next(i['wall_ns'] for i in r['timings']['intervals'] if i['interval'] == 'link') / r['timings']['wall_ns'] for r in rows)})
+            # Isolate each objcopy command using the candidate's unsplit DWARF
+            # executable: same link inputs/build ID as the old debug link.
+            debug = next(runner.work.glob('*-after-debug/program'))
+            copy_root = runner.work/'objcopy'
+            copy_root.mkdir()
+            objcopy = Path(runner.env['LLVM_SYS_211_PREFIX'])/'bin/llvm-objcopy'
+            for round_number in range(args.rounds):
+                directory = copy_root/str(round_number)
+                directory.mkdir()
+                shutil.copy2(debug, directory/'program')
+                env = runner.env | {'LD_LIBRARY_PATH': str(objcopy.parent.parent/'lib')}
+                # The second operation requires the first operation's debug file.
+                for name, flags in [('keep', ['--only-keep-debug', 'program', 'program.debug']),
+                                    ('strip', ['--strip-debug', '--add-gnu-debuglink=program.debug', 'program'])]:
+                    _, _ = runner.call('objcopy-'+name, ['sh', '-c', 'cd "$1" && shift && exec "$@"', 'objcopy', directory, objcopy, *flags], env, counted=True)
+            for name in ['keep', 'strip']:
+                rows = [r for r in runner.report['attempts'] if r['label'] == 'objcopy-'+name]
+                runner.report['medians'].append({'objcopy': name, **{key: statistics.median(r['perf']['counts'][key] for r in rows) for key in ['instructions','cycles']}})
+        else:
+            for version in ['before', 'after']:
+                for profiler in ['process', 'samples', 'callgrind']:
+                    runner.cli = getattr(args, version).resolve()
+                    directory = base.namespace(runner.work, version, 0, profiler)
+                    source = runner.fixture(directory)
+                    env = runner.environment(directory)
+                    binary = directory/'program'
+                    runner.call('prepare-'+version+'-'+profiler, command('debug', source, binary), env)
+                    with base.edit(source, base.variants(source.read_text())['body']):
+                        cmd = command('debug', source, binary)
+                        if profiler == 'process':
+                            cmd = ['strace','-f','-qq','-s','4096','-e','trace=process','-o',directory/'process.trace',*cmd]
+                        elif profiler == 'samples':
+                            cmd = ['perf','record','-e','instructions','-c','1000000','--call-graph','dwarf','-o',directory/'perf.data','--','taskset','-c',str(args.cpu),*cmd]
+                        else:
+                            runtime = env['HIRSEL_VALGRIND_RUNTIME']
+                            cmd = [env['HIRSEL_VALGRIND'],'--tool=callgrind','--trace-children=yes',
+                                '--callgrind-out-file='+str(directory/'callgrind.%p'),
+                                runtime+'/ld-linux-x86-64.so.2','--library-path',runtime+':'+env['LLVM_SYS_211_PREFIX']+'/lib',*cmd]
+                        row, _ = runner.call('profile-'+version+'-'+profiler, cmd, env)
+                        assert row['timings']['counts']['object misses'] == 1
+                        oracle('debug', source, binary, env, directory)
+                    if profiler == 'samples':
+                        _, samples = runner.call('samples-'+version, ['perf','script','-i',directory/'perf.data','-F','comm'], env)
+                        counts = Counter(line.strip() for line in samples.stdout.decode().splitlines() if line.strip())
+                        runner.report.setdefault('process_samples', {})[version] = dict(counts)
+                    print('pass', version, profiler, flush=True)
+        runner.finish()
+    finally:
+        base.dump(runner.work/'result.json', runner.report)
+
+
+if __name__ == '__main__':
+    main()

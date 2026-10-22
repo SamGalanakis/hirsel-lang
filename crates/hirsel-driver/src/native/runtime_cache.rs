@@ -273,7 +273,7 @@ pub(super) fn default_directory() -> PathBuf {
     }))
 }
 
-fn private_directory(cache: &Path) -> Result<File, NativeError> {
+pub(super) fn private_directory(cache: &Path) -> Result<File, NativeError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700);
     builder.create(cache).map_err(io)?;
@@ -298,7 +298,7 @@ fn check_directory(meta: &fs::Metadata, owner: u32) -> Result<(), NativeError> {
     Ok(())
 }
 
-fn private_file(path: &Path) -> std::io::Result<File> {
+pub(super) fn private_file(path: &Path) -> std::io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)

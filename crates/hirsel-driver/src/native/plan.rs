@@ -736,8 +736,8 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
     ];
     // Ordinary assembly's exact external artifacts. Cargo-fallback/custom
     // toolchains cannot yet supply a frozen complete identity at this seam.
-    // Hash actual content each request: path/mtime and an old pointer are not
-    // evidence that a changed file still names the same immutable product.
+    // Full content identities, shared with the link command. Metadata reuse
+    // requires a non-racy ctime/device/inode match as well as path/size/mtime.
     parts.push(link_identity(target, objects.debug)?);
     // Named foreign libraries lack a resolved byte identity at this seam.
     for link in foreign_links {
@@ -891,8 +891,6 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
     Some(out)
 }
 fn link_identity(target: &hirsel_lir::TargetSpec, debug: bool) -> Option<Vec<u8>> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
     use std::path::PathBuf;
     let runtime = PathBuf::from(std::env::var_os("HIRSEL_RUNTIME_ARCHIVES")?);
     let kit = PathBuf::from(std::env::var_os("HIRSEL_LINK_KIT")?);
@@ -920,17 +918,7 @@ fn link_identity(target: &hirsel_lir::TargetSpec, debug: bool) -> Option<Vec<u8>
     files.sort();
     let mut out = Vec::new();
     for path in files {
-        let mut file = std::fs::File::open(path).ok()?;
-        let mut hash = Sha256::new();
-        let mut buffer = [0u8; 65536];
-        loop {
-            let size = file.read(&mut buffer).ok()?;
-            if size == 0 {
-                break;
-            }
-            hash.update(&buffer[..size]);
-        }
-        out.extend_from_slice(&hash.finalize());
+        out.extend_from_slice(&super::file_digest::file(&path).ok()?.raw);
     }
     Some(out)
 }

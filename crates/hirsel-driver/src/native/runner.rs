@@ -77,8 +77,7 @@ pub struct Runner {
     pub path: PathBuf,
     pub build_id: [u8; 20],
     pub mode: Mode,
-    /// For a `debug_info` toolchain, the runner's split debug information,
-    /// `<build-id>.debug` beside it, which its `.gnu_debuglink` names.
+    /// For a `debug_info` toolchain, the executable containing its embedded DWARF.
     pub debug: Option<PathBuf>,
     exports: Arc<BTreeMap<String, SymbolKind>>,
 }
@@ -487,7 +486,7 @@ fn audit(bytes: &[u8]) -> Result<Mode, NativeError> {
 
 /// The runner for `target` and the toolchain's selected archive: built and checked once per
 /// build ID, then read from the cache. A `debug_info` toolchain's runner links the
-/// debug-bearing archive (a different build ID) and gets its own split debug file.
+/// debug-bearing archive (a different build ID) and retains embedded DWARF.
 pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, NativeError> {
     static RUNNERS: Mutex<BTreeMap<PathBuf, Runner>> = Mutex::new(BTreeMap::new());
     let stripped = toolchain.archive(&target.triple).ok_or_else(|| {
@@ -514,6 +513,12 @@ pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, Nati
         foreign: &[],
     };
     let runners = toolchain.cache.join("runners");
+    // Old debug runners had stripped DWARF and a sidecar under the same build ID.
+    let runners = if toolchain.debug_info {
+        runners.join("embedded-debug-v1")
+    } else {
+        runners
+    };
     // The ID depends only on content, so the output's path does not enter it.
     let (_, id) = link.command(&toolchain.lld, &runners.join("probe"))?;
     let directory = runners.join(hex(&id));
@@ -522,8 +527,7 @@ pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, Nati
         return Ok(runner.clone());
     }
     let manifest = directory.join("runner.json");
-    let debug_name = super::link::debug_file_name(&id);
-    let debug = toolchain.debug_info.then(|| directory.join(&debug_name));
+    let debug = toolchain.debug_info.then(|| path.clone());
     let runner = match std::fs::read(&manifest)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -558,9 +562,6 @@ pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, Nati
                 checked_exports.insert(name.clone(), *kind);
             }
             let mode = audit(&bytes)?;
-            if toolchain.debug_info {
-                super::link::split_debug(toolchain, &built, &id)?;
-            }
             let record = serde_json::json!({
                 "build_id": hex(&id),
                 "mode": match &mode { Mode::Fork => "fork".to_string(), Mode::Exec(r) => format!("exec: {r}") },

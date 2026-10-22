@@ -185,12 +185,6 @@ pub fn build_path_native_backend_with_validation(
             hirsel_intern::memory::checkpoint("link complete");
             let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
             std::fs::copy(&linked.path, output).map_err(io)?;
-            // The debug file keeps its build-id name beside the executable, where
-            // its `.gnu_debuglink` leads a debugger.
-            if let Some(debug) = &linked.debug {
-                let beside = output.with_file_name(debug.file_name().unwrap());
-                std::fs::copy(debug, beside).map_err(io)?;
-            }
             drop(timing);
             Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
         })())

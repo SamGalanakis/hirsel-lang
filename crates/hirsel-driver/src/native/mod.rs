@@ -11,6 +11,7 @@ mod differential;
 mod emit;
 mod executable;
 mod exit_report;
+mod file_digest;
 mod foreign;
 mod heap;
 mod import_cache;

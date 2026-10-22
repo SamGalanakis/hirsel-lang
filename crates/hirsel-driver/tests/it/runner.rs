@@ -237,7 +237,7 @@ fn images_run_in_runners_as_their_executables_do_on_both_targets_and_backends() 
 }
 
 /// A `debug_info` toolchain's runner links the debug-bearing archive, so it is a different
-/// runner (images name it), and keeps its debug information in its own `<build-id>.debug`.
+/// runner (images name it), and keeps its debug information in the executable.
 #[test]
 fn a_debug_runner_has_its_own_identity_and_debug_file() {
     with_compiler_stack(|| {
@@ -250,6 +250,7 @@ fn a_debug_runner_has_its_own_identity_and_debug_file() {
         let debug = runner(&toolchain, &target).unwrap();
         assert_ne!(debug.build_id, runner(&plain, &target).unwrap().build_id);
         let file = debug.debug.clone().expect("a debug file");
+        assert_eq!(file, debug.path);
         assert!(
             file.is_file() && file.parent() == debug.path.parent(),
             "{file:?}"

@@ -1,6 +1,6 @@
 //! A shipped executable is a pure function of its program and the toolchain:
-//! `hirsel build` gives the same bytes, and with `--debug` the same
-//! `<build-id>.debug`, on a repeat and from 1, 2 or 4 builds running at once,
+//! `hirsel build` gives the same bytes (including embedded DWARF with `--debug`)
+//! on a repeat and from 1, 2 or 4 builds running at once,
 //! on both targets, each build in its own scratch directory.
 use hirsel_driver::native::{self, Backend, BuildProfile, TargetSpec};
 use hirsel_engine::with_compiler_stack;
@@ -62,7 +62,10 @@ fn build(source: &Path, dir: &Path, target: &TargetSpec, profile: BuildProfile) 
                 std::fs::read(&path).unwrap(),
             )
         });
-    assert_eq!(debug.is_some(), profile == BuildProfile::Debug);
+    assert!(
+        debug.is_none(),
+        "debug information belongs in the executable"
+    );
     let bytes = std::fs::read(&executable).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     (bytes, debug)

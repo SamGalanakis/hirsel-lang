@@ -255,32 +255,24 @@ fn verify_debug_objects(paths: &[std::path::PathBuf], linked: &Path) {
     }
 }
 
-/// A `--debug` executable's split debug information: `<build-id>.debug` beside
-/// it, which its `.gnu_debuglink` names.
+/// Debug builds keep DWARF in the executable and need no sidecar.
 pub(crate) fn debug_file(exe: &Path) -> std::path::PathBuf {
-    let notes = output(Command::new(tool("llvm-readelf")).arg("--notes").arg(exe));
-    let notes = String::from_utf8(notes.stdout).unwrap();
-    let id = notes
-        .split("Build ID: ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or_else(|| panic!("no build ID: {notes}"));
-    let debug = exe.with_file_name(format!("{id}.debug"));
-    let link = output(
+    let sections = output(
         Command::new(tool("llvm-readelf"))
-            .arg("--string-dump=.gnu_debuglink")
+            .arg("--sections")
             .arg(exe),
     );
+    assert!(sections.status.success(), "{sections:?}");
+    let text = String::from_utf8(sections.stdout).unwrap();
     assert!(
-        String::from_utf8_lossy(&link.stdout).contains(&format!("{id}.debug")),
-        "{link:?}"
+        text.contains(".debug_info") && text.contains(".debug_line"),
+        "{text}"
     );
-    debug
+    assert!(!text.contains(".gnu_debuglink"), "{text}");
+    exe.to_owned()
 }
 
 fn function_lines(exe: &Path, source: &Path) -> BTreeMap<String, BTreeSet<u64>> {
-    // The executable itself carries no line table; its debug file does.
-    assert!(!dump(exe, "--debug-line").contains(source.file_name().unwrap().to_str().unwrap()));
     let exe = &debug_file(exe);
     let text = dump(exe, "--debug-line");
     assert!(
@@ -458,7 +450,6 @@ fn cranelift_debug_lines_match_llvm_per_function_on_both_targets() {
                         output(&mut Command::new(&exe))
                     };
                     assert_eq!(output.status.code(), Some(0), "{output:?}");
-                    std::fs::remove_file(debug_file(&exe)).unwrap();
                     std::fs::remove_file(exe).unwrap();
                 }
             }
@@ -517,7 +508,6 @@ fn a_generated_body_is_reported_in_its_generated_source() {
                 "{backend}: {lines:?}"
             );
             assert_eq!(output(&mut Command::new(&exe)).status.code(), Some(0));
-            std::fs::remove_file(debug_file(&exe)).unwrap();
             std::fs::remove_file(exe).unwrap();
         }
         std::fs::remove_file(source).unwrap();

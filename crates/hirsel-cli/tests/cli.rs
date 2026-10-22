@@ -1631,7 +1631,7 @@ fn standalone_cross_target_runs_under_pinned_qemu_and_debug_has_line_tables() {
                 .contains(source.file_name().unwrap().to_str().unwrap()),
             "{lines:?}"
         );
-        for path in [source, cross, debug, split, manifest] {
+        for path in [source, cross, debug, manifest] {
             std::fs::remove_file(path).unwrap();
         }
     });

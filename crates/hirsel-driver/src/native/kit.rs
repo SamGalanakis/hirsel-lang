@@ -18,7 +18,6 @@ use hirsel_syntax::ContentHash;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -177,28 +176,10 @@ pub(crate) struct Link<'a> {
     pub foreign: &'a [PathBuf],
 }
 
-/// The runtime archive's content hash, once per process and archive state.
-fn archive_identity(path: &Path) -> Result<ContentHash, NativeError> {
-    type State = (PathBuf, [i64; 5]);
-    static SEEN: Mutex<BTreeMap<State, ContentHash>> = Mutex::new(BTreeMap::new());
-    let meta = std::fs::metadata(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-    let state = (
-        path.to_path_buf(),
-        [
-            meta.dev() as i64,
-            meta.ino() as i64,
-            meta.size() as i64,
-            meta.mtime(),
-            meta.mtime_nsec(),
-        ],
-    );
-    if let Some(hash) = SEEN.lock().unwrap().get(&state) {
-        return Ok(*hash);
-    }
-    let bytes = std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-    let hash = ContentHash::of_bytes(&bytes);
-    SEEN.lock().unwrap().insert(state, hash);
-    Ok(hash)
+fn input_identity(path: &Path) -> Result<ContentHash, NativeError> {
+    super::file_digest::file(path)
+        .map(|hash| hash.content)
+        .map_err(|e| failed(format!("{}: {e}", path.display())))
 }
 
 impl Link<'_> {
@@ -275,18 +256,20 @@ impl Link<'_> {
         ];
         let named: BTreeMap<&Path, ContentHash> = {
             let mut named = BTreeMap::new();
-            for path in self.objects.iter().chain(self.foreign) {
-                let bytes =
-                    std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                named.insert(path.as_path(), ContentHash::of_bytes(&bytes));
-            }
-            if let Some(runtime) = self.runtime {
-                named.insert(runtime, archive_identity(runtime)?);
-            }
-            if let Kind::Image { script } = &self.kind {
-                let bytes = std::fs::read(script)
-                    .map_err(|e| failed(format!("{}: {e}", script.display())))?;
-                named.insert(script.as_path(), ContentHash::of_bytes(&bytes));
+            for path in self
+                .objects
+                .iter()
+                .chain(self.foreign)
+                .map(PathBuf::as_path)
+                .chain(self.runtime)
+                .chain(match &self.kind {
+                    Kind::Image { script } => Some(script.as_path()),
+                    _ => None,
+                })
+            {
+                if let std::collections::btree_map::Entry::Vacant(entry) = named.entry(path) {
+                    entry.insert(input_identity(path)?);
+                }
             }
             named
         };
