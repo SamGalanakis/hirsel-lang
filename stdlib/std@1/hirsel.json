@@ -1337,6 +1337,12 @@
       "module": [
         "json_access"
       ]
+    },
+    {
+      "path": "regex_prefilter.hir",
+      "module": [
+        "regex"
+      ]
     }
   ],
   "dependencies": []

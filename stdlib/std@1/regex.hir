@@ -64,6 +64,19 @@ pub opaque type Regex: copyable + inert + noalloc_drop uses {} {
   code: List[Inst],
   entry: u64,
   names: List[String],
+  prefilter: PrefixPlan,
+}
+
+// The hot ordered VM sees only its original compiled fields. Optional search
+// metadata belongs to the meta layer and is never copied with every thread.
+type VmProgram {
+  code: List[Inst],
+  entry: u64,
+  names: List[String],
+}
+
+fn vm_program(re: Regex) -> VmProgram in re uses {} {
+  VmProgram(code: copy re.code, entry: re.entry, names: copy re.names)
 }
 
 type Input {
@@ -887,7 +900,13 @@ pub fn compile_flags(pattern: String, flags: Flags, max_instructions: u64) -> Re
       depth += 1
     }
   }
-  Ok(Regex(code: take code, entry: entry, names: copy tree.names))
+  // Keep cold graph preparation off tiny searches with many nested captures.
+  let prefilter = if core@1/list.len(tree.names) > 8 {
+    no_prefix()
+  } else {
+    prefix_plan(code, entry)
+  }
+  Ok(Regex(code: take code, entry: entry, names: copy tree.names, prefilter: take prefilter))
 }
 
 fn spend(mut left: u64) -> Result[(), MatchError] uses {} {
@@ -915,7 +934,7 @@ type Thread {
 // Ordered epsilon closure, deduplicated by instruction for each scalar boundary.
 // An explicit DFS stack replaces Go's recursive add; first arrival wins.
 fn add(
-  re: Regex,
+  re: VmProgram,
   seed: Thread,
   at: u64,
   previous: Option[char],
@@ -1013,7 +1032,7 @@ type Machine {
 }
 
 // One scalar boundary, including the final end of text (None). The scalar view is lazy.
-fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
+fn step(re: VmProgram, next_scalar: Option[char], mut machine: Machine) -> Result[
   bool,
   MatchError
 ] uses {} {
@@ -1091,6 +1110,15 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
   Option[Span],
   MatchError
 ] uses {} {
+  if prefix_admitted(re, text, false, work_limit) {
+    let mut work = work_limit
+    let subject = make_subject(text, mut work)?
+    let (matched, _) = find_from_prefilter(
+      re, subject, 0, false, true, core@1/string.as_bytes(text), mut work
+    )?
+    return Ok(take matched)
+  }
+  let program = vm_program(re)
   let mut machine = Machine(
     seen: [],
     seeds: [],
@@ -1108,11 +1136,11 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
     i += 1
   }
   for c in core@1/string.scalars(text) {
-    if step(re, Some(c), mut machine)? {
+    if step(program, Some(c), mut machine)? {
       return Ok(copy machine.matched)
     }
   }
-  step(re, None(), mut machine)?
+  step(program, None(), mut machine)?
   Ok(copy machine.matched)
 }
 
@@ -1129,6 +1157,7 @@ fn find_from(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64
   (Option[Span], Captures),
   MatchError
 ] uses {} {
+  let program = vm_program(re)
   let mut machine = Machine(
     seen: [],
     seeds: [],
@@ -1156,7 +1185,66 @@ fn find_from(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64
     } else {
       None()
     }
-    if step(re, next, mut machine)? {
+    if step(program, next, mut machine)? {
+      work = machine.work
+      return Ok((copy machine.matched, copy machine.captures))
+    }
+    cursor += 1
+  }
+  work = machine.work
+  Ok((copy machine.matched, copy machine.captures))
+}
+
+fn find_from_prefilter(
+  re: Regex,
+  subject: Input,
+  start: u64,
+  capture: bool,
+  accelerated: bool,
+  haystack: Bytes,
+  mut work: u64
+) -> Result[(Option[Span], Captures), MatchError] uses {} {
+  if !accelerated {
+    return find_from(re, subject, start, capture, mut work)
+  }
+  let program = vm_program(re)
+  let mut machine = Machine(
+    seen: [],
+    seeds: [],
+    matched: None(),
+    captures: Captures(spans: []),
+    capture: capture,
+    at: subject.offsets[start],
+    previous: if start == 0 {
+      None()
+    } else {
+      Some(subject.scalars[start - 1])
+    },
+    work: work
+  )
+  let mut i: u64 = 0
+  while i < core@1/list.len(re.code) {
+    spend(mut machine.work)?
+    core@1/list.push(mut machine.seen, 0)
+    i += 1
+  }
+  let mut cursor = start
+  while cursor <= core@1/list.len(subject.scalars) {
+    if core@1/list.len(machine.seeds) == 0 && machine.matched == None() {
+      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else {
+        work = machine.work
+        return Ok((None(), Captures(spans: [])))
+      }
+      cursor = candidate.scalar
+      machine.at = candidate.byte
+      machine.previous = candidate.previous
+    }
+    let next: Option[char] = if cursor < core@1/list.len(subject.scalars) {
+      Some(subject.scalars[cursor])
+    } else {
+      None()
+    }
+    if step(program, next, mut machine)? {
       work = machine.work
       return Ok((copy machine.matched, copy machine.captures))
     }
@@ -1177,6 +1265,8 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   if max_matches == 0 {
     return Ok(take matches)
   }
+  let accelerated = prefix_admitted(re, text, false, work_limit)
+  let haystack = core@1/string.as_bytes(text)
   let mut work = work_limit
   let mut subject = Input(scalars: [], offsets: [], at: 0)
   let mut byte: u64 = 0
@@ -1191,7 +1281,7 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
   while pos <= core@1/list.len(subject.scalars) {
-    let (matched, _) = find_from(re, subject, pos, false, mut work)?
+    let (matched, _) = find_from_prefilter(re, subject, pos, false, accelerated, haystack, mut work)?
     let Some(span) = matched else {
       return Ok(take matches)
     }
@@ -1228,7 +1318,7 @@ pub fn subexp_names(re: Regex) -> List[String] uses {} {
   unique re.names
 }
 
-fn empty_slots(re: Regex, capture: bool, mut work: u64) -> Result[
+fn empty_slots(re: VmProgram, capture: bool, mut work: u64) -> Result[
   List[Option[u64]],
   MatchError
 ] uses {} {
@@ -1279,9 +1369,11 @@ pub fn find_captures(re: Regex, text: String, work_limit: u64) -> Result[
   Option[Captures],
   MatchError
 ] uses {} {
+  let accelerated = prefix_admitted(re, text, true, work_limit)
+  let haystack = core@1/string.as_bytes(text)
   let mut work = work_limit
   let source_input = make_subject(text, mut work)?
-  let (matched, captures) = find_from(re, source_input, 0, true, mut work)?
+  let (matched, captures) = find_from_prefilter(re, source_input, 0, true, accelerated, haystack, mut work)?
   match matched {
     Some(_) => Ok(Some(take captures)),
     None() => Ok(None()),
@@ -1297,12 +1389,14 @@ pub fn find_all_captures(re: Regex, text: String, max_matches: u64, work_limit: 
   if max_matches == 0 {
     return Ok(take matches)
   }
+  let accelerated = prefix_admitted(re, text, true, work_limit)
+  let haystack = core@1/string.as_bytes(text)
   let mut work = work_limit
   let source_input = make_subject(text, mut work)?
   let mut pos = 0u64
   let mut previous_end: Option[u64] = None()
   while pos <= core@1/list.len(source_input.scalars) {
-    let (matched, captures) = find_from(re, source_input, pos, true, mut work)?
+    let (matched, captures) = find_from_prefilter(re, source_input, pos, true, accelerated, haystack, mut work)?
     let Some(span) = matched else {
       return Ok(take matches)
     }

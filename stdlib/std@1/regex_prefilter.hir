@@ -1,0 +1,269 @@
+// Prefix selection and conservative candidate confirmation adapted from
+// rust-lang/regex 80b9d14e, regex-automata/src/meta/strategy.rs:81-153,
+// util/prefilter/mod.rs:584-688 and hybrid/search.rs:50-90.
+// Copyright (c) 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+// Scalar masks replace memchr/Teddy; fixed literals reuse std's Two-Way search.
+// Every candidate is confirmed by the ordered engine on the original source.
+type PrefixPlan {
+  enabled: bool,
+  low: u64,
+  high: u64,
+  literals: List[String],
+  search: Option[internal.substring.Plan],
+}
+
+type Candidate {
+  byte: u64,
+  scalar: u64,
+  previous: Option[char],
+}
+
+fn no_prefix() -> PrefixPlan uses {} {
+  PrefixPlan(enabled: false, low: 0, high: 0, literals: [], search: None())
+}
+
+fn prefix_bit(mut plan: PrefixPlan, cp: u32) uses {} {
+  if cp < 64 {
+    plan.low |= 1u64 << core@1/int.widen(cp)
+  } else if cp < 128 {
+    plan.high |= 1u64 << core@1/int.widen(cp - 64)
+  }
+}
+
+// A singleton's complete simple-fold orbit, including Kelvin and long-s.
+// Larger folded/negated classes are deliberately unsupported by extraction.
+fn prefix_class(mut plan: PrefixPlan, inst: Inst) -> bool uses {} {
+  if inst.negated || core@1/list.len(inst.ranges) > 16 {
+    return false
+  }
+  if inst.kind == 13 {
+    if core@1/list.len(inst.ranges) != 1 {
+      return false
+    }
+    let (lo, hi) = inst.ranges[0]
+    if lo != hi {
+      return false
+    }
+    let mut cp = lo
+    let mut fuel = 64u64
+    while true {
+      prefix_bit(mut plan, cp)
+      let Ok(next) = simple_fold(cp, mut fuel) else {
+        return false
+      }
+      cp = next
+      if cp == lo {
+        return true
+      }
+    }
+  }
+  for (lo, hi) in inst.ranges {
+    if lo < 64 {
+      let last = if hi < 64 { hi } else { 63u32 }
+      plan.low |= prefix_range(lo, last)
+    }
+    if lo < 128 && hi >= 64 {
+      let first = if lo >= 64 { lo - 64 } else { 0u32 }
+      let last = if hi < 128 { hi - 64 } else { 63u32 }
+      plan.high |= prefix_range(first, last)
+    }
+  }
+  true
+}
+
+// Inclusive interval inside one 64-bit word; no shift by the word width.
+fn prefix_range(lo: u32, hi: u32) -> u64 uses {} {
+  let width: u64 = core@1/int.widen(hi - lo + 1)
+  let bits = if width == 64 { 18446744073709551615u64 } else { (1u64 << width) - 1 }
+  let shift: u64 = core@1/int.widen(lo)
+  bits << shift
+}
+
+// Stop at the first branching/unknown instruction. A nonempty truncated
+// prefix remains necessary; it is never sufficient to return a match.
+fn prefix_literal(code: List[Inst], start: u64) -> String uses {} {
+  let mut pc = start
+  let mut needle: List[u8] = []
+  let mut steps = 0u64
+  while steps < 64 && core@1/list.len(needle) < 16 {
+    steps += 1
+    let inst = code[pc]
+    if inst.kind == 1 && !inst.negated && core@1/list.len(inst.ranges) == 1 {
+      let (lo, hi) = inst.ranges[0]
+      if lo != hi || lo >= 128 {
+        break
+      }
+      core@1/list.push(mut needle, core@1/int.narrow(lo))
+      pc = inst.x
+    } else if inst.kind == 0 || inst.kind == 12 {
+      pc = inst.x
+    } else {
+      break
+    }
+  }
+  text.finish_valid(take needle)
+}
+
+fn prefix_plan(code: List[Inst], entry: u64) -> PrefixPlan uses {} {
+  // Avoid graph preprocessing for tiny patterns and large interpreter witnesses.
+  if core@1/list.len(code) < 8 || core@1/list.len(code) > 256 {
+    return no_prefix()
+  }
+  // Rust meta/strategy.rs:89: anchored searches rarely benefit from scanning.
+  // Decline leading assertions before allocating or exploring epsilon chains.
+  let leading = code[entry].kind
+  if leading >= 3 && leading <= 6 || leading == 15 || leading == 16 {
+    return no_prefix()
+  }
+  let mut plan = no_prefix()
+  let mut stack: List[u64] = [entry]
+  let mut visited: List[u64] = []
+  let mut depth = 1u64
+  let mut literals = true
+  while depth != 0 {
+    depth -= 1
+    let pc = stack[depth]
+    if core@1/list.len(visited) == 64 {
+      return no_prefix()
+    }
+    // Cycles and shared epsilon tails conservatively disable the plan.
+    for old in visited {
+      if old == pc {
+        return no_prefix()
+      }
+    }
+    core@1/list.push(mut visited, pc)
+    let inst = code[pc]
+    if inst.kind == 1 || inst.kind == 13 {
+      if !prefix_class(mut plan, inst) {
+        return no_prefix()
+      }
+      let literal = prefix_literal(code, pc)
+      if core@1/bytes.len(core@1/string.as_bytes(literal)) == 0 {
+        literals = false
+      } else {
+        core@1/list.push(mut plan.literals, take literal)
+      }
+    } else if inst.kind == 0 || inst.kind == 12 || inst.kind == 3 || inst.kind == 4 || inst.kind == 5 || inst.kind == 6 || inst.kind == 15 || inst.kind == 16 || inst.kind == 10 {
+      if inst.kind == 10 {
+        if depth < core@1/list.len(stack) {
+          stack[depth] = inst.y
+        } else {
+          core@1/list.push(mut stack, inst.y)
+        }
+        depth += 1
+      }
+      if depth < core@1/list.len(stack) {
+        stack[depth] = inst.x
+      } else {
+        core@1/list.push(mut stack, inst.x)
+      }
+      depth += 1
+    } else {
+      // Match means nullable; dot/unknown means any starting scalar.
+      return no_prefix()
+    }
+  }
+  if !literals {
+    plan.literals = []
+  }
+  // <=64 strings, <=16 bytes each: <=3072 bytes including 32-byte string
+  // descriptors, plus fixed fields (<4 KiB). No search-time growing plan.
+  if core@1/list.len(plan.literals) == 1 {
+    plan.search = Some(internal.substring.prepare(core@1/string.as_bytes(plan.literals[0])))
+  }
+  plan.enabled = true
+  take plan
+}
+
+fn prefix_has(plan: PrefixPlan, cp: u32) -> bool uses {} {
+  if cp < 64 {
+    plan.low >> core@1/int.widen(cp) & 1u64 != 0
+  } else if cp < 128 {
+    plan.high >> core@1/int.widen(cp - 64) & 1u64 != 0
+  } else {
+    // Before any skip, allow the original engine to see every non-ASCII
+    // scalar. In particular folded ASCII letters can match non-ASCII text.
+    true
+  }
+}
+
+fn prefix_at(plan: PrefixPlan, haystack: Bytes, at: u64) -> bool uses {} {
+  if core@1/list.len(plan.literals) == 0 {
+    return true
+  }
+  for literal in plan.literals {
+    let needle = core@1/string.as_bytes(literal)
+    let size = core@1/bytes.len(needle)
+    if size <= core@1/bytes.len(haystack) - at {
+      let mut i = 0u64
+      while i < size && needle[i] == haystack[at + i] {
+        i += 1
+      }
+      if i == size {
+        return true
+      }
+    }
+  }
+  false
+}
+
+// Called only at a dead start state after whole-operation budget admission.
+// Return byte + scalar coordinates and original look-behind, never a slice.
+fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) -> Option[Candidate] uses {} {
+  let mut cursor = from
+  let mut target = subject.offsets[from]
+  if let Some(search) = plan.search {
+    let needle = core@1/string.as_bytes(plan.literals[0])
+    let Some(found) = internal.substring.find_from(haystack, needle, search, target) else {
+      return None()
+    }
+    target = found
+  }
+  while cursor < core@1/list.len(subject.scalars) {
+    let byte = subject.offsets[cursor]
+    if byte >= target && prefix_has(plan, core@1/char.to_u32(subject.scalars[cursor])) && prefix_at(plan, haystack, byte) {
+      return Some(Candidate(byte: byte, scalar: cursor, previous: if cursor == 0 {
+        None()
+      } else {
+        Some(subject.scalars[cursor - 1])
+      }))
+    }
+    cursor += 1
+  }
+  None()
+}
+
+// Safe initial admission from DESIGN: 64*(n+2)^2*(m+1)^2*(s+1)*(r+1)*65.
+// Per boundary there are <=m seeds; first-arrival dedup expands <=m PCs,
+// pushes <=2m epsilon edges, and processes <=m consuming PCs. Slot copying
+// costs <=s each; an acceptance costs <=4*(r+13) for the current fold table
+// (maximum orbit 4, binary-search depth 12). Include <=n+2 restarts, subject
+// construction, queue/slot initialization, capture materialization and public
+// iteration. The factors strictly dominate their sum. Overflow rejects.
+// No callback or output expansion is admitted. The remaining work is private;
+// admitted operations provably succeed under the unchanged logical budget.
+fn prefix_admitted(re: Regex, source: String, capture: bool, work: u64) -> bool uses {} {
+  let n = core@1/bytes.len(core@1/string.as_bytes(source))
+  if !re.prefilter.enabled || n < 64 || n > 1000000 {
+    return false
+  }
+  let m = core@1/list.len(re.code)
+  let s = if capture { core@1/list.len(re.names) * 2 } else { 0u64 }
+  let mut r = 0u64
+  for inst in re.code {
+    let size = core@1/list.len(inst.ranges)
+    if size > r {
+      r = size
+    }
+  }
+  let mut bound = 64u64
+  let factors: List[u64] = [n + 2, n + 2, m + 1, m + 1, s + 1, r + 1, 65u64]
+  for factor in factors {
+    if factor > work / bound {
+      return false
+    }
+    bound *= factor
+  }
+  true
+}

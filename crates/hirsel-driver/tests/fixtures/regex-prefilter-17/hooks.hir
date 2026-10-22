@@ -1,0 +1,95 @@
+// Test-only source added to the regex module by the driver harness.
+// Force candidate search at every original scalar start, independently of
+// public dispatch heuristics, and compare complete captures to the old VM.
+pub fn prefilter_test_case(pattern: String, source: String) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else { return false }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(source, mut work) else { return false }
+  let mut start = 0u64
+  while start <= core@1/list.len(subject.scalars) {
+    let mut reference_work = 18446744073709551615u64
+    let reference = find_from(re, subject, start, true, mut reference_work)
+    let mut fast_work = 18446744073709551615u64
+    let candidate = find_from_prefilter(re, subject, start, true, re.prefilter.enabled,
+      core@1/string.as_bytes(source), mut fast_work)
+    if candidate != reference { return false }
+    start += 1
+    if start == 16 && core@1/list.len(subject.scalars) > 32 {
+      start = core@1/list.len(subject.scalars)
+    }
+  }
+  let mut oracle = copy re
+  oracle.prefilter = no_prefix()
+  let limit = 18446744073709551615u64
+  if find(re, source, limit) != find(oracle, source, limit) { return false }
+  if find_all(re, source, 8, limit) != find_all(oracle, source, 8, limit) { return false }
+  if find_captures(re, source, limit) != find_captures(oracle, source, limit) { return false }
+  if find_all_captures(re, source, 8, limit) != find_all_captures(oracle, source, 8, limit) { return false }
+  if replace_all_func(re, source, (), prefilter_test_callback, limit) != replace_all_func(oracle, source, (), prefilter_test_callback, limit) { return false }
+
+  true
+}
+
+fn prefilter_test_callback(state: (), source: String, captures: Captures) -> String uses {} {
+  let Some(span) = captures.spans[0] else { return "absent" }
+  // The returned sequence records the callback's match and captures in order.
+  string.concat(u64.to_string(span.start), string.concat(":", u64.to_string(span.end)))
+}
+
+// Exhaust every error boundary through the first complete success + 1.
+pub fn prefilter_test_work(pattern: String, source: String) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else { return false }
+  let mut oracle = copy re
+  oracle.prefilter = no_prefix()
+  let mut limit = 0u64
+  let mut successful = false
+  while limit < 512 {
+    let a = find(re, source, limit)
+    let b = find_all(re, source, 8, limit)
+    let c = find_captures(re, source, limit)
+    let d = find_all_captures(re, source, 8, limit)
+    let e = replace_all_func(re, source, (), prefilter_test_callback, limit)
+    if a != find(oracle, source, limit) || b != find_all(oracle, source, 8, limit) || c != find_captures(oracle, source, limit) || d != find_all_captures(oracle, source, 8, limit) || e != replace_all_func(oracle, source, (), prefilter_test_callback, limit) { return false }
+    if successful { return true }
+    successful = match (a, b, c, d, e) { (Ok(_), Ok(_), Ok(_), Ok(_), Ok(_)) => true, _ => false }
+    limit += 1
+  }
+  false
+}
+
+// Exhaust every string of length <=3 over a,b,c for ordered/nullable branches.
+pub fn prefilter_test_exhaustive() -> bool uses {} {
+  let patterns: List[String] = ["abc|aba", "abx|aby", "(ab|ac)d", "(a|b)*c"]
+  for pattern in patterns {
+    let Ok(re) = compile(pattern, 10000) else { return false }
+    let mut width = 0u64
+    let mut variants = 1u64
+    while width <= 3 {
+      let mut ordinal = 0u64
+      while ordinal < variants {
+        let mut digits = ordinal
+        let mut buffer: List[u8] = []
+        let mut i = 0u64
+        while i < width {
+          core@1/list.push(mut buffer, core@1/int.narrow(97u64 + digits % 3))
+          digits /= 3
+          i += 1
+        }
+        let source = text.finish_valid(take buffer)
+        let mut work = 18446744073709551615u64
+        let Ok(subject) = make_subject(source, mut work) else { return false }
+        let mut start = 0u64
+        while start <= width {
+          let mut reference_work = 18446744073709551615u64
+          let mut fast_work = 18446744073709551615u64
+          if find_from(re, subject, start, true, mut reference_work) != find_from_prefilter(re, subject, start, true, re.prefilter.enabled, core@1/string.as_bytes(source), mut fast_work) { return false }
+          start += 1
+        }
+        ordinal += 1
+      }
+      width += 1
+      variants *= 3
+    }
+  }
+  true
+}

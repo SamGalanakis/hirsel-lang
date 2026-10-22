@@ -1,0 +1,18 @@
+// Both patterns exceed the public preprocessing threshold. The source exceeds
+// the admission threshold, and non-ASCII equivalents occur after skipped ASCII.
+pub fn main() -> Result[(), ()] {
+  let source = "________________________________________________________________Kelvin longſ kelvin longs"
+  let expected: List[regex.Span] = [
+    regex.Span(start: 64, end: 72),
+    regex.Span(start: 73, end: 79),
+    regex.Span(start: 80, end: 86),
+    regex.Span(start: 87, end: 92)
+  ]
+  let patterns: List[String] = ["(?i)(kelvin|longs)", "(?i)(Kelvin|longſ)"]
+  for pattern in patterns {
+    let Ok(re) = regex.compile(pattern, 1000) else { return Error(()) }
+    failure.check(regex.find_all(re, source, 8, 18446744073709551615) == Ok(copy expected), TextInvariant())
+    failure.check(regex.find_all(re, source, 8, 1) == Error(WorkLimit()), TextInvariant())
+  }
+  Ok(())
+}
