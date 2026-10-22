@@ -12,6 +12,34 @@ struct Arm {
 }
 
 impl Checker<'_, '_> {
+    /// Called only after the existing propagation/mapper checks succeed. The
+    /// recipe evaluates the operation once and preserves its error payload.
+    pub(super) fn result_tail_help(
+        &mut self,
+        operand: ast::ExprId,
+        mapped: bool,
+        success: TypeId,
+        required: TypeId,
+        diagnostic: usize,
+    ) {
+        let payload = self.type_spelling(success);
+        let result = self.type_spelling(required);
+        let unit = matches!(self.kind(success), TypeKind::Tuple(parts) if parts.is_empty());
+        let direct = !mapped && self.compatible(self.value(operand), required);
+        let mut notes = vec![format!(
+            "`?` produces the success payload `{payload}` after propagating any error; this expression still needs `{result}`. There is no implicit `Ok` wrapping."
+        )];
+        notes.push(match (unit, mapped) {
+            (true, false) => "help: keep the operation as a statement, then return success: `operation()?; Ok(())` (replace `operation()` with this operand).".into(),
+            (false, false) => "help: wrap the success payload: `Ok(operation()?)` (replace `operation()` with this operand).".into(),
+            (_, true) => "help: wrap the entire propagated expression in `Ok(...)`, keeping its existing `?` mapper.".into(),
+        });
+        if direct {
+            notes.push("help: to return the operation's already compatible Result directly, omit `?`; propagating and rewrapping with `Ok` is a separate choice.".into());
+        }
+        self.diagnostics[diagnostic].notes.extend(notes);
+    }
+
     /// Explain an explicit mapper without changing its primary site or verdict.
     pub(super) fn mapper_diagnostic(
         &self,

@@ -121,6 +121,7 @@ fn check_inner(
         range_sources: BTreeSet::new(),
         expected_sites: BTreeMap::new(),
         inference_variables: BTreeSet::new(),
+        result_tail_mismatches: BTreeMap::new(),
         mut_aliases: BTreeSet::new(),
         proof_failure: failure,
     };
@@ -396,6 +397,8 @@ struct Checker<'a, 'p> {
     range_sources: BTreeSet<ast::ExprId>,
     expected_sites: BTreeMap<ast::ExprId, (Span, RuleId)>,
     inference_variables: BTreeSet<TypeParameterRef>,
+    /// Keep the original LANG-7 while validating propagation before offering a repair.
+    result_tail_mismatches: BTreeMap<ast::ExprId, (TypeId, usize)>,
     mut_aliases: BTreeSet<LocalId>,
     proof_failure: &'p std::cell::RefCell<Option<QueryError>>,
 }
@@ -894,13 +897,26 @@ impl Checker<'_, '_> {
                         self.input.syntax.tree.statements[statement.0 as usize].kind,
                         ast::StmtKind::While { .. }
                     )));
+                let tail_context = if rule.as_str() == "LANG-7" {
+                    self.result_tail_context(id, ty, expected)?
+                } else {
+                    None
+                };
                 self.type_mismatch(rule, span, message, actual, required);
                 if missing_loop_tail {
                     self.diagnostics.last_mut().unwrap().notes.push(
                         "help: A `while` statement has type `()`, even for `while true`. Add an explicit tail value matching the result, such as `Ok(())`. Use `return` inside the loop for early exits; the enclosing block still needs its tail value.".into(),
                     );
                 }
-                ty = self.error();
+                if let Some((propagation, result)) = tail_context {
+                    // Preserve the operand only until `?` has checked its error
+                    // channel/mapper. The failed expression still becomes Error;
+                    // no implicit wrapping or successful elaboration is introduced.
+                    self.result_tail_mismatches
+                        .insert(propagation, (result, self.diagnostics.len() - 1));
+                } else {
+                    ty = self.error();
+                }
             }
         }
         self.finish_place(id);
@@ -1720,7 +1736,23 @@ impl Checker<'_, '_> {
                     self.error()
                 }
             }
-            E::Try { value, map_error } => self.try_type(id, value, map_error.as_ref(), frame)?,
+            E::Try { value, map_error } => {
+                let success = self.try_type(id, value, map_error.as_ref(), frame)?;
+                if let Some((result, diagnostic)) = self.result_tail_mismatches.remove(&id) {
+                    if !self.invalid(success) {
+                        self.result_tail_help(
+                            value,
+                            map_error.is_some(),
+                            success,
+                            result,
+                            diagnostic,
+                        );
+                    }
+                    self.error()
+                } else {
+                    success
+                }
+            }
             E::Block {
                 label: Some(_),
                 tail,

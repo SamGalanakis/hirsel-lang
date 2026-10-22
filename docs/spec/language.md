@@ -450,6 +450,15 @@ it selects mean the same thing and produce the same definition hash.
 When `e?` has expected type `T` in a Result-returning function, `e` is checked with
 expected type `Result[T, F]` for a fresh `F`, then the existing error rules apply.
 
+`?` produces the success payload, not a Result. A trailing `operation()?` in a
+function returning `Result[T, E]` therefore still needs the enclosing Result value;
+there is no implicit `Ok` wrapping. For unit success, write `operation()?; Ok(())`.
+When the payload fits `T`, write `Ok(operation()?)`. Keep any explicit error mapper
+inside that wrapping. If the operation already returns the required Result and no
+mapping is needed, returning `operation()` directly is another choice; it does not
+perform error injection. Each recipe evaluates the operation once and preserves
+its error payload.
+
 ```hirsel
 type ParseError = Empty | TooLong(u64)
 type AppError = Input(ParseError) | Other

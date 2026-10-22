@@ -11,6 +11,46 @@ impl Checker<'_, '_> {
             false,
         )
     }
+    /// A partial Result expectation is owned by the `?` that introduced its
+    /// fresh error binder. Recognize only its actual operand, and only when
+    /// rewrapping the known payload fits the required registered Result.
+    pub(super) fn result_tail_context(
+        &mut self,
+        operand: ast::ExprId,
+        actual: TypeId,
+        expected: TypeId,
+    ) -> Result<Option<(ast::ExprId, TypeId)>, QueryError> {
+        let Some((_, required)) = self.partial_result(expected) else {
+            return Ok(None);
+        };
+        let Some((family, wanted, _)) = self.result_parts(required)? else {
+            return Ok(None);
+        };
+        let Some((actual_family, payload, _)) = self.result_parts(actual)? else {
+            return Ok(None);
+        };
+        if family != actual_family || !self.types.shape_eq(payload, wanted).unwrap_or(false) {
+            return Ok(None);
+        }
+        let TypeKind::Named { arguments, .. } = self.kind(expected) else {
+            return Ok(None);
+        };
+        let [_, GenericArgument::Type(error)] = arguments.as_slice() else {
+            return Ok(None);
+        };
+        let TypeKind::Parameter(TypeParameterRef::Body { scope, .. }) = self.kind(*error) else {
+            return Ok(None);
+        };
+        if scope.owner == self.lexical
+            && let NameSite::Expression(propagation) = scope.site
+            && matches!(self.input.syntax.tree.expressions[propagation.0 as usize].kind,
+                ast::ExprKind::Try { value, .. } if value == operand)
+        {
+            Ok(Some((propagation, required)))
+        } else {
+            Ok(None)
+        }
+    }
     pub(super) fn shared_payload(&self, ty: TypeId) -> Option<TypeId> {
         match self.kind(ty) {
             TypeKind::Builtin {
