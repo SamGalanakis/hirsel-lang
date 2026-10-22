@@ -6503,6 +6503,7 @@ conformance/SEM/SEM-4-wave1-collections-run.hir
 conformance/SEM/SEM-4-wave1-counted-run.hir
 conformance/SEM/SEM-4-wave1-floor-run.hir
 conformance/SEM/SEM-4-wave1-primitives-run.hir
+conformance/SEM/SEM-5-bitset-7-reference-run.hir
 conformance/SEM/SEM-5-byte-order-run.hir
 conformance/SEM/SEM-5-byte-order-type-bad.hir
 conformance/SEM/SEM-5-byte-order-type-ok.hir

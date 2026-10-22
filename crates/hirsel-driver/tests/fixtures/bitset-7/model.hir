@@ -1,0 +1,130 @@
+// Independent Boolean-list oracle: no word arithmetic in the model.
+fn expect_bool(
+  actual: Result[bool, bitset.BitSetError],
+  expected: Result[bool, bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn expect_unit(
+  actual: Result[(), bitset.BitSetError],
+  expected: Result[(), bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn verify(bits: bitset.BitSet, model: List[bool]) -> () uses {} {
+  let actual = bitset.indices(bits)
+  let mut expected: unique List[u64] = []
+  for i in 0u64..list.len(model) {
+    expect_bool(bitset.contains(bits, i), Ok(model[i]))
+    if model[i] {
+      list.push(mut expected, i)
+    }
+  }
+  failure.check(actual == expected && bitset.count(bits) == list.len(actual), Bounds())
+  for j in 0u64..list.len(actual) {
+    failure.check(actual[j] < list.len(model), Bounds())
+    if j != 0 {
+      failure.check(actual[j - 1] < actual[j], Bounds())
+    }
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let input_indices_1: List[u64] = [
+    0u64,
+    1u64,
+    63u64,
+    64u64,
+    65u64,
+    127u64,
+    128u64,
+    129u64
+  ]
+  for n in input_indices_1 {
+    let mut a = bitset.empty(n)
+    let mut b = bitset.empty(n)
+    let mut ma: unique List[bool] = []
+    let mut mb: unique List[bool] = []
+    for _ in 0u64..n {
+      list.push(mut ma, false)
+      list.push(mut mb, false)
+    }
+    // Overlapping dense patterns distinguish all three binary operations.
+    for i in 0u64..n {
+      if i % 3 == 0 {
+        expect_bool(bitset.insert(mut a, i), Ok(false))
+        ma[i] = true
+      }
+      if i % 2 == 0 {
+        expect_bool(bitset.insert(mut b, i), Ok(false))
+        mb[i] = true
+      }
+    }
+    verify(a, ma)
+    verify(b, mb)
+    expect_unit(bitset.union(mut a, b), Ok(()))
+    for i in 0u64..n {
+      ma[i] = ma[i] || mb[i]
+    }
+    verify(a, ma)
+    expect_unit(bitset.intersection(mut b, a), Ok(()))
+    for i in 0u64..n {
+      mb[i] = mb[i] && ma[i]
+    }
+    verify(b, mb)
+    expect_unit(bitset.difference(mut a, b), Ok(()))
+    for i in 0u64..n {
+      ma[i] = ma[i] && !mb[i]
+    }
+    verify(a, ma)
+    let mut state = 17u64
+    for step in 0u64..48u64 {
+      state = (state * 1664525 + 1013904223) % 4294967296
+      let index = state % (n + 1)
+      let op = step % 8
+      if op < 4 {
+        if index == n {
+          expect_bool(bitset.insert(mut a, index), Error(IndexOutOfBounds(index, n)))
+          expect_bool(bitset.remove(mut b, index), Error(IndexOutOfBounds(index, n)))
+        } else if op == 0 {
+          expect_bool(bitset.insert(mut a, index), Ok(ma[index]))
+          ma[index] = true
+        } else if op == 1 {
+          expect_bool(bitset.remove(mut a, index), Ok(ma[index]))
+          ma[index] = false
+        } else if op == 2 {
+          expect_bool(bitset.insert(mut b, index), Ok(mb[index]))
+          mb[index] = true
+        } else {
+          expect_bool(bitset.remove(mut b, index), Ok(mb[index]))
+          mb[index] = false
+        }
+      } else if op == 4 {
+        expect_unit(bitset.union(mut a, b), Ok(()))
+        for i in 0u64..n {
+          ma[i] = ma[i] || mb[i]
+        }
+      } else if op == 5 {
+        expect_unit(bitset.difference(mut a, b), Ok(()))
+        for i in 0u64..n {
+          ma[i] = ma[i] && !mb[i]
+        }
+      } else if op == 6 {
+        expect_unit(bitset.intersection(mut a, b), Ok(()))
+        for i in 0u64..n {
+          ma[i] = ma[i] && mb[i]
+        }
+      } else {
+        bitset.clear(mut b)
+        for i in 0u64..n {
+          mb[i] = false
+        }
+      }
+      verify(a, ma)
+      verify(b, mb)
+    }
+  }
+  Ok(())
+}

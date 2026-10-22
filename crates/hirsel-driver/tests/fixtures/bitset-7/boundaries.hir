@@ -1,0 +1,88 @@
+// All required word boundaries, dense and sparse tails; no private word access.
+fn expect_indices(actual: List[u64], expected: List[u64]) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn expect_bool(
+  actual: Result[bool, bitset.BitSetError],
+  expected: Result[bool, bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn expect_unit(
+  actual: Result[(), bitset.BitSetError],
+  expected: Result[(), bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn after_destruction() -> unique List[u64] uses {} {
+  let mut temporary = bitset.empty(129)
+  let ignored = bitset.insert(mut temporary, 128)
+  bitset.indices(temporary)
+}
+
+pub fn main() -> Result[(), ()] {
+  let input_indices_1: List[u64] = [
+    0u64,
+    1u64,
+    63u64,
+    64u64,
+    65u64,
+    127u64,
+    128u64,
+    129u64
+  ]
+  for n in input_indices_1 {
+    let mut a = bitset.empty(n)
+    failure.check(bitset.domain_len(a) == n, Bounds())
+    for i in 0u64..n {
+      expect_bool(bitset.contains(a, i), Ok(false))
+      expect_bool(bitset.insert(mut a, i), Ok(false))
+    }
+    let dense = bitset.indices(a)
+    failure.check(bitset.count(a) == n && list.len(dense) == n, Bounds())
+    for i in 0u64..n {
+      failure.check(dense[i] == i, Bounds())
+    }
+    let input_indices_2: List[u64] = [n, 18446744073709551615u64]
+    for invalid in input_indices_2 {
+      expect_bool(bitset.contains(a, invalid), Error(IndexOutOfBounds(invalid, n)))
+      expect_bool(bitset.insert(mut a, invalid), Error(IndexOutOfBounds(invalid, n)))
+      expect_bool(bitset.remove(mut a, invalid), Error(IndexOutOfBounds(invalid, n)))
+      failure.check(bitset.indices(a) == dense && bitset.count(a) == n, Bounds())
+    }
+    // n+1 can share a word with n: compare domains, not word counts.
+    let mut wrong = bitset.empty(n + 1)
+    let ignored = bitset.insert(mut wrong, n)
+    expect_unit(bitset.union(mut a, wrong), Error(DomainMismatch(n, n + 1)))
+    failure.check(bitset.indices(a) == dense, Bounds())
+    expect_unit(bitset.intersection(mut a, wrong), Error(DomainMismatch(n, n + 1)))
+    failure.check(bitset.indices(a) == dense, Bounds())
+    expect_unit(bitset.difference(mut a, wrong), Error(DomainMismatch(n, n + 1)))
+    failure.check(bitset.indices(a) == dense, Bounds())
+    let wrong_snapshot = bitset.indices(wrong)
+    expect_unit(bitset.union(mut wrong, a), Error(DomainMismatch(n + 1, n)))
+    failure.check(bitset.indices(wrong) == wrong_snapshot, Bounds())
+    expect_unit(bitset.intersection(mut wrong, a), Error(DomainMismatch(n + 1, n)))
+    failure.check(bitset.indices(wrong) == wrong_snapshot, Bounds())
+    expect_unit(bitset.difference(mut wrong, a), Error(DomainMismatch(n + 1, n)))
+    failure.check(bitset.indices(wrong) == wrong_snapshot, Bounds())
+    let mut sparse = bitset.empty(n)
+    if n != 0 {
+      expect_bool(bitset.insert(mut sparse, n - 1), Ok(false))
+    }
+    expect_unit(bitset.intersection(mut a, sparse), Ok(()))
+    failure.check(bitset.indices(a) == bitset.indices(sparse), Bounds())
+    expect_unit(bitset.union(mut a, sparse), Ok(()))
+    expect_unit(bitset.difference(mut a, sparse), Ok(()))
+    failure.check(bitset.count(a) == 0, Bounds())
+    expect_indices(bitset.indices(a), [])
+    failure.check(list.len(dense) == n, Bounds())
+    bitset.clear(mut sparse)
+    expect_indices(bitset.indices(sparse), [])
+  }
+  failure.check(after_destruction() == [128u64], Bounds())
+  Ok(())
+}

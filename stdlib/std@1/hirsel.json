@@ -1205,6 +1205,12 @@
       "module": [
         "edit_distance"
       ]
+    },
+    {
+      "path": "bitset.hir",
+      "module": [
+        "bitset"
+      ]
     }
   ],
   "dependencies": []

@@ -1,0 +1,89 @@
+// rule: SEM-5
+// expect: run
+// rustc_index bit_set/tests.rs:8-87 at 19833af7224424e8b53e288097d56b6af43d5bcf.
+fn expect_bool(
+  actual: Result[bool, bitset.BitSetError],
+  expected: Result[bool, bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+fn expect_unit(
+  actual: Result[(), bitset.BitSetError],
+  expected: Result[(), bitset.BitSetError]
+) -> () uses {} {
+  failure.check(actual == expected, Bounds())
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut empty = bitset.empty(0)
+  let other_empty = bitset.empty(0)
+  failure.check(bitset.domain_len(empty) == 0, Bounds())
+  failure.check(bitset.count(empty) == 0, Bounds())
+  failure.check(bitset.indices(empty) == [], Bounds())
+  expect_unit(bitset.union(mut empty, other_empty), Ok(()))
+  expect_unit(bitset.intersection(mut empty, other_empty), Ok(()))
+  expect_unit(bitset.difference(mut empty, other_empty), Ok(()))
+  expect_bool(bitset.insert(mut empty, 0), Error(IndexOutOfBounds(0, 0)))
+  let mut a = bitset.empty(65)
+  let mut b = bitset.empty(65)
+  expect_bool(bitset.insert(mut a, 3), Ok(false))
+  expect_bool(bitset.insert(mut a, 3), Ok(true))
+  expect_bool(bitset.insert(mut b, 5), Ok(false))
+  expect_bool(bitset.insert(mut b, 64), Ok(false))
+  expect_unit(bitset.union(mut a, b), Ok(()))
+  expect_unit(bitset.union(mut a, b), Ok(()))
+  failure.check(bitset.indices(a) == [3u64, 5u64, 64u64], Bounds())
+  let input_indices_1: List[u64] = [3u64, 5u64, 64u64]
+  for index in input_indices_1 {
+    expect_bool(bitset.contains(a, index), Ok(true))
+  }
+  let input_indices_2: List[u64] = [4u64, 63u64]
+  for index in input_indices_2 {
+    expect_bool(bitset.contains(a, index), Ok(false))
+  }
+  expect_bool(bitset.remove(mut a, 3), Ok(true))
+  expect_bool(bitset.remove(mut a, 3), Ok(false))
+  let snapshot = bitset.indices(a)
+  bitset.clear(mut a)
+  failure.check(snapshot == [5u64, 64u64] && bitset.count(a) == 0, Bounds())
+  let mut sparse = bitset.empty(100)
+  let input_indices_3: List[u64] = [
+    1u64,
+    10u64,
+    19u64,
+    62u64,
+    63u64,
+    64u64,
+    65u64,
+    66u64,
+    99u64
+  ]
+  for index in input_indices_3 {
+    expect_bool(bitset.insert(mut sparse, index), Ok(false))
+  }
+  failure.check(
+    bitset.indices(sparse) == [
+      1u64,
+      10u64,
+      19u64,
+      62u64,
+      63u64,
+      64u64,
+      65u64,
+      66u64,
+      99u64
+    ],
+    Bounds()
+  )
+  let mut wide = bitset.empty(320)
+  let input_indices_4: List[u64] = [0u64, 127u64, 191u64, 255u64, 319u64]
+  for index in input_indices_4 {
+    expect_bool(bitset.insert(mut wide, index), Ok(false))
+  }
+  failure.check(
+    bitset.indices(wide) == [0u64, 127u64, 191u64, 255u64, 319u64],
+    Bounds()
+  )
+  Ok(())
+}

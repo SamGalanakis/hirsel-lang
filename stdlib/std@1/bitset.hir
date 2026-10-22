@@ -1,0 +1,158 @@
+// DenseBitSet, rust-lang/rust 19833af7224424e8b53e288097d56b6af43d5bcf:
+// compiler/rustc_index/src/bit_set.rs:73-180,243-258,320-336,1594-1644.
+// MIT (Rust); see third-party/NOTICES.md. Checked errors replace assertions.
+/// Fixed domain [0, domain_len), stored in zero-initialized u64 words.
+pub opaque type BitSet: () uses {} {
+  domain: u64,
+  words: unique List[u64],
+}
+
+/// IndexOutOfBounds(requested index, domain length), or
+/// DomainMismatch(destination domain length, source domain length).
+pub type BitSetError = IndexOutOfBounds(u64, u64) | DomainMismatch(u64, u64)
+
+/// Allocates ceil(length / 64) words. Empty domains are valid.
+pub fn empty(length: u64) -> unique BitSet uses {} {
+  let mut size = length / 64
+  if length % 64 != 0 {
+    size += 1
+  }
+  let mut words: unique List[u64] = []
+  for _ in 0u64..size {
+    core@1/list.push(mut words, 0)
+  }
+  BitSet(domain: length, words: take words)
+}
+
+@noalloc
+pub fn domain_len(bits: BitSet) -> u64 uses {} {
+  bits.domain
+}
+
+@noalloc
+fn check_index(bits: BitSet, index: u64) -> Result[(), BitSetError] uses {} {
+  if index >= bits.domain {
+    Error(IndexOutOfBounds(index, bits.domain))
+  } else {
+    Ok(())
+  }
+}
+
+@noalloc
+fn mask_tail(mut bits: unique BitSet) -> () uses {} {
+  let remainder = bits.domain % 64
+  // Zero words and exact multiples of 64 need neither a read nor a shift.
+  if remainder != 0 {
+    let last = core@1/list.len(bits.words) - 1
+    bits.words[last] = bits.words[last] & (1u64 << remainder) - 1
+  }
+}
+
+/// Invalid indices return a typed error, including u64::MAX.
+@noalloc
+pub fn contains(bits: BitSet, index: u64) -> Result[bool, BitSetError] uses {} {
+  check_index(bits, index)?
+  Ok(bits.words[index / 64] & 1u64 << index % 64 != 0)
+}
+
+/// Reports membership BEFORE insertion; invalid indices leave the set unchanged.
+@noalloc
+pub fn insert(mut bits: unique BitSet, index: u64) -> Result[bool, BitSetError] uses {} {
+  let previous = contains(bits, index)?
+  let word = index / 64
+  bits.words[word] = bits.words[word] | 1u64 << index % 64
+  mask_tail(mut bits)
+  Ok(previous)
+}
+
+/// Reports membership BEFORE removal; invalid indices leave the set unchanged.
+@noalloc
+pub fn remove(mut bits: unique BitSet, index: u64) -> Result[bool, BitSetError] uses {} {
+  let previous = contains(bits, index)?
+  let word = index / 64
+  bits.words[word] = bits.words[word] & ~(1u64 << index % 64)
+  mask_tail(mut bits)
+  Ok(previous)
+}
+
+@noalloc
+pub fn clear(mut bits: unique BitSet) -> () uses {} {
+  for i in 0u64..core@1/list.len(bits.words) {
+    bits.words[i] = 0
+  }
+}
+
+/// Scalar counting consumes one set bit per iteration (at most 64 per word).
+@noalloc
+pub fn count(bits: BitSet) -> u64 uses {} {
+  let mut total = 0u64
+  for value in bits.words {
+    let mut word = value
+    while word != 0 {
+      word = word & word - 1
+      total += 1
+    }
+  }
+  total
+}
+
+@noalloc
+fn check_domain(destination: BitSet, source: BitSet) -> Result[(), BitSetError] uses {} {
+  if destination.domain != source.domain {
+    Error(DomainMismatch(destination.domain, source.domain))
+  } else {
+    Ok(())
+  }
+}
+
+/// Mutates destination only after checking equal domain lengths.
+@noalloc
+pub fn union(mut destination: unique BitSet, source: BitSet) -> Result[(), BitSetError] uses {} {
+  check_domain(destination, source)?
+  for i in 0u64..core@1/list.len(destination.words) {
+    destination.words[i] = destination.words[i] | source.words[i]
+  }
+  mask_tail(mut destination)
+  Ok(())
+}
+
+@noalloc
+pub fn intersection(mut destination: unique BitSet, source: BitSet) -> Result[
+  (),
+  BitSetError
+] uses {} {
+  check_domain(destination, source)?
+  for i in 0u64..core@1/list.len(destination.words) {
+    destination.words[i] = destination.words[i] & source.words[i]
+  }
+  mask_tail(mut destination)
+  Ok(())
+}
+
+/// Removes source members from destination after checking equal domains.
+@noalloc
+pub fn difference(mut destination: unique BitSet, source: BitSet) -> Result[
+  (),
+  BitSetError
+] uses {} {
+  check_domain(destination, source)?
+  for i in 0u64..core@1/list.len(destination.words) {
+    destination.words[i] = destination.words[i] & ~source.words[i]
+  }
+  mask_tail(mut destination)
+  Ok(())
+}
+
+/// Ascending owned snapshot; later mutations or destruction cannot affect it.
+pub fn indices(bits: BitSet) -> unique List[u64] uses {} {
+  let mut indices_out: unique List[u64] = []
+  for i in 0u64..core@1/list.len(bits.words) {
+    let mut word = bits.words[i]
+    while word != 0 {
+      let bit = core@1/int.trailing_zeros(word)
+      core@1/list.push(mut indices_out, i * 64 + bit)
+      word = word & word - 1
+    }
+  }
+  take indices_out
+}

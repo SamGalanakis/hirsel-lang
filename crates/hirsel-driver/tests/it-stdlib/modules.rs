@@ -1,6 +1,7 @@
 mod edit_distance_7;
 mod base64_stream_5;
 mod binary_endian_5;
+mod bitset_7;
 mod hex_builder_5;
 mod numeric_native;
 mod package_s3;
