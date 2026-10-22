@@ -56,6 +56,9 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
 }
 
 #[cfg(test)]
+mod output;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::{Adapter, AdapterError, Completion, Ready, Request, UnitResult};
@@ -128,7 +131,7 @@ mod tests {
             self.probe.parked.fetch_add(1, Ordering::Release);
         }
     }
-    fn layout() -> crate::Layout {
+    pub(super) fn layout() -> crate::Layout {
         crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,

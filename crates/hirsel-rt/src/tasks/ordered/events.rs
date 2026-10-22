@@ -1311,6 +1311,26 @@ pub(super) fn value_subevent(
     value.map(|(item, payload)| vec![(item, CanonicalOutcome::Value { status, payload })])
 }
 
+/// Borrowed output bypasses the owned wait protocol. Copy only when evidence
+/// is enabled, while the caller still owns the exact visible byte slice.
+pub(crate) fn request_print(ctx: *mut TaskCtx, handle: u64, stderr: bool, bytes: &[u8]) {
+    if !observing(ctx) {
+        return;
+    }
+    let request = if stderr {
+        crate::io::Request::PrintStderr {
+            stderr: handle,
+            bytes: bytes.to_vec(),
+        }
+    } else {
+        crate::io::Request::Print {
+            stdout: handle,
+            bytes: bytes.to_vec(),
+        }
+    };
+    request_host(ctx, &request);
+}
+
 /// Capture the exact request before ownership moves to the home service.
 /// The head boundary has assigned its ordinal, and no bridge or scheduling
 /// point occurs here. Missing bindings reject the observation without guessing.

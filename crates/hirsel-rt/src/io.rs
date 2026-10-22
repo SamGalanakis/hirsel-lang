@@ -2867,9 +2867,16 @@ unsafe fn native_print(
             )
         };
     }
+    let ordered = crate::tasks::ordered::engine::on(ctx);
+    if ordered {
+        crate::tasks::ordered::events::request_print(ctx, handle, stderr, bytes);
+    }
     let result = unsafe { Binding::get(ctx) }
         .adapter
         .print(handle, stderr, bytes);
+    if ordered {
+        crate::tasks::ordered::events::complete_host(ctx, false, &result);
+    }
     let completion = unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) };
     unsafe { crate::tasks::yield_now(&mut *ctx) };
     completion
