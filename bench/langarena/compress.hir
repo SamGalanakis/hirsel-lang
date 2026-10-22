@@ -27,13 +27,10 @@ fn zero_bytes(n: u64) -> unique List[u8] {
   take out
 }
 
+// Vec<u8>::clone: copy the contiguous payload through the language's
+// deep unique copy, rather than interpreting a push for every byte.
 fn copy_bytes(data: List[u8]) -> unique List[u8] {
-  let mut out: List[u8] = []
-  list.reserve(mut out, list.len(data))
-  for b in data {
-    list.push(mut out, b)
-  }
-  take out
+  unique data
 }
 
 fn test_data(size: u64) -> unique List[u8] {
@@ -572,11 +569,14 @@ fn lzw_code(data: List[u8], index: u64) -> u64 {
   int.widen(data[index]) << 8 | int.widen(data[index + 1])
 }
 
-// compress.rs:962-1002. Dictionary entries are owned byte lists as upstream.
+// compress.rs:962-1002. Clone the old entry, append its successor's first
+// byte, then extend the output in bulk. bytes.from_list(copy xs) is a shared
+// view of xs's storage, so bytes.append is Vec::extend_from_slice here.
 fn lzw_decode(encoded: List[u8]) -> unique List[u8] {
   if list.len(encoded) == 0 {
     return []
   }
+  failure.check(list.len(encoded) % 2 == 0, Bounds())
   let mut dict: List[List[u8]] = []
   list.reserve(mut dict, 4096)
   for i in 0u64..256u64 {
@@ -586,25 +586,19 @@ fn lzw_decode(encoded: List[u8]) -> unique List[u8] {
   let mut out: List[u8] = []
   list.reserve(mut out, list.len(encoded) * 2)
   let mut old = lzw_code(encoded, 0)
-  for b in dict[old] {
-    list.push(mut out, b)
-  }
+  bytes.append(mut out, bytes.from_list(copy dict[old]))
   let mut i: u64 = 2
   while i < list.len(encoded) {
     let code = lzw_code(encoded, i)
     let mut entry = copy_bytes(dict[old])
     if code < list.len(dict) {
       list.push(mut entry, dict[code][0])
-      for b in dict[code] {
-        list.push(mut out, b)
-      }
+      bytes.append(mut out, bytes.from_list(copy dict[code]))
     } else {
       if code == list.len(dict) {
         let first_byte = entry[0]
         list.push(mut entry, first_byte)
-        for b in entry {
-          list.push(mut out, b)
-        }
+        bytes.append(mut out, bytes.from_list(copy entry))
       } else {
         return []
       }
@@ -754,6 +748,8 @@ fn codec_vectors(t: Test) {
   let lzw = lzw_encode(lzw_input)
   test.check(t, lzw == [0u8, 65u8, 0u8, 66u8, 1u8, 0u8, 1u8, 2u8])
   test.check(t, lzw_decode(lzw) == lzw_input)
+  test.check(t, lzw_decode([0u8, 65u8, 1u8, 1u8]) == [])
+  test.check(t, lzw_decode([0u8, 65u8, 1u8, 0u8]) == [65u8, 65u8, 65u8])
   let sizes: List[u64] = [0, 1, 2, 11, 53, 257]
   for size in sizes {
     let data = test_data(size)
