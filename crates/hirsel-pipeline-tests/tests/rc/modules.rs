@@ -37,3 +37,4 @@ mod packed_list_9;
 mod rc_borrow_cursor_8;
 mod rc_borrow_cursor_field_match_13;
 mod rc_borrow_cursor_evidence_13;
+mod rc_borrow_cursor_compose_13;

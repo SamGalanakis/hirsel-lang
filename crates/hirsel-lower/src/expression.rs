@@ -1264,8 +1264,16 @@ impl Builder<'_, '_> {
             } else {
                 self.transport(value, storage, at)
             };
+            // Preserve an existing source access through an immutable alias.
+            // A composed result needs that permission as well as installed
+            // content loans, but not the invocation's new loan on its carrier.
+            let mut source_dependencies = vec![];
             if constructor.is_none() {
                 value.usage = consumer.unwrap_or(value.usage);
+                source_dependencies = self.operand_loans(&Operand {
+                    place: value.place,
+                    usage: value.usage,
+                });
                 // A `mut` argument names a place: its exclusive loan begins
                 // when the callee is entered, so later arguments may still
                 // read the storage (spec #66).
@@ -1290,7 +1298,7 @@ impl Builder<'_, '_> {
             argument_dependencies.push((
                 ordinal,
                 if composed {
-                    self.content_loans(value.place)
+                    source_dependencies
                 } else {
                     self.operand_loans(&Operand {
                         place: field.unwrap_or(value.place),
