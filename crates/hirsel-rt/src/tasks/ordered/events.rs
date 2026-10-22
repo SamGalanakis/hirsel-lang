@@ -10,8 +10,10 @@ use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod host_keys;
 mod host_requests;
 mod host_values;
+pub(super) use host_values::HostHandleId;
 
 #[cfg(test)]
 mod blocked;
@@ -341,6 +343,10 @@ pub(super) struct Log {
     failed_ends: BTreeMap<Vec<u32>, Option<Subevents>>,
     next_subevent: BTreeMap<(Vec<u32>, u64), u32>,
     completed: BTreeSet<(Vec<u32>, u64)>,
+    pub host_handles: BTreeMap<u64, HostHandleId>,
+    pub host_resources: host_keys::Resources,
+    pub host_key_observations:
+        BTreeMap<(Vec<u32>, u64), Option<Vec<(host_keys::Resource, crate::io_keys::Mode)>>>,
     pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_values::HostValue>>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
@@ -724,6 +730,22 @@ pub(super) fn enabled(s: &super::super::Scheduler) -> bool {
     matches!(&s.logical, Logical::Ordered(driver) if driver.events.is_some())
 }
 
+fn host_identity(driver: &super::driver::Driver, word: u64) -> Option<HostHandleId> {
+    driver
+        .events
+        .as_ref()?
+        .host_handles
+        .get(&word)
+        .cloned()
+        .or_else(|| {
+            driver
+                .objects
+                .identity(crate::ordered::objects::Kind::Capability, word)
+                .cloned()
+                .map(Into::into)
+        })
+}
+
 /// IdleGuard owns the scheduler, but no TaskCtx is installed or sampled.
 pub(crate) fn record_host_poll(
     s: &mut super::super::Scheduler,
@@ -736,13 +758,7 @@ pub(crate) fn record_host_poll(
         unreachable!()
     };
     let retirement = driver.frontier.as_ref().unwrap().retired();
-    let observation = host_values::project(&result, |word| {
-        driver
-            .objects
-            .identity(crate::ordered::objects::Kind::Capability, word)
-            .cloned()
-    })
-    .ok();
+    let observation = host_values::project(&result, |word| host_identity(driver, word)).ok();
     let log = driver.events.as_mut().expect("poll evidence enabled");
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
@@ -1331,6 +1347,29 @@ pub(crate) fn request_print(ctx: *mut TaskCtx, handle: u64, stderr: bool, bytes:
     request_host(ctx, &request);
 }
 
+/// Capture already discovered issue keys under the original operation ordinal.
+/// The caller must retain no adapter or home borrow across this role-owned call.
+pub(crate) fn request_keys(ctx: *mut TaskCtx, keys: &crate::io_keys::KeySet) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("keys follow host entry");
+    let observation = log.host_resources.project(keys).ok();
+    assert!(
+        log.host_key_observations
+            .insert((path, ordinal), observation)
+            .is_none()
+    );
+}
+
 /// Capture the exact request before ownership moves to the home service.
 /// The head boundary has assigned its ordinal, and no bridge or scheduling
 /// point occurs here. Missing bindings reject the observation without guessing.
@@ -1343,13 +1382,7 @@ pub(crate) fn request_host(ctx: *mut TaskCtx, request: &crate::io::Request) {
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
-    let observation = host_requests::project(request, |word| {
-        driver
-            .objects
-            .identity(crate::ordered::objects::Kind::Capability, word)
-            .cloned()
-    })
-    .ok();
+    let observation = host_requests::project(request, |word| host_identity(driver, word)).ok();
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals[&path]
         .checked_sub(1)
@@ -1385,13 +1418,7 @@ pub(crate) fn complete_host(
     };
     // Snapshot borrowed mappings once, before encoding the owned observation.
     let result = owned_host_result(result);
-    let observation = host_values::project(&result, |word| {
-        driver
-            .objects
-            .identity(crate::ordered::objects::Kind::Capability, word)
-            .cloned()
-    })
-    .ok();
+    let observation = host_values::project(&result, |word| host_identity(driver, word)).ok();
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals[&path]
         .checked_sub(1)

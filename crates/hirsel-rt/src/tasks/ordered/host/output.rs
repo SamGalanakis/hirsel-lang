@@ -129,9 +129,12 @@ fn borrowed_output_observations_own_visible_bytes_and_keep_each_result_ordinal()
                             .unwrap();
                         assert_eq!(
                             request.handles,
-                            [ObjectId {
-                                creator: vec![],
-                                ordinal: 77
+                            [super::super::events::HostHandleId {
+                                operation: ObjectId {
+                                    creator: vec![],
+                                    ordinal: 77
+                                },
+                                field: 0,
                             }]
                         );
                         assert_eq!(

@@ -5,17 +5,33 @@ use crate::io::{AdapterError, Completion};
 use crate::ordered::footprint::ObjectId;
 use crate::tape_wire::Wire;
 
+/// Owner ruling 612399: every initialized result slot has its own identity,
+/// even when two slots are created by one operation or alias one resource.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::tasks::ordered) struct HostHandleId {
+    pub operation: ObjectId,
+    pub field: u32,
+}
+impl From<ObjectId> for HostHandleId {
+    fn from(operation: ObjectId) -> Self {
+        Self {
+            operation,
+            field: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tasks::ordered) struct HostValue {
     /// Tape payload with every initialized handle slot replaced by zero.
     pub payload: Vec<u8>,
     /// Logical identities in the same order as the initialized handle slots.
-    pub handles: Vec<ObjectId>,
+    pub handles: Vec<HostHandleId>,
 }
 
 pub(super) fn project(
     result: &Result<Completion, AdapterError>,
-    mut identity: impl FnMut(u64) -> Option<ObjectId>,
+    mut identity: impl FnMut(u64) -> Option<HostHandleId>,
 ) -> Result<HostValue, &'static str> {
     let mut result = result.clone();
     crate::io_observation::capture(&mut result).map_err(|_| "invalid host mapping")?;
@@ -43,11 +59,12 @@ mod tests {
     use crate::io::{Adapter, Request};
     use crate::tasks::ordered::{engine, events, host};
 
-    fn id(ordinal: u64) -> ObjectId {
+    fn id(ordinal: u64) -> HostHandleId {
         ObjectId {
             creator: vec![2, 1],
             ordinal,
         }
+        .into()
     }
 
     #[test]
@@ -100,6 +117,23 @@ mod tests {
             crate::tape_wire::decode::<Result<Completion, AdapterError>>(&projected.payload)
                 .unwrap(),
             Ok(Completion::Halves(Ok((0, 0))))
+        );
+        let split = project(&halves, |word| {
+            Some(HostHandleId {
+                operation: id(9).operation,
+                field: (word - 99) as u32,
+            })
+        })
+        .unwrap();
+        assert_ne!(split.handles[0], split.handles[1]);
+        assert_eq!(split.handles[0].operation, split.handles[1].operation);
+        assert_eq!(
+            split
+                .handles
+                .iter()
+                .map(|handle| handle.field)
+                .collect::<Vec<_>>(),
+            [0, 1]
         );
         let alias = project(&halves, |_| Some(id(9))).unwrap();
         assert_eq!(alias.handles, [id(9), id(9)]);
@@ -202,10 +236,22 @@ mod tests {
                             objects.bind_erased(
                                 crate::ordered::objects::Kind::Capability,
                                 word,
-                                id(ordinal),
+                                id(ordinal).operation,
                                 Default::default(),
                             );
                         }
+                        engine::driver(ctx)
+                            .events
+                            .as_mut()
+                            .unwrap()
+                            .host_handles
+                            .insert(
+                                base + 2,
+                                HostHandleId {
+                                    operation: id(7).operation,
+                                    field: 1,
+                                },
+                            );
                     },
                     move |ctx| unsafe {
                         for test in 0..6 {
@@ -254,7 +300,16 @@ mod tests {
                             observed[0].1, observed[1].1,
                             "aliases have one logical result"
                         );
-                        assert_eq!(observed[2].1.as_ref().unwrap().handles, [id(7), id(8)]);
+                        assert_eq!(
+                            observed[2].1.as_ref().unwrap().handles,
+                            [
+                                id(7),
+                                HostHandleId {
+                                    operation: id(7).operation,
+                                    field: 1
+                                }
+                            ]
+                        );
                         assert_eq!(observed[3].1.as_ref().unwrap().handles, [id(7)]);
                         assert!(observed[4].1.as_ref().unwrap().handles.is_empty());
                         assert!(

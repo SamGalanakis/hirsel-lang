@@ -1,13 +1,12 @@
 //! Initialized request projection. The field walk follows Request's variants
 //! and the existing tape codec, including handles nested in process arguments.
-use super::host_values::HostValue;
+use super::host_values::{HostHandleId, HostValue};
 use crate::io::Request;
-use crate::ordered::footprint::ObjectId;
 use crate::tape_wire::Wire;
 
 pub(super) fn project(
     request: &Request,
-    mut identity: impl FnMut(u64) -> Option<ObjectId>,
+    mut identity: impl FnMut(u64) -> Option<HostHandleId>,
 ) -> Result<HostValue, &'static str> {
     let mut request = request.clone();
     let mut handles = Vec::new();
@@ -249,11 +248,14 @@ pub(super) fn project(
 mod tests {
     use super::*;
 
-    fn identity(word: u64) -> Option<ObjectId> {
-        Some(ObjectId {
-            creator: vec![1, 3],
-            ordinal: word % 16,
-        })
+    fn identity(word: u64) -> Option<HostHandleId> {
+        Some(
+            crate::ordered::footprint::ObjectId {
+                creator: vec![1, 3],
+                ordinal: word % 16,
+            }
+            .into(),
+        )
     }
 
     fn command(directory: Option<u64>) -> crate::process::Command {
@@ -339,7 +341,7 @@ mod tests {
             assert_eq!(
                 a.handles
                     .iter()
-                    .map(|handle| handle.ordinal)
+                    .map(|handle| handle.operation.ordinal)
                     .collect::<Vec<_>>(),
                 ordinals
             );
