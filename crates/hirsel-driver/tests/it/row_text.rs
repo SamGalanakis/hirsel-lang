@@ -6,6 +6,30 @@ use hirsel_engine::{
     default_environment, entry_path, run_observed_snapshot, with_compiler_stack,
 };
 
+// The historical helper fixture stays byte-for-byte intact. Only direct field
+// projections covered by 063cbde7 change in this current-main counterpart;
+// sequential tag views still use the ordinary String helper.
+fn projected_source() -> String {
+    include_str!("../fixtures/row-text.hir")
+        .replace("own_text(row.text.title)", "unique row.text.title")
+        .replace(
+            "own_text(row.text.description)",
+            "unique row.text.description",
+        )
+        .replace(
+            "pub fn main(",
+            r#"fn removals_to_empty() -> bool uses {} {
+  let mut rows = direct()
+  if !remove(mut rows, 1) || rows.rows[0].id != 2 { return false }
+  if remove(mut rows, 1) { return false }
+  if !remove(mut rows, 2) || !remove(mut rows, 3) { return false }
+  list.len(rows.rows) == 0 && !remove(mut rows, 0)
+}
+pub fn main("#,
+        )
+        .replace("retained(false)", "retained(false) && removals_to_empty()")
+}
+
 const SOURCE: &str = include_str!("../fixtures/row-text-shape.hir");
 
 #[test]
@@ -90,7 +114,8 @@ fn adapter_matches_ordinary_items_and_encoded_snapshots() {
     with_compiler_stack(|| {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/row-text.hir");
-        let mut loaded = hirsel_driver::load_program_source(&path, None).unwrap();
+        let mut loaded =
+            hirsel_driver::load_program_source(&path, Some(&projected_source())).unwrap();
         loaded.check_for_execution().unwrap_or_else(|error| {
             if let hirsel_engine::ToolError::Query {
                 error: hirsel_types::QueryError::Diagnostics(diagnostics),
@@ -177,57 +202,38 @@ fn detached_title_minimal_probe_and_ordinary_twin() {
             assert_eq!(reference.output, b"abc");
             let input = engine.export_native_input().unwrap();
             let validated = engine.import_native_input(input).unwrap();
-            match native::build(
+            let ready = native::build(
                 &validated,
                 &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
-            ) {
-                Err(error) => {
-                    assert_eq!(
-                        kind, "direct",
-                        "the helper and ordinary twin must compile: {error}"
-                    );
-                    assert_eq!(error.stage, native::StageName::Import, "{error}");
-                    assert!(
-                        error.validator && error.message.contains("Holding("),
-                        "{error}"
-                    );
-                    assert_eq!(
-                        error.definition.as_ref().map(|d| d.0.name.as_str()),
-                        Some("detached")
-                    );
-                    eprintln!("NO-GO: minimal detached title: {error}");
-                }
-                Ok(ready) => {
-                    let sites = native::Sites::new(validated.snapshot());
-                    assert_eq!(
-                        native::heap_campaign(&ready, &entry, &sites)
-                            .unwrap()
-                            .observation,
-                        reference
-                    );
-                    let mut configs = native::smoke_matrix();
-                    configs.push(native::Configuration {
-                        options: native::Options::new(
-                            native::TargetSpec::x86_64_unknown_linux_gnu(),
-                        ),
-                        engine: native::Engine::Cranelift {
-                            partition: native::Partition::Whole,
-                            runtime: native::Runtime::Diagnostic,
-                        },
-                    });
-                    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-                        .join(format!("row-title-{kind}"));
-                    let tools =
-                        native::Toolchain::for_matrix(&dir.join("runtime"), &configs).unwrap();
-                    for (config, outcome) in
-                        native::differential(&validated, &entry, &reference, &configs, &tools, &dir)
-                    {
-                        assert!(
-                            matches!(outcome, native::Outcome::Agree),
-                            "{config}: {outcome:?}"
-                        );
-                    }
-                }
+            )
+            .unwrap_or_else(|error| {
+                panic!("{kind} must compile after the projection fix: {error}")
+            });
+            let sites = native::Sites::new(validated.snapshot());
+            assert_eq!(
+                native::heap_campaign(&ready, &entry, &sites)
+                    .unwrap()
+                    .observation,
+                reference
+            );
+            let mut configs = native::smoke_matrix();
+            configs.push(native::Configuration {
+                options: native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
+                engine: native::Engine::Cranelift {
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            });
+            let dir =
+                std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("row-title-{kind}"));
+            let tools = native::Toolchain::for_matrix(&dir.join("runtime"), &configs).unwrap();
+            for (config, outcome) in
+                native::differential(&validated, &entry, &reference, &configs, &tools, &dir)
+            {
+                assert!(
+                    matches!(outcome, native::Outcome::Agree),
+                    "{config}: {outcome:?}"
+                );
             }
         }
     });
@@ -270,8 +276,7 @@ fn heap_checks_owned_snapshots_updates_and_both_release_orders() {
     with_compiler_stack(|| {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/row-text.hir");
-        let source = std::fs::read_to_string(&path)
-            .unwrap()
+        let source = projected_source()
             .replace(&"d".repeat(4000), "long description")
             .replace(
                 "store.encode(snapshot(rows)) == store.encode(board)",
@@ -304,7 +309,9 @@ fn heap_checks_owned_snapshots_updates_and_both_release_orders() {
                         .is_some_and(|text| text.copy == CopyRecipe::FlatBytes)
             })
             .expect("the full Row schema keeps one flat owner beside ordinary metadata");
-        assert!(matches!(carrier.size, SizeSpec::Fixed(_)));
+        assert_eq!(carrier.size, SizeSpec::Fixed(40));
+        assert_eq!(carrier.align, 8);
+        assert_eq!(carrier.fields[4].offset, 32);
         eprintln!(
             "full Row C layout: size {:?}, align {}, text offset {}",
             carrier.size, carrier.align, carrier.fields[4].offset
@@ -317,6 +324,8 @@ fn heap_checks_owned_snapshots_updates_and_both_release_orders() {
             heap.observation.render()
         );
         assert_eq!(heap.observation.exit_code, Some(0));
+        assert_eq!(heap.counters.allocations, heap.counters.frees);
+        assert_eq!(heap.counters.live_heap_bytes, 0);
         eprintln!("row ownership H counters: {:?}", heap.counters);
     });
 }
@@ -341,7 +350,7 @@ fn exact10k_owned_and_direct_builders_keep_the_fixture_bytes() {
         for builder in ["build(seed10k())", "direct10k()"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/row-text.hir");
-            let original = std::fs::read_to_string(&path).unwrap();
+            let original = projected_source();
             let source = format!(
                 "{}\n{}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {{ let rows = {builder}; let _ = out.write(io.stdout(rt)?, store.encode(snapshot(rows))); Ok(()) }}\n",
                 original.split("pub fn main(").next().unwrap(),
@@ -480,6 +489,10 @@ pub fn main() -> Result[(), ()] {{
                 );
                 assert!(run.result.is_ok(), "{name}: {:?}", run.result);
                 assert_eq!(run.counters.live_heap_bytes, 0);
+                assert_eq!(run.counters.allocations, run.counters.frees);
+                if count == 3 && matches!(name, "baseline" | "replace" | "remove") {
+                    eprintln!("row cleanup H trace {name}: {:#?}", run.trace);
+                }
                 let allocations: Vec<_> = run
                     .trace
                     .iter()
