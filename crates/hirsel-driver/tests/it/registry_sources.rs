@@ -11,7 +11,6 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
     use hirsel_check_protocol::header::Input;
     use hirsel_signature::normalize;
     use hirsel_span::SourceMap;
-    use hirsel_syntax::Visibility;
 
     hirsel_engine::with_compiler_stack(|| {
         // Read the normative declarations independently of executable source.
@@ -61,11 +60,23 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 None => (String::new(), line),
             };
             let noalloc = declaration.starts_with("N ");
-            let text = declaration
-                .trim_start_matches("N ")
-                .strip_prefix("fn ")
-                .unwrap();
-            let qualified = text.split(['[', '(']).next().unwrap();
+            let declaration = declaration.trim_start_matches("N ");
+            let (prefix, text, initializer) = if let Some(text) = declaration.strip_prefix("fn ") {
+                ("pub fn ", text, "")
+            } else if let Some(text) = declaration.strip_prefix("pub opaque type ") {
+                ("pub opaque type ", text, "")
+            } else if let Some(text) = declaration.strip_prefix("const ") {
+                // Only the constant's declared type enters its signature. The
+                // parser requires a value; normalization never visits it.
+                (
+                    "pub const ",
+                    text.split("//").next().unwrap().trim(),
+                    " = ()",
+                )
+            } else {
+                panic!("unsupported catalogue declaration: {line}");
+            };
+            let qualified = text.split(['[', '(', ':']).next().unwrap();
             let name = qualified;
             let mut path = hirsel_syntax::DefPath::core(name);
             path.0.package.name = "std".into();
@@ -74,7 +85,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 modules: path.0.modules.clone(),
             };
             let source = format!(
-                "{caller}{promise}{}pub fn {}{}\n",
+                "{caller}{promise}{}{prefix}{}{}{initializer}\n",
                 if noalloc { "@noalloc\n" } else { "" },
                 path.0.name,
                 &text[qualified.len()..]
@@ -112,7 +123,10 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 .engine
                 .signature(hirsel_syntax::DefId::intern(&path))
                 .unwrap();
-            assert_eq!(actual.metadata.visibility, Visibility::Public);
+            assert_eq!(
+                actual.metadata.visibility, expected.metadata.visibility,
+                "{qualified}"
+            );
             assert_eq!(actual.definition, expected.definition);
             // Hash both complete contracts with the same empty dependency list:
             // package resolution may record additional transitive read hashes.
