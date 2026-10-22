@@ -5667,14 +5667,14 @@ pub type Limits {
   max_addresses: u64,
   max_output_bytes: u64,
 }
-pub type MailError = Syntax(u64) | Injection(u64) | UnsupportedCharset(u64)
-  | InvalidUtf8(u64) | InputLimit(u64) | NestingLimit(u64)
-  | AddressLimit(u64) | OutputLimit(u64)
-fn mail.default_limits() -> Limits uses {}
-fn mail.parse(value: String, limits: Limits) -> Result[Address, MailError] uses {}
-fn mail.parse_list(value: String, limits: Limits) -> Result[List[Address], MailError] uses {}
-fn mail.format(value: Address, limits: Limits) -> Result[unique String, MailError] uses {}
-fn mail.format_list(values: List[Address], limits: Limits) -> Result[unique String, MailError] uses {}
+pub type MailError = Syntax(u64) | Injection(u64) | UnsupportedCharset(u64) |
+  InvalidUtf8(u64) | InputLimit(u64) | NestingLimit(u64) |
+  AddressLimit(u64) | OutputLimit(u64)
+fn default_limits() -> Limits uses {}
+fn parse(value: String, limits: Limits) -> Result[Address, MailError] uses {}
+fn parse_list(value: String, limits: Limits) -> Result[List[Address], MailError] uses {}
+fn format(value: Address, limits: Limits) -> Result[unique String, MailError] uses {}
+fn format_list(values: List[Address], limits: Limits) -> Result[unique String, MailError] uses {}
 ```
 
 `parse` requires exactly one mailbox after group flattening; an empty group or a
