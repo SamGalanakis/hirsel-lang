@@ -449,7 +449,7 @@ impl QueryEngine {
     }
 
     /// Compute the records of `paths` that belong to the build's package and
-    /// have none yet, then release their checked, mode and lowered bodies.
+    /// have none yet, then release their resolved, checked, mode and lowered bodies.
     pub(crate) fn image_definitions(
         &mut self,
         build: &mut ImageBuild,
@@ -778,7 +778,7 @@ impl QueryEngine {
                 .filter(|(p, _)| &p.0.package == package)
                 .all(|(_, value)| reads_closed(&value.executed, &inside))
     }
-    /// Release the checked, mode and lowered bodies of `paths`; a later read
+    /// Release the resolved, checked, mode and lowered bodies of `paths`; a later read
     /// computes them again. Whether
     /// each released query read only inside `closure` (or core).
     fn release_bodies(&mut self, paths: &[DefPath], closure: &BTreeSet<PackageId>) -> bool {
@@ -786,10 +786,17 @@ impl QueryEngine {
         let mut closed = true;
         for path in paths {
             let id = DefId::intern(path);
+            // Resolution owns body-sized lookup/read logs, including the
+            // phase snapshot's copy. A spilled record needs neither; keep
+            // their closure evidence before forgetting them like H and TIR.
             closed &= self
-                .checked
+                .resolutions
                 .get(&id)
                 .is_none_or(|e| reads_closed(e.reads(), &inside))
+                && self
+                    .checked
+                    .get(&id)
+                    .is_none_or(|e| reads_closed(e.reads(), &inside))
                 && self
                     .modes
                     .get(&id)
@@ -803,6 +810,7 @@ impl QueryEngine {
                     .get(&id)
                     .is_none_or(|e| reads_closed(e.reads(), &inside));
             for kind in [
+                QueryKind::Resolve,
                 QueryKind::Check,
                 QueryKind::Modes,
                 QueryKind::Lower,
