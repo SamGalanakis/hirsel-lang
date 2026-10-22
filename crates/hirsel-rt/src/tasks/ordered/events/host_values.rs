@@ -156,7 +156,7 @@ mod tests {
             let Request::TestCheck { test, .. } = request else {
                 panic!("test request")
             };
-            match test {
+            match test - (self.base + 10) {
                 0 => Ok(Completion::Handle(Ok(self.base))),
                 1 => Ok(Completion::Handle(Ok(self.base + 1))),
                 2 => Ok(Completion::Halves(Ok((self.base, self.base + 2)))),
@@ -195,7 +195,10 @@ mod tests {
                         engine::enable(ctx, policy);
                         events::enable(ctx);
                         let objects = &mut engine::driver(ctx).objects;
-                        for (word, ordinal) in [(base, 7), (base + 1, 7), (base + 2, 8)] {
+                        for (word, ordinal) in [(base, 7), (base + 1, 7), (base + 2, 8)]
+                            .into_iter()
+                            .chain((0..6).map(|test| (base + 10 + test, 9 + test)))
+                        {
                             objects.bind_erased(
                                 crate::ordered::objects::Kind::Capability,
                                 word,
@@ -209,7 +212,7 @@ mod tests {
                             let (_, parked) = crate::host_waits::issue(
                                 ctx,
                                 Request::TestCheck {
-                                    test,
+                                    test: base + 10 + test,
                                     condition: true,
                                 },
                             )
@@ -223,8 +226,26 @@ mod tests {
                         let observed: Vec<_> = log
                             .host_completions
                             .iter()
-                            .map(|row| (row.ordinal, row.observation.clone()))
+                            .map(|row| {
+                                (
+                                    row.ordinal,
+                                    row.observation.clone(),
+                                    log.host_requests[&(row.task.clone(), row.ordinal)].clone(),
+                                )
+                            })
                             .collect();
+                        assert_eq!(log.host_requests.len(), 6);
+                        for (index, (_, _, request)) in observed.iter().enumerate() {
+                            let request = request.as_ref().expect("mapped request authority");
+                            assert_eq!(request.handles, [id(9 + index as u64)]);
+                            assert_eq!(
+                                crate::tape_wire::decode::<Request>(&request.payload).unwrap(),
+                                Request::TestCheck {
+                                    test: 0,
+                                    condition: true
+                                }
+                            );
+                        }
                         assert_eq!(
                             observed.iter().map(|row| row.0).collect::<Vec<_>>(),
                             [0, 1, 2, 3, 4, 5]

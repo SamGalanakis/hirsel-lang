@@ -10,6 +10,7 @@ use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod host_requests;
 mod host_values;
 
 #[cfg(test)]
@@ -340,6 +341,7 @@ pub(super) struct Log {
     failed_ends: BTreeMap<Vec<u32>, Option<Subevents>>,
     next_subevent: BTreeMap<(Vec<u32>, u64), u32>,
     completed: BTreeSet<(Vec<u32>, u64)>,
+    pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_values::HostValue>>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
     host_polled: BTreeSet<(Vec<u32>, u64)>,
@@ -1307,6 +1309,37 @@ pub(super) fn value_subevent(
     status: u32,
 ) -> Option<Subevents> {
     value.map(|(item, payload)| vec![(item, CanonicalOutcome::Value { status, payload })])
+}
+
+/// Capture the exact request before ownership moves to the home service.
+/// The head boundary has assigned its ordinal, and no bridge or scheduling
+/// point occurs here. Missing bindings reject the observation without guessing.
+pub(crate) fn request_host(ctx: *mut TaskCtx, request: &crate::io::Request) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let observation = host_requests::project(request, |word| {
+        driver
+            .objects
+            .identity(crate::ordered::objects::Kind::Capability, word)
+            .cloned()
+    })
+    .ok();
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("request follows host entry");
+    assert!(
+        log.host_requests
+            .insert((path, ordinal), observation)
+            .is_none(),
+        "one request per host operation"
+    );
 }
 
 /// Capture after the owned request returned, before its caller can yield.
