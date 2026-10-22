@@ -86,6 +86,7 @@ def aggregate(entry, field, rounds):
 
 
 def paired_ratio(row, metric, rounds):
+    """Ratio of participant medians for a task with complete passing groups."""
     h = aggregate(row['hirsel'], metric, rounds)
     r = aggregate(row['rust'], metric, rounds)
     return h / r if h and r else None
@@ -176,27 +177,28 @@ class Session:
                     compiler=compiler, binary_identity=identity(cwd / 'target/release/benchmarks'),
                     cargo_lock_sha256=sha(cwd / 'Cargo.lock'))
 
-    def build_hirsel(self):
+    def build_hirsel(self, debug=False):
         cli = build.compiler()
         native = build.native_environment()
         self.env.update({k: v for k, v in native.items() if k.startswith(('HIRSEL_', 'LLVM_', 'LD_LIBRARY'))})
         # A fresh session cache makes the first build cold and retains its
         # objects for the single-file incremental rebuild.
         self.env['HIRSEL_STD_OBJECTS'] = 'none'
-        self.env['XDG_CACHE_HOME'] = str(self.directory / 'hirsel-cache')
+        self.env['XDG_CACHE_HOME'] = str(self.directory / ('debug-cache' if debug else 'hirsel-cache'))
         manifest = build.generate()
-        binary = self.directory / 'langarena'
-        command = [str(cli), 'build', '--release', str(manifest), '-o', str(binary)]
+        binary = self.directory / ('langarena-debug' if debug else 'langarena')
+        label = 'cranelift-debug' if debug else 'hirsel'
+        command = [str(cli), 'build', '--debug' if debug else '--release', str(manifest), '-o', str(binary)]
         consumed = sources_identity()
         compiler = identity(cli)
         runtime = {key: identity(native[key]) for key in ('LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR')}
-        cold, _, _ = self.call(command, label='hirsel-cold')
+        cold, _, _ = self.call(command, label=label + '-cold')
         marker = HERE / 'main.hir'
         original = marker.read_bytes()
         try:
             marker.write_bytes(original.replace(b'RECOMPILE_MARKER_0', b'RECOMPILE_MARKER_1'))
             incremental_source = sources_identity()
-            incremental, _, _ = self.call(command, label='hirsel-incremental')
+            incremental, _, _ = self.call(command, label=label + '-incremental')
         finally:
             marker.write_bytes(original)
         return dict(binary=str(binary), cwd=str(ROOT), cold=cold, incremental=incremental,
@@ -211,7 +213,7 @@ class Session:
         rss = self.directory / (re.sub(r'[^a-zA-Z0-9_.-]', '-', label) + '.rss')
         counters = rss.with_suffix('.perf')
         before, after = rss.with_suffix('.before.stat'), rss.with_suffix('.after.stat')
-        config_arg = os.path.relpath(config, ROOT) if language == 'hirsel' else str(config)
+        config_arg = os.path.relpath(config, ROOT) if language != 'rust' else str(config)
         command = ['/usr/bin/time', '-f', '%M', '-o', str(rss), participant['binary'],
                    *participant.get('args', []), config_arg, task]
         if self.perf:
@@ -266,6 +268,7 @@ def task_status(entry, rounds):
 def report(data, published, output):
     rounds = data['rounds']
     rows = data['tasks']
+    debug = 'cranelift' in data['participants']
     full = data['config'] == 'run.js'
     eligible = {name: row for name, row in rows.items() if paired_ratio(row, 'seconds', rounds)}
     lines = ['# LangArena: Hirsel and a local Rust anchor', '',
@@ -280,9 +283,14 @@ def report(data, published, output):
              f"CPU {data['cpu']}, shared timing lock `{data['timing_lock']}` held for all interleaved rounds. Immutable consumed-source, compiler, native toolchain/runtime and binary SHA-256 identities were checked before/after the session.",
              f"Consumed source identity: `{data['consumed_sources']['sha256']}`.",
              f"Instruction counts are the verdict; cycles are supporting measurement. Available counters: {data['perf']}. Counters include startup and warmup. All local runs use nice -n 10 and tools/capped.", '',
+             'Local ratios are median(Hirsel samples) / median(Rust samples), not medians of within-round ratios. '
+             'Geometric means aggregate these per-task ratios of medians.', '',
              '## Local measurements', '',
              '| Task | Hirsel status | Rust status | Hirsel s | Rust s | Time H/R | Hirsel MiB | Rust MiB | RSS H/R | Instructions H/R |',
              '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    if debug:
+        lines[-2] += ' Cranelift debug status | Debug s | Debug MiB | Debug/Rust time |'
+        lines[-1] += ' --- | ---: | ---: | ---: |'
     for task, row in rows.items():
         h, r = row['hirsel'], row['rust']
         hs, rs = aggregate(h, 'seconds', rounds), aggregate(r, 'seconds', rounds)
@@ -293,6 +301,11 @@ def report(data, published, output):
                      f'{display(paired_ratio(row, "seconds", rounds))} | {display(hm / 1024 if hm else None)} | '
                      f'{display(rm / 1024 if rm else None)} | {display(paired_ratio(row, "rss_kib", rounds))} | '
                      f'{display(paired_ratio(row, "instructions", rounds))} |')
+        if debug:
+            d = row['cranelift']
+            ds, dm = aggregate(d, 'seconds', rounds), aggregate(d, 'rss_kib', rounds)
+            lines[-1] += (f' {status(d)} | {runtime(ds)} | {display(dm / 1024 if dm else None)} | '
+                          f'{display(ds / rs if ds is not None and rs else None)} |')
     lines += ['', '## Geometric means and compile times', '',
               '| Metric | Hirsel / Rust | Paired tasks |', '| --- | ---: | ---: |']
     for field in METRICS:
@@ -300,9 +313,14 @@ def report(data, published, output):
         lines.append(f'| {field} | {display(geometric(ratios))} | {len(ratios)} / 50 |')
     lines += ['', '| Whole-suite compilation (diagnostic singleton) | Hirsel s | Local Rust s |',
               '| --- | ---: | ---: |']
+    if debug:
+        lines[-2] += ' Cranelift debug s |'
+        lines[-1] += ' ---: |'
     for field in ('cold', 'incremental'):
         h, r = data['participants']['hirsel'].get(field), data['participants']['rust'].get(field)
         lines.append(f'| {field} | {display(h)} | {display(r)} |')
+        if debug:
+            lines[-1] += f' {display(data["participants"]["cranelift"].get(field))} |'
     lines += ['', 'These are single sequential build observations, outside the locked interleaved runtime session. '
               'They are ineligible for timing ratios, published-host projections or compile rankings. '
               'No additional compile campaign was run.', '']
@@ -382,6 +400,7 @@ def report(data, published, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--debug', action='store_true', help='include native Cranelift debug as a separate participant')
     parser.add_argument('--quick', action='store_true', help='test.js; correctness only, no published placement')
     parser.add_argument('--filter', action='append', default=[], help='case-insensitive substring; repeat for OR')
     parser.add_argument('--upstream', type=Path, default=Path('/tmp/ref-langarena'))
@@ -416,13 +435,14 @@ def main():
                 consumed_sources=sources_identity(),
                 at=datetime.now(timezone.utc).isoformat(), host=' '.join(os.uname()),
                 invocation=shlex.join(['python3', 'bench/langarena/compare.py', *sys.argv[1:]]),
+                hirsel_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                 config_sha256=hashlib.sha256(config.read_bytes()).hexdigest(),
                 published_file=published_file.name, published_sha256=hashlib.sha256(published_file.read_bytes()).hexdigest(),
                 upstream=UPSTREAM, participants={}, tasks={}, perf='unavailable')
-    for language in ('hirsel', 'rust'):
+    for language in (('hirsel', 'rust', 'cranelift') if args.debug else ('hirsel', 'rust')):
         print('building', language, flush=True)
         try:
-            data['participants'][language] = session.build_hirsel() if language == 'hirsel' else session.build_rust(reference)
+            data['participants'][language] = session.build_rust(reference) if language == 'rust' else session.build_hirsel(debug=language == 'cranelift')
         except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
             data['participants'][language] = dict(status='blocked: ' + str(error).replace('\n', ' ')[:800])
     _, status, _ = session.call(['taskset', '-c', str(args.cpu), 'perf', 'stat', '-e', 'cycles,instructions', '--', 'true'], label='perf-probe', check=False)
@@ -435,7 +455,7 @@ def main():
         row = data['tasks'][name] = {}
         for language, participant in data['participants'].items():
             files = []
-            if language == 'hirsel' and name in implemented:
+            if language != 'rust' and name in implemented:
                 files = [HERE / (implemented[name] + '.hir')]
             if language == 'rust':
                 stem = name.split('::')[-1].lower() if name.startswith(('CLBG::', 'Etc::')) else name.split('::')[0].lower()
@@ -443,7 +463,7 @@ def main():
                          if p.stem == stem or p.stem.startswith(stem + '_')]
             entry = row[language] = dict(source=source_metrics(files), samples=[])
             if name not in implemented:
-                entry['status'] = ('blocked: ' + blocked[name] if name in blocked else 'missing: unported task') if language == 'hirsel' else 'not measured: no Hirsel port'
+                entry['status'] = ('blocked: ' + blocked[name] if name in blocked else 'missing: unported task') if language != 'rust' else 'not measured: no Hirsel port'
             elif participant['status'] != 'ready':
                 entry['status'] = 'blocked: build unavailable'
             elif not selected:
@@ -459,7 +479,7 @@ def main():
                 continue
             if identity(participant['binary']) != participant['binary_identity']:
                 raise RuntimeError(f'{language} binary changed during the session')
-            if language == 'hirsel' and (sha(HERE / 'build/hirsel.json') != participant['manifest_sha256']
+            if language != 'rust' and (sha(HERE / 'build/hirsel.json') != participant['manifest_sha256']
                                          or sha(HERE / 'build/grants.json') != participant['grants_sha256']):
                 raise RuntimeError('consumed manifest/grants changed during the session')
             if language == 'rust' and identity(reference / 'rust/src') != participant['cold_sources']:

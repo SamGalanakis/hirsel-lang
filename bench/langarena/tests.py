@@ -45,6 +45,28 @@ class Comparison(unittest.TestCase):
             binary.write_bytes(b'other')
             self.assertNotEqual(before, compare.identity(binary))
 
+    def test_report_keeps_debug_results_separate_from_release_ratios(self):
+        source = dict(bytes=1, gzip_bytes=1, lines=1)
+        participants = {name: dict(status='ready', cold=cold, incremental=cold / 2,
+            source=source, compiler=dict(sha256='compiler'), binary_identity=dict(sha256=name))
+            for name, cold in [('hirsel', 10), ('rust', 5), ('cranelift', 3)]}
+        row = {name: dict(status='ready', source=source,
+            samples=[dict(status='OK', seconds=seconds, rss_kib=1024)])
+            for name, seconds in [('hirsel', 2), ('rust', 1), ('cranelift', 9)]}
+        data = dict(rounds=1, tasks={'X': row}, config='run.js', seed=1, at='now', host='host',
+            published_file='results.js', published_sha256='published', cpu=31, timing_lock='lock',
+            consumed_sources=dict(sha256='sources'), perf='unavailable', participants=participants,
+            invocation='compare.py --debug', session='example')
+        published = dict(runs={'Rust': 'prod'}, **{'X-runtime': {'Rust': 1}})
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / 'results.md'
+            compare.report(data, published, report)
+            text = report.read_text()
+        self.assertIn('Cranelift debug status | Debug s | Debug MiB | Debug/Rust time |', text)
+        self.assertIn('OK (1/1) | 9.000000000 | 1.000 | 9.000 |', text)
+        self.assertIn('| seconds | 2.000 | 1 / 50 |', text)
+        self.assertIn('| cold | 10.000 | 5.000 | 3.000 |', text)
+
     def test_new_group_is_discovered_and_duplicate_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             here = Path(directory)
