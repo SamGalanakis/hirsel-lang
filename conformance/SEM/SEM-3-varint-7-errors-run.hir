@@ -1,0 +1,1192 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/binary vectors, checked against an independent u128 radix oracle.
+pub fn main() -> Result[(), ()] {
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x00\xff", 0) == Ok((0u64, 1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x00\xff", 0) == Ok((0i64, 1)), TextInvariant())
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x00\xff", 0) == Ok((0u64, 2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x00\xff", 0) == Ok((0i64, 2)), TextInvariant())
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x00\xff", 0) == Ok((0u64, 3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x00\xff", 0) == Ok((0i64, 3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x00\xff", 0) == Ok((0u64, 4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x00\xff", 0) == Ok((0i64, 4)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x00\xff", 0) == Ok((0u64, 5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x00\xff", 0) == Ok((0i64, 5)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0u64, 6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0i64, 6)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0u64, 7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0i64, 7)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0u64, 8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0i64, 8)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0u64, 9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok((0i64, 9)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_i64(b"", 0) == Error(Truncated(0)), TextInvariant())
+  failure.check(varint.read_u64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\xa5\x55", 2) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_u64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80", 0) == Error(Truncated(1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80", 2) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(varint.read_u64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x80\x80", 0) == Error(Truncated(2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80", 2) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80", 0) == Error(Truncated(3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80", 2) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80", 0) == Error(Truncated(4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80", 2) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80", 0) == Error(Truncated(5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80", 2) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80", 2) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(8)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 0) == Error(Truncated(9)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x80", 2) == Error(
+      Truncated(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok(
+      (0u64, 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80\x00\xff", 0) == Ok(
+      (0i64, 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x02\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x81\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 0) == Error(
+      Overflow(9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x80\x00", 2) == Error(
+      Overflow(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"", 1u64) == Error(OffsetBeyondEnd(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"", 1u64) == Error(OffsetBeyondEnd(1u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x00", 2u64) == Error(OffsetBeyondEnd(2u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x00", 2u64) == Error(OffsetBeyondEnd(2u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x00", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x00", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80", 2u64) == Error(OffsetBeyondEnd(2u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80", 2u64) == Error(OffsetBeyondEnd(2u64)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 10u64) == Error(
+      OffsetBeyondEnd(10u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 10u64) == Error(
+      OffsetBeyondEnd(10u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80", 18446744073709551615u64) == Error(
+      OffsetBeyondEnd(18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

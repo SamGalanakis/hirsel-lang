@@ -1,0 +1,75 @@
+// Ported from Go encoding/binary/varint.go:39-132,134-159 at
+// ebe2feefc400f813aefdc8a036e66d2619da6649. Copyright 2009 The Go Authors.
+// BSD-3-Clause terms are reproduced in third-party/NOTICES.md.
+
+/// Absolute offsets: requested out-of-range cursor, first missing byte, or
+/// invalid tenth byte. Errors contain no partial scalar or advanced cursor.
+pub type ReadError = OffsetBeyondEnd(u64) | Truncated(u64) | Overflow(u64)
+
+/// Read unsigned base128, returning (value, next absolute offset). Overlong
+/// encodings are accepted. An invalid tenth byte overflows immediately.
+@noalloc
+pub fn read_u64(data: Bytes, offset: u64) -> Result[(u64, u64), ReadError] uses {} {
+  let length = core@1/bytes.len(data)
+  if offset > length {
+    return Error(OffsetBeyondEnd(offset))
+  }
+  let mut cursor = offset
+  let mut value = 0u64
+  let mut shift = 0u64
+  while shift < 64 {
+    // cursor < length proves both the index and cursor + 1 representable.
+    if cursor == length {
+      return Error(Truncated(cursor))
+    }
+    let byte: u64 = core@1/int.widen(data[cursor])
+    if shift == 63 && byte > 1 {
+      return Error(Overflow(cursor))
+    }
+    value = value | (byte & 127) << shift
+    cursor = cursor + 1
+    if byte < 128 {
+      return Ok((value, cursor))
+    }
+    shift = shift + 7
+  }
+  Error(Overflow(cursor - 1))
+}
+
+/// Read signed ZigZag (not signed LEB128), including i64 MIN.
+@noalloc
+pub fn read_i64(data: Bytes, offset: u64) -> Result[(i64, u64), ReadError] uses {} {
+  let (encoded, next) = read_u64(data, offset)?
+  // encoded >> 1 is always representable as a nonnegative i64.
+  let half: i64 = core@1/int.truncate(encoded >> 1)
+  let value = if encoded & 1 == 0 {
+    half
+  } else {
+    ~half
+  }
+  Ok((value, next))
+}
+
+/// Append the canonical shortest unsigned base128 encoding, preserving prefix.
+@preserves_unique(out)
+pub fn append_u64(value: u64, mut out: List[u8]) -> () uses {} {
+  let mut remaining = value
+  while remaining >= 128 {
+    core@1/list.push(mut out, core@1/int.narrow(remaining & 127 | 128))
+    remaining = remaining >> 7
+  }
+  core@1/list.push(mut out, core@1/int.narrow(remaining))
+}
+
+/// Append canonical ZigZag without negating a signed value.
+@preserves_unique(out)
+pub fn append_i64(value: i64, mut out: List[u8]) -> () uses {} {
+  let bits: u64 = core@1/int.truncate(value)
+  let shifted = bits << 1
+  let encoded = if value < 0 {
+    ~shifted
+  } else {
+    shifted
+  }
+  append_u64(encoded, mut out)
+}

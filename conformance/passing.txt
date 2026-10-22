@@ -6524,6 +6524,10 @@ conformance/SEM/SEM-3-utf8-stream-5-run.hir
 conformance/SEM/SEM-3-uuid-layout-run.hir
 conformance/SEM/SEM-3-uuid-random-run.hir
 conformance/SEM/SEM-3-uuid-rfc-extras-run.hir
+conformance/SEM/SEM-3-varint-7-errors-run.hir
+conformance/SEM/SEM-3-varint-7-record-run.hir
+conformance/SEM/SEM-3-varint-7-signed-run.hir
+conformance/SEM/SEM-3-varint-7-unsigned-run.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-fail.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-run.hir

@@ -57,3 +57,4 @@ mod quoted_printable_8;
 mod stdlib_drift;
 mod cidr_8;
 mod jaro_similarity_10;
+mod varint_7;

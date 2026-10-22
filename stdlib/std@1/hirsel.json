@@ -1271,6 +1271,12 @@
       "module": [
         "text_similarity"
       ]
+    },
+    {
+      "path": "varint.hir",
+      "module": [
+        "varint"
+      ]
     }
   ],
   "dependencies": []

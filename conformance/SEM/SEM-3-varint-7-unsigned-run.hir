@@ -1,0 +1,380 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/binary vectors, checked against an independent u128 radix oracle.
+pub fn main() -> Result[(), ()] {
+  failure.check(varint.read_u64(b"\x00", 0) == Ok((0u64, 1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x00\xff\x33", 2) == Ok((0u64, 3)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(0u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x00", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\x01", 0) == Ok((1u64, 1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x01\xff\x33", 2) == Ok((1u64, 3)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(1u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x01", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\x7f", 0) == Ok((127u64, 1)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x7f\xff\x33", 2) == Ok((127u64, 3)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(127u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x7f", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\x80\x01", 0) == Ok((128u64, 2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x01\xff\x33", 2) == Ok((128u64, 4)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(128u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x80\x01", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\xff\x01", 0) == Ok((255u64, 2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\x01\xff\x33", 2) == Ok((255u64, 4)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(255u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\xff\x01", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\x80\x02", 0) == Ok((256u64, 2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x02\xff\x33", 2) == Ok((256u64, 4)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(256u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x80\x02", TextInvariant())
+  }
+  failure.check(varint.read_u64(b"\xff\x7f", 0) == Ok((16383u64, 2)), TextInvariant())
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\x7f\xff\x33", 2) == Ok((16383u64, 4)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(16383u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\xff\x7f", TextInvariant())
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x01", 0) == Ok((16384u64, 3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x01\xff\x33", 2) == Ok((16384u64, 5)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(16384u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\x80\x80\x01", TextInvariant())
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\x7f", 0) == Ok((2097151u64, 3)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\x7f\xff\x33", 2) == Ok((2097151u64, 5)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(2097151u64, mut out)
+    failure.check(bytes.from_list(take out) == b"\xa5\x55\xff\xff\x7f", TextInvariant())
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x01", 0) == Ok((2097152u64, 4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x01\xff\x33", 2) == Ok((2097152u64, 6)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(2097152u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\x7f", 0) == Ok((268435455u64, 4)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\x7f\xff\x33", 2) == Ok((268435455u64, 6)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(268435455u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x01", 0) == Ok((268435456u64, 5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x01\xff\x33", 2) == Ok((268435456u64, 7)),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(268435456u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\x7f", 0) == Ok((34359738367u64, 5)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\x7f\xff\x33", 2) == Ok(
+      (34359738367u64, 7)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(34359738367u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x01", 0) == Ok((34359738368u64, 6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x01\xff\x33", 2) == Ok(
+      (34359738368u64, 8)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(34359738368u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\x7f", 0) == Ok((4398046511103u64, 6)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\x7f\xff\x33", 2) == Ok(
+      (4398046511103u64, 8)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(4398046511103u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x01", 0) == Ok((4398046511104u64, 7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x01\xff\x33", 2) == Ok(
+      (4398046511104u64, 9)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(4398046511104u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\x7f", 0) == Ok((562949953421311u64, 7)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\x7f\xff\x33", 2) == Ok(
+      (562949953421311u64, 9)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(562949953421311u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x01", 0) == Ok(
+      (562949953421312u64, 8)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x01\xff\x33", 2) == Ok(
+      (562949953421312u64, 10)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(562949953421312u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\x7f", 0) == Ok(
+      (72057594037927935u64, 8)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\x7f\xff\x33", 2) == Ok(
+      (72057594037927935u64, 10)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(72057594037927935u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x01", 0) == Ok(
+      (72057594037927936u64, 9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x01\xff\x33", 2) == Ok(
+      (72057594037927936u64, 11)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(72057594037927936u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\x7f", 0) == Ok(
+      (9223372036854775807u64, 9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\x7f\xff\x33", 2) == Ok(
+      (9223372036854775807u64, 11)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(9223372036854775807u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\x7f",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\x80\x80\x80\x80\x80\x80\x80\x80\x80\x01", 0) == Ok(
+      (9223372036854775808u64, 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x80\x01\xff\x33", 2) == Ok(
+      (9223372036854775808u64, 12)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(9223372036854775808u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\x80\x80\x80\x80\x80\x80\x80\x80\x80\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xd7\xff\xff\xff\xff\xff\xff\xff\xff\x01", 0) == Ok(
+      (18446744073709551575u64, 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xd7\xff\xff\xff\xff\xff\xff\xff\xff\x01\xff\x33", 2) == Ok(
+      (18446744073709551575u64, 12)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(18446744073709551575u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xd7\xff\xff\xff\xff\xff\xff\xff\xff\x01",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    varint.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01", 0) == Ok(
+      (18446744073709551615u64, 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_u64(b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01\xff\x33", 2) == Ok(
+      (18446744073709551615u64, 12)
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [165u8, 85u8]
+    varint.append_u64(18446744073709551615u64, mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xa5\x55\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01",
+      TextInvariant()
+    )
+  }
+  Ok(())
+}

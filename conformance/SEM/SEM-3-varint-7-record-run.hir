@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/binary vectors, checked against an independent u128 radix oracle.
+pub fn main() -> Result[(), ()] {
+  let mut out: unique List[u8] = [170u8]
+  varint.append_u64(300, mut out)
+  varint.append_i64(-2, mut out)
+  let packet = bytes.from_list(take out)
+  failure.check(packet == b"\xaa\xac\x02\x03", TextInvariant())
+  failure.check(varint.read_u64(packet, 1) == Ok((300u64, 3)), TextInvariant())
+  failure.check(varint.read_i64(packet, 3) == Ok((-2i64, 4)), TextInvariant())
+  let mut shared: List[u8] = [85u8]
+  let snapshot = copy shared
+  varint.append_u64(18446744073709551615u64, mut shared)
+  varint.append_i64(-9223372036854775808i64, mut shared)
+  failure.check(snapshot == [85u8], TextInvariant())
+  failure.check(list.len(shared) == 21, TextInvariant())
+  let shared_packet = bytes.from_list(take shared)
+  failure.check(
+    varint.read_u64(shared_packet, 1) == Ok((18446744073709551615u64, 11)),
+    TextInvariant()
+  )
+  failure.check(
+    varint.read_i64(shared_packet, 11) == Ok((-9223372036854775808i64, 21)),
+    TextInvariant()
+  )
+  let mut cursor = 2u64
+  let decoded = varint.read_i64(b"\x55\x55\x81", cursor)
+  match decoded {
+    Ok((_, next)) => {
+      cursor = next
+    },
+    Error(error) => {
+      failure.check(error == Truncated(3), TextInvariant())
+    },
+  }
+  failure.check(cursor == 2, TextInvariant())
+  // Nonzero overlong forms are accepted, then written canonically.
+  failure.check(varint.read_u64(b"\x81\x00\xff", 0) == Ok((1u64, 2)), TextInvariant())
+  failure.check(varint.read_i64(b"\x83\x00\xff", 0) == Ok((-2i64, 2)), TextInvariant())
+  let mut canonical: unique List[u8] = []
+  varint.append_u64(1, mut canonical)
+  varint.append_i64(-2, mut canonical)
+  failure.check(bytes.from_list(take canonical) == b"\x01\x03", TextInvariant())
+  Ok(())
+}
