@@ -5439,6 +5439,7 @@ conformance/SEM/SEM-3-json-document-scope-gate-run.hir
 conformance/SEM/SEM-3-json-document-scratch-retention-run.hir
 conformance/SEM/SEM-3-json-document-wide-run.hir
 conformance/SEM/SEM-3-json-empty-run.hir
+conformance/SEM/SEM-3-json-float-stream-run.hir
 conformance/SEM/SEM-3-json-import-001-run.hir
 conformance/SEM/SEM-3-json-import-002-run.hir
 conformance/SEM/SEM-3-json-import-003-run.hir

@@ -1,0 +1,101 @@
+// rule: SEM-3
+// expect: run
+// The direct scalar path agrees with the DOM for finite and nonfinite values;
+// borrowed numeric tokens keep exact rounding, negative zero and error policy.
+type Floats {
+  double: f64,
+  single: f32,
+}
+
+fn floats_to_json(value: Floats) -> json.Value uses {} = comptime derive.json_value(
+  shape(Floats)
+)
+
+@preserves_unique(out)
+fn floats_json_into(value: Floats, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Floats))
+
+fn floats_from_json_reader(mut cursor: json.Reader) -> Result[unique Floats, String] uses {} = comptime derive.from_json_reader(
+  shape(Floats)
+)
+
+fn floats_from_json_bytes(data: Bytes) -> Result[unique Floats, String] uses {} = comptime derive.from_json_bytes(
+  shape(Floats)
+)
+
+fn same(t: Test, double: f64, single: f32) -> Result[(), ()] {
+  let value = Floats(double: double, single: single)
+  let Ok(expected) = json.stringify(floats_to_json(value)) else {
+    return Error(())
+  }
+  let mut out: List[u8] = [b'[']
+  let Ok(()) = floats_json_into(value, mut out, 0) else {
+    return Error(())
+  }
+  test.equal(t, text.finish_valid(take out), f"[{expected}")
+  let Ok(decoded) = floats_from_json_bytes(string.as_bytes(expected)) else {
+    return Error(())
+  }
+  if double == double {
+    test.equal(t, f64.bits(decoded.double), f64.bits(double))
+  } else {
+    test.check(t, decoded.double != decoded.double)
+  }
+  if single == single {
+    test.equal(t, f32.bits(decoded.single), f32.bits(single))
+  } else {
+    test.check(t, decoded.single != decoded.single)
+  }
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  same(t, -0.0, -0.0f32)?
+  same(t, 1e-7, 1e-7f32)?
+  same(t, f64.from_bits(1u64), f32.from_bits(1u32))?
+  same(t, f64.from_bits(0x7fefffffffffffffu64), f32.from_bits(0x7f7fffffu32))?
+  same(t, f64.from_bits(0x7ff0000000000000u64), f32.from_bits(0xff800000u32))?
+  same(t, f64.from_bits(0xfff0000000000000u64), f32.from_bits(0x7fc00000u32))?
+  same(t, f64.from_bits(0x7ff8000000000000u64), f32.from_bits(0x7f800000u32))?
+  let Ok(tie) = floats_from_json_bytes(
+    b"{\"double\":1.00000000000000011102230246251565404236316680908203125,\"single\":1.000000059604644775390625}"
+  ) else {
+    return Error(())
+  }
+  test.equal(t, tie.double, 1.0)
+  test.equal(t, tie.single, 1.0f32)
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":1e9999}"),
+    Error("expected a JSON number fitting f64")
+  )
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":0,\"single\":1e40}"),
+    Error("expected a JSON number fitting f32")
+  )
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":\"1.5\"}"),
+    Error("expected a JSON number")
+  )
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":false}"),
+    Error("expected a JSON number")
+  )
+  test.equal(t, floats_from_json_bytes(b"{\"double\":1.}"), Error("not JSON"))
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":0,\"double\":1}"),
+    Error("not JSON")
+  )
+  test.equal(
+    t,
+    floats_from_json_bytes(b"{\"double\":0,\"single\":0,\"other\":0,\"other\":1}"),
+    Error("not JSON")
+  )
+  Ok(())
+}

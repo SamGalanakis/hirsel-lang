@@ -1252,7 +1252,7 @@ fn json_into_of(mut w: Writer, ty: String, read: String, depth: String) -> Resul
   if float(ty) {
     put(
       mut w,
-      f"std@1/json.stringify_into(std@1/derive.json_float(std@1/{ty}.to_string({read})), mut out)?\n"
+      f"std@1/derive.write_json_{ty}({read}, mut out)\n"
     )
     return Ok(())
   }
@@ -1484,6 +1484,26 @@ pub fn read_null(mut cursor: json.Reader) -> Result[(), String] uses {} {
   match json.next_token(mut cursor) {
     Ok(NullToken) => Ok(()),
     _ => Error("not JSON"),
+  }
+}
+
+// serde_json src/ser.rs:169-181,1716-1723: format a finite scalar
+// directly into the destination. Hirsel retains its nonfinite string policy.
+@preserves_unique(out)
+pub fn write_json_f64(value: f64, mut out: List[u8]) -> () uses {} {
+  if core@1/f64.bits(value) & 0x7ff0000000000000 == 0x7ff0000000000000 {
+    json.write_text_into(f64.to_string(value), mut out)
+  } else {
+    f64.format_into(value, mut out)
+  }
+}
+
+@preserves_unique(out)
+pub fn write_json_f32(value: f32, mut out: List[u8]) -> () uses {} {
+  if core@1/f32.bits(value) & 0x7f800000 == 0x7f800000 {
+    json.write_text_into(f32.to_string(value), mut out)
+  } else {
+    f32.format_into(value, mut out)
   }
 }
 
