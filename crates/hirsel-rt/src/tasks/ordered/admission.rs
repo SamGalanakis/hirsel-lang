@@ -4,7 +4,7 @@
 
 use crate::TaskCtx;
 use crate::ordered::Policy;
-use hirsel_run_config::{Commit, ValidatedRun};
+use hirsel_run_config::ValidatedRun;
 
 // Enable only after the native differential, host, value, physical-bound and
 // performance gates have qualified production E1. Keep this independent of F1.
@@ -37,11 +37,6 @@ impl Admission {
         }
         let placement = record.placement.clone().unwrap_or_default();
         let policy = Policy::admit(&placement, run.budgets().and_then(|b| b.memory_bytes));
-        // Dedicated is a distinct execution contract, not a hint that may be
-        // silently implemented by a shared-worker retirement callback.
-        if PRODUCTION_QUALIFIED && policy.commit == Commit::Dedicated {
-            return Err("Ordered dedicated commit execution is not admitted".into());
-        }
         Ok(Some(Self { policy }))
     }
 
@@ -73,7 +68,7 @@ impl Admission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hirsel_run_config::{Cores, Placement, Reorder, RunConfig};
+    use hirsel_run_config::{Commit, Cores, Placement, Reorder, RunConfig};
     use hirsel_run_schema::{Budgets, IoGrants, LaunchKind, Scheduler};
 
     fn run(provider: &str) -> RunConfig {

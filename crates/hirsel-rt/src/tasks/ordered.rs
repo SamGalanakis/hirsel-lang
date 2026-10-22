@@ -3,6 +3,8 @@
 //! This module does not select a physical worker or run a scheduling point.
 
 pub(crate) mod admission;
+#[cfg(test)]
+mod commit_tests;
 pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;

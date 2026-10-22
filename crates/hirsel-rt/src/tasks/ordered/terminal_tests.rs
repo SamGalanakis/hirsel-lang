@@ -679,6 +679,21 @@ unsafe extern "C" fn budget_suffix_head(ctx: *mut TaskCtx, env: *mut Header, _: 
 
 #[test]
 fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges() {
+    budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges_commit(
+        hirsel_run_config::Commit::Shared,
+    );
+}
+
+#[test]
+fn dedicated_commit_preserves_first_budget_stop_and_truncates_younger_suffix() {
+    budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges_commit(
+        hirsel_run_config::Commit::Dedicated,
+    );
+}
+
+fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges_commit(
+    commit: hirsel_run_config::Commit,
+) {
     use super::events::{CanonicalItem, CanonicalOutcome, Transition};
     use crate::budget::stretch_trace::Charge;
     let layout = crate::Layout {
@@ -727,6 +742,7 @@ fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_he
                         policy.speculation_bytes = 1 << 20;
                         policy.run_ahead = 8;
                         policy.reorder = reorder;
+                        policy.commit = commit;
                         engine::enable(ctx, policy);
                         super::events::enable(ctx);
                         crate::pool::start(ctx, width, true);
@@ -935,6 +951,21 @@ fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_he
 
 #[test]
 fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements() {
+    exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements_commit(
+        hirsel_run_config::Commit::Shared,
+    );
+}
+
+#[test]
+fn dedicated_commit_preserves_exact_budget_charges_across_partial_head_settlements() {
+    exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements_commit(
+        hirsel_run_config::Commit::Dedicated,
+    );
+}
+
+fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements_commit(
+    commit: hirsel_run_config::Commit,
+) {
     use crate::budget::stretch_trace::Charge;
     let layout = crate::Layout {
         magic: crate::LAYOUT_MAGIC,
@@ -964,7 +995,9 @@ fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlem
             |ctx| unsafe {
                 let charge = crate::alloc::allocation_charge(ctx, 2, 16, 8);
                 (*ctx).set_budgets(Some(10), Some(charge));
-                engine::enable(ctx, Policy::admit(&Default::default(), Some(charge)));
+                let mut policy = Policy::admit(&Default::default(), Some(charge));
+                policy.commit = commit;
+                engine::enable(ctx, policy);
                 super::events::enable(ctx);
             },
             move |ctx| unsafe {

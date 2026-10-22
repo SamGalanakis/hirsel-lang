@@ -46,6 +46,7 @@ use crate::stop::{Stop, Stopped};
 use crate::{environmental, fault};
 
 pub(crate) mod free;
+pub(crate) mod ordered_commit;
 
 /// The most blocking-pool threads one run starts.
 pub(crate) const POOL_THREADS: usize = 64;
@@ -73,6 +74,7 @@ enum Kind {
     Home,
     Compute(u16),
     Pool(u16),
+    Commit,
 }
 
 /// A closure the home thread runs for a thread that waits for it ([`call_home`]).
@@ -682,6 +684,7 @@ pub(crate) fn recorder_slot() -> usize {
         Kind::Home => 0,
         Kind::Compute(index) => usize::from(index) + 1,
         Kind::Pool(index) => MAX_WIDTH as usize + 1 + usize::from(index),
+        Kind::Commit => MAX_WIDTH as usize + 1 + POOL_THREADS,
     }
 }
 
@@ -832,6 +835,7 @@ pub(crate) fn resumes_into_hirsel(ctx: *mut TaskCtx, to: *const Exec) -> bool {
             !unsafe { wide(&*(*ctx).run_ptr()) }
         }
         Kind::Pool(_) => false,
+        Kind::Commit => false,
     }
 }
 

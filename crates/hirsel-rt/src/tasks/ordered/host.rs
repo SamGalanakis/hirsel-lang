@@ -816,6 +816,21 @@ mod tests {
 
     #[test]
     fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request() {
+        owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request_commit(
+            hirsel_run_config::Commit::Shared,
+        );
+    }
+
+    #[test]
+    fn dedicated_commit_preserves_home_saved_wait_completion_and_deadline_cancellation() {
+        owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request_commit(
+            hirsel_run_config::Commit::Dedicated,
+        );
+    }
+
+    fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request_commit(
+        commit: hirsel_run_config::Commit,
+    ) {
         for width in [2, 4, 8] {
             for cancellation in [false, true] {
                 let probe = Arc::new(Probe::default());
@@ -828,7 +843,9 @@ mod tests {
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
                     |ctx| unsafe {
-                        engine::enable(ctx, Policy::admit(&Default::default(), None));
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.commit = commit;
+                        engine::enable(ctx, policy);
                         super::super::events::enable(ctx);
                     },
                     move |ctx| unsafe {

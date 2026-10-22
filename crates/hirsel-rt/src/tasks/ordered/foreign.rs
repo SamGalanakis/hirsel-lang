@@ -159,12 +159,45 @@ mod tests {
 
     #[test]
     fn ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth() {
+        ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth_commit(
+            hirsel_run_config::Commit::Shared,
+        );
+    }
+
+    #[test]
+    fn dedicated_commit_preserves_home_pool_and_nested_foreign_affinity() {
+        const CHILD: &str = "HIRSEL_ORDERED_DEDICATED_FOREIGN_ONE_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tasks::ordered::foreign::tests::dedicated_commit_preserves_home_pool_and_nested_foreign_affinity", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth_commit(
+            hirsel_run_config::Commit::Dedicated,
+        );
+    }
+
+    fn ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth_commit(
+        commit: hirsel_run_config::Commit,
+    ) {
         for width in [2, 4, 8] {
             let home = std::thread::current().id();
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
-                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                |ctx| unsafe {
+                    let mut policy = Policy::admit(&Default::default(), None);
+                    policy.commit = commit;
+                    engine::enable(ctx, policy);
+                },
                 move |ctx| unsafe {
                     for dispatch in [
                         FOREIGN_THREADS_HOME | FOREIGN_BLOCKING,

@@ -52,6 +52,9 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// credits; mutex roots and yielding resource drops remain strict-head.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
+    if policy.commit == hirsel_run_config::Commit::Dedicated {
+        unsafe { crate::pool::ordered_commit::install(ctx) };
+    }
     unsafe {
         (*ctx).run_ref().ordered_allowance.store(
             policy.speculation_bytes,
@@ -221,6 +224,10 @@ fn stretch(ctx: *mut TaskCtx) -> Stretch {
 
 #[inline]
 fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
+    with_commit(ctx, || settle_head_here(ctx, before))
+}
+
+fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
     let task = current(ctx);
     let result = driver(ctx)
         .frontier
@@ -349,6 +356,21 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
 /// All callbacks here are bounded internal object work. Objects::deferred
 /// forbids a poll until this function restores the frontier and ends borrows.
 fn with_frontier<T>(
+    ctx: *mut TaskCtx,
+    action: impl FnOnce(&mut Frontier<Command, Outcome>, &mut Objects<'_>) -> T,
+) -> T {
+    with_commit(ctx, || with_frontier_here(ctx, action))
+}
+
+fn with_commit<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> T {
+    let service = unsafe { (*ctx).run_ref().ordered_commit.get() };
+    match service {
+        Some(service) => unsafe { service.call(ctx, action) },
+        None => action(),
+    }
+}
+
+fn with_frontier_here<T>(
     ctx: *mut TaskCtx,
     action: impl FnOnce(&mut Frontier<Command, Outcome>, &mut Objects<'_>) -> T,
 ) -> T {
@@ -559,7 +581,9 @@ impl<F: FnOnce() -> (T, Outcome, Next), T> Backend<Command> for HeadEffect<'_, '
     fn commit(&mut self, _: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
         assert!(!early, "a native task effect runs only at the head");
         assert!(matches!(op.payload, Command::Head { .. }));
-        let (result, outcome, next) = self.effect.take().expect("head callback committed once")();
+        let (result, outcome, next) = crate::pool::ordered_commit::on_issuer(
+            self.effect.take().expect("head callback committed once"),
+        );
         *self.result = Some(result);
         Receipt {
             result: outcome,
@@ -697,7 +721,7 @@ pub(super) fn head_continuation<T>(
     let mut result = None;
     let progress = with_frontier(ctx, |frontier, backend| {
         frontier.continue_head(before, backend, || {
-            let (value, next) = effect();
+            let (value, next) = crate::pool::ordered_commit::on_issuer(effect);
             result = Some(value);
             next
         })
@@ -1873,6 +1897,15 @@ mod tests {
 
     #[test]
     fn native_channel_and_mutex_entries_preserve_owned_carriers_and_aliases() {
+        native_channel_and_mutex_commit(hirsel_run_config::Commit::Shared);
+    }
+
+    #[test]
+    fn dedicated_commit_preserves_native_channel_mutex_carriers_aliases_and_root_release() {
+        native_channel_and_mutex_commit(hirsel_run_config::Commit::Dedicated);
+    }
+
+    fn native_channel_and_mutex_commit(commit: hirsel_run_config::Commit) {
         let image = image_layout(16);
         let close = crate::Step {
             kind: crate::STEP_CLOSE_HANDLE,
@@ -1900,7 +1933,11 @@ mod tests {
         // fixture cleanup; no other tasks or observable host services exist.
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
-            |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+            |ctx| unsafe {
+                let mut policy = Policy::admit(&Default::default(), None);
+                policy.commit = commit;
+                enable(ctx, policy);
+            },
             |ctx| {
                 use super::super::super::*;
                 unsafe {

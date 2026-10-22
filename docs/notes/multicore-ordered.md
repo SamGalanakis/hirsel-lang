@@ -219,8 +219,8 @@ when placement requests eight cores or dedicated commit. Substrate worker
 tests keep their explicit admission. Free and seeded non-FIFO schedules do not
 select this plan. Once E1 is qualified, the prepared plan will select the same
 saved-frame dispatcher at width one and wider widths, after topology and
-budgets are configured and before root publication. Dedicated execution still
-requires its own implementation; it cannot silently select shared retirement.
+budgets are configured and before root publication. Dedicated execution uses
+its fixed bounded commit executor; it never silently selects shared retirement.
 This staging is not production activation or completed E1 acceptance.
 
 `hirsel run --native --trace-events events.jsonl` and an embedding host's
@@ -344,6 +344,36 @@ after workers leave; a trace request with running workers still refuses.
 Controls compare bytes at widths 1/2/4/8 and reorder off/auto for saved blocked
 requests, completed saved input, stopped home transfer, exact partial output
 and implicit close. Production Ordered remains OFF pending later gates.
+
+## Dedicated commit execution
+
+Explicit Ordered admission with `commit="dedicated"` installs one run-owned
+commit thread. Frontier commands, retirement and partial head-budget settlement
+execute there under the issuer's delegated scheduler role. Physical dispatch,
+saved-frame publication and readiness polling retain their existing guarded
+worker paths. Bounded head effects and continuations return synchronously to
+the issuer to preserve home, pool and foreign TLS affinity. No task context
+moves to the commit thread, and no user code or suspension runs in its loan.
+
+The issuer lends its existing process compute permit under the permit-state
+lock; no additional executing capacity appears, including at process grant 1.
+Home/pool foreign transitions without a permit release the role using `Segment`
+before acquiring a temporary permit, reenter before publishing the loan, and
+return that temporary permit afterwards. An idle committer holds no permit.
+The committer participates in stopped-run lost-permit accounting. The run
+outlives every synchronous issuer; its final owner closes and joins the idle
+committer before destroying the service.
+
+The callback loan follows `pool::call_home_in` and `pool::run_call` (pool.rs),
+including predicate-under-lock notification after the borrowed callback has
+fully returned. Unlike withdrawable home I/O, a started commit loan finishes
+restoring Frontier before observing a requested stop. Stop still returns
+promptly to the launcher with a pending worker, retaining its lent permit
+until it actually leaves. Controls cover two competing real sibling workers,
+shared/dedicated canonical byte equality at widths 1/2/4/8 and both reorder
+modes, one-permit role contention, foreign affinity, host saved waits, child
+Holding/rest cleanup, channel/mutex carriers and exact first budget cuts.
+Production qualification remains false pending the corpus and final gates.
 
 ## Prior art and deviations
 

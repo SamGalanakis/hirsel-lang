@@ -1235,6 +1235,34 @@ mod tests {
     }
 
     fn children_run(width: u32, holding_first: bool, consume: u8) {
+        children_run_commit(
+            width,
+            holding_first,
+            consume,
+            hirsel_run_config::Commit::Shared,
+        );
+    }
+
+    #[test]
+    fn dedicated_commit_preserves_holding_join_scope_exit_and_detach_rests() {
+        for width in [1, 8] {
+            for (holding, consume) in [(false, 0), (true, 0), (false, 1), (false, 2), (true, 3)] {
+                children_run_commit(
+                    width,
+                    holding,
+                    consume,
+                    hirsel_run_config::Commit::Dedicated,
+                );
+            }
+        }
+    }
+
+    fn children_run_commit(
+        width: u32,
+        holding_first: bool,
+        consume: u8,
+        commit: hirsel_run_config::Commit,
+    ) {
         use hirsel_core_contract::handle_scan::{TYPED_HANDLE, WORDS};
         let scan = [TYPED_HANDLE, 8, Kind::Atomic.code(), 2, 0, 0, 0, 0];
         assert_eq!(scan.len(), WORDS);
@@ -1262,7 +1290,11 @@ mod tests {
         // every child is joined, and root completion is explicit below.
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
-            |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+            |ctx| unsafe {
+                let mut policy = Policy::admit(&Default::default(), None);
+                policy.commit = commit;
+                engine::enable(ctx, policy);
+            },
             move |ctx| unsafe {
                 for _ in 0..3 {
                     let mut scope = 0;
@@ -1501,6 +1533,57 @@ mod tests {
         super::super::events::ReceivePollCompletion,
         Vec<super::super::events::CanonicalEvent>,
     )> {
+        receive_run_commit(
+            width,
+            sender,
+            observing,
+            reorder,
+            hirsel_run_config::Commit::Shared,
+        )
+    }
+
+    #[test]
+    fn dedicated_commit_preserves_saved_receive_evidence_and_source_free_blocked_cut() {
+        let mut reference = None;
+        for width in [1, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let observed = receive_run_commit(
+                    width,
+                    true,
+                    true,
+                    reorder,
+                    hirsel_run_config::Commit::Dedicated,
+                )
+                .unwrap();
+                if let Some(reference) = &reference {
+                    assert_eq!(&observed, reference);
+                } else {
+                    reference = Some(observed);
+                }
+                receive_run_commit(
+                    width,
+                    false,
+                    false,
+                    reorder,
+                    hirsel_run_config::Commit::Dedicated,
+                );
+            }
+        }
+    }
+
+    fn receive_run_commit(
+        width: u32,
+        sender: bool,
+        observing: bool,
+        reorder: hirsel_run_config::Reorder,
+        commit: hirsel_run_config::Commit,
+    ) -> Option<(
+        super::super::events::ReceivePollCompletion,
+        Vec<super::super::events::CanonicalEvent>,
+    )> {
         use hirsel_core_contract::handle_scan::*;
         use std::sync::{Arc, Mutex};
         let observed = Arc::new(Mutex::new(None));
@@ -1562,6 +1645,7 @@ mod tests {
             |ctx| unsafe {
                 let mut policy = Policy::admit(&Default::default(), None);
                 policy.reorder = reorder;
+                policy.commit = commit;
                 engine::enable(ctx, policy);
                 if observing {
                     super::super::events::enable(ctx);
