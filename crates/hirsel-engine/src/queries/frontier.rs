@@ -139,6 +139,12 @@ impl QueryEngine {
         self.front_changes.acknowledge(observed, definitions);
     }
     pub(super) fn apply_changes(&mut self, changes: &crate::memo::ChangeSet) {
+        if !changes.is_empty() {
+            // STORE-6 can demand private schema signatures beyond the checked
+            // call graph. Keep its own result conservative until those reads
+            // are an independently recorded query product.
+            self.source_growth.invalidate_table();
+        }
         let signatures: BTreeSet<_> = changes
             .reads
             .iter()
@@ -169,20 +175,27 @@ impl QueryEngine {
             expanded = next;
             &expanded
         };
-        if !self.front_changes.active {
-            self.graph.apply(changes);
-            return;
-        }
         let mut affected = BTreeSet::new();
         for (read, _) in &changes.reads {
+            for key in self.graph.subscribers(read).filter(|key| {
+                matches!(
+                    key.kind,
+                    QueryKind::Check | QueryKind::CheckedSummary | QueryKind::Summary
+                )
+            }) {
+                self.source_growth.invalidate(key.def);
+            }
             affected.extend(self.graph.subscribers(read).map(|key| key.def));
         }
         for (definition, _) in &changes.texts {
+            self.source_growth.invalidate(*definition);
             affected.extend(self.graph.memos_of(*definition).map(|key| key.def));
         }
         self.graph.apply(changes);
-        for definition in affected {
-            self.front_changes.affected(definition);
+        if self.front_changes.active {
+            for definition in affected {
+                self.front_changes.affected(definition);
+            }
         }
     }
 }

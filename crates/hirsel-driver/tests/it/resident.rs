@@ -2530,9 +2530,10 @@ fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate
         assert_eq!(work.index_occurrence_visits, 10_000);
         assert!(work.index_anchor_visits <= 10_001, "{work:?}");
         assert!(touched < 100, "{touched} memo touches");
-        // These remain linear whole-program scans. Keeping the assertion
-        // prevents low memo-touch counts from being called an affected-work bound.
-        assert!(work.gen5_visits >= 10_000, "{work:?}");
+        // GEN-5 now demands pending roots. Parsing/indexing and lint still
+        // report their real whole-file/program work independently.
+        assert!((1..100).contains(&work.gen5_visits), "{work:?}");
+        assert_eq!(work.growth_components, 0, "equal growth output: {work:?}");
         assert!(work.lint_definition_visits >= 10_000, "{work:?}");
         eprintln!(
             "accepted10k touched={touched} work={}",

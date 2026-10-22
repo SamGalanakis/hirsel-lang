@@ -218,7 +218,7 @@ pub struct QueryEngine {
         crate::memo::Revision,
         Arc<hirsel_interp::aggregate::RuntimeTypes>,
     )>,
-    pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
+    pub(crate) source_growth: crate::generic_graph::SourceGrowth,
     /// The last signature snapshot and the inputs it was built from.
     pub(crate) snapshot: Option<(
         crate::snapshot::SnapshotStamp,
@@ -532,7 +532,7 @@ impl QueryEngine {
             execution_stack: vec![],
             active: BTreeSet::new(),
             comptime_runtime: None,
-            generic_verdict: None,
+            source_growth: Default::default(),
             snapshot: None,
             snapshot_seed_verdicts: Default::default(),
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),

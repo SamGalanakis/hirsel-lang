@@ -27,17 +27,12 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
     // Most programs have no store operations. Avoid schema building until a
     // backward walk from a table operation identifies a relevant generic slot.
     let mut required: BTreeMap<DefPath, BTreeSet<usize>> = BTreeMap::new();
-    for (_, checked) in engine.checked_definition_summaries()? {
-        for call in &checked.summary.calls {
-            let callee = call.callee.path();
-            let positions = core_roles::table_key_parameters(callee);
-            if !positions.is_empty() {
-                required
-                    .entry(callee.clone())
-                    .or_default()
-                    .extend(positions);
-            }
-        }
+    engine.refresh_source_growth()?;
+    for path in engine.source_growth.table_calls() {
+        required
+            .entry(path.clone())
+            .or_default()
+            .extend(core_roles::table_key_parameters(path));
     }
     if required.is_empty() {
         return Ok(vec![]);
