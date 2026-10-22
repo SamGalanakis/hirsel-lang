@@ -3111,3 +3111,6 @@ fn dogfood6_logdigest() {
         3,
     );
 }
+
+#[path = "support/native_argv_recipe_6.rs"]
+mod native_argv_recipe_6;

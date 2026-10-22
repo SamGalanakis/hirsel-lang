@@ -1,0 +1,15 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Output(OutputError) | Json(
+  json.JsonError
+)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut values: List[json.Value] = []
+  let mut index = 0u64
+  while index < arg.len(args) {
+    list.push(mut values, Text(arg.text(args, index)?))
+    index += 1
+  }
+  let text = json.stringify(Array(take values))?
+  out.print(io.stdout(rt)?, f"{text}\n")?
+  Ok(())
+}

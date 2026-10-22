@@ -411,6 +411,9 @@ grants only Args. `./program` grants no external roots: a root-free entry can
 run, and an entry requiring Io, Args, Env or Unsafe refuses before entry. Invalid
 UTF-8 arguments refuse launch. These snapshots contribute to run identity.
 
+See the [checked native argv recipe](native-argv.md) for exact argument vectors,
+empty process args and a preserving POSIX wrapper.
+
 Interpreted runs, native runs and directly run executables share the
 [PROG-3 exit policy](spec/programs.md#prog-3-entry). On an x86-64 host, test an AArch64
 artifact with the pinned qemu and a glibc for AArch64 (the cross sysroot here):
