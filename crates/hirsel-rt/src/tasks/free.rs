@@ -279,7 +279,17 @@ pub(super) unsafe fn check_quiet_without_sources(run: *mut crate::context::RunSh
     waits.sort_by(|a, b| a.spawn_path.cmp(&b.spawn_path));
     // The current saved continuation still holds its Lease. Its final drop
     // wakes home after busy is cleared, avoiding an invented pending worker.
-    unsafe { (*run).control.request_inside(Stop::Blocked(waits)) };
+    #[cfg(test)]
+    let selected = unsafe { (*run).control.request_inside(Stop::Blocked(waits)) };
+    #[cfg(not(test))]
+    unsafe {
+        (*run).control.request_inside(Stop::Blocked(waits))
+    };
+    #[cfg(test)]
+    if matches!(selected, Stop::Blocked(_)) {
+        let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+        ordered::events::blocked(s, unsafe { (*run).failure_table });
+    }
 }
 
 #[cfg(test)]

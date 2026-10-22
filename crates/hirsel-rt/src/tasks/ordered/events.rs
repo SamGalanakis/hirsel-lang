@@ -11,6 +11,8 @@ use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+mod blocked;
+#[cfg(test)]
 pub(super) mod charges;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,6 +130,15 @@ pub(super) struct OwnerCompletion {
     pub outcome: OwnerOutcome,
 }
 
+/// A quiescent wait projected from scheduler rows, never saved stack slots.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CanonicalWait {
+    pub task: Vec<u32>,
+    pub site: hirsel_run_schema::Site,
+    pub kind: &'static str,
+    pub targets: Vec<ObjectId>,
+}
+
 /// Canonical scalar event: no native handle word or physical worker enters it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CanonicalEvent {
@@ -221,6 +232,7 @@ pub(super) enum CanonicalOutcome {
         failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
     },
     Stopped(hirsel_run_schema::RunOutcome),
+    Blocked(Vec<CanonicalWait>),
     RootEnd {
         status: u8,
         result: Option<Vec<u8>>,
@@ -355,6 +367,7 @@ pub(super) struct Log {
     values: BTreeMap<u32, super::values::Program>,
     pub(super) canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
+    closed_blocked: bool,
     #[cfg(test)]
     charges: Option<crate::budget::stretch_trace::Observer>,
     #[cfg(test)]
@@ -784,20 +797,31 @@ impl Log {
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
         if self.unsupported.is_empty()
-            && self.joins.is_empty()
-            && self.scope_exits.is_empty()
-            && self.bulk_detaches.is_empty()
-            && self.cancel_all.is_empty()
-            && self.awaiting.is_empty()
-            && self.receiving.is_empty()
-            && self.gate_waiting.is_empty()
-            && self.arming.is_empty()
+            && (self.closed_blocked
+                || (self.joins.is_empty()
+                    && self.scope_exits.is_empty()
+                    && self.bulk_detaches.is_empty()
+                    && self.cancel_all.is_empty()
+                    && self.awaiting.is_empty()
+                    && self.receiving.is_empty()
+                    && self.gate_waiting.is_empty()
+                    && self.arming.is_empty()))
         {
             Ok(&self.canonical)
         } else {
             Err(&self.unsupported)
         }
     }
+}
+
+/// The source-free quiet verdict already owns IdleGuard and every frame is
+/// saved. Only its selected Blocked cause may close an unfinished wait prefix.
+#[cfg(test)]
+pub(in crate::tasks) fn blocked(
+    s: &mut super::super::Scheduler,
+    table: Option<crate::isolate::FailureTable>,
+) {
+    blocked::record(s, table);
 }
 
 /// Enable only at admission, before any operation can retire. No run identity

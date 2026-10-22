@@ -1023,3 +1023,247 @@ fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlem
         }
     }
 }
+
+unsafe extern "C" fn blocked_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    unsafe {
+        let mut receiver = crate::alloc::payload(env).cast::<u64>().read();
+        let mut status = u32::MAX;
+        let mut slot = [0u64; 2];
+        hirsel_rt_v2_channel_receive(
+            ctx,
+            0,
+            0,
+            &mut status,
+            &mut receiver,
+            slot.as_mut_ptr().cast(),
+        );
+        unreachable!("blocked child must never resume");
+    }
+}
+
+#[test]
+fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() {
+    use super::events::{CanonicalItem, CanonicalOutcome, Transition};
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 16,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let env_layout = crate::Layout { size: 8, ..layout };
+    let layouts = [&layout as *const crate::Layout, &env_layout];
+    for children in [false, true] {
+        for known_site in [true, false] {
+            let mut reference = None;
+            let mut raw_reference = None;
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    for jitter in [false, true] {
+                        let mut ctx = std::ptr::null_mut();
+                        unsafe {
+                            let mut config = crate::Config::new();
+                            config.layouts = layouts.as_ptr();
+                            config.layout_count = layouts.len() as u32;
+                            assert_eq!(
+                                crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx),
+                                0
+                            );
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            engine::enable(ctx, policy);
+                            super::events::enable(ctx);
+                            // Perturb only provisional storage identities; no
+                            // object is initialized or operation introduced.
+                            for _ in 1..width {
+                                let _reserved = scheduler(ctx).channels.reserve_open();
+                            }
+                            crate::pool::start(ctx, width, true);
+                            crate::pool::free::enable(ctx);
+                            let entry: crate::stop::Entry = Box::new(move |ctx, _| {
+                                let mut scope = 0;
+                                if children {
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_scope_enter(
+                                            ctx,
+                                            std::ptr::null_mut(),
+                                            &mut scope,
+                                            &0
+                                        ),
+                                        STATUS_OK
+                                    );
+                                }
+                                for _ in 0..if children { 2 } else { 1 } {
+                                    let mut endpoints = [0u64; 2];
+                                    let none = [0u64; 2];
+                                    assert_eq!(
+                                        hirsel_rt_v2_channel_open(
+                                            ctx,
+                                            std::ptr::null_mut(),
+                                            endpoints.as_mut_ptr(),
+                                            &0,
+                                            none.as_ptr().cast(),
+                                            2
+                                        ),
+                                        STATUS_OK
+                                    );
+                                    if children {
+                                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                                            ctx,
+                                            3,
+                                            8,
+                                            8,
+                                            crate::alloc::DOMAIN_HEAP,
+                                            0,
+                                        );
+                                        crate::alloc::payload(env)
+                                            .cast::<u64>()
+                                            .write(endpoints[1]);
+                                        let mut child = 0;
+                                        assert_eq!(
+                                            hirsel_rt_v2_task_spawn(
+                                                ctx,
+                                                0,
+                                                0,
+                                                std::ptr::null_mut(),
+                                                &mut child,
+                                                &scope,
+                                                blocked_child,
+                                                env,
+                                                0
+                                            ),
+                                            STATUS_OK
+                                        );
+                                    } else {
+                                        if jitter {
+                                            for _ in 0..17 {
+                                                std::thread::yield_now();
+                                            }
+                                        }
+                                        let mut status = u32::MAX;
+                                        let mut slot = [0u64; 2];
+                                        hirsel_rt_v2_channel_receive(
+                                            ctx,
+                                            if known_site { 0 } else { 17 },
+                                            0,
+                                            &mut status,
+                                            &mut endpoints[1],
+                                            slot.as_mut_ptr().cast(),
+                                        );
+                                    }
+                                }
+                                if children {
+                                    if jitter {
+                                        for _ in 0..17 {
+                                            std::thread::yield_now();
+                                        }
+                                    }
+                                    hirsel_rt_v2_task_scope_exit(
+                                        ctx,
+                                        if known_site { 0 } else { 17 },
+                                        0,
+                                        &scope,
+                                        0,
+                                    );
+                                }
+                                unreachable!("fully blocked tree cannot return");
+                            });
+                            let outcome =
+                                crate::stop::run_root(ctx, crate::stop::LaunchFrame::bare(entry));
+                            let Err(Stop::Blocked(raw)) = outcome else {
+                                panic!("{outcome:?}")
+                            };
+                            assert_eq!(raw.len(), if children { 3 } else { 1 });
+                            let until =
+                                std::time::Instant::now() + std::time::Duration::from_secs(5);
+                            while crate::pool::busy((*ctx).run_ref()) != 0 {
+                                assert!(
+                                    std::time::Instant::now() < until,
+                                    "blocked cut did not save"
+                                );
+                                std::thread::yield_now();
+                            }
+                            (*ctx).abandon();
+                            let s = (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap();
+                            assert!(
+                                s.tasks
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, row)| row.is_some())
+                                    .all(|(task, _)| readiness::saved(s, task as u32))
+                            );
+                            let Logical::Ordered(driver) = &s.logical else {
+                                unreachable!()
+                            };
+                            let log = driver.events.as_ref().unwrap();
+                            assert_eq!(log.canonical().is_ok(), known_site);
+                            if known_site {
+                                let rows = log.canonical().unwrap();
+                                let end = rows.last().unwrap();
+                                assert_eq!(end.item, CanonicalItem::Terminal);
+                                assert_eq!(end.transition, Transition::Stop);
+                                assert!(end.task.is_empty());
+                                assert_eq!((end.subevent, end.version), (0, 1));
+                                let CanonicalOutcome::Blocked(waits) = &end.outcome else {
+                                    panic!("no blocked snapshot")
+                                };
+                                assert_eq!(waits.len(), raw.len());
+                                for (wait, original) in waits.iter().zip(&raw) {
+                                    assert_eq!(wait.task, original.spawn_path);
+                                    assert_eq!(wait.kind, original.kind);
+                                    assert_eq!(wait.site, original.site);
+                                }
+                                if children {
+                                    assert_eq!(waits[0].kind, "task.scope");
+                                    assert_eq!(waits[0].targets.len(), 3);
+                                    assert_eq!(waits[1].task, [0]);
+                                    assert_eq!(waits[2].task, [1]);
+                                    assert_ne!(waits[1].targets, waits[2].targets);
+                                } else {
+                                    assert_eq!(
+                                        waits[0].targets,
+                                        [crate::ordered::footprint::ObjectId {
+                                            creator: vec![],
+                                            ordinal: 0
+                                        }]
+                                    );
+                                }
+                                if let Some(reference) = &reference {
+                                    assert_eq!(rows, reference);
+                                } else {
+                                    reference = Some(rows.to_vec());
+                                }
+                                let targets: Vec<_> = raw
+                                    .iter()
+                                    .filter(|wait| wait.kind == "channel.receive")
+                                    .flat_map(|wait| wait.targets.iter().copied())
+                                    .collect();
+                                if width == 1 {
+                                    raw_reference = Some(targets);
+                                } else {
+                                    assert_ne!(
+                                        Some(&targets),
+                                        raw_reference.as_ref(),
+                                        "negative control must change physical channel indices"
+                                    );
+                                }
+                            }
+                            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
