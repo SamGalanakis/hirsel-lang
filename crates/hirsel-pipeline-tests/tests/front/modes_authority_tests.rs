@@ -29,6 +29,75 @@ fn taking_a_directory_into_a_borrowed_call_ends_its_open_files_brand() {
 }
 
 #[test]
+fn moving_a_directory_ends_file_brands_across_whole_transfers() {
+    use hirsel_engine::DefinitionQueries;
+    for (movement, rule) in [
+        ("let moved = take dir", Some("PROV-1")),
+        ("let moved = move_dir(take dir)", Some("PROV-1")),
+        ("let moved = copy dir", None),
+    ] {
+        for (storage, call) in [
+            ("", "file.narrow(sub, take fresh)"),
+            ("", "file.narrow(sub, { take fresh })"),
+            ("", "borrow_file(take fresh)"),
+            ("let carried = take fresh", "file.narrow(sub, take carried)"),
+            ("let carried = take fresh", ""),
+        ] {
+            let source = format!(
+                "fn move_dir(take d: Dir) -> Dir {{ take d }}\nfn borrow_file(f: File) {{}}\npub fn main(t: Test) -> Result[(), FileError] {{\nlet p = path.of(\"sub/value\")\nlet dir = test.dir(t, [(p, b\"data\")])\nlet fresh = file.open(dir, p)?\n{movement}\nlet sub = dir.narrow(moved, path.of(\"sub\"))?\n{storage}\n{call}\nOk(())\n}}"
+            );
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                hirsel_driver::compiler_adapters(),
+            );
+            let context = hirsel_engine::default_context();
+            let file = engine.sources.add("moved-directory.hir", source).unwrap();
+            engine.parse_file(file, &context).unwrap();
+            let diagnostics = match engine.mode_definition(&hirsel_engine::entry_path(&context)) {
+                Ok(output) => output.diagnostics,
+                Err(QueryError::Diagnostics(diagnostics)) => diagnostics,
+                Err(error) => panic!("{error:?}"),
+            };
+            assert_eq!(
+                diagnostics.first().map(|d| d.rule.as_str()),
+                if call.is_empty() { None } else { rule },
+                "{movement}, {storage}, {call}: {diagnostics:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn whole_file_call_arguments_check_expiry_in_evaluation_order() {
+    use hirsel_engine::DefinitionQueries;
+    for (call, rule) in [
+        ("file_first(take fresh, take dir)", None),
+        ("directory_first(take dir, take fresh)", Some("PROV-1")),
+    ] {
+        let source = format!(
+            "fn file_first(take f: File, take d: Dir) {{}}\nfn directory_first(take d: Dir, take f: File) {{}}\npub fn main(t: Test) -> Result[(), FileError] {{\nlet p = path.of(\"value\")\nlet dir = test.dir(t, [(p, b\"data\")])\nlet fresh = file.open(dir, p)?\n{call}\nOk(())\n}}"
+        );
+        let mut engine = hirsel_engine::QueryEngine::new(
+            hirsel_engine::default_environment(),
+            hirsel_driver::compiler_adapters(),
+        );
+        let context = hirsel_engine::default_context();
+        let file = engine.sources.add("argument-order.hir", source).unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let diagnostics = match engine.mode_definition(&hirsel_engine::entry_path(&context)) {
+            Ok(output) => output.diagnostics,
+            Err(QueryError::Diagnostics(diagnostics)) => diagnostics,
+            Err(error) => panic!("{error:?}"),
+        };
+        assert_eq!(
+            diagnostics.first().map(|d| d.rule.as_str()),
+            rule,
+            "{call}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn error_mapper_occurrences_check_the_owned_payloads_receiving_modes() {
     use hirsel_engine::DefinitionQueries;
     for (header, rule) in [

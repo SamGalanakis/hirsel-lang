@@ -958,6 +958,51 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            ExprKind::Unary {
+                op: UnaryOp::Take | UnaryOp::Copy,
+                value,
+            } => {
+                // PROV-1/PROV-3 (brands.md): an expired File of dir may
+                // move whole into local storage, but cannot enter a call.
+                // Only taken data graphs can forget expiry at that boundary;
+                // branded and generic receiving contracts are checked by call.
+                if self.valid(e)
+                    && let Some(actual) = self.ty(e)
+                    && let Some(ended) = self.ended(actual)
+                    && matches!(
+                        self.tree.expressions[value.0 as usize].kind,
+                        ExprKind::Path(_)
+                    )
+                    && self.source_place(value).projections.is_empty()
+                    && let Some(passing) = self.out.body.calls.iter().find_map(|call| {
+                        call.arguments.iter().find_map(|argument| {
+                            (self.transparent_value(argument.expression) == e)
+                                .then_some(argument.parameter.as_ref())
+                                .flatten()
+                                .map(|(_, p)| p.passing)
+                        })
+                    })
+                {
+                    let data = passing == PassingMode::Take && {
+                        let types = self.t;
+                        let generics = self.declarations();
+                        structural_equality(types, actual, Bound::Data, &generics, &mut |path| {
+                            Ok::<_, QueryError>(self.read(path))
+                        })
+                        .unwrap_or_else(|error| self.proof_failure(error, false))
+                    };
+                    if !data {
+                        let span = self.span(value);
+                        let mut diagnostic = Diagnostic::error(
+                            const { RuleId::of("PROV-1") },
+                            span,
+                            "the value's brand owner has ended",
+                        );
+                        self.ended_explanation(ended, span).render(&mut diagnostic);
+                        self.ended_reads.push(diagnostic);
+                    }
+                }
+            }
             ExprKind::Call { ref arguments, .. } => {
                 if self.verdicts.last().unwrap().branded_use {
                     self.ended_reads.truncate(reads);
