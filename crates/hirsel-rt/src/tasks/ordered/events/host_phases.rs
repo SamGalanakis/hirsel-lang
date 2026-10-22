@@ -28,6 +28,27 @@ pub(crate) fn request_keys(ctx: *mut TaskCtx) {
 }
 
 impl Log {
+    /// Quiescence already owns Scheduler and saved rows. Native request tokens
+    /// contribute no identity; only a valid phase with no result can block.
+    pub(super) fn home_wait(&self, path: &[u32]) -> Option<(&'static str, ObjectId)> {
+        let (key, phase) = self
+            .home_phases
+            .iter()
+            .find(|((owner, _), _)| owner == path)?;
+        if !phase.valid || !phase.parked || phase.result.is_some() || phase.returned {
+            return None;
+        }
+        let request = self.host_requests.get(key)?.as_ref()?;
+        let request = crate::tape_wire::decode::<Request>(&request.payload).ok()?;
+        Some((
+            crate::host_waits::request_kind(&request),
+            ObjectId {
+                creator: path.to_vec(),
+                ordinal: key.1,
+            },
+        ))
+    }
+
     pub(super) fn start_home(&mut self, path: &[u32], ordinal: u64) {
         let key = (path.to_vec(), ordinal);
         if !self.home_requests.contains(&key) {

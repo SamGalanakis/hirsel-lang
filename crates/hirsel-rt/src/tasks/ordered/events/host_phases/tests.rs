@@ -247,3 +247,31 @@ fn immediate_home_scalar_needs_its_post_effect_continuation() {
     continuation(&mut log, Next::Yield);
     assert_eq!(log.canonical().unwrap().len(), 4);
 }
+
+#[test]
+fn home_wait_identity_requires_a_saved_valid_phase_without_completion() {
+    let mut log = pending(Err(AdapterError::Blocked));
+    log.start_home(&[1], 0);
+    assert!(log.home_wait(&[1]).is_none());
+    continuation(&mut log, Next::Park);
+    assert_eq!(
+        log.home_wait(&[1]),
+        Some((
+            "clock.sleep_until",
+            ObjectId {
+                creator: vec![1],
+                ordinal: 0
+            }
+        ))
+    );
+    assert!(log.home_wait(&[2]).is_none());
+    log.home_phases.get_mut(&(vec![1], 0)).unwrap().valid = false;
+    assert!(log.home_wait(&[1]).is_none());
+    log.home_phases.get_mut(&(vec![1], 0)).unwrap().valid = true;
+    let done = attempt(Ok(Completion::Wait(Ok(()))), 0);
+    log.attempt_home(&(vec![1], 0), &done, empty());
+    assert!(
+        log.home_wait(&[1]).is_none(),
+        "completed effect cannot be certified as a blocked wait"
+    );
+}

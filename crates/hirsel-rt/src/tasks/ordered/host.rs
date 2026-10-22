@@ -419,6 +419,101 @@ mod tests {
         }
     }
 
+    struct NeverHost;
+    impl Adapter for NeverHost {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            Err(AdapterError::Blocked)
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            Ok(Ready::Tokens(vec![]))
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn canonical_host_blocked_cut_uses_logical_request_identity_and_rejects_unknown_authority() {
+        let mut reference = None;
+        for known in [true, false] {
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.adapter = Some(Box::new(NeverHost));
+                    unsafe { run.use_physical_dispatch() };
+                    let (outcome, trace) = run.run_traced(
+                        move |ctx| unsafe {
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            engine::enable(ctx, policy);
+                            super::super::events::enable(ctx);
+                            if known {
+                                engine::driver(ctx).objects.bind_erased(
+                                    crate::ordered::objects::Kind::Capability,
+                                    u64::from(width) + 100,
+                                    crate::ordered::footprint::ObjectId {
+                                        creator: vec![],
+                                        ordinal: 77,
+                                    },
+                                    Default::default(),
+                                );
+                            }
+                        },
+                        move |ctx| unsafe {
+                            let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+                            crate::io::hirsel_rt_v2_clock_sleep_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                result.as_mut_ptr(),
+                                &(u64::from(width) + 100),
+                                &100,
+                            );
+                            unreachable!("source-free wait must end Blocked");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(outcome.pending, 0);
+                    if known {
+                        let trace = trace.expect("known saved host wait certifies terminal cut");
+                        let rows: Vec<serde_json::Value> = std::str::from_utf8(trace.bytes())
+                            .unwrap()
+                            .lines()
+                            .map(|line| serde_json::from_str(line).unwrap())
+                            .collect();
+                        let terminal = rows.last().unwrap();
+                        assert_eq!(terminal["outcome"]["kind"], "blocked");
+                        assert_eq!(terminal["outcome"]["waits"][0]["kind"], "clock.sleep_until");
+                        assert_eq!(
+                            terminal["outcome"]["waits"][0]["targets"],
+                            serde_json::json!([{"creator":[], "ordinal":0}])
+                        );
+                        assert!(
+                            !rows
+                                .iter()
+                                .any(|row| row["outcome"]["kind"] == "host_finished")
+                        );
+                        if let Some(reference) = &reference {
+                            assert_eq!(trace.bytes(), reference);
+                        } else {
+                            reference = Some(trace.bytes().to_vec());
+                        }
+                    } else {
+                        assert!(trace.is_err());
+                    }
+                }
+            }
+        }
+    }
+
     struct RetryHost {
         host: Host,
         waits: u32,

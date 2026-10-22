@@ -942,7 +942,7 @@ impl Log {
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
         if self.unsupported.is_empty()
             && self.host_entries.is_empty()
-            && self.home_phases.is_empty()
+            && (self.closed_blocked || self.home_phases.is_empty())
             && self.host_certified.is_empty()
             && (self.closed_blocked
                 || (self.joins.is_empty()

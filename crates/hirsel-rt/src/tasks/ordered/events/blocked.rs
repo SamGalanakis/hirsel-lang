@@ -8,6 +8,7 @@ fn snapshot(
     table: Option<crate::isolate::FailureTable>,
 ) -> Option<Vec<CanonicalWait>> {
     let mut rows = Vec::new();
+    let mut hosts = BTreeSet::new();
     let task_id = |index: u32| {
         let row = s.tasks.get(index as usize)?.as_ref()?;
         log.tasks.get(&handle(index, row.generation)).cloned()
@@ -59,8 +60,13 @@ fn snapshot(
             }
             Wait::Gate { gate } => ("foreign.gate", vec![log.gates.get(&gate)?.clone()]),
             Wait::Pool => ("foreign.pool", Vec::new()),
-            // Native request tokens and Free-only waits have no admitted E identity.
-            Wait::Host { .. } | Wait::Final | Wait::Retry { .. } => return None,
+            // Only a valid, still-waiting phase can explain the saved row.
+            Wait::Host { .. } => {
+                let (kind, request) = log.home_wait(&row.path)?;
+                hosts.insert(row.path.clone());
+                (kind, vec![request])
+            }
+            Wait::Final | Wait::Retry { .. } => return None,
         };
         rows.push(CanonicalWait {
             task: row.path.clone(),
@@ -68,6 +74,13 @@ fn snapshot(
             kind,
             targets,
         });
+    }
+    if log
+        .home_phases
+        .keys()
+        .any(|(path, _)| !hosts.contains(path))
+    {
+        return None;
     }
     rows.sort_unstable_by(|a, b| a.task.cmp(&b.task));
     let parked: BTreeSet<_> = rows.iter().map(|row| &row.task).collect();
@@ -83,6 +96,7 @@ fn snapshot(
         .chain(log.receiving.iter())
         .chain(log.gate_waiting.keys())
         .chain(log.arming.iter())
+        .chain(log.home_phases.keys().map(|(path, _)| path))
         .any(|path| !parked.contains(path))
     {
         return None;

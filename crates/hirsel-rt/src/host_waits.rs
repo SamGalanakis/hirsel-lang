@@ -277,38 +277,43 @@ unsafe fn canceled(
 pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
     // SAFETY: admission reports only after quiescence, with exclusive access.
     let binding = unsafe { Binding::raw(ctx) };
-    match binding
+    binding
         .waits
         .parked
         .get(&token)
         .map(|p| &p.request)
         .or_else(|| binding.waits.native.get(&token).map(|p| &p.request))
-    {
-        Some(Request::SleepUntil { .. }) => "clock.sleep_until",
-        Some(Request::ReadStdin { .. }) => "stdin.read",
-        Some(Request::Accept { .. }) => "net.accept",
-        Some(Request::NetRead { .. }) => "net.read",
-        Some(Request::Resolve { .. }) => "net.resolve",
-        Some(Request::Connect { .. }) => "net.connect",
-        Some(Request::ConnectAddr { .. }) => "net.connect_addr",
-        Some(Request::NetWrite { .. }) => "net.write",
-        Some(Request::NetWriteAll { .. }) => "net.write_all",
-        Some(Request::TlsConnect { .. }) => "tls.connect",
-        Some(Request::TlsAccept { .. }) => "tls.accept",
-        Some(Request::UdpRecv { .. }) => "udp.recv_from",
-        Some(Request::UdpSend { .. }) => "udp.send_to",
-        Some(Request::ProcessRun { .. }) => "proc.run",
-        Some(Request::ProcessPipeline { .. }) => "proc.pipeline",
-        Some(Request::ChildWrite { .. }) => "child.write",
-        Some(Request::ChildRead {
+        .map_or("provider request", request_kind)
+}
+
+/// Pure diagnostic classification, shared with owned canonical wait snapshots.
+pub(crate) fn request_kind(request: &Request) -> &'static str {
+    match request {
+        Request::SleepUntil { .. } => "clock.sleep_until",
+        Request::ReadStdin { .. } => "stdin.read",
+        Request::Accept { .. } => "net.accept",
+        Request::NetRead { .. } => "net.read",
+        Request::Resolve { .. } => "net.resolve",
+        Request::Connect { .. } => "net.connect",
+        Request::ConnectAddr { .. } => "net.connect_addr",
+        Request::NetWrite { .. } => "net.write",
+        Request::NetWriteAll { .. } => "net.write_all",
+        Request::TlsConnect { .. } => "tls.connect",
+        Request::TlsAccept { .. } => "tls.accept",
+        Request::UdpRecv { .. } => "udp.recv_from",
+        Request::UdpSend { .. } => "udp.send_to",
+        Request::ProcessRun { .. } => "proc.run",
+        Request::ProcessPipeline { .. } => "proc.pipeline",
+        Request::ChildWrite { .. } => "child.write",
+        Request::ChildRead {
             stream: crate::process::ChildStream::Stdout,
             ..
-        }) => "child.read_stdout",
-        Some(Request::ChildRead { .. }) => "child.read_stderr",
-        Some(Request::ChildWait { .. }) => "child.wait",
-        Some(Request::GroupWait { .. }) => "proc.wait_group",
-        Some(Request::WatchNext { .. }) => "watcher.next",
-        Some(Request::RunnerCall(_)) => "runner.call",
+        } => "child.read_stdout",
+        Request::ChildRead { .. } => "child.read_stderr",
+        Request::ChildWait { .. } => "child.wait",
+        Request::GroupWait { .. } => "proc.wait_group",
+        Request::WatchNext { .. } => "watcher.next",
+        Request::RunnerCall(_) => "runner.call",
         _ => "provider request",
     }
 }
