@@ -1,5 +1,12 @@
 # Compiler benchmarks
 
+The [2026-10-22 frozen service/compiler scoreboard](../../bench/apps/tasks/RESULTS-app-perf-refresh-2.md)
+contains ten-round hello/csvjson/tasks/standard syn10k check/debug cold and
+unchanged measurements, named body edits and separate resident-check evidence.
+It uses the post-cutover compiler and matching std/runtime/Rust sources, retains
+raw samples and failures, and withholds timing acceptance while the shared
+timing lock is occupied. Historical `RESULTS.md` remains dated evidence.
+
 This extends the compiler corpus and offline Rust ports; `bench/native` measures
 execution speed instead. Every measured command and dependency preparation takes
 its own `tools/capped` slot, released between commands. Never wrap the runner in

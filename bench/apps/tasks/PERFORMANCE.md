@@ -1,5 +1,10 @@
 # Tasks performance follow-up
 
+The tables and causal narrative below describe the historical 2026-10-20
+session. The [2026-10-22 frozen scoreboard](RESULTS-app-perf-refresh-2.md)
+reports current service, recording, RSS and compiler costs together, including
+the recorded-list 4 GiB failure. Its ratios must not be combined with this table.
+
 The separately landed ten-round refresh is commit `6d4e23ac`. The final
 [results](RESULTS.md) compare the same candidate binary with recording disabled
 and with `--hirsel-record` at its default level, against Rust's one-worker
