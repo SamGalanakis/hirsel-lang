@@ -85,3 +85,4 @@ mod json_value_access_16;
 mod float_reduction_model_16;
 mod utf8_construction_model_16;
 mod regex_prefilter_17;
+mod stdlib_regex_dfa;

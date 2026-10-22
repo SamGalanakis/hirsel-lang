@@ -1,0 +1,353 @@
+// Ordered lazy determinization adapted from rust-lang/regex
+// 80b9d14e4be9f0b703a742d11c064abce05f210b:
+// util/determinize/mod.rs:350-490, hybrid/search.rs:13-210,
+// hybrid/regex.rs:442-505, hybrid/dfa.rs:2119-2171,3460-3729.
+// Copyright 2014 The Rust Project Developers; MIT, third-party/NOTICES.md.
+// Unlike upstream, one full cache permanently quits this operation. All keys,
+// transitions, intern buckets and DFS scratch occupy one unique primitive slab.
+// No cache handle or partially determined match escapes to a public caller.
+type DfaCache {
+  data: unique List[u64],
+  size: u64,
+  seen: u64,
+  stack: u64,
+  ready: u64,
+  next: u64,
+  buckets: u64,
+  limit: u64,
+  disabled: bool,
+  misses: u64,
+  fallbacks: u64,
+}
+
+type DfaResult = DfaMatch(Span) | DfaMiss | DfaQuit
+
+// Admission reuses prefix_admitted's checked whole-pure-operation proof.
+// The prefilter plan is an eligibility constraint for this first integration;
+// nullable/unsupported plans and small/uncertain budgets retain the scalar VM.
+// The public 2 MiB ceiling includes allocator metadata. This implementation
+// uses <=512 KiB payload, leaving >1 MiB for size-class/header rounding and
+// scalar metadata. reserve is issued once from an empty unique list; length
+// never reaches the reserved capacity, so no geometric growth or detachment.
+fn dfa_cache(re: Regex, enabled: bool, limit: u64) -> DfaCache uses {} {
+  // Bound layout arithmetic before multiplying program length. Large programs
+  // remain entirely on PikeVM, including callers that force engine selection.
+  let instructions = core@1/list.len(re.code)
+  let m = if instructions > 512 { 0u64 } else { instructions }
+  let seen = 0u64
+  let stack = m
+  let ready = stack + 2 * m + 2
+  let next = ready + m
+  let buckets = next + m
+  let initial = buckets + 1024
+  let cap = if limit < 65024 { limit } else { 65024u64 }
+  let mut data: unique List[u64] = []
+  let disabled = !enabled || instructions > 512 || initial + 140 + m > cap
+  if !disabled {
+    core@1/list.reserve(mut data, cap)
+    let mut i = 0u64
+    while i < initial {
+      core@1/list.push(mut data, 0u64)
+      i += 1
+    }
+  }
+  DfaCache(data: take data, size: m, seen: seen, stack: stack,
+    ready: ready, next: next, buckets: buckets, limit: cap,
+    disabled: disabled, misses: 0, fallbacks: 0)
+}
+
+fn dfa_category(byte: u64) -> u64 uses {} {
+  if byte == 128 { 0u64 }
+  else if byte == 10 { 2u64 }
+  else if byte >= 48 && byte <= 57 || byte >= 65 && byte <= 90 || byte == 95 || byte >= 97 && byte <= 122 { 1u64 }
+  else { 3u64 }
+}
+
+fn dfa_allowed(kind: u8, left: u64, right: u64) -> bool uses {} {
+  kind == 0 || kind == 10 || kind == 12 ||
+  kind == 3 && left == 0 || kind == 4 && right == 0 ||
+  kind == 15 && (left == 0 || left == 2) ||
+  kind == 16 && (right == 0 || right == 2) ||
+  kind == 5 && (left == 1) != (right == 1) ||
+  kind == 6 && (left == 1) == (right == 1)
+}
+
+fn dfa_consumes(kind: u8) -> bool uses {} {
+  kind == 1 || kind == 2 || kind == 13 || kind == 14
+}
+
+// Ordered first-arrival closure. Stack/ready/seen are reused, not allocated.
+fn dfa_closure(re: VmProgram, pc: u64, left: u64, right: u64,
+  mut cache: DfaCache, mut count: u64) -> bool uses {} {
+  let mut depth = 1u64
+  cache.data[cache.stack] = pc
+  while depth != 0 {
+    depth -= 1
+    let at = cache.data[cache.stack + depth]
+    if cache.data[cache.seen + at] == 0 {
+      cache.data[cache.seen + at] = 1
+      let inst = re.code[at]
+      if dfa_consumes(inst.kind) || inst.kind == 11 {
+        cache.data[cache.ready + count] = at
+        count += 1
+        if inst.kind == 11 { return true }
+      } else if dfa_allowed(inst.kind, left, right) {
+        if inst.kind == 10 {
+          cache.data[cache.stack + depth] = inst.y
+          depth += 1
+        }
+        cache.data[cache.stack + depth] = inst.x
+        depth += 1
+      }
+    }
+  }
+  false
+}
+
+// Intern the ordered next-PC vector and the context/direction/pending flags.
+// Chained hash buckets and state keys also reside in the same slab.
+fn dfa_intern(mut cache: DfaCache, count: u64, flags: u64) -> u64 uses {} {
+  let mut hash = flags + count * 17
+  let mut i = 0u64
+  while i < count {
+    hash = (hash * 33 + cache.data[cache.next + i] + 1) % 1048573
+    i += 1
+  }
+  let bucket = cache.buckets + hash % 1024
+  let mut state = cache.data[bucket]
+  while state != 0 {
+    if cache.data[state + 1] == flags && cache.data[state + 2] == count {
+      let mut equal = true
+      i = 0
+      while equal && i < count {
+        equal = cache.data[state + 132 + i] == cache.data[cache.next + i]
+        i += 1
+      }
+      if equal { return state }
+    }
+    state = cache.data[state]
+  }
+  let used = core@1/list.len(cache.data)
+  let needed = 132 + count
+  if needed > cache.limit - used {
+    cache.disabled = true
+    return 0
+  }
+  state = used
+  let chain = cache.data[bucket]
+  core@1/list.push(mut cache.data, chain)
+  core@1/list.push(mut cache.data, flags)
+  core@1/list.push(mut cache.data, count)
+  i = 0
+  while i < 129 {
+    core@1/list.push(mut cache.data, 0u64)
+    i += 1
+  }
+  i = 0
+  while i < count {
+    let pc = cache.data[cache.next + i]
+    core@1/list.push(mut cache.data, pc)
+    i += 1
+  }
+  cache.data[bucket] = state
+  state
+}
+
+// Reverse closure traverses the transposed Thompson graph. All paths matter:
+// after the forward priority decision, earliest start is longest reverse span.
+fn dfa_reverse_closure(re: VmProgram, state: u64, left: u64, right: u64,
+  mut cache: DfaCache, mut count: u64) -> bool uses {} {
+  let mut depth = 0u64
+  let mut i = 0u64
+  while i < cache.data[state + 2] {
+    cache.data[cache.stack + depth] = cache.data[state + 132 + i]
+    depth += 1
+    i += 1
+  }
+  let mut matched = false
+  while depth != 0 {
+    depth -= 1
+    let target = cache.data[cache.stack + depth]
+    if cache.data[cache.seen + target] == 0 {
+      cache.data[cache.seen + target] = 1
+      if target == re.entry { matched = true }
+      i = 0
+      while i < cache.size {
+        let inst = re.code[i]
+        if inst.kind != 11 && (inst.x == target || inst.kind == 10 && inst.y == target) {
+          if dfa_consumes(inst.kind) {
+            // Distinct consuming PCs have one outgoing edge; no duplicates.
+            cache.data[cache.ready + count] = i
+            count += 1
+          } else if dfa_allowed(inst.kind, left, right) && cache.data[cache.seen + i] == 0 {
+            // Avoid duplicate queued predecessors to bound the reverse DFS
+            // stack independently of the graph's fan-in.
+            let mut queued = false
+            let mut j = 0u64
+            while j < depth {
+              if cache.data[cache.stack + j] == i { queued = true }
+              j += 1
+            }
+            if !queued {
+              cache.data[cache.stack + depth] = i
+              depth += 1
+            }
+          }
+        }
+        i += 1
+      }
+    }
+  }
+  matched
+}
+
+fn dfa_transition(re: VmProgram, state: u64, byte: u64, mut cache: DfaCache) -> u64 uses {} {
+  let hit = cache.data[state + 3 + byte]
+  if hit != 0 { return hit }
+  cache.misses += 1
+  let flags = cache.data[state + 1]
+  let reverse = flags >= 8
+  let pending = flags % 8 >= 4
+  let previous_category = flags % 4
+  let category = dfa_category(byte)
+  let left = if reverse { category } else { previous_category }
+  let right = if reverse { previous_category } else { category }
+  let mut i = 0u64
+  while i < cache.size {
+    cache.data[cache.seen + i] = 0
+    i += 1
+  }
+  let mut count = 0u64
+  let mut matched = false
+  if reverse {
+    matched = dfa_reverse_closure(re, state, left, right, mut cache, mut count)
+  } else {
+    i = 0
+    while !matched && i < cache.data[state + 2] {
+      let seed = cache.data[state + 132 + i]
+      matched = dfa_closure(re, seed, left, right, mut cache, mut count)
+      i += 1
+    }
+    if !matched && !pending {
+      matched = dfa_closure(re, re.entry, left, right, mut cache, mut count)
+    }
+  }
+  let mut next_count = 0u64
+  i = 0
+  while i < count {
+    let pc = cache.data[cache.ready + i]
+    let inst = re.code[pc]
+    if inst.kind == 11 { break }
+    if byte != 128 {
+      // ASCII classes are singleton equivalence classes initially. Folded
+      // acceptance still follows the full scalar orbit on cold transitions.
+      let mut unused = 1024u64
+      let scalar = core@1/char.from_u32(core@1/int.narrow(byte))
+      let accepted = match scalar {
+        Some(c) => match accepts(inst, c, mut unused) {
+          Ok(value) => value,
+          Error(_) => { cache.disabled = true; return 0 },
+        },
+        None() => { cache.disabled = true; return 0 },
+      }
+      if accepted {
+        cache.data[cache.next + next_count] = if reverse { pc } else { inst.x }
+        next_count += 1
+      }
+    }
+    i += 1
+  }
+  let stop = byte == 128 || next_count == 0 && (reverse || matched || pending)
+  let next_flags = category + (if reverse { 8u64 } else if pending || matched { 4u64 } else { 0u64 })
+  let next_state = dfa_intern(mut cache, next_count, next_flags)
+  if next_state == 0 { return 0 }
+  let transition = next_state * 4 + (if matched { 1u64 } else { 0u64 }) + (if stop { 2u64 } else { 0u64 })
+  cache.data[state + 3 + byte] = transition
+  transition
+}
+
+fn dfa_byte(subject: Input, at: u64) -> u64 uses {} {
+  if at == core@1/list.len(subject.scalars) { return 128 }
+  let cp: u64 = core@1/int.widen(core@1/char.to_u32(subject.scalars[at]))
+  if cp >= 128 { 129u64 } else { cp }
+}
+
+fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache: DfaCache) -> DfaResult uses {} {
+  if cache.disabled { return DfaQuit() }
+  let program = vm_program(re)
+  let previous = if start == 0 { 128u64 } else { dfa_byte(subject, start - 1) }
+  if previous > 128 { cache.disabled = true; return DfaQuit() }
+  let mut state = dfa_intern(mut cache, 0, dfa_category(previous))
+  if state == 0 { return DfaQuit() }
+  let mut cursor = start
+  let mut end: Option[u64] = None()
+  while true {
+    // Start-state prefilter seam (hybrid/search.rs:50-90). There can be no
+    // earlier active thread or pending match when this candidate is sought.
+    if re.prefilter.enabled && cache.data[state + 2] == 0 && cache.data[state + 1] % 8 < 4 {
+      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else {
+        return DfaMiss()
+      }
+      cursor = candidate.scalar
+      let preceding = match candidate.previous {
+        Some(c) => {
+          let cp: u64 = core@1/int.widen(core@1/char.to_u32(c))
+          if cp >= 128 { cache.disabled = true; return DfaQuit() }
+          cp
+        },
+        None() => 128u64,
+      }
+      state = dfa_intern(mut cache, 0, dfa_category(preceding))
+      if state == 0 { return DfaQuit() }
+    }
+    let byte = dfa_byte(subject, cursor)
+    if byte > 128 { cache.disabled = true; return DfaQuit() }
+    let transition = dfa_transition(program, state, byte, mut cache)
+    if transition == 0 { return DfaQuit() }
+    if transition % 2 == 1 { end = Some(cursor) }
+    if transition % 4 >= 2 { break }
+    state = transition / 4
+    cursor += 1
+  }
+  let Some(end_at) = end else { return DfaMiss() }
+  if end_at == start {
+    return DfaMatch(Span(start: subject.offsets[start], end: subject.offsets[end_at]))
+  }
+  let right = dfa_byte(subject, end_at)
+  if right > 128 { cache.disabled = true; return DfaQuit() }
+  // The compiler's sole accept instruction is PC zero.
+  cache.data[cache.next] = 0
+  state = dfa_intern(mut cache, 1, 8 + dfa_category(right))
+  if state == 0 { return DfaQuit() }
+  cursor = end_at
+  let mut found: Option[u64] = None()
+  while true {
+    let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
+    if byte > 128 { cache.disabled = true; return DfaQuit() }
+    let transition = dfa_transition(program, state, byte, mut cache)
+    if transition == 0 { return DfaQuit() }
+    if transition % 2 == 1 { found = Some(cursor) }
+    if cursor == start || transition % 4 >= 2 { break }
+    state = transition / 4
+    cursor -= 1
+  }
+  match found {
+    Some(from) => DfaMatch(Span(start: subject.offsets[from], end: subject.offsets[end_at])),
+    None() => { cache.disabled = true; DfaQuit() },
+  }
+}
+
+// Meta seam: only whole-operation admission may bypass exact VM charges.
+// A quit is inconclusive even after a tentative match. No VM budget is
+// consumed speculatively, so fallback uses the original lower bound/checkpoint.
+fn find_from(re: Regex, subject: Input, start: u64, admitted: bool, haystack: Bytes,
+  mut cache: DfaCache, mut work: u64) -> Result[(Option[Span], Captures), MatchError] uses {} {
+  if admitted && !cache.disabled {
+    match dfa_search(re, subject, start, haystack, mut cache) {
+      DfaMatch(span) => return Ok((Some(span), Captures(spans: []))),
+      DfaMiss() => return Ok((None(), Captures(spans: []))),
+      DfaQuit() => { cache.disabled = true; cache.fallbacks += 1 },
+    }
+  }
+  pike_find_from(re, subject, start, false, mut work)
+}

@@ -1343,6 +1343,12 @@
       "module": [
         "regex"
       ]
+    },
+    {
+      "path": "regex_dfa.hir",
+      "module": [
+        "regex"
+      ]
     }
   ],
   "dependencies": []

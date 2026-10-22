@@ -1113,8 +1113,9 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
   if prefix_admitted(re, text, false, work_limit) {
     let mut work = work_limit
     let subject = make_subject(text, mut work)?
-    let (matched, _) = find_from_prefilter(
-      re, subject, 0, false, true, core@1/string.as_bytes(text), mut work
+    let mut cache = dfa_cache(re, true, 65024)
+    let (matched, _) = find_from(
+      re, subject, 0, true, core@1/string.as_bytes(text), mut cache, mut work
     )?
     return Ok(take matched)
   }
@@ -1153,7 +1154,7 @@ pub fn is_match(re: Regex, text: String, work_limit: u64) -> Result[bool, MatchE
 
 // Restart the existing ordered VM at an original-source_input scalar boundary.
 // Queue initialization and every VM step draw from the caller's single budget.
-fn find_from(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64) -> Result[
+fn pike_find_from(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64) -> Result[
   (Option[Span], Captures),
   MatchError
 ] uses {} {
@@ -1205,7 +1206,7 @@ fn find_from_prefilter(
   mut work: u64
 ) -> Result[(Option[Span], Captures), MatchError] uses {} {
   if !accelerated {
-    return find_from(re, subject, start, capture, mut work)
+    return pike_find_from(re, subject, start, capture, mut work)
   }
   let program = vm_program(re)
   let mut machine = Machine(
@@ -1278,10 +1279,11 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   }
   spend(mut work)?
   core@1/list.push(mut subject.offsets, byte)
+  let mut cache = dfa_cache(re, accelerated, 65024)
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
   while pos <= core@1/list.len(subject.scalars) {
-    let (matched, _) = find_from_prefilter(re, subject, pos, false, accelerated, haystack, mut work)?
+    let (matched, _) = find_from(re, subject, pos, accelerated, haystack, mut cache, mut work)?
     let Some(span) = matched else {
       return Ok(take matches)
     }
@@ -1585,7 +1587,7 @@ fn replace[T](
   let mut pos = 0u64
   let mut last_end = 0u64
   while pos <= core@1/list.len(source_input.scalars) {
-    let (matched, captures) = find_from(re, source_input, pos, mode != 1, mut work)?
+    let (matched, captures) = pike_find_from(re, source_input, pos, mode != 1, mut work)?
     let Some(span) = matched else {
       break
     }

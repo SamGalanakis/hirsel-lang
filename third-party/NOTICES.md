@@ -1640,3 +1640,15 @@ Copyright 2009 The Go Authors. BSD-3-Clause (Go), full license above.
 The host test calls Rust's validator; its rejection-class descriptions refer to
 rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`,
 `library/core/src/str/validations.rs:128-188`; no Rust validator source is copied.
+
+Ordered lazy regex DFA: `stdlib/std@1/regex_dfa.hir` adapts rust-lang/regex
+`80b9d14e4be9f0b703a742d11c064abce05f210b`,
+`regex-automata/src/util/determinize/mod.rs:350-490`,
+`hybrid/search.rs:13-210`, `hybrid/regex.rs:442-505`,
+`hybrid/dfa.rs:2119-2171,3460-3729`. Private driver vectors derive from
+`testdata/{regression,flags,iter,utf8,regex-lite,substring}.toml` at that pin.
+Copyright (c) 2014 The Rust Project Developers; MIT, full text in
+`third-party/LICENSE.regex`. Hirsel keeps its syntax, Go iteration, exact
+work-limit admission and scalar VM fallback; one combined primitive cache quits
+on first fullness instead of clearing and retrying. Reverse graph traversal
+uses the compiled Thompson predecessors rather than a separately compiled HIR.

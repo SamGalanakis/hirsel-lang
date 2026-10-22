@@ -3649,6 +3649,17 @@ deterministic and independent of wall time or host regex behavior. Whole-match q
 memory is O(compiled size); capturing queues additionally scale with group count; work is bounded by the caller even on adversarial
 alternation, nested repetition or nullable cycles.
 
+Large pure span searches with an eligible prefix plan may use a scan-local
+ordered lazy DFA after a checked upper bound proves the entire original VM operation fits `work_limit`. Small or
+uncertain budgets retain the scalar VM and its exact errors; `u64::MAX` has no
+special meaning. The DFA uses ASCII transitions and an anchored reverse scan
+for the start. Unicode input or a full cache retries the original search from
+its lower bound and budget checkpoint. One primitive slab holds both directions,
+state keys, intern buckets and scratch, with at most 65,024 `u64` cells plus
+scalar metadata, below the combined 2 MiB charge ceiling. The first full cache
+disables acceleration for the rest of that operation. Captures and replacements
+continue to use the scalar VM. The DFA cache is separate from the immutable prefix plan on `Regex`.
+
 `find_all` returns at most `max_matches` nonoverlapping, leftmost-first whole
 matches, preserving the same alternative and greedy/lazy priority. Offsets
 always refer to the original supplied String, including when it is itself a
