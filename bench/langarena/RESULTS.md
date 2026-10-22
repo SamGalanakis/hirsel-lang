@@ -384,3 +384,4 @@ Campaign data and reproduction scripts live in `/workspace/code/hirsel-briefs/<l
 | port-3 | [RESULTS-port-3.md](/workspace/code/hirsel-briefs/port-3/repo-evidence/bench/langarena/RESULTS-port-3.md) |
 | pre-full-20261022 | [RESULTS-pre-full-20261022.md](/workspace/code/hirsel-briefs/pre-full-20261022/repo-evidence/bench/langarena/RESULTS-pre-full-20261022.md) |
 | la-csv-perf-8 | [RESULTS-la-csv-perf-8.md](/workspace/code/hirsel-briefs/la-csv-perf-8/repo-evidence/bench/langarena/RESULTS-la-csv-perf-8.md) |
+| la-base64-perf-8 | Encode/decode instructions -66.37%/-64.77%; H/R 10.777/8.042; runtime allocations 102,384→6,368 / 77,200→5,169; exact checksums. [Full report](/workspace/code/hirsel-briefs/la-base64-perf-8/RESULTS-la-base64-perf-8.md) |

@@ -2943,6 +2943,13 @@ reporting trailing garbage. Unlike Go, CR/LF are rejected rather than skipped.
 Error kinds distinguish invalid bytes, length, padding and unused bits; no partial
 output is returned.
 
+The whole-input codec reserves output once. Encoding uses the Rust `base64`
+scalar engine's four six-byte blocks; decoding uses an eight-symbol lookup
+block and returns to the Go quantum parser at padding or invalid input.
+Checked source loads and initialized output storage preserve the same behavior
+in the interpreter, LLVM and Cranelift. The incremental state and error
+lifecycle are unchanged.
+
 
 The incremental API borrows byte chunks and returns independently owned output:
 

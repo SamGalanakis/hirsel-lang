@@ -17,6 +17,7 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 | Rust standard library | `library/core/src/slice/mod.rs:4280-4388` fixed-length checked copying and `library/coretests/tests/slice.rs:2030-2088` overlap, empty and invalid-range vectors | `bytes.replace_range` runtime, lowering and private parity tests | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT (Rust), The Rust Project Contributors; upstream also Apache-2.0 |
 | Rust standard library | `library/core/src/slice/sort/stable/{mod,drift,merge,quicksort}.rs`, `shared/{pivot,smallsort,mod}.rs` stable driftsort structure; `library/alloctests/tests/sort/tests.rs:18-22,450-565,599-638` stability, pattern and failure vectors | `stdlib/std@1/list_drift.hir`, driver drift vectors; adaptations in `docs/prior-art-sort.md` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT (Rust) |
 | csv-core | `csv-core/src/reader.rs:622-700,980-1068,1254-1272` record/field state transitions and ordinary-byte run scan; `1495-1580,1603-1612` boundary and quoted-field vectors | `stdlib/std@1/csv.hir` borrowed slice cursor and `SEM-3-csv-slice-run` | BurntSushi/rust-csv `05612e87e6e92910d40d7214b70952b8434fef9b` (csv-core 0.1.13) | MIT (Copyright (c) 2015 Andrew Gallant; `third-party/LICENSE.csv-core`) |
+| Rust base64 | `src/engine/general_purpose/mod.rs:151-268` scalar four-block encode; `decode.rs:224-306` eight-symbol/six-byte decode and lookup tables. Hirsel initializes preallocated output, uses checked source loads/stores and retains Go suffix/error precedence | `stdlib/std@1/base64.hir`, `base64-perf-8.hir` boundary vectors | marshallpierce/rust-base64 `5b98ee180cc7c2a64af6cb12c724b1721550e0d0` | MIT (Rust base64) |
 | clap | `clap_builder/src/error/{kind.rs:4-35,context.rs:8-15,mod.rs:434-480,720-747,format.rs:207-233,351-365}` kind/context split and diagnostic wording; `tests/builder/error.rs:84-206,313-346` vectors | `stdlib/std@1/cli.hir`, CLI error context fixtures; adaptations in `docs/cli-errors.md` | clap-rs/clap `ccc89b83875474399e9d9d70841163f6319d1a41` | MIT (Copyright (c) Individual contributors) |
 | Goose | `stdlib/json.goose:906–1104` dense pool, child/sibling traversal and iterative parser frame structure; `test/stdlib/stdlib_json.goose:145–218` vectors read alongside Hirsel semantic oracles | `stdlib/std@1/json_document.hir`, scoped JSON conformance | aardappel/goose `8511ae34bdc9aabf77baaab80b4d659ea87835e2` | Apache-2.0 (structure reference) |
 | Goose | `src/codegen_frames.h:115–154,210–235,329–350`, `src/codegen_calls.h:245–255` ordered/transitive explicit captures; `test/codegen/funval_body_captures.goose:32–89` nested/repeated/recursive/loop vectors | `hirsel-rc/src/scoped_consumer_9.rs`, scoped consumer pipeline controls; semantic adaptations in `docs/scoped-consumer-9.md` | aardappel/goose `8511ae34bdc9aabf77baaab80b4d659ea87835e2` | Apache-2.0 (structure reference) |
@@ -1576,3 +1577,27 @@ adapt Go `src/encoding/ascii85/ascii85.go:27-83,173-239` and
 `ebe2feefc400f813aefdc8a036e66d2619da6649`, under the BSD-3-Clause (Go)
 license reproduced above. See `docs/ascii85.md` for the ownership, capacity,
 forward digit emission and explicit wrapping adaptations.
+
+## MIT (Rust base64)
+
+The MIT License (MIT)
+
+Copyright (c) 2025 Alice Maz, Marshall Pierce
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
