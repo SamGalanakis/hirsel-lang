@@ -44,6 +44,38 @@ mod expected_tests {
     }
 }
 
+// Match complete_reads' observation semantics: successful lookups, provider
+// lookups and module heads do not read the whole manifest graph. Retaining its
+// revision in their payload makes equal products differ between a package
+// checked as root and the same package checked as a dependency. Negative
+// manifest lookups retain it because near-name diagnostic repairs observe it.
+fn canonical_reads(reads: &mut [hirsel_types::DependencyRead]) {
+    use hirsel_types::{DependencyRead, LookupError};
+    for read in reads {
+        let manifest = match read {
+            DependencyRead::Lookup {
+                result: Err(LookupError::Missing | LookupError::MissingMember(_)),
+                ..
+            }
+            | DependencyRead::Signature { .. } => continue,
+            DependencyRead::Lookup { manifest, .. }
+            | DependencyRead::ModuleHead { manifest, .. } => manifest,
+            DependencyRead::ProviderLookup { output, .. } => &mut output.manifest,
+        };
+        *manifest = ContentHash::default();
+    }
+}
+fn canonical_checked(checked: &CheckedBody) -> CheckedBody {
+    let mut checked = checked.clone();
+    canonical_reads(&mut checked.resolution.reads);
+    checked
+}
+fn canonical_detail(mut detail: DependencyReads) -> DependencyReads {
+    canonical_reads(&mut detail.manifest_lookups);
+    canonical_reads(&mut detail.resolver);
+    detail
+}
+
 #[derive(Serialize, Deserialize)]
 struct Body {
     checked: CheckedBody,
@@ -79,7 +111,7 @@ impl Body {
         ownership.plain_types.clear();
         ownership.silent_drop_types.clear();
         Self {
-            checked: body.typed.checked.clone(),
+            checked: canonical_checked(&body.typed.checked),
             plans: body.typed.plans.clone(),
             unit: body.typed.unit,
             boolean: body.typed.boolean,
@@ -380,13 +412,13 @@ pub(super) fn capture_mode(
         Err(_) => return None,
     };
     let checked = checked.map(|(output, detail)| CheckedRecord {
-        checked: output.value.checked.clone(),
+        checked: canonical_checked(&output.value.checked),
         plans: output.value.plans.clone(),
         unit: output.value.unit,
         boolean: output.value.boolean,
         diagnostics: output.diagnostics.clone(),
         dependencies: output.dependencies.clone(),
-        detail: detail.clone(),
+        detail: canonical_detail(detail.clone()),
     });
     encode_record(
         types,
@@ -395,7 +427,7 @@ pub(super) fn capture_mode(
             checked,
             phases,
             output,
-            detail,
+            detail: canonical_detail(detail),
         },
     )
 }
@@ -881,7 +913,7 @@ impl QueryEngine {
             entry.reads(),
             &LowerRecord {
                 output,
-                detail: entry.detail.clone(),
+                detail: canonical_detail(entry.detail.clone()),
                 verdict,
             },
         )

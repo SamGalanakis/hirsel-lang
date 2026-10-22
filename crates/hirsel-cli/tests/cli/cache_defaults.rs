@@ -321,3 +321,89 @@ fn native_empty_xdg_uses_home_and_relocated_compiler_needs_no_home() {
     assert_eq!(report["counts"]["object hits"], 0);
     assert_eq!(bytes, relocated);
 }
+
+/// A persistent product follows its package between the root and dependency
+/// positions. The lookup of B has the same result under both manifest graphs.
+#[test]
+fn verify_cache_modes_follow_a_package_between_root_and_dependency() {
+    let fixture = HermeticCacheFixture::new();
+    let library = fixture.0.join("library.json");
+    std::fs::write(
+        fixture.0.join("library.hir"),
+        "pub type A { b:B }\npub type B { n:u8 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &library,
+        serde_json::json!({
+            "schema":1,"package":{"name":"library","version":"1"},
+            "sources":[{"path":"library.hir","module":[]}],"dependencies":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    check_root_and_dependency_cache(&fixture, &library, "library");
+}
+
+/// Checking std itself must seed products that verify in an ordinary importer.
+/// Same-root verification alone misses manifest provenance in successful reads.
+#[test]
+fn verify_cache_modes_agree_across_all_std_modules() {
+    let fixture = HermeticCacheFixture::new();
+    let library = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap();
+    check_root_and_dependency_cache(&fixture, &library, "std");
+}
+
+fn check_root_and_dependency_cache(
+    fixture: &HermeticCacheFixture,
+    library: &std::path::Path,
+    package: &str,
+) {
+    let client = fixture.0.join("hirsel.json");
+    std::fs::write(
+        &client,
+        serde_json::json!({
+            "schema":1,"package":{"name":"tiny","version":"0"},
+            "entry":{"module":[],"name":"main"},
+            "sources":[{"path":"main.hir","module":[]}],
+            "dependencies":[{"manifest":library,"package":{"name":package,"version":"1"},"expose":[]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let check = |path: &std::path::Path, verify: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .env("HIRSEL_DAEMON", "off")
+            .env("HIRSEL_IMAGE", fixture.0.join("no-image"))
+            .env("HIRSEL_RESULTS", "dir@1")
+            .env("HIRSEL_RESULTS_DIR", fixture.0.join("results"))
+            .env("HIRSEL_JOBS", "2")
+            .env_remove("HIRSEL_VERIFY_CACHE")
+            .args(["check", "--json", "--timings=json"]);
+        if verify {
+            command.arg("--verify-cache");
+        }
+        let output = command.arg(path).output().unwrap();
+        assert!(output.status.success(), "{command:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        report["counts"].clone()
+    };
+    let cold = check(library, false);
+    let warm = check(library, false);
+    assert!(cold["definitions"].as_u64().unwrap() > 0, "{cold}");
+    assert_eq!(cold["store hits"], 0, "{cold}");
+    assert!(warm["store hits"].as_u64().unwrap() > 0, "{warm}");
+    // Verify before a dependency run can replace a root-written record.
+    let verified = check(&client, true);
+    assert!(
+        verified["definitions"].as_u64().unwrap() >= cold["definitions"].as_u64().unwrap(),
+        "all source definitions must be recomputed: {verified} vs {cold}"
+    );
+}
