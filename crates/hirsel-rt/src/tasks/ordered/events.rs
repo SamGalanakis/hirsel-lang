@@ -93,6 +93,16 @@ pub(super) enum OwnerOutcome {
         member: Option<ObjectId>,
         rank: Option<u64>,
     },
+    Join {
+        scope: Option<ObjectId>,
+        child: Option<ObjectId>,
+        child_path: Vec<u32>,
+        status: u8,
+        rank: u64,
+        payload: Option<Vec<u8>>,
+        /// None means a native failure lacked immutable source metadata.
+        failures: Option<Vec<(hirsel_run_schema::Failure, Vec<u32>)>>,
+    },
     /// Payload is unavailable until a descriptor-aware initialized-field
     /// decoder certifies it. Never copy padding or an unwritten carrier.
     Receive {
@@ -644,6 +654,63 @@ pub(super) fn complete_owner(
         ordinal,
         op,
         outcome: outcome(),
+    });
+}
+
+/// Capture the consumed child's outcome before its generation-qualified row
+/// is vacated. Results come from TaskFinish's owned initialized-field snapshot;
+/// no join output or inactive failure carrier is read.
+pub(super) fn complete_join(
+    ctx: *mut TaskCtx,
+    scope_word: u64,
+    child_word: u64,
+    chain: Option<&[crate::failure::Chained]>,
+) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let row = s.tasks[child_word as u32 as usize]
+        .as_ref()
+        .expect("joined child before retirement");
+    assert_eq!(row.generation, (child_word >> 32) as u32);
+    let child_path = row.path.clone();
+    let rank = row.completed;
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_ref().unwrap();
+    let scope = log.scopes.get(&scope_word).cloned();
+    let child = log.tasks.get(&child_word).cloned();
+    let status = if chain.is_some() {
+        crate::STATUS_FAILURE
+    } else {
+        crate::STATUS_OK
+    };
+    let payload = if chain.is_none() {
+        log.task_results
+            .get(&child_path)
+            .and_then(|result| result.payload.clone())
+    } else {
+        None
+    };
+    let failures = match chain {
+        None => Some(Vec::new()),
+        Some(chain) => unsafe { (*ctx).run_ref().failure_table }.map(|table| {
+            chain
+                .iter()
+                .map(|(record, path)| (table.failure(record), path.clone()))
+                .collect()
+        }),
+    };
+    complete_owner(ctx, "task.join", || OwnerOutcome::Join {
+        scope,
+        child,
+        child_path,
+        status,
+        rank,
+        payload,
+        failures,
     });
 }
 
@@ -2295,7 +2362,7 @@ mod tests {
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
             ] {
-                let output = Arc::new(Mutex::new(Vec::new()));
+                let output = Arc::new(Mutex::new((Vec::new(), Vec::new())));
                 let seen = output.clone();
                 let mut run = crate::host::BodyRun::new(width, true);
                 run.config.layouts = layouts.as_ptr();
@@ -2405,9 +2472,39 @@ mod tests {
                         assert!(ends.iter().all(|row| row.task == [0] && row.ordinal == 0));
                         assert_eq!(ends[0].subevent, 0);
                         assert_eq!(ends[1].subevent, 1);
+                        assert_eq!(ends[2].subevent, 2);
                         assert_eq!(ends[0].transition, Transition::Hold);
                         assert_eq!(ends[2].transition, Transition::End);
-                        *seen.lock().unwrap() = ends;
+                        let joins: Vec<_> = log
+                            .owner_completions
+                            .iter()
+                            .filter(|row| row.op == "task.join")
+                            .cloned()
+                            .collect();
+                        assert_eq!(joins.len(), 1);
+                        assert_eq!(joins[0].task, Vec::<u32>::new());
+                        assert_eq!(joins[0].ordinal, 2);
+                        assert_eq!(
+                            joins[0].outcome,
+                            OwnerOutcome::Join {
+                                scope: Some(ObjectId {
+                                    creator: vec![],
+                                    ordinal: 0
+                                }),
+                                child: Some(ObjectId {
+                                    creator: vec![],
+                                    ordinal: 1
+                                }),
+                                child_path: vec![0],
+                                status: crate::STATUS_OK,
+                                rank: 0,
+                                payload: Some(
+                                    [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat()
+                                ),
+                                failures: Some(Vec::new()),
+                            }
+                        );
+                        *seen.lock().unwrap() = (ends, joins);
                         drop(_role);
                         assert_eq!(
                             hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
@@ -3016,6 +3113,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn failed_join_evidence_does_not_read_a_result_or_guess_failure_locations() {
+        use crate::tasks::{State, Task, handle, scheduler};
+        let mut run = crate::host::BodyRun::new(1, true);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                enable(ctx);
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                let s = scheduler(ctx);
+                let mut child = Task::new(7, std::ptr::null_mut(), None, vec![3], None);
+                child.state = State::Done;
+                child.completed = 12;
+                s.tasks.push(Some(child));
+                let word = handle(1, 7);
+                let scope = handle(4, 9);
+                let Logical::Ordered(driver) = &mut s.logical else {
+                    unreachable!()
+                };
+                let log = driver.events.as_mut().unwrap();
+                log.ordinals.insert(vec![], 6);
+                log.last_ops.insert(vec![], "task.join");
+                let scope_id = ObjectId {
+                    creator: vec![],
+                    ordinal: 1,
+                };
+                let child_id = ObjectId {
+                    creator: vec![],
+                    ordinal: 2,
+                };
+                log.scopes.insert(scope, scope_id.clone());
+                log.tasks.insert(word, child_id.clone());
+                // A stale successful snapshot must never be used for failure.
+                log.task_results.insert(
+                    vec![3],
+                    TaskResult {
+                        descriptor: u32::MAX,
+                        payload: Some(vec![99]),
+                    },
+                );
+                let chain = [(
+                    crate::failure::FailureRecord {
+                        kind: 1,
+                        rule: 1,
+                        site: 999,
+                        operation_site: 999,
+                    },
+                    vec![3],
+                )];
+                complete_join(ctx, scope, word, Some(&chain));
+                let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                assert_eq!(
+                    log.owner_completions,
+                    [OwnerCompletion {
+                        task: vec![],
+                        ordinal: 5,
+                        op: "task.join",
+                        outcome: OwnerOutcome::Join {
+                            scope: Some(scope_id),
+                            child: Some(child_id),
+                            child_path: vec![3],
+                            status: crate::STATUS_FAILURE,
+                            rank: 12,
+                            payload: None,
+                            failures: None,
+                        }
+                    }]
+                );
+                scheduler(ctx).tasks.pop();
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     }
 
     #[test]

@@ -393,9 +393,11 @@ pub(crate) unsafe fn join(
     caller_site: u64,
 ) -> Stopped<u8> {
     engine::at_head(ctx)?;
+    let scope_word = unsafe { scope.read() };
+    let child_word = unsafe { task.read() };
     let s = scheduler(ctx);
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let child = s.task_handle(unsafe { task.read() }, scope);
+    let scope = s.scope_handle(scope_word);
+    let child = s.task_handle(child_word, scope);
     match s.task(child).state {
         State::Holding => {
             unsafe {
@@ -451,6 +453,10 @@ pub(crate) unsafe fn join(
     assert_eq!(s.task(child).state, State::Done);
     assert!(readiness::saved(s, child));
     let chain = s.task(child).failure.take();
+    super::events::complete_join(ctx, scope_word, child_word, chain.as_deref());
+    // Keep the original no-stop window through row retirement. The observer
+    // only reborrowed role-owned data and cannot add a scheduling boundary.
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
     s.scope(scope).children.retain(|&c| c != child);
     s.vacate_task(child);
     Ok(if let Some(chain) = chain {
