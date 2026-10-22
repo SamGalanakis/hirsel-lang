@@ -259,10 +259,37 @@ impl Checker<'_, '_> {
                                 PatternDecisionKind::Error
                             }
                         } else {
-                            self.report(
+                            let shared = if let Some(part) = self.shared_payload(inspected) {
+                                let (owner, repr) = self.representation(part)?;
+                                let belongs = match self.kind(repr) {
+                                    TypeKind::Record(_) => owner.is_some_and(|owner| {
+                                        owner.0.name == name
+                                            && self.input.resolution.contextual.iter().any(|(site, resolved)| {
+                                                *site == NameSite::Pattern(id)
+                                                    && matches!(resolved, ContextualName::Constructor(definition) if *definition == owner)
+                                            })
+                                    }),
+                                    TypeKind::Variant(variants) => owner.is_some_and(|owner| {
+                                        variants.iter().enumerate().any(|(index, variant)| {
+                                            variant.name.as_str() == name
+                                                && self.input.resolution.contextual.iter().any(|(site, resolved)| {
+                                                    *site == NameSite::Pattern(id)
+                                                        && matches!(resolved, ContextualName::Variant { owner: definition, variant }
+                                                            if *definition == owner && variant.0 as usize == index)
+                                                })
+                                        })
+                                    }),
+                                    _ => false,
+                                };
+                                belongs.then_some(part)
+                            } else {
+                                None
+                            };
+                            self.shared_access_error(
                                 const { RuleId::of("LANG-13") },
                                 p.origin.span,
                                 "constructor pattern needs a nominal type",
+                                shared,
                             );
                             for f in fs {
                                 let e = self.error();

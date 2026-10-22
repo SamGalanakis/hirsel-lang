@@ -2317,6 +2317,93 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             }
         }
     }
+    /// A failed projection through Shared is still LANG-4. Inspect only the
+    /// visible payload header to decide whether a read callback can help.
+    fn shared_field_payload(
+        &mut self,
+        owner: &DefPath,
+        arguments: &[ExpectedType],
+        field: Symbol,
+    ) -> Option<String> {
+        if !owner.package_is("core", "1") || !owner.0.modules.is_empty() || owner.0.name != "Shared"
+        {
+            return None;
+        }
+        let [
+            payload @ ExpectedType::Named {
+                definition,
+                arguments,
+            },
+        ] = arguments
+        else {
+            return None;
+        };
+        if self.index.access(&self.context, definition).is_err() {
+            return None;
+        }
+        if definition.0.package != self.context.package
+            && (self
+                .index
+                .entry(definition)
+                .is_some_and(|e| e.visibility == Visibility::PublicOpaque)
+                || self.signature(definition).is_some_and(|s| {
+                    matches!(&s.kind,
+                    ty::SignatureKind::Type(t) if t.representation.is_none())
+                }))
+        {
+            return None;
+        }
+        let shape = self.shape(definition, arguments);
+        shape
+            .fields
+            .iter()
+            .any(|(name, _)| name == &self.spelling(field))
+            .then(|| self.expected_spelling(payload))
+            .flatten()
+    }
+    fn expected_spelling(&self, expected: &ExpectedType) -> Option<String> {
+        match expected {
+            ExpectedType::Named {
+                definition,
+                arguments,
+            } => {
+                let mut name = if definition.0.package == self.context.package
+                    || definition.package_is("core", "1")
+                {
+                    definition
+                        .0
+                        .modules
+                        .iter()
+                        .chain([&definition.0.name])
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(".")
+                } else {
+                    definition.to_string()
+                };
+                if !arguments.is_empty() {
+                    let arguments = arguments
+                        .iter()
+                        .map(|t| self.expected_spelling(t))
+                        .collect::<Option<Vec<_>>>()?;
+                    name.push_str(&format!("[{}]", arguments.join(", ")));
+                }
+                Some(name)
+            }
+            ExpectedType::Tuple(parts) => {
+                let parts = parts
+                    .iter()
+                    .map(|t| self.expected_spelling(t))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(if parts.len() == 1 {
+                    format!("({},)", parts[0])
+                } else {
+                    format!("({})", parts.join(", "))
+                })
+            }
+            ExpectedType::Unknown | ExpectedType::Function { .. } => None,
+        }
+    }
     fn local_projection(
         &mut self,
         path: &Path,
@@ -2374,11 +2461,16 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                     } else {
                         const { RuleId::of("LANG-4") }
                     };
+                    let payload = self.shared_field_payload(&owner, &arguments, *field);
                     self.diagnostic(
                         rule,
                         span,
                         "unresolved field name; methods are not supported",
                     );
+                    if let Some(payload) = payload {
+                        let diagnostic = self.output.query.diagnostics.last_mut().unwrap();
+                        *diagnostic = diagnostic.clone().with_shared_read_help(&payload);
+                    }
                     let prefix = path.segments[..segment]
                         .iter()
                         .map(|s| format!("{}.", self.spelling(*s)))

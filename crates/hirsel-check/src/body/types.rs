@@ -556,10 +556,19 @@ impl Checker<'_, '_> {
                         });
                         t = self.projected_type(t, ty);
                     } else {
-                        self.report(
+                        let shared = if let Some(part) = self.shared_payload(t) {
+                            let (_, repr) = self.representation(part)?;
+                            matches!(self.kind(repr), TypeKind::Record(fields)
+                                if fields.iter().any(|f| f.name.as_str() == name))
+                            .then_some(part)
+                        } else {
+                            None
+                        };
+                        self.shared_access_error(
                             const { RuleId::of("LANG-7") },
                             self.span(id),
                             "field is unavailable on this type",
+                            shared,
                         );
                         t = self.error();
                     }

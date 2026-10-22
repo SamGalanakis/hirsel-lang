@@ -103,3 +103,4 @@ mod image_memory_dev_18;
 mod sequence_prefix_diagnostics_19;
 mod borrowed_capture_repairs_19;
 mod receive_endpoint_diagnostic_19;
+mod shared_read_diagnostics_19;

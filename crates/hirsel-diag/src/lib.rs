@@ -184,6 +184,20 @@ impl Diagnostic {
             root_cause: None,
         }
     }
+    /// Attach read guidance only after the producer proves a Shared payload relation.
+    /// The example uses an illustrative root name and never exposes payload fields.
+    pub fn with_shared_read_help(mut self, payload: &str) -> Self {
+        self.secondary.push(Label {
+            span: self.primary,
+            message: format!("frozen Shared root; shared.with lends its `{payload}` payload"),
+        });
+        self.notes.push(format!(
+            "help: read inside shared.with; for a root named root: `shared.with(root, fn(value: {payload}) -> () {{ let _ = value }})`"
+        ));
+        self.notes.push("the callback result is global: return a plain value, a deep `unique` copy, or a copied nested Shared root; a borrowed payload cannot escape".into());
+        self.notes.push("for mutation, consume an owned root with `shared.thaw(take root)`: `Ok(value)` supplies unique mutable ownership; `Error(root)` returns the still-frozen root when another share exists".into());
+        self
+    }
     pub fn with_obligation(mut self, obligation: Obligation) -> Self {
         self.obligations.push(obligation);
         self

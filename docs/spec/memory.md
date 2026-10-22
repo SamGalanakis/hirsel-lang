@@ -251,6 +251,42 @@ including when read from a borrowed parameter, capture or field. An uncopied bor
 keeps its local view. `unique` on the root is inert; `thaw` checks the sole-holder count at
 run time. Copying and deep ownership never traverse `Shared` contents.
 
+A `Shared[T]` root is read through `shared.with`, including when passing its payload
+as a borrowed argument or matching a payload constructor. Field access and matching do
+not unwrap the root. The callback's borrow lasts only for the call. A plain result
+can leave directly; use `unique` for a deep independent copy of ordinary content.
+Copying a nested `Shared` root retains that root instead. `shared.with` grants no
+additional visibility into an opaque payload.
+
+<!-- shared-read-diagnostics-19 -->
+```hirsel
+type SharedConfig { count: u64, values: List[u64] }
+
+fn read_config(root: Shared[SharedConfig]) -> u64 {
+  shared.with(root, fn(value: SharedConfig) -> u64 { value.count })
+}
+
+fn copy_values(root: Shared[SharedConfig]) -> unique List[u64] {
+  shared.with(root, fn(value: SharedConfig) -> unique List[u64] { unique value.values })
+}
+
+fn grow_config(take root: Shared[SharedConfig]) -> Result[unique SharedConfig, Shared[SharedConfig]] {
+  match shared.thaw(take root) {
+    Ok(value) => {
+      let mut changed = take value
+      list.push(mut changed.values, 3)
+      Ok(take changed)
+    },
+    Error(remaining) => Error(take remaining),
+  }
+}
+```
+
+Mutation requires owned mutable storage. `shared.thaw` consumes the owned root;
+`Ok` supplies the unique value, while `Error` returns the still-frozen root when
+another share exists. A read callback cannot mutate or take its borrowed payload,
+and a borrowed result cannot escape it.
+
 ### MEM-12: Flat types
 
 Layer 1. A `flat type` stores everything inline as one contiguous block with no pointers:
