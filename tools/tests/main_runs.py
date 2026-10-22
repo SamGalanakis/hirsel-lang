@@ -129,6 +129,27 @@ class Lifecycle(unittest.TestCase):
                     reds, ran, skip, perf, status = self.tool['run_stages'](directory, log, 'fast')
         return reds, status
 
+    def test_stage_exception_runs_and_preserves_failure_recovery_and_infrastructure(self):
+        identity = 'stage: cost coverage'
+        known = {identity: [identity, 'missing measured rows', 'lane', '2026-10-22']}
+        for exit_status, expected in [(1, 'failure'), (0, 'pass'), (71, 'infrastructure')]:
+            with self.subTest(exit_status=exit_status), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                def stages(stage, tier):
+                    stage('cost coverage', [sys.executable, '-c', f'raise SystemExit({exit_status})'])
+                with patch.dict(self.tool['run_stages'].__globals__, stages=stages,
+                                stage_plan=lambda tier: {}, exception_tables=lambda: ({}, known, {})):
+                    with (directory / 'run.log').open('w') as log:
+                        reds, ran, _, _, status = self.tool['run_stages'](directory, log, 'fast')
+                self.assertEqual(ran, ['cost coverage'])
+                self.assertEqual(status['known'][0]['states'], [expected])
+                self.assertEqual(status['known'][0]['recovery_stages'], ['cost coverage'] if exit_status == 0 else [])
+                self.assertEqual(status['known'][0]['observations'][0]['scope'], 'stage')
+                if exit_status == 71:
+                    self.assertEqual(reds[identity]['kind'], 'infra')
+                else:
+                    self.assertEqual(reds, {})
+
     def test_exact_fail_pass_and_unobserved_full_only_case(self):
         reds, status = self.observe([('binary', self.result([('broken', 'FAILED'), ('fixed', 'ok')]))],
                                     ['binary::broken', 'binary::fixed', 'full-only::case'])

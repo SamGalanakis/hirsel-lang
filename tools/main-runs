@@ -270,7 +270,7 @@ def lifecycle(known, observations, selections, revisions):
     for identity, row in known.items():
         exact = [o for o in observations if o['identity'] == identity]
         # A binary-wide exception covers its shards as it does for red suppression.
-        target_scope = '::' not in identity and not identity.startswith('conformance/')
+        target_scope = '::' not in identity and not identity.startswith(('conformance/', 'stage: '))
         matched = ([o for o in observations if o['scope'] == 'target' and
                     (o['target'] == identity or re.sub(r'-shard-\d+$', '', o['target']) == identity)]
                    if target_scope else exact)
@@ -385,8 +385,13 @@ def run_stages(directory, log, tier):
                                      provenance=dict(execution='unknown'), complete=False, ignored=False, filtered_out=None))
             reds[f'evidence: {name}: {target}'] = dict(stage=name, target=target, ids=[], kind='infra',
                                                       reason='selected target has no TestResult')
-        if status and (not failed or reason and not infra):
-            reds[f'stage: {name}'] = dict(stage=name, target=None, ids=[], kind='infra' if reason else 'code', reason=reason)
+        stage_id = f'stage: {name}'
+        observations.append(dict(stage=name, target=None, identity=stage_id, scope='stage',
+                                 state='infrastructure' if reason else 'failure' if status else 'pass',
+                                 provenance=dict(execution='fresh', command_succeeded=status == 0),
+                                 status=status, complete=True, ignored=False, filtered_out=None))
+        if status and (not failed or reason and not infra) and (reason or stage_id not in known):
+            reds[stage_id] = dict(stage=name, target=None, ids=[], kind='infra' if reason else 'code', reason=reason)
     stages(stage, tier)
     status = lifecycle(known, observations, selections, revisions)
     status.update(skipped=skipped, planned_stages=list(planned), unselected_stages=sorted(set(stage_plan('full')) - set(planned)))
