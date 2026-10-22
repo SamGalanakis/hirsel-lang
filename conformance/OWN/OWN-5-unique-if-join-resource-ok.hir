@@ -1,0 +1,16 @@
+// rule: OWN-5
+// expect: accept
+// boundary: Unique joins accept fresh resource arms, but cannot copy a borrowed resource arm.
+// Borrowed resources cannot be deep-copied even when the other arm is fresh.
+resource type Token: noalloc_drop {
+  n: u64,
+}
+@noalloc drop(self) {}
+
+fn pick(a: Token, select: bool) -> unique Token {
+  unique if select {
+    Token(n: 1u64)
+  } else {
+    Token(n: 2u64)
+  }
+}

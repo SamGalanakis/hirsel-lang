@@ -1,0 +1,30 @@
+// rule: MODE-2
+// expect: run
+// stdout: a
+// stdout: b
+// stdout: b
+// The unique consumer must use one compatible destination for every reaching arm.
+fn pick(a: String, b: String, select: bool) -> unique String {
+  if string.byte_len(a) == 0u64 {
+    return unique b
+  }
+  {
+    let selected = if select {
+      a
+    } else {
+      b
+    }
+    unique selected
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, pick("a", "b", true))
+  let _ = out.print(stdout, "\n")
+  let _ = out.print(stdout, pick("a", "b", false))
+  let _ = out.print(stdout, "\n")
+  let _ = out.print(stdout, pick("", "b", true))
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

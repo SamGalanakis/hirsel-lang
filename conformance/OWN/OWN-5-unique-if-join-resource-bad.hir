@@ -1,0 +1,16 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 11
+// twin: OWN/OWN-5-unique-if-join-resource-ok.hir
+// Borrowed resources cannot be deep-copied even when the other arm is fresh.
+resource type Token: noalloc_drop {
+  n: u64,
+}
+@noalloc drop(self) {}
+
+fn pick(a: Token, select: bool) -> unique Token {
+  unique if select {
+    Token(n: 1u64)
+  } else {
+    a
+  }
+}

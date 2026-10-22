@@ -808,7 +808,19 @@ impl Builder<'_, '_> {
             let root = self.root(owner.place);
             value.place = self.place(root, place.projection, place.ty);
         }
+        // A view join receives the arms before its consumer's extraction.
+        // In particular, `unique (if ..)` may give the expression a detached
+        // result row while its arms still lend their original storage.
         let root = self.root(destination).0 as usize;
+        if matches!(value.usage, UseKind::Borrow | UseKind::Mut) {
+            let mut row = self.types.get(self.ty(destination)).unwrap().clone();
+            row.modes = row
+                .modes
+                .join(&self.types.get(self.ty(value.place)).unwrap().modes);
+            let ty = self.types.intern(row);
+            self.body.places[destination.0 as usize].ty = ty;
+            self.body.locals[root].ty = ty;
+        }
         self.receive_ownership(root, self.value_owned(value));
         let _ = self.loan(&mut value, span);
         if let Some(home) = lent {
@@ -1000,7 +1012,6 @@ impl Builder<'_, '_> {
         &mut self,
         body: ExprId,
         destination: PlaceId,
-        ty: TypeId,
         lent: Option<ScopeId>,
         scope: ScopeId,
         parent: ScopeId,
@@ -1011,7 +1022,14 @@ impl Builder<'_, '_> {
     ) -> Result<()> {
         if let Some(result) = self.expression(body, bodies)? {
             self.transfer_to(destination, result, lent, span);
-            if !self.types.get(ty).unwrap().modes.relation.is_global() {
+            if !self
+                .types
+                .get(self.ty(destination))
+                .unwrap()
+                .modes
+                .relation
+                .is_global()
+            {
                 for (_, loan_scope) in &mut self.state.loans {
                     if *loan_scope == scope {
                         *loan_scope = parent;
@@ -1144,7 +1162,6 @@ impl Builder<'_, '_> {
                 self.arm_body(
                     arm.body,
                     destination,
-                    ty,
                     lent,
                     scope,
                     parent,
@@ -1169,7 +1186,6 @@ impl Builder<'_, '_> {
                 self.arm_body(
                     arm.body,
                     destination,
-                    ty,
                     lent,
                     scope,
                     parent,

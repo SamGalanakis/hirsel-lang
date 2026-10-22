@@ -166,7 +166,16 @@ impl Builder<'_, '_> {
             let source = self.types.get(self.ty(value.place)).unwrap();
             // Source places already carry concrete projection/owner identities.
             // Use I's changed mode judgment when sharing refines that value.
-            if checked.modes.relation != source.modes.relation
+            let detached_view = !self.value_owned(*value)
+                && self.body.locals[self.root(value.place).0 as usize].storage
+                    == Storage::Temporary
+                && checked.modes.uniqueness == hirsel_types::Uniqueness::Unique
+                && source.modes.uniqueness != hirsel_types::Uniqueness::Unique;
+            if detached_view {
+                // A composed view is still the input to its enclosing `unique`.
+                // Spilling it across a block must not claim the detached result.
+                value.checked_ty = None;
+            } else if checked.modes.relation != source.modes.relation
                 || checked.modes.uniqueness != source.modes.uniqueness
                 || checked.modes.sendability != source.modes.sendability
                 || checked.sendability_requirement != source.sendability_requirement

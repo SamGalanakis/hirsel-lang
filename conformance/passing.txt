@@ -3507,6 +3507,7 @@ conformance/MODE/MODE-2-unique-argument-ok.hir
 conformance/MODE/MODE-2-unique-borrowed-record-branch-join-run.hir
 conformance/MODE/MODE-2-unique-borrowed-record-join-field-return-run.hir
 conformance/MODE/MODE-2-unique-borrowed-record-loop-join-run.hir
+conformance/MODE/MODE-2-unique-bound-join-run.hir
 conformance/MODE/MODE-2-unique-clause-borrow-copy-bad.hir
 conformance/MODE/MODE-2-unique-clause-exit-branch-bad.hir
 conformance/MODE/MODE-2-unique-clause-exit-early-bad.hir
@@ -3519,8 +3520,11 @@ conformance/MODE/MODE-2-unique-field-push-pop-aliased-bad.hir
 conformance/MODE/MODE-2-unique-field-push-pop-ok.hir
 conformance/MODE/MODE-2-unique-flat-field-copy-projection-run.hir
 conformance/MODE/MODE-2-unique-flat-field-projection-run.hir
+conformance/MODE/MODE-2-unique-if-join-run.hir
+conformance/MODE/MODE-2-unique-match-join-run.hir
 conformance/MODE/MODE-2-unique-mut-handback-lost-bad.hir
 conformance/MODE/MODE-2-unique-mut-handback-restored-ok.hir
+conformance/MODE/MODE-2-unique-nested-if-join-run.hir
 conformance/MODE/MODE-2-unique-part-mut-ok.hir
 conformance/MODE/MODE-2-unique-payload-aliased-bad.hir
 conformance/MODE/MODE-2-unique-payload-fresh-receipt-ok.hir
@@ -4189,6 +4193,8 @@ conformance/OWN/OWN-5-task-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-ok.hir
 conformance/OWN/OWN-5-task-sender-free-use-bad.hir
 conformance/OWN/OWN-5-task-sender-free-use-run.hir
+conformance/OWN/OWN-5-unique-if-join-resource-bad.hir
+conformance/OWN/OWN-5-unique-if-join-resource-ok.hir
 conformance/OWN/OWN-6-counted-child-borrow-bad.hir
 conformance/OWN/OWN-6-counted-child-borrow-ok.hir
 conformance/OWN/OWN-6-shared-children.hir
