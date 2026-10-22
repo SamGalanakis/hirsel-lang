@@ -948,7 +948,9 @@ Link input digests are read once per file state and shared by native planning an
 link command construction. Disposable `file-digests-v1` receipts live in the
 private native cache. Reuse requires path, device, inode, mode, size, nanosecond
 mtime and ctime to match; files changed in the last two seconds are re-read.
-A miss verifies all bytes and checks metadata again after reading. This assumes
+A miss verifies all bytes and checks metadata again after reading, retrying up to
+three complete reads if metadata changes (including hard-link publication by a
+shared build cache). Persistent changes or path replacement remain errors. This assumes
 a local filesystem with coherent ctime updates, like Git's stat cache; receipts
 are private to the current user and are not accepted as portable cache artifacts.
 Both existing digest encodings are accumulated in one read to preserve build IDs

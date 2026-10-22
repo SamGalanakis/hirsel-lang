@@ -9,7 +9,7 @@ use hirsel_syntax::ContentHash;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -122,11 +122,8 @@ fn cached(path: &Path, cache: &Path, started: SystemTime) -> std::io::Result<Dig
         MEMORY.lock().unwrap().insert(path, (state, value));
         return Ok(value);
     }
-    let value = read_digests(&mut source, meta.size())?;
-    // Do not publish an identity for a file that changed during the read, or
-    // for a path replaced while its old opened inode was being read.
-    verify_state(&path, &source, &state)?;
-    if reusable {
+    let (state, value) = verified_digests(&path, &mut source, || {})?;
+    if stable(&state, started) {
         MEMORY.lock().unwrap().insert(path.clone(), (state, value));
         if private {
             let record: Receipt = (
@@ -158,6 +155,28 @@ fn cached(path: &Path, cache: &Path, started: SystemTime) -> std::io::Result<Dig
         }
     }
     Ok(value)
+}
+
+fn verified_digests(
+    path: &Path,
+    source: &mut File,
+    mut after_read: impl FnMut(),
+) -> std::io::Result<(Stamp, Digests)> {
+    // CAS materialization can add/remove hard links to an immutable input,
+    // changing ctime during a read. Keep ctime in every cache/verification
+    // check, but retry a full read before treating metadata churn as failure.
+    for attempt in 0..3 {
+        let state = stamp(&source.metadata()?);
+        source.rewind()?;
+        let value = read_digests(source, state[3])?;
+        after_read();
+        match verify_state(path, source, &state) {
+            Ok(()) => return Ok((state, value)),
+            Err(error) if attempt == 2 => return Err(error),
+            Err(_) => {}
+        }
+    }
+    unreachable!()
 }
 
 fn verify_state(path: &Path, source: &File, state: &Stamp) -> std::io::Result<()> {
@@ -237,6 +256,86 @@ mod tests {
         assert_eq!(opened.metadata().unwrap().size(), before[3]);
         assert_ne!(stamp(&std::fs::metadata(&path).unwrap()), before);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn hard_link_publication_during_hashing_retries_without_changing_identity() {
+        let (path, _, _) = fixture("hard-link");
+        let mut opened = File::open(&path).unwrap();
+        let original = stamp(&opened.metadata().unwrap());
+        let alias = path.with_file_name("published");
+        let mut reads = 0;
+        let (state, value) = verified_digests(&path, &mut opened, || {
+            reads += 1;
+            if reads == 1 {
+                // Pool actions link immutable CAS inputs into independent trees.
+                // Publishing another name changes ctime, without changing bytes.
+                std::fs::hard_link(&path, &alias).unwrap();
+                std::fs::remove_file(&alias).unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(reads, 2);
+        assert_eq!(value, expected(b"abcd"));
+        assert_eq!(state, stamp(&std::fs::metadata(&path).unwrap()));
+        assert_eq!(state[..6], original[..6]);
+        assert_ne!(state[6..], original[6..]);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn bytes_changed_during_hashing_are_read_again_even_with_restored_mtime() {
+        let (path, _, _) = fixture("during-write");
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut opened = File::open(&path).unwrap();
+        let mut reads = 0;
+        let (_, value) = verified_digests(&path, &mut opened, || {
+            reads += 1;
+            if reads == 1 {
+                std::fs::write(&path, b"efgh").unwrap();
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(modified))
+                    .unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(reads, 2);
+        assert_eq!(value, expected(b"efgh"));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn persistent_changes_and_path_replacement_fail_after_bounded_retries() {
+        for replacement in [false, true] {
+            let (path, _, _) = fixture(if replacement {
+                "retry-replace"
+            } else {
+                "retry-write"
+            });
+            let mut opened = File::open(&path).unwrap();
+            let mut reads = 0;
+            let result = verified_digests(&path, &mut opened, || {
+                reads += 1;
+                if replacement {
+                    let next = path.with_file_name("replacement");
+                    std::fs::write(&next, b"efgh").unwrap();
+                    std::fs::rename(&next, &path).unwrap();
+                } else {
+                    std::fs::write(&path, vec![0; reads]).unwrap();
+                }
+            });
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("changed while hashing")
+            );
+            assert_eq!(reads, 3);
+            std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
     }
 
     #[test]

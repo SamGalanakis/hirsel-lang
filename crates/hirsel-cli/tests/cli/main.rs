@@ -764,7 +764,12 @@ fn native_run_matches_the_reference_run() {
     );
     for path in [&prints, &fails, &rejected, &map, &decimal, &directory] {
         let (reference, native) = (run(false, path), run(true, path));
-        assert_eq!(native.status.code(), reference.status.code(), "{path:?}");
+        assert_eq!(
+            native.status.code(),
+            reference.status.code(),
+            "{path:?}: native stderr: {}",
+            String::from_utf8_lossy(&native.stderr)
+        );
         assert_eq!(native.stdout, reference.stdout, "{path:?}");
         assert_eq!(
             String::from_utf8_lossy(&native.stderr),
