@@ -44,6 +44,7 @@ struct Built {
     units: Vec<LirUnit<Reuse>>,
     table: LayoutTable,
     specializations: usize,
+    statics: Vec<hirsel_lir::statics::StaticData>,
 }
 
 #[test]
@@ -121,6 +122,7 @@ fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
         units,
         table,
         specializations,
+        statics: lowered.statics,
     }
 }
 
@@ -129,7 +131,7 @@ fn heap_program(built: &Built) -> hirsel_heapcheck::Program<Reuse> {
         target: target(),
         layouts: built.table.clone(),
         units: built.units.clone(),
-        statics: Vec::new(),
+        statics: built.statics.clone(),
     }
 }
 
@@ -389,5 +391,38 @@ fn a_destructured_shared_box_copies_its_children() {
         assert_eq!(returned_u64(&on.observation), 63);
         assert_eq!(on.counters.dups, off.counters.dups, "regions {regions}");
         assert_eq!(on.counters.reuses, 0, "regions {regions}");
+    }
+}
+
+/// Nullary boxes use immortal static storage. Moving one through temporary
+/// slots and across a branch must not turn it into a heap donor.
+#[test]
+fn static_box_temporary_keeps_its_provenance() {
+    let source = include_str!("../../../../conformance/MEM/MEM-14-reuse-donor-credit-run.hir");
+    let outcomes = run_all(source);
+    for (_, outcome) in &outcomes {
+        assert_eq!(outcome.counters.resets, 0);
+        assert_eq!(outcome.counters.reuses, 0);
+    }
+}
+
+#[test]
+fn joined_static_and_heap_box_is_not_a_donor() {
+    for flag in ["true", "false"] {
+        let source = format!(
+            "type Value = Empty | Number(u64)\n\
+             fn observe(value: box Value) -> u64 {{ 0 }}\n\
+             fn main() -> u64 {{\n\
+               let value = if {flag} {{ box Empty() }} else {{ box Number(1u64) }}\n\
+               let n = observe(value)\n\
+               let next = box Number(2u64)\n\
+               n + observe(next)\n\
+             }}"
+        );
+        let outcomes = run_all(&source);
+        for (_, outcome) in &outcomes {
+            assert_eq!(returned_u64(&outcome.observation), 0);
+            assert_eq!(outcome.counters.resets, 0);
+        }
     }
 }

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "MEM-14-reuse-donor-credit-run.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

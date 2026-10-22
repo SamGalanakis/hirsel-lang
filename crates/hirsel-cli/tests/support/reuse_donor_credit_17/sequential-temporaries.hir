@@ -1,0 +1,297 @@
+// Adapted from the shipped LANG-15 tree/JSON and OWN-3 snapshot witnesses.
+type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
+
+type Value = Text(String) | Array(List[Value])
+
+type PairValue = Text(String) | Leaf | Array(List[PairValue]) | Tagged(
+  value: box PairValue
+)
+
+type Pair {
+  a: List[u64],
+  b: List[u64],
+}
+
+// recipe: borrowed_tree
+fn borrowed_tree(root: box Tree) -> u64 {
+  let mut node = root
+  while true {
+    match node {
+      Leaf(n: n) => {
+        return n;
+      },
+      Branch(left: child, right: _) => {
+        node = child
+      },
+    }
+  }
+  0
+}
+
+// endrecipe
+// recipe: owned_tree
+fn owned_tree(root: box Tree) -> u64 {
+  let mut node = copy root
+  while true {
+    match node {
+      Leaf(n: n) => {
+        return n;
+      },
+      Branch(left: child, right: _) => {
+        node = copy child
+      },
+    }
+  }
+  0
+}
+
+// endrecipe
+// recipe: array_result
+fn array_result(root: Value) -> Value in root {
+  let mut node = root
+  while true {
+    match node {
+      Text(_) => {
+        return copy node;
+      },
+      Array(items) => {
+        if list.len(items) == 0 {
+          return copy node;
+        }
+        node = items[0]
+      },
+    }
+  }
+  copy node
+}
+
+// endrecipe
+// recipe: sibling_reset
+fn sibling_reset(p: Pair) -> u64 {
+  let Pair(a: first, b: _) = p
+  let mut node: List[u64] in p = first
+  let saved = node
+  node = p.b
+  let both = list.len(saved) + list.len(node)
+  node = p.a
+  both + list.len(node)
+}
+
+// endrecipe
+// recipe: saved_snapshot
+fn saved_snapshot(mut a: List[u64], b: List[u64]) -> u64 {
+  let mut node: List[u64] in {a, b} = a
+  let saved = node
+  node = b
+  let answer = list.len(saved) + list.len(node)
+  // saved's last use ended its loan on a; rebinding node alone did not.
+  list.push(mut a, 9)
+  answer
+}
+
+// endrecipe
+// recipe: transaction
+fn transaction(a: List[u64]) -> List[u64] in a {
+  let mut work = copy a
+  list.push(mut work, 9)
+  take work
+}
+
+// endrecipe
+// recipe: same
+fn same(a: PairValue, b: PairValue) -> bool uses {} {
+  let mut left = a
+  let mut right = b
+  while true {
+    match left {
+      Array(xs) => match right {
+        Array(ys) => {
+          let n = core@1/list.len(xs)
+          if n != core@1/list.len(ys) {
+            return false
+          }
+          if n == 0 {
+            return true
+          }
+          let mut i = 0u64
+          while i + 1 < n {
+            if !same(xs[i], ys[i]) {
+              return false
+            }
+            i += 1
+          }
+          left = xs[n - 1]
+          right = ys[n - 1]
+        },
+        _ => return false,
+      },
+      Text(s) => return match right {
+        Text(t) => s == t,
+        _ => false,
+      },
+      Leaf() => return match right {
+        Leaf() => true,
+        _ => false,
+      },
+      Tagged(value: x) => return match right {
+        Tagged(value: y) => x == y,
+        _ => false,
+      },
+    }
+  }
+  false
+}
+
+// endrecipe
+// recipe: tag_depth
+fn tag_depth(value: box PairValue) -> u64 uses {} {
+  let mut cursor = value
+  let mut n = 0u64
+  while true {
+    match cursor {
+      Tagged(value: inner) => {
+        cursor = inner
+        n += 1
+      },
+      _ => return n,
+    }
+  }
+  n
+}
+
+// endrecipe
+// recipe: read
+fn read(a: List[u64], b: List[u64]) -> u64 uses {} {
+  let mut c: List[u64] in {a, b} = a
+  let old = c
+  c = b
+  old[0u64] + c[0u64]
+}
+
+// endrecipe
+fn paired_recipes_agree() -> bool {
+  // These are separately constructed roots, including equal tails with unequal siblings.
+  let a: PairValue = Array([Leaf(), Array([Leaf()])])
+  let b: PairValue = Array([Leaf(), Array([Leaf()])])
+  let bad: PairValue = Array([Array([]), Array([Leaf()])])
+  let empty: PairValue = Array([])
+  let other_empty: PairValue = Array([])
+  let one: PairValue = Array([Leaf()])
+  let deep: PairValue = Array([Array([Array([Leaf()])])])
+  let deep_other: PairValue = Array([Array([Array([Leaf()])])])
+  let tags: box PairValue = box Tagged(value: box Tagged(value: box Leaf()))
+  let tagged: PairValue = Tagged(value: box Leaf())
+  let tagged_other: PairValue = Tagged(value: box Leaf())
+  let tagged_bad: PairValue = Tagged(value: box Array([]))
+  if !same(a, b) {
+    return false
+  }
+  if !same(b, a) {
+    return false
+  }
+  if !!same(a, bad) {
+    return false
+  }
+  if !!same(bad, a) {
+    return false
+  }
+  if !same(empty, other_empty) {
+    return false
+  }
+  if !!same(empty, one) {
+    return false
+  }
+  if !!same(one, empty) {
+    return false
+  }
+  if !!same(empty, Leaf()) {
+    return false
+  }
+  if !!same(Leaf(), empty) {
+    return false
+  }
+  if !same(Leaf(), Leaf()) {
+    return false
+  }
+  if !same(one, Array([Leaf()])) {
+    return false
+  }
+  if !same(deep, deep_other) {
+    return false
+  }
+  if !!same(deep, one) {
+    return false
+  }
+  if !!same(one, deep) {
+    return false
+  }
+  if !same(tagged, tagged_other) {
+    return false
+  }
+  if !!same(tagged, tagged_bad) {
+    return false
+  }
+  if !!same(tagged, Leaf()) {
+    return false
+  }
+  if !!same(Leaf(), tagged) {
+    return false
+  }
+  if !same(Text("x"), Text("x")) {
+    return false
+  }
+  if !!same(Text("x"), Text("y")) {
+    return false
+  }
+  if !!same(Text("x"), Leaf()) {
+    return false
+  }
+  if !(tag_depth(box Leaf()) == 0) {
+    return false
+  }
+  if !(tag_depth(tags) == 2) {
+    return false
+  }
+  if !(tag_depth(box Array([Leaf()])) == 0) {
+    return false
+  }
+  if !(read([3u64], [7u64]) == 10) {
+    return false
+  }
+  true
+}
+
+fn recipes_agree() -> bool {
+  let root = box Branch(
+    left: box Branch(left: box Leaf(n: 7), right: box Leaf(n: 8)),
+    right: box Leaf(n: 9)
+  )
+  let mut a: List[u64] = [1]
+  let selected = array_result(Array([Array([Text("seven")])]))
+  let text_ok = match selected {
+    Text(s) => s == "seven",
+    Array(_) => false,
+  }
+  let paired_ok = paired_recipes_agree()
+  let mut count = 0u64
+  count += 1
+  borrowed_tree(root) == 7 && owned_tree(root) == 7 && borrowed_tree(box Leaf(n: 3)) == 3 && text_ok && array_result(
+    Array([])
+  ) == Array([]) && sibling_reset(Pair(a: [1], b: [2, 3])) == 4 && saved_snapshot(
+    mut a,
+    [2, 3]
+  ) == 3 && a == [1, 9] && transaction([1]) == [1, 9] && count == 1 && paired_ok
+}
+
+@test
+fn cursor_recipes(t: Test) {
+  test.check(t, recipes_agree())
+}
+
+pub fn main() -> Result[(), ()] {
+  if recipes_agree() {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

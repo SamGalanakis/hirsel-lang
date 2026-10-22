@@ -1,0 +1,14 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 9
+// twin: MEM/MEM-14-reuse-donor-credit-run.hir
+type Value = Empty | Number(u64)
+
+// An owned heap construction cannot refill a borrowed cursor.
+fn refill(value: box Value) {
+  let mut cursor = value
+  cursor = box Number(1u64)
+}
+
+pub fn main() -> Result[(), ()] {
+  Ok(())
+}

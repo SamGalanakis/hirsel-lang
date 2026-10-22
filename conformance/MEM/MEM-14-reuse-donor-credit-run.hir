@@ -1,0 +1,16 @@
+// rule: MEM-14
+// expect: accept
+// The first box is an immortal nullary singleton, including after slot transfers.
+type Value = Empty | Number(u64)
+
+fn observe(value: box Value) -> u64 uses {} {
+  0
+}
+
+pub fn main() -> Result[(), ()] {
+  if observe(box Empty()) == 0 && observe(box Number(1u64)) == 0 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

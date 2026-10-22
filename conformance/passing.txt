@@ -1756,6 +1756,7 @@ conformance/LANG/LANG-15-paired-cursor-recipes-17-run.hir
 conformance/LANG/LANG-15-paired-cursor-recipes-17-stale-root-bad.hir
 conformance/LANG/LANG-15-plain-copy.hir
 conformance/LANG/LANG-15-returned-closure-keeps-type.hir
+conformance/LANG/LANG-15-reuse-donor-credit-bad.hir
 conformance/LANG/LANG-2-alias-variant-construction-bad.hir
 conformance/LANG/LANG-2-bare-generic-empty-record-bad.hir
 conformance/LANG/LANG-2-bare-generic-record-bad.hir
@@ -2465,6 +2466,7 @@ conformance/MEM/MEM-14-owned-replacement-self-move.hir
 conformance/MEM/MEM-14-remove-other-keeps-brand.hir
 conformance/MEM/MEM-14-replace-ends-brand-bad.hir
 conformance/MEM/MEM-14-replace-ends-brand-ok.hir
+conformance/MEM/MEM-14-reuse-donor-credit-run.hir
 conformance/MEM/MEM-14-slot-example.hir
 conformance/MEM/MEM-14-slots-copy-independence.hir
 conformance/MEM/MEM-14-slots-owned-payloads.hir

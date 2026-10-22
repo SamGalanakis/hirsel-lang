@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "LANG-15-reuse-donor-credit-bad.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

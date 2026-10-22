@@ -267,6 +267,53 @@ fn heap_values<S: Stage>(ed: &Editor<S>, facts: &Facts) -> Vec<bool> {
             ok[v] = Some(false);
         }
     }
+    // A slot version denotes its stored value, not fresh heap storage. Carry
+    // provenance through whole-slot transfers and reference-preserving copies;
+    // in particular a ReadStatic must stay ineligible after temporary storage.
+    let mut transfers = Vec::new();
+    for code in &ed.code {
+        for inst in code {
+            match *inst {
+                Inst::Store {
+                    address,
+                    value,
+                    version,
+                }
+                | Inst::Replace {
+                    address,
+                    value,
+                    version,
+                    ..
+                } if facts
+                    .slot_of(address)
+                    .is_some_and(|(_, path)| path.is_empty()) =>
+                {
+                    transfers.push((version, value));
+                }
+                Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                }
+                | Inst::Copy {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                } if facts
+                    .slot_of(address)
+                    .is_some_and(|(_, path)| path.is_empty()) =>
+                {
+                    transfers.push((result, reaching));
+                }
+                Inst::CopyValue { result, value }
+                | Inst::Recast { result, value }
+                | Inst::Weaken { result, value } => transfers.push((result, value)),
+                _ => {}
+            }
+        }
+    }
     // Block parameters: known only if every argument is.
     let mut params: Vec<(ValueId, BlockId, usize)> = Vec::new();
     for (b, block) in unit.blocks.iter().enumerate() {
@@ -298,6 +345,12 @@ fn heap_values<S: Stage>(ed: &Editor<S>, facts: &Facts) -> Vec<bool> {
     let mut answer: Vec<bool> = ok.iter().map(|o| o.unwrap_or(true)).collect();
     loop {
         let mut changed = false;
+        for &(result, source) in &transfers {
+            if answer[result.index()] && !answer[source.index()] {
+                answer[result.index()] = false;
+                changed = true;
+            }
+        }
         for &(p, b, i) in &params {
             let v = incoming(b, i).iter().all(|a| answer[a.index()]);
             if answer[p.index()] && !v {
