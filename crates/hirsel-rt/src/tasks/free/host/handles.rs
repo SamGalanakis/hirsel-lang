@@ -43,8 +43,9 @@ impl Wire for Envelope {
 
 pub(in crate::tasks::free) fn encode(
     pending: &mut Pending,
-    result: &Result<Completion, AdapterError>,
+    result: &mut Result<Completion, AdapterError>,
 ) -> Stopped<()> {
+    capture(result)?;
     let mut canonical = result.clone();
     let fields = fields(&mut canonical).map_err(|error| Stop::Refused(error.into()))?;
     let count = fields.iter().flatten().count();
@@ -67,6 +68,28 @@ pub(in crate::tasks::free) fn encode(
         created,
     }
     .encode(&mut pending.encoded);
+    Ok(())
+}
+
+/// A recorded mapping lends owned bytes to both the live caller and replay.
+/// Capture while the adapter still owns its mapping, before Ended can publish
+/// or another request can close it. Reuse MapView's established byte codec.
+fn capture(result: &mut Result<Completion, AdapterError>) -> Stopped<()> {
+    if let Ok(Completion::View(view)) = result {
+        if let Some(bytes) = &view.bytes {
+            if view.length != bytes.len() as u64 {
+                return Err(Stop::Refused("host mapping length mismatch".into()));
+            }
+        } else if view.length == 0 {
+            view.bytes = Some(Vec::new());
+        } else {
+            if view.block == 0 {
+                return Err(Stop::Refused("host mapping has no live storage".into()));
+            }
+            view.bytes = Some(view.contents());
+        }
+        view.block = 0;
+    }
     Ok(())
 }
 
@@ -127,6 +150,15 @@ pub(super) fn fields(
             | Completion::ChildExit(_)
             | Completion::GroupExit(_),
         ) => Ok([None, None]),
+        Ok(Completion::View(view))
+            if view.block == 0
+                && view
+                    .bytes
+                    .as_ref()
+                    .is_some_and(|bytes| view.length == bytes.len() as u64) =>
+        {
+            Ok([None, None])
+        }
         _ => Err("host result needs an unsupported logical handle codec"),
     }
 }
@@ -481,5 +513,213 @@ mod payload_tests {
             assert!(handles.words.is_empty());
         }
         assert_eq!(handles.next, 0);
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+    use crate::io::MapView;
+
+    #[test]
+    fn native_mapped_result_survives_close_before_ended_and_replays_without_adapter() {
+        use hirsel_free::projection::Projection;
+        for width in [1, 8] {
+            for durable in [false, true] {
+                let path = std::env::temp_dir().join(format!(
+                    "hirsel-f1-map-native-{}-{width}-{durable}",
+                    std::process::id()
+                ));
+                let bytes = b"owned mapping\0\xff".to_vec();
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .unwrap();
+                use std::io::Write;
+                (&file).write_all(&bytes).unwrap();
+                std::fs::remove_file(path).unwrap();
+                let mut file = Some(file);
+                let recording =
+                    super::super::super::record::Recording::new(b"mapped host result", durable);
+                let install = recording.clone();
+                let expected = bytes.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mapping = crate::mapping::Mapping::new(
+                            file.take().unwrap(),
+                            expected.len() as u64,
+                        )
+                        .unwrap();
+                        let _role = role::Guard::new(ctx);
+                        crate::stop::check(
+                            ctx,
+                            prepare(
+                                ctx,
+                                Request::MapView {
+                                    directory: 1,
+                                    mapped: 17,
+                                },
+                            ),
+                        );
+                        assert!(crate::stop::check(ctx, claim(ctx)));
+                        crate::stop::check(
+                            ctx,
+                            invoke(ctx, |_| {
+                                Completion::View(MapView {
+                                    length: expected.len() as u64,
+                                    bytes: None,
+                                    block: mapping.block(),
+                                })
+                            }),
+                        );
+                        drop(mapping);
+                        crate::stop::check(ctx, ended(ctx));
+                        let Completion::View(view) = crate::stop::check(ctx, complete(ctx)) else {
+                            panic!("view")
+                        };
+                        assert_eq!(view.block, 0);
+                        assert_eq!(view.contents(), expected);
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                let cut = recording
+                    .recorder
+                    .stop("returned", None)
+                    .unwrap()
+                    .unwrap()
+                    .0;
+                let projection = Projection::new("returned", &cut.progress, &recording.trace());
+                let tape = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink()
+                    .bytes;
+                for width in [1, 8] {
+                    let replay = super::super::super::replay::Replay::new(&tape).unwrap();
+                    let install = replay.clone();
+                    let expected = bytes.clone();
+                    let mut run = crate::host::BodyRun::new(width, false);
+                    run.free = true;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe { install.root(ctx) },
+                        move |ctx| unsafe {
+                            let _role = role::Guard::new(ctx);
+                            let result = crate::stop::check(
+                                ctx,
+                                replay_request(
+                                    ctx,
+                                    Request::MapView {
+                                        directory: 1,
+                                        mapped: 17,
+                                    },
+                                    KeySet::coupled(),
+                                ),
+                            );
+                            let Ok(Completion::View(view)) = result else {
+                                panic!("view")
+                            };
+                            assert_eq!(view.block, 0);
+                            assert_eq!(view.contents(), expected);
+                            super::super::super::replay::start(ctx);
+                            unreachable!("mapped result past cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(replay.finish().unwrap(), projection);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mapped_views_snapshot_before_publication_and_replay_after_unmapping() {
+        // Mapping's production static Bytes block: anonymous metadata prefix,
+        // followed by the live file pages. Keep both forms in the same codec.
+        let path = std::env::temp_dir().join(format!("hirsel-f1-map-{}", std::process::id()));
+        let bytes = vec![0, 255, 7, 11, 0, 99];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write;
+        (&file).write_all(&bytes).unwrap();
+        let mapping = crate::mapping::Mapping::new(file, bytes.len() as u64).unwrap();
+        let address = mapping.block();
+        assert_ne!(address, 0);
+        let borrowed = Ok(Completion::View(MapView {
+            length: bytes.len() as u64,
+            bytes: None,
+            block: address,
+        }));
+        let mut canonical = borrowed.clone();
+        capture(&mut canonical).unwrap();
+        let Ok(Completion::View(view)) = &canonical else {
+            panic!("view")
+        };
+        assert_eq!(view.block, 0);
+        assert_eq!(view.bytes.as_ref(), Some(&bytes));
+        let mut owned = canonical.clone();
+        assert!(fields(&mut owned).unwrap().iter().all(Option::is_none));
+        let mut tape = Vec::new();
+        Envelope {
+            result: canonical,
+            created: Vec::new(),
+        }
+        .encode(&mut tape);
+        assert!(
+            !tape
+                .windows(size_of::<usize>())
+                .any(|part| part == address.to_le_bytes())
+        );
+        drop(mapping);
+        std::fs::remove_file(path).unwrap();
+        let mut handles = Handles::default();
+        let decoded = crate::tape_wire::decode(&tape).unwrap();
+        let replayed = handles.substitute(decoded).unwrap();
+        let Ok(Completion::View(view)) = replayed else {
+            panic!("view")
+        };
+        assert_eq!(view.block, 0);
+        assert_eq!(view.length, bytes.len() as u64);
+        assert_eq!(view.contents(), bytes);
+        assert!(handles.words.is_empty());
+
+        // Refuse invalid owned captures before serialization, and never
+        // admit an uncaptured native address through the replay allow-list.
+        let mut borrowed = borrowed;
+        assert!(fields(&mut borrowed).is_err());
+        assert!(
+            capture(&mut Ok(Completion::View(MapView {
+                length: 2,
+                bytes: Some(vec![1]),
+                block: 0
+            })))
+            .is_err()
+        );
+        assert!(
+            capture(&mut Ok(Completion::View(MapView {
+                length: 1,
+                bytes: None,
+                block: 0
+            })))
+            .is_err()
+        );
     }
 }

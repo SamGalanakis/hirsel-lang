@@ -209,9 +209,9 @@ unsafe fn issue_home_loan(
                     .unwrap()
                     .claim_host(&pending.request);
                 if matches!(claimed, Ok(true)) {
-                    let completion =
+                    let mut completion =
                         call.take().expect("one bounded home call")(pending.request.buffers());
-                    let encoded = handles::encode(pending, &completion);
+                    let encoded = handles::encode(pending, &mut completion);
                     pending.completion = Some(completion);
                     if let Err(stop) = encoded {
                         issued = Some(Err(stop));
@@ -283,8 +283,8 @@ pub(crate) unsafe fn request_home(
             let _segment = unsafe { role::Segment::new(ctx) };
             unsafe {
                 crate::pool::call_home(ctx, &mut || {
-                    let result = crate::host_waits::native_call_home(run, token, cause);
-                    encoded = Some(handles::encode(&mut *pending, &result));
+                    let mut result = crate::host_waits::native_call_home(run, token, cause);
+                    encoded = Some(handles::encode(&mut *pending, &mut result));
                     (*pending).completion = Some(result);
                 })
             }?;
@@ -340,13 +340,13 @@ unsafe fn invoke_result(
             .expect("an active host transition")
             .ready()
     });
-    let completion = {
+    let mut completion = {
         // No role, section, writer or session lock crosses the host call.
         let _segment = unsafe { role::Segment::new(ctx) };
         call(unsafe { (*pending).request.buffers() })
     };
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
-    let encoded = handles::encode(pending, &completion);
+    let encoded = handles::encode(pending, &mut completion);
     pending.completion = Some(completion);
     encoded
 }
