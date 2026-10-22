@@ -93,7 +93,10 @@ impl Fixture {
         let output = cmd.output().unwrap();
         assert!(output.status.success(), "{backend}: {output:?}");
         let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(stdout.contains("13 passed; 0 failed; 13 total"), "{backend}: {stdout}");
+        assert!(
+            stdout.contains("13 passed; 0 failed; 13 total"),
+            "{backend}: {stdout}"
+        );
     }
 }
 impl Drop for Fixture {
