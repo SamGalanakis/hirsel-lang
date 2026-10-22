@@ -185,7 +185,7 @@ def native_environment(extra=None):
     archives=buck2_build('//:hirsel-rt-archives')['hirsel-rt-archives']
     env=controlled_environment(extra)
     env.update({variable:tools[target]+'/'+path for variable,target,path in rows})
-    env.update(LLVM_SYS_211_PREFIX=llvm,HIRSEL_RUNTIME_ARCHIVES=archives,
+    env.update(LLVM_SYS_231_PREFIX=llvm,HIRSEL_RUNTIME_ARCHIVES=archives,
                PATH=llvm+'/bin:'+env.get('PATH','/usr/bin:/bin'),
                LD_LIBRARY_PATH=llvm+'/lib'+(':'+env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else ''))
     return env

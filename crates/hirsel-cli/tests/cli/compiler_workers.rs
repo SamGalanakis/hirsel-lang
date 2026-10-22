@@ -13,7 +13,7 @@ fn compiler_worker_spawn_failure_falls_back_with_one_operational_warning() {
     let library = source.with_extension("so");
     std::fs::write(&injection, include_str!("compiler_workers.c")).unwrap();
     let clang =
-        PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap()).join("bin/hirsel-clang");
+        PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap()).join("bin/hirsel-clang");
     let built = Command::new(clang)
         .args(["-shared", "-fPIC", "-nostdlib", "-fuse-ld=lld"])
         .arg(&injection)

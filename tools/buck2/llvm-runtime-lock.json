@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "about": "Ubuntu noble libraries libLLVM 21 and clang load that a minimal Ubuntu 24.04 (minbase) worker image lacks. bootstrap_llvm.py unpacks their shared objects into the LLVM tree's lib/, beside libLLVM (RUNPATH $ORIGIN/../lib).",
+  "about": "Ubuntu noble libraries libLLVM 23 and clang load that a minimal Ubuntu 24.04 (minbase) worker image lacks. bootstrap_llvm.py unpacks their shared objects into the LLVM tree's lib/, beside libLLVM (RUNPATH $ORIGIN/../lib).",
   "debs": [
     {
       "name": "libedit2_3.1-20230828-1build1_amd64.deb",
@@ -36,6 +36,14 @@
       "urls": [
         "http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb",
         "https://launchpad.net/ubuntu/+archive/primary/+files/libicu74_74.2-1ubuntu3.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libz3-4_4.8.12-3.1build1_amd64.deb",
+      "sha256": "67ceb432593fe62afbaf3bd85c73d46c66fa19433a6b58326a3248162f139b19",
+      "size": 5836188,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/universe/z/z3/libz3-4_4.8.12-3.1build1_amd64.deb"
       ]
     }
   ]

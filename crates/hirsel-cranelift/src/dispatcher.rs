@@ -182,7 +182,7 @@ mod tests {
         .unwrap();
         let dispatcher = emit(&target, &["test_0", "test_1"]).unwrap();
         std::fs::write(root.join("dispatcher.o"), dispatcher).unwrap();
-        let prefix = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap());
+        let prefix = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
         let result = std::process::Command::new(prefix.join("bin/hirsel-clang"))
             .arg(root.join("entries.o"))
             .arg(root.join("dispatcher.o"))

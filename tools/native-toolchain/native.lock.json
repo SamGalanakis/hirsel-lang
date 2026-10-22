@@ -34,14 +34,14 @@
       "size": 253117
     },
     "libunwind": {
-      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/libunwind-21.1.8.src.tar.xz",
-      "sha256": "03e8adc6c3bdde657dcaedc94886ea70d1f7d551d622fcd8a36a8300e5c36cbc",
-      "size": 121872
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/llvm-project-23.1.4.src.tar.xz",
+      "sha256": "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2",
+      "size": 179272572
     },
     "compiler-rt": {
-      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/compiler-rt-21.1.8.src.tar.xz",
-      "sha256": "dd54ae21aee1780fac59445b51ebff601ad016b31ac3a7de3b21126fd3ccb229",
-      "size": 2642260
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/llvm-project-23.1.4.src.tar.xz",
+      "sha256": "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2",
+      "size": 179272572
     },
     "glibc:amd64": {
       "url": "https://archive.debian.org/debian/pool/main/g/glibc/libc6_2.28-10+deb10u1_amd64.deb",

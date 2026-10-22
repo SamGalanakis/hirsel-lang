@@ -43,7 +43,7 @@ fn smoke_imports(target: &TargetSpec) -> &'static [&'static str] {
 #[test]
 fn the_loaded_libllvm_is_the_pin() {
     assert_eq!(loaded_llvm_version(), PINNED_LLVM);
-    assert_eq!(PINNED_LLVM.to_string(), "21.1.8");
+    assert_eq!(PINNED_LLVM.to_string(), "23.1.4");
 }
 
 /// The schema's pinned DataLayout string, byte order, pointer width and scalar sizes and

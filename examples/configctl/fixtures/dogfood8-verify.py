@@ -26,7 +26,7 @@ def verify(hirsel, root, output, group):
     manifest = json.loads(selection.read_text())
     std = (root / manifest['dependencies'][0]['manifest']).resolve().parent
     frozen_paths.extend(std.rglob('*'))
-    for name in ('HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_211_PREFIX'):
+    for name in ('HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_231_PREFIX'):
         if os.environ.get(name):
             frozen_paths.extend(Path(os.environ[name]).rglob('*'))
     frozen = {str(p): digest(p) for p in frozen_paths if p.is_file()}

@@ -191,7 +191,7 @@ class Session:
         command = [str(cli), 'build', '--debug' if debug else '--release', str(manifest), '-o', str(binary)]
         consumed = sources_identity()
         compiler = identity(cli)
-        runtime = {key: identity(native[key]) for key in ('LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR')}
+        runtime = {key: identity(native[key]) for key in ('LLVM_SYS_231_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR')}
         cold, _, _ = self.call(command, label=label + '-cold')
         marker = HERE / 'main.hir'
         original = marker.read_bytes()

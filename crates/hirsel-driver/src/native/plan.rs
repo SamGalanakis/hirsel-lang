@@ -897,7 +897,7 @@ fn link_identity(target: &hirsel_lir::TargetSpec, debug: bool) -> Option<Vec<u8>
     use std::path::PathBuf;
     let runtime = PathBuf::from(std::env::var_os("HIRSEL_RUNTIME_ARCHIVES")?);
     let kit = PathBuf::from(std::env::var_os("HIRSEL_LINK_KIT")?);
-    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX")?);
+    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX")?);
     let mut files = vec![
         runtime.join(&target.triple).join("libhirsel_builtins.a"),
         runtime.join(&target.triple).join("default").join(if debug {

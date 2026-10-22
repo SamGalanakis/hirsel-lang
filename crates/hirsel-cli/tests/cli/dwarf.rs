@@ -49,7 +49,7 @@ fn output(command: &mut Command) -> std::process::Output {
 }
 
 fn tool(name: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+    std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap())
         .join("bin")
         .join(name)
 }

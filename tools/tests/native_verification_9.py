@@ -131,7 +131,7 @@ class Recipe:
                   for p in base.rglob('*') if p.is_file()]
         inputs += [Path(__file__).resolve(), ROOT / 'docs/native-verification.md', self.compiler]
         # Freeze the actual link inputs as well as the program and its dependencies.
-        for key in ('HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_211_PREFIX', 'HIRSEL_IMAGE'):
+        for key in ('HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_231_PREFIX', 'HIRSEL_IMAGE'):
             if self.env.get(key):
                 path = Path(self.env[key]).resolve(strict=True)
                 inputs += [path] if path.is_file() else [p for p in path.rglob('*') if p.is_file()]

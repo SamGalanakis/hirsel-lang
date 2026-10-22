@@ -35,7 +35,7 @@ llvm_tree(
         "llvm-files/bin/hirsel-clang",
         "llvm-files/bin/hirsel-clang++",
         "llvm-files/bin/hirsel-llvm-ar",
-        "llvm-files/bin/clang-21",
+        "llvm-files/bin/clang-23",
         "llvm-files/bin/ld.lld",
         "llvm-files/bin/lld",
         "llvm-files/bin/llvm-ar",
@@ -46,7 +46,7 @@ llvm_tree(
     visibility = ["PUBLIC"],
 )
 
-# The whole pinned tree, as tools and tests that name LLVM_SYS_211_PREFIX see it.
+# The whole pinned tree, as tools and tests that name LLVM_SYS_231_PREFIX see it.
 llvm_tree(
     name = "llvm",
     srcs = {p.removeprefix("llvm-files/"): p for p in glob(["llvm-files/**"], exclude = ["llvm-files/.hirsel-llvm.json"])},
@@ -79,8 +79,8 @@ noop_test_toolchain(name = "test", visibility = ["PUBLIC"])
 # libLLVM and its C headers, for llvm-sys (tools/buck2/fixups/llvm-sys).
 prebuilt_cxx_library(
     name = "libllvm",
-    shared_lib = "llvm-files/lib/libLLVM.so.21.1",
-    soname = "libLLVM.so.21.1",
+    shared_lib = "llvm-files/lib/libLLVM.so.23.1",
+    soname = "libLLVM.so.23.1",
     header_dirs = ["llvm-files/include"],
     preferred_linkage = "shared",
     visibility = ["PUBLIC"],

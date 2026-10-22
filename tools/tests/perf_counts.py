@@ -109,7 +109,7 @@ class BigintMicroOracle(unittest.TestCase):
     def test_wrong_or_empty_stdout_cannot_produce_a_measurement(self):
         measure = COUNTS['measure']
         env = dict(HIRSEL_VALGRIND='/valgrind/bin/valgrind',
-                   HIRSEL_VALGRIND_RUNTIME='/runtime', LLVM_SYS_211_PREFIX='/llvm')
+                   HIRSEL_VALGRIND_RUNTIME='/runtime', LLVM_SYS_231_PREFIX='/llvm')
         for stdout in (b'4901293426875656069\n', b'', b'4901293426875656068'):
             with self.subTest(stdout=stdout), \
                     patch.dict(measure.__globals__, run=Mock(return_value=stdout), annotate=Mock()) as scope:

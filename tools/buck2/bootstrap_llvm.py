@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Materialize the pinned LLVM 21 tree as an ignored Buck2 toolchain input.
+"""Materialize the pinned LLVM 23 tree as an ignored Buck2 toolchain input.
 
 `tools/native-toolchain/install --unpack` verifies every locked `.deb` against
-`tools/native-toolchain/llvm-21.lock`, unpacks it and runs the pin's `check`.
+`tools/native-toolchain/llvm-23.lock`, unpacks it and runs the pin's `check`.
 This script then lays the result out as one self-contained tree with no
 symbolic links (Buck2 hashes a link, not its target):
 
@@ -38,7 +38,7 @@ import bootstrap_store
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-LOCK = ROOT / "tools/native-toolchain/llvm-21.lock"
+LOCK = ROOT / "tools/native-toolchain/llvm-23.lock"
 RUNTIME_LOCK = pathlib.Path(__file__).with_name("llvm-runtime-lock.json")
 INSTALL = ROOT / "tools/native-toolchain/install"
 DEFAULT_OUTPUT = pathlib.Path(__file__).with_name("toolchains") / "llvm-files"
@@ -46,16 +46,17 @@ RECEIPT = ".hirsel-llvm.json"
 LAYOUT = 6
 REQUIRED = (
     "bin/clang",
-    "bin/clang-21",
+    "bin/clang-23",
     "bin/llvm-config",
     "bin/ld.lld",
-    "lib/libLLVM.so.21.1",
-    "lib/libLLVM-21.so",
-    "lib/libclang-cpp.so.21.1",
-    "lib/clang/21/include/stddef.h",
+    "lib/libLLVM.so.23.1",
+    "lib/libLLVM-23.so",
+    "lib/libclang-cpp.so.23.1",
+    "lib/clang/23/include/stddef.h",
     "include/llvm-c/Core.h",
     "lib/libedit.so.2",
     "lib/libxml2.so.2",
+    "lib/libz3.so.4",
     "bin/hirsel-clang",
     "bin/hirsel-clang++",
     "bin/hirsel-llvm-ar",
@@ -125,8 +126,8 @@ def place_runtime_libraries(stage: pathlib.Path, scratch: pathlib.Path) -> None:
     for deb in lock["debs"]:
         subprocess.run(["dpkg-deb", "-x", fetch_deb(deb, scratch), unpacked], check=True)
     for path in sorted((unpacked / "usr/lib/x86_64-linux-gnu").iterdir()):
-        # The soname links: the names the loader asks for.
-        if ".so." in path.name and path.is_symlink():
+        # Sonames may be regular files (libz3) or links (libedit).
+        if ".so." in path.name and path.is_file():
             place(path, stage / "lib" / path.name)
 
 
@@ -135,10 +136,10 @@ def build(stage: pathlib.Path, wanted: dict) -> None:
     with tempfile.TemporaryDirectory(prefix="hirsel-llvm-") as raw:
         unpacked = pathlib.Path(raw) / "root"
         subprocess.run([INSTALL, "--unpack", unpacked], check=True, stdout=sys.stderr)
-        prefix = unpacked / "usr/lib/llvm-21"
+        prefix = unpacked / "usr/lib/llvm-23"
         for path in sorted((prefix / "bin").iterdir()):
             place(path, stage / "bin" / path.name)
-        for name in ("libLLVM.so.21.1", "libLLVM-21.so", "libclang-cpp.so.21.1"):
+        for name in ("libLLVM.so.23.1", "libLLVM-23.so", "libclang-cpp.so.23.1"):
             place(prefix / "lib" / name, stage / "lib" / name)
         place_tree(prefix / "lib/clang", stage / "lib/clang")
         for name in ("llvm", "llvm-c"):

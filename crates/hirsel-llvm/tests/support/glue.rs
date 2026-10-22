@@ -604,14 +604,10 @@ pub fn cases_header(corpus: &Corpus, scenarios: &[Scenario]) -> String {
     let descriptors = rt_program::descriptors(table, &used).expect("every layout lowers");
     let mut c = String::new();
     for d in &descriptors {
-        let digest = hirsel_lir::snapshot::digest(
-            "runtime-layout-descriptor",
-            table.layout(d.layout).unwrap(),
-        );
-        let hex: String = digest.0.iter().map(|b| format!("{b:02x}")).collect();
+        let name = hirsel_lir::glue::descriptor_name(&corpus.program.table.keys.key(d.layout));
         let _ = writeln!(
             c,
-            "extern const hirsel_rt_v2_layout L{} __asm__(\"hirsel.layout.{hex}\");",
+            "extern const hirsel_rt_v2_layout L{} __asm__(\"{name}\");",
             d.layout.0
         );
     }

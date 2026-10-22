@@ -642,6 +642,25 @@ mod tests {
     use crate::context::Context;
 
     #[test]
+    fn whole_memory_promises_include_llvm_target_state() {
+        for (effect, spelling) in [
+            (MemoryEffects::Read, "memory(read)"),
+            (MemoryEffects::ReadWrite, "memory(readwrite)"),
+        ] {
+            let context = Context::new();
+            let module = Module::new(&context, "whole-memory-effects");
+            let function = module
+                .function("probe", module.function_type(module.void_type(), &[]))
+                .unwrap();
+            module.add_attribute(function, AttributeSlot::Function, Attribute::Memory(effect));
+            module.verify().unwrap();
+            let text = module.text();
+            assert!(text.contains(spelling), "{text}");
+            assert!(!text.contains("target_mem:"), "{text}");
+        }
+    }
+
+    #[test]
     fn read_only_leaves_and_callback_entries_have_different_promises() {
         let context = Context::new();
         let module = Module::new(&context, "runtime-effects");
@@ -803,16 +822,62 @@ mod tests {
             module.run_passes("default<O3>", &machine).unwrap();
             module.verify().unwrap();
             let text = module.text();
+            // LLVM 23 removes the precondition load along with llvm.assume.
+            // The post-Dup query must still read the count and compare it.
             assert_eq!(
                 text.matches("load i32").count(),
-                if duplicated { 2 } else { 1 },
+                usize::from(duplicated),
                 "{text}"
             );
             if duplicated {
+                assert!(text.contains("call void @hirsel_rt_v2_dup"), "{text}");
                 assert!(text.contains("icmp eq i32"), "{text}");
             } else {
                 assert!(text.contains("ret i1 true"), "{text}");
             }
+            let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join(format!("unique-after-dup-{duplicated}"));
+            std::fs::create_dir_all(&root).unwrap();
+            let object = root.join("probe.o");
+            std::fs::write(&object, module.emit_object(&machine).unwrap()).unwrap();
+            let harness = root.join("harness.c");
+            std::fs::write(
+                &harness,
+                format!(
+                    "#include <stdbool.h>\n#include <stdint.h>\n\
+                     extern bool probe(void *, uint32_t *);\n\
+                     void hirsel_rt_v2_dup(void *ctx, uint32_t *count) {{ (void)ctx; ++*count; }}\n\
+                     int main(void) {{ uint32_t count = 1; bool result = probe(0, &count); \
+                     return result != {} || count != {}; }}\n",
+                    u8::from(!duplicated),
+                    if duplicated { 2 } else { 1 },
+                ),
+            )
+            .unwrap();
+            let llvm = std::path::PathBuf::from(
+                std::env::var_os("LLVM_SYS_231_PREFIX").expect("pinned LLVM input"),
+            );
+            let executable = root.join("probe");
+            let linked = std::process::Command::new(llvm.join("bin/clang"))
+                .arg(format!("--ld-path={}", llvm.join("bin/ld.lld").display()))
+                .args(["-std=c11", "-Wall", "-Werror"])
+                .arg(&harness)
+                .arg(&object)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(
+                linked.status.success(),
+                "{}",
+                String::from_utf8_lossy(&linked.stderr)
+            );
+            assert!(
+                std::process::Command::new(executable)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         }
     }
 }

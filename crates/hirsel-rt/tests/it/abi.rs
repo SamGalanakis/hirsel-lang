@@ -307,7 +307,7 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
         .unwrap()
         .parent()
         .unwrap();
-    let lock = std::fs::read_to_string(repo.join("tools/native-toolchain/llvm-21.lock")).unwrap();
+    let lock = std::fs::read_to_string(repo.join("tools/native-toolchain/llvm-23.lock")).unwrap();
     let locked = |key: &str| {
         lock.lines()
             .find_map(|line| line.strip_prefix(&format!("{key} ")))
@@ -315,7 +315,7 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
     };
     // The explicit input prefix is shared with tools/native-toolchain/check.
     let prefix =
-        PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX"));
+        PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX"));
     let config = prefix.join("bin/llvm-config");
     assert_eq!(
         command_output(Command::new(&config).arg("--version")).trim(),

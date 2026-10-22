@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the LLVM pin in llvm-21.lock.
+# Install the LLVM pin in llvm-23.lock.
 #
 #   install                 print the pinned apt.llvm.org commands (the default; changes nothing)
 #   install --run           run them; needs root and changes the system
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-lock="$here/llvm-21.lock"
+lock="$here/llvm-23.lock"
 
 fail() { echo "native-toolchain install: $*" >&2; exit 1; }
 usage() { echo "usage: install [--run | --unpack DIR | --source]" >&2; exit 2; }
@@ -19,7 +19,7 @@ usage() { echo "usage: install [--run | --unpack DIR | --source]" >&2; exit 2; }
 lock_value() {
   local value
   value="$(awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; found = 1 } END { exit !found }' "$lock")" \
-    || fail "llvm-21.lock has no '$1' record"
+    || fail "llvm-23.lock has no '$1' record"
   printf '%s\n' "$value"
 }
 
@@ -32,7 +32,7 @@ apt_commands() {
   cat <<EOF
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL $(lock_value apt_key_url) -o /etc/apt/keyrings/apt.llvm.org.asc
-echo '$(lock_value apt_source)' | sed 's|^deb |deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] |' > /etc/apt/sources.list.d/llvm-21.list
+echo '$(lock_value apt_source)' | sed 's|^deb |deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] |' > /etc/apt/sources.list.d/llvm-23.list
 apt-get update
 apt-get install -y --no-install-recommends ${pinned[*]}
 apt-mark hold ${packages[*]}
@@ -78,13 +78,13 @@ case "${1:-}" in
     done
     llvm_prefix="$root$(lock_value prefix)"
     "$here/check" --prefix "$llvm_prefix"
-    echo "export LLVM_SYS_211_PREFIX=$llvm_prefix"
+    echo "export LLVM_SYS_231_PREFIX=$llvm_prefix"
     echo "export LD_LIBRARY_PATH=$root/usr/lib/x86_64-linux-gnu\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
     ;;
   --source)
     (( $# == 1 )) || usage
     cat <<EOF
-# The pinned source build: LLVM, clang and lld with a shared libLLVM-21.so.
+# The pinned source build: LLVM, clang and lld with a shared libLLVM-23.so.
 curl -fsSLO $(lock_value source_url)
 echo '$(lock_value source_sha256)  llvm-project-$(lock_value llvm_version).src.tar.xz' | sha256sum -c -
 tar xf llvm-project-$(lock_value llvm_version).src.tar.xz

@@ -245,7 +245,7 @@ of the targets it builds for:
 
 | variable | needed for | names |
 |---|---|---|
-| `LLVM_SYS_211_PREFIX` | every target | the pinned LLVM 21.1.8 tree, whose `bin/ld.lld` links every executable |
+| `LLVM_SYS_231_PREFIX` | every target | the pinned LLVM 23.1.4 tree, whose `bin/ld.lld` links every executable |
 | `HIRSEL_LINK_KIT` | every target | the link kit: every link input besides the program, its runtime archive and foreign libraries |
 | `HIRSEL_RUNTIME_ARCHIVES` | every target (optional) | prebuilt runtime archives, `<dir>/<triple>/<variant>/libhirsel_rt.a`; without it the runtime is built once with Cargo from the source checkout |
 | `HIRSEL_NATIVE_CACHE` | every target (optional) | where Cargo-built runtime archives are kept |
@@ -262,7 +262,7 @@ Buck2 from the repository root, and export the paths it prints:
 .buck2/bin/buck2 build //tools/buck2/native-toolchain:arm //tools/buck2/native-toolchain:qemu --show-full-simple-output
 ```
 
-`LLVM_SYS_211_PREFIX` is the `llvm` directory and `HIRSEL_RUNTIME_ARCHIVES` the
+`LLVM_SYS_231_PREFIX` is the `llvm` directory and `HIRSEL_RUNTIME_ARCHIVES` the
 `hirsel-rt-archives` directory. `tools/buck2/native-toolchain/environment.tsv`
 lists the path of every other variable inside its toolchain directory
 (`tools/native-toolchain/README.md` installs the LLVM tree without Buck2).

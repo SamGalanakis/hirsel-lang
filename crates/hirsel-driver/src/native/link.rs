@@ -217,7 +217,7 @@ pub(crate) fn checked(stage: StageName, command: &mut Command) -> Result<(), Nat
 
 impl Toolchain {
     /// The toolchain of a source checkout: the pinned LLVM prefix
-    /// (`LLVM_SYS_211_PREFIX`), explicit cross-tool inputs, and the runtime
+    /// (`LLVM_SYS_231_PREFIX`), explicit cross-tool inputs, and the runtime
     /// archive of each listed target: Buck2's under `HIRSEL_RUNTIME_ARCHIVES`, or
     /// built by Cargo with aborting panics into `build_dir`.
     pub fn in_tree(build_dir: &Path, targets: &[&TargetSpec]) -> Result<Self, NativeError> {
@@ -281,7 +281,7 @@ impl Toolchain {
                 "a toolchain needs a runtime archive",
             ));
         };
-        let prefix = environment_path("LLVM_SYS_211_PREFIX")?;
+        let prefix = environment_path("LLVM_SYS_231_PREFIX")?;
         let needs_aarch64 = targets.iter().any(|target| aarch64(target));
         let needs_memcheck = runtime_builds.iter().any(|build| build.memcheck);
         // No program link runs the cross driver: it is an input only where configured.

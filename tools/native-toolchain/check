@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Check that an LLVM install is exactly the pin in llvm-21.lock.
+# Check that an LLVM install is exactly the pin in llvm-23.lock.
 #
 #   check [--prefix DIR]
 #
-# DIR is the directory holding bin/llvm-config. It defaults to $LLVM_SYS_211_PREFIX,
+# DIR is the directory holding bin/llvm-config. It defaults to $LLVM_SYS_231_PREFIX,
 # which must be supplied when --prefix is absent. There is no PATH search or fallback: a wrong
 # version, a static-only install or a missing tool is a failure, never a skip.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-lock="$here/llvm-21.lock"
+lock="$here/llvm-23.lock"
 repo="$(cd "$here/../.." && pwd)"
 
 fail() { echo "native-toolchain check: $*" >&2; exit 1; }
@@ -18,7 +18,7 @@ fail() { echo "native-toolchain check: $*" >&2; exit 1; }
 lock_value() {
   local value
   value="$(awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; found = 1 } END { exit !found }' "$lock")" \
-    || fail "llvm-21.lock has no '$1' record"
+    || fail "llvm-23.lock has no '$1' record"
   printf '%s\n' "$value"
 }
 
@@ -30,8 +30,8 @@ while (( $# > 0 )); do
   esac
 done
 lock_prefix="$(lock_value prefix)"
-prefix="${prefix:-${LLVM_SYS_211_PREFIX:-}}"
-[[ -n "$prefix" && "$prefix" == /* ]] || fail "--prefix or LLVM_SYS_211_PREFIX must name an absolute input directory"
+prefix="${prefix:-${LLVM_SYS_231_PREFIX:-}}"
+[[ -n "$prefix" && "$prefix" == /* ]] || fail "--prefix or LLVM_SYS_231_PREFIX must name an absolute input directory"
 
 version="$(lock_value llvm_version)"
 major="${version%%.*}"

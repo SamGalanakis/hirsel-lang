@@ -104,7 +104,7 @@ fn the_artifact_is_owned_and_reproducible() {
     assert_eq!(first, second, "emission is deterministic");
     let program = scalar_program(&x86());
     assert_eq!(first.target, x86().digest());
-    assert_eq!(first.reproducibility.toolchain, "llvm 21.1.8");
+    assert_eq!(first.reproducibility.toolchain, "llvm 23.1.4");
     assert_eq!(&first.bytes[..4], b"\x7fELF");
 }
 

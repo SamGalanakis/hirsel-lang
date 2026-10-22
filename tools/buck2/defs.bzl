@@ -273,7 +273,7 @@ def _rust_test_impl(ctx):
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
         # The same effective request as the executor, including focus mode.
         "HIRSEL_TEST_CPUS": ctx.attrs.request[0],
-        "LLVM_SYS_211_PREFIX": cmd_args(llvm),
+        "LLVM_SYS_231_PREFIX": cmd_args(llvm),
         # A pool worker's action supervisor can attribute a test run's CPU to
         # these Bazel test variables. They are stable per
         # target and shard, as they are part of the action key.
@@ -502,7 +502,7 @@ def _link_hosts_local_impl(ctx):
         hidden = ctx.attrs.data + list(tools.values()),
     )
     env = {
-        "LLVM_SYS_211_PREFIX": cmd_args(tools["llvm"]),
+        "LLVM_SYS_231_PREFIX": cmd_args(tools["llvm"]),
         "HIRSEL_LINK_KIT": cmd_args(tools["kit"]),
         "HIRSEL_RUNTIME_ARCHIVES": cmd_args(tools["archives"]),
         "HIRSEL_IMAGE": cmd_args(tools["image"]),

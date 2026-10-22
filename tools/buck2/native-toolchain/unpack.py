@@ -75,7 +75,7 @@ def unpack(kind, output, archives):
             subprocess.run(["dpkg-deb", "-x", archive, tree], check=True)
         normalize_links(tree)
         if kind == "llvm":
-            prefix = tree / "usr/lib/llvm-21"
+            prefix = tree / "usr/lib/llvm-23"
             for name in ("bin", "include"):
                 copy_tree(prefix / name, output / name)
             copy_tree(prefix / "lib/clang", output / "lib/clang")

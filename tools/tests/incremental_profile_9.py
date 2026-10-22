@@ -15,9 +15,9 @@ loader.exec_module(h)
 
 class Invariants(unittest.TestCase):
     def test_environment_excludes_unrelated_secrets(self):
-        self.assertEqual(h.compiler_environment({'PATH':'/bin', 'HIRSEL_JOBS':'1', 'LLVM_SYS_211_PREFIX':'/llvm',
+        self.assertEqual(h.compiler_environment({'PATH':'/bin', 'HIRSEL_JOBS':'1', 'LLVM_SYS_231_PREFIX':'/llvm',
                                                 'CONNECTOR_API_KEY':'private', 'SLUICE_RUN_ID':'private'}),
-                         {'PATH':'/bin', 'HIRSEL_JOBS':'1', 'LLVM_SYS_211_PREFIX':'/llvm'})
+                         {'PATH':'/bin', 'HIRSEL_JOBS':'1', 'LLVM_SYS_231_PREFIX':'/llvm'})
 
     def test_edit_restores_exact_bytes_after_failure(self):
         with tempfile.TemporaryDirectory() as temp:

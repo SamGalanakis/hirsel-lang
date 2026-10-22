@@ -5,7 +5,7 @@
 # The Buck2 launcher supplies HIRSEL_RUNTIME_ARCHIVES and all native tool paths.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-llvm="${LLVM_SYS_211_PREFIX:?LLVM_SYS_211_PREFIX must name the pinned input}"
+llvm="${LLVM_SYS_231_PREFIX:?LLVM_SYS_231_PREFIX must name the pinned input}"
 : "${HIRSEL_AARCH64_CC:?}" "${HIRSEL_QEMU_AARCH64:?}" "${HIRSEL_AARCH64_SYSROOT:?}"
 libs=(-lgcc_s -lutil -lrt -lpthread -lm -ldl)
 archives="${HIRSEL_RUNTIME_ARCHIVES:?HIRSEL_RUNTIME_ARCHIVES must name the Buck2 input}"

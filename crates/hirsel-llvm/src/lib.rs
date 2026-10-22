@@ -2,8 +2,8 @@
 //! Ready LIR units that returns an owned `hirsel_lir::ObjectArtifact` after every LLVM and
 //! LIR temporary is dropped.
 //!
-//! The binding is llvm-sys `=211.0.1` against the shared libLLVM 21.1.8 pinned in
-//! `tools/native-toolchain/llvm-21.lock`. No raw LLVM handle is
+//! The binding is llvm-sys `=231.0.1` against the shared libLLVM 23.1.4 pinned in
+//! `tools/native-toolchain/llvm-23.lock`. No raw LLVM handle is
 //! public, and there is no fallback to another LLVM.
 
 #[cfg(test)]
@@ -41,11 +41,11 @@ impl fmt::Display for LlvmVersion {
     }
 }
 
-/// The pinned LLVM release (`llvm_version` in `tools/native-toolchain/llvm-21.lock`).
+/// The pinned LLVM release (`llvm_version` in `tools/native-toolchain/llvm-23.lock`).
 pub const PINNED_LLVM: LlvmVersion = LlvmVersion {
-    major: 21,
+    major: 23,
     minor: 1,
-    patch: 8,
+    patch: 4,
 };
 
 /// The version of the libLLVM this process loaded.

@@ -104,7 +104,7 @@ def verify(hirsel, root, output, prebuilt=None):
         frozen_paths.extend(prebuilt / ('httpaggregate-' + b) for b in ('llvm', 'cranelift'))
     manifest = json.loads(selection.read_text())
     frozen_paths.extend((root / manifest['dependencies'][0]['manifest']).resolve().parent.rglob('*'))
-    for key in ('HIRSEL_IMAGE', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_211_PREFIX'):
+    for key in ('HIRSEL_IMAGE', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_231_PREFIX'):
         if os.environ.get(key):
             path = Path(os.environ[key])
             frozen_paths.extend(path.rglob('*') if path.is_dir() else [path])

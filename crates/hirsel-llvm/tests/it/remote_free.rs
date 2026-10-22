@@ -206,6 +206,9 @@ int main(void) {{
       assert(pthread_create(&b, NULL, other, NULL) == 0);
       assert(pthread_join(b, NULL) == 0);
       assert(pthread_join(a, NULL) == 0);
+      /* Stats cover the whole run; trim both idle workers before that audit. */
+      hirsel_rt_v2_trim(owner_ctx);
+      hirsel_rt_v2_trim(other_ctx);
       empty(owner_ctx);
       empty(other_ctx);
     }}
@@ -228,6 +231,7 @@ int main(void) {{
       assert(pthread_join(w, NULL) == 0);
       /* A scheduling point collects and trims the orphan; then nothing of it is live. */
       hirsel_rt_v2_worker_collect(ctx);
+      hirsel_rt_v2_trim(ctx);
       hirsel_rt_v2_ctx *probe = hirsel_rt_v2_worker_create(ctx);
       assert(heap_id(probe) == 2);
       empty(probe);
@@ -268,7 +272,12 @@ fn workers_free_each_others_blocks_on_both_backends() {
                         .unwrap()
                         .bytes
                 };
-                let executable = link(&target, &dir, &[("remote.o", &object)], &[source]);
+                let executable = link(
+                    &target,
+                    &dir,
+                    &[("remote.o", &object), ("program-glue.o", &p.glue())],
+                    &[source],
+                );
                 assert_eq!(
                     run(&target, &executable),
                     "remote free ok\n",

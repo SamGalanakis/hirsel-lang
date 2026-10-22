@@ -216,7 +216,7 @@ pub(crate) enum Attribute {
 /// whose only uses are stores into it and a free of this family, as C's malloc/free.
 pub(crate) const ALLOC_FAMILY: &str = "hirsel_rt_v2";
 
-/// LLVM 21.1.8's `AllocFnKind` bits for the entries the runtime has. Neither returns
+/// LLVM 23.1.4's `AllocFnKind` bits for the entries the runtime has. Neither returns
 /// uninitialized or zeroed memory: the runtime writes the header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AllocKind {
@@ -224,8 +224,9 @@ pub(crate) enum AllocKind {
     Free,
 }
 
-/// LLVM 21.1.8's ModRef.h encodes two bits per location, in order:
-/// argument, inaccessible, errno, other. Keep the pinned C API encoding here.
+/// LLVM 23.1.4's ModRef.h encodes two bits per location, in order:
+/// argument, inaccessible, errno, other, and two target-state locations.
+/// Keep the pinned C API encoding here (IRMemLocation in llvm/Support/ModRef.h).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MemoryEffects {
     None,
@@ -239,10 +240,10 @@ impl MemoryEffects {
     fn bits(self) -> u64 {
         match self {
             Self::None => 0,
-            Self::Read => 0b0101_0101,
+            Self::Read => 0b0101_0101_0101,
             Self::ArgumentRead => 1,
             Self::ArgumentReadWrite => 3,
-            Self::ReadWrite => 0b1111_1111,
+            Self::ReadWrite => 0b1111_1111_1111,
         }
     }
 }

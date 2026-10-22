@@ -148,16 +148,16 @@ RUNTIME_DATA = {
     "hirsel-lexer": [*CORPUS_DATA],
     "hirsel-lir": ["crates/hirsel-rt/include/**", "native-tests/**"],
     # tools/native-toolchain/check reads Cargo.lock's llvm-sys pin.
-    "hirsel-llvm": ["Cargo.lock", "crates/hirsel-rt/include/**", "stdlib/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**"],
+    "hirsel-llvm": ["Cargo.lock", "crates/hirsel-rt/include/**", "stdlib/**", "tools/native-toolchain/llvm-23.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**"],
     "hirsel-authority": [*CORPUS_DATA],
     "hirsel-ownership": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-parser": ["docs/spec/**"],
     "hirsel-pipeline-tests": [
         *CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/harness/**",
-        "crates/hirsel-rt/include/**", "docs/spec/**", "native-tests/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**",
+        "crates/hirsel-rt/include/**", "docs/spec/**", "native-tests/**", "tools/native-toolchain/llvm-23.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**",
     ],
     "hirsel-rc": [*CORPUS_DATA, "crates/hirsel-rt/include/**", "native-tests/**"],
-    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"],
+    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/llvm-23.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"],
 }
 
 # What a test binary reads at run time from its own crate, beyond the non-Rust
@@ -1049,7 +1049,7 @@ def first_party(meta: dict) -> str:
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),
-        ("gate-native-toolchain-pin", "tools/native-toolchain/check", ["tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"], None),
+        ("gate-native-toolchain-pin", "tools/native-toolchain/check", ["tools/native-toolchain/llvm-23.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"], None),
     ):
         out.append("\n" + call("hirsel_script_test", name=name, script=script, data=Raw(f"glob({starlark(data, 4)})"), runtime_archives=archives))
     return "".join(out)
@@ -1157,7 +1157,7 @@ def root_buck(meta: dict) -> str:
 
 def native_toolchain_pins() -> str:
     directory = ROOT / "tools/native-toolchain"
-    records = [line.split() for line in READS.text(directory / "llvm-21.lock").splitlines()
+    records = [line.split() for line in READS.text(directory / "llvm-23.lock").splitlines()
                if line and not line.startswith("#")]
     scalars = {row[0]: " ".join(row[1:]) for row in records if row[0] != "deb"}
     llvm = [{"url": f"{scalars['apt_pool']}/{name}_{scalars['apt_version'].split(':', 1)[1]}_{arch}.deb",

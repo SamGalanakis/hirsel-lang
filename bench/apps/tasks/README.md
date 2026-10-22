@@ -87,7 +87,7 @@ other cells continue. The exact memory-limit evidence is retained in the report.
 Allocation profiles require the already installed `heaptrack` tools; no package
 installation is attempted. `/proc` resident mapping snapshots accompany them.
 
-Measurement builds use the repository's pinned Rust 1.99.0 and LLVM 21.1.8.
+Measurement builds use the repository's pinned Rust 1.99.0 and LLVM 23.1.4.
 The initial seed is written directly as the common on-disk snapshot, rather than
 spending measurement time creating 10,000 tasks through HTTP. A create cell grows
 that board; an update cell repeatedly edits task 1, and every successful edit

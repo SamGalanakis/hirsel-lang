@@ -57,7 +57,7 @@ def program(family, n):
 
 def environment():
     env = {key: value for key, value in os.environ.items() if key in (
-        'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_IMAGE', 'HIRSEL_VALGRIND', 'VALGRIND_LIB',
+        'PATH', 'LLVM_SYS_231_PREFIX', 'HIRSEL_IMAGE', 'HIRSEL_VALGRIND', 'VALGRIND_LIB',
         'HIRSEL_VALGRIND_RUNTIME', 'LD_LIBRARY_PATH')}
     env.update(LC_ALL='C', HIRSEL_JOBS='1', HIRSEL_MEMORY_LIMIT=str(DATA_CAP))
     return env
@@ -98,7 +98,7 @@ def valgrind(env):
     if 'HIRSEL_VALGRIND' in env:
         # Pin the loader/libc as well as Valgrind (as tools/perf-counts does).
         runtime = env['HIRSEL_VALGRIND_RUNTIME']
-        libraries = runtime + (':' + env['LLVM_SYS_211_PREFIX'] + '/lib' if 'LLVM_SYS_211_PREFIX' in env else '')
+        libraries = runtime + (':' + env['LLVM_SYS_231_PREFIX'] + '/lib' if 'LLVM_SYS_231_PREFIX' in env else '')
         return [env['HIRSEL_VALGRIND']], [runtime + '/ld-linux-x86-64.so.2', '--library-path', libraries]
     return ['valgrind'], []
 

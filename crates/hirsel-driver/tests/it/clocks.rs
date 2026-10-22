@@ -250,9 +250,9 @@ int main(void) {{
             "Instant arithmetic samples (round direct_ns source_ns):\n{}",
             String::from_utf8_lossy(&output.stdout)
         );
-        let llvm_prefix = std::env::var_os("LLVM_SYS_211_PREFIX")
+        let llvm_prefix = std::env::var_os("LLVM_SYS_231_PREFIX")
             .map(std::path::PathBuf::from)
-            .expect("LLVM_SYS_211_PREFIX names the pinned toolchain input");
+            .expect("LLVM_SYS_231_PREFIX names the pinned toolchain input");
         let disassembly = Command::new(llvm_prefix.join("bin/llvm-objdump"))
             .args(["-d", "--no-show-raw-insn"])
             .arg(scratch.join("time.o"))

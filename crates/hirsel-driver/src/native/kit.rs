@@ -354,7 +354,7 @@ mod tests {
             foreign: &[],
         };
         let output = dir.join("program");
-        let lld = input("LLVM_SYS_211_PREFIX").join("bin/ld.lld");
+        let lld = input("LLVM_SYS_231_PREFIX").join("bin/ld.lld");
         let (mut command, id) = link.command(&lld, &output).unwrap();
         let ran = command.args(extra).output().unwrap();
         assert!(ran.status.success(), "{ran:?}");
@@ -403,7 +403,7 @@ mod tests {
             .unwrap();
         let root = root_scratch.path().to_path_buf();
         let kit = Kit::load(&input("HIRSEL_LINK_KIT")).unwrap();
-        let lld = input("LLVM_SYS_211_PREFIX").join("bin/ld.lld");
+        let lld = input("LLVM_SYS_231_PREFIX").join("bin/ld.lld");
         for target in [
             TargetSpec::x86_64_unknown_linux_gnu(),
             TargetSpec::aarch64_unknown_linux_gnu(),

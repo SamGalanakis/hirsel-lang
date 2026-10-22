@@ -283,7 +283,7 @@ class Runner:
                     runtime = env['HIRSEL_VALGRIND_RUNTIME']
                     command = [env['HIRSEL_VALGRIND'], '--tool=callgrind', '--trace-children=yes',
                                '--callgrind-out-file='+str(directory/'callgrind.%p'),
-                               runtime+'/ld-linux-x86-64.so.2', '--library-path', runtime+':'+env['LLVM_SYS_211_PREFIX']+'/lib', *command]
+                               runtime+'/ld-linux-x86-64.so.2', '--library-path', runtime+':'+env['LLVM_SYS_231_PREFIX']+'/lib', *command]
                 row, _ = self.call('profile-body-'+kind, command, env)
                 if row['timings']['counts']['object misses'] != 1:
                     raise RuntimeError('profile must observe the first body edit, not a previously cached variant')

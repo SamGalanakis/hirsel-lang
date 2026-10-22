@@ -168,7 +168,7 @@ def measure(name, command, scratch, env, expected=None):
     runtime = Path(env['HIRSEL_VALGRIND_RUNTIME'])
     # Pin the loader/libc as well as Valgrind, including compiler-check startup.
     launch = [runtime / 'ld-linux-x86-64.so.2', '--library-path',
-              str(runtime) + ':' + str(Path(env['LLVM_SYS_211_PREFIX']) / 'lib'), *command]
+              str(runtime) + ':' + str(Path(env['LLVM_SYS_231_PREFIX']) / 'lib'), *command]
     stdout = run([valgrind, '--tool=cachegrind', '--cache-sim=no', '--branch-sim=no',
                   '--cachegrind-out-file=' + str(output), *launch], env)
     if expected is not None and stdout != expected:
@@ -263,7 +263,7 @@ def main():
     if args.bless:
         return bless()
     env = {key: value for key, value in os.environ.items() if key in (
-        'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_IMAGE', 'HIRSEL_MEMORY_LIMIT',
+        'PATH', 'LLVM_SYS_231_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_IMAGE', 'HIRSEL_MEMORY_LIMIT',
         'HIRSEL_VALGRIND', 'VALGRIND_LIB', 'HIRSEL_VALGRIND_RUNTIME', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR', 'LD_LIBRARY_PATH')}
     env.update(LC_ALL='C', HIRSEL_JOBS='1', RUST_TEST_THREADS='1')
     hirsel = ROOT / 'buck-out/tmp/cargo-bin-exe/gate-perf-counts/hirsel'

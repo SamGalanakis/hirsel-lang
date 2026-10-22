@@ -1838,7 +1838,7 @@ fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
         };
         let matrix = smoke_matrix();
         let tools = toolchain(&matrix).with_runtime(native::Runtime::Diagnostic.build());
-        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap())
             .join("bin/llvm-dwarfdump");
         for (backend, opt) in [
             (Backend::Cranelift, OptLevel::None),

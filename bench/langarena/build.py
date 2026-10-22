@@ -81,7 +81,7 @@ def native_environment():
     paths = {key.rsplit(':', 1)[-1]: str((ROOT / path).resolve())
              for key, path in json.loads(result.stdout).items()}
     env = os.environ.copy()
-    env.update(LLVM_SYS_211_PREFIX=paths['llvm'], HIRSEL_RUNTIME_ARCHIVES=paths['hirsel-rt-archives'],
+    env.update(LLVM_SYS_231_PREFIX=paths['llvm'], HIRSEL_RUNTIME_ARCHIVES=paths['hirsel-rt-archives'],
                HIRSEL_LINK_KIT=paths['kit'], HIRSEL_GLIBC_FLOOR=paths['glibc_floor'],
                PATH=paths['llvm'] + '/bin:' + env.get('PATH', '/usr/bin:/bin'),
                LD_LIBRARY_PATH=paths['llvm'] + '/lib:' + env.get('LD_LIBRARY_PATH', ''))

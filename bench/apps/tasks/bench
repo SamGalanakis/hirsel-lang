@@ -46,7 +46,7 @@ def build(binary):
         '--target-platforms', '//tools/buck2:release', '//:hirsel-toolchain', '//:hirsel-rt-archives',
         '//tools/buck2/native-toolchain:kit', '//tools/buck2/native-toolchain:glibc_floor', '--show-full-output'], cwd=ROOT, text=True)
     paths = {line.split()[0].rsplit(':', 1)[1]: line.split()[1] for line in output.splitlines() if line.startswith('root//')}
-    environment = dict(os.environ, LLVM_SYS_211_PREFIX='/usr/lib/llvm-21',
+    environment = dict(os.environ, LLVM_SYS_231_PREFIX=str(ROOT / 'tools/buck2/toolchains/llvm-files'),
         HIRSEL_RUNTIME_ARCHIVES=paths['hirsel-rt-archives'], HIRSEL_LINK_KIT=paths['kit'], HIRSEL_GLIBC_FLOOR=paths['glibc_floor'])
     run([CAPPED, '--timeout', 300, Path(paths['hirsel-toolchain']) / 'hirsel', 'build', ROOT / 'examples/tasks/hirsel.json',
          '--release', '-o', binary], env=environment)

@@ -1,4 +1,4 @@
-"""The pinned LLVM 21.1.8 tree (tools/buck2/bootstrap_llvm.py) as action inputs."""
+"""The pinned LLVM 23.1.4 tree (tools/buck2/bootstrap_llvm.py) as action inputs."""
 
 load("@prelude//cxx:cxx_toolchain_types.bzl", "LinkerType")
 load("@prelude//toolchains:cxx.bzl", "CxxToolsInfo")

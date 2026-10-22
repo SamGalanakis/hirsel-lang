@@ -2098,7 +2098,7 @@ fn c_probes_agree_on_both_targets() {
         std::fs::write(&file, &probe).unwrap();
         let out = std::process::Command::new(
             std::path::PathBuf::from(
-                std::env::var_os("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX"),
+                std::env::var_os("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX"),
             )
             .join("bin/clang"),
         )

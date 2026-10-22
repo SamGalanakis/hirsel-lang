@@ -236,12 +236,12 @@ configured. Native changes use a filtered campaign:
 .buck2/bin/buck2 test -c hirsel.full=true //:gate-native-full -- --test-arg=--filter --test-arg=SEM-4-view-return-source-run --timeout 14400
 ```
 
-Native tests receive LLVM 21.1.8, the link kit and glibc 2.28 floor runtime
+Native tests receive LLVM 23.1.4, the link kit and glibc 2.28 floor runtime
 (`native-toolchain:kit`, `:glibc_floor`), Arm GNU 14.3.Rel1 with its Linux
 sysroot, static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads or
 builds from them. No worker
 image changes, PATH lookup or binfmt registration are needed. The launcher
-resolves `LLVM_SYS_211_PREFIX` and each variable of
+resolves `LLVM_SYS_231_PREFIX` and each variable of
 `native-toolchain/environment.tsv` (`HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`,
 `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`, `VALGRIND_LIB`,
 `HIRSEL_VALGRIND_RUNTIME`, `HIRSEL_LINK_KIT`, `HIRSEL_GLIBC_FLOOR`: a path inside
@@ -398,7 +398,7 @@ the old copy.
   the locations.
 - Test harnesses are `rustc --test` binaries; `test_launcher.sh` runs them
   with an existing `CARGO_TARGET_TMPDIR`, the pinned LLVM as
-  `LLVM_SYS_211_PREFIX` (its `bin/` first on `PATH`, its `lib/` on the loader
+  `LLVM_SYS_231_PREFIX` (its `bin/` first on `PATH`, its `lib/` on the loader
   path), insta's workspace root, and test threads and `HIRSEL_JOBS` set to the
   action's effective CPU reservation (`HIRSEL_TEST_CPUS`, passed from the same
   request as the executor, including focus mode), at most 4. A visible cgroup
@@ -447,9 +447,9 @@ them into a shared directory.
 - Rust: the official 1.99.0 components (rustc, std for x86-64 and AArch64,
   clippy, rustfmt), byte-identical to the rustup ones, from
   `hermeticbuild/rust-redist`.
-- C and linking: clang 21.1.8 from the pinned LLVM tree
-  (`tools/native-toolchain/llvm-21.lock`). The Ubuntu clang and libLLVM load
-  four libraries a minimal Ubuntu worker image lacks; `llvm-runtime-lock.json` pins
+- C and linking: clang 23.1.4 from the pinned LLVM tree
+  (`tools/native-toolchain/llvm-23.lock`). The Ubuntu clang and libLLVM load
+  five libraries a minimal Ubuntu worker image lacks; `llvm-runtime-lock.json` pins
   them and `bootstrap_llvm.py` bundles them in the tree's `lib/`.
 - `platforms.bzl`: one remote execution platform per measured `(CPU, memory,
   CPU class)` budget, with a 1 CPU/1 GiB compile default, 1 CPU/512 MiB Clippy

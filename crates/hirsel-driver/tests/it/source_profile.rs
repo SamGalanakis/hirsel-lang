@@ -96,9 +96,9 @@ fn check_source_profile(backend: Backend) {
                 assert_eq!(sum, count, "line {line} {kind}: {report}");
             }
         }
-        let dwarfdump = std::env::var_os("LLVM_SYS_211_PREFIX")
+        let dwarfdump = std::env::var_os("LLVM_SYS_231_PREFIX")
             .map(std::path::PathBuf::from)
-            .expect("LLVM_SYS_211_PREFIX names the pinned toolchain input")
+            .expect("LLVM_SYS_231_PREFIX names the pinned toolchain input")
             .join("bin/llvm-dwarfdump");
         let dwarf = std::process::Command::new(&dwarfdump)
             .args(["--verify", exe.to_str().unwrap()])

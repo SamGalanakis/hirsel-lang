@@ -28,7 +28,7 @@ def verify(hirsel, root, output, reuse=None):
     frozen_paths = [hirsel, Path(__file__)] + [p for p in root.rglob('*') if p.is_file()]
     std = (root / json.loads(manifest.read_text())['dependencies'][0]['manifest']).resolve().parent
     frozen_paths += [p for p in std.rglob('*') if p.is_file()]
-    for key in ('HIRSEL_IMAGE', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_211_PREFIX'):
+    for key in ('HIRSEL_IMAGE', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT', 'LLVM_SYS_231_PREFIX'):
         if os.environ.get(key):
             p = Path(os.environ[key])
             frozen_paths += [q for q in p.rglob('*') if q.is_file()] if p.is_dir() else [p]

@@ -1,0 +1,35 @@
+# The pinned LLVM toolchain for native code.
+# `check` and `install` read this file; it is the one place the pin is written.
+# Format: one record per line, fields separated by single spaces; `#` starts a comment.
+#   key <value>                       pinned scalar facts
+#   deb <package> <arch> <sha256> <size>
+# The .deb hashes were checked against the signed apt.llvm.org Packages index
+# (llvm-toolchain-noble-23, main/binary-amd64) on 2026-10-22.
+
+llvm_version 23.1.4
+llvm_sys_version 231.0.1
+llvm_sys_checksum 21cdb31b2047b57121a31a911af86e4bacb93d165843d27cea1e14e071ac2b4c
+prefix /usr/lib/llvm-23
+shared_library libLLVM-23.so
+targets X86 AArch64
+release_tag llvmorg-23.1.4
+release_commit 7a941dfb2877a0b8cf30323fefa85ad019e0b0f5
+source_url https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.4/llvm-project-23.1.4.src.tar.xz
+source_sha256 819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2
+apt_source deb http://apt.llvm.org/noble/ llvm-toolchain-noble-23 main
+apt_key_url https://apt.llvm.org/llvm-snapshot.gpg.key
+apt_pool https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-23
+apt_version 1:23.1.4~++20261020011024+7a941dfb2877-1~exp1~20261020131035.87
+
+deb libllvm23 amd64 d61f5a83eab6e7c7b40a271966a490650df5b7fc55c697a23cb9b0e47f8c1cfa 33725614
+deb llvm-23 amd64 f31b626438354b02edb53af2b9db04dfff1f536e17f550dae46b806dd4ed6988 21332558
+deb llvm-23-runtime amd64 a3f0a5f9336fb11926343f57efad6c9e451196da1f7526fdedb60802e2d9046a 678918
+deb llvm-23-dev amd64 08ae482a28549cdab04362388bc644cc4954d8eafbe315f2ad38b48a1a7d7e1d 57196340
+deb llvm-23-tools amd64 33f3e75ea5a3518516cb138264244725fe643c8f80a4e8c3906f988ac4b88482 540616
+deb llvm-23-linker-tools amd64 391e6562e04e98de08b53f354100fc3c24be240f786f8871732c9c6fa9858f22 1357086
+deb clang-23 amd64 2af04cf44b2d90e1893c9f333845a0b8aa1d9146343264de8a9fb0bb62d7e6a7 183446
+deb libclang-cpp23 amd64 1e843fecaa24b15287ca20f9237b09beff7bee2f8ccc11abcca3438c5ad8c0da 14879068
+deb libclang-common-23-dev amd64 6962167f38ca31f65d05c79eafc081731b0f586eaeb91eae7513000e3cc844e7 824442
+deb libclang1-23 amd64 ffa9b6b6bb07ddbd78648f78b5def0891c3d5a297a7ac75a1956f3d423dd8f71 9138176
+deb libclang-rt-23-dev amd64 571585fc8127c8b29617ad14de716f2902fb1db23dafd7fff2a70280a191efc3 4344184
+deb lld-23 amd64 a07d904030cf185153f8bc4e52156628ba09662978fe116f3ff6ee288de70764 1628432

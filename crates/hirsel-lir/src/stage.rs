@@ -281,7 +281,7 @@ pub struct Relocation {
 /// What reproduces the object bit-for-bit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Reproducibility {
-    /// The pinned backend, e.g. "llvm 21.1.8".
+    /// The pinned backend, e.g. "llvm 23.1.4".
     pub toolchain: String,
     pub options: ContentHash,
     pub lir_version: u32,

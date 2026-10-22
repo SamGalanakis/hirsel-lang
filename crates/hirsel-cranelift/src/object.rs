@@ -222,7 +222,7 @@ mod tests {
         ] {
             std::fs::write(root.join(name), bytes).unwrap();
         }
-        let prefix = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap());
+        let prefix = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
         let link = |input: &str, output: &str| {
             let result = std::process::Command::new(prefix.join("bin/ld.lld"))
                 .args(["-shared", "-Bsymbolic"])

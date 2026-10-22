@@ -81,11 +81,11 @@ def record(hirsel, listing):
         environment["TMPDIR"] = str(root / "tmp")
         (root / "tmp").mkdir()
         # Tool inputs may name repository-relative paths; the driver takes absolute ones.
-        for name in ("LLVM_SYS_211_PREFIX", "HIRSEL_LINK_KIT", "HIRSEL_RUNTIME_ARCHIVES", "HIRSEL_IMAGE",
+        for name in ("LLVM_SYS_231_PREFIX", "HIRSEL_LINK_KIT", "HIRSEL_RUNTIME_ARCHIVES", "HIRSEL_IMAGE",
                      "HIRSEL_QEMU_AARCH64", "HIRSEL_AARCH64_SYSROOT"):
             if name in environment:
                 environment[name] = str(Path(environment[name]).resolve())
-        environment["LD_LIBRARY_PATH"] = environment["LLVM_SYS_211_PREFIX"] + "/lib"
+        environment["LD_LIBRARY_PATH"] = environment["LLVM_SYS_231_PREFIX"] + "/lib"
         for index, (source, target, profile, fixed) in enumerate(rows(listing)):
             out = root / "out" / str(index)
             out.mkdir(parents=True)

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run one libtest harness (or gate command) as `cargo test` would: from its
 # package directory (HIRSEL_TEST_CWD), with an existing CARGO_TARGET_TMPDIR,
-# the pinned LLVM as LLVM_SYS_211_PREFIX (its bin first on PATH, for tests that
+# the pinned LLVM as LLVM_SYS_231_PREFIX (its bin first on PATH, for tests that
 # run `clang` by name, and its lib on the loader path), the runtime archives as
 # absolute HIRSEL_RUNTIME_ARCHIVES, insta's snapshots under the project root,
 # and test threads and campaign workers bounded by the action's CPU share (at
@@ -72,8 +72,8 @@ export XDG_CACHE_HOME="$action_cache/cache"
 export HIRSEL_RESULTS_DIR="$action_cache/results"
 export HIRSEL_NATIVE_CACHE="$action_cache/runtime"
 mkdir -m 700 "$XDG_CACHE_HOME"
-LLVM_SYS_211_PREFIX="$(cd "$LLVM_SYS_211_PREFIX" && pwd)"
-export LLVM_SYS_211_PREFIX
+LLVM_SYS_231_PREFIX="$(cd "$LLVM_SYS_231_PREFIX" && pwd)"
+export LLVM_SYS_231_PREFIX
 if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
   # Each row of tools/buck2/native-toolchain/environment.tsv is a variable, the
   # toolchain whose tree HIRSEL_TOOLCHAIN_<TARGET> names, and a path inside it.
@@ -87,8 +87,8 @@ if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
   done < "$HIRSEL_NATIVE_ENVIRONMENT"
   unset HIRSEL_NATIVE_ENVIRONMENT $trees
 fi
-export PATH="$LLVM_SYS_211_PREFIX/bin:${PATH:-/usr/bin:/bin}"
-export LD_LIBRARY_PATH="$LLVM_SYS_211_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="$LLVM_SYS_231_PREFIX/bin:${PATH:-/usr/bin:/bin}"
+export LD_LIBRARY_PATH="$LLVM_SYS_231_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
   HIRSEL_RUNTIME_ARCHIVES="$(cd "$HIRSEL_RUNTIME_ARCHIVES" && pwd)"
   export HIRSEL_RUNTIME_ARCHIVES

@@ -260,12 +260,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="hirsel-link-kit-") as scratch:
         scratch = Path(scratch)
         with tarfile.open(args.libunwind) as archive:
-            archive.extractall(scratch, filter="data")
-        with tarfile.open(args.compiler_rt) as archive:
-            members = [m for m in archive.getmembers() if m.name.endswith(("lib/builtins/crtbegin.c", "lib/builtins/crtend.c"))]
+            members = [m for m in archive.getmembers() if "/libunwind/" in m.name]
             archive.extractall(scratch, members=members, filter="data")
-        unwind = next(scratch.glob("libunwind-*.src"))
-        builtins = next(scratch.glob("compiler-rt-*.src")) / "lib/builtins"
+        with tarfile.open(args.compiler_rt) as archive:
+            members = [m for m in archive.getmembers() if m.name.endswith(("compiler-rt/lib/builtins/crtbegin.c", "compiler-rt/lib/builtins/crtend.c"))]
+            archive.extractall(scratch, members=members, filter="data")
+        source = next(scratch.glob("llvm-project-*.src"))
+        unwind = source / "libunwind"
+        builtins = source / "compiler-rt/lib/builtins"
         for triple, target in TARGETS.items():
             root = scratch / ("root-" + target["deb"])
             for role in ("glibc-dev", "glibc", "linux-headers"):

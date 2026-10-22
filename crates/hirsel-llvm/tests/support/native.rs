@@ -11,8 +11,8 @@ use hirsel_lir::layout_types::TargetSpec;
 pub const RUNTIME_INCLUDE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../hirsel-rt/include");
 
 pub fn llvm_prefix() -> PathBuf {
-    std::env::var_os("LLVM_SYS_211_PREFIX")
-        .expect("LLVM_SYS_211_PREFIX is set by .cargo/config.toml or the environment")
+    std::env::var_os("LLVM_SYS_231_PREFIX")
+        .expect("LLVM_SYS_231_PREFIX is set by .cargo/config.toml or the environment")
         .into()
 }
 

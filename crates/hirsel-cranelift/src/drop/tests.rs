@@ -401,7 +401,7 @@ fn inline_sequences_columns_masks_and_finalizers_execute_on_both_targets() {
             Command::new(std::env::var_os("HIRSEL_AARCH64_CC").unwrap())
         } else {
             Command::new(
-                PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap()).join("bin/clang"),
+                PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap()).join("bin/clang"),
             )
         };
         let archive = PathBuf::from(std::env::var_os("HIRSEL_RUNTIME_ARCHIVES").unwrap())

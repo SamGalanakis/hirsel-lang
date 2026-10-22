@@ -73,7 +73,7 @@ plan order. `ReleaseLto` explicitly selects the whole-module path.
 
 Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract, the native backends, and `object` (reading runner, image and stub ELF files, writing the runner note). Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
 
-Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
+Native tool paths are explicit absolute inputs: `LLVM_SYS_231_PREFIX`,
 `HIRSEL_LINK_KIT`, and for the targets and variants that use them
 `HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`,
 `HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME`. The Buck2 test

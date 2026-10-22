@@ -1467,7 +1467,7 @@ fn standalone_hello_runs_directly_with_fresh_grants_and_only_floor_glibc() {
             String::from_utf8_lossy(&wrong.stderr).contains("binding"),
             "{wrong:?}"
         );
-        let readobj = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+        let readobj = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap())
             .join("bin/llvm-readobj");
         let dynamic = Command::new(readobj)
             .arg("--needed-libs")
@@ -1559,7 +1559,7 @@ fn standalone_cross_target_runs_under_pinned_qemu_and_debug_has_line_tables() {
         let debug = build_executable(&manifest, &["--debug"]);
         let output = Command::new(&debug).output().unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
-        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap())
             .join("bin/llvm-dwarfdump");
         let split = dwarf::debug_file(&debug);
         let lines = Command::new(dwarf)

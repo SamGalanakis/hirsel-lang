@@ -35,10 +35,10 @@
   },
   "external": [
     {
-      "component": "LLVM 21.1.8 and its shared-library dependencies",
+      "component": "LLVM 23.1.4 and its shared-library dependencies",
       "status": "Required externally; not copied by hirsel-toolchain. Native --unpack retains Debian usr/share/doc/*/copyright.",
       "pins": [
-        "tools/native-toolchain/llvm-21.lock",
+        "tools/native-toolchain/llvm-23.lock",
         "tools/buck2/llvm-runtime-lock.json"
       ]
     },

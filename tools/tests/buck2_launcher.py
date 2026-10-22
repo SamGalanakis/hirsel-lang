@@ -64,7 +64,7 @@ class LauncherFixture(unittest.TestCase):
         self.observed = self.root / 'observed.json'
         self.env = os.environ | dict(
             HIRSEL_TEST_TMPDIR=str(self.root / 'tmp'), HIRSEL_TEST_CWD=str(self.root),
-            LLVM_SYS_211_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
+            LLVM_SYS_231_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
             OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
         for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
             self.env.pop(key, None)
@@ -372,7 +372,7 @@ class LauncherBinaries(unittest.TestCase):
             harness.chmod(0o755)
             env = os.environ | dict(
                 HIRSEL_TEST_TMPDIR='buck-out/tmp/cargo-target-tmpdir', HIRSEL_TEST_CWD='crates/pkg',
-                LLVM_SYS_211_PREFIX=str(root / 'llvm'),
+                LLVM_SYS_231_PREFIX=str(root / 'llvm'),
                 HIRSEL_TEST_BIN_EXE_DIR='buck-out/tmp/cargo-bin-exe/pkg-test-it-harness',
                 HIRSEL_TEST_BIN_EXES='tool=buck-out/art/__pkg-bin-tool__/tool')
             for key in ('HIRSEL_TEST_POOL', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_CASES', 'HIRSEL_TEST_BINARY'):
