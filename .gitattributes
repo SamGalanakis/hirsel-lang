@@ -17,4 +17,5 @@ native-tests/regressions/*.txt merge=hirsel
 # Three-way set merge preserves removals as well as concurrent additions.
 # tools/check-hot-files rejects duplicates before landing.
 crates/*/tests/*/modules.rs merge=hirsel
+crates/hirsel-cli/tests/support/la_calculator_interpreter_10/modules.rs merge=hirsel
 tools/known-failures.tsv merge=hirsel
