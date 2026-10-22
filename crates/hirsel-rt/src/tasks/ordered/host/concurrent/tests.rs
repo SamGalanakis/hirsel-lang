@@ -74,7 +74,7 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
             });
             let install = adapter.clone();
             let calls = adapter.clone();
-            let output = Arc::new(Mutex::new((Vec::new(), Vec::new())));
+            let output = Arc::new(Mutex::new((Vec::new(), Vec::new(), Vec::new())));
             let seen = output.clone();
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
@@ -199,7 +199,19 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                             (0..events.len() as u32).collect::<Vec<_>>()
                         );
                     }
-                    *seen.lock().unwrap() = (rows, canonical.to_vec());
+                    let jsonl = log.jsonl().expect("canonical trace serializes");
+                    let parsed: Vec<serde_json::Value> = std::str::from_utf8(&jsonl)
+                        .unwrap()
+                        .lines()
+                        .map(|line| serde_json::from_str(line).unwrap())
+                        .collect();
+                    assert_eq!(parsed.len(), canonical.len());
+                    assert!(
+                        parsed
+                            .iter()
+                            .all(|row| row["schema"] == "hirsel.ordered.events@1")
+                    );
+                    *seen.lock().unwrap() = (rows, canonical.to_vec(), jsonl);
                     STATUS_OK
                 },
             );

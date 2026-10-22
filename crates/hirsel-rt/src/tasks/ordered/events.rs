@@ -14,6 +14,7 @@ mod host_keys;
 mod host_requests;
 pub(super) use host_requests::HostAuthority;
 mod host_values;
+mod jsonl;
 pub(super) use host_values::HostHandleId;
 
 #[cfg(test)]
