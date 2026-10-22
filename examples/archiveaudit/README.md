@@ -27,12 +27,12 @@ hirsel build examples/archiveaudit/hirsel.json --backend llvm -o /tmp/archiveaud
 /tmp/archiveaudit --hirsel-grants /tmp/archiveaudit-grants.json manifest release.zip
 ```
 
-The program exits **0** for a valid manifest or exact verification match and **1**
-for mismatch or invalid input/I/O. This follows Hirsel's `Result` launch contract
-(PROG-3); application errors cannot select exit 2. The deterministic JSON
+The program returns `Result[process.ExitCode, AppError]`: **0** for a valid manifest
+or exact verification match, **1** for mismatch, and **2** for malformed input or
+archive/manifest I/O errors. The deterministic JSON
 `summary.class` distinguishes `ok`, `mismatch` and `input_error`. Missing stdout
-authority or output failure returns `Grant`/`Output` on stderr because a report
-cannot be emitted. Hirsel's compiler/launcher can separately refuse a launch.
+authority or output failure also returns 2; a JSON report cannot be emitted in
+those cases. Hirsel's compiler/launcher can separately refuse a launch.
 
 The version 1 manifest is compact UTF-8 JSON followed by one LF, with fixed key
 order and entries sorted by UTF-8 path bytes. Every entry has `path`, `type`

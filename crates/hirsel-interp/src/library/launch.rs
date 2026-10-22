@@ -4,7 +4,7 @@ use crate::{Error, Execution, Limits, Outcome, Value, invalid, run_with_runtime}
 use hirsel_span::SourceMap;
 use hirsel_syntax::{DefPath, Visibility};
 use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
-use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeInterner, TypeKind};
+use hirsel_types::{Signature, SignatureKind, TypeInterner, TypeKind};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,32 +50,8 @@ impl Library {
                 "entry must be complete and monomorphic".into(),
             ));
         }
-        let result = types
-            .get(f.result)
-            .ok_or_else(|| LaunchError::InvalidEntry("missing result type".into()))?;
-        let TypeKind::Named {
-            definition,
-            arguments,
-        } = &result.kind
-        else {
-            return Err(LaunchError::InvalidEntry(
-                "entry must return core Result[(),E]".into(),
-            ));
-        };
-        if !definition.path().is_core("Result") || arguments.len() != 2 {
-            return Err(LaunchError::InvalidEntry(
-                "entry must return core Result[(),E]".into(),
-            ));
-        }
-        let GenericArgument::Type(ok) = arguments[0] else {
-            return Err(LaunchError::InvalidEntry("invalid Result argument".into()));
-        };
-        if !matches!(types.get(ok).map(|t|&t.kind),Some(TypeKind::Tuple(fields))if fields.is_empty())
-            || !matches!(arguments[1], GenericArgument::Type(_))
-        {
-            return Err(LaunchError::InvalidEntry(
-                "entry success must be unit".into(),
-            ));
+        if hirsel_types::entry::entry_return(types, f.result).is_none() {
+            return Err(LaunchError::InvalidEntry("entry must return Result[(), E], std@1/process.ExitCode or Result[std@1/process.ExitCode, E]".into()));
         }
         let mut roots = vec![];
         for p in &f.parameters {
@@ -194,18 +170,38 @@ pub fn launch_with_runtime(
             .map_err(|error| execution_error(error, &execution))?;
     }
     if let Outcome::Returned { value, exit_code } = &execution.outcome {
-        let Value::Variant { variant, fields } = value else {
-            return Err(execution_error(
-                invalid("entry returned a non-Result"),
-                &execution,
-            ));
+        use hirsel_types::entry::EntryReturn;
+        let SignatureKind::Function(function) = &signature.kind else {
+            unreachable!()
         };
-        if fields.len() != 1
-            || (*variant == 0 && fields[0] != Some(Value::Unit))
-            || !matches!((*variant, *exit_code), (0, 0) | (1, 1))
-        {
+        let kind = hirsel_types::entry::entry_return(&runtime.types, function.result).unwrap();
+        let code = |value: &Value| match value {
+            Value::Record { fields, .. } if fields.len() == 1 => match fields[0].as_ref()? {
+                Value::Integer(n) if n.kind() == hirsel_types::Primitive::U8 => {
+                    Some(n.bits() as i32)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let actual = if kind == EntryReturn::ExitCode {
+            code(value)
+        } else {
+            match value {
+                Value::Variant { variant, fields } if fields.len() == 1 => {
+                    match (*variant, fields[0].as_ref()) {
+                        (1, Some(_)) => Some(1),
+                        (0, Some(Value::Unit)) if kind == EntryReturn::UnitResult => Some(0),
+                        (0, Some(value)) if kind == EntryReturn::ExitCodeResult => code(value),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        };
+        if actual != Some(*exit_code) {
             return Err(execution_error(
-                invalid("entry Result shape/exit mismatch"),
+                invalid("entry return shape/exit mismatch"),
                 &execution,
             ));
         }

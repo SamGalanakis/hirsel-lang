@@ -367,11 +367,7 @@ pub fn project_outcome(
     let locate = |definition: &hirsel_syntax::DefPath, span| locate(sources, definition, span);
     Ok(match &execution.outcome {
         hirsel_interp::Outcome::Returned { exit_code, .. } => {
-            RunOutcome::Returned(if *exit_code == 0 {
-                Returned::Ok
-            } else {
-                Returned::Error
-            })
+            RunOutcome::Returned(Returned::from_exit_code(*exit_code as u8))
         }
         hirsel_interp::Outcome::Failed(_) => project_failures(&execution.failures, sources)?,
         hirsel_interp::Outcome::Blocked(waits) => {

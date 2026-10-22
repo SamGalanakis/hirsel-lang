@@ -220,12 +220,26 @@ fn prng.bytes(mut generator: prng.Generator, count: u64) -> unique Bytes uses {}
 fn random.u64(r: Random) -> Result[u64, RandomError]
 fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleError]
 N fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}
+pub opaque type process.ExitCode: plain + inert + noalloc_drop uses {}
+const process.SUCCESS: process.ExitCode // 0
+const process.FAILURE: process.ExitCode // 1
+N fn process.exit_code(n: u8) -> process.ExitCode uses {}
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`,
 `hpack`, `http2_wire`, `http2`, `bufio`, `fnv`, `derive`, `keys`, `task` and the
 `format_into` and NFC functions below) define their contracts by
 their declared signatures and the rules in this part.
+
+## Program exit statuses
+
+`process.ExitCode` is an opaque unsigned byte returned by an entry, directly or
+inside `Result[process.ExitCode, E]`. `SUCCESS` is 0, `FAILURE` is 1, and
+`exit_code(n)` preserves every value from 0 through 255. Normal cleanup completes
+before the host receives the status; replay reproduces it without another effect.
+`Result[(), E]` keeps its existing 0/1 policy, and `Error(e)` still renders e to
+stderr and exits 1. A bare `u8` is not an eligible entry return type. See
+[PROG-3](programs.md#prog-3-entry).
 
 ## Conventions
 

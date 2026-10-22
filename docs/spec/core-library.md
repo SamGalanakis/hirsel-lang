@@ -1185,6 +1185,12 @@ real network produces, so a simulated run yields a recording that replays like a
 
 ## Processes
 
+`std@1/process` also supplies the opaque `ExitCode` returned by a program entry:
+`SUCCESS` (0), `FAILURE` (1), and `exit_code(n: u8) -> ExitCode uses {}`. All values
+0 through 255 are preserved. It is a pure value; returning it or `Ok(code)` performs
+ordinary cleanup. `Error(e)` reports e and exits 1. See [PROG-3](programs.md#prog-3-entry).
+
+
 The process data types are root core types, with variant ordinals in the order written:
 
 ```text

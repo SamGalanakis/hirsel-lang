@@ -1,3 +1,24 @@
+// ExitCode follows Rust std process.rs at afe686de2708699b69dd31ed14be326f4e95edfc:
+// ExitCode (2210), SUCCESS/FAILURE (2220/2228), From<u8> (2303), and
+// Result termination (2712). Zig start.zig callMain (700-739) at
+// 738d2be9d6b6ef3ff3559130c05159ef53336224 confirms the portable u8 range.
+/// A program's returned exit status, from 0 through 255. Returning it runs
+/// ordinary cleanup; it performs no effect and requires no capability.
+pub opaque type ExitCode: plain + inert + noalloc_drop uses {} {
+  code: u8,
+}
+
+/// Successful completion (0).
+pub const SUCCESS: ExitCode = ExitCode(code: 0u8)
+/// Unsuccessful completion (1), without an Error payload report.
+pub const FAILURE: ExitCode = ExitCode(code: 1u8)
+
+/// Construct an exit status from the portable unsigned byte range.
+@noalloc
+pub fn exit_code(n: u8) -> ExitCode uses {} {
+  ExitCode(code: n)
+}
+
 // Pipeline status helpers over core `proc.pipeline` results
 // (docs/spec/core-library.md#processes).
 // The status a shell's `pipefail` reports for a pipeline: the last stage's status that is

@@ -796,6 +796,7 @@ pub enum DescriptorField {
 #[derive(Clone, Debug)]
 pub struct ExitReport {
     pub result_index: u32,
+    pub is_result: bool,
     pub offset: u64,
     pub root: usize,
     pub nodes: Vec<ReportNode>,
@@ -903,9 +904,13 @@ pub fn named_launch_object(
         b.ins().brif(status, done, &[], returned, &[]);
         b.switch_to_block(returned);
         let flags = ir::MemFlagsData::new();
-        let tag = b.ins().load(types::I32, flags, params[2], 0);
-        let error = b.ins().icmp_imm_s(ir::condcodes::IntCC::Equal, tag, 1);
-        b.ins().brif(error, reported, &[], done, &[]);
+        if report.is_result {
+            let tag = b.ins().load(types::I32, flags, params[2], 0);
+            let error = b.ins().icmp_imm_s(ir::condcodes::IntCC::Equal, tag, 1);
+            b.ins().brif(error, reported, &[], done, &[]);
+        } else {
+            b.ins().jump(done, &[]);
+        }
         b.switch_to_block(reported);
         let index = b.ins().iconst(types::I32, i64::from(report.result_index));
         let offset = b.ins().iconst(types::I64, report.offset as i64);

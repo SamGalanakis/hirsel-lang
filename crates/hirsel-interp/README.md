@@ -120,7 +120,7 @@ Revision 1 classifies these as ToolingLimitKind::Steps/CallDepth with no RuleId;
 trace and outcome distinguish them from language failures. A logical-frame-byte limit is future
 work, distinct from the required call-depth host-stack safeguard.
 
-The entry Result lowering uses Ok ordinal 0 (exit 0), Error ordinal 1 (exit 1).
+Entry return mapping preserves unit Ok (0) and Error (1); a returned std process ExitCode or Ok(ExitCode) preserves its unsigned byte value.
 Other return values are core fixtures and exit 0. v20 PROG-3 fixes exit 0/1; M supplies the nominal Result registry mapping.
 The driver must supply correctly lowered root capability arguments; the core does
 not grant capabilities on its own.

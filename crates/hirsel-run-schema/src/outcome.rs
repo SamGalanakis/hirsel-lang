@@ -10,12 +10,25 @@ pub enum BudgetKind {
     Memory,
 }
 
-/// What an entry returned: its `core@1/Result[(), E]` tag. The `Error` payload's PROG-3 report
-/// is already on the run's standard error sink.
+/// A completed entry's status: the legacy 0/1 pair or an explicit unsigned byte code.
+/// The `Error` payload's PROG-3 report is already on the run's standard error sink;
+/// explicit status values do not produce an error report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Returned {
     Ok,
     Error,
+    /// An explicit application status outside the legacy 0/1 pair.
+    ExitCode(u8),
+}
+impl Returned {
+    /// Preserve the legacy encoding for statuses 0 and 1.
+    pub fn from_exit_code(code: u8) -> Self {
+        match code {
+            0 => Self::Ok,
+            1 => Self::Error,
+            code => Self::ExitCode(code),
+        }
+    }
 }
 
 /// A source position named by a program's failure table.
@@ -120,6 +133,7 @@ impl RunOutcome {
         match self {
             Self::Returned(Returned::Ok) => exit::RETURNED_OK,
             Self::Returned(Returned::Error) => exit::RETURNED_ERROR,
+            Self::Returned(Returned::ExitCode(code)) => i32::from(*code),
             Self::Failed { .. } => exit::FAILED,
             Self::Refused(_)
             | Self::Diverged(_)

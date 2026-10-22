@@ -1,0 +1,6 @@
+// rule: PROG-3
+// expect: refuse entry
+// twin: PROG/PROG-3-exit-code-run.hir
+pub fn main() -> u8 {
+  255u8
+}

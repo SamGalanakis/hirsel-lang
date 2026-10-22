@@ -10,6 +10,8 @@ Issues are in [SamGalanakis/hirsel-lang](https://github.com/SamGalanakis/hirsel-
 
 There are no UTF rule IDs in v20 and no UTF directory; Unicode coverage belongs to SEM-3.
 
-V20 pins Ok/Error entry exits to 0/1. Evaluator artificial limits remain #34:
+PROG-3 keeps unit Ok/Error entry exits at 0/1 and preserves explicit ExitCode values.
+The `expect: refuse entry` twins check the production admission contract after
+ordinary source checking; a bare u8 remains legal as an ordinary return type. Evaluator artificial limits remain #34:
 use internal API tests for limit stop sites and resource cleanup rather than
 claiming a configurable instruction count is the language's Depth limit.

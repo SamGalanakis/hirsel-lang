@@ -1,0 +1,6 @@
+// rule: PROG-3
+// expect: run
+// exit: 2
+pub fn main() -> Result[std@1/process.ExitCode, String] {
+  Ok(std@1/process.exit_code(2u8))
+}

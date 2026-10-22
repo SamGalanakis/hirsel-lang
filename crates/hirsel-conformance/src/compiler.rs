@@ -227,6 +227,32 @@ fn evaluate_on_compiler_thread(
         observation.phase = phase.phase_name().into();
         return (Status::NotImplemented, observation);
     }
+    if matches!(expect, Expect::RefuseEntry) {
+        use hirsel_engine::DefinitionQueries;
+        let refused = engine.item_signature(&entry).is_ok_and(|signature| {
+            matches!(hirsel_engine::entry_launch_kind(engine.types(), &signature.value),
+                Err(hirsel_run_schema::RunRefusal::Invalid { field, .. }) if field == "entry")
+        });
+        observation.phase = "entry admission".into();
+        observation.actual = if refused {
+            "refused entry"
+        } else {
+            "accepted entry"
+        }
+        .into();
+        return (
+            verdict(
+                expect,
+                &if refused {
+                    Actual::RefusedEntry
+                } else {
+                    Actual::Accepted
+                },
+                &observation.actual,
+            ),
+            observation,
+        );
+    }
     observation.actual = "accept".into();
     if !matches!(
         expect,

@@ -332,7 +332,7 @@ fn summary(passed: u64, failed: u64, errors: u64, skipped: u64, mut rendered: Li
   text.append(mut rendered, "}}\n")
 }
 
-pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
   let Ok(output) = io.stdout(rt) else {
     return Error(Authority())
   }
@@ -351,7 +351,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
     let Ok(()) = out.write(output, bytes.from_list(take rendered)) else {
       return Error(Output())
     }
-    return Error(Scenario())
+    return Ok(std@1/process.exit_code(2u8))
   }
   // Obtain all authority before the first request. No implicit grants.
   let granted = (io.net(rt), io.tasks(rt), io.monotonic_clock(rt))
@@ -395,10 +395,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
     return Error(Output())
   }
   if errors > 0 {
-    return Error(Transport())
+    return Ok(std@1/process.exit_code(2u8))
   }
   if failed > 0 {
     return Error(Assertion())
   }
-  Ok(())
+  Ok(std@1/process.SUCCESS)
 }

@@ -4297,6 +4297,11 @@ conformance/PROG/PROG-3-entry-main.hir
 conformance/PROG/PROG-3-entry-ok.hir
 conformance/PROG/PROG-3-entry-root-env.hir
 conformance/PROG/PROG-3-entry-root-unsafe.hir
+conformance/PROG/PROG-3-exit-code-error-run.hir
+conformance/PROG/PROG-3-exit-code-result-run.hir
+conformance/PROG/PROG-3-exit-code-result-u8-bad.hir
+conformance/PROG/PROG-3-exit-code-run.hir
+conformance/PROG/PROG-3-exit-code-u8-bad.hir
 conformance/PROG/PROG-3-exit-report-list-error-run.hir
 conformance/PROG/PROG-3-exit-report-resource-error-run.hir
 conformance/PROG/PROG-3-exit-report-string-error-run.hir

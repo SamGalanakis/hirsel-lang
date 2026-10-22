@@ -2112,7 +2112,14 @@ fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
         }
     };
     match &outcome {
-        RunOutcome::Returned(_) => {}
+        RunOutcome::Returned(_) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({"schema_version": 1, "run": {"outcome": "returned", "exit_code": outcome.exit_code()}})
+                );
+            }
+        }
         RunOutcome::Failed { primary, causes } => {
             for failure in std::iter::once(primary).chain(causes) {
                 eprintln!(

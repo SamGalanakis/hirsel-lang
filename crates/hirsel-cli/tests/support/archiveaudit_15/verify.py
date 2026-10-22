@@ -102,9 +102,8 @@ def verify(hirsel, root, output):
     def case(label, args, expected=None, error=None, record=False, grant=None):
         if error:
             expected = dict(schema=1, summary={'class': 'input_error', 'error': error})
-        code = int(error is not None or expected['summary']['class'] == 'mismatch')
-        stderr = (('error: InvalidInput(' + json.dumps(error) + ')\n').encode() if error else
-                  b'error: Mismatch\n' if code else b'')
+        code = 2 if error is not None else int(expected['summary']['class'] == 'mismatch')
+        stderr = b'error: Mismatch\n' if code == 1 else b''
         cases.append((label, args, (code, canonical(expected), stderr), record, grant))
 
     mixed = [('z.bin', b'\0\xff\r\n', 'file'), ('docs/', b'', 'directory'),

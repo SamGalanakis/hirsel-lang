@@ -49,6 +49,10 @@ pub struct ProgramDescriptor {
     /// function-reference code and full path, which runner calls are made by.
     pub entries: *const EntryRow,
     pub entry_count: u64,
+    /// ABI 45: 0 = Result[(), E], 1 = ExitCode, 2 = Result[ExitCode, E].
+    pub return_kind: u64,
+    /// Offset of the unsigned status byte for return kinds 1 and 2.
+    pub success_offset: u64,
 }
 
 /// One row of [`ProgramDescriptor::entries`].
@@ -94,6 +98,8 @@ impl Code {
 pub struct Program {
     pub(crate) code: Code,
     pub(crate) result_size: u64,
+    pub(crate) return_kind: u64,
+    pub(crate) success_offset: u64,
     pub(crate) layouts: *const *const Layout,
     pub(crate) layout_count: u32,
     pub(crate) failure_table: Option<FailureTable>,
@@ -124,6 +130,9 @@ impl Program {
         }
         if d.flags & !KNOWN_FLAGS != 0 {
             return Err("unknown program flags".into());
+        }
+        if d.return_kind > 2 || (d.return_kind != 0 && d.success_offset >= d.result_size) {
+            return Err("invalid entry return description".into());
         }
         let roots = u8::try_from(d.roots).map_err(|_| "invalid compiled root selection")?;
         crate::standalone::required_roots(roots).map_err(|e| e.to_string())?;
@@ -159,6 +168,8 @@ impl Program {
         Ok(Program {
             code: Code::Roots(d.entry, roots),
             result_size: d.result_size,
+            return_kind: d.return_kind,
+            success_offset: d.success_offset,
             layouts: d.layouts,
             layout_count: d.layout_count,
             failure_table: Some(table),
@@ -181,6 +192,8 @@ impl Program {
         Program {
             code,
             result_size,
+            return_kind: 0,
+            success_offset: 0,
             layouts,
             layout_count,
             failure_table: None,

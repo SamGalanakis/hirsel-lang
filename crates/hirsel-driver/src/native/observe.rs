@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 /// The comparison's own version: bump when a field is added or its meaning
 /// changes, so stored mismatch artifacts name what they compared.
-pub const OBSERVATION_SCHEMA: u32 = 4;
+pub const OBSERVATION_SCHEMA: u32 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -29,7 +29,7 @@ pub struct Failure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Observation {
-    /// 0 for `Ok`, 1 for `Error`; None when the entry failed or the run is Blocked.
+    /// The returned unsigned byte status; None when the entry failed or did not return.
     pub exit_code: Option<i32>,
     /// The run is Blocked (CONC-8, schema 2): it neither returned nor failed.
     pub blocked: bool,
@@ -92,11 +92,7 @@ impl Observation {
             return Ok(RunOutcome::Blocked(waits));
         }
         if let Some(code) = self.exit_code {
-            return Ok(RunOutcome::Returned(if code == 0 {
-                Returned::Ok
-            } else {
-                Returned::Error
-            }));
+            return Ok(RunOutcome::Returned(Returned::from_exit_code(code as u8)));
         }
         let mut failures = self.failures.iter().map(|failure| {
             let missing = || NativeError::new(StageName::Launch, "failure has no source site");

@@ -494,23 +494,29 @@ fn audit(rt: Io, args: Args) -> Result[Report, String] {
   Ok(compare(take entries, take expected))
 }
 
-pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
-  let output = io.stdout(rt)?
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(2u8))
+  }
   match audit(rt, args) {
     Ok(report) => {
-      out.write(output, encode(report))?
+      let Ok(()) = out.write(output, encode(report)) else {
+        return Ok(std@1/process.exit_code(2u8))
+      }
       if !is_match(report) {
         return Error(Mismatch())
       }
-      Ok(())
+      Ok(std@1/process.SUCCESS)
     },
     Error(error) => {
       let mut out: List[u8] = []
       append(mut out, "{\"schema\":1,\"summary\":{\"class\":\"input_error\",\"error\":")
       json.write_text_into(error, mut out)
       append(mut out, "}}\n")
-      out.write(output, bytes.from_list(take out))?
-      Error(InvalidInput(take error))
+      let Ok(()) = out.write(output, bytes.from_list(take out)) else {
+        return Ok(std@1/process.exit_code(2u8))
+      }
+      Ok(std@1/process.exit_code(2u8))
     },
   }
 }

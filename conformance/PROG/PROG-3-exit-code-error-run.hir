@@ -1,0 +1,6 @@
+// rule: PROG-3
+// expect: run
+// exit: 1
+pub fn main() -> Result[std@1/process.ExitCode, String] {
+  Error(unique "bad input")
+}

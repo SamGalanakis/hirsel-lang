@@ -13,6 +13,8 @@ fn every_run_ending_has_one_exit_policy() {
     let cases = [
         (RunOutcome::Returned(Returned::Ok), 0),
         (RunOutcome::Returned(Returned::Error), 1),
+        (RunOutcome::Returned(Returned::ExitCode(2)), 2),
+        (RunOutcome::Returned(Returned::ExitCode(255)), 255),
         (
             RunOutcome::Failed {
                 primary: Failure {

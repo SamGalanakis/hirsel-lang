@@ -461,3 +461,9 @@ skipped by name outside the full suite (`FULL_GATE_SKIPS` in
 appends to `alarms.log` in `$HIRSEL_MAIN_RUNS` when main gets no commit for
 40 minutes while contributor worktrees are moving; it can run from a
 repository maintenance loop.
+
+A PROG-3 corpus case may use `// expect: refuse entry` with an accepted or run
+`twin:`. The source still checks normally; the conformance driver then calls the
+production entry admission validator and requires an invalid-entry refusal. This
+keeps ordinary functions returning other types legal without treating a launch
+refusal as a language failure.

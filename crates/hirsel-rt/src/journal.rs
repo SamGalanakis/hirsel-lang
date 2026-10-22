@@ -301,6 +301,7 @@ pub fn render_outcome(outcome: &RunOutcome) -> String {
     match outcome {
         RunOutcome::Returned(Returned::Ok) => "returned ok".into(),
         RunOutcome::Returned(Returned::Error) => "returned error".into(),
+        RunOutcome::Returned(Returned::ExitCode(code)) => format!("returned code {code}"),
         RunOutcome::Failed { primary, causes } => {
             let mut text = format!("failed {} {}", causes.len(), failure(primary));
             for cause in causes {
@@ -362,6 +363,9 @@ pub fn parse_outcome(text: &str) -> Result<RunOutcome, String> {
         "returned" => match next()? {
             "ok" => RunOutcome::Returned(Returned::Ok),
             "error" => RunOutcome::Returned(Returned::Error),
+            "code" => RunOutcome::Returned(Returned::ExitCode(
+                u8::try_from(canonical_number(next()?)?).map_err(|_| "exit code outside u8")?,
+            )),
             _ => return Err("bad journal outcome".into()),
         },
         "failed" => {
@@ -1059,6 +1063,8 @@ mod tests {
         for outcome in [
             RunOutcome::Returned(Returned::Ok),
             RunOutcome::Returned(Returned::Error),
+            RunOutcome::Returned(Returned::ExitCode(2)),
+            RunOutcome::Returned(Returned::ExitCode(255)),
             RunOutcome::Blocked(vec![]),
             RunOutcome::Blocked(vec![Wait {
                 spawn_path: vec![0, 2],
@@ -1091,6 +1097,8 @@ mod tests {
             assert_eq!(parse_outcome(&render_outcome(&outcome)), Ok(outcome));
         }
         assert!(parse_outcome("returned ok extra").is_err());
+        assert!(parse_outcome("returned code 256").is_err());
+        assert!(parse_outcome("returned code -1").is_err());
     }
 
     #[test]

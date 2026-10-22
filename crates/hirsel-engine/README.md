@@ -740,7 +740,7 @@ ABI data only from that record. Allocation receives only hash_seed. The Ready
 cache includes every launch input. Nonzero fields extend configuration names with
 canonical hash/random/test suffixes; seed-zero names remain unchanged.
 
-`entry_roots` checks the exact public monomorphic core Result/root entry contract.
+`entry_roots` checks the exact public monomorphic root/return contract: core Result[(), E], std process ExitCode or core Result[ExitCode, E].
 `admit_run` checks the semantic revision, entry, launch kind and all required
 roots before invoking the host authority. No supplied record selects explicit
 denial defaults. `read_run_record` uses the shared absolute-path record reader.

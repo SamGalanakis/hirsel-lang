@@ -51,7 +51,7 @@ use std::io::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 5;
+pub const OBSERVATION_VERSION: u32 = 6;
 
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -1606,7 +1606,7 @@ pub(crate) unsafe fn execute(
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
     let seed = launch_config.test_seed;
-    if !(4..=RESULT_MAX).contains(&result_size) {
+    if !(1..=RESULT_MAX).contains(&result_size) || (program.return_kind != 1 && result_size < 4) {
         return Err("the entry result is not a Result of at most 64 bytes".into());
     }
     let inherited_outputs = match crate::host_paths::inherited_output_pins() {
@@ -2303,11 +2303,19 @@ pub(crate) unsafe fn execute(
                 let _ = write!(record, "{b:02x}");
             }
             record.push('\n');
-            hirsel_run_schema::RunOutcome::Returned(if bytes[..4] == [0, 0, 0, 0] {
-                hirsel_run_schema::Returned::Ok
+            let code = if program.return_kind == 1 {
+                bytes[program.success_offset as usize]
+            } else if bytes[..4] != [0, 0, 0, 0] {
+                1
+            } else if program.return_kind == 2 {
+                bytes[program.success_offset as usize]
             } else {
-                hirsel_run_schema::Returned::Error
-            })
+                0
+            };
+            let _ = writeln!(record, "exit_code {code}");
+            hirsel_run_schema::RunOutcome::Returned(hirsel_run_schema::Returned::from_exit_code(
+                code,
+            ))
         }
         Ok(STATUS_FAILURE) => {
             let _ = writeln!(record, "status {STATUS_FAILURE}");

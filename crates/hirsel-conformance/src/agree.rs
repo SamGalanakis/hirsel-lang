@@ -100,7 +100,9 @@ impl Execution {
             | crate::Expect::Blocked { .. }
             | crate::Expect::Signaled { .. } => Self::Entry,
             crate::Expect::Test => Self::Tests,
-            crate::Expect::Accept | crate::Expect::Reject { .. } => Self::None,
+            crate::Expect::Accept | crate::Expect::Reject { .. } | crate::Expect::RefuseEntry => {
+                Self::None
+            }
         }
     }
     /// A reproducer carries no header: one that declares a `@test` function

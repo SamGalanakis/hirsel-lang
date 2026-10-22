@@ -70,12 +70,11 @@ summary with one error and no step rows. Missing network/task/clock authority an
 errors without traffic. Missing stdout returns `Authority`; output device
 failure returns `Output`.
 
-Exit status is **0 for all pass, 1 for any application error or mismatch**.
-The shipped language requires `main -> Result[(), E]`: every `Error(e)` exits 1,
-independently of its variant. The JSON report distinguishes scenario, transport
-and assertion failures. This example preserves that policy without an exit-code
-API or launcher workaround. The host writes `error: Scenario`, `Transport`,
-`Assertion`, `Authority` or `Output` plus LF on stderr for a returned error.
+The entry returns `Result[process.ExitCode, AppError]`: **0** for all pass, **1**
+for assertion failures, and **2** for scenario or transport errors. The JSON report
+continues to distinguish these classes. Scenario and transport errors return a
+status without a host diagnostic; returned `Assertion`, `Authority` or `Output`
+errors retain the standard `error: ...` plus LF on stderr and exit 1.
 
 For the invocation above, `/tmp/httpcheck-grants.json` explicitly grants just
 the endpoint, stdout, cooperative tasks and a monotonic clock:

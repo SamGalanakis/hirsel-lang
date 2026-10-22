@@ -244,8 +244,8 @@ def verify(hirsel, root, output):
     def request(verb='GET', route='/', body=b'', headers=None):
         return verb, route, body, headers or []
 
-    transport = (1, rendered([('transport_error', [])], errors=1), b'error: Transport\n')
-    invalid = (1, b'{"result":"scenario_error"}\n{"summary":{"passed":0,"failed":0,"errors":1,"skipped":0}}\n', b'error: Scenario\n')
+    transport = (2, rendered([('transport_error', [])], errors=1), b'')
+    invalid = (2, b'{"result":"scenario_error"}\n{"summary":{"passed":0,"failed":0,"errors":1,"skipped":0}}\n', b'')
     try:
         for backend, binary in binaries.items():
             actual = run('build-' + backend, [hirsel, 'build', manifest, '--backend', backend, '-o', binary])
@@ -288,7 +288,7 @@ def verify(hirsel, root, output):
             predicates = {'json': [{'pointer': '', 'equals': None}]} if route == 'bad-json' else {'contains': 'a'}
             cases.append((route, {'steps': [step(base, route='/' + route, **predicates)]}, transport, [request(route='/' + route)]))
         stopped = {'steps': [step(base), step(base, route='/truncated'), step(base)]}
-        stopped_triple = (1, rendered([('pass', []), ('transport_error', []), ('skipped', [])], passed=1, errors=1, skipped=1), b'error: Transport\n')
+        stopped_triple = (2, rendered([('pass', []), ('transport_error', []), ('skipped', [])], passed=1, errors=1, skipped=1), b'')
         cases.append(('transport-stops', stopped, stopped_triple, [request(), request(route='/truncated')]))
         malformed = ['{', '{"steps":[],"steps":[]}', {'steps': []}, {'steps': [step(base)] * 17},
                      {'steps': [step(base)], 'unknown': True}, {'steps': [step(base), {}]}]

@@ -673,8 +673,8 @@ fn entry_result(
             SizeSpec::Fixed(n) => Some(n),
             SizeSpec::Dynamic(_) => None,
         })
-        .filter(|n| (4..=hirsel_rt::launch::RESULT_MAX).contains(n))
-        .ok_or_else(|| refuse("a result that is not an inline Result"))?;
+        .filter(|n| (1..=hirsel_rt::launch::RESULT_MAX).contains(n))
+        .ok_or_else(|| refuse("a result that does not fit the inline entry return buffer"))?;
     Ok((
         hirsel_lir::emission::symbol_name(entry, Some(instance)),
         size,
@@ -1360,6 +1360,8 @@ fn launcher_object(
     let report = program.exit_reports.get(entry).ok_or_else(|| {
         NativeError::new(StageName::Launch, "missing checked exit-report description")
     })?;
+    let return_kind = report.return_kind;
+    let success_offset = report.success_offset;
     let report_declarations = &report.declarations;
     let report_root = report.root;
     let report_offset = report.offset;
@@ -1368,6 +1370,11 @@ fn launcher_object(
         .ok_or_else(|| NativeError::new(StageName::Launch, "missing entry-result descriptor"))?;
     let caller_parameters = if caller_site { ", i64, i64" } else { "" };
     let caller_arguments = if caller_site { ", i64 0, i64 0" } else { "" };
+    let report_branch = if return_kind == 1 {
+        " br label %done".to_owned()
+    } else {
+        " %tag = load i32, ptr %out, align 1\n %error = icmp eq i32 %tag, 1\n br i1 %error, label %report, label %done".to_owned()
+    };
     let declaration = format!(
         r#"{report_declarations}
 declare void @hirsel_rt_v2_exit_report(ptr, ptr, i32, i64, ptr)
@@ -1377,9 +1384,7 @@ define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
  %ok = icmp eq i8 %s, 0
  br i1 %ok, label %returned, label %done
 returned:
- %tag = load i32, ptr %out, align 1
- %error = icmp eq i32 %tag, 1
- br i1 %error, label %report, label %done
+{report_branch}
 report:
  call void @hirsel_rt_v2_exit_report(ptr %ctx, ptr %out, i32 {result_index}, i64 {report_offset}, ptr @hirsel.report.node.{report_root})
  br label %done
@@ -1490,10 +1495,13 @@ done:
                     .collect(),
             ),
             F::U64(program.entries.len() as u64),
+            F::U64(return_kind),
+            F::U64(success_offset),
         ];
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
         let report = hirsel_cranelift::ExitReport {
             result_index,
+            is_result: return_kind != 1,
             offset: report_offset,
             root: report_root,
             nodes: report.nodes.clone(),
@@ -1540,10 +1548,10 @@ done:
             "@hirsel.failure.table = private constant [{table_len} x i8] c\"{text}\"\n\
              @hirsel.entry.name = private constant [{name_len} x i8] [{name_bytes}]\n\
              {entry_ir}\
-             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64 }} \
+             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64, i64, i64 }} \
              {{ i32 {abi}, i32 {flags}, i32 {roots_mask}, i32 {layout_count}, ptr @hirsel.entry, i64 {result_size}, \
              ptr @\"{registry_symbol}\", ptr @hirsel.failure.table, i64 {table_len}, ptr @hirsel.entry.name, i64 {name_len}, \
-             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count} }}\n\
+             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count}, i64 {return_kind}, i64 {success_offset} }}\n\
              declare i32 @hirsel_rt_v2_main(ptr, i32, ptr)\n",
             table_len = table.len(),
             name_len = name.len(),
@@ -2595,6 +2603,7 @@ pub fn observe_run(
     let codes = site_codes(program);
     let mut status = None;
     let mut result = None;
+    let mut reported_code = None;
     let mut failures = Vec::new();
     let mut audit = None;
     let mut blocked = false;
@@ -2661,6 +2670,15 @@ pub fn observe_run(
                 )
             }
             ["result", hex] => result = Some(*hex),
+            ["exit_code", code] => {
+                if reported_code.is_some() {
+                    return Err(bad("duplicate exit code".into()));
+                }
+                reported_code = Some(i32::from(
+                    code.parse::<u8>()
+                        .map_err(|_| bad("invalid exit code".into()))?,
+                ));
+            }
             ["failure", _kind, rule, site, operation] => {
                 let rule = rule
                     .parse::<u32>()
@@ -2792,7 +2810,9 @@ pub fn observe_run(
         )));
     }
     let exit_code = match (status, result, failures.is_empty()) {
-        (Some(0), Some(hex), true) => Some(i32::from(!hex.starts_with("00000000"))),
+        (Some(0), Some(hex), true) => {
+            Some(reported_code.unwrap_or_else(|| i32::from(!hex.starts_with("00000000"))))
+        }
         (Some(1), None, false) => None,
         _ => return Err(bad("an inconsistent observation record".into())),
     };

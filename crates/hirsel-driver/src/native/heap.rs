@@ -2090,16 +2090,29 @@ fn observation(
     let exit_code = if !o.failures.is_empty() {
         None
     } else {
-        match &o.returned {
-            None => None,
-            Some(Observed::Variant { tag, .. }) => Some(i32::from(*tag != 0)),
-            Some(other) => {
-                return Err(NativeError::new(
-                    StageName::Heap,
-                    format!("the entry returned {other:?}, not a Result"),
-                ));
+        fn code(value: &Observed) -> Option<i32> {
+            match value {
+                Observed::Unit => Some(0),
+                Observed::Integer {
+                    scalar: ScalarKind::U8,
+                    bits,
+                } => i32::try_from(*bits).ok(),
+                Observed::Aggregate(fields) if fields.len() == 1 => code(fields[0].as_ref()?),
+                Observed::Variant { tag: 0, fields } if fields.len() == 1 => {
+                    code(fields[0].as_ref()?)
+                }
+                Observed::Variant { tag: 1, .. } => Some(1),
+                _ => None,
             }
         }
+        o.returned
+            .as_ref()
+            .map(|v| {
+                code(v).ok_or_else(|| {
+                    NativeError::new(StageName::Heap, format!("invalid entry return value {v:?}"))
+                })
+            })
+            .transpose()?
     };
     Ok(Observation {
         exit_code,

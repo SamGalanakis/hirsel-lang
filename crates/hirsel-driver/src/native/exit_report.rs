@@ -14,6 +14,8 @@ pub(crate) struct Report {
     pub offset: u64,
     pub root: usize,
     pub result: LayoutId,
+    pub return_kind: u64,
+    pub success_offset: u64,
 }
 #[derive(Default)]
 struct Node {
@@ -52,19 +54,6 @@ pub(crate) fn derive(
         })
     };
     let logical = Logical::new(&nominal);
-    let TypeKind::Named { arguments, .. } = &input
-        .types
-        .get(function.result)
-        .ok_or_else(|| error("missing entry result type".into()))?
-        .kind
-    else {
-        return Err(error("entry result is not Result".into()));
-    };
-    let Some(hirsel_types::GenericArgument::Type(ty)) = arguments.get(1) else {
-        return Err(error("missing Error type".into()));
-    };
-    let ty = *ty;
-    let scope = Scope::root(&input.types);
     let instance = program.functions[entry];
     let unit = program
         .summaries
@@ -76,6 +65,54 @@ pub(crate) fn derive(
         .as_ref()
         .ok_or_else(|| error("no entry result".into()))?
         .layout;
+    let return_kind = match hirsel_types::entry::entry_return(&input.types, function.result) {
+        Some(hirsel_types::entry::EntryReturn::UnitResult) => 0,
+        Some(hirsel_types::entry::EntryReturn::ExitCode) => 1,
+        Some(hirsel_types::entry::EntryReturn::ExitCodeResult) => 2,
+        None => return Err(error("invalid entry return type".into())),
+    };
+    // The offset is derived from the checked layout, never the opaque source shape.
+    let mut success_layout = result;
+    let mut success_offset = 0;
+    if return_kind == 2 {
+        let field = program
+            .table
+            .layout(result)
+            .and_then(|r| r.tag.as_ref())
+            .and_then(|t| t.variants.iter().find(|v| v.ordinal == 0))
+            .and_then(|v| v.fields.first())
+            .ok_or_else(|| error("no Ok payload layout".into()))?;
+        success_offset = field.offset;
+        success_layout = field.layout;
+    }
+    if return_kind != 0 {
+        let mut layout = program
+            .table
+            .layout(success_layout)
+            .ok_or_else(|| error("missing ExitCode layout".into()))?;
+        while let Some(field) = layout.fields.first().filter(|_| layout.fields.len() == 1) {
+            success_offset += field.offset;
+            layout = program
+                .table
+                .layout(field.layout)
+                .ok_or_else(|| error("missing code layout".into()))?;
+        }
+    }
+    if return_kind == 1 {
+        return Ok(Report {
+            declarations: "%hirsel.report.node = type { i64, i64, i64, i64, ptr, i64, ptr, i64 }\n@hirsel.report.node.0 = private constant %hirsel.report.node zeroinitializer\n".into(),
+            nodes: vec![hirsel_cranelift::ReportNode::default()],
+            offset: 0, root: 0, result, return_kind, success_offset,
+        });
+    }
+    let TypeKind::Named { arguments, .. } = &input.types.get(function.result).unwrap().kind else {
+        unreachable!()
+    };
+    let Some(hirsel_types::GenericArgument::Type(ty)) = arguments.get(1) else {
+        return Err(error("missing Error type".into()));
+    };
+    let ty = *ty;
+    let scope = Scope::root(&input.types);
     let field = program
         .table
         .layout(result)
@@ -360,5 +397,7 @@ pub(crate) fn derive(
         offset: field.offset,
         root,
         result,
+        return_kind,
+        success_offset,
     })
 }

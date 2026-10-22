@@ -798,7 +798,8 @@ wire_enum!(hirsel_run_schema::BudgetKind {
 
 wire_enum!(hirsel_run_schema::Returned {
     0 => Ok,
-    1 => Error
+    1 => Error,
+    2 => ExitCode(v0)
 });
 
 wire_struct!(hirsel_run_schema::Site {

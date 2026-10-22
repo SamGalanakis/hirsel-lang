@@ -106,8 +106,16 @@ destructuring keep their defining-module restrictions.
 ### PROG-3: Entry
 
 An entry is any `pub fn` whose parameters are root capabilities (`Io`, `Args`, `Env`,
-`Unsafe`) and which returns `Result[(), E]`. A completed entry returning `Ok(())` exits 0;
+`Unsafe`) and which returns `Result[(), E]`, `std@1/process.ExitCode`, or
+`Result[std@1/process.ExitCode, E]`. A completed entry returning `Ok(())` exits 0;
 `Error(e)` exits 1, independently of `E`'s variant numbering.
+
+`std@1/process.ExitCode` is an opaque unsigned byte status. `process.SUCCESS` is 0,
+`process.FAILURE` is 1, and `process.exit_code(n: u8)` constructs any status from 0
+through 255. A bare `ExitCode` or `Ok(code)` exits with that status. `Error(e)` still
+renders e and exits 1. A bare `u8` is not an eligible entry return type. The status is
+a return value: normal cleanup and drops finish before the host exits; recording
+and replay reproduce the same status without a new capability effect or trait.
 
 A **call entry** (planned) is the callee of a runner call: any top-level definition an
 `Entry` names ([RUN-3](runners.md#run-3-entries)). It is launched as its own run with
@@ -121,6 +129,7 @@ Both interpreted and native launchers use the same run outcome and exit policy:
 | --- | --- |
 | Returned `Ok(())` | 0 |
 | Returned `Error(e)` | 1 |
+| Returned `ExitCode` or `Ok(ExitCode)` | its unsigned byte value |
 | Language failure (FAIL-1), including cleanup causes | 2 |
 | Refused launch or request, replay divergence, or tooling failure | 3 |
 | Blocked (CONC-8), with its parked waits | 4 |
@@ -131,7 +140,8 @@ Artificial interpreter limits, detected undefined behavior and checked-execution
 traps are tooling stops (3), outside language failure semantics. A run stopped as
 Blocked or by a host budget performs no further cleanup. Hosts receive
 `hirsel_run_config::RunOutcome`; standalone launchers, including `hirsel run`,
-obtain their process status only from `RunOutcome::exit_code()`. Source rejection
+obtain their process status only from `RunOutcome::exit_code()`. `hirsel run --json` reports a returned status as
+`{"schema_version":1,"run":{"outcome":"returned","exit_code":n}}`. Source rejection
 remains a compiler-command error (1); invalid command arguments remain usage
 errors (2).
 

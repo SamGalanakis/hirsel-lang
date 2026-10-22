@@ -2686,11 +2686,21 @@ fn failure(sources: &SourceMap, site: Span, rule: &str, kind: &str) -> Result<Fa
     })
 }
 fn exit_code(value: &Value) -> i32 {
-    // PROG-3/FAIL-1 issue #34: provisional Result ordinal and exit mapping.
-    // Core fixtures may return other values; those exit zero.
     match value {
-        Value::Unit => 0,
-        Value::Variant { variant: 0, .. } => 0,
+        Value::Record { definition, fields }
+            if definition.path().package_is("std", "1")
+                && definition.path().0.modules.as_ref() == ["process"]
+                && definition.path().0.name == "ExitCode" =>
+        {
+            match fields.first().and_then(Option::as_ref) {
+                Some(Value::Integer(n)) => n.bits() as i32,
+                _ => 0,
+            }
+        }
+        Value::Variant { variant: 0, fields } => match fields.first().and_then(Option::as_ref) {
+            Some(value @ Value::Record { .. }) => exit_code(value),
+            _ => 0,
+        },
         Value::Variant { variant: 1, .. } => 1,
         _ => 0,
     }

@@ -93,6 +93,8 @@ pub fn spec_rules(root: &Path) -> Result<Rules, String> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expect {
     Accept,
+    /// The checked function is legal, but PROG-3 refuses it as a selected entry.
+    RefuseEntry,
     Test,
     Blocked {
         stdout: String,
@@ -126,6 +128,7 @@ pub enum Actual {
         line: usize,
     },
     Accepted,
+    RefusedEntry,
     /// Execution ended, having written `stdout`.
     Ran {
         end: End,
@@ -155,6 +158,7 @@ impl Expect {
     pub fn kind(&self) -> &'static str {
         match self {
             Expect::Accept => "accept",
+            Expect::RefuseEntry => "refuse entry",
             Expect::Test => "test",
             Expect::Blocked { .. } => "blocked",
             Expect::Signaled { .. } => "signaled",
@@ -168,6 +172,7 @@ impl Expect {
     pub fn matches(&self, actual: &Actual) -> bool {
         match (self, actual) {
             (Expect::Accept, Actual::Accepted) => true,
+            (Expect::RefuseEntry, Actual::RefusedEntry) => true,
             (Expect::Reject { rule, line }, Actual::Rejected { rule: r, line: l }) => {
                 rule == r && line == l
             }
@@ -467,6 +472,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                         ["blocked"] => Expect::Blocked {
                             stdout: String::new(),
                         },
+                        ["refuse", "entry"] => Expect::RefuseEntry,
                         ["run"] => Expect::Run {
                             stdout: String::new(),
                             exit: 0,
@@ -611,11 +617,15 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         if matches!(expect, Expect::Signaled { .. }) && fixture.signals.is_none() {
             return Err("expect: signaled requires a signals directive".into());
         }
-        if matches!(expect, Expect::Accept | Expect::Reject { .. }) && fixture.steps.is_some() {
+        if matches!(
+            expect,
+            Expect::Accept | Expect::Reject { .. } | Expect::RefuseEntry
+        ) && fixture.steps.is_some()
+        {
             return Err("steps requires expect: run, fail, blocked or test".into());
         }
-        if twin.is_some() && !matches!(expect, Expect::Reject { .. }) {
-            return Err("twin is only valid for expect: reject".into());
+        if twin.is_some() && !matches!(expect, Expect::Reject { .. } | Expect::RefuseEntry) {
+            return Err("twin is only valid for expect: reject or refuse entry".into());
         }
         let prefix_dir = path
             .components()
@@ -670,7 +680,7 @@ fn corpus_errors(root: &Path, path: &str, header: &Header, rules: &Rules) -> Vec
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
-    let reject = matches!(header.expect, Expect::Reject { .. });
+    let reject = matches!(header.expect, Expect::Reject { .. } | Expect::RefuseEntry);
     let fail = matches!(header.expect, Expect::Fail { .. });
     let suffix = if stem.ends_with("-bad") || stem.ends_with("-reject") {
         (!reject && !fail).then_some("a -bad or -reject name needs expect: reject or fail")

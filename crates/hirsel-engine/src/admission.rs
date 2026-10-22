@@ -40,30 +40,17 @@ pub fn entry_roots(
             "expected a public, complete, monomorphic Hirsel function",
         ));
     }
-    let TypeKind::Named {
-        definition,
-        arguments,
-    } = &t
-        .get(function.result)
-        .ok_or_else(|| invalid("missing result type"))?
-        .kind
-    else {
-        return Err(invalid("expected core@1/Result[(), E]"));
-    };
+    if hirsel_types::entry::entry_return(t, function.result).is_none() {
+        return Err(invalid(
+            "expected Result[(), E], std@1/process.ExitCode or Result[std@1/process.ExitCode, E]",
+        ));
+    }
     let nominal = |definition: &hirsel_syntax::DefId, name: &str| {
         let definition = definition.path();
         definition.package_is("core", "1")
             && definition.0.modules.is_empty()
             && definition.0.name == name
     };
-    let [GenericArgument::Type(ok), GenericArgument::Type(_)] = arguments.as_ref() else {
-        return Err(invalid("expected core@1/Result[(), E]"));
-    };
-    if !nominal(definition, "Result")
-        || !matches!(t.get(*ok).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty())
-    {
-        return Err(invalid("expected core@1/Result[(), E]"));
-    }
     let roots = function
         .parameters
         .iter()
