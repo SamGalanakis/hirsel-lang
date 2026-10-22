@@ -6951,6 +6951,7 @@ conformance/SER/SER-1-lexical-generic-bound-ok.hir
 conformance/SER/SER-1-local-annotation-bad.hir
 conformance/SER/SER-1-local-annotation-ok.hir
 conformance/SER/SER-1-metrics-opaque-bad.hir
+conformance/SER/SER-1-metrics-projection-9-ok.hir
 conformance/SER/SER-1-opaque-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-ok.hir

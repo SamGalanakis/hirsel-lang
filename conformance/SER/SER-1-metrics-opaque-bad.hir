@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 5
+// expect: reject SER-1 at line 6
+// twin: SER/SER-1-metrics-projection-9-ok.hir
 // Checked wrappers require the explicit validated plain-data projection.
 pub fn encode(m: std@1/metrics.CheckedMeasurement) -> Bytes uses {} {
   codec.encode(m)

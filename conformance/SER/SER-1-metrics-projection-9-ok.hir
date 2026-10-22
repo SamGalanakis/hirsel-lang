@@ -1,0 +1,6 @@
+// rule: SER-1
+// expect: accept
+// boundary: A checked measurement serializes only through its public data projection.
+pub fn encode(m: std@1/metrics.CheckedMeasurement) -> Bytes uses {} {
+  codec.encode(std@1/metrics.measurement_data(m))
+}
