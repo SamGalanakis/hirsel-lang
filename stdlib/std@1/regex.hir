@@ -906,7 +906,14 @@ pub fn compile_flags(pattern: String, flags: Flags, max_instructions: u64) -> Re
   } else {
     prefix_plan(code, entry)
   }
-  Ok(Regex(code: take code, entry: entry, names: copy tree.names, prefilter: take prefilter))
+  Ok(
+    Regex(
+      code: take code,
+      entry: entry,
+      names: copy tree.names,
+      prefilter: take prefilter
+    )
+  )
 }
 
 fn spend(mut left: u64) -> Result[(), MatchError] uses {} {
@@ -1115,7 +1122,13 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
     let subject = make_subject(text, mut work)?
     let mut cache = dfa_cache(re, true, 65024)
     let (matched, _) = find_from(
-      re, subject, 0, true, core@1/string.as_bytes(text), mut cache, mut work
+      re,
+      subject,
+      0,
+      true,
+      core@1/string.as_bytes(text),
+      mut cache,
+      mut work
     )?
     return Ok(take matched)
   }
@@ -1283,7 +1296,15 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
   while pos <= core@1/list.len(subject.scalars) {
-    let (matched, _) = find_from(re, subject, pos, accelerated, haystack, mut cache, mut work)?
+    let (matched, _) = find_from(
+      re,
+      subject,
+      pos,
+      accelerated,
+      haystack,
+      mut cache,
+      mut work
+    )?
     let Some(span) = matched else {
       return Ok(take matches)
     }
@@ -1375,7 +1396,18 @@ pub fn find_captures(re: Regex, text: String, work_limit: u64) -> Result[
   let haystack = core@1/string.as_bytes(text)
   let mut work = work_limit
   let source_input = make_subject(text, mut work)?
-  let (matched, captures) = find_from_prefilter(re, source_input, 0, true, accelerated, haystack, mut work)?
+  let mut cache = dfa_cache(re, accelerated, 65024)
+  let mut replay = capture_scratch()
+  let (matched, captures) = capture_find_from(
+    re,
+    source_input,
+    0,
+    accelerated,
+    haystack,
+    mut cache,
+    mut replay,
+    mut work
+  )?
   match matched {
     Some(_) => Ok(Some(take captures)),
     None() => Ok(None()),
@@ -1397,8 +1429,19 @@ pub fn find_all_captures(re: Regex, text: String, max_matches: u64, work_limit: 
   let source_input = make_subject(text, mut work)?
   let mut pos = 0u64
   let mut previous_end: Option[u64] = None()
+  let mut cache = dfa_cache(re, accelerated, 65024)
+  let mut replay = capture_scratch()
   while pos <= core@1/list.len(source_input.scalars) {
-    let (matched, captures) = find_from_prefilter(re, source_input, pos, true, accelerated, haystack, mut work)?
+    let (matched, captures) = capture_find_from(
+      re,
+      source_input,
+      pos,
+      accelerated,
+      haystack,
+      mut cache,
+      mut replay,
+      mut work
+    )?
     let Some(span) = matched else {
       return Ok(take matches)
     }
@@ -1571,7 +1614,7 @@ pub fn expand(
   expand_into(re, mut dst, template, src, captures, mut work)
 }
 
-fn replace[T](
+fn replace_pike[T](
   re: Regex,
   src: String,
   replacement: String,

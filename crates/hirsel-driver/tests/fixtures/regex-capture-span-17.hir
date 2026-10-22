@@ -1,0 +1,2129 @@
+// rust-lang/regex 80b9d14e; supported scalar/non-overlapping cases only.
+@serializable
+pub type CaptureTestFailure {
+  pattern: String,
+  src: String,
+  stage: u64,
+}
+
+fn capture_case(pattern: String, src: String) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    return false
+  }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return false
+  }
+  let mut scratch = capture_scratch()
+  let mut cache = dfa_cache(re, true, 65024)
+  let mut tiny = dfa_cache(re, true, 1)
+  let mut start = 0u64
+  while start <= core@1/list.len(subject.scalars) {
+    let mut expected_work = work
+    let Ok((span, expected)) = pike_find_from(
+      re,
+      subject,
+      start,
+      true,
+      mut expected_work
+    ) else {
+      return false
+    }
+    if let Some(found) = span {
+      if capture_replay(re, subject, found, mut scratch) != expected {
+        return false
+      }
+    }
+    let mut actual_work = work
+    let Ok(actual) = capture_find_from(
+      re,
+      subject,
+      start,
+      re.prefilter.enabled,
+      core@1/string.as_bytes(src),
+      mut cache,
+      mut scratch,
+      mut actual_work
+    ) else {
+      return false
+    }
+    if actual != (span, copy expected) {
+      return false
+    }
+    actual_work = work
+    let Ok(retry) = capture_find_from(
+      re,
+      subject,
+      start,
+      false,
+      core@1/string.as_bytes(src),
+      mut tiny,
+      mut scratch,
+      mut actual_work
+    ) else {
+      return false
+    }
+    if retry != (span, expected) || actual_work != expected_work {
+      return false
+    }
+    start += 1
+  }
+  true
+}
+
+fn capture_work(pattern: String, src: String) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    return false
+  }
+  let mut budget = 0u64
+  while budget < 240 {
+    let mut work = budget
+    let expected: Result[Option[Captures], MatchError] = match make_subject(
+      src,
+      mut work
+    ) {
+      Error(e) => Error(e),
+      Ok(subject) => match pike_find_from(re, subject, 0, true, mut work) {
+        Error(e) => Error(e),
+        Ok((matched, captures)) => Ok(
+          if matched == None() {
+            None()
+          } else {
+            Some(captures)
+          }
+        ),
+      },
+    }
+    if find_captures(re, src, budget) != expected {
+      return false
+    }
+    budget += 1
+  }
+  true
+}
+
+fn capture_callback(state: u64, src: String, captures: Captures) -> String uses {} {
+  // Arbitrary output, including zero length. Trace is separately instrumented.
+  let mut bytes: List[u8] = []
+  let mut i = 0u64
+  while i < state {
+    core@1/list.push(mut bytes, b'x')
+    i += 1
+  }
+  text.finish_valid(take bytes)
+}
+
+fn capture_replace_case(pattern: String, src: String, output_size: u64) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    return false
+  }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return false
+  }
+  let mut exact = work
+  let mut pos = 0u64
+  let mut count = 0u64
+  while pos <= core@1/list.len(subject.scalars) {
+    count += 1
+    let Ok((matched, _)) = pike_find_from(re, subject, pos, true, mut exact) else {
+      return false
+    }
+    let Some(span) = matched else {
+      break
+    }
+    if pos < core@1/list.len(subject.scalars) && subject.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == subject.offsets[pos] {
+      pos += 1
+    } else {
+      while subject.offsets[pos] < span.end {
+        pos += 1
+      }
+    }
+  }
+  let bound = work - exact
+  let mut replay_work = work
+  if replacement_resolve(re, subject, count, true, mut replay_work) != Ok(()) || replay_work != exact {
+    return false
+  }
+  let mut budget = 0u64
+  while budget < bound + 120 {
+    let mut expected_trace: List[u64] = []
+    let expected = traced_replace_pike(
+      re,
+      src,
+      "",
+      2,
+      output_size,
+      capture_callback,
+      budget,
+      mut expected_trace
+    )
+    let mut actual_trace: List[u64] = []
+    // A tighter proven bound forces debt resolution at realistic tiny budgets.
+    let actual = traced_replace_accelerated(
+      re,
+      src,
+      "",
+      2,
+      output_size,
+      capture_callback,
+      budget,
+      bound,
+      mut actual_trace
+    )
+    if actual != expected || actual_trace != expected_trace {
+      return false
+    }
+    budget += 1
+  }
+  true
+}
+
+fn capture_exhaustive_pattern(pattern: String) -> Result[(), CaptureTestFailure] uses {} {
+  let mut bits = 1u64
+  while bits < 16 {
+    let mut value = bits
+    let mut bytes: List[u8] = []
+    while value > 1 {
+      core@1/list.push(
+        mut bytes,
+        if value % 2 == 0 {
+          97u8
+        } else {
+          98u8
+        }
+      )
+      value /= 2
+    }
+    let src = text.finish_valid(take bytes)
+    if !capture_case(pattern, src) {
+      return Error(CaptureTestFailure(pattern: unique pattern, src: src, stage: 1))
+    }
+    bits += 1
+  }
+  let samples: List[String] = [
+    "éa😀b",
+    "a\nb\na",
+    "Kkſs",
+    " a_a a ",
+    "aaabbb",
+    "axxbzz",
+    "éaaaé",
+    "\naaa\n",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+  ]
+  for src in samples {
+    if !capture_case(pattern, src) {
+      return Error(CaptureTestFailure(pattern: unique pattern, src: src, stage: 2))
+    }
+  }
+  Ok(())
+}
+
+pub fn capture_exhaustive() -> Result[(), CaptureTestFailure] uses {} {
+  let patterns: List[String] = [
+    "",
+    "(a){0}(a)",
+    "(a*)*",
+    "((a?)*)*",
+    "(a|ab)(b?)",
+    "(ab|a)(b?)",
+    "(a)+",
+    "(?P<x>a)?(b*)",
+    "(?U)(a+)",
+    "(?U)(a+?)",
+    "(?m)^(a*)$",
+    "(a)\\b",
+    "(?i)(k|s)+",
+    "(a.*z|a)(b*)",
+    "(a|a.*z)(b*)",
+    "((a)?b)*"
+  ]
+  for pattern in patterns {
+    capture_exhaustive_pattern(pattern)?
+  }
+  Ok(())
+}
+
+pub fn capture_budgets() -> Result[(), CaptureTestFailure] uses {} {
+  let patterns: List[String] = ["(a)", "(a?)*", "(a|ab)", "(?P<x>a)?b", "\\b(a)"]
+  for pattern in patterns {
+    if !capture_work(pattern, "aba") {
+      return Error(CaptureTestFailure(pattern: pattern, src: "aba", stage: 3))
+    }
+  }
+  Ok(())
+}
+
+pub fn capture_replacements() -> Result[(), CaptureTestFailure] uses {} {
+  let patterns: List[String] = ["(a)", "(a?)*", "(a|ab)", "(?P<x>a)?b"]
+  for pattern in patterns {
+    let sizes: List[u64] = [0u64, 30u64, 60u64]
+    for output_size in sizes {
+      if !capture_replace_case(pattern, "aba", output_size) {
+        return Error(CaptureTestFailure(pattern: pattern, src: "aba", stage: 4))
+      }
+    }
+  }
+  Ok(())
+}
+
+fn traced_replace_pike[T](
+  re: Regex,
+  src: String,
+  replacement: String,
+  mode: u8,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64,
+  mut trace: List[u64]
+) -> Result[String, MatchError] uses {} {
+  let mut work = work_limit
+  let source_input = make_subject(src, mut work)?
+  let data = core@1/string.as_bytes(src)
+  let mut dst: List[u8] = []
+  let mut pos = 0u64
+  let mut last_end = 0u64
+  while pos <= core@1/list.len(source_input.scalars) {
+    let (matched, captures) = pike_find_from(re, source_input, pos, mode != 1, mut work)?
+    let Some(span) = matched else {
+      break
+    }
+    append_bytes(mut dst, data, last_end, span.start, mut work)?
+    if span.end > last_end || span.start == 0 {
+      if mode == 2 {
+        core@1/list.push(mut trace, span.start)
+        core@1/list.push(mut trace, span.end)
+        let value = callback(state, src, captures)
+        let bytes = core@1/string.as_bytes(value)
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else if mode == 1 {
+        let bytes = core@1/string.as_bytes(replacement)
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else {
+        expand_into(re, mut dst, replacement, src, captures, mut work)?
+      }
+    }
+    last_end = span.end
+    // Go replaceAll advances at least one scalar from the search position.
+    spend(mut work)?
+    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == source_input.offsets[pos] {
+      pos += 1
+    } else {
+      while source_input.offsets[pos] < span.end {
+        spend(mut work)?
+        pos += 1
+      }
+    }
+  }
+  append_bytes(mut dst, data, last_end, core@1/bytes.len(data), mut work)?
+  Ok(text.finish_valid(take dst))
+}
+
+fn traced_replace_accelerated[T](
+  re: Regex,
+  src: String,
+  replacement: String,
+  mode: u8,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64,
+  initial_bound: u64,
+  mut trace: List[u64]
+) -> Result[String, MatchError] uses {} {
+  let mut work = work_limit
+  let source_input = make_subject(src, mut work)?
+  let data = core@1/string.as_bytes(src)
+  let mut dst: List[u8] = []
+  let mut bound = initial_bound
+  let mut pending = 0u64
+  let mut cache = dfa_cache(re, true, 65024)
+  let mut scratch = capture_scratch()
+  let mut pos = 0u64
+  let mut last_end = 0u64
+  while pos <= core@1/list.len(source_input.scalars) {
+    replacement_afford(re, source_input, mode != 1, 0, pending, mut bound, mut work)?
+    let search_outcome = if bound != 0 && !cache.disabled {
+      dfa_search(re, source_input, pos, data, mut cache)
+    } else {
+      DfaQuit()
+    }
+    let (matched, captures) = match search_outcome {
+      DfaMatch(span) => {
+        pending += 1
+        (
+          Some(span),
+          if mode == 1 {
+            Captures(spans: [])
+          } else {
+            capture_replay(re, source_input, span, mut scratch)
+          }
+        )
+      },
+      DfaMiss() => {
+        pending += 1
+        (None(), Captures(spans: []))
+      },
+      DfaQuit() => {
+        if bound != 0 {
+          replacement_resolve(re, source_input, pending, mode != 1, mut work)?
+          bound = 0
+        }
+        pike_find_from(re, source_input, pos, mode != 1, mut work)?
+      },
+    }
+    let Some(span) = matched else {
+      break
+    }
+    replacement_afford(
+      re,
+      source_input,
+      mode != 1,
+      span.start - last_end,
+      pending,
+      mut bound,
+      mut work
+    )?
+    append_bytes(mut dst, data, last_end, span.start, mut work)?
+    if span.end > last_end || span.start == 0 {
+      if mode == 2 {
+        core@1/list.push(mut trace, span.start)
+        core@1/list.push(mut trace, span.end)
+        let value = callback(state, src, captures)
+        let bytes = core@1/string.as_bytes(value)
+        replacement_afford(
+          re,
+          source_input,
+          mode != 1,
+          core@1/bytes.len(bytes),
+          pending,
+          mut bound,
+          mut work
+        )?
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else if mode == 1 {
+        let bytes = core@1/string.as_bytes(replacement)
+        replacement_afford(
+          re,
+          source_input,
+          mode != 1,
+          core@1/bytes.len(bytes),
+          pending,
+          mut bound,
+          mut work
+        )?
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else {
+        if bound != 0 {
+          replacement_resolve(re, source_input, pending, true, mut work)?
+          bound = 0
+        }
+        expand_into(re, mut dst, replacement, src, captures, mut work)?
+      }
+    }
+    last_end = span.end
+    // Go replaceAll advances at least one scalar from the search position.
+    replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
+    spend(mut work)?
+    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == source_input.offsets[pos] {
+      pos += 1
+    } else {
+      while source_input.offsets[pos] < span.end {
+        replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
+        spend(mut work)?
+        pos += 1
+      }
+    }
+  }
+  replacement_afford(
+    re,
+    source_input,
+    mode != 1,
+    core@1/bytes.len(data) - last_end,
+    pending,
+    mut bound,
+    mut work
+  )?
+  append_bytes(mut dst, data, last_end, core@1/bytes.len(data), mut work)?
+  Ok(text.finish_valid(take dst))
+}
+
+pub fn capture_goldens() -> Result[(), CaptureTestFailure] uses {} {
+  // flags.toml:1 1
+  {
+    let Ok(re) = compile("(?i)abc", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?i)abc", src: "ABC", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "ABC", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?i)abc", src: "ABC", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 3))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?i)abc", src: "ABC", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?i)abc", src: "ABC", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?i)abc", "ABC") {
+      return Error(CaptureTestFailure(pattern: "(?i)abc", src: "ABC", stage: 9))
+    }
+  }
+  // flags.toml:7 2
+  {
+    let Ok(re) = compile("(?i)a(?-i)bc", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "Abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "Abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "Abc", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 3))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "Abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "Abc", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?i)a(?-i)bc", "Abc") {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "Abc", stage: 9))
+    }
+  }
+  // flags.toml:13 3
+  {
+    let Ok(re) = compile("(?i)a(?-i)bc", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "ABC", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "ABC", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "ABC", stage: 6))
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "ABC", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "ABC", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?i)a(?-i)bc", "ABC") {
+      return Error(CaptureTestFailure(pattern: "(?i)a(?-i)bc", src: "ABC", stage: 9))
+    }
+  }
+  // flags.toml:19 4
+  {
+    let Ok(re) = compile("(?is)a.", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?is)a.", src: "A\n", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "A\n", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?is)a.", src: "A\n", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 2))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?is)a.", src: "A\n", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?is)a.", src: "A\n", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?is)a.", "A\n") {
+      return Error(CaptureTestFailure(pattern: "(?is)a.", src: "A\n", stage: 9))
+    }
+  }
+  // flags.toml:25 5
+  {
+    let Ok(re) = compile("(?is)a.(?-is)a.", 10000) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\nab", stage: 5)
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "A\nab", 100, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\nab", stage: 6)
+      )
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 4))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\nab", stage: 7)
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\nab", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?is)a.(?-is)a.", "A\nab") {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\nab", stage: 9)
+      )
+    }
+  }
+  // flags.toml:31 6
+  {
+    let Ok(re) = compile("(?is)a.(?-is)a.", 10000) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\na\n", stage: 5)
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "A\na\n", 100, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\na\n", stage: 6)
+      )
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\na\n", stage: 7)
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\na\n", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?is)a.(?-is)a.", "A\na\n") {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is)a.", src: "A\na\n", stage: 9)
+      )
+    }
+  }
+  // flags.toml:37 7
+  {
+    let Ok(re) = compile("(?is)a.(?-is:a.)?", 10000) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is:a.)?", src: "A\na\n", stage: 5)
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "A\na\n", 1, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is:a.)?", src: "A\na\n", stage: 6)
+      )
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 2))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is:a.)?", src: "A\na\n", stage: 7)
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "(?is)a.(?-is:a.)?", src: "A\na\n", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?is)a.(?-is:a.)?", "A\na\n") {
+      return Error(
+        CaptureTestFailure(pattern: "(?is)a.(?-is:a.)?", src: "A\na\n", stage: 9)
+      )
+    }
+  }
+  // flags.toml:44 8
+  {
+    let Ok(re) = compile("(?U)a+", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?U)a+", src: "aa", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aa", 1, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?U)a+", src: "aa", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 1))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?U)a+", src: "aa", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?U)a+", src: "aa", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?U)a+", "aa") {
+      return Error(CaptureTestFailure(pattern: "(?U)a+", src: "aa", stage: 9))
+    }
+  }
+  // flags.toml:51 9
+  {
+    let Ok(re) = compile("(?U)a+?", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?U)a+?", src: "aa", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aa", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?U)a+?", src: "aa", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 2))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?U)a+?", src: "aa", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?U)a+?", src: "aa", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?U)a+?", "aa") {
+      return Error(CaptureTestFailure(pattern: "(?U)a+?", src: "aa", stage: 9))
+    }
+  }
+  // flags.toml:57 10
+  {
+    let Ok(re) = compile("(?U)(?-U)a+", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?U)(?-U)a+", src: "aa", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aa", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?U)(?-U)a+", src: "aa", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 2))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?U)(?-U)a+", src: "aa", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?U)(?-U)a+", src: "aa", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?U)(?-U)a+", "aa") {
+      return Error(CaptureTestFailure(pattern: "(?U)(?-U)a+", src: "aa", stage: 9))
+    }
+  }
+  // flags.toml:63 11
+  {
+    let Ok(re) = compile("(?m)(?:^\\d+$\\n?)+", 10000) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?m)(?:^\\d+$\\n?)+",
+          src: "123\n456\n789",
+          stage: 5
+        )
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "123\n456\n789", 100, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?m)(?:^\\d+$\\n?)+",
+          src: "123\n456\n789",
+          stage: 6
+        )
+      )
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 11))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?m)(?:^\\d+$\\n?)+",
+          src: "123\n456\n789",
+          stage: 7
+        )
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(
+              pattern: "(?m)(?:^\\d+$\\n?)+",
+              src: "123\n456\n789",
+              stage: 8
+            )
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?m)(?:^\\d+$\\n?)+", "123\n456\n789") {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?m)(?:^\\d+$\\n?)+",
+          src: "123\n456\n789",
+          stage: 9
+        )
+      )
+    }
+  }
+  // iter.toml:1 1
+  {
+    let Ok(re) = compile("a", 10000) else {
+      return Error(CaptureTestFailure(pattern: "a", src: "aaa", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aaa", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "a", src: "aaa", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 1))]),
+      Captures(spans: [Some(Span(start: 1, end: 2))]),
+      Captures(spans: [Some(Span(start: 2, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "a", src: "aaa", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "a", src: "aaa", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("a", "aaa") {
+      return Error(CaptureTestFailure(pattern: "a", src: "aaa", stage: 9))
+    }
+  }
+  // iter.toml:7 2
+  {
+    let Ok(re) = compile("a", 10000) else {
+      return Error(CaptureTestFailure(pattern: "a", src: "aba", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aba", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "a", src: "aba", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "a", src: "aba", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "a", src: "aba", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("a", "aba") {
+      return Error(CaptureTestFailure(pattern: "a", src: "aba", stage: 9))
+    }
+  }
+  // iter.toml:13 empty1
+  {
+    let Ok(re) = compile("", 10000) else {
+      return Error(CaptureTestFailure(pattern: "", src: "", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "", src: "", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 0))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "", src: "", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "", src: "", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("", "") {
+      return Error(CaptureTestFailure(pattern: "", src: "", stage: 9))
+    }
+  }
+  // iter.toml:19 empty2
+  {
+    let Ok(re) = compile("", 10000) else {
+      return Error(CaptureTestFailure(pattern: "", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("", "abc") {
+      return Error(CaptureTestFailure(pattern: "", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:25 empty3
+  {
+    let Ok(re) = compile("(?:)", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:31 empty4
+  {
+    let Ok(re) = compile("(?:)*", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)*", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)*", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)*", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)*", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)*", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)*", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:37 empty5
+  {
+    let Ok(re) = compile("(?:)+", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)+", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)+", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)+", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)+", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:43 empty6
+  {
+    let Ok(re) = compile("(?:)?", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)?", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)?", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)?", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)?", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)?", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)?", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:49 empty7
+  {
+    let Ok(re) = compile("(?:)(?:)", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)(?:)", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)(?:)", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)(?:)", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)(?:)", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)(?:)", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)(?:)", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:55 empty8
+  {
+    let Ok(re) = compile("(?:)+|z", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+|z", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+|z", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)+|z", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)+|z", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)+|z", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)+|z", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:61 empty9
+  {
+    let Ok(re) = compile("z|(?:)+", 10000) else {
+      return Error(CaptureTestFailure(pattern: "z|(?:)+", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "z|(?:)+", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "z|(?:)+", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "z|(?:)+", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("z|(?:)+", "abc") {
+      return Error(CaptureTestFailure(pattern: "z|(?:)+", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:67 empty10
+  {
+    let Ok(re) = compile("(?:)+|b", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+|b", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(?:)+|b", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 1))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(?:)+|b", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(?:)+|b", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:)+|b", "abc") {
+      return Error(CaptureTestFailure(pattern: "(?:)+|b", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:73 empty11
+  {
+    let Ok(re) = compile("b|(?:)+", 10000) else {
+      return Error(CaptureTestFailure(pattern: "b|(?:)+", src: "abc", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "abc", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "b|(?:)+", src: "abc", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 1, end: 2))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "b|(?:)+", src: "abc", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "b|(?:)+", src: "abc", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("b|(?:)+", "abc") {
+      return Error(CaptureTestFailure(pattern: "b|(?:)+", src: "abc", stage: 9))
+    }
+  }
+  // iter.toml:79 start1
+  {
+    let Ok(re) = compile("^a", 10000) else {
+      return Error(CaptureTestFailure(pattern: "^a", src: "a", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "a", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "^a", src: "a", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 1))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "^a", src: "a", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "^a", src: "a", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("^a", "a") {
+      return Error(CaptureTestFailure(pattern: "^a", src: "a", stage: 9))
+    }
+  }
+  // iter.toml:85 start2
+  {
+    let Ok(re) = compile("^a", 10000) else {
+      return Error(CaptureTestFailure(pattern: "^a", src: "aa", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "aa", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "^a", src: "aa", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 1))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "^a", src: "aa", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "^a", src: "aa", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("^a", "aa") {
+      return Error(CaptureTestFailure(pattern: "^a", src: "aa", stage: 9))
+    }
+  }
+  // regex-lite.toml:11 perl-class-decimal
+  {
+    let Ok(re) = compile("\\d", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\d", src: "᠕", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "᠕", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\d", src: "᠕", stage: 6))
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\d", src: "᠕", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "\\d", src: "᠕", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\d", "᠕") {
+      return Error(CaptureTestFailure(pattern: "\\d", src: "᠕", stage: 9))
+    }
+  }
+  // regex-lite.toml:19 perl-class-space
+  {
+    let Ok(re) = compile("\\s", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\s", src: " ", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, " ", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\s", src: " ", stage: 6))
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\s", src: " ", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "\\s", src: " ", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\s", " ") {
+      return Error(CaptureTestFailure(pattern: "\\s", src: " ", stage: 9))
+    }
+  }
+  // regex-lite.toml:27 perl-class-word
+  {
+    let Ok(re) = compile("\\w", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\w", src: "δ", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "δ", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\w", src: "δ", stage: 6))
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\w", src: "δ", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "\\w", src: "δ", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\w", "δ") {
+      return Error(CaptureTestFailure(pattern: "\\w", src: "δ", stage: 9))
+    }
+  }
+  // regex-lite.toml:35 word-boundary
+  {
+    let Ok(re) = compile("\\b", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\b", src: "δ", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "δ", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\b", src: "δ", stage: 6))
+    }
+    let expected: List[Captures] = []
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\b", src: "δ", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "\\b", src: "δ", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\b", "δ") {
+      return Error(CaptureTestFailure(pattern: "\\b", src: "δ", stage: 9))
+    }
+  }
+  // regex-lite.toml:44 word-boundary-negated
+  {
+    let Ok(re) = compile("\\B", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\B", src: "δ", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "δ", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\B", src: "δ", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 2, end: 2))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\B", src: "δ", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "\\B", src: "δ", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\B", "δ") {
+      return Error(CaptureTestFailure(pattern: "\\B", src: "δ", stage: 9))
+    }
+  }
+  // regex-lite.toml:53 empty-no-split-codepoint
+  {
+    let Ok(re) = compile("", 10000) else {
+      return Error(CaptureTestFailure(pattern: "", src: "💩", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "💩", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "", src: "💩", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 4, end: 4))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "", src: "💩", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "", src: "💩", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("", "💩") {
+      return Error(CaptureTestFailure(pattern: "", src: "💩", stage: 9))
+    }
+  }
+  // regex-lite.toml:61 dot-always-matches-codepoint
+  {
+    let Ok(re) = compile(".", 10000) else {
+      return Error(CaptureTestFailure(pattern: ".", src: "💩", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "💩", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: ".", src: "💩", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 4))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: ".", src: "💩", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: ".", src: "💩", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case(".", "💩") {
+      return Error(CaptureTestFailure(pattern: ".", src: "💩", stage: 9))
+    }
+  }
+  // utf8.toml:26 empty-utf8yes
+  {
+    let Ok(re) = compile("", 10000) else {
+      return Error(CaptureTestFailure(pattern: "", src: "☃", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "☃", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "", src: "☃", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(spans: [Some(Span(start: 0, end: 0))]),
+      Captures(spans: [Some(Span(start: 3, end: 3))])
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "", src: "☃", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "", src: "☃", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("", "☃") {
+      return Error(CaptureTestFailure(pattern: "", src: "☃", stage: 9))
+    }
+  }
+  // substring.toml:30 ascii-word-end
+  {
+    let Ok(re) = compile("\\b[0-9]+\\b", 10000) else {
+      return Error(CaptureTestFailure(pattern: "\\b[0-9]+\\b", src: "123β", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "123β", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "\\b[0-9]+\\b", src: "123β", stage: 6))
+    }
+    let expected: List[Captures] = [Captures(spans: [Some(Span(start: 0, end: 3))])]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "\\b[0-9]+\\b", src: "123β", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(pattern: "\\b[0-9]+\\b", src: "123β", stage: 8)
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("\\b[0-9]+\\b", "123β") {
+      return Error(CaptureTestFailure(pattern: "\\b[0-9]+\\b", src: "123β", stage: 9))
+    }
+  }
+  // regression.toml:776 captures-wrong-order
+  {
+    let Ok(re) = compile("(a){0}(a)", 10000) else {
+      return Error(CaptureTestFailure(pattern: "(a){0}(a)", src: "a", stage: 5))
+    }
+    let Ok(actual) = find_all_captures(re, "a", 100, 18446744073709551615) else {
+      return Error(CaptureTestFailure(pattern: "(a){0}(a)", src: "a", stage: 6))
+    }
+    let expected: List[Captures] = [
+      Captures(
+        spans: [Some(Span(start: 0, end: 1)), None(), Some(Span(start: 0, end: 1))]
+      )
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(CaptureTestFailure(pattern: "(a){0}(a)", src: "a", stage: 7))
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(CaptureTestFailure(pattern: "(a){0}(a)", src: "a", stage: 8))
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(a){0}(a)", "a") {
+      return Error(CaptureTestFailure(pattern: "(a){0}(a)", src: "a", stage: 9))
+    }
+  }
+  // regression.toml:833 reverse-inner-plus-shorter-than-expected
+  {
+    let Ok(re) = compile("(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})", 10000) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})",
+          src: "102:12:39",
+          stage: 5
+        )
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "102:12:39", 100, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})",
+          src: "102:12:39",
+          stage: 6
+        )
+      )
+    }
+    let expected: List[Captures] = [
+      Captures(
+        spans: [
+          Some(Span(start: 0, end: 9)),
+          Some(Span(start: 0, end: 3)),
+          Some(Span(start: 4, end: 6)),
+          Some(Span(start: 7, end: 9))
+        ]
+      )
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})",
+          src: "102:12:39",
+          stage: 7
+        )
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(
+              pattern: "(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})",
+              src: "102:12:39",
+              stage: 8
+            )
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})", "102:12:39") {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})",
+          src: "102:12:39",
+          stage: 9
+        )
+      )
+    }
+  }
+  // regression.toml:843 reverse-inner-short
+  {
+    let Ok(re) = compile("(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])", 10000) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])",
+          src: "102:12:39",
+          stage: 5
+        )
+      )
+    }
+    let Ok(actual) = find_all_captures(re, "102:12:39", 100, 18446744073709551615) else {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])",
+          src: "102:12:39",
+          stage: 6
+        )
+      )
+    }
+    let expected: List[Captures] = [
+      Captures(
+        spans: [
+          Some(Span(start: 0, end: 9)),
+          Some(Span(start: 0, end: 3)),
+          Some(Span(start: 4, end: 6)),
+          Some(Span(start: 7, end: 9))
+        ]
+      )
+    ]
+    if core@1/list.len(actual) != core@1/list.len(expected) {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])",
+          src: "102:12:39",
+          stage: 7
+        )
+      )
+    }
+    let mut i = 0u64
+    while i < core@1/list.len(expected) {
+      let mut j = 0u64
+      while j < core@1/list.len(expected[i].spans) {
+        if actual[i].spans[j] != expected[i].spans[j] {
+          return Error(
+            CaptureTestFailure(
+              pattern: "(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])",
+              src: "102:12:39",
+              stage: 8
+            )
+          )
+        }
+        j += 1
+      }
+      i += 1
+    }
+    if !capture_case("(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])", "102:12:39") {
+      return Error(
+        CaptureTestFailure(
+          pattern: "(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])",
+          src: "102:12:39",
+          stage: 9
+        )
+      )
+    }
+  }
+  Ok(())
+}
+
+fn capture_context_pattern(pattern: String) -> bool uses {} {
+  let samples: List[String] = [
+    "éaa\naaaa\n",
+    "aa😀a",
+    "aKſb",
+    "ababxxzbb",
+    "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbz ab",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+  ]
+  for src in samples {
+    if !capture_case(pattern, src) {
+      return false
+    }
+  }
+  true
+}
+
+pub fn capture_retention() -> Result[(), CaptureTestFailure] uses {} {
+  let Ok(re) = compile("(ab+)(c?)", 100) else {
+    return Error(CaptureTestFailure(pattern: "retained", src: "abb abbbc", stage: 11))
+  }
+  let mut work = 100000u64
+  let Ok(subject) = make_subject("abb abbbc", mut work) else {
+    return Error(CaptureTestFailure(pattern: "retained", src: "abb abbbc", stage: 12))
+  }
+  let mut scratch = capture_scratch()
+  let first = capture_replay(re, subject, Span(start: 0, end: 3), mut scratch)
+  let second = capture_replay(re, subject, Span(start: 4, end: 9), mut scratch)
+  if first.spans != [
+    Some(Span(start: 0, end: 3)),
+    Some(Span(start: 0, end: 3)),
+    Some(Span(start: 3, end: 3))
+  ] || second.spans != [
+    Some(Span(start: 4, end: 9)),
+    Some(Span(start: 4, end: 8)),
+    Some(Span(start: 8, end: 9))
+  ] {
+    return Error(CaptureTestFailure(pattern: "retained", src: "abb abbbc", stage: 13))
+  }
+  let mut cache = dfa_cache(re, true, 65024)
+  let mut no_rows = capture_scratch()
+  let Ok(miss_subject) = make_subject(
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    mut work
+  ) else {
+    return Error(CaptureTestFailure(pattern: "miss", src: "x64", stage: 14))
+  }
+  let Ok((matched, _)) = capture_find_from(
+    re,
+    miss_subject,
+    0,
+    true,
+    b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    mut cache,
+    mut no_rows,
+    mut work
+  ) else {
+    return Error(CaptureTestFailure(pattern: "miss", src: "x64", stage: 15))
+  }
+  if matched != None() || core@1/list.len(no_rows.data) != 0 {
+    return Error(CaptureTestFailure(pattern: "miss", src: "x64", stage: 16))
+  }
+  let cases: List[(String, String)] = [
+    ("(a){0}(a)", "a"),
+    ("(?:(\\d+)[:.])?(\\d{1,2})[:.](\\d{2})", "102:12:39"),
+    ("(?:([0-9][0-9][0-9]):)?([0-9][0-9]):([0-9][0-9])", "102:12:39"),
+    ("\\b[0-9]+\\b", "β123"),
+    ("\\b[0-9]+\\b", "123β")
+  ]
+  for (pattern, src) in cases {
+    if !capture_case(pattern, src) {
+      return Error(CaptureTestFailure(pattern: pattern, src: src, stage: 17))
+    }
+  }
+  Ok(())
+}
+
+pub fn capture_expand_partial() -> Result[(), CaptureTestFailure] uses {} {
+  let Ok(re) = compile("(a)", 100) else {
+    return Error(CaptureTestFailure(pattern: "expand", src: "aé", stage: 18))
+  }
+  let invalid: List[Captures] = [
+    Captures(spans: [Some(Span(start: 1, end: 2))]),
+    Captures(spans: [Some(Span(start: 4, end: 5))]),
+    Captures(spans: [Some(Span(start: 2, end: 1))])
+  ]
+  for captures in invalid {
+    let mut budget = 0u64
+    while budget < 30 {
+      let mut actual: List[u8] = [b'x']
+      let mut expected: List[u8] = [b'x']
+      let mut exact = budget
+      let a = expand(re, mut actual, "q$0", "aé", captures, budget)
+      let b = expand_into(re, mut expected, "q$0", "aé", captures, mut exact)
+      if a != b || actual != expected {
+        return Error(CaptureTestFailure(pattern: "expand", src: "aé", stage: 19))
+      }
+      budget += 1
+    }
+  }
+  Ok(())
+}
+
+pub fn capture_exhaustive_0() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("")
+}
+
+pub fn capture_exhaustive_1() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a){0}(a)")
+}
+
+pub fn capture_exhaustive_2() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a*)*")
+}
+
+pub fn capture_exhaustive_3() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("((a?)*)*")
+}
+
+pub fn capture_exhaustive_4() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a|ab)(b?)")
+}
+
+pub fn capture_exhaustive_5() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(ab|a)(b?)")
+}
+
+pub fn capture_exhaustive_6() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a)+")
+}
+
+pub fn capture_exhaustive_7() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(?P<x>a)?(b*)")
+}
+
+pub fn capture_exhaustive_8() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(?U)(a+)")
+}
+
+pub fn capture_exhaustive_9() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(?U)(a+?)")
+}
+
+pub fn capture_exhaustive_10() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(?m)^(a*)$")
+}
+
+pub fn capture_exhaustive_11() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a)\\b")
+}
+
+pub fn capture_exhaustive_12() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(?i)(k|s)+")
+}
+
+pub fn capture_exhaustive_13() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a.*z|a)(b*)")
+}
+
+pub fn capture_exhaustive_14() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("(a|a.*z)(b*)")
+}
+
+pub fn capture_exhaustive_15() -> Result[(), CaptureTestFailure] uses {} {
+  capture_exhaustive_pattern("((a)?b)*")
+}
+
+pub fn capture_replacements_0_0() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a)", "aba", 0) {
+    return Error(CaptureTestFailure(pattern: "(a)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_0_1() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a)", "aba", 30) {
+    return Error(CaptureTestFailure(pattern: "(a)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_0_2() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a)", "aba", 60) {
+    return Error(CaptureTestFailure(pattern: "(a)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_1_0() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a?)*", "aba", 0) {
+    return Error(CaptureTestFailure(pattern: "(a?)*", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_1_1() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a?)*", "aba", 30) {
+    return Error(CaptureTestFailure(pattern: "(a?)*", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_1_2() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a?)*", "aba", 60) {
+    return Error(CaptureTestFailure(pattern: "(a?)*", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_2_0() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a|ab)", "aba", 0) {
+    return Error(CaptureTestFailure(pattern: "(a|ab)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_2_1() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a|ab)", "aba", 30) {
+    return Error(CaptureTestFailure(pattern: "(a|ab)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_2_2() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(a|ab)", "aba", 60) {
+    return Error(CaptureTestFailure(pattern: "(a|ab)", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_3_0() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(?P<x>a)?b", "aba", 0) {
+    return Error(CaptureTestFailure(pattern: "(?P<x>a)?b", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_3_1() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(?P<x>a)?b", "aba", 30) {
+    return Error(CaptureTestFailure(pattern: "(?P<x>a)?b", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+pub fn capture_replacements_3_2() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_replace_case("(?P<x>a)?b", "aba", 60) {
+    return Error(CaptureTestFailure(pattern: "(?P<x>a)?b", src: "aba", stage: 4))
+  }
+  Ok(())
+}
+
+fn capture_forced_limits_inner() -> bool uses {} {
+  let src = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxabb abbbc"
+  let Ok(re) = compile("(ab+)(c?)", 100) else {
+    return false
+  }
+  let mut work = 1000000u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return false
+  }
+  let mut exact = work
+  let Ok(expected) = pike_find_from(re, subject, 0, true, mut exact) else {
+    return false
+  }
+  let mut scratch = capture_scratch()
+  let mut tiny = dfa_cache(re, true, 1)
+  let mut i = 0u64
+  while i < 2 {
+    let mut remaining = work
+    let Ok(actual) = capture_find_from(
+      re,
+      subject,
+      0,
+      true,
+      core@1/string.as_bytes(src),
+      mut tiny,
+      mut scratch,
+      mut remaining
+    ) else {
+      return false
+    }
+    if actual != expected || core@1/list.len(scratch.data) != 0 {
+      return false
+    }
+    i += 1
+  }
+  let Ok(boundary_re) = compile("\\b([0-9]+)\\b", 100) else {
+    return false
+  }
+  let Ok(preceding) = make_subject("β123", mut work) else {
+    return false
+  }
+  let Ok(after) = make_subject("123β", mut work) else {
+    return false
+  }
+  // substring.toml:23-35, supported ASCII boundary mode, original expected rows.
+  let preceding_caps = capture_replay(
+    boundary_re,
+    preceding,
+    Span(start: 2, end: 5),
+    mut scratch
+  )
+  let following_caps = capture_replay(
+    boundary_re,
+    after,
+    Span(start: 0, end: 3),
+    mut scratch
+  )
+  if preceding_caps.spans != [
+    Some(Span(start: 2, end: 5)),
+    Some(Span(start: 2, end: 5))
+  ] || following_caps.spans != [
+    Some(Span(start: 0, end: 3)),
+    Some(Span(start: 0, end: 3))
+  ] {
+    return false
+  }
+  true
+}
+
+pub fn capture_forced_limits() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_forced_limits_inner() {
+    return Error(
+      CaptureTestFailure(
+        pattern: "limits",
+        src: "long ASCII and β boundaries",
+        stage: 20
+      )
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_0() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(a){0}(a)") {
+    return Error(
+      CaptureTestFailure(pattern: "(a){0}(a)", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_1() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("((a?)*)*") {
+    return Error(
+      CaptureTestFailure(pattern: "((a?)*)*", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_2() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(ab.*z|ab)(b*)") {
+    return Error(
+      CaptureTestFailure(pattern: "(ab.*z|ab)(b*)", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_3() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(ab|ab.*z)(b*)") {
+    return Error(
+      CaptureTestFailure(pattern: "(ab|ab.*z)(b*)", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_4() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(?m)^(a+)\\b") {
+    return Error(
+      CaptureTestFailure(pattern: "(?m)^(a+)\\b", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_5() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(a+)\\b") {
+    return Error(
+      CaptureTestFailure(pattern: "(a+)\\b", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_6() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("\\b(a+)\\B") {
+    return Error(
+      CaptureTestFailure(pattern: "\\b(a+)\\B", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_7() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(?i)(k|s)+") {
+    return Error(
+      CaptureTestFailure(pattern: "(?i)(k|s)+", src: "context samples", stage: 10)
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_8() -> Result[(), CaptureTestFailure] uses {} {
+  if !capture_context_pattern("(?P<one>a)?(?P<two>b*)") {
+    return Error(
+      CaptureTestFailure(
+        pattern: "(?P<one>a)?(?P<two>b*)",
+        src: "context samples",
+        stage: 10
+      )
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_context_and_retention() -> Result[(), CaptureTestFailure] uses {} {
+  capture_context_0()?
+  capture_context_1()?
+  capture_context_2()?
+  capture_context_3()?
+  capture_context_4()?
+  capture_context_5()?
+  capture_context_6()?
+  capture_context_7()?
+  capture_context_8()?
+  capture_retention()
+}

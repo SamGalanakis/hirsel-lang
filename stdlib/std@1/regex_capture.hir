@@ -1,0 +1,453 @@
+// Span-first capture recovery: rust-lang/regex 80b9d14e4be9f0b703a742d11c064abce05f210b
+// regex-automata/src/meta/strategy.rs:802-864; regex-lite/src/pikevm.rs:294-435,
+// :550-731, :798-900. Copyright 2014 The Rust Project Developers; MIT,
+// third-party/NOTICES.md. Adaptations: original-source scalar assertions,
+// bounded scan-local scratch, and separate legacy logical-work accounting.
+type CaptureScratch {
+  data: unique List[u64],
+}
+
+fn capture_scratch() -> CaptureScratch uses {} {
+  CaptureScratch(data: [])
+}
+
+// Two ordered banks, a current restore row, a winning row, generation marks,
+// and <=2m+1 Explore/Restore frames (two cells each). Zero denotes absent;
+// offsets are stored +1. Eligible source lengths are <=1M, so this cannot wrap.
+// Check before multiplying; never allocate an unbounded program*groups table.
+// <=32768 cells (256 KiB) plus DFA <=520192 bytes leaves >1 MiB of the combined
+// 2 MiB cap for allocator rounding, headers and scalar metadata. No growth.
+fn capture_layout(re: Regex) -> u64 uses {} {
+  let m = core@1/list.len(re.code)
+  let groups = core@1/list.len(re.names)
+  if m > 512 || groups > 128 {
+    return 0
+  }
+  let s = groups * 2
+  let cells = 7 * m + 4 + (2 * m + 2) * s
+  if cells >= 32768 {
+    0u64
+  } else {
+    cells
+  }
+}
+
+fn capture_row(mut scratch: CaptureScratch, dst: u64, src: u64, size: u64) -> () uses {} {
+  let mut i = 0u64
+  while i < size {
+    scratch.data[dst + i] = scratch.data[src + i]
+    i += 1
+  }
+}
+
+// Restore frames mutate only the current row. A full row is copied only when
+// a consuming/accept state enters the ordered ready set, never on epsilon edges.
+fn capture_closure(
+  re: VmProgram,
+  pc: u64,
+  at: u64,
+  left: u64,
+  right: u64,
+  mut scratch: CaptureScratch,
+  mut count: u64
+) -> bool uses {} {
+  let m = core@1/list.len(re.code)
+  let s = core@1/list.len(re.names) * 2
+  let stack = m
+  let ready = 5 * m + 4
+  let rows = 7 * m + 4
+  let current = rows + 2 * m * s
+  let mut depth = 1u64
+  scratch.data[stack] = pc
+  scratch.data[stack + 1] = 0
+  while depth != 0 {
+    depth -= 1
+    let tag = scratch.data[stack + 2 * depth]
+    if tag >= m {
+      scratch.data[current + tag - m] = scratch.data[stack + 2 * depth + 1]
+      continue
+    }
+    if scratch.data[tag] == at + 1 {
+      continue
+    }
+    scratch.data[tag] = at + 1
+    let inst = re.code[tag]
+    if dfa_consumes(inst.kind) || inst.kind == 11 {
+      scratch.data[ready + count] = tag
+      capture_row(mut scratch, rows + count * s, current, s)
+      count += 1
+      if inst.kind == 11 {
+        return true
+      }
+    } else if dfa_allowed(inst.kind, left, right) {
+      if inst.kind == 12 {
+        scratch.data[stack + 2 * depth] = m + inst.y
+        scratch.data[stack + 2 * depth + 1] = scratch.data[current + inst.y]
+        depth += 1
+        scratch.data[current + inst.y] = at + 1
+      }
+      if inst.kind == 10 {
+        scratch.data[stack + 2 * depth] = inst.y
+        depth += 1
+      }
+      scratch.data[stack + 2 * depth] = inst.x
+      depth += 1
+    }
+  }
+  false
+}
+
+fn capture_scalar(subject: Input, byte: u64) -> u64 uses {} {
+  let mut lo = 0u64
+  let mut hi = core@1/list.len(subject.offsets)
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if subject.offsets[mid] < byte {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  core@1/failure.check(
+    lo < core@1/list.len(subject.offsets) && subject.offsets[lo] == byte,
+    Bounds()
+  )
+  lo
+}
+
+// Anchored ordered Pike replay over the confirmed span. The end boundary still
+// sees the actual following scalar; ^/$/word boundaries never see a sliced text.
+// Replay is physical implementation work, not a second logical matching debit.
+fn capture_replay(re: Regex, subject: Input, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+  let cells = capture_layout(re)
+  core@1/failure.check(cells != 0, Bounds())
+  if core@1/list.len(scratch.data) == 0 {
+    core@1/list.reserve(mut scratch.data, 32768)
+    let mut i = 0u64
+    while i < cells {
+      core@1/list.push(mut scratch.data, 0u64)
+      i += 1
+    }
+  }
+  let program = vm_program(re)
+  let m = core@1/list.len(re.code)
+  let s = core@1/list.len(re.names) * 2
+  let ready = 5 * m + 4
+  let seeds = ready + m
+  let rows = 7 * m + 4
+  let seed_rows = rows + m * s
+  let current = seed_rows + m * s
+  let best = current + s
+  let mut i = 0u64
+  while i < m {
+    scratch.data[i] = 0
+    i += 1
+  }
+  i = 0
+  while i < s {
+    scratch.data[seed_rows + i] = 0
+    i += 1
+  }
+  scratch.data[seeds] = re.entry
+  let mut seed_count = 1u64
+  let mut cursor = capture_scalar(subject, span.start)
+  let end = capture_scalar(subject, span.end)
+  let mut matched: Option[Span] = None()
+  while cursor <= end {
+    let at = subject.offsets[cursor]
+    let left = if cursor == 0 {
+      0u64
+    } else {
+      dfa_category(dfa_byte(subject, cursor - 1))
+    }
+    let right = dfa_category(dfa_byte(subject, cursor))
+    let mut count = 0u64
+    i = 0
+    while i < seed_count {
+      let pc = scratch.data[seeds + i]
+      capture_row(mut scratch, current, seed_rows + i * s, s)
+      if capture_closure(program, pc, at, left, right, mut scratch, mut count) {
+        break
+      }
+      i += 1
+    }
+    seed_count = 0
+    i = 0
+    while i < count {
+      let pc = scratch.data[ready + i]
+      let inst = re.code[pc]
+      if inst.kind == 11 {
+        matched = Some(Span(start: span.start, end: at))
+        capture_row(mut scratch, best, rows + i * s, s)
+        break
+      }
+      if cursor < end {
+        let mut unused = 18446744073709551615u64
+        let accepted = match accepts(inst, subject.scalars[cursor], mut unused) {
+          Ok(value) => value,
+          Error(_) => {
+            core@1/failure.check(false, Bounds())
+            false
+          },
+        }
+        if accepted {
+          scratch.data[seeds + seed_count] = inst.x
+          capture_row(mut scratch, seed_rows + seed_count * s, rows + i * s, s)
+          seed_count += 1
+        }
+      }
+      i += 1
+    }
+    if seed_count == 0 || cursor == end {
+      break
+    }
+    cursor += 1
+  }
+  // A disagreement is an internal invariant failure, never fabricated captures.
+  core@1/failure.check(matched == Some(span), Bounds())
+  let mut spans: List[Option[Span]] = [Some(span)]
+  i = 2
+  while i < s {
+    let a = scratch.data[best + i]
+    let b = scratch.data[best + i + 1]
+    core@1/list.push(
+      mut spans,
+      if a != 0 && b != 0 {
+        Some(Span(start: a - 1, end: b - 1))
+      } else {
+        None()
+      }
+    )
+    i += 2
+  }
+  Captures(spans: take spans)
+}
+
+fn capture_find_from(
+  re: Regex,
+  subject: Input,
+  start: u64,
+  admitted: bool,
+  haystack: Bytes,
+  mut cache: DfaCache,
+  mut scratch: CaptureScratch,
+  mut work: u64
+) -> Result[(Option[Span], Captures), MatchError] uses {} {
+  if admitted && !cache.disabled && capture_layout(re) != 0 {
+    match dfa_search(re, subject, start, haystack, mut cache) {
+      DfaMatch(span) => return Ok(
+        (Some(span), capture_replay(re, subject, span, mut scratch))
+      ),
+      DfaMiss() => return Ok((None(), Captures(spans: []))),
+      DfaQuit() => {
+        cache.disabled = true
+        cache.fallbacks += 1
+      },
+    }
+  }
+  find_from_prefilter(re, subject, start, true, admitted, haystack, mut work)
+}
+
+// Deferred matching debt for replacement. While work >= bound, ALL skipped
+// pure matching (including failed starts, captures and final miss) is affordable.
+// work debits output and progression exactly. Before an uncertain output charge
+// or callback, replay only pending original searches, without consumer effects.
+// A single resolution permanently disables acceleration. Never replay callbacks.
+fn replacement_resolve(
+  re: Regex,
+  subject: Input,
+  count: u64,
+  capture: bool,
+  mut work: u64
+) -> Result[(), MatchError] uses {} {
+  let mut pos = 0u64
+  let mut i = 0u64
+  while i < count {
+    let (matched, _) = pike_find_from(re, subject, pos, capture, mut work)?
+    let Some(span) = matched else {
+      break
+    }
+    if pos < core@1/list.len(subject.scalars) && subject.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == subject.offsets[pos] {
+      pos += 1
+    } else {
+      while subject.offsets[pos] < span.end {
+        pos += 1
+      }
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn replacement_afford(
+  re: Regex,
+  subject: Input,
+  capture: bool,
+  charge: u64,
+  pending: u64,
+  mut bound: u64,
+  mut work: u64
+) -> Result[(), MatchError] uses {} {
+  if bound != 0 && (bound > work || charge > work - bound) {
+    replacement_resolve(re, subject, pending, capture, mut work)?
+    bound = 0
+  }
+  Ok(())
+}
+
+fn replace[T](
+  re: Regex,
+  src: String,
+  replacement: String,
+  mode: u8,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64
+) -> Result[String, MatchError] uses {} {
+  // Tiny/uncertain operations use the unchanged loop before cache preparation.
+  if core@1/bytes.len(core@1/string.as_bytes(src)) >= 64 && re.prefilter.enabled {
+    let bound = prefix_work_bound(re, src, mode != 1, work_limit)
+    if bound != 0 && (mode == 1 || capture_layout(re) != 0) {
+      return replace_accelerated(
+        re,
+        src,
+        replacement,
+        mode,
+        state,
+        callback,
+        work_limit,
+        bound
+      )
+    }
+  }
+  replace_pike(re, src, replacement, mode, state, callback, work_limit)
+}
+
+fn replace_accelerated[T](
+  re: Regex,
+  src: String,
+  replacement: String,
+  mode: u8,
+  state: T,
+  callback: fn(T, String, Captures) -> String uses {},
+  work_limit: u64,
+  initial_bound: u64
+) -> Result[String, MatchError] uses {} {
+  let mut work = work_limit
+  let source_input = make_subject(src, mut work)?
+  let data = core@1/string.as_bytes(src)
+  let mut dst: List[u8] = []
+  let mut bound = initial_bound
+  let mut pending = 0u64
+  let mut cache = dfa_cache(re, true, 65024)
+  let mut scratch = capture_scratch()
+  let mut pos = 0u64
+  let mut last_end = 0u64
+  while pos <= core@1/list.len(source_input.scalars) {
+    replacement_afford(re, source_input, mode != 1, 0, pending, mut bound, mut work)?
+    let search_outcome = if bound != 0 && !cache.disabled {
+      dfa_search(re, source_input, pos, data, mut cache)
+    } else {
+      DfaQuit()
+    }
+    let (matched, captures) = match search_outcome {
+      DfaMatch(span) => {
+        pending += 1
+        (
+          Some(span),
+          if mode == 1 {
+            Captures(spans: [])
+          } else {
+            capture_replay(re, source_input, span, mut scratch)
+          }
+        )
+      },
+      DfaMiss() => {
+        pending += 1
+        (None(), Captures(spans: []))
+      },
+      DfaQuit() => {
+        if bound != 0 {
+          replacement_resolve(re, source_input, pending, mode != 1, mut work)?
+          bound = 0
+        }
+        pike_find_from(re, source_input, pos, mode != 1, mut work)?
+      },
+    }
+    let Some(span) = matched else {
+      break
+    }
+    replacement_afford(
+      re,
+      source_input,
+      mode != 1,
+      span.start - last_end,
+      pending,
+      mut bound,
+      mut work
+    )?
+    append_bytes(mut dst, data, last_end, span.start, mut work)?
+    if span.end > last_end || span.start == 0 {
+      if mode == 2 {
+        let value = callback(state, src, captures)
+        let bytes = core@1/string.as_bytes(value)
+        replacement_afford(
+          re,
+          source_input,
+          mode != 1,
+          core@1/bytes.len(bytes),
+          pending,
+          mut bound,
+          mut work
+        )?
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else if mode == 1 {
+        let bytes = core@1/string.as_bytes(replacement)
+        replacement_afford(
+          re,
+          source_input,
+          mode != 1,
+          core@1/bytes.len(bytes),
+          pending,
+          mut bound,
+          mut work
+        )?
+        append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
+      } else {
+        if bound != 0 {
+          replacement_resolve(re, source_input, pending, true, mut work)?
+          bound = 0
+        }
+        expand_into(re, mut dst, replacement, src, captures, mut work)?
+      }
+    }
+    last_end = span.end
+    // Go replaceAll advances at least one scalar from the search position.
+    replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
+    spend(mut work)?
+    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
+      pos += 1
+    } else if span.end == source_input.offsets[pos] {
+      pos += 1
+    } else {
+      while source_input.offsets[pos] < span.end {
+        replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
+        spend(mut work)?
+        pos += 1
+      }
+    }
+  }
+  replacement_afford(
+    re,
+    source_input,
+    mode != 1,
+    core@1/bytes.len(data) - last_end,
+    pending,
+    mut bound,
+    mut work
+  )?
+  append_bytes(mut dst, data, last_end, core@1/bytes.len(data), mut work)?
+  Ok(text.finish_valid(take dst))
+}

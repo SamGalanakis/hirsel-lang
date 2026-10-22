@@ -59,12 +59,24 @@ fn prefix_class(mut plan: PrefixPlan, inst: Inst) -> bool uses {} {
   }
   for (lo, hi) in inst.ranges {
     if lo < 64 {
-      let last = if hi < 64 { hi } else { 63u32 }
+      let last = if hi < 64 {
+        hi
+      } else {
+        63u32
+      }
       plan.low |= prefix_range(lo, last)
     }
     if lo < 128 && hi >= 64 {
-      let first = if lo >= 64 { lo - 64 } else { 0u32 }
-      let last = if hi < 128 { hi - 64 } else { 63u32 }
+      let first = if lo >= 64 {
+        lo - 64
+      } else {
+        0u32
+      }
+      let last = if hi < 128 {
+        hi - 64
+      } else {
+        63u32
+      }
       plan.high |= prefix_range(first, last)
     }
   }
@@ -74,7 +86,11 @@ fn prefix_class(mut plan: PrefixPlan, inst: Inst) -> bool uses {} {
 // Inclusive interval inside one 64-bit word; no shift by the word width.
 fn prefix_range(lo: u32, hi: u32) -> u64 uses {} {
   let width: u64 = core@1/int.widen(hi - lo + 1)
-  let bits = if width == 64 { 18446744073709551615u64 } else { (1u64 << width) - 1 }
+  let bits = if width == 64 {
+    18446744073709551615u64
+  } else {
+    (1u64 << width) - 1
+  }
   let shift: u64 = core@1/int.widen(lo)
   bits << shift
 }
@@ -170,7 +186,9 @@ fn prefix_plan(code: List[Inst], entry: u64) -> PrefixPlan uses {} {
   // <=64 strings, <=16 bytes each: <=3072 bytes including 32-byte string
   // descriptors, plus fixed fields (<4 KiB). No search-time growing plan.
   if core@1/list.len(plan.literals) == 1 {
-    plan.search = Some(internal.substring.prepare(core@1/string.as_bytes(plan.literals[0])))
+    plan.search = Some(
+      internal.substring.prepare(core@1/string.as_bytes(plan.literals[0]))
+    )
   }
   plan.enabled = true
   take plan
@@ -210,7 +228,9 @@ fn prefix_at(plan: PrefixPlan, haystack: Bytes, at: u64) -> bool uses {} {
 
 // Called only at a dead start state after whole-operation budget admission.
 // Return byte + scalar coordinates and original look-behind, never a slice.
-fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) -> Option[Candidate] uses {} {
+fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) -> Option[
+  Candidate
+] uses {} {
   let mut cursor = from
   let mut target = subject.offsets[from]
   if let Some(search) = plan.search {
@@ -222,12 +242,22 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) 
   }
   while cursor < core@1/list.len(subject.scalars) {
     let byte = subject.offsets[cursor]
-    if byte >= target && prefix_has(plan, core@1/char.to_u32(subject.scalars[cursor])) && prefix_at(plan, haystack, byte) {
-      return Some(Candidate(byte: byte, scalar: cursor, previous: if cursor == 0 {
-        None()
-      } else {
-        Some(subject.scalars[cursor - 1])
-      }))
+    if byte >= target && prefix_has(plan, core@1/char.to_u32(subject.scalars[cursor])) && prefix_at(
+      plan,
+      haystack,
+      byte
+    ) {
+      return Some(
+        Candidate(
+          byte: byte,
+          scalar: cursor,
+          previous: if cursor == 0 {
+            None()
+          } else {
+            Some(subject.scalars[cursor - 1])
+          }
+        )
+      )
     }
     cursor += 1
   }
@@ -244,12 +274,21 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) 
 // No callback or output expansion is admitted. The remaining work is private;
 // admitted operations provably succeed under the unchanged logical budget.
 fn prefix_admitted(re: Regex, source: String, capture: bool, work: u64) -> bool uses {} {
+  prefix_work_bound(re, source, capture, work) != 0
+}
+
+// Zero declines; the returned bound covers all legacy pure matching work.
+fn prefix_work_bound(re: Regex, source: String, capture: bool, work: u64) -> u64 uses {} {
   let n = core@1/bytes.len(core@1/string.as_bytes(source))
   if !re.prefilter.enabled || n < 64 || n > 1000000 {
-    return false
+    return 0
   }
   let m = core@1/list.len(re.code)
-  let s = if capture { core@1/list.len(re.names) * 2 } else { 0u64 }
+  let s = if capture {
+    core@1/list.len(re.names) * 2
+  } else {
+    0u64
+  }
   let mut r = 0u64
   for inst in re.code {
     let size = core@1/list.len(inst.ranges)
@@ -261,9 +300,9 @@ fn prefix_admitted(re: Regex, source: String, capture: bool, work: u64) -> bool 
   let factors: List[u64] = [n + 2, n + 2, m + 1, m + 1, s + 1, r + 1, 65u64]
   for factor in factors {
     if factor > work / bound {
-      return false
+      return 0
     }
     bound *= factor
   }
-  true
+  bound
 }

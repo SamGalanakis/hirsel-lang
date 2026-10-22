@@ -1349,6 +1349,12 @@
       "module": [
         "regex"
       ]
+    },
+    {
+      "path": "regex_capture.hir",
+      "module": [
+        "regex"
+      ]
     }
   ],
   "dependencies": []
