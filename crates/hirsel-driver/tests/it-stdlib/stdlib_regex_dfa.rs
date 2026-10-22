@@ -208,6 +208,7 @@ fn interpreter_driver(source: &str) -> String {
             )
             .replace(&format!("{declaration}\n"), ""),
     );
+    driver.push('\n');
     for (index, chunk) in patterns.chunks(4).enumerate() {
         let list = serde_json::to_string(chunk).unwrap();
         driver.push_str(&format!("pub fn dfa_interpreter_work_{index}() -> Result[(), DfaTestFailure] uses {{}} {{\n let patterns: List[String] = {list}\n if dfa_interpreter_sweeps(patterns) {{ Ok(()) }} else {{ Error(DfaTestFailure(pattern: \"partition\", src: \"aaa/64a\", stage: {index})) }}\n}}\n"));
