@@ -123,6 +123,9 @@ pub(crate) struct Control {
     pub(crate) live_width: AtomicU32,
     stopped: AtomicBool,
     stop: Mutex<Option<Stop>>,
+    /// Installed at admission. Closing the recorded prefix precedes publication
+    /// of the stop, so no waiter can destroy the run before its cutter finishes.
+    terminal: Mutex<Option<Arc<dyn Terminal>>>,
     /// The home thread's exec, while a run with compute workers runs: a stop wakes its loop.
     home: Mutex<Option<Arc<crate::pool::Exec>>>,
     /// A descriptor a stop makes readable, which ends a width-1 run's idle host wait.
@@ -137,7 +140,33 @@ pub(crate) struct Control {
     hosted: AtomicBool,
 }
 
+/// A terminal observer owns its recording state, never a task context or an
+/// adapter borrow. Stops are requested only outside operation sections.
+pub(crate) trait Terminal: Send + Sync {
+    fn stop(&self, cause: &Stop) -> std::io::Result<()>;
+}
+
 impl Control {
+    /// Admission only, before any worker can enter a recording section. An
+    /// embedding host may already have stopped its not-yet-started run.
+    pub(crate) fn terminal(&self, terminal: Arc<dyn Terminal>) {
+        let mut won = self.stop.lock().unwrap();
+        let mut admitted = self.terminal.lock().unwrap();
+        assert!(
+            !self.finished.load(Ordering::Acquire),
+            "terminal admission after finish"
+        );
+        assert!(admitted.is_none(), "terminal admitted twice");
+        if let Some(stop) = &*won
+            && let Err(error) = terminal.stop(stop)
+        {
+            *won = Some(Stop::Environmental(Environmental::Recording(
+                error.to_string(),
+            )));
+        }
+        *admitted = Some(terminal);
+    }
+
     /// Request `stop`: the run's stop, unless another won first. The run's waits wake.
     pub(crate) fn request(&self, stop: Stop) -> Stop {
         self.decide(stop, true)
@@ -153,6 +182,20 @@ impl Control {
         if let Some(winner) = &*won {
             return winner.clone();
         }
+        // Keep first-winner arbitration locked until the observer closes its
+        // prefix. Other callers cannot return an outcome while the cutter is
+        // still scanning. The fast stop bit stays clear during this work:
+        // bounded sections may finish without waiting on this mutex.
+        let stop = match self
+            .terminal
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|terminal| terminal.stop(&stop))
+        {
+            Some(Err(error)) => Stop::Environmental(Environmental::Recording(error.to_string())),
+            _ => stop,
+        };
         *won = Some(stop.clone());
         self.stopped.store(true, Ordering::SeqCst);
         drop(won);
@@ -206,6 +249,11 @@ impl Control {
     }
     /// The launcher returned, leaving `pending` workers inside the run.
     pub(crate) fn finish(&self, pending: u32) {
+        // A retained stop handle must not rewrite a completed tape or keep
+        // its recording buffers alive after the launcher returned. Synchronize
+        // with an in-progress terminal callback in the same lock order.
+        let _stop = self.stop.lock().unwrap();
+        self.terminal.lock().unwrap().take();
         self.pending.store(pending, Ordering::SeqCst);
         self.finished.store(true, Ordering::SeqCst);
     }

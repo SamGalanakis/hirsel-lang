@@ -2150,6 +2150,7 @@ pub(crate) unsafe fn execute(
         == Some("tasks.free@1");
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
+    crate::tasks::free::record::bind_terminal(unsafe { &*ctx });
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.

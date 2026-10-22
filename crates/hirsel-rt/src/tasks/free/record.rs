@@ -19,6 +19,54 @@ use hirsel_free::projection::Stamped;
 use hirsel_free::session::Marked;
 use std::sync::{Arc, Mutex};
 
+/// The host stop path retains only this owner and the stable recorder logs.
+/// It never needs the scheduler role, a saved stack, or the home adapter.
+pub(crate) struct Terminal {
+    recording: Arc<Recording>,
+    receipt: Mutex<Option<(hirsel_free::concurrent::Cut, hirsel_free::claim::Sweep)>>,
+}
+
+impl Terminal {
+    /// Admission only; the caller installs this on the control of the same run
+    /// before publishing the run to workers or an embedding host.
+    pub(crate) fn new(recording: Arc<Recording>) -> Arc<Self> {
+        Arc::new(Self {
+            recording,
+            receipt: Mutex::new(None),
+        })
+    }
+}
+
+impl crate::stop::Terminal for Terminal {
+    fn stop(&self, cause: &Stop) -> std::io::Result<()> {
+        use crate::tape_wire::Wire;
+        let mut bytes = Vec::new();
+        cause.encode(&mut bytes);
+        let outcome = format!("native-stop-v1/{}", hirsel_run_schema::hex(&bytes));
+        let receipt = self.recording.recorder.stop(&outcome, None)?;
+        if let Some(receipt) = receipt {
+            *self.receipt.lock().unwrap() = Some(receipt);
+        }
+        Ok(())
+    }
+}
+
+/// Bind an admitted native recorder to the run's actual stop authority. F0's
+/// cooperative test session has its own lifecycle and is deliberately excluded.
+/// Call before starting workers. A stop requested before launch closes the
+/// already registered START prefix at this admission boundary.
+pub(crate) fn bind_terminal(ctx: &TaskCtx) {
+    if let Some(task) = &ctx.recording {
+        ctx.run_ref()
+            .control
+            .terminal(Terminal::new(task.shared.clone()));
+    }
+}
+
+#[cfg(test)]
+#[path = "record/terminal_tests.rs"]
+mod terminal_tests;
+
 pub(crate) struct Recording {
     pub(crate) recorder: Recorder<Marked, crate::io::Request>,
     trace: Mutex<Vec<Stamped>>,

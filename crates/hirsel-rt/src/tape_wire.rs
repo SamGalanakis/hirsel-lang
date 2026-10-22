@@ -837,6 +837,18 @@ wire_enum!(hirsel_run_schema::RunOutcome {
     11 => Trapped(v0)
 });
 
+wire_enum!(crate::stop::Stop {
+    0 => Blocked(v0),
+    1 => BudgetExceeded(v0),
+    2 => Refused(v0),
+    3 => Diverged(v0),
+    4 => Environmental(v0),
+    5 => Failed,
+    6 => Signaled(v0),
+    7 => Requested,
+    8 => UndefinedBehavior(v0)
+});
+
 wire_struct!(hirsel_run_schema::Wait {
     spawn_path,
     site,
