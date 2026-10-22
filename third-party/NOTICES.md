@@ -1602,3 +1602,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+Package formatting: `crates/hirsel-cli/src/main.rs` adapts the prepare/compare/write
+structure from Go `ebe2feefc400f813aefdc8a036e66d2619da6649`,
+`src/cmd/gofmt/gofmt.go:238–303`; `crates/hirsel-cli/tests/cli/fmt_manifest_11.rs`
+adapts the input/expected-output test structure from `gofmt_test.go:67–115`.
+Copyright 2009 The Go Authors; BSD-3-Clause (Go), license above. Hirsel retains
+its formatter and syntax, prepares the entire direct-source batch before writes,
+skips dependencies, and uses its existing exit codes; Go-specific rewriting,
+fragment, diff and flag vectors do not apply.

@@ -73,8 +73,13 @@ or privileges.
 graph and its entry. A command on a source file uses that file's exact `file.hir.json`
 sidecar when present, else `standalone@0` with the toolchain's `std@1` as its only
 dependency; no parent manifest is searched for. A sidecar
-must assign the source to its root package. Formatting operates on one source file and
-needs no dependency bodies. Capability implementations and simulation inputs are separate,
+must assign the source to its root package. `hirsel fmt examples/configctl/hirsel.json`
+formats only that package's explicit direct sources, in manifest order with canonical
+paths deduplicated; no entrypoint or dependency bodies are needed. `hirsel fmt file.hir`
+formats just that source. `--check` never writes and exits 1 for differences or 0 if
+unchanged. Every selected source is read and formatted before any writes; unchanged
+files are skipped. Write-time I/O errors are reported, but multi-file filesystem
+atomicity is not promised. Capability implementations and simulation inputs are separate,
 explicit launch inputs ([run configuration](determinism.md#run-configuration)); selecting a
 package grants no authority. An explicit `--run /absolute/run.json` selects freshly admitted
 host Io in either engine. Launch defaults and argument snapshots follow

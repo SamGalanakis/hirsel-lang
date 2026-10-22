@@ -11,6 +11,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Select only explicitly declared root sources, using ordinary manifest
+/// validation and canonical paths without visiting dependency manifests.
+pub(crate) fn format_sources(path: &Path) -> Result<Vec<PathBuf>, ToolError> {
+    if !path.extension().is_some_and(|e| e == "json") {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let mut graph = Graph::default();
+    let package = graph.select(path, None, false)?;
+    let mut seen = BTreeSet::new();
+    Ok(graph.packages[&package]
+        .sources
+        .iter()
+        .map(|(path, _)| path.clone())
+        .filter(|path| seen.insert(path.clone()))
+        .collect())
+}
+
 /// A manifest-selected declaration graph, including libraries without an entry.
 /// Loading parses and indexes sources; it never checks or evaluates a body.
 pub struct PackageDeclarations {
@@ -984,6 +1001,14 @@ impl<'a> Graph<'a> {
         ContentHash::of_parts("hirsel.checked-package.v1", parts.iter().map(Vec::as_slice))
     }
     fn visit(&mut self, path: &Path, expected: Option<&PackageId>) -> Result<PackageId, ToolError> {
+        self.select(path, expected, true)
+    }
+    fn select(
+        &mut self,
+        path: &Path,
+        expected: Option<&PackageId>,
+        follow_dependencies: bool,
+    ) -> Result<PackageId, ToolError> {
         let path = self.inputs.canonicalize(path)?;
         if self.active.contains(&path) {
             return Err(invalid("cyclic package dependency"));
@@ -1072,10 +1097,12 @@ impl<'a> Graph<'a> {
         for d in array(required(object, "dependencies")?)? {
             let d = object_value(d, &["manifest", "package", "expose"])?;
             let expected = package_value(required(d, "package")?)?;
-            let selected = self.visit(
-                &base.join(string(required(d, "manifest")?)?),
-                Some(&expected),
-            )?;
+            let manifest = base.join(string(required(d, "manifest")?)?);
+            if !follow_dependencies {
+                dependency_exposures(d, &expected)?;
+                continue;
+            }
+            let selected = self.visit(&manifest, Some(&expected))?;
             // Every foreign library of a program is chosen by its root (PROG-4).
             if self.active.len() > 1 && self.packages[&selected].unsafe_ffi.is_some() {
                 return Err(invalid(&format!(
@@ -1095,14 +1122,7 @@ impl<'a> Graph<'a> {
                     });
                 }
             }
-            for exposure in array(required(d, "expose")?)? {
-                let e = object_value(exposure, &["head", "module"])?;
-                exposures.push(DependencyExposure {
-                    head: identifier(required(e, "head")?)?,
-                    package: selected.clone(),
-                    modules: modules(required(e, "module")?)?,
-                });
-            }
+            exposures.extend(dependency_exposures(d, &selected)?);
         }
         if package.name_is("std") {
             for (_, context) in &sources {
@@ -1199,6 +1219,22 @@ fn foreign_manifest(
         }
     }
     Ok((link, headers_checked, wrappers, threads))
+}
+fn dependency_exposures(
+    dependency: &Map<String, Value>,
+    package: &PackageId,
+) -> Result<Vec<DependencyExposure>, ToolError> {
+    array(required(dependency, "expose")?)?
+        .iter()
+        .map(|exposure| {
+            let e = object_value(exposure, &["head", "module"])?;
+            Ok(DependencyExposure {
+                head: identifier(required(e, "head")?)?,
+                package: package.clone(),
+                modules: modules(required(e, "module")?)?,
+            })
+        })
+        .collect()
 }
 fn invalid(message: &str) -> ToolError {
     ToolError::Runtime(format!("package manifest: {message}"))

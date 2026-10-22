@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
@@ -27,6 +27,7 @@ fn main() -> ExitCode {
 }
 enum Command {
     Help,
+    FmtHelp,
     New(hirsel_cli_args::NewOptions),
     Ctl {
         path: OsString,
@@ -844,6 +845,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 }
             } else {
                 match args.next()? {
+                    Some(Long("help")) if name == "fmt" => Command::FmtHelp,
                     Some(Long("json")) if name == "check" => Command::Source {
                         command: name,
                         flag: Some("--json"),
@@ -1307,6 +1309,12 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
+        Command::FmtHelp => {
+            println!(
+                "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic."
+            );
+            return 0;
+        }
         Command::Help => {
             println!("{USAGE}");
             return 0;
@@ -1730,19 +1738,23 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             }
             Err(error) => tool_error(error, false),
         },
-        "fmt" => match hirsel_driver::format_path(path) {
-            Ok(formatted) if flag.is_some() => match std::fs::read_to_string(path) {
-                Ok(original) if original == formatted => 0,
-                Ok(_) => {
-                    eprintln!("{}: formatting differs", path.display());
-                    1
+        "fmt" => match hirsel_driver::prepare_format_path(path) {
+            Ok(sources) => {
+                // Adapted from gofmt's parse/format, compare, then write order
+                // (gofmt.go:238-303); see third-party/NOTICES.md. Prepare the
+                // whole batch first; write-time failures can leave earlier
+                // files changed, so multi-file filesystem atomicity is not promised.
+                let mut differs = false;
+                for source in sources.iter().filter(|source| source.changed()) {
+                    if flag.is_some() {
+                        eprintln!("{}: formatting differs", source.path.display());
+                        differs = true;
+                    } else if let Err(error) = std::fs::write(&source.path, &source.formatted) {
+                        return tool_error(ToolError::Io(error), false);
+                    }
                 }
-                Err(error) => tool_error(ToolError::Io(error), false),
-            },
-            Ok(formatted) => match std::fs::write(path, formatted) {
-                Ok(()) => 0,
-                Err(error) => tool_error(ToolError::Io(error), false),
-            },
+                u8::from(differs)
+            }
             Err(error) => tool_error(error, false),
         },
         _ => usage(),

@@ -93,6 +93,11 @@ pub fn check_safe_path(
 pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
 }
+/// Prepare all direct source outputs without writing. Callers may compare or
+/// write changed files only after this succeeds for the entire input.
+pub fn prepare_format_path(path: &Path) -> Result<Vec<hirsel_engine::FormattedSource>, ToolError> {
+    COMPILER.prepare_format_path(path)
+}
 pub fn run_path(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, ToolError> {
     COMPILER.run_path(path, stdout)
 }

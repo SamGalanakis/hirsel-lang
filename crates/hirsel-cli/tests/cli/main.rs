@@ -4,72 +4,8 @@ use std::{
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
-#[path = "cli/budgets.rs"]
-mod budgets;
-#[path = "cli/cache_defaults.rs"]
-mod cache_defaults;
-#[path = "cli/candidate.rs"]
-mod candidate;
-#[path = "cli/compiler_workers.rs"]
-mod compiler_workers;
-#[path = "cli/deadlines.rs"]
-mod deadlines;
-#[path = "cli/dependency_card.rs"]
-mod dependency_card;
-#[path = "cli/durable.rs"]
-mod durable;
-#[path = "cli/dwarf.rs"]
-mod dwarf;
-#[path = "cli/entropy_waits.rs"]
-mod entropy_waits;
-#[path = "cli/ergonomics.rs"]
-mod ergonomics;
-#[path = "cli/exit_report.rs"]
-mod exit_report;
-#[path = "cli/hello_web_readiness_8.rs"]
-mod hello_web_readiness_8;
-#[path = "cli/https.rs"]
-mod https;
-#[path = "cli/observation_view.rs"]
-mod observation_view;
-#[path = "cli/onboard.rs"]
-mod onboard;
-#[path = "cli/placement.rs"]
-mod placement;
-#[path = "cli/ready_together.rs"]
-mod ready_together;
-#[path = "cli/remote.rs"]
-mod remote;
-#[path = "cli/replay.rs"]
-mod replay;
-#[path = "cli/replay_format.rs"]
-mod replay_format;
-#[path = "cli/resident.rs"]
-mod resident;
-#[path = "cli/runners.rs"]
-mod runners;
-#[path = "cli/schema.rs"]
-mod schema;
-#[path = "cli/select_race.rs"]
-mod select_race;
-#[path = "cli/signals.rs"]
-mod signals;
-#[path = "cli/split.rs"]
-mod split;
-#[path = "cli/store.rs"]
-mod store;
-#[path = "cli/tape_identity.rs"]
-mod tape_identity;
-#[path = "cli/telemetry.rs"]
-mod telemetry;
-#[path = "cli/testing.rs"]
-mod testing;
-#[path = "cli/timings.rs"]
-mod timings;
-#[path = "cli/unix_backlog.rs"]
-mod unix_backlog;
-#[path = "cli/validation.rs"]
-mod validation;
+include!("modules.rs");
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
@@ -131,7 +67,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>\n",
+            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -530,7 +466,7 @@ fn syntax_rejection_and_real_formatting_cover_exit_codes() {
 
 #[test]
 fn spec_opening_example_checks_formats_and_runs_with_simulated_directory() {
-    let path = file(include_str!("fixtures/opening.hir"));
+    let path = file(include_str!("../fixtures/opening.hir"));
     let sidecar = path.with_extension("hir.json");
     let manifest = serde_json::json!({"schema":1,"package":{"name":"standalone","version":"0"},"entry":{"module":[],"name":"main"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib/std@1/hirsel.json").canonicalize().unwrap(),"package":{"name":"std","version":"1"},"expose":[]}]});
     std::fs::write(&sidecar, manifest.to_string()).unwrap();
@@ -1040,9 +976,9 @@ fn hello_web(native: bool, concurrent: bool, cranelift: bool, deadline: bool) {
     use std::time::Duration;
     {
         let original = if concurrent {
-            include_str!("../../../examples/hello-web-concurrent/main.hir")
+            include_str!("../../../../examples/hello-web-concurrent/main.hir")
         } else {
-            include_str!("../../../examples/hello-web/main.hir")
+            include_str!("../../../../examples/hello-web/main.hir")
         };
         // The existing examples own the listener, bind port zero, and publish
         // the actual local address (Go httptest server.go:215–231,319–346).
@@ -1395,7 +1331,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 
 #[test]
 fn tar_and_zip_extract_never_follow_host_symlinks_out_of_the_grant_in_both_engines() {
-    let source = std_file(include_str!("fixtures/tar-symlink-escape.hir"));
+    let source = std_file(include_str!("../fixtures/tar-symlink-escape.hir"));
     let root = source.with_extension("root");
     let outside = source.with_extension("outside");
     std::fs::create_dir(&root).unwrap();
@@ -1934,7 +1870,7 @@ fn standalone_grants_bind_embedded_code_without_an_exported_record() {
 #[test]
 fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
     let source = std_file(include_str!(
-        "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
+        "../../../../conformance/CAP/CAP-1-host-inputs-run.hir"
     ));
     let simulation = source.with_extension("simulation.json");
     std::fs::write(
@@ -1988,7 +1924,7 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
 #[test]
 fn simulation_bufio_stdin_adapters_share_one_reader() {
     let source = std_file(include_str!(
-        "../../../conformance/CAP/CAP-1-bufio-stdin-run.hir"
+        "../../../../conformance/CAP/CAP-1-bufio-stdin-run.hir"
     ));
     let simulation = source.with_extension("simulation.json");
     std::fs::write(
@@ -2027,7 +1963,7 @@ fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapsho
     use std::io::Write;
     use std::process::Stdio;
     let source = std_file(include_str!(
-        "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
+        "../../../../conformance/CAP/CAP-1-host-inputs-run.hir"
     ));
     for native in [false, true] {
         for stdin_granted in [false, true] {
@@ -2228,7 +2164,9 @@ fn file_errors_cli_reports_permission_denied_for_a_chmod_zero_host_file() {
 
 #[test]
 fn real_host_child_await() {
-    let source = file(include_str!("../../../conformance/CONC/CONC-2-await.hir"));
+    let source = file(include_str!(
+        "../../../../conformance/CONC/CONC-2-await.hir"
+    ));
     let record = run_record(
         &source,
         serde_json::json!({
@@ -2409,7 +2347,7 @@ fn real_host_canceled_stdin_and_stderr_have_no_effects() {
     use std::process::Stdio;
     let source = file(
         &include_str!(
-            "../../../conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir"
+            "../../../../conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir"
         )
         .replace(
             "Ok(_) => true,",
@@ -2442,7 +2380,7 @@ fn real_host_canceled_stdin_and_stderr_have_no_effects() {
 #[test]
 fn real_host_detached_results_drop_before_scope_exit() {
     let source = file(include_str!(
-        "../../../conformance/CONC/CONC-2-detached-result-cleanup-run.hir"
+        "../../../../conformance/CONC/CONC-2-detached-result-cleanup-run.hir"
     ));
     let record = run_record(
         &source,
@@ -3247,7 +3185,7 @@ fn doc_manifest_json_and_output_file_share_public_api() {
     assert!(output.stderr.is_empty());
     assert_eq!(
         std::fs::read_to_string(&destination).unwrap(),
-        include_str!("../../../packages/doc_api@1/api.md")
+        include_str!("../../../../packages/doc_api@1/api.md")
     );
     std::fs::remove_file(destination).unwrap();
 }

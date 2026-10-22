@@ -4,6 +4,18 @@
 use crate::*;
 use std::{io::Write, path::Path, sync::Arc};
 
+/// A fully prepared source; constructing a batch never writes to disk.
+pub struct FormattedSource {
+    pub path: std::path::PathBuf,
+    pub original: String,
+    pub formatted: String,
+}
+impl FormattedSource {
+    pub fn changed(&self) -> bool {
+        self.original != self.formatted
+    }
+}
+
 #[derive(Clone)]
 pub struct Compiler {
     owned_engines: bool,
@@ -313,14 +325,36 @@ impl Compiler {
         })
         .or_else(|error| check_diagnostics(error).map(|output| (output, None)))
     }
+    /// Format one source, preserving the single-source API's output.
     pub fn format_path(&self, path: &Path) -> Result<String, ToolError> {
+        self.prepare_format_source(path)
+            .map(|source| source.formatted)
+    }
+    /// Read and format every direct source before returning any output. A
+    /// manifest selects its explicit sources in order, deduplicated by canonical
+    /// path; a source selects only itself, without consulting its sidecar.
+    pub fn prepare_format_path(&self, path: &Path) -> Result<Vec<FormattedSource>, ToolError> {
+        crate::package::format_sources(path)?
+            .iter()
+            .map(|path| self.prepare_format_source(path))
+            .collect()
+    }
+    fn prepare_format_source(&self, path: &Path) -> Result<FormattedSource, ToolError> {
         with_compiler_stack(|| {
             let (mut engine, file) = self.load(path)?;
-            let result = format_snapshot(&mut engine, file, &default_context());
-            result.map_err(|error| ToolError::Query {
-                error,
-                phase: engine.unavailable,
-                sources: engine.sources.clone(),
+            let original = engine.sources.file(file).unwrap().text().to_owned();
+            let formatted =
+                format_snapshot(&mut engine, file, &default_context()).map_err(|error| {
+                    ToolError::Query {
+                        error,
+                        phase: engine.unavailable,
+                        sources: engine.sources.clone(),
+                    }
+                })?;
+            Ok(FormattedSource {
+                path: path.to_path_buf(),
+                original,
+                formatted,
             })
         })
     }

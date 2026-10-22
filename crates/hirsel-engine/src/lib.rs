@@ -16,7 +16,7 @@ pub use representation::RepresentationRecord;
 mod compiler;
 mod comptime;
 mod config;
-pub use compiler::Compiler;
+pub use compiler::{Compiler, FormattedSource};
 pub use config::CompileConfig;
 mod dictionaries;
 mod materialized;
