@@ -1,0 +1,316 @@
+pub type Reason = BodyLimit | RecordLimit | Empty | Utf8 | Key | Tab | Integer | Overflow
+
+pub type InputError {
+  ordinal: u64,
+  line: u64,
+  reason: Reason,
+}
+
+pub type Stats {
+  count: u64,
+  sum: i64,
+  min: i64,
+  max: i64,
+}
+
+pub type Work {
+  ordinal: u64,
+  data: Bytes,
+}
+
+pub type Partial {
+  ordinal: u64,
+  totals: Map[String, Stats],
+}
+
+pub fn combine(a: Stats, b: Stats) -> Result[Stats, Reason] uses {} {
+  let Some(count) = int.checked_add(a.count, b.count) else {
+    return Error(Overflow())
+  }
+  let Some(sum) = int.checked_add(a.sum, b.sum) else {
+    return Error(Overflow())
+  }
+  Ok(
+    Stats(
+      count: count,
+      sum: sum,
+      min: if a.min < b.min {
+        a.min
+      } else {
+        b.min
+      },
+      max: if a.max > b.max {
+        a.max
+      } else {
+        b.max
+      }
+    )
+  )
+}
+
+fn add(mut totals: Map[String, Stats], key: String, value: Stats) -> Result[(), Reason] uses {} {
+  let next = match map.get(totals, key) {
+    Some(old) => combine(old, value)?,
+    None() => value,
+  }
+  map.insert(mut totals, unique key, next)
+  Ok(())
+}
+
+pub fn merge(
+  mut totals: Map[String, Stats],
+  partial: Map[String, Stats],
+  ordinal: u64,
+  line: u64
+) -> Result[(), InputError] uses {} {
+  for (key, value) in partial {
+    if let Error(reason) = add(mut totals, key, value) {
+      return Error(InputError(ordinal: ordinal, line: line, reason: reason))
+    }
+  }
+  Ok(())
+}
+
+fn record(data: Bytes, first: u64, end: u64, mut totals: Map[String, Stats]) -> Result[
+  (),
+  Reason
+] uses {} {
+  if first == end {
+    return Error(Empty())
+  }
+  let mut key: List[u8] = []
+  let mut number: List[u8] = []
+  let mut tab = false
+  let mut i = first
+  while i < end {
+    let byte = data[i]
+    if byte == b'\r' {
+      return Error(Tab())
+    }
+    if byte == b'\t' {
+      if tab {
+        return Error(Tab())
+      }
+      tab = true
+    } else if tab {
+      list.push(mut number, byte)
+    } else {
+      list.push(mut key, byte)
+    }
+    i += 1
+  }
+  if !tab {
+    return Error(Tab())
+  }
+  if list.len(key) == 0 || list.len(key) > 128 {
+    return Error(Key())
+  }
+  let Ok(name) = string.from_bytes(bytes.from_list(take key)) else {
+    return Error(Utf8())
+  }
+  let Ok(raw) = string.from_bytes(bytes.from_list(take number)) else {
+    return Error(Utf8())
+  }
+  let digits = string.as_bytes(raw)
+  let mut j: u64 = 0
+  if bytes.len(digits) > 0 && (digits[0] == b'+' || digits[0] == b'-') {
+    j = 1
+  }
+  if j == bytes.len(digits) {
+    return Error(Integer())
+  }
+  while j < bytes.len(digits) {
+    if digits[j] < b'0' || digits[j] > b'9' {
+      return Error(Integer())
+    }
+    j += 1
+  }
+  // std integer conversion accepts a minus but no plus. Validate first,
+  // then remove only the single optional plus from this wire grammar.
+  let mut normalized: List[u8] = []
+  let mut start: u64 = if digits[0] == b'+' {
+    1
+  } else {
+    0
+  }
+  while start < bytes.len(digits) {
+    list.push(mut normalized, digits[start])
+    start += 1
+  }
+  let Ok(value) = i64.parse(text.finish_valid(take normalized)) else {
+    return Error(Integer())
+  }
+  if value < -1000000000 || value > 1000000000 {
+    return Error(Integer())
+  }
+  add(mut totals, name, Stats(count: 1, sum: value, min: value, max: value))
+}
+
+pub fn reduce(work: Work) -> Result[Partial, InputError] uses {} {
+  let data = work.data
+  if bytes.len(data) > 65536 {
+    return Error(InputError(ordinal: work.ordinal, line: 0, reason: BodyLimit()))
+  }
+  let mut totals: Map[String, Stats] = map.empty()
+  let mut first: u64 = 0
+  let mut line: u64 = 1
+  while first < bytes.len(data) {
+    if line > 1024 {
+      return Error(InputError(ordinal: work.ordinal, line: line, reason: RecordLimit()))
+    }
+    let mut end = first
+    while end < bytes.len(data) && data[end] != b'\n' {
+      end += 1
+    }
+    let mut content_end = end
+    if end < bytes.len(data) && end > first && data[end - 1] == b'\r' {
+      content_end -= 1
+    }
+    if let Error(reason) = record(data, first, content_end, mut totals) {
+      return Error(InputError(ordinal: work.ordinal, line: line, reason: reason))
+    }
+    first = if end < bytes.len(data) {
+      end + 1
+    } else {
+      end
+    }
+    line += 1
+  }
+  Ok(Partial(ordinal: work.ordinal, totals: take totals))
+}
+
+pub fn render(totals: Map[String, Stats]) -> Result[unique Bytes, csv.CsvError] uses {} {
+  let mut keys: List[String] = []
+  for (key, _) in totals {
+    list.push(mut keys, unique key)
+  }
+  list.sort(mut keys, string.compare)
+  let mut out: List[u8] = []
+  csv.write_record(["key", "count", "sum", "min", "max"], b',', mut out)?
+  for key in keys {
+    if let Some(value) = map.get(totals, key) {
+      csv.write_record(
+        [
+          key,
+          u64.to_string(value.count),
+          i64.to_string(value.sum),
+          i64.to_string(value.min),
+          i64.to_string(value.max)
+        ],
+        b',',
+        mut out
+      )?
+    }
+  }
+  Ok(unique bytes.from_list(take out))
+}
+
+@test
+fn empty_single_multiple(t: Test) -> Result[(), InputError] {
+  let empty = reduce(Work(ordinal: 1, data: b""))?
+  test.check(t, map.len(empty.totals) == 0)
+  let mut totals = reduce(Work(ordinal: 1, data: b"b\t-2\r\na\t+0\nb\t3"))?.totals
+  merge(mut totals, reduce(Work(ordinal: 2, data: b"b\t-1\n"))?.totals, 2, 0)?
+  test.check(t, map.get(totals, "b") == Some(Stats(count: 3, sum: 0, min: -2, max: 3)))
+  Ok(())
+}
+
+@test
+fn strict_records(t: Test) {
+  let invalid: List[Bytes] = [
+    b"\n",
+    b"a",
+    b"\t1",
+    b"a\t",
+    b"a\t+",
+    b"a\t 1",
+    b"a\t1\t2",
+    b"a\t1\r",
+    b"\xff\t1",
+    b"a\t\xff",
+    b"a\t1000000001",
+    b"a\t-1000000001",
+    b"a\t1\n\n"
+  ]
+  for data in invalid {
+    test.check(t, results.is_error(reduce(Work(ordinal: 7, data: data))))
+  }
+  test.check(
+    t,
+    reduce(Work(ordinal: 7, data: b"a\t1\nbad")) == Error(
+      InputError(ordinal: 7, line: 2, reason: Tab())
+    )
+  )
+}
+
+@test
+fn checked_aggregation(t: Test) {
+  let a = Stats(count: 18446744073709551615u64, sum: 0, min: 0, max: 0)
+  let one = Stats(count: 1, sum: 1, min: 1, max: 1)
+  test.check(t, combine(a, one) == Error(Overflow()))
+  let hi = Stats(count: 1, sum: 9223372036854775807i64, min: 1, max: 1)
+  let lo = Stats(count: 1, sum: -9223372036854775808i64, min: -1, max: -1)
+  test.check(t, combine(hi, one) == Error(Overflow()))
+  test.check(
+    t,
+    combine(lo, Stats(count: 1, sum: -1, min: -1, max: -1)) == Error(Overflow())
+  )
+}
+
+@test
+fn csv_and_extremes(t: Test) -> Result[(), InputError] {
+  let partial = reduce(
+    Work(
+      ordinal: 1,
+      data: b"comma,key\t1000000000\nquote\"key\t-1000000000\ncomma,key\t-0\n"
+    )
+  )?
+  test.check(
+    t,
+    render(partial.totals) == Ok(
+      b"key,count,sum,min,max\n\"comma,key\",2,1000000000,0,1000000000\n\"quote\"\"key\",1,-1000000000,-1000000000,-1000000000\n"
+    )
+  )
+  let empty: Map[String, Stats] = map.empty()
+  test.check(t, render(empty) == Ok(b"key,count,sum,min,max\n"))
+  test.check(
+    t,
+    combine(
+      Stats(count: 0, sum: 9223372036854775807i64, min: 0, max: 0),
+      Stats(count: 0, sum: 0, min: 0, max: 0)
+    ) == Ok(Stats(count: 0, sum: 9223372036854775807i64, min: 0, max: 0))
+  )
+  Ok(())
+}
+
+// Indexed successes and zero/single/error controls: Go errgroup_test.go:65–136.
+@test
+fn scoped_batches(t: Test) -> Result[(), InputError] {
+  let tasks = test.tasks(t)
+  let empty: List[Work] = []
+  test.check(t, task.map_all(tasks, take empty, 1, reduce) == Ok([]))
+  let single: List[Work] = [Work(ordinal: 9, data: b"a\t1")]
+  let one = task.map_all(tasks, take single, 1, reduce)?
+  test.check(t, list.len(one) == 1 && one[0].ordinal == 9)
+  let items: List[Work] = [
+    Work(ordinal: 3, data: b"a\t1"),
+    Work(ordinal: 8, data: b"b\t2"),
+    Work(ordinal: 1, data: b"a\t-1")
+  ]
+  let many = task.map_all(tasks, take items, 1, reduce)?
+  test.check(
+    t,
+    list.len(many) == 3 && many[0].ordinal == 3 && many[1].ordinal == 8 && many[2].ordinal == 1
+  )
+  let rejected: List[Work] = [
+    Work(ordinal: 2, data: b"bad"),
+    Work(ordinal: 4, data: b"a\t1")
+  ]
+  test.check(
+    t,
+    task.map_all(tasks, take rejected, 1, reduce) == Error(
+      InputError(ordinal: 2, line: 1, reason: Tab())
+    )
+  )
+  Ok(())
+}

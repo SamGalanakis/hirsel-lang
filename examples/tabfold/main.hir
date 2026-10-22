@@ -1,0 +1,61 @@
+// Go x/sync errgroup 1f920df1, errgroup.go:45–100; BSD-3-Clause.
+// Bounded indexed successes and first-error joins use shipped task.map_all.
+pub type AppError = Usage | Flags(cli.ParseError) | Arguments(ArgError) | Grant(
+  GrantError
+) | Directory(FileError) | File(u64, FileError) | Limit(u64) | Input(model.InputError) | Output(
+  OutputError
+) | Csv(csv.CsvError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let flags: List[cli.Flag] = [
+    cli.Flag(name: "jobs", short: None(), kind: Value, help: "Workers (1..4)")
+  ]
+  let parsed = cli.parse_interspersed(take argv, flags) ? Flags
+  let mut jobs: u64 = 2
+  if let Some(values) = map.get(parsed.flags, "jobs") {
+    if list.len(values) != 1 {
+      return Error(Usage())
+    }
+    let Ok(value) = u64.parse(values[0]) else {
+      return Error(Usage())
+    }
+    jobs = value
+  }
+  let count = list.len(parsed.positional)
+  if jobs < 1 || jobs > 4 || count < 1 || count > 32 {
+    return Error(Usage())
+  }
+  let output = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let d = io.dir(rt, path.of("data")) ? Directory
+  let mut totals: Map[String, model.Stats] = map.empty()
+  let mut index: u64 = 0
+  while index < count {
+    let mut batch: List[model.Work] = []
+    while index < count && list.len(batch) < jobs {
+      let ordinal = index + 1
+      let mut f = match file.open(d, path.of(parsed.positional[index])) {
+        Ok(value) => take value,
+        Error(e) => return Error(File(ordinal, e)),
+      }
+      let data = match file.read_all_bounded(d, mut f, 65536) {
+        Ok(value) => take value,
+        Error(Limit()) => return Error(Limit(ordinal)),
+        Error(File(e)) => return Error(File(ordinal, e)),
+      }
+      list.push(mut batch, model.Work(ordinal: ordinal, data: take data))
+      index += 1
+    }
+    let partials = task.map_all(tasks, take batch, 1, model.reduce) ? Input
+    for partial in partials {
+      model.merge(mut totals, partial.totals, partial.ordinal, 0) ? Input
+    }
+  }
+  let rendered = model.render(totals) ? Csv
+  out.write(output, rendered)?
+  Ok(())
+}
