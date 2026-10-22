@@ -1,0 +1,19 @@
+// rule: LANG-2
+// expect: run
+// boundary: Array, Inline, empty and repeat contexts keep their kinds; core List ignores shadowing.
+type List[T] {
+  value: T,
+}
+
+pub fn main() -> Result[(), ()] {
+  let xs = [1u64, 2]
+  let array: Array[u64] = [1, 2]
+  let inline: Inline[u64, 2] = [1, 2]
+  let empty: core@1/List[u64] = []
+  let repeat: Array[u64] = [1; 2]
+  failure.check(list.len(xs) == 2 && xs[1] == 2, Arithmetic())
+  failure.check(array.len(array) == 2 && array[1] == 2, Arithmetic())
+  failure.check(inline[1] == 2 && list.len(empty) == 0, Arithmetic())
+  failure.check(array.len(repeat) == 2 && repeat[1] == 1, Arithmetic())
+  Ok(())
+}

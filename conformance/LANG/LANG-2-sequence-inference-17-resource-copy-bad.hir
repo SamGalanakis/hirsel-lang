@@ -1,0 +1,13 @@
+// rule: LANG-2
+// expect: reject OWN-5 at line 12
+// twin: LANG/LANG-2-sequence-inference-17-resource-run.hir
+// boundary: First element fixes core List only without an expected type.
+resource type Token {
+  id: u64,
+}
+drop(x) {}
+
+fn probe() {
+  let x = Token(id: 1u64)
+  let xs = [copy x]
+}

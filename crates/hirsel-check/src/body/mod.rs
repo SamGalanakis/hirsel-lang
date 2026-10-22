@@ -325,6 +325,7 @@ enum Work {
     AfterChild(After),
 }
 enum After {
+    SequenceFirst(ast::ExprId, usize),
     Binary(ast::ExprId, Option<TypeId>, usize),
     CallCallee(ast::ExprId, Option<TypeId>, usize),
     CallArgument(usize, usize),
@@ -1193,12 +1194,27 @@ impl Checker<'_, '_> {
             E::Sequence(children) => {
                 let element = expected
                     .and_then(|t| self.element(t).map(|part| self.placed_part_type(t, part)));
-                self.schedule(
-                    id,
-                    expected,
-                    frame,
-                    children.into_iter().map(|c| (c, element)).collect(),
-                );
+                if expected.is_none()
+                    && !children.is_empty()
+                    && !self
+                        .input
+                        .syntax
+                        .tree
+                        .repeats
+                        .iter()
+                        .any(|r| r.sequence == id)
+                {
+                    self.work
+                        .push(Work::AfterChild(After::SequenceFirst(id, frame)));
+                    self.work.push(Work::Enter(children[0], None, frame));
+                } else {
+                    self.schedule(
+                        id,
+                        expected,
+                        frame,
+                        children.into_iter().map(|c| (c, element)).collect(),
+                    );
+                }
             }
             E::Unary {
                 op: ast::UnaryOp::Neg,
@@ -2044,6 +2060,53 @@ impl Checker<'_, '_> {
     }
     fn after(&mut self, after: After) -> Result<(), QueryError> {
         match after {
+            After::SequenceFirst(id, frame) => {
+                let ast::ExprKind::Sequence(children) = self.input.syntax.tree.expressions
+                    [id.0 as usize]
+                    .kind
+                    .clone()
+                else {
+                    unreachable!()
+                };
+                let first = self.value(children[0]);
+                // No lookahead or recovery from a later element: only the
+                // completed first expression may establish the contract.
+                let mut pending = vec![first];
+                let mut seen = std::collections::HashSet::new();
+                let mut complete = !self.bottom(first);
+                while let Some(ty) = pending.pop() {
+                    if seen.insert(ty) {
+                        complete &= !self.invalid(ty) && !self.inference_variable(ty);
+                        pending.extend(self.kind(ty).graph_edges().into_iter().map(|e| e.ty));
+                    }
+                }
+                let sequence = if complete {
+                    // Builtin identity selects core List even when the spelling
+                    // is shadowed. Normalize value access just as a generic
+                    // type argument does; nested contracts and brands survive.
+                    let arenas = self.arena_places(first);
+                    let element = generic_type_argument(self.types, first, |o| arenas.contains(o))
+                        .map_err(|error| {
+                            QueryError::Operational(OperationalFailure {
+                                operation: "sequence element type".into(),
+                                message: format!("{error:?}"),
+                            })
+                        })?;
+                    Some(self.inferred_aggregate_type(TypeKind::Builtin {
+                        kind: BuiltinType::List,
+                        arguments: vec![GenericArgument::Type(element)].into(),
+                    }))
+                } else {
+                    None
+                };
+                let element = sequence.and_then(|t| self.element(t));
+                self.schedule(
+                    id,
+                    sequence,
+                    frame,
+                    children.into_iter().skip(1).map(|c| (c, element)).collect(),
+                );
+            }
             After::Binary(id, expected, frame) => {
                 let ast::ExprKind::Binary { op, left, right } =
                     self.input.syntax.tree.expressions[id.0 as usize].kind

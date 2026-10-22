@@ -41,3 +41,4 @@ mod noalloc_cleanup_model_16;
 mod tuple_compare;
 mod map_loop_validity_17;
 mod prov4_owner_placement;
+mod sequence_inference_17;

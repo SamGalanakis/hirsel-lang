@@ -1,0 +1,10 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 7
+// twin: LANG/LANG-2-sequence-inference-17-first-run.hir
+// boundary: First element fixes core List only without an expected type.
+fn probe(c: bool) {
+  if c {
+    let xs = [return, 1u64]
+  }
+  ()
+}

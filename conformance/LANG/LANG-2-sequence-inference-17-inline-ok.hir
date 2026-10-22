@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: accept
+// boundary: First element fixes core List only without an expected type.
+fn probe() -> Inline[u64, 2] {
+  let xs: Inline[u64, 2] = [1, 2]
+  xs
+}

@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-2-sequence-inference-17-array-ok.hir
+// boundary: First element fixes core List only without an expected type.
+fn probe() -> Array[u64] {
+  let xs = [1u64, 2]
+  xs
+}

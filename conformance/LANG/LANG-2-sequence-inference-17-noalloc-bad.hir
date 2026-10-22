@@ -1,0 +1,15 @@
+// rule: LANG-2
+// expect: reject MEM-5 at line 7
+// twin: LANG/LANG-2-sequence-inference-17-first-run.hir
+// boundary: First element fixes core List only without an expected type.
+@noalloc
+fn probe(x: u64) -> List[u64] {
+  let xs = [x, x]
+  xs
+}
+
+pub fn main() -> Result[(), ()] {
+  let xs = probe(1u64)
+  failure.check(xs[0] == 1, Arithmetic())
+  Ok(())
+}

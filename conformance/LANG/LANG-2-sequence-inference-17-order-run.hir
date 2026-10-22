@@ -1,0 +1,40 @@
+// rule: LANG-2
+// expect: run
+// boundary: First element fixes core List only without an expected type.
+// stdout: eval
+// stdout: eval
+// stdout: first
+// stdout: named
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn element(stdout: Stdout, n: u64) -> Trace {
+  let _ = out.print(stdout, "eval\n")
+  failure.check(n != 0, Arithmetic())
+  Trace(stdout: stdout, text: "first\n")
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let caught: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let named = Trace(stdout: stdout, text: "named\n")
+      let xs = [element(stdout, 1), element(stdout, 0)]
+    }
+  )
+  failure.check(
+    match caught {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    Arithmetic()
+  )
+  Ok(())
+}

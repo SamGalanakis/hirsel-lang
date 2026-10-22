@@ -1,0 +1,12 @@
+// rule: LANG-2
+// expect: run
+// boundary: First element fixes core List only without an expected type.
+pub fn main() -> Result[(), ()] {
+  let sources: List[String] = ["-"]
+  let xs: List[u64] = [1, 2]
+  let nested: List[List[u64]] = [[1], []]
+  let options: List[Option[u64]] = [Some(1), None()]
+  failure.check(sources[0] == "-" && xs[1] == 2 && nested[0][0] == 1, Arithmetic())
+  failure.check(list.len(nested[1]) == 0 && list.len(options) == 2, Arithmetic())
+  Ok(())
+}

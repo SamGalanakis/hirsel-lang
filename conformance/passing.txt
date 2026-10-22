@@ -1862,6 +1862,17 @@ conformance/LANG/LANG-2-provisional-pattern-variant-statement-bad.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-ok.hir
 conformance/LANG/LANG-2-recursive-shared-checker-bad.hir
 conformance/LANG/LANG-2-recursive-shared-checker-ok.hir
+conformance/LANG/LANG-2-sequence-inference-17-array-ok.hir
+conformance/LANG/LANG-2-sequence-inference-17-empty-ok.hir
+conformance/LANG/LANG-2-sequence-inference-17-first-context-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-first-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-inline-ok.hir
+conformance/LANG/LANG-2-sequence-inference-17-kinds-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-noalloc-local-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-order-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-repeat-ok.hir
+conformance/LANG/LANG-2-sequence-inference-17-resource-run.hir
+conformance/LANG/LANG-2-sequence-inference-17-shadow-ok.hir
 conformance/LANG/LANG-2-size-value-u64.hir
 conformance/LANG/LANG-2-string-context-bad.hir
 conformance/LANG/LANG-2-string-context-ok.hir

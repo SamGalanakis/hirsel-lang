@@ -520,8 +520,12 @@ exits end the same loans and clean up every exited scope in the same order
 as an unlabelled exit to that loop; a continue retains the selected loop's
 iteration preparation. Only loops and blocks may be labelled. Constructors use ordinary call
 syntax; field and variant names are resolved against the expected type. `[a, b]` is a
-sequence literal whose kind (`Array`, `List`, `Inline`) comes from the expected type; an
-empty sequence literal also needs one. `[e; N]` repeats a value in an expected
+sequence literal whose kind (`Array`, `List`, `Inline`) comes from a usable complete
+expected type. With no expected type, an ordinary nonempty literal defaults to
+core `List[T]` only when its first element alone supplies a complete, valid,
+non-bottom T; subsequent elements are checked once against T, in order
+([LANG-2](language.md#lang-2-prefix-law)). A user type named `List` does not change
+that default. Empty literals still need an expected sequence type. `[e; N]` repeats a value in an expected
 `Array[T]` or `Inline[T, n]`: `N` is a definition-time-known `u64` expression,
 and for `Inline` it must equal `n`. The element is evaluated once, including
 when `N` is zero; a nonconstant element must be copyable

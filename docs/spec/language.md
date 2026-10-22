@@ -65,6 +65,45 @@ payloads constrain the selected constructor's declared parameters and result.
 Hirsel reuses its ordinary generic call inference and does not introduce full
 unification or payload-based overload selection.
 
+An ordinary nonempty sequence literal `[e0, e1, …]` keeps a usable complete
+expected sequence type: that type fixes its kind, element contract, placement and
+Inline size. A conflicting or erroneous explicit context is never discarded.
+Only when there is no expected type, check `e0` without an expectation. If it
+supplies a complete, valid, non-bottom type T, construct the registered core
+`List[T]`, regardless of a user declaration named `List`. Apply ordinary aggregate
+and type-argument normalization: infer no root `unique` or written `sendable`
+requirement from a value occurrence, preserve nested contracts and brands, and
+manufacture no placement. Check the remaining elements once each, left to right,
+against that fixed T. A mismatch is LANG-7 at the receiving element. Never recheck
+the first element, skip an invalid or undetermined first element, widen T, coerce
+values, or solve constraints from later elements or uses. Existing prefix rules
+within `e0`, such as other-operand numeric inference, still apply.
+
+```hirsel
+fn sequences() {
+  let sources = ["-"]             // core List[String]
+  let counts = [1u64, 2]           // core List[u64]
+  let array: Array[u64] = [1, 2]   // expected kind wins
+  let inline: Inline[u64, 2] = [1, 2]
+  let empty: List[u64] = []        // empty still needs context
+  let repeat: Array[u64] = [1; 2]  // repeat still needs context
+  // let a = [1, 2u64]            // LANG-2 at 1
+  // let b = [1u64, true]         // LANG-7 at true
+  // let c = []                   // LANG-2
+  // let d = [1u64; 2]            // LANG-2
+  // let e: Inline[u64, 3] = [1, 2] // LANG-7: wrong length
+}
+```
+
+`[]` and `[e; N]` retain their context requirements. No later call, binding
+annotation, destructuring pattern or allocation prohibition revises the selected
+kind or element type. An inferred List has ordinary List ownership, locality,
+allocation and cleanup obligations; `@noalloc` never changes it to Inline.
+Swift likewise lets array context override its default literal collection
+([CSGen.cpp:1580–1713](https://github.com/swiftlang/swift/blob/adf10a038cc1cf884e4a0e08964ef69ff890ba0a/lib/Sema/CSGen.cpp#L1580)).
+Hirsel deliberately fixes T from the first element alone, without Swift's
+whole-literal joins or default element type.
+
 Without an outer expectation, the first valid, non-bottom branch of an `if`/`else`
 or `match` supplies the expected type for branches to its right in source order.
 Returning or invalid branches provide no type. Later text never types an earlier

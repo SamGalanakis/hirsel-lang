@@ -1,0 +1,6 @@
+// rule: LANG-2
+// expect: accept
+// boundary: First element fixes core List only without an expected type.
+fn probe() {
+  let xs: Array[u64] = [1u64; 2]
+}

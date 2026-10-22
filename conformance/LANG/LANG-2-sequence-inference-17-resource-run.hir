@@ -1,0 +1,19 @@
+// rule: LANG-2
+// expect: run
+// boundary: First element fixes core List only without an expected type.
+resource type Token {
+  id: u64,
+}
+drop(x) {}
+
+fn id[T](take x: T) -> T {
+  take x
+}
+
+pub fn main() -> Result[(), ()] {
+  let token = Token(id: 1u64)
+  let xs = [take token, Token(id: 2u64)]
+  let ys = id([3u64, 4])
+  failure.check(xs[0].id == 1 && xs[1].id == 2 && ys[1] == 4, Arithmetic())
+  Ok(())
+}
