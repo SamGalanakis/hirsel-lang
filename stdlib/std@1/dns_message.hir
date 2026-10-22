@@ -1,0 +1,568 @@
+// Ported from golang.org/x/net/dns/dnsmessage/message.go:332-395,2039-2123
+// at 7e562009b3884a0845019b5f886f0242a7c0b970. Copyright The Go Authors.
+// BSD-3-Clause; see third-party/NOTICES.md. Raw labels, explicit budgets and
+// deterministic uncompressed output replace Go's dotted names and compression.
+
+/// Root is an empty list. Labels contain arbitrary wire octets, never UTF-8.
+pub type Name {
+  labels: List[Bytes],
+}
+
+/// All 16 flag bits are retained, including the reserved bit. Opcode occupies
+/// bits 11..14, response code bits 0..3; no opcode or class policy is applied.
+pub type Header {
+  id: u16,
+  flags: u16,
+}
+
+pub type Question {
+  name: Name,
+  qtype: u16,
+  class: u16,
+}
+
+pub type Mx {
+  preference: u16,
+  exchange: Name,
+}
+
+pub type Soa {
+  primary: Name,
+  mailbox: Name,
+  serial: u32,
+  refresh: u32,
+  retry: u32,
+  expire: u32,
+  minimum: u32,
+}
+
+pub type Srv {
+  priority: u16,
+  weight: u16,
+  port: u16,
+  target: Name,
+}
+
+pub type RData = A(Bytes) | AAAA(Bytes) | CNAME(Name) | NS(Name) | PTR(Name) | MX(Mx) | TXT(
+  List[Bytes]
+) | SOA(Soa) | SRV(Srv) | Unknown(kind: u16, raw: Bytes)
+
+pub type Record {
+  name: Name,
+  class: u16,
+  ttl: u32,
+  data: RData,
+}
+
+pub type Message {
+  header: Header,
+  questions: List[Question],
+  answers: List[Record],
+  authorities: List[Record],
+  additionals: List[Record],
+}
+
+/// Caller may lower these hard ceilings: 65535 packet bytes, 4096 total
+/// questions + records, 1048576 expanded-name work units. Each visited name
+/// control byte/pointer second byte and copied label byte consumes one unit.
+/// A name follows at most 128 pointers, including forward pointers.
+pub type Limits {
+  packet_bytes: u64,
+  records: u64,
+  name_work: u64,
+}
+
+pub type ErrorKind = InvalidLimits | PacketLimit | RecordLimit | WorkLimit | Truncated | ReservedLabel | PointerLimit | InvalidPointer | NameTooLong | InvalidLabel | InvalidRdata | UnknownEncoding | Trailing
+
+/// Decode offsets are absolute packet positions: offending control byte,
+/// first missing byte, or first unconsumed byte. Limit errors point to header
+/// count/packet end or the name byte exhausting work. Encode offsets identify
+/// the prospective uncompressed field start; InvalidLimits uses zero.
+pub type CodecError {
+  kind: ErrorKind,
+  offset: u64,
+}
+
+pub fn default_limits() -> Limits uses {} {
+  Limits(packet_bytes: 65535, records: 4096, name_work: 1048576)
+}
+
+fn fail(kind: ErrorKind, offset: u64) -> CodecError uses {} {
+  CodecError(kind: kind, offset: offset)
+}
+
+fn limits_ok(limits: Limits) -> Result[(), CodecError] uses {} {
+  if limits.packet_bytes > 65535 || limits.records > 4096 || limits.name_work > 1048576 {
+    return Error(fail(InvalidLimits(), 0))
+  }
+  Ok(())
+}
+
+fn charge(amount: u64, at: u64, mut work: u64) -> Result[(), CodecError] uses {} {
+  if amount > work {
+    return Error(fail(WorkLimit(), at))
+  }
+  work -= amount
+  Ok(())
+}
+
+fn need(at: u64, amount: u64, end: u64) -> Result[(), CodecError] uses {} {
+  if at > end {
+    return Error(fail(Truncated(), at))
+  }
+  if amount > end - at {
+    return Error(fail(Truncated(), end))
+  }
+  Ok(())
+}
+
+fn word(packet: Bytes, end: u64, width: u64, mut at: u64) -> Result[u64, CodecError] uses {} {
+  need(at, width, end)?
+  let mut value = 0u64
+  let stop = at + width
+  while at < stop {
+    value = value << 8 | core@1/int.widen(packet[at])
+    at += 1
+  }
+  Ok(value)
+}
+
+fn raw(packet: Bytes, end: u64, width: u64, mut at: u64) -> Result[Bytes, CodecError] uses {} {
+  need(at, width, end)?
+  let value = unique core@1/bytes.slice(packet, at, at + width)
+  at += width
+  Ok(value)
+}
+
+// Go currOff/newOff split: only bytes before the first pointer consume the
+// enclosing field. Pointer targets are packet-bounded, inline bytes are also
+// RDATA-bounded. A hop ceiling terminates cycles without a packet-sized set.
+fn read_name(packet: Bytes, end: u64, mut at: u64, mut work: u64) -> Result[
+  Name,
+  CodecError
+] uses {} {
+  let mut cursor = at
+  let mut bound = end
+  let mut jumped = false
+  let mut hops = 0u64
+  let mut expanded = 1u64
+  let mut labels: List[Bytes] = []
+  while true {
+    need(cursor, 1, bound)?
+    charge(1, cursor, mut work)?
+    let control: u64 = core@1/int.widen(packet[cursor])
+    let start = cursor
+    cursor += 1
+    if control == 0 {
+      if !jumped {
+        at = cursor
+      }
+      return Ok(Name(labels: take labels))
+    }
+    if control < 64 {
+      need(cursor, control, bound)?
+      if expanded + control + 1 > 255 {
+        return Error(fail(NameTooLong(), start))
+      }
+      charge(control, start, mut work)?
+      core@1/list.push(
+        mut labels,
+        unique core@1/bytes.slice(packet, cursor, cursor + control)
+      )
+      expanded += control + 1
+      cursor += control
+    } else if control >= 192 {
+      need(cursor, 1, bound)?
+      charge(1, cursor, mut work)?
+      let target = (control & 63) * 256 + core@1/int.widen(packet[cursor])
+      if target >= core@1/bytes.len(packet) {
+        return Error(fail(InvalidPointer(), start))
+      }
+      hops += 1
+      if hops > 128 {
+        return Error(fail(PointerLimit(), start))
+      }
+      if !jumped {
+        at = cursor + 1
+      }
+      jumped = true
+      cursor = target
+      bound = core@1/bytes.len(packet)
+    } else {
+      return Error(fail(ReservedLabel(), start))
+    }
+  }
+  Error(fail(Truncated(), cursor))
+}
+
+fn read_question(packet: Bytes, end: u64, mut at: u64, mut work: u64) -> Result[
+  Question,
+  CodecError
+] uses {} {
+  let name = read_name(packet, end, mut at, mut work)?
+  let qtype: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+  let class: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+  Ok(Question(name: name, qtype: qtype, class: class))
+}
+
+fn read_data(packet: Bytes, kind: u16, end: u64, mut at: u64, mut work: u64) -> Result[
+  RData,
+  CodecError
+] uses {} {
+  let start = at
+  let value: RData = match kind {
+    1 => A(raw(packet, end, 4, mut at)?),
+    28 => AAAA(raw(packet, end, 16, mut at)?),
+    5 => CNAME(read_name(packet, end, mut at, mut work)?),
+    2 => NS(read_name(packet, end, mut at, mut work)?),
+    12 => PTR(read_name(packet, end, mut at, mut work)?),
+    15 => {
+      let preference: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+      let exchange = read_name(packet, end, mut at, mut work)?
+      MX(Mx(preference: preference, exchange: exchange))
+    },
+    16 => {
+      let mut texts: List[Bytes] = []
+      while at < end {
+        let size = word(packet, end, 1, mut at)?
+        core@1/list.push(mut texts, raw(packet, end, size, mut at)?)
+      }
+      TXT(take texts)
+    },
+    6 => {
+      let primary = read_name(packet, end, mut at, mut work)?
+      let mailbox = read_name(packet, end, mut at, mut work)?
+      let serial: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+      let refresh: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+      let retry: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+      let expire: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+      let minimum: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+      SOA(
+        Soa(
+          primary: primary,
+          mailbox: mailbox,
+          serial: serial,
+          refresh: refresh,
+          retry: retry,
+          expire: expire,
+          minimum: minimum
+        )
+      )
+    },
+    33 => {
+      let priority: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+      let weight: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+      let port: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+      let target = read_name(packet, end, mut at, mut work)?
+      SRV(Srv(priority: priority, weight: weight, port: port, target: target))
+    },
+    _ => Unknown(kind: kind, raw: raw(packet, end, end - at, mut at)?),
+  }
+  if at != end {
+    return Error(fail(InvalidRdata(), start))
+  }
+  Ok(value)
+}
+
+fn read_records(packet: Bytes, end: u64, count: u64, mut at: u64, mut work: u64) -> Result[
+  List[Record],
+  CodecError
+] uses {} {
+  let mut records: List[Record] = []
+  let mut i = 0u64
+  while i < count {
+    let name = read_name(packet, end, mut at, mut work)?
+    let kind: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+    let class: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+    let ttl: u32 = core@1/int.narrow(word(packet, end, 4, mut at)?)
+    let size = word(packet, end, 2, mut at)?
+    need(at, size, end)?
+    let data = read_data(packet, kind, at + size, mut at, mut work)?
+    core@1/list.push(
+      mut records,
+      Record(name: name, class: class, ttl: ttl, data: data)
+    )
+    i += 1
+  }
+  Ok(take records)
+}
+
+/// Parse exactly one owned DNS packet. No transport framing, I/O or authority.
+/// Unknown RDATA is opaque inspection data; it may contain packet-relative
+/// pointers. We never infer compression by scanning arbitrary opaque bytes.
+pub fn decode(packet: Bytes, limits: Limits) -> Result[Message, CodecError] uses {} {
+  limits_ok(limits)?
+  let end = core@1/bytes.len(packet)
+  if end > limits.packet_bytes {
+    return Error(fail(PacketLimit(), limits.packet_bytes))
+  }
+  let mut at = 0u64
+  let id: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+  let flags: u16 = core@1/int.narrow(word(packet, end, 2, mut at)?)
+  let nq = word(packet, end, 2, mut at)?
+  let na = word(packet, end, 2, mut at)?
+  let ns = word(packet, end, 2, mut at)?
+  let nr = word(packet, end, 2, mut at)?
+  if nq + na + ns + nr > limits.records {
+    return Error(fail(RecordLimit(), 4))
+  }
+  let mut work = limits.name_work
+  let mut questions: List[Question] = []
+  let mut i = 0u64
+  while i < nq {
+    core@1/list.push(mut questions, read_question(packet, end, mut at, mut work)?)
+    i += 1
+  }
+  let answers = read_records(packet, end, na, mut at, mut work)?
+  let authorities = read_records(packet, end, ns, mut at, mut work)?
+  let additionals = read_records(packet, end, nr, mut at, mut work)?
+  if at != end {
+    return Error(fail(Trailing(), at))
+  }
+  Ok(
+    Message(
+      header: Header(id: id, flags: flags),
+      questions: take questions,
+      answers: answers,
+      authorities: authorities,
+      additionals: additionals
+    )
+  )
+}
+
+fn name_size(name: Name, at: u64, mut work: u64) -> Result[u64, CodecError] uses {} {
+  if core@1/list.len(name.labels) > 127 {
+    return Error(fail(NameTooLong(), at))
+  }
+  let mut size = 1u64
+  for label in name.labels {
+    let n = core@1/bytes.len(label)
+    if n == 0 || n > 63 {
+      return Error(fail(InvalidLabel(), at))
+    }
+    size += n + 1
+    if size > 255 {
+      return Error(fail(NameTooLong(), at))
+    }
+  }
+  charge(size, at, mut work)?
+  Ok(size)
+}
+
+fn data_size(data: RData, at: u64, mut work: u64) -> Result[u64, CodecError] uses {} {
+  match data {
+    A(value) => {
+      if core@1/bytes.len(value) != 4 {
+        return Error(fail(InvalidRdata(), at))
+      }
+      Ok(4)
+    },
+    AAAA(value) => {
+      if core@1/bytes.len(value) != 16 {
+        return Error(fail(InvalidRdata(), at))
+      }
+      Ok(16)
+    },
+    CNAME(name) => name_size(name, at, mut work),
+    NS(name) => name_size(name, at, mut work),
+    PTR(name) => name_size(name, at, mut work),
+    MX(mx) => Ok(2 + name_size(mx.exchange, at + 2, mut work)?),
+    SOA(soa) => {
+      let first = name_size(soa.primary, at, mut work)?
+      let second = name_size(soa.mailbox, at + first, mut work)?
+      Ok(first + second + 20)
+    },
+    SRV(srv) => Ok(6 + name_size(srv.target, at + 6, mut work)?),
+    TXT(texts) => {
+      if core@1/list.len(texts) > 65535 {
+        return Error(fail(InvalidRdata(), at))
+      }
+      let mut size = 0u64
+      for text in texts {
+        let n = core@1/bytes.len(text)
+        if n > 255 || size + n + 1 > 65535 {
+          return Error(fail(InvalidRdata(), at))
+        }
+        size += n + 1
+      }
+      Ok(size)
+    },
+    Unknown(kind: _, raw: _) => Error(fail(UnknownEncoding(), at)),
+  }
+}
+
+fn within(size: u64, cap: u64) -> Result[(), CodecError] uses {} {
+  if size > cap {
+    return Error(fail(PacketLimit(), cap))
+  }
+  Ok(())
+}
+
+fn section_size(records: List[Record], cap: u64, mut size: u64, mut work: u64) -> Result[
+  (),
+  CodecError
+] uses {} {
+  for record in records {
+    size += name_size(record.name, size, mut work)? + 10
+    within(size, cap)?
+    size += data_size(record.data, size, mut work)?
+    within(size, cap)?
+  }
+  Ok(())
+}
+
+fn put(value: u64, width: u64, mut out: List[u8]) -> () uses {} {
+  let mut i = width
+  while i > 0 {
+    i -= 1
+    core@1/list.push(mut out, core@1/int.narrow(value >> i * 8 & 255))
+  }
+}
+
+fn put_name(name: Name, mut out: List[u8]) -> () uses {} {
+  for label in name.labels {
+    put(core@1/bytes.len(label), 1, mut out)
+    core@1/bytes.append(mut out, label)
+  }
+  put(0, 1, mut out)
+}
+
+fn kind_of(data: RData) -> u64 uses {} {
+  match data {
+    A(_) => 1,
+    AAAA(_) => 28,
+    CNAME(_) => 5,
+    NS(_) => 2,
+    PTR(_) => 12,
+    MX(_) => 15,
+    TXT(_) => 16,
+    SOA(_) => 6,
+    SRV(_) => 33,
+    Unknown(kind: kind, raw: _) => core@1/int.widen(kind),
+  }
+}
+
+fn put_data(data: RData, mut out: List[u8]) -> () uses {} {
+  match data {
+    A(value) => core@1/bytes.append(mut out, value),
+    AAAA(value) => core@1/bytes.append(mut out, value),
+    CNAME(name) => put_name(name, mut out),
+    NS(name) => put_name(name, mut out),
+    PTR(name) => put_name(name, mut out),
+    MX(mx) => {
+      put(core@1/int.widen(mx.preference), 2, mut out)
+      put_name(mx.exchange, mut out)
+    },
+    SOA(soa) => {
+      put_name(soa.primary, mut out)
+      put_name(soa.mailbox, mut out)
+      put(core@1/int.widen(soa.serial), 4, mut out)
+      put(core@1/int.widen(soa.refresh), 4, mut out)
+      put(core@1/int.widen(soa.retry), 4, mut out)
+      put(core@1/int.widen(soa.expire), 4, mut out)
+      put(core@1/int.widen(soa.minimum), 4, mut out)
+    },
+    SRV(srv) => {
+      put(core@1/int.widen(srv.priority), 2, mut out)
+      put(core@1/int.widen(srv.weight), 2, mut out)
+      put(core@1/int.widen(srv.port), 2, mut out)
+      put_name(srv.target, mut out)
+    },
+    TXT(texts) => {
+      for text in texts {
+        put(core@1/bytes.len(text), 1, mut out)
+        core@1/bytes.append(mut out, text)
+      }
+    },
+    Unknown(kind: _, raw: _) => {},
+  }
+}
+
+fn put_records(records: List[Record], mut out: List[u8]) -> Result[(), CodecError] uses {} {
+  for record in records {
+    put_name(record.name, mut out)
+    put(kind_of(record.data), 2, mut out)
+    put(core@1/int.widen(record.class), 2, mut out)
+    put(core@1/int.widen(record.ttl), 4, mut out)
+    let mut work = 1048576u64
+    let size = data_size(record.data, core@1/list.len(out) + 2, mut work)?
+    put(size, 2, mut out)
+    put_data(record.data, mut out)
+  }
+  Ok(())
+}
+
+/// Preflight validates all counts, labels, typed lengths and the complete packet
+/// size before allocating the output. Counts and RDLENGTH are derived, never
+/// truncated. Every Unknown record is rejected, even if its bytes look plain:
+/// reconstructing a packet cannot safely relocate unknown compression pointers.
+/// Keeping the original Bytes for whole-packet passthrough is a separate action.
+pub fn encode(message: Message, limits: Limits) -> Result[Bytes, CodecError] uses {} {
+  limits_ok(limits)?
+  let nq = core@1/list.len(message.questions)
+  let na = core@1/list.len(message.answers)
+  let ns = core@1/list.len(message.authorities)
+  let nr = core@1/list.len(message.additionals)
+  // Check each before summing, so even pathological input lengths cannot wrap.
+  if nq > limits.records || na > limits.records || ns > limits.records || nr > limits.records {
+    return Error(fail(RecordLimit(), 4))
+  }
+  if nq + na + ns + nr > limits.records {
+    return Error(fail(RecordLimit(), 4))
+  }
+  let mut work = limits.name_work
+  let mut size = 12u64
+  within(size, limits.packet_bytes)?
+  for question in message.questions {
+    size += name_size(question.name, size, mut work)? + 4
+    within(size, limits.packet_bytes)?
+  }
+  section_size(message.answers, limits.packet_bytes, mut size, mut work)?
+  section_size(message.authorities, limits.packet_bytes, mut size, mut work)?
+  section_size(message.additionals, limits.packet_bytes, mut size, mut work)?
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
+  put(core@1/int.widen(message.header.id), 2, mut out)
+  put(core@1/int.widen(message.header.flags), 2, mut out)
+  put(nq, 2, mut out)
+  put(na, 2, mut out)
+  put(ns, 2, mut out)
+  put(nr, 2, mut out)
+  for question in message.questions {
+    put_name(question.name, mut out)
+    put(core@1/int.widen(question.qtype), 2, mut out)
+    put(core@1/int.widen(question.class), 2, mut out)
+  }
+  put_records(message.answers, mut out)?
+  put_records(message.authorities, mut out)?
+  put_records(message.additionals, mut out)?
+  Ok(core@1/bytes.from_list(take out))
+}
+
+/// ASCII absolute display name. Dot, backslash, whitespace and nonprintable
+/// octets use a backslash and three decimal digits, so labels stay unambiguous.
+/// This is display only; no dotted-name parser or IDNA policy is provided.
+pub fn display_name(name: Name) -> Result[String, CodecError] uses {} {
+  let mut work = 1048576u64
+  let size = name_size(name, 0, mut work)?
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size * 4)
+  if core@1/list.len(name.labels) == 0 {
+    core@1/list.push(mut out, 46u8)
+  }
+  for label in name.labels {
+    for byte in label {
+      let value: u64 = core@1/int.widen(byte)
+      if value <= 32 || value > 126 || value == 46 || value == 92 {
+        core@1/list.push(mut out, 92u8)
+        core@1/list.push(mut out, core@1/int.narrow(48u64 + value / 100))
+        core@1/list.push(mut out, core@1/int.narrow(48u64 + value / 10 % 10))
+        core@1/list.push(mut out, core@1/int.narrow(48u64 + value % 10))
+      } else {
+        core@1/list.push(mut out, byte)
+      }
+    }
+    core@1/list.push(mut out, 46u8)
+  }
+  Ok(std@1/text.finish_valid(take out))
+}

@@ -1,0 +1,413 @@
+pub fn main() -> Result[(), ()] {
+  let limits = dns_message.default_limits()
+  failure.check(
+    dns_message.decode(b"", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 0)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 1)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 2)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 3)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 4)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 5)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 6)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 7)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 8)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 9)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x40", limits) == Error(
+      dns_message.CodecError(kind: ReservedLabel(), offset: 12)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x80", limits) == Error(
+      dns_message.CodecError(kind: ReservedLabel(), offset: 12)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\xbf", limits) == Error(
+      dns_message.CodecError(kind: ReservedLabel(), offset: 12)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\xc0", limits) == Error(
+      dns_message.CodecError(kind: Truncated(), offset: 13)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\xc0\xff",
+      limits
+    ) == Error(dns_message.CodecError(kind: InvalidPointer(), offset: 12)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\xc0\x0c",
+      limits
+    ) == Error(dns_message.CodecError(kind: PointerLimit(), offset: 12)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\xc0\x0e\xc0\x0c",
+      limits
+    ) == Error(dns_message.CodecError(kind: PointerLimit(), offset: 12)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03\x61\x62",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 15)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 14)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", limits) == Error(
+      dns_message.CodecError(kind: Trailing(), offset: 12)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff", limits) == Error(
+      dns_message.CodecError(kind: RecordLimit(), offset: 4)
+    ),
+    TextInvariant()
+  )
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3d\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x00\x00\x01\x00\x01",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      dns_message.encode(message, limits) == Ok(
+        b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3d\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x00\x00\x01\x00\x01"
+      ),
+      TextInvariant()
+    )
+  }
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3f\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x78\x3e\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x79\x00\x00\x01\x00\x01",
+      limits
+    ) == Error(dns_message.CodecError(kind: NameTooLong(), offset: 204)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x03\x01\x02\x03",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 26)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x1c\x00\x01\x00\x00\x00\x00\x00\x0f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 38)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x0f\x00\x01\x00\x00\x00\x00\x00\x01\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 24)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x21\x00\x01\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 28)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06\x00\x01\x00\x00\x00\x00\x00\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 44)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x10\x00\x01\x00\x00\x00\x00\x00\x03\x03\x61\x62",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 26)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05\x00\x01\x00\x00\x00\x00\x00\x03\x03\x61\x62",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 26)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05\x00\x01\x00\x00\x00\x00\x00\x01\xc0",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 24)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x04\x01\x02",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 25)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: InvalidRdata(), offset: 23)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x05\x00\x01\x00\x00\x00\x00\x00\x01\x01\x78\x00",
+      limits
+    ) == Error(dns_message.CodecError(kind: Truncated(), offset: 24)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 11, records: 4096, name_work: 1048576)
+    ) == Error(dns_message.CodecError(kind: PacketLimit(), offset: 11)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 65535, records: 0, name_work: 1048576)
+    ) == Error(dns_message.CodecError(kind: RecordLimit(), offset: 4)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 65535, records: 4096, name_work: 0)
+    ) == Error(dns_message.CodecError(kind: WorkLimit(), offset: 12)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 65536, records: 1, name_work: 1)
+    ) == Error(dns_message.CodecError(kind: InvalidLimits(), offset: 0)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 12, records: 4097, name_work: 1)
+    ) == Error(dns_message.CodecError(kind: InvalidLimits(), offset: 0)),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+      dns_message.Limits(packet_bytes: 12, records: 1, name_work: 1048577)
+    ) == Error(dns_message.CodecError(kind: InvalidLimits(), offset: 0)),
+    TextInvariant()
+  )
+  let empty = dns_message.Message(
+    header: dns_message.Header(id: 0, flags: 0),
+    questions: [],
+    answers: [],
+    authorities: [],
+    additionals: []
+  )
+  {
+    let message = dns_message.Message(
+      header: empty.header,
+      questions: [
+        dns_message.Question(name: dns_message.Name(labels: [b""]), qtype: 1, class: 1)
+      ],
+      answers: [],
+      authorities: [],
+      additionals: []
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: InvalidLabel(), offset: 12)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let message = dns_message.Message(
+      header: empty.header,
+      questions: [
+        dns_message.Question(
+          name: dns_message.Name(
+            labels: [
+              b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            ]
+          ),
+          qtype: 1,
+          class: 1
+        )
+      ],
+      answers: [],
+      authorities: [],
+      additionals: []
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: InvalidLabel(), offset: 12)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let message = dns_message.Message(
+      header: empty.header,
+      questions: [],
+      answers: [
+        dns_message.Record(
+          name: dns_message.Name(labels: []),
+          class: 1,
+          ttl: 0,
+          data: A(b"123")
+        )
+      ],
+      authorities: [],
+      additionals: []
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: InvalidRdata(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let message = dns_message.Message(
+      header: empty.header,
+      questions: [],
+      answers: [
+        dns_message.Record(
+          name: dns_message.Name(labels: []),
+          class: 1,
+          ttl: 0,
+          data: AAAA(b"123")
+        )
+      ],
+      authorities: [],
+      additionals: []
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: InvalidRdata(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let message = dns_message.Message(
+      header: empty.header,
+      questions: [],
+      answers: [
+        dns_message.Record(
+          name: dns_message.Name(labels: []),
+          class: 1,
+          ttl: 0,
+          data: TXT(
+            [
+              b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            ]
+          )
+        )
+      ],
+      authorities: [],
+      additionals: []
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: InvalidRdata(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  failure.check(
+    dns_message.encode(
+      empty,
+      dns_message.Limits(packet_bytes: 11, records: 0, name_work: 0)
+    ) == Error(dns_message.CodecError(kind: PacketLimit(), offset: 11)),
+    TextInvariant()
+  )
+  Ok(())
+}

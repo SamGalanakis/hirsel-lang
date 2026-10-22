@@ -1,0 +1,276 @@
+pub fn main() -> Result[(), ()] {
+  let limits = dns_message.default_limits()
+  let expected = dns_message.Message(
+    header: dns_message.Header(id: 4660, flags: 65535),
+    questions: [
+      dns_message.Question(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        qtype: 65000,
+        class: 65535
+      )
+    ],
+    answers: [
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: A(b"\x7f\x00\x00\x01")
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: AAAA(b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f")
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: CNAME(dns_message.Name(labels: [b"www", b"google", b"com"]))
+      )
+    ],
+    authorities: [
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: NS(dns_message.Name(labels: []))
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: PTR(dns_message.Name(labels: [b"www", b"google", b"com"]))
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: MX(
+          dns_message.Mx(
+            preference: 65535,
+            exchange: dns_message.Name(labels: [b"www", b"google", b"com"])
+          )
+        )
+      )
+    ],
+    additionals: [
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: TXT([b"", b"a\x00\xff"])
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: SOA(
+          dns_message.Soa(
+            primary: dns_message.Name(labels: []),
+            mailbox: dns_message.Name(labels: [b"www", b"google", b"com"]),
+            serial: 4294967295u32,
+            refresh: 2,
+            retry: 3,
+            expire: 4,
+            minimum: 5
+          )
+        )
+      ),
+      dns_message.Record(
+        name: dns_message.Name(labels: [b"www", b"google", b"com"]),
+        class: 65534,
+        ttl: 4294967295u32,
+        data: SRV(
+          dns_message.Srv(
+            priority: 1,
+            weight: 2,
+            port: 443,
+            target: dns_message.Name(labels: [b"www", b"google", b"com"])
+          )
+        )
+      )
+    ]
+  )
+  let golden_wire = b"\x12\x34\xff\xff\x00\x01\x00\x03\x00\x03\x00\x03\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\xfd\xe8\xff\xff\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x01\xff\xfe\xff\xff\xff\xff\x00\x04\x7f\x00\x00\x01\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x1c\xff\xfe\xff\xff\xff\xff\x00\x10\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x05\xff\xfe\xff\xff\xff\xff\x00\x10\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x02\xff\xfe\xff\xff\xff\xff\x00\x01\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x0c\xff\xfe\xff\xff\xff\xff\x00\x10\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x0f\xff\xfe\xff\xff\xff\xff\x00\x12\xff\xff\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x10\xff\xfe\xff\xff\xff\xff\x00\x05\x00\x03\x61\x00\xff\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x06\xff\xfe\xff\xff\xff\xff\x00\x25\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\xff\xff\xff\xff\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x04\x00\x00\x00\x05\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x21\xff\xfe\xff\xff\xff\xff\x00\x16\x00\x01\x00\x02\x01\xbb\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00"
+  failure.check(
+    dns_message.decode(golden_wire, limits) == Ok(copy expected),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.encode(expected, limits) == Ok(golden_wire),
+    TextInvariant()
+  )
+  {
+    let wire = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x00\x01"
+    let Ok(message) = dns_message.decode(wire, limits) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(labels: []),
+      TextInvariant()
+    )
+    failure.check(dns_message.encode(message, limits) == Ok(wire), TextInvariant())
+  }
+  {
+    let wire = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x1c\x00\x01"
+    let Ok(message) = dns_message.decode(wire, limits) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(
+        labels: [b"\x67\x6f\x6f\x67\x6c\x65", b"\x63\x6f\x6d"]
+      ),
+      TextInvariant()
+    )
+    failure.check(dns_message.encode(message, limits) == Ok(wire), TextInvariant())
+  }
+  {
+    let wire = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x1c\x00\x01"
+    let Ok(message) = dns_message.decode(wire, limits) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(
+        labels: [b"\x77\x77\x77", b"\x67\x6f\x6f\x67\x6c\x65", b"\x63\x6f\x6d"]
+      ),
+      TextInvariant()
+    )
+    failure.check(dns_message.encode(message, limits) == Ok(wire), TextInvariant())
+  }
+  {
+    let wire = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03\x77\x2e\x77\x02\x67\x6f\x03\x64\x65\x76\x00\x00\x1c\x00\x01"
+    let Ok(message) = dns_message.decode(wire, limits) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(
+        labels: [b"\x77\x2e\x77", b"\x67\x6f", b"\x64\x65\x76"]
+      ),
+      TextInvariant()
+    )
+    failure.check(dns_message.encode(message, limits) == Ok(wire), TextInvariant())
+  }
+  {
+    let wire = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04\x00\xff\x2e\x5c\x00\x00\x1c\x00\x01"
+    let Ok(message) = dns_message.decode(wire, limits) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(labels: [b"\x00\xff\x2e\x5c"]),
+      TextInvariant()
+    )
+    failure.check(dns_message.encode(message, limits) == Ok(wire), TextInvariant())
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\x03\x77\x77\x77\x06\x67\x6f\x6f\x67\x6c\x65\x03\x63\x6f\x6d\x00\x00\x05\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x00\x0a\x00\x02\xc0\x0c",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(message.answers[0].name == message.questions[0].name, TextInvariant())
+    failure.check(
+      message.answers[0].data == CNAME(copy message.questions[0].name),
+      TextInvariant()
+    )
+    let Ok(rebuilt) = dns_message.encode(message, limits) else {
+      return Error(())
+    }
+    failure.check(dns_message.decode(rebuilt, limits) == Ok(message), TextInvariant())
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\x02\xff\x00\x00\x00\x05\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x00\x0a\x00\x02\xc0\x0c",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(message.answers[0].name == message.questions[0].name, TextInvariant())
+    failure.check(
+      message.answers[0].data == CNAME(copy message.questions[0].name),
+      TextInvariant()
+    )
+    let Ok(rebuilt) = dns_message.encode(message, limits) else {
+      return Error(())
+    }
+    failure.check(dns_message.decode(rebuilt, limits) == Ok(message), TextInvariant())
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00\xc0\x12\x00\x01\x00\x01\x01\x78\x00\x00\x01\x00\x01\x00\x00\x00\x00\x00\x04\x01\x02\x03\x04",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      message.questions[0].name == dns_message.Name(labels: [b"x"]),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\xfd\xe8\x00\x63\x00\x00\x00\x00\x00\x05\x70\x6c\x61\x69\x6e",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      message.answers[0].data == Unknown(kind: 65000, raw: b"\x70\x6c\x61\x69\x6e"),
+      TextInvariant()
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: UnknownEncoding(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\xfd\xe8\x00\x63\x00\x00\x00\x00\x00\x02\xc0\x0c",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      message.answers[0].data == Unknown(kind: 65000, raw: b"\xc0\x0c"),
+      TextInvariant()
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: UnknownEncoding(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let Ok(message) = dns_message.decode(
+      b"\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\xfd\xe8\x00\x63\x00\x00\x00\x00\x00\x00",
+      limits
+    ) else {
+      return Error(())
+    }
+    failure.check(
+      message.answers[0].data == Unknown(kind: 65000, raw: b""),
+      TextInvariant()
+    )
+    failure.check(
+      dns_message.encode(message, limits) == Error(
+        dns_message.CodecError(kind: UnknownEncoding(), offset: 23)
+      ),
+      TextInvariant()
+    )
+  }
+  failure.check(
+    dns_message.display_name(dns_message.Name(labels: [b"a.\x00\xff\\"])) == Ok(
+      "a\\046\\000\\255\\092."
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.display_name(dns_message.Name(labels: [])) == Ok("."),
+    TextInvariant()
+  )
+  Ok(())
+}

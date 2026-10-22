@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// Go dnsmessage root question and independent compressed record wire bytes.
+pub fn main() -> Result[(), ()] {
+  let limits = dns_message.default_limits()
+  let packet = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x00\x01"
+  let Ok(message) = dns_message.decode(packet, limits) else {
+    return Error(())
+  }
+  failure.check(message.header.id == 4660, TextInvariant())
+  failure.check(
+    message.questions[0].name == dns_message.Name(labels: []),
+    TextInvariant()
+  )
+  failure.check(dns_message.encode(message, limits) == Ok(packet), TextInvariant())
+  failure.check(
+    dns_message.display_name(dns_message.Name(labels: [b"a.\xff"])) == Ok(
+      "a\\046\\255."
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    dns_message.decode(b"\0\0\0\0\0\x01\0\0\0\0\0\0\xc0\x0c", limits) == Error(
+      dns_message.CodecError(kind: PointerLimit(), offset: 12)
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1307,6 +1307,12 @@
       "module": [
         "list"
       ]
+    },
+    {
+      "path": "dns_message.hir",
+      "module": [
+        "dns_message"
+      ]
     }
   ],
   "dependencies": []

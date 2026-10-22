@@ -1,0 +1,14 @@
+pub type SummaryError = Packet(dns_message.CodecError) | Grant(GrantError) | Output(
+  OutputError
+)
+
+pub fn main(rt: Io) -> Result[(), SummaryError] {
+  let packet = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x00\x01"
+  let message = dns_message.decode(packet, dns_message.default_limits())?
+  let output = io.stdout(rt)?
+  out.print(
+    output,
+    f"DNS id={message.header.id} questions={list.len(message.questions)}\n"
+  )?
+  Ok(())
+}

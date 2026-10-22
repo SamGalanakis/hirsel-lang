@@ -5352,6 +5352,7 @@ conformance/SEM/SEM-3-diff-histogram-7-run.hir
 conformance/SEM/SEM-3-diff-histogram-8-run.hir
 conformance/SEM/SEM-3-diff-histogram-9-run.hir
 conformance/SEM/SEM-3-diff-pairs-1-run.hir
+conformance/SEM/SEM-3-dns-message-15-run.hir
 conformance/SEM/SEM-3-ed25519-rfc8032-sign-run.hir
 conformance/SEM/SEM-3-ed25519-rfc8032-verify-run.hir
 conformance/SEM/SEM-3-ed25519-seed-size-fail.hir

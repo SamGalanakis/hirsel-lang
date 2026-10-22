@@ -5374,3 +5374,92 @@ are excluded. Unlike Go's negative-count prepass and eager capacity sizing,
 Hirsel uses the Rust remaining-count loop and its existing list builder and
 substring plan, so it needs neither a delimiter-count pass nor a capacity
 proportional to the limit.
+
+## DNS packet messages
+
+`dns_message` is a pure `Bytes` codec (`uses {}`), with no resolver, socket,
+clock, cache or ambient I/O. `decode(packet, limits)` reads exactly one packet;
+`encode(message, limits)` reconstructs deterministic uncompressed wire bytes.
+Transport length prefixes are outside this module. Both return
+`Result[..., dns_message.CodecError]`.
+
+`Message` owns a `Header`, questions and three record sections (`answers`,
+`authorities`, `additionals`). `Header.id` and `Header.flags` retain every bit;
+`(flags >> 11) & 15` is the opcode and `flags & 15` the response code.
+`Question` contains `name`, `qtype`, `class`; `Record` contains `name`, `class`,
+`ttl`, `data`. Numeric types and classes are preserved without policy.
+`RData` supports `A(Bytes)` (4 octets), `AAAA(Bytes)` (16), `CNAME(Name)`,
+`NS(Name)`, `PTR(Name)`, `MX(Mx)`, `TXT(List[Bytes])`, `SOA(Soa)`, `SRV(Srv)`
+and `Unknown(kind: u16, raw: Bytes)`. TXT segments preserve arbitrary octets
+and empty segments; each is at most 255 bytes. The MX/SOA/SRV records expose
+all wire fields; times/serials are unsigned 32-bit values.
+
+A `Name` contains `labels: List[Bytes]`; root is `Name(labels: [])`.
+Labels must contain 1–63 octets and their expanded wire form, including length
+bytes and the final root byte, must fit 255 bytes. Embedded dots, zero and
+non-UTF-8 bytes remain valid label data. `display_name` returns an absolute
+ASCII name, escaping dot, backslash, whitespace and nonprintable octets with
+`\DDD` decimal escapes. Display rendering is optional and does not alter data.
+There is no dotted-name parsing or IDNA normalization.
+
+`default_limits()` sets `packet_bytes: 65535`, `records: 4096`, and
+`name_work: 1048576`; callers may lower any ceiling, including to zero.
+Higher ceilings return `InvalidLimits`. The record limit includes questions
+and all three sections, and is checked before allocating section lists.
+Every visited name control byte, pointer second byte and expanded label byte
+consumes one work unit; each name follows at most 128 pointers. Forward and
+backward pointers are accepted; cycles terminate with `PointerLimit` or
+`WorkLimit`. Inline name bytes stay within their question/record or RDATA
+extent; after a pointer jump, the target is bounded by the entire packet.
+No target is interpreted as UTF-8. Known RDATA must consume its exact declared
+length. Trailing packet bytes are rejected.
+
+Encoding derives section counts and RDLENGTH from the owned records, validates
+labels and typed lengths, and checks the complete packet size before reserving
+output space. The 4096 record ceiling also guarantees every count fits u16;
+TXT RDATA is explicitly checked against 65535. Output contains no compression.
+At most 4096 records, 1048576 expanded-name work units, 65535 source bytes and
+65535 output bytes are processed; TXT segments are bounded by their wire extent.
+Decoded labels and RDATA own copies of their bytes, independent of packet storage.
+Allocation is bounded by record count, consumed name work and packet size;
+no packet-sized visited set or allocation based only on an unchecked count is
+needed. Display output reserves at most 1020 bytes for a validated name.
+
+`CodecError { kind, offset }` uses absolute byte offsets when decoding:
+`Truncated` identifies the first missing byte, `ReservedLabel`, `NameTooLong`,
+`InvalidPointer` and `PointerLimit` the offending control byte; `WorkLimit`
+identifies the byte/label whose work cannot be charged. `RecordLimit` uses
+header offset 4, `PacketLimit` the configured cap, and `Trailing` the first
+unconsumed byte. Excess known RDATA uses `InvalidRdata` at the RDATA start.
+Encoding offsets identify the prospective uncompressed field start (invalid
+names use their start); `InvalidLimits` uses zero. No partial result is exposed.
+
+Unknown RDATA can contain compression pointers relative to the original packet.
+The codec preserves it for inspection and **rejects encoding every Unknown
+record**, even when its raw bytes look uncompressed. Scanning opaque bytes for
+pointer-looking values cannot determine whether they are compression pointers.
+Keeping and forwarding the original whole packet is a separate passthrough
+operation; reconstruction does not provide that guarantee. EDNS data remains
+Unknown and receives no semantics; DNSSEC validation is outside this codec.
+
+This example reads a literal packet and prints a summary without DNS traffic:
+
+```hirsel
+pub type SummaryError = Packet(dns_message.CodecError) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), SummaryError] {
+  let packet = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x00\x01"
+  let message = dns_message.decode(packet, dns_message.default_limits())?
+  let output = io.stdout(rt)?
+  out.print(output, f"DNS id={message.header.id} questions={list.len(message.questions)}\n")?
+  Ok(())
+}
+```
+
+The model and currOff/newOff decompression structure follow Go x/net
+`dns/dnsmessage/message.go:332–395,2039–2123`, pinned at
+`7e562009b3884a0845019b5f886f0242a7c0b970`; tests adapt its name/message
+vectors. Deviations are raw labels rather than dotted-name restrictions,
+lossless packed flags (including the reserved bit), explicit resource budgets,
+strict packet/RDATA consumption, and deterministic uncompressed encoding with
+Unknown reconstruction refused. The Go BSD license is in the std notices.
