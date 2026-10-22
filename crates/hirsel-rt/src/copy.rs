@@ -113,12 +113,16 @@ unsafe fn clone_block(
 }
 
 /// One stretch of a drop program to visit: steps `pc..end` over the value at `base`, inside
-/// a loop element `index` (a column's element).
+/// a loop element `index` (a column's element). A loop queues one cursor for all its
+/// elements, highest index first, rather than one work item per element.
+#[derive(Clone, Copy)]
 struct Span {
     pc: usize,
     end: usize,
     base: *mut u8,
     index: u64,
+    remaining: u64,
+    stride: u64,
 }
 
 /// Visits every counted holder slot of the value at `value`, read through `layout`'s program.
@@ -146,6 +150,8 @@ unsafe fn holder_views(
             end: count,
             base: value,
             index: 0,
+            remaining: 1,
+            stride: 0,
         };
         loop {
             let Span {
@@ -153,6 +159,7 @@ unsafe fn holder_views(
                 end,
                 base,
                 index,
+                ..
             } = span;
             while pc < end {
                 let step = &*steps.add(pc);
@@ -174,12 +181,19 @@ unsafe fn holder_views(
                                 .cast::<u64>()
                                 .read_unaligned()
                         };
-                        for element in 0..elements {
+                        // Rust alloc/src/slice.rs:425-432 (a7c37f9f0ee5) clones
+                        // elements directly, without an element-sized worklist.
+                        // Our descriptor walk keeps one reverse cursor instead:
+                        // nested loops/columns need scratch proportional to nesting.
+                        if elements != 0 && step.span != 0 {
+                            let element = elements - 1;
                             work.push(Span {
                                 pc,
                                 end: pc + step.span as usize,
                                 base: at.wrapping_add(element.wrapping_mul(step.stride) as usize),
                                 index: element,
+                                remaining: elements,
+                                stride: step.stride,
                             });
                         }
                         pc += step.span as usize;
@@ -198,6 +212,8 @@ unsafe fn holder_views(
                             end: pc + step.span as usize,
                             base: base.wrapping_add(offset as usize),
                             index,
+                            remaining: 1,
+                            stride: 0,
                         });
                         pc += step.span as usize;
                     }
@@ -208,8 +224,17 @@ unsafe fn holder_views(
                     _ => fault("a drop step has an unknown kind"),
                 }
             }
-            match work.pop() {
-                Some(next) => span = next,
+            match work.last_mut() {
+                Some(next) => {
+                    span = *next;
+                    if next.remaining > 1 {
+                        next.remaining -= 1;
+                        next.index -= 1;
+                        next.base = next.base.wrapping_sub(next.stride as usize);
+                    } else {
+                        work.pop();
+                    }
+                }
                 None => return,
             }
         }

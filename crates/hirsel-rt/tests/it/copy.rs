@@ -368,6 +368,49 @@ fn a_detach_copies_the_block_alone_and_shares_each_active_child() {
 }
 
 #[test]
+fn a_wide_holder_loop_does_not_allocate_per_element_work_items() {
+    let ctx = Ctx::production();
+    let leaf_layout = leaf(8);
+    let list = layout(
+        8,
+        1,
+        None,
+        vec![elements_step(0, 0, 8, 8, 1), release_step(WHOLE_VALUE, 0)],
+    );
+    let leaf = alloc_block(ctx.0, leaf_layout, 8);
+    write_u64(leaf, 0, 42);
+    let length = 4096;
+    let items = alloc_block(ctx.0, list, 8 + length * 8);
+    write_u64(items, 0, length);
+    for i in 0..length {
+        if i != 0 {
+            unsafe { hirsel_rt_v2_dup(ctx.0, leaf) };
+        }
+        write_ref(items, (8 + i * 8) as usize, leaf);
+    }
+
+    let before = host_calls();
+    let mut detached = ptr::null_mut();
+    assert_eq!(
+        unsafe { hirsel_rt_v2_detach(ctx.0, items, 0, &mut detached) },
+        0
+    );
+    let calls = host_calls() - before;
+    assert!(
+        calls <= 4,
+        "one copied block and bounded walk scratch: {calls}"
+    );
+    for i in 0..length {
+        assert_eq!(child(detached, (8 + i * 8) as usize), leaf);
+    }
+    assert_eq!(count(leaf), 2 * length as u32);
+    release(ctx.0, detached);
+    assert_eq!(count(leaf), length as u32);
+    release(ctx.0, items);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
 fn an_inline_value_s_holders_are_copied_independently() {
     pair();
     let ctx = Ctx::diagnostic();
