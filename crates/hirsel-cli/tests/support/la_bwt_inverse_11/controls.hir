@@ -1,0 +1,25 @@
+
+@test
+fn inverse_reduced_checksums(t: Test) {
+  // LangArena test.js:258-271: one warmup plus three measured runs.
+  let encode_input = test_data(50)
+  let decode_input = test_data(51)
+  let encoded = bwt_encode(decode_input)
+  let mut encode_sum: u64 = 0
+  let mut decode_sum: u64 = 0
+  let mut decoded: List[u8] = []
+  for _ in 0u64..4u64 {
+    encode_sum += list.len(bwt_encode(encode_input).data)
+    decoded = bwt_decode(encoded)
+    decode_sum += list.len(decoded)
+  }
+  test.check(t, encode_sum == 200)
+  test.check(t, decoded == decode_input)
+  test.check(t, decode_sum + if decoded == decode_input { 100000 } else { 0 } == 100204)
+}
+
+@test
+fn inverse_empty_ignores_primary(t: Test) {
+  // Empty input returns before primary-index access in both ports.
+  test.check(t, bwt_decode(Bwt(data: [], original: 18446744073709551615)) == [])
+}

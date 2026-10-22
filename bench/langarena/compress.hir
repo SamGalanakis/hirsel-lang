@@ -175,6 +175,8 @@ fn bwt_encode(input: List[u8]) -> Bwt {
 
 // compress.rs:159-197. Stable inverse mapping; reserve the output once and
 // initialize each byte at its final value, avoiding a scalar zero-fill pass.
+// Advance each prefix position as its byte occurs: prefix[b] + occurrence[b]
+// is exactly this cursor, preserving stable LF numbering without a used table.
 fn bwt_decode(encoded: Bwt) -> unique List[u8] {
   let n = list.len(encoded.data)
   if n == 0 {
@@ -187,12 +189,12 @@ fn bwt_decode(encoded: Bwt) -> unique List[u8] {
     positions[i] = total
     total += counts[i]
   }
-  let mut used = zeros(256)
   let mut next = zeros(n)
   for i in 0u64..n {
     let byte: u64 = int.widen(encoded.data[i])
-    next[positions[byte] + used[byte]] = i
-    used[byte] += 1
+    let position = positions[byte]
+    next[position] = i
+    positions[byte] = position + 1
   }
   let mut out: List[u8] = []
   list.reserve(mut out, n)
