@@ -1066,3 +1066,195 @@ fn a_flat_field_view_cannot_claim_ownership() {
             .any(|v| v.kind == ViolationKind::Holding(result))
     );
 }
+
+#[test]
+fn loop_version_list_reduction() {
+    lower_valid(
+        "type V = Text(String) | Num(u64)\nfn total(values: List[V]) -> u64 { let mut n = 0u64; for value in values { match value { Text(s) => { n += string.byte_len(s) }, Num(k) => { n += k } } }; n }\nfn main() -> u64 { total([Text(\"a\"), Num(2u64)]) }",
+    );
+}
+
+#[test]
+fn loop_version_map_reduction() {
+    let (_, lowered) = lower_valid(
+        "type V = Text(String) | Num(u64)\nfn texts(fields: Map[String, V]) -> Result[Map[String, String], u64] { let mut entries: Map[String, String] = map.empty(); for (key, value) in fields { match value { Text(s) => map.insert(mut entries, unique key, unique s), Num(k) => return Error(k) } }; Ok(take entries) }\nfn main() -> Result[Map[String, String], u64] { texts(map.empty()) }",
+    );
+    // The borrowed variant travels as SSA backing: no slot is initialized for
+    // it. C must validate the deep copy's field read against that backing.
+    let unit = unit_named(&lowered, "texts");
+    assert!(unit.instructions.iter().any(|instruction| {
+        let hirsel_lir::ir::Inst::UniqueCopy { value, .. } = instruction else {
+            return false;
+        };
+        unit.instructions.iter().any(|read| matches!(read,
+            hirsel_lir::ir::Inst::Read { result, address, reaching, .. }
+                if result == value
+                    && unit.addresses[address.index()].base == hirsel_lir::ir::AddressBase::Value(*reaching)
+        ))
+    }), "{}", dump(unit));
+}
+
+#[test]
+fn loop_version_kvstore_reduction() {
+    lower_valid(
+        "fn parse_entries(take text: String) -> Result[Map[String, String], String] { let fields = match std@1/json.parse(take text) { Ok(Object(fields)) => copy fields, _ => return Error(\"object\") }; let mut entries: Map[String, String] = map.empty(); for (key, value) in fields { match value { Text(s) => map.insert(mut entries, unique key, unique s), _ => return Error(unique key) } }; Ok(take entries) }\nfn main() -> Result[Map[String, String], String] { parse_entries(\"{}\") }",
+    );
+}
+
+/// Unlike Cranelift's undefined-entry vector, import must never synthesize bits.
+#[test]
+fn loop_version_missing_definition_is_rejected() {
+    use hirsel_tir::{InstructionKind, Rvalue};
+    let mut program = compile("fn main() -> u64 { 19u64 }");
+    let definition = std::sync::Arc::make_mut(program.definitions.get_mut(&path("main")).unwrap());
+    let body = &mut definition.bodies[definition.entry.0 as usize];
+    let mut removed = 0;
+    for block in &mut body.blocks {
+        block.instructions.retain(|instruction| {
+            let remove = matches!(instruction.kind,
+                InstructionKind::Assign { value, .. }
+                    if matches!(body.rvalues[value.0 as usize], Rvalue::Constant(_)));
+            removed += usize::from(remove);
+            !remove
+        });
+    }
+    assert_eq!(removed, 1);
+    let error = hirsel_rc::import::lower(&program, &target())
+        .err()
+        .expect("undefined read rejected");
+    assert!(
+        format!("{error}").contains("no reaching version"),
+        "{error}"
+    );
+}
+
+/// C derives currency from the graph, independently of the importer's names.
+#[test]
+fn loop_version_stale_join_is_rejected() {
+    use hirsel_lir::ir::{AddressBase, Inst};
+    use hirsel_lir::validate::{Inputs, ViolationKind};
+    let (program, lowered) =
+        lower_valid("fn main() -> u64 { let mut n = 0u64; while n < 3u64 { n += 1u64 }; n }");
+    let mut unit = unit_named(&lowered, "main").clone();
+    let (index, old) = unit
+        .instructions
+        .iter()
+        .enumerate()
+        .find_map(|(index, read)| {
+            let Inst::Read {
+                address, reaching, ..
+            } = *read
+            else {
+                return None;
+            };
+            let AddressBase::Slot(slot) = unit.addresses[address.index()].base else {
+                return None;
+            };
+            unit.instructions.iter().find_map(|store| match *store {
+                Inst::Store {
+                    address, version, ..
+                } if unit.addresses[address.index()].base == AddressBase::Slot(slot)
+                    && version != reaching =>
+                {
+                    Some((index, version))
+                }
+                _ => None,
+            })
+        })
+        .expect("a read with a distinct pre-loop slot version");
+    let read = &mut unit.instructions[index];
+    if let Inst::Read { reaching, .. } = read {
+        *reaching = old;
+    }
+    let manifest = manifest(&program);
+    let target = target();
+    let inputs = Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &program.operation_registry(),
+        target: &target,
+        layouts: &lowered.table,
+        manifest: &manifest,
+    };
+    let errors = hirsel_lir::validate::check(&unit, &inputs);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, ViolationKind::StaleVersion { .. })),
+        "{errors:?}"
+    );
+}
+
+/// Keep the regression bounded: one fault campaign and one executable per backend.
+#[test]
+#[ignore = "native: run by tools/check-native.sh"]
+fn loop_version_matches_reference_heap_llvm_and_cranelift() {
+    use hirsel_driver::native::*;
+    use hirsel_engine::{
+        QueryEngine, RunConfiguration, check_progress, default_context, default_environment,
+        entry_path, run_observed_snapshot, with_compiler_stack,
+    };
+    let source = include_str!("../../../../conformance/LANG/LANG-13-loop-element-match-run.hir");
+    with_compiler_stack(move || {
+        let mut engine =
+            QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
+        let file = engine
+            .sources
+            .add("loop-element.hir", source.into())
+            .unwrap();
+        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let entry = entry_path(&default_context());
+        let config = RunConfiguration {
+            entry: entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let run = run_observed_snapshot(&mut engine, &config, Default::default()).unwrap();
+        let reference = Observation::of_reference(run.observation.as_ref().unwrap());
+        assert_eq!(reference.output, b"7 b d\n");
+        let input = engine.export_native_input().unwrap();
+        let input = engine.import_native_input(input).unwrap();
+        let mut options = Options::new(target());
+        options.validation = Validation::EveryStage;
+        let matrix = vec![
+            Configuration {
+                options: options.clone(),
+                engine: Engine::Heap { campaign: true },
+            },
+            Configuration {
+                options: options.clone(),
+                engine: Engine::Native {
+                    opt: OptLevel::Speed,
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            },
+            Configuration {
+                options,
+                engine: Engine::Cranelift {
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            },
+        ];
+        let directory =
+            std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("loop-version-native");
+        let toolchain = Toolchain::for_matrix(&directory.join("runtime"), &matrix).unwrap();
+        let outcomes = differential(&input, &entry, &reference, &matrix, &toolchain, &directory);
+        assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in outcomes {
+            assert!(
+                matches!(outcome, Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn loop_version_join_and_early_return() {
+    lower_valid(
+        "fn pick(a: String, b: String, select: bool) -> unique String { if string.byte_len(a) == 0u64 { return unique b }; let selected = if select { a } else { b }; unique selected }\nfn main() -> unique String { pick(\"a\", \"b\", false) }",
+    );
+}

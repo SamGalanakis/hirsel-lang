@@ -995,7 +995,12 @@ impl Importer<'_> {
         if p.source.is_some() || self.bits(p.ty) {
             return self.operand_at(UseKind::Copy, &p, address, None);
         }
-        let reaching = self.reaching(p.slot)?;
+        // A joined loop/pattern view has SSA backing and no initialized slot.
+        // Read that transported view, as ordinary operands and tag tests do.
+        let reaching = match p.value {
+            Some(value) => value,
+            None => self.reaching(p.slot)?,
+        };
         let tir_loan = p.loan;
         let (holding, synthetic) = match tir_loan {
             Some(l) if self.state.loans[self.loan(l)?.index()] == Tri::Yes => {
