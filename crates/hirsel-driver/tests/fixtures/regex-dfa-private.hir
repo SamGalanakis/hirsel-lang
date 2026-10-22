@@ -24,7 +24,7 @@ fn dfa_test_case(pattern: String, src: String) -> bool uses {} {
     }
     let mut retry_work = work
     let Ok((retry, _)) = find_from(re, subject, start, true, core@1/string.as_bytes(src), mut tiny, mut retry_work) else { return false }
-    if retry != expected || retry_work != oracle_work { return false }
+    if retry != expected || retry_work != oracle_work || tiny.scalar_fallback { return false }
     start += 1
   }
   true
@@ -54,6 +54,7 @@ pub fn dfa_test_main() -> Result[(), DfaTestFailure] uses {} {
     }
   }
   if !dfa_public_sweeps() { return Error(DfaTestFailure(pattern: "public-work-sweeps", src: "aaa and 64-byte ASCII", stage: 5)) }
+  if !dfa_scalar_retry() { return Error(DfaTestFailure(pattern: "scalar-retry", src: "ASCII prefix/Unicode folds", stage: 6)) }
   if !dfa_forced_quits() { return Error(DfaTestFailure(pattern: "forced-quit", src: "aaa/axq", stage: 2)) }
   if !dfa_goldens() { return Error(DfaTestFailure(pattern: "goldens", src: "see vectors", stage: 3)) }
   // Exact original public thresholds: budget admission must never erase errors.
@@ -97,7 +98,7 @@ fn dfa_forced_quits() -> bool uses {} {
   }
   cache.limit = core@1/list.len(cache.data)
   let previous_misses = cache.misses
-  if dfa_search(re, subject, 0, b"aaa", mut cache) != DfaQuit() || !cache.disabled || cache.misses != previous_misses { return false }
+  if dfa_search(re, subject, 0, b"aaa", mut cache) != DfaQuit() || !cache.disabled || cache.scalar_fallback || cache.misses != previous_misses { return false }
   let mut repeat = 0u64
   while repeat < 2 {
     let mut retry = work
@@ -114,7 +115,7 @@ fn dfa_forced_quits() -> bool uses {} {
   if second % 2 != 1 { return false }
   pending.limit = core@1/list.len(pending.data)
   let Ok(other) = make_subject("axq", mut work) else { return false }
-  if dfa_search(alternate, other, 0, b"axq", mut pending) != DfaQuit() { return false }
+  if dfa_search(alternate, other, 0, b"axq", mut pending) != DfaQuit() || pending.scalar_fallback { return false }
   let Ok((answer, _)) = find_from(alternate, other, 0, true, b"axq", mut pending, mut work) else { return false }
   answer == Some(Span(start: 0, end: 1))
 }
@@ -211,6 +212,36 @@ fn dfa_oracle_all(re: Regex, text: String, max_matches: u64, work_limit: u64) ->
 }
 
 
+// A Unicode quit must retain the predecessor's admitted prefix-assisted VM,
+// including subsequent searches and nonzero lower bounds. Low budgets still
+// select the raw oracle even when this operation previously quit on Unicode.
+fn dfa_scalar_retry() -> bool uses {} {
+  let src = "________________________________________________________________Kelvin longſ kelvin longs"
+  let patterns: List[String] = ["(?i)(kelvin|longs)", "(?i)(Kelvin|longſ)"]
+  for pattern in patterns {
+    let Ok(re) = compile(pattern, 10000) else { return false }
+    if !prefix_admitted(re, src, false, 18446744073709551615) { return false }
+    let mut work = 18446744073709551615u64
+    let Ok(subject) = make_subject(src, mut work) else { return false }
+    let haystack = core@1/string.as_bytes(src)
+    let mut cache = dfa_cache(re, true, 65024)
+    let starts: List[u64] = [0, 65, 72, 80]
+    for start in starts {
+      let mut retry_work = work
+      let got = find_from(re, subject, start, true, haystack, mut cache, mut retry_work)
+      let mut expected_work = work
+      let expected = find_from_prefilter(re, subject, start, false, true, haystack, mut expected_work)
+      if got != expected || retry_work != expected_work || !cache.disabled || !cache.scalar_fallback { return false }
+      let mut low_work = 100u64
+      let low = find_from(re, subject, start, false, haystack, mut cache, mut low_work)
+      let mut oracle_work = 100u64
+      let oracle = pike_find_from(re, subject, start, false, mut oracle_work)
+      if low != oracle || low_work != oracle_work { return false }
+    }
+  }
+  true
+}
+
 fn dfa_public_sweeps() -> bool uses {} {
   let patterns: List[String] = ["", "a", "a*", "a*?", "a|ab", "(a|aa)*b", "(?i)a", "\\ba", "(?m)^a", "a{8}", "abcdefg|a", "aaaaaaa|aaaaaaab", "(?i)abcdefgh"]
   for pattern in patterns {
@@ -241,3 +272,4 @@ fn dfa_public_sweeps() -> bool uses {} {
   }
   true
 }
+

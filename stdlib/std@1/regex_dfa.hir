@@ -16,6 +16,7 @@ type DfaCache {
   buckets: u64,
   limit: u64,
   disabled: bool,
+  scalar_fallback: bool,
   misses: u64,
   fallbacks: u64,
 }
@@ -53,7 +54,7 @@ fn dfa_cache(re: Regex, enabled: bool, limit: u64) -> DfaCache uses {} {
   }
   DfaCache(data: take data, size: m, seen: seen, stack: stack,
     ready: ready, next: next, buckets: buckets, limit: cap,
-    disabled: disabled, misses: 0, fallbacks: 0)
+    disabled: disabled, scalar_fallback: false, misses: 0, fallbacks: 0)
 }
 
 fn dfa_category(byte: u64) -> u64 uses {} {
@@ -246,9 +247,9 @@ fn dfa_transition(re: VmProgram, state: u64, byte: u64, mut cache: DfaCache) -> 
       let accepted = match scalar {
         Some(c) => match accepts(inst, c, mut unused) {
           Ok(value) => value,
-          Error(_) => { cache.disabled = true; return 0 },
+          Error(_) => { cache.disabled = true; cache.scalar_fallback = true; return 0 },
         },
-        None() => { cache.disabled = true; return 0 },
+        None() => { cache.disabled = true; cache.scalar_fallback = true; return 0 },
       }
       if accepted {
         cache.data[cache.next + next_count] = if reverse { pc } else { inst.x }
@@ -276,7 +277,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
   if cache.disabled { return DfaQuit() }
   let program = vm_program(re)
   let previous = if start == 0 { 128u64 } else { dfa_byte(subject, start - 1) }
-  if previous > 128 { cache.disabled = true; return DfaQuit() }
+  if previous > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
   let mut state = dfa_intern(mut cache, 0, dfa_category(previous))
   if state == 0 { return DfaQuit() }
   let mut cursor = start
@@ -292,7 +293,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
       let preceding = match candidate.previous {
         Some(c) => {
           let cp: u64 = core@1/int.widen(core@1/char.to_u32(c))
-          if cp >= 128 { cache.disabled = true; return DfaQuit() }
+          if cp >= 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
           cp
         },
         None() => 128u64,
@@ -301,7 +302,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
       if state == 0 { return DfaQuit() }
     }
     let byte = dfa_byte(subject, cursor)
-    if byte > 128 { cache.disabled = true; return DfaQuit() }
+    if byte > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
     let transition = dfa_transition(program, state, byte, mut cache)
     if transition == 0 { return DfaQuit() }
     if transition % 2 == 1 { end = Some(cursor) }
@@ -314,7 +315,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
     return DfaMatch(Span(start: subject.offsets[start], end: subject.offsets[end_at]))
   }
   let right = dfa_byte(subject, end_at)
-  if right > 128 { cache.disabled = true; return DfaQuit() }
+  if right > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
   // The compiler's sole accept instruction is PC zero.
   cache.data[cache.next] = 0
   state = dfa_intern(mut cache, 1, 8 + dfa_category(right))
@@ -323,7 +324,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
   let mut found: Option[u64] = None()
   while true {
     let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
-    if byte > 128 { cache.disabled = true; return DfaQuit() }
+    if byte > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
     let transition = dfa_transition(program, state, byte, mut cache)
     if transition == 0 { return DfaQuit() }
     if transition % 2 == 1 { found = Some(cursor) }
@@ -333,7 +334,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
   }
   match found {
     Some(from) => DfaMatch(Span(start: subject.offsets[from], end: subject.offsets[end_at])),
-    None() => { cache.disabled = true; DfaQuit() },
+    None() => { cache.disabled = true; cache.scalar_fallback = true; DfaQuit() },
   }
 }
 
@@ -348,6 +349,12 @@ fn find_from(re: Regex, subject: Input, start: u64, admitted: bool, haystack: By
       DfaMiss() => return Ok((None(), Captures(spans: []))),
       DfaQuit() => { cache.disabled = true; cache.fallbacks += 1 },
     }
+  }
+  // Unicode/unsupported quits retain the landed prefix-assisted scalar path.
+  // Fullness keeps strict raw replay, including on later searches in this
+  // operation. Neither route uses the tentative match or quit position.
+  if admitted && cache.scalar_fallback && re.prefilter.enabled {
+    return find_from_prefilter(re, subject, start, false, true, haystack, mut work)
   }
   pike_find_from(re, subject, start, false, mut work)
 }
