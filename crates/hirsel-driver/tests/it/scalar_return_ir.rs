@@ -1,5 +1,5 @@
 //! Scalar call results in optimized LLVM IR: a callee whose result is a plain
-//! scalar returns `{ status, value }` in registers, so the erased stage loop of
+//! scalar returns `{ value, status }` in registers, so the erased stage loop of
 //! `bench/native/programs/closure-iter-erased.hir` calls through its code
 //! pointers with no out-cell, on both targets.
 use hirsel_driver::compiler_adapters;
@@ -106,7 +106,7 @@ fn an_erased_stage_call_returns_its_scalar_in_registers() {
         assert!(!calls.is_empty(), "the stage calls stay indirect\n{ir}");
         for call in &calls {
             assert!(
-                call.contains("call { i8, i64 } %"),
+                call.contains("call { i64, i8 } %"),
                 "a scalar result returns with its status\n{call}\n{ir}"
             );
         }
@@ -121,7 +121,7 @@ fn an_erased_stage_call_returns_its_scalar_in_registers() {
 fn a_function_reference_thunk_returns_the_pair() {
     for target in targets() {
         let ir = function_ir(ERASED, target, &["@_H1T", "10stage__add"]);
-        assert!(ir.contains("{ i8, i64 } @_H1T"), "{ir}");
+        assert!(ir.contains("{ i64, i8 } @_H1T"), "{ir}");
         assert!(!ir.contains(" alloca "), "{ir}");
     }
 }
@@ -155,7 +155,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
         assert_eq!(result_cells(&ir), Vec::<String>::new(), "{ir}");
         // The workload's own return builds a pair; no inlined one is merged or read.
         assert!(
-            !ir.contains("phi { i8, i64 }") && !ir.contains("extractvalue { i8, i64 }"),
+            !ir.contains("phi { i64, i8 }") && !ir.contains("extractvalue { i64, i8 }"),
             "an inlined result pair survives\n{ir}"
         );
     }
