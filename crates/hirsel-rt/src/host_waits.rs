@@ -54,7 +54,7 @@ unsafe fn count(ctx: *mut TaskCtx) {
             0
         } else {
             let waits = &Binding::raw(ctx).waits;
-            waits.parked.len() + waits.armed.len()
+            waits.parked.len() + waits.native.len() + waits.armed.len()
         };
         (*ctx)
             .run_ref()
@@ -82,6 +82,9 @@ unsafe fn quiet(ctx: *mut TaskCtx) -> bool {
 pub(crate) struct Waits {
     next: u64,
     parked: IdMap<Parked>,
+    /// Free requests retry on their owning fiber, inside recorded phases.
+    /// Home observes readiness only; it never calls these requests at a poll.
+    native: IdMap<Native>,
     /// Armed scope deadlines (CONC-3) by token: the scope and its timer request.
     armed: IdMap<(u32, Request)>,
 }
@@ -92,6 +95,147 @@ struct Parked {
     task: Option<u32>,
     /// The re-issued request's outcome, from the poll that ended the wait.
     completion: Option<Result<Completion, AdapterError>>,
+}
+
+struct Native {
+    request: Request,
+    task: Option<u32>,
+    notified: bool,
+    ready: bool,
+}
+
+/// Reserve a normal adapter token for an explicitly admitted Free request.
+/// # Safety
+/// Home only; the task owns the request through the synchronous bridge.
+pub(crate) unsafe fn native_begin_home(
+    run: *mut crate::context::RunShared,
+    request: &Request,
+) -> u64 {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let token = binding.waits.next;
+    binding.waits.next += 1;
+    binding.waits.native.insert(
+        token,
+        Native {
+            request: request.clone(),
+            task: None,
+            notified: false,
+            ready: false,
+        },
+    );
+    unsafe { native_count_home(run, binding) };
+    token
+}
+
+unsafe fn native_count_home(run: *mut crate::context::RunShared, binding: &Binding) {
+    unsafe {
+        (*run).host_waits.store(
+            (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
+                as u32,
+            std::sync::atomic::Ordering::Release,
+        )
+    };
+}
+
+/// One bounded attempt, called by its owner after claim/key admission.
+/// # Safety
+/// Home only; token belongs to the owner's live native request.
+pub(crate) unsafe fn native_call_home(
+    run: *mut crate::context::RunShared,
+    token: u64,
+) -> Result<Completion, AdapterError> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let row = binding
+        .waits
+        .native
+        .get_mut(&token)
+        .expect("a native attempt");
+    row.task = None;
+    row.ready = false;
+    let request = row.request.clone();
+    binding.adapter.enter(token);
+    binding.adapter.call(request)
+}
+
+/// Retire readiness storage after the final bounded attempt ended.
+/// # Safety
+/// Home only, under the owner's synchronous bridge.
+pub(crate) unsafe fn native_finish_home(run: *mut crate::context::RunShared, token: u64) {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    binding.adapter.finish(token);
+    assert!(binding.waits.native.remove(&token).is_some());
+    unsafe { native_count_home(run, binding) };
+}
+
+/// Home copied readiness into saved runtime metadata. Suppress repeated
+/// notifications until another Blocked attempt parks this token again.
+/// # Safety
+/// Home only; no adapter borrow or scheduler role is retained.
+pub(crate) unsafe fn native_notified_home(run: *mut crate::context::RunShared, tokens: &[u64]) {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    for token in tokens {
+        binding
+            .waits
+            .native
+            .get_mut(token)
+            .expect("a native readiness owner")
+            .notified = true;
+    }
+}
+
+/// Free polls use the existing driver/token readiness surface, but only
+/// return native token notifications. No request is reissued on this stack.
+/// # Safety
+/// Home only; no scheduler role or parked context is borrowed.
+pub(crate) unsafe fn native_ready_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    native_ready_binding(binding)
+}
+
+fn native_ready_binding(binding: &mut Binding) -> Stopped<HomeReady> {
+    assert!(
+        binding.waits.parked.is_empty(),
+        "Free native requests use owner-side attempts"
+    );
+    let ready = binding.adapter.ready().map_err(Stop::refusal)?;
+    let expired = expired_binding(binding, &ready)?;
+    // Adapter readiness may consume an edge before an owner is fully saved
+    // (or even before its parked notification reaches home). Retain it until
+    // that owner's next bounded attempt, independently of task registration.
+    let available: Vec<_> = binding
+        .waits
+        .native
+        .iter_unordered()
+        .filter_map(|(token, row)| {
+            (ready.contains(token) || binding.adapter.injected_wait(&row.request)).then_some(token)
+        })
+        .collect();
+    for token in available {
+        binding.waits.native.get_mut(&token).unwrap().ready = true;
+    }
+    let hosts = binding
+        .waits
+        .native
+        .iter_unordered()
+        .filter_map(|(token, row)| {
+            let task = row.task?;
+            if row.notified {
+                return None;
+            }
+            let deadline = if let Request::SleepUntil { deadline, .. } = row.request {
+                Some(deadline)
+            } else {
+                None
+            };
+            Some(ReadyHost {
+                task,
+                token,
+                deadline,
+                ready: row.ready,
+            })
+        })
+        .collect();
+    Ok(HomeReady { expired, hosts })
 }
 
 /// The completion a canceled `request` returns without its requested effect, or `None` when it
@@ -117,7 +261,13 @@ unsafe fn canceled(
 pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
     // SAFETY: admission reports only after quiescence, with exclusive access.
     let binding = unsafe { Binding::raw(ctx) };
-    match binding.waits.parked.get(&token).map(|p| &p.request) {
+    match binding
+        .waits
+        .parked
+        .get(&token)
+        .map(|p| &p.request)
+        .or_else(|| binding.waits.native.get(&token).map(|p| &p.request))
+    {
         Some(Request::SleepUntil { .. }) => "clock.sleep_until",
         Some(Request::ReadStdin { .. }) => "stdin.read",
         Some(Request::Accept { .. }) => "net.accept",
@@ -557,7 +707,8 @@ pub(crate) unsafe fn ready_home(run: *mut crate::context::RunShared) -> Stopped<
         .collect();
     unsafe {
         (*run).host_waits.store(
-            (binding.waits.parked.len() + binding.waits.armed.len()) as u32,
+            (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
+                as u32,
             std::sync::atomic::Ordering::Release,
         )
     };
@@ -660,9 +811,14 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
 
 unsafe fn park_here(ctx: *mut TaskCtx, token: u64, task: u32) {
     let binding = unsafe { Binding::get(ctx) };
-    match binding.waits.parked.get_mut(&token) {
-        Some(parked) => parked.task = Some(task),
-        None => crate::fault("a park of an unknown host wait"),
+    if let Some(native) = binding.waits.native.get_mut(&token) {
+        native.task = Some(task);
+        native.notified = false;
+    } else {
+        match binding.waits.parked.get_mut(&token) {
+            Some(parked) => parked.task = Some(task),
+            None => crate::fault("a park of an unknown host wait"),
+        }
     }
     binding.adapter.parked(token);
 }
@@ -931,5 +1087,53 @@ fn net_result(request: &Request, value: Completion) -> Result<u64, crate::net::N
             value.map(|()| 0)
         }
         _ => crate::fault("borrowed network result changed"),
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    struct Edge(bool);
+    impl crate::io::Adapter for Edge {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            unreachable!()
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            Ok(Ready::Tokens(if std::mem::take(&mut self.0) {
+                vec![7]
+            } else {
+                vec![]
+            }))
+        }
+    }
+    #[test]
+    fn native_edge_survives_registration_and_save_until_owner_notification() {
+        let mut binding = Binding::new(Edge(true));
+        binding.waits.native.insert(
+            7,
+            Native {
+                request: Request::SleepUntil {
+                    clock: 17,
+                    deadline: 100,
+                },
+                task: None,
+                notified: false,
+                ready: false,
+            },
+        );
+        assert!(native_ready_binding(&mut binding).unwrap().hosts.is_empty());
+        binding.waits.native.get_mut(&7).unwrap().task = Some(3);
+        // The adapter has already consumed its one ready edge.
+        for _ in 0..2 {
+            let snapshot = native_ready_binding(&mut binding).unwrap();
+            assert_eq!(snapshot.hosts.len(), 1);
+            assert_eq!(snapshot.hosts[0].task, 3);
+            assert!(snapshot.hosts[0].ready);
+        }
+        binding.waits.native.get_mut(&7).unwrap().notified = true;
+        assert!(native_ready_binding(&mut binding).unwrap().hosts.is_empty());
     }
 }

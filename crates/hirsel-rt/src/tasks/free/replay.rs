@@ -386,6 +386,12 @@ impl Token {
         self.shared.handles.lock().unwrap().resource(word)
     }
 
+    pub(super) fn host_readiness(&self, ready: bool) -> Stopped<()> {
+        self.shared
+            .with(|session| session.replay_host_readiness(&self.path, ready))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
     pub(super) fn host_positions(
         &self,
         keys: &[(String, bool)],

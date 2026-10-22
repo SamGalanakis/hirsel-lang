@@ -535,6 +535,21 @@ impl Session {
         Ok(bytes)
     }
 
+    /// Existing blocked/ready markers surrounding an owner-side host retry.
+    pub fn replay_host_readiness(&mut self, path: &[u32], ready: bool) -> Result<(), Diverged> {
+        let op = self.op(path);
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged(
+                "native host replay requires a replay session".into(),
+            ));
+        };
+        if ready {
+            replayer.ready(path, op)
+        } else {
+            replayer.blocked(path, op)
+        }
+    }
+
     /// Typed completion bytes at an admitted Done phase. Host handles, if
     /// present, still need the engine's persisted logical mapping.
     pub fn replay_host_completion(&mut self, path: &[u32]) -> Result<Vec<u8>, Diverged> {

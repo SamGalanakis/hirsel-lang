@@ -2038,6 +2038,7 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         unpin(row);
         s.park(wait);
         if let Wait::Host { token } = wait {
+            let _segment = unsafe { role::Segment::new(ctx) };
             unsafe { crate::host_waits::park(ctx, token, me) };
         }
         return unsafe { run_next(ctx) };

@@ -1,4 +1,4 @@
-//! Home timer readiness for Free saved-frame waits. Follows the Ordered
+//! Home readiness for Free saved-frame waits. Follows the Ordered
 //! context-free home service: snapshot under the role, adapter calls without
 //! the role, then generation-checked metadata merge and saved-slot readiness.
 use super::super::{Logical, readiness, role};
@@ -13,7 +13,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return false;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (scopes, idle) = {
+    let (scopes, waits, idle) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -43,19 +43,31 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                     .map(|token| (index as u32, row.generation, token))
             })
             .collect::<Vec<_>>();
-        (scopes, idle)
+        let waits = s
+            .tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(task, row)| {
+                let row = row.as_ref()?;
+                let super::super::Wait::Host { token } = row.wait? else {
+                    return None;
+                };
+                readiness::saved(s, task as u32).then_some((task as u32, row.generation, token))
+            })
+            .collect::<Vec<_>>();
+        (scopes, waits, idle)
     };
-    if scopes.is_empty() {
+    if scopes.is_empty() && waits.is_empty() {
         return false;
     }
     // The home thread serializes this call with all worker home bridges.
     // Never retain the scheduler role while an adapter blocks or calls back.
-    let result = unsafe { crate::host_waits::timers_home(run, idle) };
+    let result = unsafe { poll_home(run, idle) };
     let _guard = unsafe { role::IdleGuard::new(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return true;
     }
-    let (expired, sources) = match result {
+    let (crate::host_waits::HomeReady { expired, hosts }, sources) = match result {
         Ok(result) => result,
         Err(stop) => {
             unsafe { (*run).control.request_inside(stop) };
@@ -63,7 +75,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         }
     };
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-    let changed = !expired.is_empty();
+    let mut changed = !expired.is_empty();
     for index in expired {
         let valid = scopes.iter().any(|&(scope, generation, token)| {
             scope == index
@@ -82,6 +94,21 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             s.expire(index);
         }
     }
+    let mut notified = Vec::new();
+    for host in hosts {
+        let valid = host.ready
+            && waits.iter().any(|&(task, generation, token)| {
+                task == host.task && token == host.token && s.tasks.get(task as usize)
+                .and_then(Option::as_ref).is_some_and(|row| row.generation == generation
+                    && matches!(row.wait, Some(super::super::Wait::Host { token: t }) if t == token)
+                    && readiness::saved(s, task))
+            });
+        if valid {
+            s.unpark(host.task);
+            notified.push(host.token);
+            changed = true;
+        }
+    }
     unsafe { readiness::poll_free(s) };
     unsafe { super::publish_ready(s, run) };
     if !sources {
@@ -89,7 +116,26 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     } else {
         unsafe { super::check_quiet(run) };
     }
-    // If no timer fired while workers run, let their queued home calls run.
+    drop(_guard);
+    unsafe { crate::host_waits::native_notified_home(run, &notified) };
+    // If no event fired while workers run, let their queued home calls run.
     // Repeated readiness probes must never starve a synchronous bridge.
     changed || idle
+}
+
+/// Poll the same home driver as scope timers, without issuing parked native
+/// requests. The saved owner supplies the next recorded bounded attempt.
+unsafe fn poll_home(
+    run: *mut RunShared,
+    idle: bool,
+) -> crate::stop::Stopped<(crate::host_waits::HomeReady, bool)> {
+    loop {
+        let ready = unsafe { crate::host_waits::native_ready_home(run) }?;
+        if !idle || !ready.expired.is_empty() || ready.hosts.iter().any(|host| host.ready) {
+            return Ok((ready, true));
+        }
+        if !unsafe { crate::host_waits::wait_home(run) }? {
+            return Ok((ready, false));
+        }
+    }
 }

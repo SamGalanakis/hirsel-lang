@@ -1,6 +1,7 @@
 //! Request ownership and native recorded host phases. This foundation does
-//! admits explicit bounded host tests only. General adapter routing,
-//! readiness, resource discovery and terminal activation remain gated.
+//! admits explicit bounded host tests, home readiness and owner-side retries.
+//! General adapter routing, cancellation, resource discovery and terminal
+//! activation remain gated.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};
 use crate::io_keys::{KeySet, Mode, Positions};
@@ -23,6 +24,7 @@ pub(crate) struct Pending {
     positions: Option<Positions>,
     attempt: u32,
     home_log: Option<Box<super::record::Task>>,
+    home_token: Option<u64>,
     created: Vec<Created>,
 }
 
@@ -65,6 +67,7 @@ pub(crate) unsafe fn prepare_with_keys(
             positions: None,
             attempt: 0,
             home_log: None,
+            home_token: None,
             created: Vec::new(),
         }));
     }
@@ -221,6 +224,71 @@ unsafe fn issue_home_loan(
     issued.expect("a served home claim")
 }
 
+/// Recorded home request with real token readiness and owner-side retries.
+/// # Safety
+/// Explicit recorded Free admission, role held, bound home adapter; keys and
+/// payloads use the admitted subset. General production routing stays gated.
+pub(crate) unsafe fn request_home(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+) -> Stopped<Result<Completion, AdapterError>> {
+    unsafe { prepare_with_keys(ctx, request, keys) }?;
+    let run = unsafe { (*ctx).run_ptr() };
+    let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
+    {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        unsafe {
+            crate::pool::call_home(ctx, &mut || {
+                (*pending).home_token = Some(crate::host_waits::native_begin_home(
+                    run,
+                    (*pending).request.buffers(),
+                ));
+            })
+        }?;
+    }
+    let token = unsafe { (*pending).home_token.unwrap() };
+    if !unsafe { issue_home_with(ctx, |_| crate::host_waits::native_call_home(run, token)) }? {
+        return Err(Stop::Requested);
+    }
+    unsafe { ended(ctx) }?;
+    while matches!(
+        unsafe { &(*pending).completion },
+        Some(Err(AdapterError::Blocked))
+    ) {
+        assert!(
+            unsafe { (*pending).positions.is_none() },
+            "no key across readiness"
+        );
+        // Ended released every key. Home observes only readiness, and wakes
+        // only after this task's physical save; the owner issues Attempt.
+        unsafe { try_block(&mut *ctx, Wait::Host { token }, false, 0) }?;
+        unsafe { attempt(ctx) }?;
+        let mut encoded = None;
+        {
+            let _segment = unsafe { role::Segment::new(ctx) };
+            unsafe {
+                crate::pool::call_home(ctx, &mut || {
+                    let result = crate::host_waits::native_call_home(run, token);
+                    encoded = Some(handles::encode(&mut *pending, &result));
+                    (*pending).completion = Some(result);
+                })
+            }?;
+        }
+        encoded.expect("one bounded home retry")?;
+        unsafe { ended(ctx) }?;
+    }
+    {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        unsafe {
+            crate::pool::call_home(ctx, &mut || {
+                crate::host_waits::native_finish_home(run, token)
+            })
+        }?;
+    }
+    unsafe { complete_result(ctx) }
+}
+
 /// # Safety
 /// The owner holds the role and has claimed its request. The bounded host
 /// call neither suspends Hirsel nor retains its borrowed request buffers.
@@ -275,9 +343,11 @@ pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
     let index = unsafe { (*pending).attempt };
     super::record::publish(ctx, Phase::Ended(index), |writer| unsafe {
-        writer
-            .expect("a recorded host observation")
-            .observation(&(*pending).encoded);
+        let writer = writer.expect("a recorded host observation");
+        writer.observation(&(*pending).encoded);
+        if matches!(&(*pending).completion, Some(Err(AdapterError::Blocked))) {
+            writer.blocked();
+        }
         (*pending)
             .positions
             .take()
@@ -338,7 +408,9 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
     };
     super::record::publish(ctx, Phase::Attempt(index), |writer| unsafe {
         (*pending).attempt = index;
-        take_positions(&mut *pending, writer.expect("a recorded host attempt"));
+        let writer = writer.expect("a recorded host attempt");
+        writer.ready();
+        take_positions(&mut *pending, writer);
     })?;
     unsafe { wait_keys(ctx) }
 }
@@ -453,6 +525,9 @@ pub(crate) unsafe fn replay_request(
                 host.positions.clear();
                 let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
                 let result = token.host_result(envelope)?;
+                if matches!(result, Err(AdapterError::Blocked)) {
+                    token.host_readiness(false)?;
+                }
                 host.observed = Some(result);
                 Ok::<_, Stop>(())
             })??;
@@ -471,6 +546,7 @@ pub(crate) unsafe fn replay_request(
             token.publish(ctx, Phase::Attempt(index), || {
                 let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
                 host.attempt = index;
+                token.host_readiness(true)?;
                 host.positions = token.host_positions(&host.keys, index)?;
                 Ok::<_, Stop>(())
             })??;
@@ -528,3 +604,6 @@ unsafe fn replay_wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod readiness_tests;

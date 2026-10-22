@@ -6,8 +6,9 @@
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
 //! channel/task boundaries, root entry tails, thaw, mutex closes and foreign
 //! callbacks on compute, home and pool threads. A separate test-only host
-//! foundation proves request ownership, claim/withdraw and bounded key epochs;
-//! adapter routing, handles and replay remain gated. General activation requires every boundary
+//! path proves request ownership, claim/withdraw, bounded key epochs, owned
+//! home readiness, logical result handles and replay for admitted payloads.
+//! General adapter routing and activation require every boundary
 //! and stop to use this protocol.
 
 use crate::TaskCtx;
