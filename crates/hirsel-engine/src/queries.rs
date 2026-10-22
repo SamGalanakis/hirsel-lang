@@ -183,6 +183,7 @@ pub struct QueryEngine {
     lower_holds: crate::memo::Holds<()>,
     pub(crate) summaries: Table<Arc<PublishedSummary>>,
     pub(crate) checked_summaries: Table<Arc<CheckedSummary>>,
+    portable_type_records: std::sync::Mutex<Option<Arc<persistent::TypeRecords>>>,
     /// The memo records, the reverse subscriber index and the dirty marks.
     pub(crate) graph: MemoGraph,
     front_changes: frontier::FrontTracker,
@@ -517,6 +518,7 @@ impl QueryEngine {
             lower_holds: crate::memo::Holds::new(hold_bytes),
             summaries: Default::default(),
             checked_summaries: Default::default(),
+            portable_type_records: Default::default(),
             graph: MemoGraph::default(),
             front_changes: Default::default(),
             front_products: Default::default(),

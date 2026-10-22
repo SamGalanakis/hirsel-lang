@@ -969,7 +969,7 @@ impl QueryEngine {
                             &worker,
                             self.types.clone(),
                             &mut source,
-                            writer.is_some(),
+                            writer.map(|writer| &*writer.types),
                         );
                         done.write_payload(writer);
                         WorkerCompleted::Compact(done)

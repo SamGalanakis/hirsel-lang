@@ -491,7 +491,7 @@ impl TirSource for FrozenSource<'_> {
                 candidates,
                 environment: self.environment,
             },
-            false,
+            None,
         );
         self.completed
             .lock()

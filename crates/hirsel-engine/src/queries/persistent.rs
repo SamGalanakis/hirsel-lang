@@ -4,10 +4,13 @@
 use super::*;
 use crate::store::{Entry as StoredEntry, EntryKey, Variant, VariantRef};
 use hirsel_span::{Anchor, AnchorCodec};
-use hirsel_types::{OwnershipFacts, TypeId, TypeTable};
+use hirsel_types::{OwnershipFacts, TypeId};
 use serde::{Deserialize, Serialize};
 mod expected;
+mod types;
 pub(crate) use expected::{Expected, Spool};
+pub(crate) use types::TypeRecords;
+use types::{ProductTypes, TypeRef};
 
 #[cfg(test)]
 mod expected_tests {
@@ -398,7 +401,7 @@ impl PublicationRecord {
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     anchors: Vec<(DefPath, u32)>,
-    table: TypeTable,
+    types: Vec<TypeRef>,
     #[serde(serialize_with = "serialize_payload")]
     payload: Vec<u8>,
 }
@@ -412,7 +415,7 @@ fn serialize_payload<S: serde::Serializer>(
     serializer.serialize_bytes(payload)
 }
 
-fn encode_record<T: Serialize>(
+pub(super) fn canonical_bytes<T: Serialize>(
     types: Arc<hirsel_types::TypeInterner>,
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     record: &T,
@@ -424,10 +427,18 @@ fn encode_record<T: Serialize>(
             hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(record))
         })
         .ok()?;
+    let anchors = anchor_owners(anchors, items)?;
+    bincode::serialize(&(anchors, table.finish(), payload)).ok()
+}
+
+fn anchor_owners(
+    anchors: AnchorCodec,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+) -> Option<Vec<(DefPath, u32)>> {
     let AnchorCodec::Collect(anchors) = anchors else {
         unreachable!()
     };
-    let anchors = anchors
+    anchors
         .into_iter()
         .map(|anchor| {
             items.iter().find_map(|(path, items)| {
@@ -437,10 +448,26 @@ fn encode_record<T: Serialize>(
                     .map(|item| (path.clone(), item.occurrence))
             })
         })
-        .collect::<Option<Vec<_>>>()?;
+        .collect()
+}
+
+fn encode_record<T: Serialize>(
+    records: &TypeRecords,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    record: &T,
+) -> Option<Vec<u8>> {
+    let mut anchors = AnchorCodec::Collect(vec![]);
+    let mut table = hirsel_types::TableBuilder::new(records.types.clone());
+    let payload = table
+        .with_encoding(|| {
+            hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(record))
+        })
+        .ok()?;
+    let anchors = anchor_owners(anchors, items)?;
+    let types = records.encode(table.roots())?;
     bincode::serialize(&Envelope {
         anchors,
-        table: table.finish(),
+        types,
         payload,
     })
     .ok()
@@ -450,6 +477,7 @@ fn encode_record<T: Serialize>(
 /// Callers must check the selected provider before invoking this: an off store
 /// never clones body data or enters canonical type/anchor encoding.
 pub(super) fn capture_mode(
+    records: &TypeRecords,
     types: Arc<hirsel_types::TypeInterner>,
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     result: &Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
@@ -476,7 +504,7 @@ pub(super) fn capture_mode(
         detail: canonical_detail(detail.clone()),
     });
     encode_record(
-        types,
+        records,
         items,
         &ModeRecord {
             checked,
@@ -491,6 +519,7 @@ pub(super) fn capture_mode(
 /// verification bytes are selected by the engine before freezing; provider I/O
 /// owns no query state and retains no encoded payload after write returns.
 pub(super) struct EncodedWriter {
+    pub(super) types: Arc<TypeRecords>,
     store: Arc<dyn crate::store::ResultStore>,
     key: EntryKey,
     path: DefPath,
@@ -683,7 +712,24 @@ impl QueryEngine {
         ))
     }
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
-        encode_record(self.types.clone(), &self.items, record)
+        let records = self.type_records()?;
+        encode_record(&records, &self.items, record)
+    }
+    fn type_records(&self) -> Option<Arc<TypeRecords>> {
+        let store = self.result_store.clone()?;
+        let mut current = self
+            .portable_type_records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(records) = &*current
+            && Arc::ptr_eq(&records.types, &self.types)
+            && Arc::ptr_eq(&records.store, &store)
+        {
+            return Some(records.clone());
+        }
+        let records = TypeRecords::new(self.types.clone(), store);
+        *current = Some(records.clone());
+        Some(records)
     }
     fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
         use bincode::Options;
@@ -693,9 +739,6 @@ impl QueryEngine {
             .reject_trailing_bytes()
             .deserialize(bytes)
             .ok()?;
-        if !envelope.table.valid_indices() {
-            return None;
-        }
         let anchors = envelope
             .anchors
             .iter()
@@ -707,20 +750,24 @@ impl QueryEngine {
                     .map(|item| item.anchor)
             })
             .collect::<Option<Vec<Anchor>>>()?;
-        let ids = hirsel_types::decode_table(&self.types, &envelope.table);
-        let record: T = hirsel_types::with_table_decoding(&ids, || {
-            hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
-                bincode::DefaultOptions::new()
-                    .with_fixint_encoding()
-                    .with_limit(envelope.payload.len() as u64)
-                    .reject_trailing_bytes()
-                    .deserialize(&envelope.payload)
-            })
-        })
+        let records = self.type_records()?;
+        let record: T = hirsel_types::with_type_source(
+            Arc::new(ProductTypes {
+                records,
+                references: envelope.types,
+            }),
+            || {
+                hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
+                    bincode::DefaultOptions::new()
+                        .with_fixint_encoding()
+                        .with_limit(envelope.payload.len() as u64)
+                        .reject_trailing_bytes()
+                        .deserialize(&envelope.payload)
+                })
+            },
+        )
         .ok()?;
-        // The compatibility decoder represents an invalid type position as
-        // DANGLING for V. Front records must reject it before any consumer can
-        // index types; collecting through serde covers all nested payload IDs.
+        // Check every nested payload TypeId before any semantic consumer indexes it.
         let (encoded, roots) = hirsel_types::with_table_collection(|| {
             bincode::serialize_into(std::io::sink(), &record)
         });
@@ -775,6 +822,7 @@ impl QueryEngine {
             .pending_store_checks
             .remove(&(DefId::intern(path), kind));
         EncodedWriter {
+            types: self.type_records().expect("enabled result store"),
             store,
             key,
             path: path.clone(),
@@ -896,11 +944,13 @@ impl QueryEngine {
             })
             .collect();
         self.write_encoded(path, QueryKind::Modes, entry.reads(), |engine| {
+            let records = engine.type_records()?;
             let checked = engine
                 .checked
                 .get(&DefId::intern(path))
                 .and_then(|entry| entry.result().ok().map(|output| (output, &entry.detail)));
             capture_mode(
+                &records,
                 engine.types.clone(),
                 &engine.items,
                 &output,
@@ -919,6 +969,7 @@ impl QueryEngine {
             return None;
         }
         Some(EncodedWriter {
+            types: self.type_records()?,
             store: self.result_store.clone()?,
             key: self.store_key(path, QueryKind::Modes)?,
             path: path.clone(),
@@ -1085,16 +1136,16 @@ impl QueryEngine {
 mod malformed_tests {
     use super::*;
 
-    // The pre-bulk codec, including its original Vec<u8> serialization.
+    // Equivalent sequence serialization for the bulk byte payload vectors.
     #[derive(Serialize, Deserialize)]
-    struct LegacyEnvelope {
+    struct SequenceEnvelope {
         anchors: Vec<(DefPath, u32)>,
-        table: TypeTable,
+        types: Vec<TypeRef>,
         payload: Vec<u8>,
     }
 
     #[test]
-    fn bulk_payload_preserves_legacy_envelope_bytes_and_bounded_decoding() {
+    fn bulk_payload_matches_sequence_encoding_and_bounded_decoding() {
         use bincode::Options;
         let (engine, syntax) = fixture();
         let unit = engine.types.intern(hirsel_types::Type::unit());
@@ -1103,7 +1154,7 @@ mod malformed_tests {
             .unwrap();
         let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
         assert!(!envelope.anchors.is_empty());
-        assert!(!envelope.table.is_empty());
+        assert!(!envelope.types.is_empty());
         // Include bincode 1.3.3 tests/test.rs:565-572's byte equality vector,
         // every byte value, and payloads spanning multiple copy chunks.
         for payload in [
@@ -1115,9 +1166,9 @@ mod malformed_tests {
             vec![0xff; 1 << 20],
         ] {
             envelope.payload = payload;
-            let legacy = LegacyEnvelope {
+            let legacy = SequenceEnvelope {
                 anchors: envelope.anchors.clone(),
-                table: envelope.table.clone(),
+                types: envelope.types.clone(),
                 payload: envelope.payload.clone(),
             };
             let old = bincode::serialize(&legacy).unwrap();
@@ -1129,7 +1180,7 @@ mod malformed_tests {
                 .reject_trailing_bytes();
             let decoded: Envelope = options.deserialize(&old).unwrap();
             assert_eq!(decoded.payload, legacy.payload);
-            let decoded: LegacyEnvelope = options.deserialize(&new).unwrap();
+            let decoded: SequenceEnvelope = options.deserialize(&new).unwrap();
             assert_eq!(decoded.payload, envelope.payload);
             assert!(
                 options
@@ -1143,14 +1194,14 @@ mod malformed_tests {
     }
 
     #[test]
-    fn legacy_envelope_records_relocate_types_and_anchors() {
+    fn reference_records_relocate_types_and_anchors() {
         let (engine, syntax) = fixture();
         let unit = engine.types.intern(hirsel_types::Type::unit());
         let record = (unit, syntax.item.origin.span);
         let bytes = engine.encode_record(&record).unwrap();
-        // Decode the current writer using the legacy layout, then write with
+        // Decode the current writer using sequence serialization, then write with
         // the old serializer and consume through the production decoder.
-        let legacy: LegacyEnvelope = bincode::deserialize(&bytes).unwrap();
+        let legacy: SequenceEnvelope = bincode::deserialize(&bytes).unwrap();
         let old = bincode::serialize(&legacy).unwrap();
         assert_eq!(old, bytes);
         assert_eq!(engine.decode_record::<(TypeId, Span)>(&old), Some(record));
@@ -1372,8 +1423,7 @@ mod malformed_tests {
             .intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Box(
                 TypeId::DANGLING,
             )));
-        let bytes = engine.encode_record(&bad).unwrap();
-        assert!(engine.decode_record::<TypeId>(&bytes).is_none());
+        assert!(engine.encode_record(&bad).is_none());
         let bytes = engine.encode_record(&syntax.item.origin.span).unwrap();
         let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
         envelope.payload[..4].copy_from_slice(&u32::MAX.to_le_bytes());
