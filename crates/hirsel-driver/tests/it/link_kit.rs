@@ -4,6 +4,8 @@
 //! on both targets, each build in its own scratch directory.
 use hirsel_driver::native::{self, Backend, BuildProfile, TargetSpec};
 use hirsel_engine::with_compiler_stack;
+use object::read::elf::{FileHeader, Sym};
+use object::{LittleEndian, elf};
 use std::path::{Path, PathBuf};
 
 const PROGRAM: &str = "type Shape = Circle(u64) | Square(u64)
@@ -114,6 +116,17 @@ const TLS_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), NetError] {
 }
 ";
 
+/// A network entry reaches the socket provider without linking TLS.
+const NET_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), NetError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let _plain = net.connect(n, \"localhost\", 443u16, Unbounded())?
+  Ok(())
+}
+";
+
 const PROCESS_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), ProcessError] {
   let p = match io.process(rt) {
     Ok(p) => p,
@@ -134,18 +147,36 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
     // By name: ring's primitives, rustls's client handshake and the compiled root set
     // (TLS), the resolver and sockets (network), and process spawning.
     let providers = |bytes: &[u8]| {
+        // Read ELF symbol tables as native::runner does. setsockopt is also
+        // used by managed_cores' control socket, so the network marker names
+        // its provider constructor rather than that shared libc dependency.
+        let header = elf::FileHeader64::<LittleEndian>::parse(bytes).unwrap();
+        let endian = header.endian().unwrap();
+        let sections = header.sections(endian, bytes).unwrap();
+        let mut names = Vec::new();
+        for kind in [elf::SHT_SYMTAB, elf::SHT_DYNSYM] {
+            let symbols = sections.symbols(endian, bytes, kind).unwrap();
+            for symbol in symbols.iter() {
+                names.push(symbol.name(endian, symbols.strings()).unwrap());
+            }
+        }
+        let symbol = |needle: &[u8]| {
+            names
+                .iter()
+                .any(|name| name.windows(needle.len()).any(|w| w == needle))
+        };
         [
-            &b"ring_core_"[..],
-            b"ClientConnection",
-            b"ISRG Root",
-            b"getaddrinfo",
-            b"setsockopt",
-            b"posix_spawnp",
+            symbol(b"ring_core_"),
+            symbol(b"ClientConnection"),
+            bytes.windows(b"ISRG Root".len()).any(|w| w == b"ISRG Root"),
+            symbol(b"getaddrinfo"),
+            symbol(b"net_host8provider"),
+            symbol(b"posix_spawnp"),
         ]
-        .map(|name| bytes.windows(name.len()).any(|w| w == name))
     };
     for (name, program, expected) in [
         ("plain", PROGRAM, [false; 6]),
+        ("net", NET_PROGRAM, [false, false, false, true, true, false]),
         ("tls", TLS_PROGRAM, [true, true, true, true, true, false]),
         (
             "process",
