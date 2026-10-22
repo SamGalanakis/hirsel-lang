@@ -31,8 +31,9 @@ impl Replay {
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
     /// scopes whose children use these admitted operations, task-set selection, serial gates and
     /// scalar mutex operations including kill/cause and scalar channels with
-    /// endpoint aliases/closes; no host requests or general cancellation-ended
-    /// waits yet. Deterministic yielding object finalizers
+    /// endpoint aliases/closes, and explicit bounded host requests whose
+    /// results create no handles; general host dispatch and handle mapping
+    /// remain gated. Deterministic yielding object finalizers
     /// must use only these admitted operations and task-owned detached images.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
@@ -362,6 +363,40 @@ impl Token {
         publication
             .map(|()| result)
             .map_err(|error| crate::stop::Stop::Diverged(error.0))
+    }
+
+    pub(super) fn host_positions(
+        &self,
+        keys: &[(String, bool)],
+        index: u32,
+    ) -> Stopped<Vec<hirsel_free::recorder::Position>> {
+        let keys: Vec<_> = keys
+            .iter()
+            .map(|(key, shared)| (key.as_str(), *shared))
+            .collect();
+        self.shared
+            .with(|session| session.replay_host_positions(&self.path, index, &keys))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn host_ready(&self, positions: &[hirsel_free::recorder::Position]) -> bool {
+        self.shared
+            .with(|session| session.replay_host_ready(positions))
+    }
+
+    pub(super) fn host_observation(
+        &self,
+        positions: &[hirsel_free::recorder::Position],
+    ) -> Stopped<Vec<u8>> {
+        self.shared
+            .with(|session| session.replay_host_observation(&self.path, positions))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn host_completion(&self) -> Stopped<Vec<u8>> {
+        self.shared
+            .with(|session| session.replay_host_completion(&self.path))
+            .map_err(|error| Stop::Diverged(error.0))
     }
 
     pub(super) fn load(&self, live: u128) -> Stopped<u128> {

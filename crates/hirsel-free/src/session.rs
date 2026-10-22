@@ -225,7 +225,9 @@ impl Session {
     pub fn at_cut(&self, path: &[u32]) -> bool {
         match &self.side {
             Side::Live(_) => false,
-            Side::Replay(replayer) => replayer.cut(path) == Some(self.task(path).progress),
+            Side::Replay(replayer) => {
+                !replayer.starts(path) || replayer.cut(path) == Some(self.task(path).progress)
+            }
         }
     }
 
@@ -484,6 +486,65 @@ impl Session {
             }
             Side::Replay(replayer) => replayer.cancel_check(path, op),
         }
+    }
+
+    /// Native replay consumes a host transition using the same epoch decoder
+    /// as host_write. The engine owns phases, waits and typed payloads.
+    /// Index zero consumes Prepared; later indices keep the current ordinal.
+    pub fn replay_host_positions(
+        &mut self,
+        path: &[u32],
+        index: u32,
+        keys: &[(&str, bool)],
+    ) -> Result<Vec<Position>, Diverged> {
+        let op = self.op(path);
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged(
+                "native host replay requires a replay session".into(),
+            ));
+        };
+        if index == 0 {
+            replayer.prepare(path, op)?;
+        }
+        replayer.positions(path, op, index, keys)
+    }
+
+    /// Check without advancing or retaining a session borrow across a save.
+    pub fn replay_host_ready(&self, positions: &[Position]) -> bool {
+        let Side::Replay(replayer) = &self.side else {
+            return false;
+        };
+        replayer.positions_ready(positions)
+    }
+
+    /// An admitted Ended phase substitutes the bounded-call observation and
+    /// ends its key positions before later transitions become enabled.
+    pub fn replay_host_observation(
+        &mut self,
+        path: &[u32],
+        positions: &[Position],
+    ) -> Result<Vec<u8>, Diverged> {
+        let op = self.op(path);
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged(
+                "native host replay requires a replay session".into(),
+            ));
+        };
+        let bytes = replayer.observation(path, op)?;
+        replayer.end_positions(positions);
+        Ok(bytes)
+    }
+
+    /// Typed completion bytes at an admitted Done phase. Host handles, if
+    /// present, still need the engine's persisted logical mapping.
+    pub fn replay_host_completion(&mut self, path: &[u32]) -> Result<Vec<u8>, Diverged> {
+        let op = self.op(path);
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged(
+                "native host replay requires a replay session".into(),
+            ));
+        };
+        replayer.completion(path, op)
     }
 
     /// A host write's entered phase, once the engine began the op, the cut admitted its entry

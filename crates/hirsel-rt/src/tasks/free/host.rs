@@ -350,5 +350,137 @@ pub(crate) unsafe fn complete_result(
         .expect("one returned host completion"))
 }
 
+/// Replay-only request ownership. This initial admission excludes completions
+/// that create host handles: those require a persisted resource mapping.
+pub(crate) struct ReplayHost {
+    _request: Request,
+    keys: Vec<(String, bool)>,
+    positions: Vec<hirsel_free::recorder::Position>,
+    attempt: u32,
+    observed: Option<Result<Completion, AdapterError>>,
+}
+
+/// # Safety
+/// Replay admission, role held; request and completion create no host handle.
+/// The caller delivers the result then checks replay::start before pure code.
+pub(crate) unsafe fn replay_request(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+) -> Stopped<Result<Completion, AdapterError>> {
+    assert!(unsafe { (*ctx).replay_host.is_none() });
+    unsafe {
+        (*ctx).replay_host = Some(Box::new(ReplayHost {
+            _request: request,
+            keys: keys
+                .keys()
+                .iter()
+                .map(|(key, mode)| (format!("host-resource/{}", key.0), *mode == Mode::Shared))
+                .collect(),
+            positions: Vec::new(),
+            attempt: 0,
+            observed: None,
+        }))
+    };
+    drop(keys);
+    super::record::begin(ctx);
+    {
+        let token = super::replay::token(ctx).expect("native host replay admission");
+        token.publish(ctx, Phase::Entered, || {
+            let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
+            host.positions = token.host_positions(&host.keys, 0)?;
+            Ok::<_, Stop>(())
+        })??;
+    }
+    unsafe { replay_wait_keys(ctx) }?;
+    {
+        let token = super::replay::token(ctx).unwrap();
+        token.publish(ctx, Phase::Claimed, || ())?;
+    }
+    loop {
+        let index = unsafe { (*ctx).replay_host.as_ref().unwrap().attempt };
+        {
+            let token = super::replay::token(ctx).unwrap();
+            token.publish(ctx, Phase::Ended(index), || {
+                let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
+                let bytes = token.host_observation(&host.positions)?;
+                host.positions.clear();
+                let result = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+                if !matches!(
+                    &result,
+                    Err(_)
+                        | Ok(Completion::Unit(_)
+                            | Completion::Size(_)
+                            | Completion::Bytes(_)
+                            | Completion::Wait(_))
+                ) {
+                    return Err(Stop::Diverged(
+                        "host result requires unsupported logical handle mapping".into(),
+                    ));
+                }
+                host.observed = Some(result);
+                Ok::<_, Stop>(())
+            })??;
+        }
+        if !matches!(
+            unsafe { &(*ctx).replay_host.as_ref().unwrap().observed },
+            Some(Err(AdapterError::Blocked))
+        ) {
+            break;
+        }
+        {
+            let token = super::replay::token(ctx).unwrap();
+            let index = index
+                .checked_add(1)
+                .ok_or_else(|| Stop::Diverged("host attempt overflow".into()))?;
+            token.publish(ctx, Phase::Attempt(index), || {
+                let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
+                host.attempt = index;
+                host.positions = token.host_positions(&host.keys, index)?;
+                Ok::<_, Stop>(())
+            })??;
+        }
+        unsafe { replay_wait_keys(ctx) }?;
+    }
+    {
+        let token = super::replay::token(ctx).unwrap();
+        token.publish(ctx, Phase::Done, || {
+            let bytes = token.host_completion()?;
+            let result = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+            let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
+            if host.observed.as_ref() != Some(&result) {
+                return Err(Stop::Diverged(
+                    "host completion differs from final observation".into(),
+                ));
+            }
+            host.observed = Some(result);
+            Ok::<_, Stop>(())
+        })??;
+    }
+    let mut host = unsafe { (*ctx).replay_host.take().unwrap() };
+    Ok(host.observed.take().unwrap())
+}
+
+unsafe fn replay_wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
+    loop {
+        let ready = {
+            let token = super::replay::token(ctx).unwrap();
+            token.host_ready(&unsafe { (*ctx).replay_host.as_ref().unwrap() }.positions)
+        };
+        if ready {
+            return Ok(());
+        }
+        if super::replay::at_cut(ctx) {
+            return Err(Stop::Requested);
+        }
+        let s = scheduler(ctx);
+        let me = s.current;
+        if !s.retrying.contains(&me) {
+            s.retrying.push(me);
+        }
+        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+    }
+}
+
 #[cfg(test)]
 mod tests;

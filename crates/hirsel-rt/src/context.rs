@@ -165,6 +165,8 @@ pub struct TaskCtx {
     /// A native Free request retains its buffers and late completion even
     /// when its task's host-call frame is abandoned after a terminal cut.
     pub(crate) pending_host: Option<Box<crate::tasks::free::host::Pending>>,
+    /// Replay holds request and transition buffers across admitted-prefix saves.
+    pub(crate) replay_host: Option<Box<crate::tasks::free::host::ReplayHost>>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -346,6 +348,7 @@ impl TaskCtx {
             site: 0,
             detached_images: Default::default(),
             pending_host: None,
+            replay_host: None,
         }
     }
 

@@ -336,7 +336,7 @@ fn native_host_epochs_release_workers_and_end_before_readiness_attempts() {
                         std::thread::yield_now();
                     }
                     assert!(observed.calls.lock().unwrap().iter().all(|id| *id == 1));
-                    crate::stop::check(ctx, invoke(ctx, |_| Completion::Unit(Ok(()))));
+                    crate::stop::check(ctx, invoke_result(ctx, |_| Err(AdapterError::Blocked)));
                     crate::stop::check(ctx, ended(ctx));
                     assert!((*ctx).pending_host.as_ref().unwrap().positions.is_none());
                     // The exclusive and its following shared epoch must finish
@@ -401,6 +401,7 @@ fn native_host_epochs_release_workers_and_end_before_readiness_attempts() {
                 .bytes;
             let parsed = hirsel_free::tape::parse(&bytes).unwrap();
             assert_eq!(parsed.cut, cut.progress);
+            replay_epoch_tape(&bytes, &projection);
         }
     }
 }
@@ -850,5 +851,248 @@ fn native_home_claim_uses_owned_log_and_quarantines_non_send_adapter_results() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn native_host_replay_substitutes_adapter_results_and_stops_at_partial_phases() {
+    for durable in [false, true] {
+        for retry in [false, true] {
+            for refuse in [false, true] {
+                let recording =
+                    super::super::record::Recording::new(b"native host replay", durable);
+                let install = recording.clone();
+                let adapter = Arc::new(ConcurrentHost {
+                    home: std::thread::current().id(),
+                    recording: recording.clone(),
+                    run: Default::default(),
+                    calls: 0.into(),
+                    stop_inside: false,
+                    retry,
+                    refuse,
+                });
+                let observed = adapter.clone();
+                let mut run = crate::host::BodyRun::new(8, false);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        observed.run.store((*ctx).run_ptr(), Ordering::Release);
+                        crate::stop::check(
+                            ctx,
+                            prepare(
+                                ctx,
+                                Request::Print {
+                                    stdout: 17,
+                                    bytes: vec![42; 4096],
+                                },
+                            ),
+                        );
+                        assert!(crate::stop::check(ctx, claim(ctx)));
+                        crate::stop::check(ctx, invoke_concurrent(ctx, &*observed));
+                        crate::stop::check(ctx, ended(ctx));
+                        // Keep an Ended cut as well as the adapter's Claimed cut.
+                        observed.recording.recorder.flush().unwrap().unwrap();
+                        if retry {
+                            crate::stop::check(ctx, attempt(ctx));
+                            crate::stop::check(ctx, invoke_concurrent(ctx, &*observed));
+                            crate::stop::check(ctx, ended(ctx));
+                        }
+                        let result = crate::stop::check(ctx, complete_result(ctx));
+                        assert_eq!(
+                            result,
+                            if refuse {
+                                Err(AdapterError::Unsupported("native refusal".into()))
+                            } else {
+                                Ok(Completion::Unit(Ok(())))
+                            }
+                        );
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                recording.recorder.stop("returned", None).unwrap().unwrap();
+                let trace = recording.trace();
+                let calls = adapter.calls.load(Ordering::Acquire);
+                assert_eq!(calls, if retry { 2 } else { 1 });
+                drop(adapter);
+                let sink = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink();
+                // Every actual flush, the complete tape and one-byte torn
+                // successors admit exactly their published phases.
+                let mut ends = sink.marks.clone();
+                ends.push(sink.bytes.len());
+                for mark in sink.marks {
+                    if mark < sink.bytes.len() {
+                        ends.push(mark + 1);
+                    }
+                }
+                ends.sort_unstable();
+                ends.dedup();
+                for end in ends {
+                    let tape = hirsel_free::tape::parse(&sink.bytes[..end]).unwrap();
+                    let expected = hirsel_free::projection::Projection::new(
+                        if tape.end.is_some() {
+                            "returned"
+                        } else {
+                            "truncated"
+                        },
+                        &tape.cut,
+                        &trace,
+                    );
+                    for width in [1, 2, 8] {
+                        let replay = super::super::replay::Replay::new(&sink.bytes[..end]).unwrap();
+                        let install = replay.clone();
+                        let result = Arc::new(Mutex::new(None));
+                        let observed = result.clone();
+                        let mut run = crate::host::BodyRun::new(width, false);
+                        run.free = true;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            move |ctx| unsafe { install.root(ctx) },
+                            move |ctx| unsafe {
+                                let _role = role::Guard::new(ctx);
+                                let completion = crate::stop::check(
+                                    ctx,
+                                    replay_request(
+                                        ctx,
+                                        Request::Print {
+                                            stdout: 17,
+                                            bytes: vec![42; 4096],
+                                        },
+                                        KeySet::coupled(),
+                                    ),
+                                );
+                                *observed.lock().unwrap() = Some(completion);
+                                super::super::replay::start(ctx);
+                                panic!("host replay passed its terminal phase");
+                            },
+                        );
+                        assert!(
+                            matches!(outcome.ended, Err(Stop::Blocked(_))),
+                            "durable={durable} retry={retry} refuse={refuse} end={end} width={width} cut={:?} {outcome:?}",
+                            tape.cut
+                        );
+                        assert_eq!(
+                            result.lock().unwrap().is_some(),
+                            tape.cut
+                                .get(&Vec::new())
+                                .is_some_and(|at| at.phase == Phase::Done)
+                        );
+                        if let Some(result) = result.lock().unwrap().as_ref() {
+                            assert_eq!(
+                                *result,
+                                if refuse {
+                                    Err(AdapterError::Unsupported("native refusal".into()))
+                                } else {
+                                    Ok(Completion::Unit(Ok(())))
+                                }
+                            );
+                        }
+                        assert_eq!(replay.finish().unwrap(), expected);
+                    }
+                }
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn replay_epoch_child(ctx: *mut u8, _: *mut u8) -> ! {
+    let ctx = ctx.cast::<TaskCtx>();
+    let _role = unsafe { role::Guard::new(ctx) };
+    let id = unsafe { (*ctx).task_id };
+    unsafe {
+        let completion = crate::stop::check(
+            ctx,
+            replay_request(
+                ctx,
+                Request::Print {
+                    stdout: 17,
+                    bytes: vec![id as u8],
+                },
+                KeySet::new(vec![
+                    (crate::io_keys::Key(18), Mode::Shared),
+                    (
+                        crate::io_keys::Key(17),
+                        if id == 2 {
+                            Mode::Exclusive
+                        } else {
+                            Mode::Shared
+                        },
+                    ),
+                ]),
+            ),
+        );
+        assert_eq!(completion, Ok(Completion::Unit(Ok(()))));
+        super::super::replay::start(ctx);
+    }
+    unreachable!("child host replay past cut");
+}
+
+fn replay_epoch_tape(bytes: &[u8], expected: &hirsel_free::projection::Projection) {
+    for width in [1, 2, 8] {
+        let replay = super::super::replay::Replay::new(bytes).unwrap();
+        let install = replay.clone();
+        let mut run = crate::host::BodyRun::new(width, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe { install.root(ctx) },
+            move |ctx| unsafe {
+                let _role = role::Guard::new(ctx);
+                for ordinal in 0..3u32 {
+                    let stack = Stack::new();
+                    let child_ctx = stack.context();
+                    child_ctx.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+                    let path = vec![ordinal];
+                    super::super::record::begin(ctx);
+                    assert!(crate::stop::check(
+                        ctx,
+                        super::super::record::publish(ctx, Phase::Done, |_| {
+                            super::super::replay::child(ctx, &path)
+                        })
+                    ));
+                    let s = scheduler(ctx);
+                    let id = s.tasks.len() as u32;
+                    (*child_ctx).task_id = id;
+                    (*child_ctx).task_sp =
+                        stack.prepare(replay_epoch_child, child_ctx.cast(), std::ptr::null_mut());
+                    let mut row = crate::tasks::Task::new(1, child_ctx, None, path, None);
+                    row.stack = Some(stack);
+                    s.tasks.push(Some(row));
+                    crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                }
+                let completion = crate::stop::check(
+                    ctx,
+                    replay_request(
+                        ctx,
+                        Request::Print {
+                            stdout: 17,
+                            bytes: vec![0],
+                        },
+                        KeySet::new(vec![
+                            (crate::io_keys::Key(18), Mode::Shared),
+                            (crate::io_keys::Key(17), Mode::Shared),
+                        ]),
+                    ),
+                );
+                assert_eq!(completion, Ok(Completion::Unit(Ok(()))));
+                super::super::replay::start(ctx);
+                unreachable!("root host replay past cut");
+            },
+        );
+        assert!(
+            matches!(outcome.ended, Err(Stop::Blocked(_))),
+            "{outcome:?}"
+        );
+        assert_eq!(&replay.finish().unwrap(), expected);
     }
 }
