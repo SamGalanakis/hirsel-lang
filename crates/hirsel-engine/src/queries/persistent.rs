@@ -44,20 +44,16 @@ mod expected_tests {
     }
 }
 
-// Match complete_reads' observation semantics: successful lookups, provider
-// lookups and module heads do not read the whole manifest graph. Retaining its
-// revision in their payload makes equal products differ between a package
-// checked as root and the same package checked as a dependency. Negative
-// manifest lookups retain it because near-name diagnostic repairs observe it.
+// Match complete_reads' observation semantics: manifest graph revisions are
+// unused provenance for every lookup, including failed probes of local names.
+// Negative lookups observe accessible repair candidates through their canonical
+// Reads, not through this stamp. Keeping it here makes equal products differ
+// when the same package moves between root and dependency positions.
 fn canonical_reads(reads: &mut [hirsel_types::DependencyRead]) {
-    use hirsel_types::{DependencyRead, LookupError};
+    use hirsel_types::DependencyRead;
     for read in reads {
         let manifest = match read {
-            DependencyRead::Lookup {
-                result: Err(LookupError::Missing | LookupError::MissingMember(_)),
-                ..
-            }
-            | DependencyRead::Signature { .. } => continue,
+            DependencyRead::Signature { .. } => continue,
             DependencyRead::Lookup { manifest, .. }
             | DependencyRead::ModuleHead { manifest, .. } => manifest,
             DependencyRead::ProviderLookup { output, .. } => &mut output.manifest,

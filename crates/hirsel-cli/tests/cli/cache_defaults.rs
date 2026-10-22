@@ -345,6 +345,29 @@ fn verify_cache_modes_follow_a_package_between_root_and_dependency() {
     check_root_and_dependency_cache(&fixture, &library, "library");
 }
 
+/// Index resolution probes the local parameter as a manifest name. Its
+/// negative lookup must verify when only the importing manifest graph changes.
+#[test]
+fn verify_cache_negative_lookup_modes_follow_a_package_between_root_and_dependency() {
+    let fixture = HermeticCacheFixture::new();
+    let library = fixture.0.join("library.json");
+    std::fs::write(
+        fixture.0.join("library.hir"),
+        "fn value(data: Bytes)->u8 { data[0] }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &library,
+        serde_json::json!({
+            "schema":1,"package":{"name":"library","version":"1"},
+            "sources":[{"path":"library.hir","module":[]}],"dependencies":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    check_root_and_dependency_cache(&fixture, &library, "library");
+}
+
 /// Checking std itself must seed products that verify in an ordinary importer.
 /// Same-root verification alone misses manifest provenance in successful reads.
 #[test]
@@ -396,14 +419,38 @@ fn check_root_and_dependency_cache(
         report["counts"].clone()
     };
     let cold = check(library, false);
+    // Verify the cold products before any warm adoption can replace them.
+    let same_root = check(library, true);
+    assert_eq!(same_root["definitions"], cold["definitions"], "{same_root}");
+    assert_eq!(same_root["store misses"], 0, "{same_root}");
     let warm = check(library, false);
     assert!(cold["definitions"].as_u64().unwrap() > 0, "{cold}");
     assert_eq!(cold["store hits"], 0, "{cold}");
-    assert!(warm["store hits"].as_u64().unwrap() > 0, "{warm}");
+    // Generated definitions are replayed rather than persisted. Every other
+    // definition must be adopted, so hits plus replayed work cover the cold run.
+    assert_eq!(
+        warm["definitions"].as_u64().unwrap() + warm["store hits"].as_u64().unwrap(),
+        cold["definitions"].as_u64().unwrap(),
+        "{warm} vs {cold}"
+    );
+    assert_eq!(warm["store misses"], 0, "{warm}");
+    assert_eq!(warm["store hits"], cold["store misses"], "{warm} vs {cold}");
     // Verify before a dependency run can replace a root-written record.
     let verified = check(&client, true);
-    assert!(
-        verified["definitions"].as_u64().unwrap() >= cold["definitions"].as_u64().unwrap(),
-        "all source definitions must be recomputed: {verified} vs {cold}"
+    assert_eq!(
+        verified["definitions"].as_u64().unwrap(),
+        cold["definitions"].as_u64().unwrap() + 1,
+        "every library definition plus the client's main must be recomputed: {verified} vs {cold}"
+    );
+    // A recomputation alone is insufficient: a rejected cache variant also
+    // recomputes, without comparing its payload. Only the new client may miss.
+    assert_eq!(verified["store misses"], 1, "{verified}");
+    eprintln!(
+        "{package}: {} cold definitions, {} warm hits, {} replayed definitions, {} importer definitions, {} importer misses",
+        cold["definitions"],
+        warm["store hits"],
+        warm["definitions"],
+        verified["definitions"],
+        verified["store misses"]
     );
 }
