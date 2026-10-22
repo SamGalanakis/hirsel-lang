@@ -23,49 +23,57 @@ fn sum(node: box Tree) -> i64 {
   }
 }
 
+// rust/src/benchmarks/binarytrees.rs:65-76,104-140: twelve-byte nodes,
+// signed -1 child sentinels, and wrapping u32 subtree sums.
 type Node {
-  item: i64,
-  left: u64,
-  right: u64,
+  item: i32,
+  left: i32,
+  right: i32,
 }
 
-fn build(mut nodes: List[Node], item: i64, depth: u64) -> u64 {
+fn build(mut nodes: List[Node], item: i32, depth: u64) -> i32 {
   let index = list.len(nodes)
-  list.push(mut nodes, Node(item: item, left: 0, right: 0))
+  list.push(mut nodes, Node(item: item, left: -1, right: -1))
   if depth > 0 {
-    let delta: i64 = int.narrow(1u64 << depth - 1)
+    let delta: i32 = int.narrow(1u64 << depth - 1)
     let left = build(mut nodes, item - delta, depth - 1)
     let right = build(mut nodes, item + delta, depth - 1)
-    nodes[index] = Node(item: item, left: left, right: right)
+    nodes[index].left = left
+    nodes[index].right = right
   }
-  index
+  int.narrow(index)
 }
 
-fn arena_sum(nodes: List[Node], index: u64) -> i64 {
-  let node = nodes[index]
-  node.item + 1 + if node.left == 0 {
-    0
-  } else {
-    arena_sum(nodes, node.left) + arena_sum(nodes, node.right)
+fn arena_sum(nodes: List[Node], index: i32) -> u32 {
+  let position: u64 = int.narrow(index)
+  let node = nodes[position]
+  let mut total = u32.wrapping_add(int.truncate(node.item), 1)
+  if node.left >= 0 {
+    total = u32.wrapping_add(total, arena_sum(nodes, node.left))
   }
+  if node.right >= 0 {
+    total = u32.wrapping_add(total, arena_sum(nodes, node.right))
+  }
+  total
 }
 
 type State {
   depth: u64,
   arena: bool,
+  nodes: List[Node],
   value_out: u32,
 }
 
 fn step(mut s: State, iteration: u64) {
   let value = if s.arena {
-    let mut nodes: List[Node] = []
-    let root = build(mut nodes, 0, s.depth)
-    arena_sum(nodes, root)
+    s.nodes = []
+    let root = build(mut s.nodes, 0, s.depth)
+    arena_sum(s.nodes, root)
   } else {
-    sum(tree(0, s.depth))
+    let positive: u64 = int.narrow(sum(tree(0, s.depth)))
+    int.truncate(positive)
   }
-  let positive: u64 = int.narrow(value)
-  s.value_out = u32.wrapping_add(s.value_out, int.truncate(positive))
+  s.value_out = u32.wrapping_add(s.value_out, value)
 }
 
 fn checksum(s: State) -> u32 {
@@ -82,9 +90,27 @@ pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
     State(
       depth: harness.number(config, "depth"),
       arena: name == "Binarytrees::Arena",
+      nodes: [],
       value_out: 0
     ),
     step,
     checksum
   )
+}
+
+@test
+fn arena_vectors(t: Test) {
+  let mut nodes: List[Node] = []
+  let root = build(mut nodes, 0, 0)
+  test.check(t, root == 0 && list.len(nodes) == 1)
+  test.check(t, nodes[0].left == -1 && nodes[0].right == -1)
+  test.check(t, arena_sum(nodes, root) == 1)
+  nodes = []
+  let branch = build(mut nodes, 0, 2)
+  test.check(t, list.len(nodes) == 7 && nodes[0].left == 1 && nodes[0].right == 4)
+  test.check(t, nodes[1].item == -2 && nodes[4].item == 2)
+  test.check(t, arena_sum(nodes, branch) == 7)
+  nodes = []
+  let negative = build(mut nodes, -3, 1)
+  test.check(t, arena_sum(nodes, negative) == 4294967290u32)
 }
