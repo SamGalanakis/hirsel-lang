@@ -112,7 +112,28 @@ fn self_nominal_signature_probes_are_recorded_without_recomputing_forever_on_com
     let reads = engine
         .dependency_reads(&path("Node"), QueryKind::Signature)
         .unwrap();
-    assert!(reads.failed_signatures.contains(&path("Node")));
+    // Lexical self names resolve from their own header, without publishing
+    // a transient failed-signature dependency (1d15243c).
+    assert!(!reads.failed_signatures.contains(&path("Node")));
+    let first = engine.item_signature(&path("Node")).unwrap().value;
+    parse(&mut engine, "type Node { next: box Node, value: u64 }\n");
+    let edited = engine.item_signature(&path("Node")).unwrap().value;
+    assert_ne!(first.fingerprint, edited.fingerprint);
+    let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+    parse(&mut fresh, "type Node { next: box Node, value: u64 }\n");
+    assert_eq!(
+        edited.fingerprint,
+        fresh
+            .item_signature(&path("Node"))
+            .unwrap()
+            .value
+            .fingerprint
+    );
+    engine.item_signature(&path("Node")).unwrap();
+    assert_eq!(
+        engine.recompute_count(&path("Node"), QueryKind::Signature),
+        2
+    );
 }
 
 #[test]
