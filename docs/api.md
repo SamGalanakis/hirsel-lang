@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2037 exported definitions; 848 variants.
+2103 exported definitions; 883 variants.
 
 ## Types and roots
 
@@ -2151,6 +2151,73 @@ References: [`core@1/u8`](#def-core_401_2fu8)
 - `@noalloc fn atomic.store[A](tasks: Tasks, a: Atomic[A], value: A) -> ()`
 
 
+## base32
+
+<a id="def-std_401_2fbase32_2fAlphabet"></a>
+
+- `@serializable pub type base32.Alphabet = Standard | Hex`
+
+<a id="def-std_401_2fbase32_2fAlphabet_23Hex"></a>
+
+- `Hex -> base32.Alphabet`
+
+Variant of base32.Alphabet.
+
+<a id="def-std_401_2fbase32_2fAlphabet_23Standard"></a>
+
+- `Standard -> base32.Alphabet`
+
+Variant of base32.Alphabet.
+
+<a id="def-std_401_2fbase32_2fDecodeError"></a>
+
+- `@serializable pub type base32.DecodeError = CorruptInput(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbase32_2fDecodeError_23CorruptInput"></a>
+
+- `CorruptInput(u64) -> base32.DecodeError`
+
+Variant of base32.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbase32_2fPadding"></a>
+
+- `@serializable pub type base32.Padding = Required | Omitted`
+
+<a id="def-std_401_2fbase32_2fPadding_23Omitted"></a>
+
+- `Omitted -> base32.Padding`
+
+Variant of base32.Padding.
+
+<a id="def-std_401_2fbase32_2fPadding_23Required"></a>
+
+- `Required -> base32.Padding`
+
+Variant of base32.Padding.
+
+<a id="def-std_401_2fbase32_2fdecode"></a>
+
+- `pub fn base32.decode(input: String, alphabet: Alphabet, padding: Padding) -> Result[ unique Bytes, DecodeError ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/base32/Alphabet`](#def-std_401_2fbase32_2fAlphabet), [`std@1/base32/DecodeError`](#def-std_401_2fbase32_2fDecodeError), [`std@1/base32/Padding`](#def-std_401_2fbase32_2fPadding)
+
+<a id="def-std_401_2fbase32_2fencode"></a>
+
+- `pub fn base32.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString), [`std@1/base32/Alphabet`](#def-std_401_2fbase32_2fAlphabet), [`std@1/base32/Padding`](#def-std_401_2fbase32_2fPadding)
+
+<a id="def-std_401_2fbase32_2fencoded_5flen"></a>
+
+- `@noalloc pub fn base32.encoded_len(n: u64, padding: Padding) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/base32/Padding`](#def-std_401_2fbase32_2fPadding)
+
+
 ## base64
 
 <a id="def-std_401_2fbase64_2fAlphabet"></a>
@@ -2789,6 +2856,122 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 Read eight bytes at any offset, or return the requested offset on truncation.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder), [`std@1/binary/ReadError`](#def-std_401_2fbinary_2fReadError)
+
+
+## bitset
+
+<a id="def-std_401_2fbitset_2fBitSet"></a>
+
+- `pub opaque type bitset.BitSet: () uses {}`
+
+Fixed domain [0, domain_len), stored in zero-initialized u64 words.
+
+<a id="def-std_401_2fbitset_2fBitSetError"></a>
+
+- `pub type bitset.BitSetError = IndexOutOfBounds(u64, u64) | DomainMismatch(u64, u64)`
+
+IndexOutOfBounds(requested index, domain length), or
+DomainMismatch(destination domain length, source domain length).
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbitset_2fBitSetError_23DomainMismatch"></a>
+
+- `DomainMismatch(u64, u64) -> bitset.BitSetError`
+
+Variant of bitset.BitSetError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbitset_2fBitSetError_23IndexOutOfBounds"></a>
+
+- `IndexOutOfBounds(u64, u64) -> bitset.BitSetError`
+
+Variant of bitset.BitSetError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbitset_2fclear"></a>
+
+- `@noalloc pub fn bitset.clear(mut bits: unique BitSet) -> () uses {}`
+
+References: [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet)
+
+<a id="def-std_401_2fbitset_2fcontains"></a>
+
+- `@noalloc pub fn bitset.contains(bits: BitSet, index: u64) -> Result[bool, BitSetError] uses {}`
+
+Invalid indices return a typed error, including u64::MAX.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
+
+<a id="def-std_401_2fbitset_2fcount"></a>
+
+- `@noalloc pub fn bitset.count(bits: BitSet) -> u64 uses {}`
+
+Scalar counting consumes one set bit per iteration (at most 64 per word).
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet)
+
+<a id="def-std_401_2fbitset_2fdifference"></a>
+
+- `@noalloc pub fn bitset.difference(mut destination: unique BitSet, source: BitSet) -> Result[ (), BitSetError ] uses {}`
+
+Removes source members from destination after checking equal domains.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
+
+<a id="def-std_401_2fbitset_2fdomain_5flen"></a>
+
+- `@noalloc pub fn bitset.domain_len(bits: BitSet) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet)
+
+<a id="def-std_401_2fbitset_2fempty"></a>
+
+- `pub fn bitset.empty(length: u64) -> unique BitSet uses {}`
+
+Allocates ceil(length / 64) words. Empty domains are valid.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet)
+
+<a id="def-std_401_2fbitset_2findices"></a>
+
+- `pub fn bitset.indices(bits: BitSet) -> unique List[u64] uses {}`
+
+Ascending owned snapshot; later mutations or destruction cannot affect it.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet)
+
+<a id="def-std_401_2fbitset_2finsert"></a>
+
+- `@noalloc pub fn bitset.insert(mut bits: unique BitSet, index: u64) -> Result[bool, BitSetError] uses {}`
+
+Reports membership BEFORE insertion; invalid indices leave the set unchanged.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
+
+<a id="def-std_401_2fbitset_2fintersection"></a>
+
+- `@noalloc pub fn bitset.intersection(mut destination: unique BitSet, source: BitSet) -> Result[ (), BitSetError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
+
+<a id="def-std_401_2fbitset_2fremove"></a>
+
+- `@noalloc pub fn bitset.remove(mut bits: unique BitSet, index: u64) -> Result[bool, BitSetError] uses {}`
+
+Reports membership BEFORE removal; invalid indices leave the set unchanged.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
+
+<a id="def-std_401_2fbitset_2funion"></a>
+
+- `@noalloc pub fn bitset.union(mut destination: unique BitSet, source: BitSet) -> Result[(), BitSetError] uses {}`
+
+Mutates destination only after checking equal domain lengths.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/bitset/BitSet`](#def-std_401_2fbitset_2fBitSet), [`std@1/bitset/BitSetError`](#def-std_401_2fbitset_2fBitSetError)
 
 
 ## blake2b
@@ -4726,6 +4909,41 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 - `pub fn ed25519.verify(public: Bytes, message: Bytes, signature: Bytes) -> bool uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
+
+
+## edit_distance
+
+<a id="def-std_401_2fedit_5fdistance_2fError"></a>
+
+- `pub type edit_distance.Error = ScalarLimit | CellLimit`
+
+Resource refusal, checked in this order: total input scalars, then DP cells.
+
+<a id="def-std_401_2fedit_5fdistance_2fError_23CellLimit"></a>
+
+- `CellLimit -> edit_distance.Error`
+
+Variant of edit_distance.Error.
+
+<a id="def-std_401_2fedit_5fdistance_2fError_23ScalarLimit"></a>
+
+- `ScalarLimit -> edit_distance.Error`
+
+Variant of edit_distance.Error.
+
+<a id="def-std_401_2fedit_5fdistance_2flevenshtein"></a>
+
+- `pub fn edit_distance.levenshtein(a: String, b: String, max_cells: u64, max_scalars: u64) -> Result[ u64, Error ] uses {}`
+
+Exact unit-cost Levenshtein distance over Unicode scalar values.
+No normalization, grapheme segmentation or transposition is performed.
+`max_scalars` bounds the combined decoded input lengths and scalar buffers.
+`max_cells` bounds only their product, not decoding or all CPU work.
+ScalarLimit precedes CellLimit. Both are checked before allocating buffers
+or the DP row. Empty inputs still obey max_scalars and use zero DP cells.
+Storage: O(m+n) scalars and O(min(m,n)) u64 DP words; time O(m+n+m*n).
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/edit_distance/Error`](#def-std_401_2fedit_5fdistance_2fError)
 
 
 ## env
@@ -7204,6 +7422,123 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_40
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame), [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
 
 
+## http_date
+
+<a id="def-std_401_2fhttp_5fdate_2fFormatError"></a>
+
+- `@serializable pub type http_date.FormatError = OutOfRange | Subsecond`
+
+<a id="def-std_401_2fhttp_5fdate_2fFormatError_23OutOfRange"></a>
+
+- `OutOfRange -> http_date.FormatError`
+
+Variant of http_date.FormatError.
+
+<a id="def-std_401_2fhttp_5fdate_2fFormatError_23Subsecond"></a>
+
+- `Subsecond -> http_date.FormatError`
+
+Variant of http_date.FormatError.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseError"></a>
+
+- `@serializable pub type http_date.ParseError { offset: u64, kind: ParseErrorKind, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/http_date/ParseErrorKind`](#def-std_401_2fhttp_5fdate_2fParseErrorKind)
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind"></a>
+
+- `@serializable pub type http_date.ParseErrorKind = Length | NonAscii | Separator | Weekday | Month | Digit | Year | Day | Hour | Minute | Second | Calendar`
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Calendar"></a>
+
+- `Calendar -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Day"></a>
+
+- `Day -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Digit"></a>
+
+- `Digit -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Hour"></a>
+
+- `Hour -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Length"></a>
+
+- `Length -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Minute"></a>
+
+- `Minute -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Month"></a>
+
+- `Month -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23NonAscii"></a>
+
+- `NonAscii -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Second"></a>
+
+- `Second -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Separator"></a>
+
+- `Separator -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Weekday"></a>
+
+- `Weekday -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fParseErrorKind_23Year"></a>
+
+- `Year -> http_date.ParseErrorKind`
+
+Variant of http_date.ParseErrorKind.
+
+<a id="def-std_401_2fhttp_5fdate_2fformat"></a>
+
+- `pub fn http_date.format(value: time.Timestamp) -> Result[unique String, FormatError] uses {}`
+
+Canonical UTC text; rejects out-of-range and subsecond timestamps.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http_date/FormatError`](#def-std_401_2fhttp_5fdate_2fFormatError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2fhttp_5fdate_2fparse"></a>
+
+- `@noalloc pub fn http_date.parse(value: String) -> Result[time.Timestamp, ParseError] uses {}`
+
+Exactly 29 ASCII bytes, matching weekday, GMT, and years 1970 through 9999.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http_date/ParseError`](#def-std_401_2fhttp_5fdate_2fParseError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+
 ## http_wire
 
 <a id="def-std_401_2fhttp_5fwire_2fChunkError"></a>
@@ -8869,6 +9204,103 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption)
 
 
+## line_scan
+
+<a id="def-std_401_2fline_5fscan_2fError"></a>
+
+- `@serializable pub type line_scan.Error = InvalidPolicy | LineTooLong(u64) | OffsetOverflow | AlreadyFinished | ScannerFailed`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fline_5fscan_2fError_23AlreadyFinished"></a>
+
+- `AlreadyFinished -> line_scan.Error`
+
+Variant of line_scan.Error.
+
+<a id="def-std_401_2fline_5fscan_2fError_23InvalidPolicy"></a>
+
+- `InvalidPolicy -> line_scan.Error`
+
+Variant of line_scan.Error.
+
+<a id="def-std_401_2fline_5fscan_2fError_23LineTooLong"></a>
+
+- `LineTooLong(u64) -> line_scan.Error`
+
+Variant of line_scan.Error.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fline_5fscan_2fError_23OffsetOverflow"></a>
+
+- `OffsetOverflow -> line_scan.Error`
+
+Variant of line_scan.Error.
+
+<a id="def-std_401_2fline_5fscan_2fError_23ScannerFailed"></a>
+
+- `ScannerFailed -> line_scan.Error`
+
+Variant of line_scan.Error.
+
+<a id="def-std_401_2fline_5fscan_2fScanner"></a>
+
+- `pub opaque type line_scan.Scanner: inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fline_5fscan_2fStatus"></a>
+
+- `@serializable pub type line_scan.Status = Open | Finished | Poisoned`
+
+<a id="def-std_401_2fline_5fscan_2fStatus_23Finished"></a>
+
+- `Finished -> line_scan.Status`
+
+Variant of line_scan.Status.
+
+<a id="def-std_401_2fline_5fscan_2fStatus_23Open"></a>
+
+- `Open -> line_scan.Status`
+
+Variant of line_scan.Status.
+
+<a id="def-std_401_2fline_5fscan_2fStatus_23Poisoned"></a>
+
+- `Poisoned -> line_scan.Status`
+
+Variant of line_scan.Status.
+
+<a id="def-std_401_2fline_5fscan_2fbuffered"></a>
+
+- `@noalloc pub fn line_scan.buffered(s: Scanner) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/line_scan/Scanner`](#def-std_401_2fline_5fscan_2fScanner)
+
+<a id="def-std_401_2fline_5fscan_2ffeed"></a>
+
+- `pub fn line_scan.feed(mut s: unique Scanner, chunk: Bytes, eof: bool) -> Result[ List[Bytes], Error ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/line_scan/Error`](#def-std_401_2fline_5fscan_2fError), [`std@1/line_scan/Scanner`](#def-std_401_2fline_5fscan_2fScanner)
+
+<a id="def-std_401_2fline_5fscan_2fnew"></a>
+
+- `pub fn line_scan.new(max_line_bytes: u64, strip_cr: bool) -> Result[unique Scanner, Error] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/line_scan/Error`](#def-std_401_2fline_5fscan_2fError), [`std@1/line_scan/Scanner`](#def-std_401_2fline_5fscan_2fScanner)
+
+<a id="def-std_401_2fline_5fscan_2foffset"></a>
+
+- `@noalloc pub fn line_scan.offset(s: Scanner) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/line_scan/Scanner`](#def-std_401_2fline_5fscan_2fScanner)
+
+<a id="def-std_401_2fline_5fscan_2fstatus"></a>
+
+- `@noalloc pub fn line_scan.status(s: Scanner) -> Status uses {}`
+
+References: [`std@1/line_scan/Scanner`](#def-std_401_2fline_5fscan_2fScanner), [`std@1/line_scan/Status`](#def-std_401_2fline_5fscan_2fStatus)
+
+
 ## list
 
 <a id="def-std_401_2flist_2fall"></a>
@@ -9134,6 +9566,114 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/log/Entry`](#def-
 - `pub fn log.write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError]`
 
 References: [`core@1/OutputError`](#def-core_401_2fOutputError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stderr`](#def-core_401_2fStderr), [`std@1/log/Entry`](#def-std_401_2flog_2fEntry), [`std@1/log/Level`](#def-std_401_2flog_2fLevel)
+
+
+## lru
+
+<a id="def-std_401_2flru_2fCache"></a>
+
+- `pub opaque type lru.Cache[T]: () uses {T}`
+
+<a id="def-std_401_2flru_2fCapacityError"></a>
+
+- `pub type lru.CapacityError { requested: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2flru_2fEntry"></a>
+
+- `pub type lru.Entry[T] { key: unique String, value: unique T, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2flru_2fPutResult"></a>
+
+- `pub type lru.PutResult[T] = Inserted | Replaced(unique Entry[T]) | Evicted(unique Entry[T])`
+
+References: [`std@1/lru/Entry`](#def-std_401_2flru_2fEntry)
+
+<a id="def-std_401_2flru_2fPutResult_23Evicted"></a>
+
+- `Evicted(unique Entry[T]) -> lru.PutResult[T]`
+
+Variant of lru.PutResult.
+
+References: [`std@1/lru/Entry`](#def-std_401_2flru_2fEntry)
+
+<a id="def-std_401_2flru_2fPutResult_23Inserted"></a>
+
+- `Inserted -> lru.PutResult[T]`
+
+Variant of lru.PutResult.
+
+<a id="def-std_401_2flru_2fPutResult_23Replaced"></a>
+
+- `Replaced(unique Entry[T]) -> lru.PutResult[T]`
+
+Variant of lru.PutResult.
+
+References: [`std@1/lru/Entry`](#def-std_401_2flru_2fEntry)
+
+<a id="def-std_401_2flru_2fcapacity"></a>
+
+- `@noalloc pub fn lru.capacity[T](c: Cache[T]) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
+
+<a id="def-std_401_2flru_2flen"></a>
+
+- `@noalloc pub fn lru.len[T](c: Cache[T]) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
+
+<a id="def-std_401_2flru_2fnew"></a>
+
+- `pub fn lru.new[T](max_entries: u64) -> unique Result[Cache[T], CapacityError] uses {}`
+
+Capacity counts entries, independently of key and value byte sizes.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache), [`std@1/lru/CapacityError`](#def-std_401_2flru_2fCapacityError)
+
+<a id="def-std_401_2flru_2fpeek"></a>
+
+- `pub fn lru.peek[T: copyable](c: Cache[T], key: String) -> Option[T] in c uses {}`
+
+A view tied to c; does not change recency or deep-copy the payload.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
+
+<a id="def-std_401_2flru_2fput"></a>
+
+- `pub fn lru.put[T](mut c: unique Cache[T], take key: unique String, take value: unique T) -> unique PutResult[ T ] uses {c, value}`
+
+Consumes value; replacement and eviction return the previous owned entry.
+A replacement is MRU, just like an insertion or successful touch.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache), [`std@1/lru/PutResult`](#def-std_401_2flru_2fPutResult)
+
+<a id="def-std_401_2flru_2fremove"></a>
+
+- `pub fn lru.remove[T](mut c: unique Cache[T], key: String) -> unique Option[unique Entry[T]] uses {c}`
+
+Transfers an entry's owners to the caller and clears its reusable slot.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache), [`std@1/lru/Entry`](#def-std_401_2flru_2fEntry)
+
+<a id="def-std_401_2flru_2fslot_5fcount"></a>
+
+- `@noalloc pub fn lru.slot_count[T](c: Cache[T]) -> u64 uses {}`
+
+Allocated logical slots, including empty reusable slots; never exceeds capacity.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
+
+<a id="def-std_401_2flru_2ftouch"></a>
+
+- `pub fn lru.touch[T](mut c: unique Cache[T], key: String) -> bool uses {c}`
+
+Reports presence and makes a hit most recently used, without observing its payload.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
 
 
 ## map
@@ -10445,6 +10985,37 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
 
+## peekable
+
+<a id="def-std_401_2fpeekable_2fPeekable"></a>
+
+- `@captures(inner) pub opaque type peekable.Peekable[T]: () uses {T}`
+
+<a id="def-std_401_2fpeekable_2ffill"></a>
+
+- `pub fn peekable.fill[T](mut p: Peekable[T]) -> bool uses {p}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/peekable/Peekable`](#def-std_401_2fpeekable_2fPeekable)
+
+<a id="def-std_401_2fpeekable_2fnew"></a>
+
+- `pub fn peekable.new[T](take it: Iter[T]) -> Peekable[T] uses {it}`
+
+References: [`core@1/Iter`](#def-core_401_2fIter), [`std@1/peekable/Peekable`](#def-std_401_2fpeekable_2fPeekable)
+
+<a id="def-std_401_2fpeekable_2fnext"></a>
+
+- `pub fn peekable.next[T](mut p: Peekable[T]) -> Option[T] uses {p}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/peekable/Peekable`](#def-std_401_2fpeekable_2fPeekable)
+
+<a id="def-std_401_2fpeekable_2fpeek"></a>
+
+- `pub fn peekable.peek[T: copyable](p: Peekable[T]) -> Option[T] in p uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/peekable/Peekable`](#def-std_401_2fpeekable_2fPeekable)
+
+
 ## priority_queue
 
 <a id="def-std_401_2fpriority_5fqueue_2fHeap"></a>
@@ -10646,6 +11217,12 @@ References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/RandomError`](#d
 
 ## regex
 
+<a id="def-std_401_2fregex_2fCaptures"></a>
+
+- `pub type regex.Captures { spans: List[Option[Span]], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/regex/Span`](#def-std_401_2fregex_2fSpan)
+
 <a id="def-std_401_2fregex_2fCompileError"></a>
 
 - `@serializable pub type regex.CompileError = Syntax(u64) | ProgramTooLarge`
@@ -10666,13 +11243,25 @@ Variant of regex.CompileError.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fregex_2fFlags"></a>
+
+- `pub type regex.Flags { fold_case: bool, multiline: bool, dot_newline: bool, ungreedy: bool, }`
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fregex_2fMatchError"></a>
 
-- `@serializable pub type regex.MatchError = WorkLimit()`
+- `@serializable pub type regex.MatchError = WorkLimit | InvalidCaptures`
+
+<a id="def-std_401_2fregex_2fMatchError_23InvalidCaptures"></a>
+
+- `InvalidCaptures -> regex.MatchError`
+
+Variant of regex.MatchError.
 
 <a id="def-std_401_2fregex_2fMatchError_23WorkLimit"></a>
 
-- `WorkLimit() -> regex.MatchError`
+- `WorkLimit -> regex.MatchError`
 
 Variant of regex.MatchError.
 
@@ -10692,6 +11281,24 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/CompileError`](#def-std_401_2fregex_2fCompileError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
 
+<a id="def-std_401_2fregex_2fcompile_5fflags"></a>
+
+- `pub fn regex.compile_flags(pattern: String, flags: Flags, max_instructions: u64) -> Result[ Regex, CompileError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/CompileError`](#def-std_401_2fregex_2fCompileError), [`std@1/regex/Flags`](#def-std_401_2fregex_2fFlags), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2fdefault_5fflags"></a>
+
+- `pub fn regex.default_flags() -> Flags uses {}`
+
+References: [`std@1/regex/Flags`](#def-std_401_2fregex_2fFlags)
+
+<a id="def-std_401_2fregex_2fexpand"></a>
+
+- `pub fn regex.expand( re: Regex, mut dst: List[u8], template: String, src: String, captures: Captures, work_limit: u64 ) -> Result[(), MatchError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/regex/Captures`](#def-std_401_2fregex_2fCaptures), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
 <a id="def-std_401_2fregex_2ffind"></a>
 
 - `pub fn regex.find(re: Regex, text: String, work_limit: u64) -> Result[ Option[Span], MatchError ] uses {}`
@@ -10704,11 +11311,53 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-co
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex), [`std@1/regex/Span`](#def-std_401_2fregex_2fSpan)
 
+<a id="def-std_401_2fregex_2ffind_5fall_5fcaptures"></a>
+
+- `pub fn regex.find_all_captures(re: Regex, text: String, max_matches: u64, work_limit: u64) -> Result[ List[Captures], MatchError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/Captures`](#def-std_401_2fregex_2fCaptures), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2ffind_5fcaptures"></a>
+
+- `pub fn regex.find_captures(re: Regex, text: String, work_limit: u64) -> Result[ Option[Captures], MatchError ] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/Captures`](#def-std_401_2fregex_2fCaptures), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
 <a id="def-std_401_2fregex_2fis_5fmatch"></a>
 
 - `pub fn regex.is_match(re: Regex, text: String, work_limit: u64) -> Result[bool, MatchError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2fnum_5fsubexp"></a>
+
+- `pub fn regex.num_subexp(re: Regex) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2freplace_5fall"></a>
+
+- `pub fn regex.replace_all(re: Regex, src: String, replacement: String, work_limit: u64) -> Result[ String, MatchError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2freplace_5fall_5ffunc"></a>
+
+- `pub fn regex.replace_all_func[T]( re: Regex, src: String, state: T, callback: fn(T, String, Captures) -> String uses {}, work_limit: u64 ) -> Result[String, MatchError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/Captures`](#def-std_401_2fregex_2fCaptures), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2freplace_5fall_5fliteral"></a>
+
+- `pub fn regex.replace_all_literal(re: Regex, src: String, replacement: String, work_limit: u64) -> Result[ String, MatchError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
+
+<a id="def-std_401_2fregex_2fsubexp_5fnames"></a>
+
+- `pub fn regex.subexp_names(re: Regex) -> List[String] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex)
 
 
 ## region
@@ -12727,6 +13376,38 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/siphash/State`](#def-std_
 <a id="def-core_401_2fslots_2fremove"></a>
 
 - `fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]`
+
+
+## sorted
+
+<a id="def-std_401_2fsorted_2fequal_5frange"></a>
+
+- `@noalloc pub fn sorted.equal_range[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> ( u64, u64 ) uses {}`
+
+Half-open equal range (lower_bound, upper_bound); absent values give (i, i).
+Searches the lower boundary first, then only its suffix for the upper one.
+Failures propagate immediately with ordinary source attribution and cleanup.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsorted_2flower_5fbound"></a>
+
+- `@noalloc pub fn sorted.lower_bound[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {}`
+
+First index i with by(xs[i], value) >= 0, or len(xs).
+Input must be sorted by the same ordering. Borrows elements; never clones.
+Calls by only at actual midpoints. Empty input makes no calls.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsorted_2fupper_5fbound"></a>
+
+- `@noalloc pub fn sorted.upper_bound[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {}`
+
+First index i with by(xs[i], value) > 0, or len(xs).
+Same sorted-input, borrowing and comparator restrictions as lower_bound.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u64`](#def-core_401_2fu64)
 
 
 ## sorted_map
