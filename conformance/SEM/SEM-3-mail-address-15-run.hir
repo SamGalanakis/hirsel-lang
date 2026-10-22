@@ -1,0 +1,32 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Go net/mail message_test.go:434-650 (BSD-3-Clause).
+pub fn main() -> Result[(), ()] {
+  let limits = mail.default_limits()
+  failure.check(
+    mail.parse_list(
+      "empty: ;, John (middle) Doe <MiXeD@Example.COM>, =?iso-8859-1?q?J=F6rg?= <j@x>",
+      limits
+    ) == Ok(
+      [
+        mail.Address(display_name: "John Doe", address: "MiXeD@Example.COM"),
+        mail.Address(display_name: "Jörg", address: "j@x")
+      ]
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("\"a@b\"@Example.COM", limits) == Ok(
+      mail.Address(display_name: "", address: "a@b@Example.COM")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format(mail.Address(display_name: "Böb", address: "bob@example.com"), limits) == Ok(
+      "=?utf-8?q?B=C3=B6b?= <bob@example.com>"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,338 @@
+// Go net/mail/message_test.go:369-400 plus strict safety/cap controls.
+@track_caller
+fn bad(input: String) -> () {
+  if let Ok(_) = mail.parse(input, mail.default_limits()) {
+    failure.check(false, TextInvariant())
+  }
+}
+
+@track_caller
+fn limit(input: String, limits: mail.Limits, expected: mail.MailError) -> () {
+  failure.check(mail.parse_list(input, limits) == Error(expected), TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  bad("=?iso-8859-2?Q?Bogl=E1rka_Tak=E1cs?= <unknown@gmail.com>")
+  bad("a@gmail.com b@gmail.com")
+  bad("\"\u{0000}\" <null@example.net>")
+  bad("\"\\\u{0000}\" <escaped-null@example.net>")
+  bad("John Doe")
+  bad("<jdoe#machine.example>")
+  bad("John <middle> Doe <jdoe@machine.example>")
+  bad("cfws@example.com (")
+  bad("empty group: ;")
+  bad("root group: embed group: null@example.com;")
+  bad("group not closed: null@example.com")
+  bad("group: first@example.com, second@example.com;")
+  bad("john.doe")
+  bad("john.doe@")
+  bad("John Doe@foo.bar")
+  bad(" group: null@example.com; (asd")
+  bad(" group: ; (asd")
+  bad("(John) Doe <jdoe@machine.example>")
+  bad("<jdoe@[[192.168.0.1]>")
+  bad("<jdoe@[192.168.0.1>")
+  bad("<jdoe@[256.0.0.1]>")
+  bad("<jdoe@[fd42::de:ad:be:ef]>")
+  bad("")
+  bad(",")
+  bad("a..b@c")
+  bad(".a@b")
+  bad("a.@b")
+  bad("a@.b")
+  bad("a@b.")
+  bad("a@b..c")
+  bad("\"\"@b")
+  bad("a (comment)@b")
+  bad("a@b garbage")
+  bad("<a@b")
+  bad("a@b>")
+  bad("A <a@b> B <c@d>")
+  bad("G:a@b,;")
+  bad("G:;H:;")
+  bad("(leading) a@b")
+  bad("a@[]")
+  bad("a@[IPv6:bad]")
+  bad("a@[::1]")
+  bad("A \"unfinished <a@b>")
+  failure.check(
+    mail.parse_list("empty group: ;", mail.default_limits()) == Ok([]),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse_list("a@b,", mail.default_limits()) == Ok(
+      [mail.Address(display_name: "", address: "a@b")]
+    ),
+    TextInvariant()
+  )
+  let invalid_lists: List[String] = ["", ",", "G:a@b,;", "G:G:a@b;;", "a@b c@d"]
+  for input in invalid_lists {
+    if let Ok(_) = mail.parse_list(input, mail.default_limits()) {
+      failure.check(false, TextInvariant())
+    }
+  }
+  limit(
+    "a@b",
+    mail.Limits(
+      max_input_bytes: 2,
+      max_comment_depth: 16,
+      max_addresses: 10,
+      max_output_bytes: 100
+    ),
+    InputLimit(2)
+  )
+  limit(
+    "a@b ((x))",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 1,
+      max_addresses: 10,
+      max_output_bytes: 100
+    ),
+    NestingLimit(5)
+  )
+  limit(
+    "a@b (x)",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 0,
+      max_addresses: 10,
+      max_output_bytes: 100
+    ),
+    NestingLimit(4)
+  )
+  limit(
+    "a@b",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 16,
+      max_addresses: 0,
+      max_output_bytes: 100
+    ),
+    AddressLimit(0)
+  )
+  limit(
+    "G:a@b,c@d;",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 16,
+      max_addresses: 1,
+      max_output_bytes: 100
+    ),
+    AddressLimit(6)
+  )
+  limit(
+    "a@b",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 16,
+      max_addresses: 10,
+      max_output_bytes: 2
+    ),
+    OutputLimit(0)
+  )
+  limit(
+    "a@b,c@d",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 16,
+      max_addresses: 10,
+      max_output_bytes: 5
+    ),
+    OutputLimit(4)
+  )
+  limit(
+    "=?iso-8859-1?q?=FF=FF?= <a@b>",
+    mail.Limits(
+      max_input_bytes: 100,
+      max_comment_depth: 16,
+      max_addresses: 10,
+      max_output_bytes: 3
+    ),
+    OutputLimit(0)
+  )
+  failure.check(
+    mail.parse(
+      "a@b",
+      mail.Limits(
+        max_input_bytes: 3,
+        max_comment_depth: 0,
+        max_addresses: 1,
+        max_output_bytes: 3
+      )
+    ) == Ok(mail.Address(display_name: "", address: "a@b")),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse_list(
+      "G:;",
+      mail.Limits(
+        max_input_bytes: 3,
+        max_comment_depth: 0,
+        max_addresses: 0,
+        max_output_bytes: 1
+      )
+    ) == Ok([]),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?utf-8?q?=FF?= <a@b>", mail.default_limits()) == Error(InvalidUtf8(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?koi8-r?q?abc?= <a@b>", mail.default_limits()) == Error(
+      UnsupportedCharset(0)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("a@b (=?x?q?abc?=)", mail.default_limits()) == Error(
+      UnsupportedCharset(4)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("a@b\r\nBcc:c@d", mail.default_limits()) == Error(Injection(3)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse_list("a@b\n", mail.default_limits()) == Error(Injection(3)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?utf-8?q?A=0DB?= <a@b>", mail.default_limits()) == Error(Injection(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?utf-8?b?QQpC?= <a@b>", mail.default_limits()) == Error(Injection(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format(
+      mail.Address(display_name: "A\nB", address: "a@b"),
+      mail.default_limits()
+    ) == Error(Injection(1)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format(
+      mail.Address(display_name: "A", address: "a@b\r"),
+      mail.default_limits()
+    ) == Error(Injection(3)),
+    TextInvariant()
+  )
+  if let Ok(_) = mail.format(
+    mail.Address(display_name: "", address: "a@b>"),
+    mail.default_limits()
+  ) {
+    failure.check(false, TextInvariant())
+  }
+  failure.check(
+    mail.format(
+      mail.Address(display_name: "", address: "a@b"),
+      mail.Limits(
+        max_input_bytes: 100,
+        max_comment_depth: 0,
+        max_addresses: 1,
+        max_output_bytes: 4
+      )
+    ) == Error(OutputLimit(0)),
+    TextInvariant()
+  )
+  failure.check(mail.format_list([], mail.default_limits()) == Ok(""), TextInvariant())
+  let pair: List[mail.Address] = [
+    mail.Address(display_name: "A", address: "a@b"),
+    mail.Address(display_name: "", address: "c@d")
+  ]
+  failure.check(
+    mail.format_list(pair, mail.default_limits()) == Ok("\"A\" <a@b>, <c@d>"),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format_list(
+      pair,
+      mail.Limits(
+        max_input_bytes: 100,
+        max_comment_depth: 0,
+        max_addresses: 1,
+        max_output_bytes: 100
+      )
+    ) == Error(AddressLimit(1)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format_list(
+      pair,
+      mail.Limits(
+        max_input_bytes: 100,
+        max_comment_depth: 0,
+        max_addresses: 2,
+        max_output_bytes: 15
+      )
+    ) == Error(OutputLimit(1)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format_list(
+      pair,
+      mail.Limits(
+        max_input_bytes: 6,
+        max_comment_depth: 0,
+        max_addresses: 2,
+        max_output_bytes: 100
+      )
+    ) == Error(InputLimit(6)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format_list(
+      pair,
+      mail.Limits(
+        max_input_bytes: 7,
+        max_comment_depth: 0,
+        max_addresses: 2,
+        max_output_bytes: 16
+      )
+    ) == Ok("\"A\" <a@b>, <c@d>"),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse(
+      "a@b ((x))",
+      mail.Limits(
+        max_input_bytes: 9,
+        max_comment_depth: 2,
+        max_addresses: 1,
+        max_output_bytes: 6
+      )
+    ) == Ok(mail.Address(display_name: "(x)", address: "a@b")),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse(
+      "=?us-ascii?q?=FF?= <a@b>",
+      mail.Limits(
+        max_input_bytes: 100,
+        max_comment_depth: 1,
+        max_addresses: 1,
+        max_output_bytes: 2
+      )
+    ) == Error(OutputLimit(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.format(
+      mail.Address(display_name: "A", address: "a@b"),
+      mail.Limits(
+        max_input_bytes: 3,
+        max_comment_depth: 1,
+        max_addresses: 1,
+        max_output_bytes: 100
+      )
+    ) == Error(InputLimit(3)),
+    TextInvariant()
+  )
+  bad("=?utf-8?q?name?= (comment) <a@b>")
+  bad("=?utf-8?q??= <a@b>")
+  Ok(())
+}

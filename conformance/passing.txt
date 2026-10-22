@@ -5639,6 +5639,8 @@ conformance/SEM/SEM-3-log-slog-cases-run.hir
 conformance/SEM/SEM-3-log-slog-edges-run.hir
 conformance/SEM/SEM-3-log-slog-special-run.hir
 conformance/SEM/SEM-3-log-slog-values-run.hir
+conformance/SEM/SEM-3-mail-address-15-invalid-run.hir
+conformance/SEM/SEM-3-mail-address-15-run.hir
 conformance/SEM/SEM-3-markdown-api-run.hir
 conformance/SEM/SEM-3-markdown-cmark-pathological-10-run.hir
 conformance/SEM/SEM-3-markdown-cmark-pathological-11-run.hir

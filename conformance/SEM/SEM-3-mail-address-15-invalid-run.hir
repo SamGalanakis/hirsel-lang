@@ -1,0 +1,42 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+pub fn main() -> Result[(), ()] {
+  let limits = mail.default_limits()
+  failure.check(
+    mail.parse("a@b\r\nBcc:c@d", limits) == Error(Injection(3)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?utf-8?q?A=0DB?= <a@b>", limits) == Error(Injection(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse("=?unsupported?q?A?= <a@b>", limits) == Error(UnsupportedCharset(0)),
+    TextInvariant()
+  )
+  failure.check(
+    mail.parse_list(
+      "a@b,c@d",
+      mail.Limits(
+        max_input_bytes: 100,
+        max_comment_depth: 1,
+        max_addresses: 1,
+        max_output_bytes: 100
+      )
+    ) == Error(AddressLimit(4)),
+    TextInvariant()
+  )
+  let invalid: List[String] = [
+    "a..b@c",
+    "G:G:a@b;;",
+    "\"unclosed <a@b>",
+    "a@[256.0.0.1]"
+  ]
+  for value in invalid {
+    if let Ok(_) = mail.parse_list(value, limits) {
+      failure.check(false, TextInvariant())
+    }
+  }
+  Ok(())
+}

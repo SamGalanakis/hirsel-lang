@@ -1,0 +1,780 @@
+// Go net/mail/message.go:228-1008, ebe2feefc400f813aefdc8a036e66d2619da6649;
+// mime/encodedword.go:190-430, d934b909f6a50247e2a2e9b89de02cdcef93a163.
+// BSD-3-Clause, Copyright The Go Authors; third-party/NOTICES.md.
+// Adaptations: explicit byte offsets and budgets, valid UTF-8 Strings, no CR/LF,
+// no charset callback, strict shipped base64, atomic errors. No message parser.
+pub type Address {
+  display_name: String,
+  address: String,
+}
+
+pub type Limits {
+  max_input_bytes: u64,
+  max_comment_depth: u64,
+  max_addresses: u64,
+  max_output_bytes: u64,
+}
+
+pub type MailError = Syntax(u64) | Injection(u64) | UnsupportedCharset(u64) | InvalidUtf8(
+  u64
+) | InputLimit(u64) | NestingLimit(u64) | AddressLimit(u64) | OutputLimit(u64)
+
+pub fn default_limits() -> Limits uses {} {
+  Limits(
+    max_input_bytes: 65536,
+    max_comment_depth: 16,
+    max_addresses: 1000,
+    max_output_bytes: 65536
+  )
+}
+
+fn slice(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn size(value: String) -> u64 uses {} {
+  bytes.len(string.as_bytes(value))
+}
+
+fn wsp(b: u8) -> bool uses {} {
+  b == b' ' || b == b'\t'
+}
+
+fn visible(b: u8) -> bool uses {} {
+  b >= 0x21 && b != 0x7f
+}
+
+fn atext(b: u8) -> bool uses {} {
+  visible(b) && b != b'(' && b != b')' && b != b'<' && b != b'>' && b != b'[' && b != b']' && b != b':' && b != b';' && b != b'@' && b != b'\\' && b != b',' && b != b'"'
+}
+
+fn skip_space(data: Bytes, mut pos: u64) -> () uses {} {
+  while pos < bytes.len(data) && wsp(data[pos]) {
+    pos += 1
+  }
+}
+
+fn consume(data: Bytes, mut pos: u64, b: u8) -> bool uses {} {
+  if pos < bytes.len(data) && data[pos] == b {
+    pos += 1
+    return true
+  }
+  false
+}
+
+fn safe(data: Bytes, offset: u64) -> Result[(), MailError] uses {} {
+  let mut i: u64 = 0
+  for b in data {
+    if b == b'\r' || b == b'\n' {
+      return Error(Injection(offset + i))
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn check_input(value: String, limits: Limits) -> Result[(), MailError] uses {} {
+  if size(value) > limits.max_input_bytes {
+    return Error(InputLimit(limits.max_input_bytes))
+  }
+  safe(string.as_bytes(value), 0)
+}
+
+fn output_check(n: u64, limits: Limits, pos: u64) -> Result[(), MailError] uses {} {
+  if n > limits.max_output_bytes {
+    return Error(OutputLimit(pos))
+  }
+  Ok(())
+}
+
+// consumeComment: iterative depth, retaining nested parentheses and quoted pairs.
+fn comment(data: Bytes, mut pos: u64, limits: Limits) -> Result[
+  unique String,
+  MailError
+] uses {} {
+  let start = pos
+  pos += 1
+  if limits.max_comment_depth == 0 {
+    return Error(NestingLimit(start))
+  }
+  let mut depth: u64 = 1
+  let mut out: List[u8] = []
+  while pos < bytes.len(data) {
+    let mut b = data[pos]
+    if b == b'\\' && pos + 1 < bytes.len(data) {
+      pos += 1
+      b = data[pos]
+    } else if b == b'(' {
+      if depth >= limits.max_comment_depth {
+        return Error(NestingLimit(pos))
+      }
+      depth += 1
+    } else if b == b')' {
+      depth -= 1
+    }
+    pos += 1
+    if depth == 0 {
+      return Ok(text.finish_valid(take out))
+    }
+    list.push(mut out, b)
+  }
+  Error(Syntax(start))
+}
+
+fn cfws(data: Bytes, mut pos: u64, limits: Limits) -> Result[(), MailError] uses {} {
+  skip_space(data, mut pos)
+  while pos < bytes.len(data) && data[pos] == b'(' {
+    comment(data, mut pos, limits)?
+    skip_space(data, mut pos)
+  }
+  Ok(())
+}
+
+fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, MailError] uses {} {
+  let start = pos
+  pos += 1
+  let mut out: List[u8] = []
+  while pos < bytes.len(data) {
+    let mut b = data[pos]
+    pos += 1
+    if b == b'"' {
+      return Ok(text.finish_valid(take out))
+    }
+    if b == b'\\' {
+      if pos == bytes.len(data) {
+        return Error(Syntax(start))
+      }
+      b = data[pos]
+      pos += 1
+    }
+    if !visible(b) && !wsp(b) {
+      return Error(Syntax(pos - 1))
+    }
+    list.push(mut out, b)
+  }
+  Error(Syntax(start))
+}
+
+fn atom(data: Bytes, mut pos: u64, permissive: bool) -> Result[unique String, MailError] uses {} {
+  let start = pos
+  while pos < bytes.len(data) && atext(data[pos]) {
+    pos += 1
+  }
+  if pos == start {
+    return Error(Syntax(start))
+  }
+  let value = slice(data, start, pos)
+  if !permissive && (data[start] == b'.' || data[pos - 1] == b'.' || string.contains(
+    value,
+    ".."
+  )) {
+    return Error(Syntax(start))
+  }
+  Ok(take value)
+}
+
+fn addr_spec(data: Bytes, mut pos: u64) -> Result[unique String, MailError] uses {} {
+  skip_space(data, mut pos)
+  if pos == bytes.len(data) {
+    return Error(Syntax(pos))
+  }
+  let local_part = if data[pos] == b'"' {
+    quoted(data, mut pos)?
+  } else {
+    atom(data, mut pos, false)?
+  }
+  if local_part == "" || !consume(data, mut pos, b'@') {
+    return Error(Syntax(pos))
+  }
+  skip_space(data, mut pos)
+  if pos == bytes.len(data) {
+    return Error(Syntax(pos))
+  }
+  let domain = if data[pos] == b'[' {
+    let start = pos
+    pos += 1
+    let first = pos
+    while pos < bytes.len(data) && data[pos] != b']' {
+      let b = data[pos]
+      if !visible(b) || b == b'[' || b == b'\\' {
+        return Error(Syntax(pos))
+      }
+      pos += 1
+    }
+    if pos == bytes.len(data) {
+      return Error(Syntax(start))
+    }
+    let ip = slice(data, first, pos)
+    if string.starts_with(ip, "IPv6:") {
+      let raw = slice(data, first + 5, pos)
+      if let Error(_) = net.parse_ip(raw) {
+        return Error(Syntax(first))
+      }
+    } else {
+      match net.parse_ip(ip) {
+        Ok(V4(_)) => (),
+        Ok(V6(octets)) => {
+          let mut i: u64 = 0
+          while i < 10 {
+            if octets[i] != 0 {
+              return Error(Syntax(first))
+            }
+            i += 1
+          }
+          if octets[10] != 255 || octets[11] != 255 {
+            return Error(Syntax(first))
+          }
+        },
+        Error(_) => return Error(Syntax(first)),
+      }
+    }
+    pos += 1
+    slice(data, start, pos)
+  } else {
+    atom(data, mut pos, false)?
+  }
+  Ok(f"{local_part}@{domain}")
+}
+
+// WordDecoder.Decode/convert. Bad word syntax/transfer encoding stays literal,
+// as net/mail does; an otherwise decoded unknown charset is an explicit error.
+fn decode_word(word: String, offset: u64, limits: Limits) -> Result[
+  (String, bool),
+  MailError
+] uses {} {
+  let data = string.as_bytes(word)
+  let n = bytes.len(data)
+  if n < 8 || !string.starts_with(word, "=?") || !string.ends_with(word, "?=") {
+    return Ok((unique word, false))
+  }
+  let mut marks: List[u64] = []
+  let mut i: u64 = 0
+  while i < n {
+    if data[i] == b'?' {
+      list.push(mut marks, i)
+    }
+    i += 1
+  }
+  if list.len(marks) != 4 || marks[1] <= 2 || marks[2] != marks[1] + 2 {
+    return Ok((unique word, false))
+  }
+  let charset = string.ascii_lower(slice(data, 2, marks[1]))
+  let encoding = data[marks[1] + 1]
+  let payload = slice(data, marks[2] + 1, n - 2)
+  let decoded = if encoding == b'B' || encoding == b'b' {
+    match base64.decode(payload, Standard(), Required()) {
+      Ok(value) => take value,
+      Error(_) => return Ok((unique word, false)),
+    }
+  } else if encoding == b'Q' || encoding == b'q' {
+    let raw = string.as_bytes(payload)
+    let mut out: List[u8] = []
+    let mut at: u64 = 0
+    while at < bytes.len(raw) {
+      let b = raw[at]
+      if b == b'_' {
+        list.push(mut out, b' ')
+      } else if b == b'=' {
+        if bytes.len(raw) - at < 3 {
+          return Ok((unique word, false))
+        }
+        let Some(hi) = ascii.digit_value_radix(raw[at + 1], 16) else {
+          return Ok((unique word, false))
+        }
+        let Some(lo) = ascii.digit_value_radix(raw[at + 2], 16) else {
+          return Ok((unique word, false))
+        }
+        list.push(mut out, hi * 16 + lo)
+        at += 2
+      } else if b >= 0x20 && b <= 0x7e {
+        list.push(mut out, b)
+      } else {
+        return Ok((unique word, false))
+      }
+      at += 1
+    }
+    bytes.from_list(take out)
+  } else {
+    return Ok((unique word, false))
+  }
+  for b in decoded {
+    if b == b'\r' || b == b'\n' {
+      return Error(Injection(offset))
+    }
+  }
+  let mut out: List[u8] = []
+  if charset == "utf-8" {
+    match string.from_bytes(take decoded) {
+      Ok(s) => {
+        output_check(size(s), limits, offset)?
+        return Ok((take s, true))
+      },
+      Error(_) => return Error(InvalidUtf8(offset)),
+    }
+  } else if charset == "iso-8859-1" {
+    for b in decoded {
+      if b < 128 {
+        list.push(mut out, b)
+      } else {
+        list.push(mut out, 0xc0 | b >> 6)
+        list.push(mut out, 0x80 | b & 0x3f)
+      }
+      output_check(list.len(out), limits, offset)?
+    }
+  } else if charset == "us-ascii" {
+    for b in decoded {
+      if b < 128 {
+        list.push(mut out, b)
+      } else {
+        text.append(mut out, "�")
+      }
+      output_check(list.len(out), limits, offset)?
+    }
+  } else {
+    return Error(UnsupportedCharset(offset))
+  }
+  Ok((text.finish_valid(take out), true))
+}
+
+fn phrase(data: Bytes, mut pos: u64, limits: Limits) -> Result[unique String, MailError] uses {} {
+  let start = pos
+  let mut out: List[u8] = []
+  let mut words: u64 = 0
+  let mut pending: List[u8] = []
+  while true {
+    if words > 0 {
+      cfws(data, mut pos, limits)?
+    }
+    skip_space(data, mut pos)
+    if pos == bytes.len(data) {
+      break
+    }
+    let at = pos
+    let (word, encoded) = if data[pos] == b'"' {
+      (quoted(data, mut pos)?, false)
+    } else if atext(data[pos]) {
+      let raw = atom(data, mut pos, true)?
+      decode_word(raw, at, limits)?
+    } else {
+      break
+    }
+    if encoded {
+      let extra: u64 = if words > 0 && list.len(pending) == 0 && size(word) > 0 {
+        1
+      } else {
+        0
+      }
+      let used = list.len(out) + list.len(pending)
+      let remaining = limits.max_output_bytes - used
+      if extra > remaining || size(word) > remaining - extra {
+        return Error(OutputLimit(at))
+      }
+      if extra != 0 {
+        list.push(mut out, b' ')
+      }
+      text.append(mut pending, word)
+    } else {
+      if list.len(pending) > 0 {
+        bytes.append(mut out, bytes.from_list(take pending))
+        pending = []
+        words += 1
+      }
+      let extra: u64 = if words > 0 {
+        1
+      } else {
+        0
+      }
+      let remaining = limits.max_output_bytes - list.len(out)
+      if extra > remaining || size(word) > remaining - extra {
+        return Error(OutputLimit(at))
+      }
+      if extra != 0 {
+        list.push(mut out, b' ')
+      }
+      text.append(mut out, word)
+      words += 1
+    }
+  }
+  if list.len(pending) > 0 {
+    bytes.append(mut out, bytes.from_list(take pending))
+  }
+  if words == 0 && list.len(out) == 0 {
+    return Error(Syntax(start))
+  }
+  Ok(text.finish_valid(take out))
+}
+
+fn comment_name(value: String, offset: u64, limits: Limits) -> Result[
+  unique String,
+  MailError
+] uses {} {
+  let mut out: List[u8] = []
+  let data = string.as_bytes(value)
+  let mut pos: u64 = 0
+  let mut first = true
+  while pos < bytes.len(data) {
+    skip_space(data, mut pos)
+    let start = pos
+    while pos < bytes.len(data) && !wsp(data[pos]) {
+      pos += 1
+    }
+    if pos == start {
+      break
+    }
+    let raw = slice(data, start, pos)
+    let (word, _) = decode_word(raw, offset, limits)?
+    let extra: u64 = if first {
+      0
+    } else {
+      1
+    }
+    let remaining = limits.max_output_bytes - list.len(out)
+    if extra > remaining || size(word) > remaining - extra {
+      return Error(OutputLimit(offset))
+    }
+    if !first {
+      list.push(mut out, b' ')
+    }
+    text.append(mut out, word)
+    first = false
+  }
+  Ok(text.finish_valid(take out))
+}
+
+fn push_address(
+  mut out: List[Address],
+  take value: Address,
+  mut used: u64,
+  limits: Limits,
+  pos: u64
+) -> Result[(), MailError] uses {} {
+  if list.len(out) >= limits.max_addresses {
+    return Error(AddressLimit(pos))
+  }
+  let n = size(value.address) + size(value.display_name)
+  if n > limits.max_output_bytes - used {
+    return Error(OutputLimit(pos))
+  }
+  used += n
+  list.push(mut out, take value)
+  Ok(())
+}
+
+// parseAddress: speculative addr-spec, then phrase/name-addr or one flat group.
+fn parse_one(
+  data: Bytes,
+  mut pos: u64,
+  group: bool,
+  mut out: List[Address],
+  mut used: u64,
+  limits: Limits
+) -> Result[(), MailError] uses {} {
+  skip_space(data, mut pos)
+  let start = pos
+  let mut probe = pos
+  if let Ok(address) = addr_spec(data, mut probe) {
+    pos = probe
+    skip_space(data, mut pos)
+    let name = if pos < bytes.len(data) && data[pos] == b'(' {
+      let at = pos
+      let raw = comment(data, mut pos, limits)?
+      comment_name(raw, at, limits)?
+    } else {
+      ""
+    }
+    return push_address(
+      mut out,
+      Address(display_name: take name, address: take address),
+      mut used,
+      limits,
+      start
+    )
+  }
+  if pos == bytes.len(data) {
+    return Error(Syntax(pos))
+  }
+  let name = if data[pos] == b'<' {
+    ""
+  } else {
+    phrase(data, mut pos, limits)?
+  }
+  skip_space(data, mut pos)
+  if group && consume(data, mut pos, b':') {
+    skip_space(data, mut pos)
+    if consume(data, mut pos, b';') {
+      return cfws(data, mut pos, limits)
+    }
+    while true {
+      parse_one(data, mut pos, false, mut out, mut used, limits)?
+      cfws(data, mut pos, limits)?
+      if consume(data, mut pos, b';') {
+        return cfws(data, mut pos, limits)
+      }
+      if !consume(data, mut pos, b',') {
+        return Error(Syntax(pos))
+      }
+    }
+  }
+  if !consume(data, mut pos, b'<') {
+    return Error(Syntax(pos))
+  }
+  let address = addr_spec(data, mut pos)?
+  if !consume(data, mut pos, b'>') {
+    return Error(Syntax(pos))
+  }
+  push_address(
+    mut out,
+    Address(display_name: take name, address: take address),
+    mut used,
+    limits,
+    start
+  )
+}
+
+pub fn parse(value: String, limits: Limits) -> Result[Address, MailError] uses {} {
+  check_input(value, limits)?
+  let data = string.as_bytes(value)
+  let mut pos: u64 = 0
+  let mut used: u64 = 0
+  let mut out: List[Address] = []
+  parse_one(data, mut pos, true, mut out, mut used, limits)?
+  cfws(data, mut pos, limits)?
+  if pos != bytes.len(data) || list.len(out) != 1 {
+    return Error(Syntax(pos))
+  }
+  Ok(unique out[0])
+}
+
+pub fn parse_list(value: String, limits: Limits) -> Result[List[Address], MailError] uses {} {
+  check_input(value, limits)?
+  let data = string.as_bytes(value)
+  let mut pos: u64 = 0
+  let mut used: u64 = 0
+  let mut out: List[Address] = []
+  while true {
+    skip_space(data, mut pos)
+    if consume(data, mut pos, b',') {
+      continue
+    }
+    parse_one(data, mut pos, true, mut out, mut used, limits)?
+    cfws(data, mut pos, limits)?
+    if pos == bytes.len(data) {
+      return Ok(take out)
+    }
+    if !consume(data, mut pos, b',') {
+      return Error(Syntax(pos))
+    }
+    while true {
+      skip_space(data, mut pos)
+      if !consume(data, mut pos, b',') {
+        break
+      }
+    }
+    if pos == bytes.len(data) {
+      return Ok(take out)
+    }
+  }
+  Ok(take out)
+}
+
+fn quote(value: String) -> unique String uses {} {
+  let mut out: List[u8] = [b'"']
+  for b in string.as_bytes(value) {
+    if b == b'"' || b == b'\\' {
+      list.push(mut out, b'\\')
+    }
+    if visible(b) || wsp(b) {
+      list.push(mut out, b)
+    }
+  }
+  list.push(mut out, b'"')
+  text.finish_valid(take out)
+}
+
+// Go WordEncoder splitting: 75-byte encoded words, never split a UTF-8 scalar.
+fn encode_name(value: String, binary: bool) -> unique String uses {} {
+  let data = string.as_bytes(value)
+  let mut out: List[u8] = []
+  let mut pos: u64 = 0
+  let mut first = true
+  while pos < bytes.len(data) {
+    if !first {
+      list.push(mut out, b' ')
+    }
+    first = false
+    text.append(
+      mut out,
+      if binary {
+        "=?utf-8?b?"
+      } else {
+        "=?utf-8?q?"
+      }
+    )
+    let start = pos
+    let mut encoded: u64 = 0
+    while pos < bytes.len(data) {
+      let b = data[pos]
+      let width: u64 = if b < 128 {
+        1
+      } else if b < 224 {
+        2
+      } else if b < 240 {
+        3
+      } else {
+        4
+      }
+      let mut cost: u64 = 0
+      let mut i: u64 = 0
+      while i < width {
+        let c = data[pos + i]
+        cost += if c == b' ' || c >= 0x21 && c <= 0x7e && c != b'=' && c != b'?' && c != b'_' {
+          1
+        } else {
+          3
+        }
+        i += 1
+      }
+      if binary {
+        if pos - start + width > 45 {
+          break
+        }
+      } else if encoded + cost > 63 {
+        break
+      }
+      encoded += cost
+      if !binary {
+        let digits = b"0123456789ABCDEF"
+        i = 0
+        while i < width {
+          let c = data[pos + i]
+          if c == b' ' {
+            list.push(mut out, b'_')
+          } else if c >= 0x21 && c <= 0x7e && c != b'=' && c != b'?' && c != b'_' {
+            list.push(mut out, c)
+          } else {
+            list.push(mut out, b'=')
+            list.push(mut out, digits[core@1/int.widen(c >> 4)])
+            list.push(mut out, digits[core@1/int.widen(c & 15)])
+          }
+          i += 1
+        }
+      }
+      pos += width
+    }
+    if binary {
+      text.append(
+        mut out,
+        base64.encode(string.as_bytes(slice(data, start, pos)), Standard(), Required())
+      )
+    }
+    text.append(mut out, "?=")
+  }
+  text.finish_valid(take out)
+}
+
+pub fn format(value: Address, limits: Limits) -> Result[unique String, MailError] uses {} {
+  if limits.max_addresses == 0 {
+    return Error(AddressLimit(0))
+  }
+  check_input(value.address, limits)?
+  check_input(value.display_name, limits)?
+  if size(value.address) > limits.max_input_bytes - size(value.display_name) {
+    return Error(InputLimit(limits.max_input_bytes))
+  }
+  // Validate the semantic local-part@domain value by quoting its local part first.
+  let Some((local_part, domain)) = string.rsplit_once(value.address, "@") else {
+    return Error(Syntax(0))
+  }
+  let local_bytes = string.as_bytes(local_part)
+  let mut needs_quote = local_part == ""
+  let mut i: u64 = 0
+  for b in local_bytes {
+    if !atext(b) || b == b'.' && (i == 0 || i + 1 == bytes.len(local_bytes) || local_bytes[i - 1] == b'.') {
+      needs_quote = true
+    }
+    if !visible(b) && !wsp(b) {
+      return Error(Syntax(i))
+    }
+    i += 1
+  }
+  let rendered_local = if needs_quote {
+    quote(local_part)
+  } else {
+    unique local_part
+  }
+  let mailbox = f"{rendered_local}@{domain}"
+  let mut pos: u64 = 0
+  let check = addr_spec(string.as_bytes(mailbox), mut pos)?
+  if pos != size(mailbox) || check != value.address {
+    return Error(Syntax(pos))
+  }
+  let mut printable = true
+  let mut binary = false
+  let specials = b"\\\"#$%&'(),.:;<>@[]^`{|}~"
+  for b in string.as_bytes(value.display_name) {
+    if b >= 128 || !visible(b) && !wsp(b) {
+      printable = false
+    }
+    for c in specials {
+      if b == c {
+        binary = true
+      }
+    }
+  }
+  let name = if value.display_name == "" {
+    ""
+  } else if printable {
+    quote(value.display_name)
+  } else {
+    encode_name(value.display_name, binary)
+  }
+  let rendered = if name == "" {
+    f"<{mailbox}>"
+  } else {
+    f"{name} <{mailbox}>"
+  }
+  output_check(size(rendered), limits, 0)?
+  Ok(take rendered)
+}
+
+/// Canonical mailboxes in order, separated by comma-space. Groups stay flattened.
+pub fn format_list(values: List[Address], limits: Limits) -> Result[
+  unique String,
+  MailError
+] uses {} {
+  if list.len(values) > limits.max_addresses {
+    return Error(AddressLimit(limits.max_addresses))
+  }
+  let mut out: List[u8] = []
+  let mut used: u64 = 0
+  let mut index: u64 = 0
+  for value in values {
+    let n = size(value.address) + size(value.display_name)
+    if n > limits.max_input_bytes - used {
+      return Error(InputLimit(limits.max_input_bytes))
+    }
+    used += n
+    let rendered = format(value, limits)?
+    let extra: u64 = if index == 0 {
+      0
+    } else {
+      2
+    }
+    let remaining = limits.max_output_bytes - list.len(out)
+    if extra > remaining || size(rendered) > remaining - extra {
+      return Error(OutputLimit(index))
+    }
+    if index != 0 {
+      text.append(mut out, ", ")
+    }
+    text.append(mut out, rendered)
+    index += 1
+  }
+  Ok(text.finish_valid(take out))
+}

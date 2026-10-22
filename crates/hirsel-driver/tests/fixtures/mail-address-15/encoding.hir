@@ -1,0 +1,101 @@
+// Go net/mail TestAddressString and mime encodedword_test.go:20-100.
+@track_caller
+fn check(name: String, address: String, expected: String) -> () {
+  failure.check(
+    mail.format(
+      mail.Address(display_name: name, address: address),
+      mail.default_limits()
+    ) == Ok(expected),
+    TextInvariant()
+  )
+}
+
+@track_caller
+fn decode(input: String, expected: String) -> () {
+  failure.check(
+    mail.parse(f"{input} <a@b>", mail.default_limits()) == Ok(
+      mail.Address(display_name: expected, address: "a@b")
+    ),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", "bob@example.com", "<bob@example.com>")
+  check("", "my@idiot@address@example.com", "<\"my@idiot@address\"@example.com>")
+  check("", " @example.com", "<\" \"@example.com>")
+  check("Bob", "bob@example.com", "\"Bob\" <bob@example.com>")
+  check("Böb", "bob@example.com", "=?utf-8?q?B=C3=B6b?= <bob@example.com>")
+  check("Bob Jane", "bob@example.com", "\"Bob Jane\" <bob@example.com>")
+  check(
+    "Böb Jacöb",
+    "bob@example.com",
+    "=?utf-8?q?B=C3=B6b_Jac=C3=B6b?= <bob@example.com>"
+  )
+  check(
+    "Böb, Jacöb",
+    "bob@example.com",
+    "=?utf-8?b?QsO2YiwgSmFjw7Zi?= <bob@example.com>"
+  )
+  check("=??Q?x?=", "hello@world.com", "\"=??Q?x?=\" <hello@world.com>")
+  check("=?hello", "hello@world.com", "\"=?hello\" <hello@world.com>")
+  check("world?=", "hello@world.com", "\"world?=\" <hello@world.com>")
+  check("", "bob@[192.168.0.1]", "<bob@[192.168.0.1]>")
+  check("Bob", "bob@[192.168.0.1]", "\"Bob\" <bob@[192.168.0.1]>")
+  check("", "bob@[IPv6:fd42::dead:beef:1234]", "<bob@[IPv6:fd42::dead:beef:1234]>")
+  check(
+    "Bob",
+    "bob@[IPv6:fd42::dead:beef:1234]",
+    "\"Bob\" <bob@[IPv6:fd42::dead:beef:1234]>"
+  )
+  check("François-Jérôme", "a@b", "=?utf-8?q?Fran=C3=A7ois-J=C3=A9r=C3=B4me?= <a@b>")
+  check(
+    "ééééééééééé",
+    "a@b",
+    "=?utf-8?q?=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9=C3=A9?= =?utf-8?q?=C3=A9?= <a@b>"
+  )
+  // The MIME vector contains a literal comma; net/mail admits it in a comment.
+  failure.check(
+    mail.parse("a@b (=?UTF-8?Q?=C2=A1Hola,_se=C3=B1or!?=)", mail.default_limits()) == Ok(
+      mail.Address(display_name: "¡Hola, señor!", address: "a@b")
+    ),
+    TextInvariant()
+  )
+  decode("=?UTF-8?Q?Fran=C3=A7ois-J=C3=A9r=C3=B4me?=", "François-Jérôme")
+  decode("=?UTF-8?q?ascii?=", "ascii")
+  decode("=?utf-8?B?QW5kcsOp?=", "André")
+  decode("=?ISO-8859-1?Q?Rapha=EBl_Dupont?=", "Raphaël Dupont")
+  decode(
+    "=?utf-8?b?IkFudG9uaW8gSm9zw6kiIDxqb3NlQGV4YW1wbGUub3JnPg==?=",
+    "\"Antonio José\" <jose@example.org>"
+  )
+  decode("=?UTF-8?A?Test?=", "=?UTF-8?A?Test?=")
+  decode("=?UTF-8?Q?A=B?=", "=?UTF-8?Q?A=B?=")
+  decode("=?UTF-8?Q?=A?=", "=?UTF-8?Q?=A?=")
+  decode("=?UTF-8?A?A?=", "=?UTF-8?A?A?=")
+  decode("=????=", "=????=")
+  decode("=?UTF-8???=", "=?UTF-8???=")
+  failure.check(
+    mail.parse("a@b (=?UTF-8?Q??=)", mail.default_limits()) == Ok(
+      mail.Address(display_name: "", address: "a@b")
+    ),
+    TextInvariant()
+  )
+  decode("=?utf-8?q?a?= =?UTF-8?B?Yg==?=", "ab")
+  decode("x =?utf-8?q?a?= =?utf-8?q?b?= y", "x ab y")
+  decode("=?utf-8?q??= plain", "plain")
+  decode("plain =?utf-8?q??=", "plain")
+  decode("=?utf-8?q?a?= =?utf-8?q??= =?utf-8?q?b?=", "ab")
+  decode("=?utf-8?b?Zh==?=", "=?utf-8?b?Zh==?=")
+  check(
+    "ééééééééééééééééééééééé,",
+    "a@b",
+    "=?utf-8?b?w6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6nDqcOpw6k=?= =?utf-8?b?w6ks?= <a@b>"
+  )
+  check(
+    "😀😀😀😀😀😀😀😀😀😀😀😀,",
+    "a@b",
+    "=?utf-8?b?8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIDwn5iA8J+YgPCfmIA=?= =?utf-8?b?8J+YgCw=?= <a@b>"
+  )
+  Ok(())
+}

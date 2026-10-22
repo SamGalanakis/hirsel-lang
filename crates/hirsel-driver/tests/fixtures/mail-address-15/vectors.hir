@@ -1,0 +1,248 @@
+// Independent Go net/mail/message_test.go:434-878, ebe2feef (BSD-3-Clause).
+@track_caller
+fn check(input: String, expected: List[mail.Address]) -> () {
+  let limits = mail.default_limits()
+  failure.check(mail.parse_list(input, limits) == Ok(expected), TextInvariant())
+  if list.len(expected) == 1 {
+    failure.check(mail.parse(input, limits) == Ok(expected[0]), TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "jdoe@machine.example",
+    [mail.Address(display_name: "", address: "jdoe@machine.example")]
+  )
+  check(
+    "John Doe <jdoe@machine.example>",
+    [mail.Address(display_name: "John Doe", address: "jdoe@machine.example")]
+  )
+  check(
+    "\"Joe Q. Public\" <john.q.public@example.com>",
+    [mail.Address(display_name: "Joe Q. Public", address: "john.q.public@example.com")]
+  )
+  check(
+    "John (middle) Doe <jdoe@machine.example>",
+    [mail.Address(display_name: "John Doe", address: "jdoe@machine.example")]
+  )
+  check(
+    "\"John (middle) Doe\" <jdoe@machine.example>",
+    [mail.Address(display_name: "John (middle) Doe", address: "jdoe@machine.example")]
+  )
+  check(
+    "\"John <middle> Doe\" <jdoe@machine.example>",
+    [mail.Address(display_name: "John <middle> Doe", address: "jdoe@machine.example")]
+  )
+  check(
+    "Mary Smith <mary@x.test>, jdoe@example.org, Who? <one@y.test>",
+    [
+      mail.Address(display_name: "Mary Smith", address: "mary@x.test"),
+      mail.Address(display_name: "", address: "jdoe@example.org"),
+      mail.Address(display_name: "Who?", address: "one@y.test")
+    ]
+  )
+  check(
+    "<boss@nil.test>, \"Giant; \\\"Big\\\" Box\" <sysservices@example.net>",
+    [
+      mail.Address(display_name: "", address: "boss@nil.test"),
+      mail.Address(
+        display_name: "Giant; \"Big\" Box",
+        address: "sysservices@example.net"
+      )
+    ]
+  )
+  check(
+    "Joe Q. Public <john.q.public@example.com>",
+    [mail.Address(display_name: "Joe Q. Public", address: "john.q.public@example.com")]
+  )
+  check(
+    "group1: groupaddr1@example.com;",
+    [mail.Address(display_name: "", address: "groupaddr1@example.com")]
+  )
+  check("empty group: ;", [])
+  check(
+    "A Group:Ed Jones <c@a.test>,joe@where.test,John <jdoe@one.test>;",
+    [
+      mail.Address(display_name: "Ed Jones", address: "c@a.test"),
+      mail.Address(display_name: "", address: "joe@where.test"),
+      mail.Address(display_name: "John", address: "jdoe@one.test")
+    ]
+  )
+  check(
+    " , joe@where.test,,John <jdoe@one.test>,",
+    [
+      mail.Address(display_name: "", address: "joe@where.test"),
+      mail.Address(display_name: "John", address: "jdoe@one.test")
+    ]
+  )
+  check(
+    " , joe@where.test,,John <jdoe@one.test>,,",
+    [
+      mail.Address(display_name: "", address: "joe@where.test"),
+      mail.Address(display_name: "John", address: "jdoe@one.test")
+    ]
+  )
+  check(
+    "Group1: <addr1@example.com>;, Group 2: addr2@example.com;, John <addr3@example.com>",
+    [
+      mail.Address(display_name: "", address: "addr1@example.com"),
+      mail.Address(display_name: "", address: "addr2@example.com"),
+      mail.Address(display_name: "John", address: "addr3@example.com")
+    ]
+  )
+  check(
+    "=?iso-8859-1?q?J=F6rg_Doe?= <joerg@example.com>",
+    [mail.Address(display_name: "Jörg Doe", address: "joerg@example.com")]
+  )
+  check(
+    "=?us-ascii?q?J=6Frg_Doe?= <joerg@example.com>",
+    [mail.Address(display_name: "Jorg Doe", address: "joerg@example.com")]
+  )
+  check(
+    "=?utf-8?q?J=C3=B6rg_Doe?= <joerg@example.com>",
+    [mail.Address(display_name: "Jörg Doe", address: "joerg@example.com")]
+  )
+  check(
+    "=?utf-8?q?J=C3=B6rg?=  =?utf-8?q?Doe?= <joerg@example.com>",
+    [mail.Address(display_name: "JörgDoe", address: "joerg@example.com")]
+  )
+  check(
+    "=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>",
+    [mail.Address(display_name: "André Pirard", address: "PIRARD@vm1.ulg.ac.be")]
+  )
+  check(
+    "=?ISO-8859-1?B?SvZyZw==?= <joerg@example.com>",
+    [mail.Address(display_name: "Jörg", address: "joerg@example.com")]
+  )
+  check(
+    "=?UTF-8?B?SsO2cmc=?= <joerg@example.com>",
+    [mail.Address(display_name: "Jörg", address: "joerg@example.com")]
+  )
+  check(
+    "Asem H. <noreply@example.com>",
+    [mail.Address(display_name: "Asem H.", address: "noreply@example.com")]
+  )
+  check(
+    "\"Gø Pher\" <gopher@example.com>",
+    [mail.Address(display_name: "Gø Pher", address: "gopher@example.com")]
+  )
+  check(
+    "µ <micro@example.com>",
+    [mail.Address(display_name: "µ", address: "micro@example.com")]
+  )
+  check(
+    "Micro <µ@example.com>",
+    [mail.Address(display_name: "Micro", address: "µ@example.com")]
+  )
+  check(
+    "Micro <micro@µ.example.com>",
+    [mail.Address(display_name: "Micro", address: "micro@µ.example.com")]
+  )
+  check(
+    "\"\" <emptystring@example.com>",
+    [mail.Address(display_name: "", address: "emptystring@example.com")]
+  )
+  check(
+    "<cfws@example.com> (CFWS (cfws))  (another comment)",
+    [mail.Address(display_name: "", address: "cfws@example.com")]
+  )
+  check(
+    "<cfws@example.com> ()  (another comment), <cfws2@example.com> (another)",
+    [
+      mail.Address(display_name: "", address: "cfws@example.com"),
+      mail.Address(display_name: "", address: "cfws2@example.com")
+    ]
+  )
+  check(
+    "john@example.com (John Doe)",
+    [mail.Address(display_name: "John Doe", address: "john@example.com")]
+  )
+  check(
+    "John Doe <john@example.com> (Joey)",
+    [mail.Address(display_name: "John Doe", address: "john@example.com")]
+  )
+  check(
+    "john@example.com(John Doe)",
+    [mail.Address(display_name: "John Doe", address: "john@example.com")]
+  )
+  check(
+    "asjo@example.com (Adam =?utf-8?Q?Sj=C3=B8gren?=)",
+    [mail.Address(display_name: "Adam Sjøgren", address: "asjo@example.com")]
+  )
+  check(
+    "asjo@example.com (Adam\t=?utf-8?Q?Sj=C3=B8gren?=)",
+    [mail.Address(display_name: "Adam Sjøgren", address: "asjo@example.com")]
+  )
+  check(
+    "asjo@example.com (Adam =?utf-8?Q?Sj=C3=B8gren?= (Debian))",
+    [mail.Address(display_name: "Adam Sjøgren (Debian)", address: "asjo@example.com")]
+  )
+  check(
+    "group (comment:): a@example.com, b@example.com;",
+    [
+      mail.Address(display_name: "", address: "a@example.com"),
+      mail.Address(display_name: "", address: "b@example.com")
+    ]
+  )
+  check(
+    "x(:\"):\"@a.example;(\"@b.example;",
+    [mail.Address(display_name: "", address: "@a.example;(@b.example")]
+  )
+  check(
+    "jdoe@[192.168.0.1]",
+    [mail.Address(display_name: "", address: "jdoe@[192.168.0.1]")]
+  )
+  check(
+    "John Doe <jdoe@[192.168.0.1]>",
+    [mail.Address(display_name: "John Doe", address: "jdoe@[192.168.0.1]")]
+  )
+  check(
+    "jdoe@[IPv6:fd42::dead:beef:1234]",
+    [mail.Address(display_name: "", address: "jdoe@[IPv6:fd42::dead:beef:1234]")]
+  )
+  check(
+    "John Doe <jdoe@[IPv6:fd42::dead:beef:1234]>",
+    [
+      mail.Address(
+        display_name: "John Doe",
+        address: "jdoe@[IPv6:fd42::dead:beef:1234]"
+      )
+    ]
+  )
+  check(
+    "\"a\\\"b\"@Example.COM",
+    [mail.Address(display_name: "", address: "a\"b@Example.COM")]
+  )
+  check(
+    "\"a@b\"@Example.COM",
+    [mail.Address(display_name: "", address: "a@b@Example.COM")]
+  )
+  check(
+    "\"A\\\\B\"@Example.COM",
+    [mail.Address(display_name: "", address: "A\\B@Example.COM")]
+  )
+  check(
+    "Name (a(b(c))) <MiXeD@ExAmPlE.COM>",
+    [mail.Address(display_name: "Name", address: "MiXeD@ExAmPlE.COM")]
+  )
+  check("a@b (one\\) two)", [mail.Address(display_name: "one) two", address: "a@b")])
+  check(
+    "=?utf-8?q?bad=GG?= <a@b>",
+    [mail.Address(display_name: "=?utf-8?q?bad=GG?=", address: "a@b")]
+  )
+  check(
+    "=?utf-8?b?!!?= <a@b>",
+    [mail.Address(display_name: "=?utf-8?b?!!?=", address: "a@b")]
+  )
+  check("=?us-ascii?q?=FF?= <a@b>", [mail.Address(display_name: "�", address: "a@b")])
+  check("a@b (A\u{c}B)", [mail.Address(display_name: "A\u{c}B", address: "a@b")])
+  check(
+    "a@[::ffff:192.0.2.1]",
+    [mail.Address(display_name: "", address: "a@[::ffff:192.0.2.1]")]
+  )
+  check(
+    "a@[IPv6:192.0.2.1]",
+    [mail.Address(display_name: "", address: "a@[IPv6:192.0.2.1]")]
+  )
+  Ok(())
+}

@@ -5463,3 +5463,96 @@ vectors. Deviations are raw labels rather than dotted-name restrictions,
 lossless packed flags (including the reserved bit), explicit resource budgets,
 strict packet/RDATA consumption, and deterministic uncompressed encoding with
 Unknown reconstruction refused. The Go BSD license is in the std notices.
+
+## Mail addresses
+
+`std@1/mail` is a bounded mailbox parser and formatter, adapted from Go
+`net/mail` and `mime` (see `third-party/NOTICES.md`). It has no network effects.
+
+```hirsel
+pub type Address { display_name: String, address: String }
+pub type Limits {
+  max_input_bytes: u64,
+  max_comment_depth: u64,
+  max_addresses: u64,
+  max_output_bytes: u64,
+}
+pub type MailError = Syntax(u64) | Injection(u64) | UnsupportedCharset(u64)
+  | InvalidUtf8(u64) | InputLimit(u64) | NestingLimit(u64)
+  | AddressLimit(u64) | OutputLimit(u64)
+fn mail.default_limits() -> Limits uses {}
+fn mail.parse(value: String, limits: Limits) -> Result[Address, MailError] uses {}
+fn mail.parse_list(value: String, limits: Limits) -> Result[List[Address], MailError] uses {}
+fn mail.format(value: Address, limits: Limits) -> Result[unique String, MailError] uses {}
+fn mail.format_list(values: List[Address], limits: Limits) -> Result[unique String, MailError] uses {}
+```
+
+`parse` requires exactly one mailbox after group flattening; an empty group or a
+group with several mailboxes fails. `parse_list` preserves mailbox order and
+flattens groups, including empty groups. Empty input and lists consisting only
+of commas fail. Like Go, obsolete address lists allow leading, repeated and
+trailing commas, but group members require exactly one comma between mailboxes.
+Groups cannot nest. Display-name phrases accept dots, even leading, trailing or
+repeated dots (Go's permissive obs-phrase), and comments between words or after
+the name once an ordinary phrase word has been consumed; Go rejects a comment
+after an encoded-word-only phrase. A leading comment before the first word is
+rejected. Space and tab are accepted where Go skips space, including after `@`;
+comments inside an addr-spec, source routes and folded headers are rejected.
+Nested comments and backslash escapes are supported. A bare mailbox's first
+trailing comment supplies its display name; comments after an angle address and
+subsequent comments are ignored.
+
+Mailbox local parts are strict dot-atoms or nonempty quoted strings; quoted
+pairs are unescaped in `address`, as in Go. Domain literals follow Go's IP
+checks: IPv4 or IPv4-mapped IPv6 without a prefix, and `IPv6:` followed by
+either an IPv4 or IPv6 address. Names, unquoted mailbox atoms and quoted local
+parts may contain valid UTF-8. Mailbox case and Unicode spelling are preserved,
+with no normalization, IDNA conversion, DNS or deliverability check. This API
+makes no promise about SMTPUTF8 transport. For example, the input
+`"Joe" <MiXeD@Example.COM>` parses to `Address("Joe", "MiXeD@Example.COM")`;
+`"a@b"@Example.COM` has the semantic address `a@b@Example.COM`.
+
+Comment names split only on space/tab. Unquoted phrase words and bare-mailbox
+comments decode RFC 2047 B/b and Q/q words. Charsets are case insensitive: UTF-8
+is validated, ISO-8859-1 bytes map to Unicode scalars, and US-ASCII bytes above
+127 become U+FFFD, following Go. Otherwise valid words with unknown charsets
+fail explicitly; there is no ambient charset registry or callback. Adjacent
+encoded phrase words discard intervening space/tab; comment words retain one
+separating space. Quoted display names stay literal. Like Go, a phrase made only
+of empty encoded words is rejected; an empty quoted display name or an empty
+encoded comment name is accepted. Like Go net/mail, malformed word syntax,
+transfer encoding, base64 or Q hex stays literal. Shipped base64 additionally
+rejects noncanonical pad bits. Decoded invalid UTF-8 fails rather than creating
+an invalid Hirsel String.
+
+`format` validates the semantic mailbox, quotes/escapes its local part when
+needed, and always emits angle brackets. Printable ASCII names are quoted with
+backslash escapes. Other names use UTF-8 Q words, or B words when RFC 2047
+phrase specials occur. Encoded words are at most 75 bytes, separated by one
+space, and never split a UTF-8 scalar. `format_list` joins canonical mailboxes
+with comma-space; it cannot reconstruct group names. Unlike Go's permissive
+`Address.String`, formatting a malformed semantic mailbox fails. Literal CR/LF
+in either API, and CR/LF decoded from an encoded word, fail with `Injection`; no
+folded output is emitted.
+
+Defaults are 65536 input bytes, comment depth 16, 1000 flattened mailboxes and
+65536 output bytes. Parsing charges the sum of UTF-8 bytes in all retained
+`display_name` and `address` fields against `max_output_bytes`; intermediate
+phrase/decoded-word text is capped too. Formatting charges the combined input
+fields against `max_input_bytes` and the complete rendered string against
+`max_output_bytes`. Every limit is inclusive; zero permits no corresponding
+resource (an empty group uses no retained mailbox/output budget, but its name
+still uses the intermediate phrase budget). Scans and scratch are bounded by
+input size; comment depth uses an iterative counter and group nesting is
+rejected. Errors return no partial result.
+
+Error positions are zero-based bytes in input: syntax identifies the offending
+cursor or lexical item's start; nesting identifies the opening parenthesis that
+exceeds the cap; address/output limits identify the mailbox start or current
+phrase word. Unsupported charset and invalid decoded UTF-8 identify the encoded
+word start (the enclosing comment start for comment words). Injection in decoded
+words identifies the word/comment start. `InputLimit` carries the allowed input
+size. Formatting uses byte offsets in the semantic mailbox/name,
+`OutputLimit(0)` for a single rendered mailbox, and a zero-based mailbox index
+for list count/output failures. UTF-8 cannot be invalid in an input String, only
+in decoded word bytes.
