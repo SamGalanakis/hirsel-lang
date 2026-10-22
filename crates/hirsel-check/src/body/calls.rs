@@ -9,6 +9,7 @@ pub(super) struct PendingCall {
     ordinals: Vec<Option<usize>>,
     inferred: Vec<Option<GenericArgument>>,
     type_contracts: BTreeSet<usize>,
+    contextual_contracts: Vec<u32>,
     bad: bool,
     capability_parameters: BTreeSet<usize>,
     missing_capabilities: bool,
@@ -440,7 +441,7 @@ impl Checker<'_, '_> {
         // An expected type fixes a parameter's modes only where it occurs as a
         // type contract; the modes of the expected value itself are its
         // receiver's requirement, which the result meets by weakening.
-        let type_contracts = expected
+        let type_contracts: BTreeSet<usize> = expected
             .map(|e| self.occurrences(f.result, e))
             .unwrap_or_default()
             .into_iter()
@@ -456,6 +457,7 @@ impl Checker<'_, '_> {
             arguments,
             ordinals,
             inferred,
+            contextual_contracts: type_contracts.iter().map(|i| *i as u32).collect(),
             type_contracts,
             capability_parameters,
             missing_capabilities,
@@ -488,6 +490,7 @@ impl Checker<'_, '_> {
                 })
                 .collect(),
             generic_arguments: vec![],
+            contextual_contracts: vec![],
             result: e,
             state: CallState::Recovery,
         });
@@ -958,6 +961,7 @@ impl Checker<'_, '_> {
         let result = c.function.result;
         let inferred = c.inferred.clone();
         let type_contracts = c.type_contracts.clone();
+        let contextual_contracts = c.contextual_contracts.clone();
         let mut bad = c.bad;
         let source_arguments = c.arguments.clone();
         let ordinals = c.ordinals.clone();
@@ -1095,6 +1099,7 @@ impl Checker<'_, '_> {
             target,
             arguments,
             generic_arguments: args.clone(),
+            contextual_contracts,
             result,
             state: if bad {
                 CallState::Recovery

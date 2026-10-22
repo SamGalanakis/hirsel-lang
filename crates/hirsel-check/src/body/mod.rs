@@ -1972,6 +1972,7 @@ impl Checker<'_, '_> {
                     target: CallTarget::Definition(role.operation),
                     arguments: vec![],
                     generic_arguments: vec![],
+                    contextual_contracts: vec![],
                     result,
                     state: CallState::Complete,
                 });

@@ -1367,12 +1367,18 @@ impl Checker<'_> {
                             callee,
                         ))
                     && self.keeps_nested_brands(*actual, expected, p.passing, arguments[i].value)
-                    && self.keeps_nested_uniqueness(
-                        *actual,
-                        expected,
-                        p.passing != PassingMode::Mut,
-                        self.span(arguments[i].value),
-                    );
+                    && {
+                        let valid = self.keeps_nested_uniqueness(
+                            *actual,
+                            expected,
+                            p.passing != PassingMode::Mut,
+                            self.span(arguments[i].value),
+                        );
+                        if !valid {
+                            self.explain_contextual_contract(e, i, p.ty, *actual, expected);
+                        }
+                        valid
+                    };
                 self.receiving = saved;
                 if !valid {
                     obligation_valid = false;

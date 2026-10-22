@@ -1050,6 +1050,10 @@ pub struct CheckedCall {
     /// Written evaluation order, independently of declaration order.
     pub arguments: Vec<CheckedArgument>,
     pub generic_arguments: Vec<GenericArgument>,
+    /// Diagnostic provenance: generic ordinals fixed by the expected result
+    /// before any operand was checked. These never affect a judgment.
+    #[serde(default)]
+    pub contextual_contracts: Vec<u32>,
     /// Declared result requirement before actual value-flow refinement.
     pub result: TypeId,
     pub state: CallState,

@@ -61,6 +61,7 @@ impl Fixture {
                 })
                 .collect(),
             generic_arguments: vec![],
+            contextual_contracts: vec![],
             result: self.checked.expressions[expression.0 as usize].ty,
             state: hirsel_types::CallState::Complete,
         };

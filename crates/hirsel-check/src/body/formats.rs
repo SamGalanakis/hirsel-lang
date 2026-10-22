@@ -314,6 +314,7 @@ impl Checker<'_, '_> {
                 })
                 .collect(),
             generic_arguments: vec![],
+            contextual_contracts: vec![],
             result: e,
             state: CallState::Recovery,
         });

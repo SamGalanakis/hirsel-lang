@@ -204,6 +204,7 @@ impl Fixture {
                         })
                         .collect(),
                     generic_arguments: vec![],
+                    contextual_contracts: vec![],
                     result: f.result,
                     state: CallState::Complete,
                 });
@@ -367,6 +368,7 @@ impl Fixture {
                 })
                 .collect(),
             generic_arguments: vec![],
+            contextual_contracts: vec![],
             result,
             state: CallState::Complete,
         });

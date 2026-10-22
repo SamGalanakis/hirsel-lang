@@ -419,6 +419,7 @@ impl Fixture {
                 })
                 .collect(),
             generic_arguments: vec![],
+            contextual_contracts: vec![],
             result,
             state: hirsel_types::CallState::Complete,
         });

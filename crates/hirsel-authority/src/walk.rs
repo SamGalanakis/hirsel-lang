@@ -12,6 +12,7 @@ type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 mod brands;
 mod calls;
 mod causes;
+mod contextual_contracts;
 mod crossing;
 mod patterns;
 mod promises;
