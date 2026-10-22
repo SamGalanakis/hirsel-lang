@@ -1311,15 +1311,6 @@ const POWER_OF_FIVE_128: Array[u64] = [
   0x570f09eaa7ea7648
 ]
 
-@noalloc
-fn leading_zeros(value: u64) -> u64 uses {} {
-  let mut count: u64 = 0
-  while value & 0x8000000000000000 >> count == 0 {
-    count += 1
-  }
-  count
-}
-
 // floor(q * log2(10)) + 63, by the integer approximation 217706 / 2^16, exact
 // over the table's whole exponent range.
 @noalloc
@@ -1385,7 +1376,8 @@ pub fn compute(q: i64, w: u64, fraction: u64, bias: i32) -> Option[u64] uses {} 
   if q > largest {
     return Some(infinity << fraction)
   }
-  let zeros = leading_zeros(w)
+  // Rust dec2flt/lemire.rs:42 normalizes with the integer primitive.
+  let zeros = core@1/int.leading_zeros(w)
   let (high, low) = product(q, w << zeros, fraction + 3)
   // An undecidable truncation; it is exact when q is in [-27, 55].
   if low == 18446744073709551615u64 && (q < -27 || q > 55) {
