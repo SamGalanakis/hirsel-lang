@@ -1,4 +1,4 @@
-//! Explicit native clock and file admission. Replay derives resource positions from
+//! Explicit native clock, file, output and random admission. Replay derives resource positions from
 //! checked creator metadata, without consulting a live adapter or host clock.
 use super::*;
 use std::sync::atomic::Ordering;
@@ -66,6 +66,7 @@ pub(super) fn request_keys(
     let keys = match request {
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
+        | R::Random { io: 1 }
         | R::Stdout { io: 1 }
         | R::Stderr { io: 1 } => vec![(ROOT, Mode::Shared)],
         R::Print { stdout: word, .. } | R::PrintStderr { stderr: word, .. } => {
@@ -79,10 +80,13 @@ pub(super) fn request_keys(
             }
             keys
         }
-        R::Monotonic { clock } | R::Wall { clock } | R::SleepUntil { clock, .. } => {
+        R::Monotonic { clock }
+        | R::Wall { clock }
+        | R::SleepUntil { clock, .. }
+        | R::RandomBytes { random: clock, .. } => {
             let (key, kind) = identity(*clock)?;
             if kind != Kind::Other {
-                return Err(Stop::Diverged("native clock resource kind differs".into()));
+                return Err(Stop::Diverged("native scalar resource kind differs".into()));
             }
             vec![(key, Mode::Exclusive)]
         }
@@ -194,4 +198,32 @@ pub(crate) unsafe fn finish_result(
         unsafe { crate::tasks::leave_home(ctx) };
     }
     *unsafe { (*ctx).native_host_result.take().expect("a native delivery") }
+}
+
+/// Keep host-owned payloads outside abandonable Rust frames while an ABI
+/// conversion allocates Hirsel storage. The closure borrows the stable result;
+/// it must not issue another host request or move its buffers onto the stack.
+/// # Safety
+/// The task holds its role, has no pending native delivery, and owns completion.
+pub(crate) unsafe fn convert_result<T>(
+    ctx: *mut TaskCtx,
+    completion: Completion,
+    convert: impl FnOnce(&Completion) -> T,
+) -> T {
+    if !enabled(ctx) {
+        return convert(&completion);
+    }
+    assert!(unsafe { (*ctx).native_host_result.is_none() });
+    unsafe { (*ctx).native_host_result = Some(Box::new(Ok(completion))) };
+    let value = unsafe {
+        (*ctx)
+            .native_host_result
+            .as_deref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+    } as *const Completion;
+    let converted = convert(unsafe { &*value });
+    drop(unsafe { (*ctx).native_host_result.take().unwrap() });
+    converted
 }

@@ -3143,15 +3143,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_view(
     let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::View(view) = completion else {
-        crate::fault("Io completion type mismatch");
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::View(view) = completion else {
+                crate::fault("Io completion type mismatch");
+            };
+            let slice = match &view.bytes {
+                _ if view.block != 0 => crate::mapping::view(view.block, view.length),
+                Some(bytes) => crate::text::allocate_bytes(ctx, bytes),
+                None => crate::fault("a mapped view without its bytes"),
+            };
+            out.write(slice);
+        })
     };
-    let slice = match view.bytes {
-        _ if view.block != 0 => crate::mapping::view(view.block, view.length),
-        Some(bytes) => unsafe { crate::text::allocate_bytes(ctx, &bytes) },
-        None => crate::fault("a mapped view without its bytes"),
-    };
-    unsafe { out.write(slice) };
     crate::STATUS_OK
 }
 /// `mapped.with`'s check: 0, 1 when the mapped file was truncated, or 2 when the mapping
@@ -4259,8 +4263,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let value = if count == 0 {
-        Ok(vec![])
+    let completion = if count == 0 {
+        Completion::Random(Ok(vec![]))
     } else {
         let request = Request::RandomBytes {
             random: unsafe { random.read() },
@@ -4269,20 +4273,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
         let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
             return crate::STATUS_FAILURE;
         };
-        let Completion::Random(value) = completion else {
-            crate::fault("random completion mismatch");
-        };
-        value
+        completion
     };
-    // Initialize padding and inactive bytes; RandomError has no payload.
     unsafe {
-        out.cast::<u8>()
-            .write_bytes(0, std::mem::size_of::<BytesResult>())
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Random(value) = completion else {
+                crate::fault("random completion mismatch");
+            };
+            // Initialize padding and inactive bytes; RandomError has no payload.
+            out.cast::<u8>()
+                .write_bytes(0, std::mem::size_of::<BytesResult>());
+            match value {
+                Ok(bytes) => (*out).value = crate::text::allocate_bytes(ctx, bytes),
+                Err(RandomError::Unavailable) => (*out).tag = 1,
+            }
+        })
     };
-    match value {
-        Ok(bytes) => unsafe { (*out).value = crate::text::allocate_bytes(ctx, &bytes) },
-        Err(RandomError::Unavailable) => unsafe { (*out).tag = 1 },
-    }
     crate::STATUS_OK
 }
 /// # Safety
@@ -4623,25 +4629,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_bytes(
     let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::Bytes(value) = completion else {
-        crate::fault("Io completion type mismatch");
-    };
-    // Initialize padding and inactive bytes without manufacturing a pointer from error bits.
     unsafe {
-        out.cast::<u8>()
-            .write_bytes(0, std::mem::size_of::<BytesResult>())
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Bytes(value) = completion else {
+                crate::fault("Io completion type mismatch");
+            };
+            // Initialize padding and inactive bytes without manufacturing a pointer from error bits.
+            out.cast::<u8>()
+                .write_bytes(0, std::mem::size_of::<BytesResult>());
+            match value {
+                Ok(bytes) => (*out).value = crate::text::allocate_bytes(ctx, bytes),
+                Err(error) => {
+                    (*out).tag = 1;
+                    std::ptr::copy_nonoverlapping(
+                        error_word(error.clone()).to_le_bytes().as_ptr(),
+                        std::ptr::addr_of_mut!((*out).value).cast::<u8>(),
+                        8,
+                    );
+                }
+            }
+        })
     };
-    match value {
-        Ok(bytes) => unsafe { (*out).value = crate::text::allocate_bytes(ctx, &bytes) },
-        Err(error) => unsafe {
-            (*out).tag = 1;
-            std::ptr::copy_nonoverlapping(
-                error_word(error).to_le_bytes().as_ptr(),
-                std::ptr::addr_of_mut!((*out).value).cast::<u8>(),
-                8,
-            )
-        },
-    }
     crate::STATUS_OK
 }
 

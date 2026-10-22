@@ -881,3 +881,6 @@ mod native_file_tests;
 
 #[cfg(test)]
 mod native_output_tests;
+
+#[cfg(test)]
+mod native_random_tests;
