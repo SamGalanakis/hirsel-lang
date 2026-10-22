@@ -351,6 +351,9 @@ pub(crate) unsafe fn issue(
     if ordered {
         crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
         crate::tasks::ordered::events::request_host(ctx, &request);
+        if crate::tasks::ordered::events::observing(ctx) {
+            crate::tasks::ordered::events::host_phases::request_keys(ctx);
+        }
     }
     let close = matches!(request, Request::Close { .. });
     // SAFETY: caller contract.

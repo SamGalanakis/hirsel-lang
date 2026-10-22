@@ -472,12 +472,21 @@ mod tests {
                     waits: 0,
                 }));
                 unsafe { run.use_physical_dispatch() };
-                let outcome = run.run(
+                let (outcome, trace) = run.run_traced(
                     move |ctx| unsafe {
                         let mut policy = Policy::admit(&Default::default(), None);
                         policy.reorder = reorder;
                         engine::enable(ctx, policy);
                         super::super::events::enable(ctx);
+                        engine::driver(ctx).objects.bind_erased(
+                            crate::ordered::objects::Kind::Capability,
+                            11,
+                            crate::ordered::footprint::ObjectId {
+                                creator: vec![],
+                                ordinal: 77,
+                            },
+                            Default::default(),
+                        );
                     },
                     move |ctx| unsafe {
                         let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
@@ -515,9 +524,26 @@ mod tests {
                                 .iter()
                                 .all(|row| row.completion.observation.is_some())
                         );
-                        assert!(
-                            log.canonical().is_err(),
-                            "raw attempts do not certify parked phases"
+                        let canonical = log.canonical().expect("complete coupled scalar phases");
+                        assert_eq!(
+                            canonical
+                                .iter()
+                                .filter(|row| matches!(
+                                    row.outcome,
+                                    super::super::events::CanonicalOutcome::HostAccess { .. }
+                                ))
+                                .count(),
+                            3
+                        );
+                        assert_eq!(
+                            canonical
+                                .iter()
+                                .filter(|row| matches!(
+                                    row.outcome,
+                                    super::super::events::CanonicalOutcome::HostFinished
+                                ))
+                                .count(),
+                            1
                         );
                         *seen.lock().unwrap() = attempts.clone();
                         STATUS_OK
@@ -527,7 +553,8 @@ mod tests {
                 assert_eq!(outcome.pending, 0);
                 assert_eq!(probe.completed.load(Ordering::Acquire), 1);
                 assert_eq!(probe.parked.load(Ordering::Acquire), 1);
-                let attempts = output.lock().unwrap().clone();
+                let trace = trace.expect("complete root-ended host trace");
+                let attempts = (output.lock().unwrap().clone(), trace.bytes().to_vec());
                 if let Some(reference) = &reference {
                     assert_eq!(&attempts, reference);
                 } else {

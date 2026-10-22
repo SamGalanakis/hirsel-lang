@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod host_keys;
 pub(super) mod host_output;
+pub(crate) mod host_phases;
 mod host_requests;
 pub(super) use host_requests::HostAuthority;
 mod host_values;
@@ -181,6 +182,7 @@ pub(super) enum CanonicalOutcome {
     HostAlias(host_keys::Creation),
     HostResult(host_values::HostValue),
     HostFinished,
+    HostWaiting,
     HostOutput(Vec<u8>),
     Created(ObjectId),
     Alias(ObjectId),
@@ -368,6 +370,8 @@ pub(super) struct Log {
         BTreeMap<(Vec<u32>, u64), Option<Vec<(host_keys::Resource, crate::io_keys::Mode)>>>,
     pub host_roots: BTreeMap<u64, HostAuthority>,
     host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
+    home_phases: BTreeMap<(Vec<u32>, u64), host_phases::Phase>,
+    home_requests: BTreeSet<(Vec<u32>, u64)>,
     host_certified: BTreeSet<(Vec<u32>, u64)>,
     host_outputs: BTreeMap<(Vec<u32>, u64), Result<Option<Vec<u8>>, &'static str>>,
     host_creations: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Creation>>,
@@ -846,10 +850,11 @@ pub(crate) fn record_host_initial(
     };
     assert!(
         log.host_initials
-            .insert((path, ordinal), completion)
+            .insert((path.clone(), ordinal), completion)
             .is_none(),
         "one initial host attempt per ordinal"
     );
+    log.start_home(&path, ordinal);
 }
 
 /// Source-free evidence of one actual poll attempt, captured before any wake.
@@ -872,6 +877,7 @@ pub(crate) fn record_host_attempt(
         .expect("poll follows entry");
     let op = log.last_ops[&path];
     assert_eq!(op, "host.request");
+    let key = (path.clone(), ordinal);
     log.host_attempts.push(HostPollCompletion {
         completion: HostCompletion {
             task: path,
@@ -888,6 +894,8 @@ pub(crate) fn record_host_attempt(
             .try_into()
             .expect("host attempt sequence fits u64"),
     });
+    let attempt = log.host_attempts.last().unwrap().clone();
+    log.attempt_home(&key, &attempt, Stretch::new(driver.budgets));
 }
 
 impl Log {
@@ -934,6 +942,7 @@ impl Log {
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
         if self.unsupported.is_empty()
             && self.host_entries.is_empty()
+            && self.home_phases.is_empty()
             && self.host_certified.is_empty()
             && (self.closed_blocked
                 || (self.joins.is_empty()
@@ -1634,6 +1643,7 @@ pub(crate) fn complete_host(
         log.completed.insert((path.clone(), ordinal)),
         "one completion per host operation"
     );
+    let key = (path.clone(), ordinal);
     log.host_completions.push(HostCompletion {
         task: path,
         ordinal,
@@ -1641,6 +1651,9 @@ pub(crate) fn complete_host(
         result,
         observation,
     });
+    let completion = log.host_completions.last().unwrap().clone();
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    log.return_home(&key, &completion, retirement, Stretch::new(driver.budgets));
 }
 
 /// The owner fixes a waiting operation's final outcome after its saved
@@ -2869,10 +2882,16 @@ pub(super) fn record(
     });
     let canonical = canonical.or_else(|| {
         if operation.is_none() {
-            let Logical::Ordered(driver) = &s.logical else {
+            let Logical::Ordered(driver) = &mut s.logical else {
                 unreachable!()
             };
-            let log = driver.events.as_ref()?;
+            let log = driver.events.as_mut()?;
+            if let Some(ordinal) = log.ordinals.get(&path).and_then(|next| next.checked_sub(1))
+                && let Some(events) =
+                    log.continue_home(&(path.clone(), ordinal), &retirement.transition)
+            {
+                return Some(events);
+            }
             if matches!(
                 log.last_ops.get(&path),
                 Some(&"host.request" | &"host.handle_drop")
