@@ -2932,7 +2932,7 @@ fn ledger_service_survives_faults_replays_and_trials_a_changed_transfer() {
          7: insufficient: 550\n";
     assert_eq!(text(&traded.stdout), trades);
     let call = |n: u32| dir.join(format!("T.call-{n}"));
-    let crashed = std::fs::read_to_string(call(0)).unwrap();
+    let crashed = hirsel_rt::launch::read_recording_text(call(0)).unwrap();
     assert!(crashed.contains("\nstopped -> ready\n"), "{crashed}");
     let replay = |tape: &std::path::Path| {
         hirsel(&[
