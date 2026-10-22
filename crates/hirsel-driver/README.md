@@ -7,6 +7,10 @@ path entry points (`check_path`, `run_path`, `format_path`, `load_program*`)
 start sessions from it. `native/` compiles the engine's `ValidatedNativeInput`
 through hirsel-lir, hirsel-rc, hirsel-heapcheck, hirsel-llvm and hirsel-rt.
 
+Native builds and runs reserve a private scratch directory per build and remove
+it on drop, including errors and unwinding. Set `HIRSEL_KEEP_NATIVE_SCRATCH=1`
+to retain these directories for debugging; the driver prints each retained path.
+
 Source launch boundaries flush stdout before writing the interpreter's PROG-3 return-payload report. Ready programs retain a checked, layout-derived diagnostic view for the native entry wrapper. Host reports are separate from semantic observations and Io tapes. Native CLI launches inherit the OS output streams, preserving the host report and finalizer order; custom-writer launches retain per-stream forwarding.
 
 `COMPILER` carries the compiler identity `build.rs` computes: a digest of the

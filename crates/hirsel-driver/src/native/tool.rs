@@ -241,41 +241,36 @@ fn run(
         writeln!(stderr, "hirsel: {line}")
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     }
-    let scratch = std::env::temp_dir().join(format!("hirsel-native-{}", std::process::id()));
+    let scratch = super::executable::Scratch::new()?;
     let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(super::runtime_cache::default_directory);
     let io = |e: std::io::Error| NativeError::new(StageName::Link, e.to_string());
-    std::fs::create_dir_all(&scratch).map_err(io)?;
-    let result = (|| {
-        let toolchain = Toolchain::in_tree(&cache, &[&target])?;
-        let objects = super::link::emit_backend_objects(
-            &program,
-            backend,
-            opt,
-            Partition::Whole,
-            false,
-            None,
-        )?;
-        let runnable =
-            super::link::link_runnable(&program, entry, &objects, &toolchain, &scratch, Some(run))?;
-        let launched = super::link::launch_live(
-            &runnable,
-            &target,
-            &toolchain,
-            &scratch,
-            tape,
-            super::link::LiveRun {
-                run,
-                inherit,
-                stdout,
-                stderr,
-            },
-        )?;
-        let observation =
-            super::link::observe_run(&launched, &program, &Sites::new(validated.snapshot()))?;
-        Ok(observation)
-    })();
-    let _ = std::fs::remove_dir_all(&scratch);
-    result
+    let toolchain = Toolchain::in_tree(&cache, &[&target])?;
+    let objects =
+        super::link::emit_backend_objects(&program, backend, opt, Partition::Whole, false, None)?;
+    #[cfg(test)]
+    concurrent_tests::before_link(&scratch.0);
+    let runnable =
+        super::link::link_runnable(&program, entry, &objects, &toolchain, &scratch.0, Some(run))?;
+    let launched = super::link::launch_live(
+        &runnable,
+        &target,
+        &toolchain,
+        &scratch.0,
+        tape,
+        super::link::LiveRun {
+            run,
+            inherit,
+            stdout,
+            stderr,
+        },
+    )?;
+    let observation =
+        super::link::observe_run(&launched, &program, &Sites::new(validated.snapshot()))?;
+    Ok(observation)
 }
+
+#[cfg(test)]
+#[path = "concurrent_tests.rs"]
+mod concurrent_tests;

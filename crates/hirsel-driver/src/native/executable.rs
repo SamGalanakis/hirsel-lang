@@ -23,18 +23,40 @@ impl BuildProfile {
     }
 }
 
-pub(crate) struct Scratch(pub(crate) PathBuf);
+/// One build owns its directory from exclusive creation until drop.
+pub(crate) struct Scratch(pub(crate) PathBuf, bool);
 impl Scratch {
     pub(crate) fn new() -> Result<Self, NativeError> {
+        Self::create_in(
+            &std::env::temp_dir(),
+            std::env::var_os("HIRSEL_KEEP_NATIVE_SCRATCH").is_some(),
+        )
+    }
+
+    fn create_in(parent: &Path, keep: bool) -> Result<Self, NativeError> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self::create_with_counter(parent, keep, &NEXT)
+    }
+
+    fn create_with_counter(
+        parent: &Path,
+        keep: bool,
+        next: &AtomicU64,
+    ) -> Result<Self, NativeError> {
+        use std::os::unix::fs::DirBuilderExt;
         loop {
-            let path = std::env::temp_dir().join(format!(
+            let path = parent.join(format!(
                 "hirsel-build-{}-{}",
                 std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
+                next.fetch_add(1, Ordering::Relaxed)
             ));
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
+            match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => {
+                    if keep {
+                        eprintln!("hirsel: retaining native scratch at {}", path.display());
+                    }
+                    return Ok(Self(path, keep));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(io(error)),
             }
@@ -43,7 +65,9 @@ impl Scratch {
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if !self.1 {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
 fn io(error: std::io::Error) -> NativeError {
@@ -189,4 +213,41 @@ pub fn build_path_native_backend_with_validation(
             Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
         })())
     })
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+
+    #[test]
+    fn exclusive_creation_skips_existing_names_and_drop_cleans_up() {
+        let parent = Scratch::new().unwrap();
+        let next_id = AtomicU64::new(0);
+        let first = Scratch::create_with_counter(&parent.0, true, &next_id).unwrap();
+        let occupied = first.0.clone();
+        std::fs::write(occupied.join("sentinel"), b"another build").unwrap();
+        drop(first);
+        next_id.store(0, Ordering::Relaxed);
+        let next = Scratch::create_with_counter(&parent.0, false, &next_id).unwrap();
+        let path = next.0.clone();
+        assert_ne!(occupied, path);
+        drop(next);
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read(occupied.join("sentinel")).unwrap(),
+            b"another build"
+        );
+    }
+
+    #[test]
+    fn unwinding_removes_scratch() {
+        let scratch = Scratch::new().unwrap();
+        let path = scratch.0.clone();
+        let panic = std::panic::catch_unwind(move || {
+            let _scratch = scratch;
+            panic!("build failed");
+        });
+        assert!(panic.is_err());
+        assert!(!path.exists());
+    }
 }
