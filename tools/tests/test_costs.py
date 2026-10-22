@@ -33,7 +33,7 @@ class Costs(unittest.TestCase):
             table = Path(scratch) / f'{binary}.tsv'
             table.write_text('unobserved\t4.0\na\t0.0\n')
             with patch.object(costs, 'TABLES', Path(scratch)), \
-                 patch.object(sys, 'argv', ['test_costs.py', '--from-history', str(path)]), \
+                 patch.object(sys, 'argv', ['test_costs.py', '--from-history', str(path), '--binary', binary]), \
                  contextlib.redirect_stdout(io.StringIO()):
                 costs.main()
             self.assertEqual(costs.read_table(table), {'unobserved': 4, 'a': 2.023, 'b': 3})
