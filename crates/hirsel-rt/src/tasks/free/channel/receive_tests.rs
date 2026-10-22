@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 struct ReplayReceive {
     recording: Option<Arc<record::Recording>>,
+    canceled: bool,
+    replay_cause: Option<u32>,
 }
 
 unsafe extern "C" fn replay_sender(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -24,12 +26,19 @@ unsafe extern "C" fn replay_sender(ctx: *mut TaskCtx, env: *mut Header, _: u64, 
         assert_eq!(cut.progress[&Vec::new()], Progress::new(4, Phase::Entered));
         assert_eq!(cut.progress[&vec![0]], Progress::START);
     }
-    let mut message = [1u64, 7];
-    let mut status = 99;
-    unsafe {
-        hirsel_rt_v2_channel_send(ctx, &mut status, &mut sender, message.as_mut_ptr().cast())
-    };
-    assert_eq!(status, crate::channels::DONE);
+    if probe.canceled {
+        if probe.recording.is_some() {
+            let _role = unsafe { role::Guard::new(ctx) };
+            scheduler(ctx).cancel(ROOT, CANCEL_REQUESTED);
+        }
+    } else {
+        let mut message = [1u64, 7];
+        let mut status = 99;
+        unsafe {
+            hirsel_rt_v2_channel_send(ctx, &mut status, &mut sender, message.as_mut_ptr().cast())
+        };
+        assert_eq!(status, crate::channels::DONE);
+    }
     STATUS_OK
 }
 
@@ -70,21 +79,29 @@ unsafe fn replay_receive_body(
         );
         let parks = {
             let _role = role::Guard::new(ctx);
-            if replay {
-                // No tape cancellation was observed. The live flag must not
-                // cancel the receive or make its saved wait spin ready.
-                scheduler(ctx).cancel(ROOT, CANCEL_PARENT);
+            if replay && let Some(cause) = probe.replay_cause {
+                // The tape can suppress or replace this different live cause.
+                scheduler(ctx).cancel(ROOT, cause);
             }
             scheduler(ctx).parks
         };
         let mut status = 99;
         hirsel_rt_v2_channel_receive(ctx, 0, 0, &mut status, &mut endpoints[1], out);
-        assert_eq!(status, crate::channels::DONE);
-        let _role = role::Guard::new(ctx);
-        assert!(
-            scheduler(ctx).parks > parks,
-            "the empty receive saved its wait at one permit"
+        assert_eq!(
+            status,
+            if probe.canceled {
+                crate::channels::CANCELED + CANCEL_REQUESTED
+            } else {
+                crate::channels::DONE
+            }
         );
+        let _role = role::Guard::new(ctx);
+        if !probe.canceled || !replay {
+            assert!(
+                scheduler(ctx).parks > parks,
+                "the empty receive saved its wait at one permit"
+            );
+        }
         hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
     }
 }
@@ -102,11 +119,13 @@ fn native_receive_replay_saves_before_send_and_admits_entered_only_cuts() {
     crate::pool::set_compute_grant(1);
     let layout = tests::layout();
     let layouts = [&raw const layout];
-    for durable in [false, true] {
+    for (durable, canceled) in [(false, false), (true, false), (false, true), (true, true)] {
         let recording = record::Recording::new(b"native receive replay", durable);
         let install = recording.clone();
         let probe = Arc::new(ReplayReceive {
             recording: Some(recording.clone()),
+            canceled,
+            replay_cause: None,
         });
         let observed = probe.clone();
         let mut run = crate::host::BodyRun::new(8, false);
@@ -122,7 +141,7 @@ fn native_receive_replay_saves_before_send_and_admits_entered_only_cuts() {
             move |ctx| unsafe {
                 let mut image = [0u64; 2];
                 replay_receive_body(ctx, &observed, image.as_mut_ptr().cast(), false);
-                assert_eq!(image, [1, 7]);
+                assert_eq!(image, if canceled { [0, 0] } else { [1, 7] });
                 STATUS_OK
             },
         );
@@ -151,10 +170,21 @@ fn native_receive_replay_saves_before_send_and_admits_entered_only_cuts() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [1, 2, 8] {
+            for (width, replay_cause) in [
+                (1, None),
+                (2, None),
+                (8, None),
+                (1, Some(CANCEL_PARENT)),
+                (2, Some(CANCEL_PARENT)),
+                (8, Some(CANCEL_PARENT)),
+            ] {
                 let replay = Replay::new(&bytes[..end]).unwrap();
                 let install = replay.clone();
-                let probe = Arc::new(ReplayReceive { recording: None });
+                let probe = Arc::new(ReplayReceive {
+                    recording: None,
+                    canceled,
+                    replay_cause,
+                });
                 let observed = probe.clone();
                 let outputs = Arc::new([AtomicU64::new(0), AtomicU64::new(0)]);
                 let out = outputs.clone();
@@ -174,8 +204,14 @@ fn native_receive_replay_saves_before_send_and_admits_entered_only_cuts() {
                     matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
                     "{outcome:?}"
                 );
-                assert_eq!(outputs[0].load(Ordering::Acquire), u64::from(full));
-                assert_eq!(outputs[1].load(Ordering::Acquire), if full { 7 } else { 0 });
+                assert_eq!(
+                    outputs[0].load(Ordering::Acquire),
+                    u64::from(full && !canceled)
+                );
+                assert_eq!(
+                    outputs[1].load(Ordering::Acquire),
+                    if full && !canceled { 7 } else { 0 }
+                );
                 assert_eq!(replay.finish().unwrap(), expected);
             }
         }
