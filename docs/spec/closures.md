@@ -144,6 +144,15 @@ state parameter is `mut` (`@preserves_unique` may also select a `take` parameter
   kind and model), and only a direct
   call to that declaration uses it: a call through a function value hands its `mut`
   arguments back shared.
+  When a named helper's plain `mut` handback is the operation that lost a
+  caller's uniqueness, declaring this promise can make an append-only helper
+  usable there. For example, `@preserves_unique(lines)` on
+  `fn append_line(mut lines: List[u64]) { list.push(mut lines, 1) }` lets a direct
+  caller keep a unique list unique. This is a conditional signature repair:
+  the body must pass the contract check on every exit, including failure
+  handback. A helper that installs a counted share still fails that check.
+  Adding the promise cannot repair an independently copied input or result,
+  and a caller never infers it by inspecting a helper body.
 - `@captures(state, next)` on a callable returning an `Iter`, a function value or an
   erased carrier ([CAP-2](capabilities.md#cap-2-charged-at-use)): the
   selected parameters (or their field paths) determine the returned environment's

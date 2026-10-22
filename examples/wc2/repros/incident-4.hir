@@ -1,3 +1,6 @@
+// This plain mut helper loses the caller's uniqueness at handback.
+// Conditional repair: declare @preserves_unique(xs) on add, whose append-only
+// body checks the contract. A body that installs shares would still reject.
 fn add(mut xs: List[u64]) {
   list.push(mut xs, 1)
 }

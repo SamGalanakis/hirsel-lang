@@ -27,6 +27,7 @@ struct UniqueStep {
     /// was already aliased (including at a loop's fixed point).
     already_aliased: bool,
     losses: Vec<(Span, String)>,
+    repairs: Vec<Repair>,
 }
 /// An explanation whose remaining sites need the trace.
 pub(super) struct Pending {
@@ -159,6 +160,16 @@ impl Checker<'_, '_> {
                     if !self.callee_preserves_unique(*callee, requirement.parameter) {
                         let part = self.spelled(argument.value).unwrap_or_else(|| name.clone());
                         step.losses.push((self.span_of(*expression), format!("this plain `mut` handback through `{part}` may install counted shares in `{name}`")));
+                        // Consult only the written direct signature. A body in
+                        // another module or a foreign/bodyless declaration is
+                        // not a local declaration edit we can recommend.
+                        if !step.already_aliased
+                            && step.losses.len() == 1
+                            && let Some(repair) =
+                                self.helper_unique_repair(*callee, requirement.parameter)
+                        {
+                            step.repairs.push(repair);
+                        }
                     } else {
                         for (input, row) in arguments.iter().zip(requirements) {
                             let Some(row) = row else { continue };
@@ -244,6 +255,52 @@ impl Checker<'_, '_> {
         step
     }
 
+    fn helper_unique_repair(&self, callee: ExprId, ordinal: usize) -> Option<Repair> {
+        let path = self.callee_definition(callee)?;
+        let owner = &self.syntax.item.definition;
+        if path.0.package != owner.0.package
+            || path.0.modules != owner.0.modules
+            || path.package_is("core", "1")
+        {
+            return None;
+        }
+        let TypeKind::Function(function) = &self.t.get(self.ty(callee)?)?.kind else {
+            return None;
+        };
+        if function.foreign.is_some() {
+            return None;
+        }
+        let parameter = function.parameters.get(ordinal)?;
+        Some(Repair::PreserveUnique {
+            helper: path.0.name.clone(),
+            parameter: parameter.name.clone()?,
+        })
+    }
+
+    /// A consumed argument is checked at its call after its storage was moved.
+    /// Start its diagnostic trace at the read, before the move cuts history.
+    pub(super) fn uniqueness_origin(&self, mut expression: ExprId) -> Option<(usize, usize)> {
+        let mut consumed = false;
+        while let ExprKind::Unary {
+            op: UnaryOp::Take,
+            value,
+        } = self.tree.expressions[expression.0 as usize].kind
+        {
+            expression = value;
+            consumed = true;
+        }
+        let place = place(self.body, expression, self.source_rows)?;
+        let node = if consumed {
+            self.graph.nodes.iter().position(|node| {
+                matches!(node.op,
+                Op::Use { expression: e, .. } if e == expression)
+            })?
+        } else {
+            self.node
+        };
+        Some((place.binding, node))
+    }
+
     fn reachable(&self, from: usize, target: usize) -> bool {
         let mut seen = BTreeSet::new();
         let mut pending = self.graph.nodes[from].next.clone();
@@ -260,7 +317,12 @@ impl Checker<'_, '_> {
 
     /// Walk only aliased predecessors of the failed input, stopping at a
     /// restoration or replacement. Multiple paths remain explicitly possible.
-    fn uniqueness_causes(&self, trace: &Trace, binding: usize, target: usize) -> Vec<Fact<Cause>> {
+    fn uniqueness_causes(
+        &self,
+        trace: &Trace,
+        binding: usize,
+        target: usize,
+    ) -> (Vec<Fact<Cause>>, Vec<Repair>) {
         let (name, span) = self.binding_site(binding);
         let mut predecessors = vec![vec![]; self.graph.nodes.len()];
         for (id, node) in self.graph.nodes.iter().enumerate() {
@@ -271,6 +333,7 @@ impl Checker<'_, '_> {
         let mut pending = predecessors[target].clone();
         let mut seen = BTreeSet::new();
         let mut losses = vec![];
+        let mut repairs = vec![];
         let mut looped = false;
         let mut uncertain = false;
         let mut joined = false;
@@ -286,6 +349,7 @@ impl Checker<'_, '_> {
                 looped |= self.reachable(target, node);
                 uncertain |= step.already_aliased;
                 losses.extend(step.losses.iter().cloned());
+                repairs.extend(step.repairs.iter().cloned());
                 if !step.already_aliased {
                     continue;
                 }
@@ -297,6 +361,12 @@ impl Checker<'_, '_> {
         losses.sort_by_key(|(span, description)| (span.start, span.end, description.clone()));
         losses.dedup();
         let merged = looped || uncertain || losses.len() > 1 || losses.is_empty() && joined;
+        // A declaration promise repairs one handback, not a surviving copy or
+        // other share on the path. Keep every loss label, but do not present
+        // this recipe as a repair for mixed or uncertain causes.
+        if merged {
+            repairs.clear();
+        }
         let mut facts: Vec<_> = losses
             .into_iter()
             .map(|(span, description)| {
@@ -326,7 +396,7 @@ impl Checker<'_, '_> {
         if facts.is_empty() {
             facts.push(Fact::new(Cause::Aliased, span, &[&name]));
         }
-        facts
+        (facts, repairs)
     }
 
     pub(super) fn span_of(&self, expression: ExprId) -> Span {
@@ -902,7 +972,9 @@ impl Checker<'_, '_> {
             .collect();
         for (index, mut pending) in std::mem::take(&mut self.explanations) {
             if let Some((binding, node)) = pending.uniqueness {
-                pending.explanation.provided = self.uniqueness_causes(&trace, binding, node);
+                let (facts, repairs) = self.uniqueness_causes(&trace, binding, node);
+                pending.explanation.provided = facts;
+                pending.explanation.repairs.extend(repairs);
             }
             if let Some(site) = pending.temporary {
                 let fact = match site {

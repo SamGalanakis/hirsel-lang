@@ -228,6 +228,12 @@ fn uniqueness_loss_diagnostics_17_loop_branch_and_handback() {
             &["edit(mut m)"],
             "lost its deep uniqueness",
         );
+        let output = checked(HANDBACK);
+        assert!(output.diagnostics[0].notes.iter().any(
+            |note| note.contains("@preserves_unique(m)")
+                && note.contains("`edit`")
+                && note.contains("only if")
+        ));
     });
 }
 

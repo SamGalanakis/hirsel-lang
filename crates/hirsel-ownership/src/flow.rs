@@ -3508,10 +3508,12 @@ impl Checker<'_, '_> {
                     },
                     |c| {
                         let (name, declaration) = c.binding_site(index);
-                        Explanation::default()
+                        let mut pending: causes::Pending = Explanation::default()
                             .provided(Fact::new(Cause::Aliased, site, &[&name]))
                             .required(Fact::new(Requirement::Unique, declaration, &[&name]))
-                            .into()
+                            .into();
+                        pending.uniqueness = Some((index, c.node));
+                        pending
                     },
                 );
             }
@@ -8154,8 +8156,7 @@ impl Checker<'_, '_> {
                         .provided(Fact::new(Cause::Aliased, provided, &[]))
                         .required(Fact::new(Requirement::Unique, context.span, &[]))
                         .into();
-                    pending.uniqueness = place(c.body, expression, c.source_rows)
-                        .map(|place| (place.binding, c.node));
+                    pending.uniqueness = c.uniqueness_origin(expression);
                     pending
                 },
             );

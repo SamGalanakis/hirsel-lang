@@ -692,6 +692,11 @@ impl<K> Fact<K> {
 /// the checker accepts for that cause and requirement are listed.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Repair {
+    /// A declaration edit, conditional on the existing body contract check.
+    PreserveUnique {
+        helper: String,
+        parameter: String,
+    },
     /// A Shared root's copy is a counted, global handle (MEM-11).
     CopyShared(String),
     UseOwner {
@@ -730,6 +735,9 @@ pub enum Repair {
 impl Repair {
     fn text(&self) -> String {
         match self {
+            Repair::PreserveUnique { helper, parameter } => format!(
+                "declare `@preserves_unique({parameter})` on `{helper}` only if its body checks the contract: the selected parameter must stay deeply unique at every exit, including failure handback; other non-plain `take` inputs must also be unique at this call (no cost; checked signature promise, never inferred from the body)"
+            ),
             Repair::UniqueResult { ty, expression } => format!(
                 "return a `unique {ty}` value with `unique {expression}` (deep copy: may allocate and costs O(size))"
             ),
@@ -950,7 +958,8 @@ impl Repair {
             | Repair::PassBorrowed(_)
             | Repair::TakeAtLastUse(_)
             | Repair::CopyPart(_) => 0,
-            Repair::TakeParameter(_)
+            Repair::PreserveUnique { .. }
+            | Repair::TakeParameter(_)
             | Repair::LocalResult { .. }
             | Repair::PlaceParameter { .. }
             | Repair::PlaceResult { .. }
