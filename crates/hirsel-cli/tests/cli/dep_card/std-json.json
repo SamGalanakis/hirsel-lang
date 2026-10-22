@@ -40,6 +40,9 @@
             "core@1/map/empty",
             "core@1/map/get",
             "core@1/map/insert",
+            "core@1/set/contains",
+            "core@1/set/empty",
+            "core@1/set/insert",
             "core@1/string/as_bytes",
             "core@1/string/byte_len",
             "core@1/string/from_bytes"
@@ -76,10 +79,28 @@
       },
       "package": "std@1/json",
       "public_functions": [
+        "std@1/json/array_next",
+        "std@1/json/begin_array",
+        "std@1/json/begin_object",
         "std@1/json/check_depth",
+        "std@1/json/colon",
+        "std@1/json/finish_reader",
+        "std@1/json/next_token",
+        "std@1/json/number_text",
+        "std@1/json/object_key",
+        "std@1/json/object_next",
         "std@1/json/parse",
+        "std@1/json/peek",
+        "std@1/json/read_number",
+        "std@1/json/read_owned_text",
+        "std@1/json/read_text",
+        "std@1/json/reader",
+        "std@1/json/skip",
         "std@1/json/stringify",
         "std@1/json/stringify_into",
+        "std@1/json/text_is",
+        "std@1/json/text_owned",
+        "std@1/json/valid_utf8",
         "std@1/json/write_text_into"
       ],
       "weight": {
@@ -89,13 +110,13 @@
           "check_ms": null,
           "check_source_tokens": 0,
           "lower_source_tokens": 0,
-          "native_build_source_tokens": 2162,
-          "prechecked_definitions": 12,
-          "reached_source_tokens": 2162
+          "native_build_source_tokens": 2399,
+          "prechecked_definitions": 14,
+          "reached_source_tokens": 2399
         },
         "definitions": {
-          "reached": 12,
-          "total": 18
+          "reached": 14,
+          "total": 43
         },
         "transitive_dependencies": [],
         "units": {
