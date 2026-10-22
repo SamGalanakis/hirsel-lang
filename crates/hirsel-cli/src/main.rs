@@ -1045,7 +1045,7 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
             }
             Err(error) => {
                 eprintln!("{error}");
-                usage()
+                usage_for(args.first().and_then(|arg| arg.to_str()))
             }
         };
     }
@@ -1055,7 +1055,7 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
         .find_map(|arg| arg.to_str().filter(|arg| !arg.starts_with('-')));
     if verify_cache && !command.is_some_and(|c| matches!(c, "check" | "build" | "run")) {
         eprintln!("--verify-cache applies only to check, build and run");
-        return usage();
+        return usage_for(command);
     }
     hirsel_engine::verify_cached_results(if verify_cache {
         hirsel_engine::store::VerifyStore::Recompute
@@ -1095,7 +1095,7 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
         Ok(measure) => measure,
         Err(error) => {
             eprintln!("{error}");
-            return usage();
+            return usage_for(args.first().and_then(|arg| arg.to_str()));
         }
     };
     measure.start();
@@ -1122,11 +1122,13 @@ fn execute_resident(mut args: Vec<OsString>) -> u8 {
 }
 
 fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
+    // Keep the selected command before the parser consumes its operands.
+    let topic = args.first().cloned();
     let command = match parse_command(args) {
         Ok(command) => command,
         Err(error) => {
             eprintln!("{error}");
-            return usage();
+            return usage_for(topic.as_deref().and_then(|arg| arg.to_str()));
         }
     };
     if verify == Verify::Off
@@ -1140,7 +1142,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
         )
     {
         eprintln!("--no-verify applies only to run, test and build");
-        return usage();
+        return usage_for(topic.as_deref().and_then(|arg| arg.to_str()));
     }
     let (command, flag, file) = match command {
         Command::Ctl { path, cores } => {
@@ -1977,6 +1979,21 @@ fn tool_error(error: ToolError, json: bool) -> u8 {
         1
     }
 }
+/// Error, command usage, then a help pointer, following clap's
+/// clap_builder/src/error/format.rs:397–469, ccc89b83875474399e9d9d70841163f6319d1a41.
+/// MIT, Copyright (c) Individual contributors; see third-party/NOTICES.md.
+fn usage_for(topic: Option<&str>) -> u8 {
+    if let Some(topic) = topic
+        && let Some(help) = command_help(topic)
+    {
+        let usage = help.lines().next().expect("command help starts with usage");
+        eprintln!("{usage}\n\nFor more information, try 'hirsel {topic} --help'.");
+        2
+    } else {
+        usage()
+    }
+}
+
 fn usage() -> u8 {
     eprintln!("{USAGE}");
     2

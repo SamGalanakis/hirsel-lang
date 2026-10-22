@@ -3,6 +3,8 @@
 //! MIT, Copyright (c) Individual contributors; see third-party/NOTICES.md.
 //! Hirsel uses process exit/stdout/stderr assertions in place of DisplayHelp,
 //! and retains its own root-help and operand ownership rules.
+//! Compact error/usage/help and trailing-newline vectors also adapt
+//! tests/builder/error.rs:1–65 at the same revision and under the same license.
 use std::{fs, path::PathBuf, process::Command};
 
 const TOPICS: [&str; 5] = ["check", "run", "build", "test", "fmt"];
@@ -55,7 +57,7 @@ impl PrivateCwd {
         );
         output.stdout
     }
-    fn usage_error(&self, args: &[&str]) {
+    fn usage_error(&self, args: &[&str]) -> Vec<u8> {
         let output = self
             .command()
             .env("HIRSEL_DAEMON", "off")
@@ -69,6 +71,17 @@ impl PrivateCwd {
             fs::read_dir(&self.0).unwrap().count(),
             0,
             "{args:?} wrote files"
+        );
+        output.stderr
+    }
+    fn compact_usage_error(&self, args: &[&str], topic: &str, error: &str) {
+        let help = String::from_utf8(self.help(&[topic, "--help"], topic)).unwrap();
+        let usage = help.lines().next().unwrap();
+        assert_eq!(
+            self.usage_error(args),
+            format!("{error}\n{usage}\n\nFor more information, try 'hirsel {topic} --help'.\n")
+                .as_bytes(),
+            "{args:?}"
         );
     }
 }
@@ -198,6 +211,112 @@ fn command_help_12_missing_operands_remain_usage_errors() {
     }
     cwd.usage_error(&[]);
     cwd.usage_error(&["build", "app.hir"]);
+}
+
+#[test]
+fn command_help_12_backend_errors_show_only_the_failing_command_usage() {
+    let cwd = PrivateCwd::new();
+    for topic in ["test", "run"] {
+        cwd.compact_usage_error(
+            &[topic, "app.hir", "--backend", "llvm"],
+            topic,
+            "--backend requires --native",
+        );
+    }
+    // The original dogfood invocation fails before requiring a source.
+    cwd.compact_usage_error(
+        &["test", "--backend", "llvm"],
+        "test",
+        "--backend requires --native",
+    );
+    for topic in ["test", "run", "build"] {
+        cwd.compact_usage_error(
+            &[topic, "app.hir", "--backend", "invalid"],
+            topic,
+            "--backend must be llvm or cranelift",
+        );
+        cwd.compact_usage_error(
+            &[topic, "app.hir", "--backend", "llvm", "--backend", "llvm"],
+            topic,
+            "invalid option '--backend'",
+        );
+        cwd.compact_usage_error(
+            &[topic, "app.hir", "--backend"],
+            topic,
+            "missing argument for option '--backend'",
+        );
+    }
+}
+
+#[test]
+fn command_help_12_operand_and_global_errors_keep_command_usage() {
+    let cwd = PrivateCwd::new();
+    for (args, topic, error) in [
+        (vec!["check"], "check", "missing source path"),
+        (vec!["run"], "run", "missing source path"),
+        (
+            vec!["build"],
+            "build",
+            "build requires a source or manifest",
+        ),
+        (vec!["test"], "test", "test requires a package manifest"),
+        (vec!["build", "app.hir"], "build", "build requires -o"),
+        (
+            vec!["build", "app.hir", "-o"],
+            "build",
+            "missing argument for option '-o'",
+        ),
+        (
+            vec!["check", "--bad", "app.hir"],
+            "check",
+            "invalid option '--bad'",
+        ),
+        (
+            vec!["--verbose", "test", "--backend", "llvm"],
+            "test",
+            "--backend requires --native",
+        ),
+        (
+            vec!["test", "--verify-cache"],
+            "test",
+            "--verify-cache applies only to check, build and run",
+        ),
+        (
+            vec!["check", "--no-verify", "app.hir"],
+            "check",
+            "--no-verify applies only to run, test and build",
+        ),
+        (
+            vec!["run", "--timings=invalid"],
+            "run",
+            "invalid option '--timings=invalid': expected --timings or --timings=json",
+        ),
+        (
+            vec!["build", "--help", "extra.hir"],
+            "build",
+            "command help takes no extra operands or options",
+        ),
+    ] {
+        cwd.compact_usage_error(&args, topic, error);
+    }
+}
+
+#[test]
+fn command_help_12_unknown_and_missing_commands_keep_root_usage() {
+    let cwd = PrivateCwd::new();
+    let root = cwd.command().arg("--help").output().unwrap();
+    assert_eq!(root.status.code(), Some(0));
+    assert!(root.stderr.is_empty());
+    for (args, error) in [
+        (vec![], "missing command"),
+        (vec!["unknown"], "unexpected argument \"unknown\""),
+        (vec!["unknown", "test"], "unexpected argument \"unknown\""),
+        (vec!["help", "unknown"], "unknown help topic"),
+    ] {
+        let mut expected = format!("{error}\n").into_bytes();
+        expected.extend_from_slice(&root.stdout);
+        assert_eq!(cwd.usage_error(&args), expected, "{args:?}");
+    }
 }
 
 #[test]
