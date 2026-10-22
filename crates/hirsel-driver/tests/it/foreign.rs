@@ -19,16 +19,19 @@ const MAIN: &str = "pub fn main(u: Unsafe) -> Result[(), ()] {
 ";
 
 /// A fresh directory holding `lib@1`, marked `unsafe ffi` with `foreign`.
-fn fixture(name: &str, foreign: serde_json::Value) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hirsel-foreign-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+fn fixture(name: &str, foreign: serde_json::Value) -> tempfile::TempDir {
+    let dir_scratch = tempfile::Builder::new()
+        .prefix(&format!("hirsel-foreign-{name}-"))
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     std::fs::create_dir_all(dir.join("lib")).unwrap();
     std::fs::write(dir.join("lib/lib.hir"), LIBRARY).unwrap();
     let lib = json!({"schema":1,"package":{"name":"lib","version":"1"},
         "sources":[{"path":"lib.hir","module":[]}],"dependencies":[],"unsafe_ffi":foreign});
     std::fs::write(dir.join("lib/hirsel.json"), lib.to_string()).unwrap();
     std::fs::write(dir.join("main.hir"), MAIN).unwrap();
-    dir
+    dir_scratch
 }
 fn select_lib() -> serde_json::Value {
     json!({"manifest":"lib/hirsel.json","package":{"name":"lib","version":"1"},
@@ -57,7 +60,8 @@ fn deterministic_add() -> serde_json::Value {
 #[test]
 fn foreign_dispatch_ordinals_are_bound_in_glue_in_both_backends() {
     with_compiler_stack(|| {
-        let dir = fixture("dispatch-glue", deterministic_add());
+        let dir_scratch = fixture("dispatch-glue", deterministic_add());
+        let dir = dir_scratch.path().to_path_buf();
         let path = launch(&dir, json!([select_lib()]));
         let mut loaded = load_program(&path).unwrap();
         loaded.check_for_execution().unwrap();
@@ -120,7 +124,8 @@ fn foreign_dispatch_ordinals_are_bound_in_glue_in_both_backends() {
 #[test]
 fn the_root_selects_unsafe_ffi_and_check_reports_it() {
     with_compiler_stack(|| {
-        let dir = fixture("root", deterministic_add());
+        let dir_scratch = fixture("root", deterministic_add());
+        let dir = dir_scratch.path().to_path_buf();
         let path = launch(&dir, json!([select_lib()]));
         let output = check_path(&path).unwrap();
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
@@ -147,7 +152,8 @@ fn the_root_selects_unsafe_ffi_and_check_reports_it() {
 #[test]
 fn only_the_root_manifest_selects_an_unsafe_ffi_package() {
     with_compiler_stack(|| {
-        let dir = fixture("nested", deterministic_add());
+        let dir_scratch = fixture("nested", deterministic_add());
+        let dir = dir_scratch.path().to_path_buf();
         std::fs::write(dir.join("mid.hir"), "pub fn m() {}\n").unwrap();
         let mid = json!({"schema":1,"package":{"name":"mid","version":"1"},
             "sources":[{"path":"mid.hir","module":[]}],"dependencies":[select_lib()]});
@@ -216,7 +222,8 @@ fn unsafe_ffi_metadata_errors_are_tool_errors() {
                 "unknown field libraries",
             ),
         ] {
-            let dir = fixture(case, foreign);
+            let dir_scratch = fixture(case, foreign);
+            let dir = dir_scratch.path().to_path_buf();
             let message = refusal(&launch(&dir, json!([select_lib()])));
             assert!(message.contains(expected), "{case}: {message}");
             std::fs::remove_dir_all(dir).unwrap();
@@ -922,7 +929,8 @@ fn dependency_cards_distinguish_modeled_and_unmodeled_foreign_reach() {
                 "unreplayable",
             ),
         ] {
-            let dir = fixture(name, foreign);
+            let dir_scratch = fixture(name, foreign);
+            let dir = dir_scratch.path().to_path_buf();
             let path = launch(&dir, json!([select_lib()]));
             let report = COMPILER.dependency_cards(&path, Some("lib@1")).unwrap();
             let safety = &report["cards"][0]["determinism"]["reached_by_you"];

@@ -2443,9 +2443,11 @@ impl Drop for Running {
 fn tasks_llvm() -> &'static PathBuf {
     static EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     EXE.get_or_init(|| {
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-example-{}-tasks-llvm", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-example-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let exe = dir.join("tasks");
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["build", "--backend", "llvm"])
@@ -2455,6 +2457,7 @@ fn tasks_llvm() -> &'static PathBuf {
             .output()
             .unwrap();
         assert!(output.status.success(), "build tasks: {output:?}");
+        let _ = dir_scratch.keep();
         exe
     })
 }
@@ -2880,8 +2883,11 @@ fn tasks_event_streams_hold_no_board_llvm() {
 /// under the candidate revision whose transfer charges a fee.
 #[test]
 fn ledger_service_survives_faults_replays_and_trials_a_changed_transfer() {
-    let dir = std::env::temp_dir().join(format!("hirsel-ledger-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-ledger-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     std::fs::create_dir_all(dir.join("db")).unwrap();
     let example = repository_manifest("examples/ledger-service");
     for template in ["grants.json", "faults.json", "fork.json"] {

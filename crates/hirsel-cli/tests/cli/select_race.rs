@@ -54,10 +54,11 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("hirsel-select-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-select-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         let root = root.canonicalize().unwrap();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -80,6 +81,7 @@ impl Fixture {
             .to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn run(&self, engine: Engine, args: &[&std::ffi::OsStr]) -> std::process::Output {

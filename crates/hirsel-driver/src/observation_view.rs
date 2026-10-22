@@ -888,9 +888,11 @@ mod tests {
     #[test]
     fn replay_enrichment_matches_live_observations_without_repeating_host_writes() {
         hirsel_engine::with_compiler_stack(|| {
-            let root =
-                std::env::temp_dir().join(format!("observation-replay-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&root);
+            let root_scratch = tempfile::Builder::new()
+                .prefix("observation-replay-")
+                .tempdir()
+                .unwrap();
+            let root = root_scratch.path().to_path_buf();
             std::fs::create_dir_all(root.join("host")).unwrap();
             let source = root.join("main.hir");
             let tape = root.join("recording");

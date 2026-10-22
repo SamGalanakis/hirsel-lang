@@ -53,9 +53,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), EchoError] {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("hirsel-split-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-split-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
         std::fs::write(
             root.join("main.hir.json"),
@@ -83,6 +85,7 @@ impl Fixture {
             .to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn run(&self, backend: Option<&str>, args: &[&std::ffi::OsStr]) -> std::process::Output {

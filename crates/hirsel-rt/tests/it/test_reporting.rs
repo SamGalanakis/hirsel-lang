@@ -21,8 +21,11 @@ impl Write for Output {
 
 #[test]
 fn case_reporting_records_the_bound_seed_and_replays_before_publication() {
-    let root = std::env::temp_dir().join(format!("hirsel-test-report-{}", std::process::id()));
-    std::fs::create_dir(&root).unwrap();
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-test-report-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     let output = Output(Arc::new(Mutex::new(vec![])));
     let mut real = RealIo::grant_with_output(&root, output.clone()).unwrap();
     real.test_context(u64::MAX);

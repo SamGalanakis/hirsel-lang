@@ -11,14 +11,17 @@ use std::path::{Path, PathBuf};
 struct Scratch(PathBuf);
 impl Scratch {
     fn new(name: &str) -> Self {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("recorder-{name}-{}", std::process::id()));
-        fs::create_dir(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("recorder-{name}-"))
+            .tempdir_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         // Host roots in a run configuration are canonical absolute paths.
         let root = fs::canonicalize(root).unwrap();
         for name in ["work", "work/child", "tapes", "other", "other/child"] {
             fs::create_dir(root.join(name)).unwrap();
         }
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn path(&self, path: &str) -> PathBuf {

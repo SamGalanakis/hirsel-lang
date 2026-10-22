@@ -220,7 +220,11 @@ mod tests {
         let run = RunConfig::empty([1; 32], entry.into(), LaunchKind::Main)
             .validated()
             .unwrap();
-        let tape = std::env::temp_dir().join(format!("hirsel-select-{}", std::process::id()));
+        let tape_scratch = tempfile::Builder::new()
+            .prefix("hirsel-select-")
+            .tempdir()
+            .unwrap();
+        let tape = tape_scratch.path().join("tape");
         let recording = Recording {
             arguments: vec![],
             run_identity: run.identity(),

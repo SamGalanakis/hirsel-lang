@@ -35,9 +35,11 @@ fn regex_all_5_exports_have_source_owners_and_no_builtin_operations() {
 #[test]
 fn regex_all_5_logtail_importer_on_interpreter_llvm_and_cranelift() {
     with_compiler_stack(|| {
-        let directory =
-            std::env::temp_dir().join(format!("regex-all-5-logtail-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory_scratch = tempfile::Builder::new()
+            .prefix("regex-all-5-logtail-")
+            .tempdir()
+            .unwrap();
+        let directory = directory_scratch.path().to_path_buf();
         let source = directory.join("main.hir");
         std::fs::write(
             &source,

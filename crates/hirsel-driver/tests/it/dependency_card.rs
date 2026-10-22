@@ -68,8 +68,11 @@ fn dependency_card_verifies_signed_code_store_objects() {
         let signer = Signer::from_seed(&[34; 32]);
         let mut bundle = Bundle::of_groups(&groups);
         bundle.sign(&signer);
-        let dir = std::env::temp_dir().join(format!("hirsel-card-signed-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-card-signed-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let config = json!({"provider":"code.dir@1", "path":dir.join("objects"),
             "signatures":{"provider":"sign.ed25519@1","keys":[signer.public_key().hex()]}});
         let store = hirsel_code_store::config::open(&config).unwrap();
@@ -106,8 +109,11 @@ fn dependency_cards_preserve_facts_when_a_matching_image_saves_body_work() {
         use hirsel_engine::{StdImage, StdImages};
         let manifest = manifest();
         let leaf = manifest.parent().unwrap().join("../leaf/hirsel.json");
-        let path =
-            std::env::temp_dir().join(format!("hirsel-card-image-{}.bin", std::process::id()));
+        let path_scratch = tempfile::Builder::new()
+            .prefix("hirsel-card-image-")
+            .tempdir()
+            .unwrap();
+        let path = path_scratch.path().join("image.bin");
         COMPILER.image_package(&leaf, &path).unwrap();
         let images = StdImages::of(vec![StdImage::open(&path).unwrap()]);
         let mut source = COMPILER

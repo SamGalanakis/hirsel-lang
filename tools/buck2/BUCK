@@ -125,6 +125,9 @@ export_file(name = "test_launcher.sh", src = "test_launcher.sh", visibility = ["
 export_file(name = "bundle_archive.py", src = "bundle_archive.py", visibility = ["PUBLIC"])
 export_file(name = "runtime_parts.py", src = "runtime_parts.py", visibility = ["PUBLIC"])
 export_file(name = "link_hosts.py", src = "link_hosts.py", visibility = ["PUBLIC"])
+export_file(name = "sync.py", src = "sync.py", mode = "reference", visibility = ["PUBLIC"])
+export_file(name = "action_sizes_from_log.py", src = "action_sizes_from_log.py", mode = "reference", visibility = ["PUBLIC"])
+export_file(name = "test_sizes_from_usage.py", src = "test_sizes_from_usage.py", mode = "reference", visibility = ["PUBLIC"])
 
 # Measured seconds per case of each sharded test binary (sync.py, test_costs.py).
 [export_file(name = table, src = table, visibility = ["PUBLIC"]) for table in glob(["test-costs/*.tsv"])]

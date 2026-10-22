@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 struct Program(PathBuf);
 impl Program {
     fn new(name: &str, source: &str) -> Self {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "bytes-replace-bulk-6-{name}-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix(&format!("bytes-replace-bulk-6-{name}-"))
+            .tempdir_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let path = dir.join("main.hir");
         std::fs::write(&path, source).unwrap();
         let manifest = serde_json::json!({
@@ -28,6 +28,7 @@ impl Program {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        let _ = dir_scratch.keep();
         Self(path)
     }
 }

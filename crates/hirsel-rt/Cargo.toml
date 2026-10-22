@@ -33,6 +33,7 @@ webpki-roots = "=1.0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+tempfile = "3"
 syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "clone-impls"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }

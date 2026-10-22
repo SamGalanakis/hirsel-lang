@@ -3008,8 +3008,11 @@ mod tests {
 
     #[test]
     fn wrappers_keep_selected_memcheck_inputs_without_requiring_them_for_other_launches() {
-        let dir = std::env::temp_dir().join(format!("hirsel-memcheck-env-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-memcheck-env-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let mut tools = Toolchain {
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),

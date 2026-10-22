@@ -498,6 +498,7 @@ dependencies = [
  "rustls",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -631,6 +632,7 @@ dependencies = [
  "object",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -1031,6 +1033,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "syn 2.0.119",
+ "tempfile",
  "webpki-roots",
 ]
 

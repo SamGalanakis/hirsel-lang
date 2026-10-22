@@ -18,16 +18,16 @@ fn header() -> Recording {
         events: vec![],
     }
 }
-fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("tape-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("tape-{name}-"))
+        .tempdir_in(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")))
+        .unwrap()
 }
 #[test]
 fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
-    let root = scratch("stream");
+    let root_scratch = scratch("stream");
+    let root = root_scratch.path().to_path_buf();
     let tape = root.join("tape");
     let writer = RecordingWriter::new(std::fs::File::create(&tape).unwrap(), &header()).unwrap();
     let mut io = RealIo::grant(&root).unwrap();
@@ -56,7 +56,8 @@ fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
 }
 #[test]
 fn invalid_capability_refusals_are_events_and_replay_consumes_them() {
-    let root = scratch("refusal");
+    let root_scratch = scratch("refusal");
+    let root = root_scratch.path().to_path_buf();
     let mut io = RealIo::grant(&root).unwrap();
     let requests = [
         Request::Stdout { io: 999 },
@@ -98,7 +99,8 @@ fn a_flush_error_is_recorded_before_the_print_returns() {
             Err(std::io::Error::from_raw_os_error(libc::EPIPE))
         }
     }
-    let root = scratch("flush");
+    let root_scratch = scratch("flush");
+    let root = root_scratch.path().to_path_buf();
     let mut io = RealIo::grant_with_output(&root, FlushError).unwrap();
     let Completion::Handle(Ok(stdout)) = io.call(Request::Stdout { io: 1 }).unwrap() else {
         panic!()
@@ -199,7 +201,8 @@ fn process_probe() {
 
 #[test]
 fn launcher_passes_only_the_hash_seed_to_allocation() {
-    let root = scratch("seeds");
+    let root_scratch = scratch("seeds");
+    let root = root_scratch.path().to_path_buf();
     let tape = root.with_extension("tape");
     let output = probe("seeds", &root, &tape, false);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -242,7 +245,8 @@ fn probe(
 #[test]
 fn abort_keeps_completed_events_and_replay_divergence_exits_three_with_stdout() {
     use std::os::unix::process::ExitStatusExt;
-    let root = scratch("process");
+    let root_scratch = scratch("process");
+    let root = root_scratch.path().to_path_buf();
     // Tape lives outside the grant: the initial snapshot must not include itself.
     let tape = root.with_extension("tape");
     let output = probe("abort", &root, &tape, false);
@@ -368,7 +372,8 @@ fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
 #[test]
 fn mapping_views_and_an_outside_truncation_replay_from_the_tape() {
     use hirsel_rt::io::{IoError, MapView};
-    let root = scratch("map");
+    let root_scratch = scratch("map");
+    let root = root_scratch.path().to_path_buf();
     let original: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
     std::fs::write(root.join("m"), &original).unwrap();
     let mut io = RealIo::grant(&root).unwrap();

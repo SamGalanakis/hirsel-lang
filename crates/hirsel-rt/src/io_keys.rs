@@ -703,8 +703,11 @@ mod tests {
 
     #[test]
     fn redirected_stdout_to_a_file_is_ordered_against_its_truncation() {
-        let dir = std::env::temp_dir().join(format!("hirsel-keys-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-keys-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let file = std::fs::File::create(dir.join("out")).unwrap();
         use std::os::fd::AsRawFd;
         // fds 1 and 2 redirected to one file share its key (fd-aliased redirection).

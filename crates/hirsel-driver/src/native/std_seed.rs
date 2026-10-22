@@ -225,9 +225,11 @@ mod tests {
     #[test]
     fn a_read_only_seed_hits_on_a_new_programs_first_build() {
         hirsel_engine::with_compiler_stack(|| {
-            let directory =
-                std::env::temp_dir().join(format!("hirsel-native-seed-{}", std::process::id()));
-            std::fs::create_dir_all(&directory).unwrap();
+            let directory_scratch = tempfile::Builder::new()
+                .prefix("hirsel-native-seed-")
+                .tempdir()
+                .unwrap();
+            let directory = directory_scratch.path().to_path_buf();
             std::fs::write(
                 directory.join("library.hir"),
                 "type Payload { n:u64 }\npub fn aaa()->(bool,u32) { (true,0u32) }\npub fn answer(x:u64)->u64 { let p=Payload(n:x); let get=fn()->u64 { p.n }; get()+1u64 }\n",

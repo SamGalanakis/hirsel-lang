@@ -44,8 +44,11 @@ mod tests {
 
     #[test]
     fn retained_launch_survives_job_reuse_without_following_fixture_links() {
-        let dir = std::env::temp_dir().join(format!("hirsel-timeout-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-timeout-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         std::fs::write(dir.join("program"), b"first executable").unwrap();
         std::fs::write(dir.join("run.json"), b"first record").unwrap();
         std::os::unix::fs::symlink("/dev/zero", dir.join("fixture-link")).unwrap();

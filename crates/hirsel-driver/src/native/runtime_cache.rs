@@ -550,9 +550,11 @@ mod tests {
     #[test]
     fn frozen_inputs_memoize_probes_and_keys_but_refuse_changed_builds() {
         use std::os::unix::fs::PermissionsExt;
-        let root =
-            std::env::temp_dir().join(format!("hirsel-runtime-snapshot-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix("hirsel-runtime-snapshot-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         let package = root.join("crates/hirsel-rt");
         fs::create_dir_all(package.join("include")).unwrap();
         fs::create_dir_all(package.join("src")).unwrap();
@@ -681,9 +683,11 @@ mod tests {
 
     #[test]
     fn distinct_runtime_inputs_publish_distinct_archives_and_identical_trees_share() {
-        let root =
-            std::env::temp_dir().join(format!("hirsel-runtime-cache-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix("hirsel-runtime-cache-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         let tree = root.join("tree");
         let copy = root.join("other-checkout");
         for tree in [&tree, &copy] {
@@ -759,10 +763,14 @@ mod tests {
     #[test]
     fn concurrent_builders_publish_one_complete_archive() {
         use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
         use std::sync::mpsc;
-        let cache =
-            std::env::temp_dir().join(format!("hirsel-runtime-publication-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&cache);
+        let cache_scratch = tempfile::Builder::new()
+            .prefix("hirsel-runtime-publication-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let cache = cache_scratch.path().to_path_buf();
         let (started, ready) = mpsc::channel();
         let (release, proceed) = mpsc::channel();
         let first_cache = cache.clone();
@@ -794,12 +802,16 @@ mod tests {
         assert_eq!(fs::read(a).unwrap(), b"first half;second half");
         fs::remove_dir_all(cache).unwrap();
     }
-    fn test_cache(name: &str) -> PathBuf {
-        let cache =
-            std::env::temp_dir().join(format!("hirsel-cache-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&cache);
+    fn test_cache(name: &str) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let cache_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-cache-{name}-"))
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let cache = cache_scratch.path().to_path_buf();
         private_directory(&cache).unwrap();
-        cache
+        cache_scratch
     }
 
     fn build_bytes(cache: &Path, key: &str, bytes: &[u8]) -> PathBuf {
@@ -814,7 +826,8 @@ mod tests {
 
     #[test]
     fn planted_archive_without_a_receipt_is_rebuilt() {
-        let cache = test_cache("planted");
+        let cache_scratch = test_cache("planted");
+        let cache = cache_scratch.path().to_path_buf();
         fs::write(cache.join("key.a"), b"planted archive").unwrap();
         let archive = build_bytes(&cache, "key", b"trusted build");
         assert_eq!(fs::read(&archive).unwrap(), b"trusted build");
@@ -827,7 +840,8 @@ mod tests {
 
     #[test]
     fn truncated_or_changed_archives_and_receipts_are_rebuilt() {
-        let cache = test_cache("corrupt");
+        let cache_scratch = test_cache("corrupt");
+        let cache = cache_scratch.path().to_path_buf();
         let archive = build_bytes(&cache, "key", b"complete archive");
         fs::write(&archive, b"complete").unwrap();
         build_bytes(&cache, "key", b"complete archive");
@@ -846,7 +860,8 @@ mod tests {
     #[test]
     fn private_directory_checks_owner_and_mode_on_every_use() {
         use std::os::unix::fs::PermissionsExt;
-        let cache = test_cache("permissions");
+        let cache_scratch = test_cache("permissions");
+        let cache = cache_scratch.path().to_path_buf();
         let meta = fs::metadata(&cache).unwrap();
         assert_eq!(meta.mode() & 0o7777, 0o700);
         check_directory(&meta, meta.uid()).unwrap();
@@ -870,7 +885,8 @@ mod tests {
     #[test]
     fn foreign_archive_permissions_and_symlinks_force_rebuilding() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let cache = test_cache("foreign");
+        let cache_scratch = test_cache("foreign");
+        let cache = cache_scratch.path().to_path_buf();
         let archive = build_bytes(&cache, "key", b"trusted build");
         fs::set_permissions(&archive, fs::Permissions::from_mode(0o666)).unwrap();
         build_bytes(&cache, "key", b"trusted build");

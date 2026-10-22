@@ -176,9 +176,11 @@ fn oracle_row(bytes: &[u8]) -> String {
 struct GeneratedProgram(PathBuf);
 impl GeneratedProgram {
     fn new(name: &str, source: &str) -> Self {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("utf8-stream-5-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix(&format!("utf8-stream-5-{name}-"))
+            .tempdir_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let path = dir.join("main.hir");
         std::fs::write(&path, source).unwrap();
         let std_manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -198,6 +200,7 @@ impl GeneratedProgram {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        let _ = dir_scratch.keep();
         Self(path)
     }
 }

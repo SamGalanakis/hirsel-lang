@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep full-gate tool dependencies in Buck2's host test partition."""
+"""Check Buck2 inventories and exclusive temporary-file publication."""
 import importlib.util
 import contextlib
 import io
@@ -9,12 +9,45 @@ import tempfile
 import unittest
 import json
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'buck2'))
 SPEC = importlib.util.spec_from_file_location('buck2_sync', Path(__file__).resolve().parents[1] / 'buck2/sync.py')
 sync = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sync)
+
+
+class AtomicScratch(unittest.TestCase):
+    def concurrent_writes(self, writer, output):
+        barrier = threading.Barrier(2)
+        replace = Path.replace
+
+        def publish(path, destination):
+            barrier.wait(timeout=10)
+            return replace(path, destination)
+
+        with patch.object(Path, 'replace', publish), ThreadPoolExecutor(2) as workers:
+            futures = [workers.submit(writer, i) for i in range(2)]
+            for future in futures:
+                future.result()
+        self.assertTrue(output.is_file())
+        self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_inventory_writers_use_distinct_exclusive_temporary_files(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            output = Path(scratch) / 'BUCK'
+            self.concurrent_writes(lambda i: sync.write(output, str(i)), output)
+            self.assertIn(output.read_text(), ['0', '1'])
+
+    def test_stamp_writers_use_distinct_exclusive_temporary_files(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            reads = sync.generated.Reads(root)
+            output = root / sync.generated.STAMP
+            self.concurrent_writes(lambda _: sync.generated.record(root, 'first-party', reads), output)
+            self.assertIn('first-party', json.loads(output.read_text())['parts'])
 
 
 class GeneratedStamp(unittest.TestCase):

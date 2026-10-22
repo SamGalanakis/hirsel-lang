@@ -288,8 +288,11 @@ mod tests {
 
     #[test]
     fn sidecar_on_and_off_have_identical_ordinary_and_durable_tapes_and_stdout() {
-        let root = std::env::temp_dir().join(format!("timing-journal-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix("timing-journal-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         for durable in [false, true] {
             for finish in [false, true] {
                 let off = run(&root, "off", durable, false, finish);
@@ -344,7 +347,11 @@ mod tests {
 
     #[test]
     fn interrupted_durable_sidecar_keeps_only_barrier_confirmed_events() {
-        let root = std::env::temp_dir().join(format!("timing-barrier-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("timing-barrier-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(&root).unwrap();
         let tape = root.join("tape");
         let journal = DurableJournal::create(File::create(&tape).unwrap(), &header()).unwrap();
@@ -389,7 +396,11 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        let root = std::env::temp_dir().join(format!("timing-memory-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("timing-memory-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(&root).unwrap();
         let tape = root.join("tape");
         let journal =
@@ -466,8 +477,11 @@ mod tests {
 
     #[test]
     fn diagnostic_write_failure_does_not_fail_the_journal() {
-        let root =
-            std::env::temp_dir().join(format!("timing-write-failure-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("timing-write-failure-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(&root).unwrap();
         let tape = root.join("tape");
         let journal =

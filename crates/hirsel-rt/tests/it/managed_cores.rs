@@ -117,8 +117,11 @@ fn production_gate_preserves_requested_width_without_enabling_unproven_execution
 #[test]
 fn control_admission_excludes_mounts_and_sinks_and_creates_a_private_socket() {
     use std::os::unix::fs::PermissionsExt;
-    let path = std::env::temp_dir().join(format!("hirsel-control-{}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
+    let path_scratch = tempfile::Builder::new()
+        .prefix("hirsel-control-")
+        .tempdir()
+        .unwrap();
+    let path = path_scratch.path().to_path_buf();
     let socket_path = path.join("ctl");
     let mount = PinnedDirectory::open(&path).unwrap();
     assert!(

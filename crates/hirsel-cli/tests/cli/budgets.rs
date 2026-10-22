@@ -145,11 +145,11 @@ fn a_recorded_budget_stop_replays_to_the_same_stop() {
         (ENGINES[1], SPIN, FUEL, "fuel"),
         (ENGINES[1], GROW, NATIVE_MEMORY, "memory"),
     ] {
-        let tape = std::env::temp_dir().join(format!(
-            "hirsel-budget-tape-{}-{kind}-{}",
-            std::process::id(),
-            engine.len()
-        ));
+        let tape_scratch = tempfile::Builder::new()
+            .prefix("hirsel-budget-tape-")
+            .tempdir()
+            .unwrap();
+        let tape = tape_scratch.path().join("tape");
         let path = super::file(source);
         let recorded = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .arg("run")
@@ -212,7 +212,11 @@ fn a_run_without_budgets_keeps_historical_identity_and_events_with_placement_pro
     // else, including canonical bytes without `budgets`, stays unchanged; placement now
     // has its own diagnostic metadata line outside those canonical bytes.
     let path = super::file(MAIN_RECORDED);
-    let tape = std::env::temp_dir().join(format!("hirsel-budget-main-tape-{}", std::process::id()));
+    let tape_scratch = tempfile::Builder::new()
+        .prefix("hirsel-budget-main-tape-")
+        .tempdir()
+        .unwrap();
+    let tape = tape_scratch.path().join("tape");
     let recorded = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
         .arg(&path)

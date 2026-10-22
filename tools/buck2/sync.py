@@ -611,9 +611,14 @@ def write(path: pathlib.Path, content: bytes | str) -> None:
     if path.is_file() and path.read_bytes() == data:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_name(f".{path.name}.{os.getpid()}")
-    pending.write_bytes(data)
-    pending.replace(path)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f'.{path.name}.', delete=False) as output:
+        pending = pathlib.Path(output.name)
+        try:
+            output.write(data)
+            output.close()
+            pending.replace(path)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 def optional(reads: generated.Reads, path: pathlib.Path) -> None:
@@ -830,6 +835,11 @@ def first_party(meta: dict) -> str:
         'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_image", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_std_objects", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
+
+    out.append("\n" + call("hirsel_script_test", name="test-native-scratch-tools", script="tools/tests/buck2_sync.py", full=False,
+                           args=["AtomicScratch"],
+                           data=["//tools/buck2:sync.py", "//tools/buck2:generated.py",
+                                 "//tools/buck2:action_sizes_from_log.py", "//tools/buck2:test_sizes_from_usage.py"]))
 
     def label(package_id: str) -> str:
         package = packages[package_id]

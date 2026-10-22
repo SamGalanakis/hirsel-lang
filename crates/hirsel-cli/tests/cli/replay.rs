@@ -43,9 +43,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("hirsel-replay-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-replay-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("data/greeting.txt"), "hello from a file\n").unwrap();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
@@ -63,6 +65,7 @@ impl Fixture {
             serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"data","host":root.join("data"),"access":"read"}],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}).to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn source(&self) -> PathBuf {
@@ -282,8 +285,11 @@ const PROCESS_PROGRAM: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), G
 
 #[test]
 fn process_recordings_replay_in_either_engine_without_spawning() {
-    let root = std::env::temp_dir().join(format!("hirsel-replay-process-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-replay-process-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     std::fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
     let echo = root.join("echo");
@@ -774,16 +780,17 @@ fn process_round_trip(
     root.to_path_buf()
 }
 
-fn process_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("hirsel-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    root.canonicalize().unwrap()
+fn process_root(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("hirsel-{name}-"))
+        .tempdir()
+        .unwrap()
 }
 
 #[test]
 fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
-    let root = process_root("replay-deadline");
+    let root_scratch = process_root("replay-deadline");
+    let root = root_scratch.path().to_path_buf();
     let sleep = root.join("sleep");
     std::fs::copy("/bin/sleep", &sleep).unwrap();
     process_round_trip(
@@ -799,7 +806,8 @@ fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
 #[test]
 fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
     use std::os::unix::fs::PermissionsExt;
-    let root = process_root("replay-cancel");
+    let root_scratch = process_root("replay-cancel");
+    let root = root_scratch.path().to_path_buf();
     let ready = root.join("ready");
     // A FIFO lets the child acknowledge startup without a clock or a filesystem poll.
     unsafe extern "C" {
@@ -830,7 +838,8 @@ fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
 
 #[test]
 fn a_streaming_cat_child_round_trips_lines_and_replays_without_spawning() {
-    let root = process_root("replay-stream");
+    let root_scratch = process_root("replay-stream");
+    let root = root_scratch.path().to_path_buf();
     let cat = root.join("cat");
     std::fs::copy("/bin/cat", &cat).unwrap();
     process_round_trip(
@@ -1100,7 +1109,8 @@ fn file_map_truncation_records_and_replays_across_backends() {
 
 #[test]
 fn a_host_pipeline_reports_every_status_and_replays_without_spawning() {
-    let root = process_root("replay-pipeline");
+    let root_scratch = process_root("replay-pipeline");
+    let root = root_scratch.path().to_path_buf();
     let programs = ["printf", "sort", "uniq"].map(|name| root.join(name));
     for (name, copy) in ["/usr/bin/printf", "/usr/bin/sort", "/usr/bin/uniq"]
         .iter()
@@ -1120,7 +1130,8 @@ fn a_host_pipeline_reports_every_status_and_replays_without_spawning() {
 
 #[test]
 fn a_streaming_group_round_trips_and_replays_without_spawning() {
-    let root = process_root("replay-group");
+    let root_scratch = process_root("replay-group");
+    let root = root_scratch.path().to_path_buf();
     let [cat, sort, sh] = ["cat", "sort", "sh"].map(|name| root.join(name));
     for (from, to) in [
         ("/bin/cat", &cat),
@@ -1141,7 +1152,8 @@ fn a_streaming_group_round_trips_and_replays_without_spawning() {
 
 #[test]
 fn an_own_group_kill_stops_what_its_stages_started_and_replays_without_spawning() {
-    let root = process_root("replay-own-group");
+    let root_scratch = process_root("replay-own-group");
+    let root = root_scratch.path().to_path_buf();
     let [sh, cat] = ["sh", "cat"].map(|name| root.join(name));
     for (from, to) in [("/bin/sh", &sh), ("/bin/cat", &cat)] {
         std::fs::copy(from, to).unwrap();

@@ -90,8 +90,11 @@ struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
         // A short directory: a Unix socket path is at most 107 bytes.
-        let root = PathBuf::from(format!("/tmp/hirsel-remote-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-remote-{name}-"))
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(root.join("tapes")).unwrap();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -143,6 +146,7 @@ impl Fixture {
             )
             .unwrap();
         }
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn hirsel(&self, args: &[&std::ffi::OsStr]) -> Output {

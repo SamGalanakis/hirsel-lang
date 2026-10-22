@@ -23,8 +23,11 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
     let parent = alloc_block(ctx.0, pair, 16);
     write_ref(parent, 0, child);
     write_ref(parent, 8, child);
-    let path =
-        std::env::temp_dir().join(format!("hirsel-measurement-known-{}", std::process::id()));
+    let path_scratch = tempfile::Builder::new()
+        .prefix("hirsel-measurement-known-")
+        .tempdir()
+        .unwrap();
+    let path = path_scratch.path().join("output");
     unsafe { &mut *ctx.0 }.set_measurement_output(
         hirsel_rt::host_paths::RecorderDestination::pin(&path)
             .unwrap()
@@ -150,8 +153,11 @@ fn nested_site_scopes_restore_the_caller_and_totals_sum_over_all_sites() {
         operation: c"Copy".as_ptr(),
     };
     let (first, second) = (site(1, 2), site(2, 3));
-    let path =
-        std::env::temp_dir().join(format!("hirsel-sites-nested-{}.json", std::process::id()));
+    let path_scratch = tempfile::Builder::new()
+        .prefix("hirsel-sites-nested-")
+        .tempdir()
+        .unwrap();
+    let path = path_scratch.path().join("output");
     unsafe { &mut *ctx.0 }.set_profile_output(std::fs::File::create(&path).unwrap());
     unsafe {
         let outer = hirsel_rt_v2_profile_enter(ctx.0, &first);

@@ -42,8 +42,11 @@ fn explicit_launch_selects_source_std_without_registry_status() {
 
 #[test]
 fn launch_metadata_errors_are_tool_errors() {
-    let dir = std::env::temp_dir().join(format!("hirsel-packages-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-packages-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     std::fs::write(dir.join("main.hir"), "pub fn main(t: Test) {}\n").unwrap();
     let base = serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}});
     let path = dir.join("hirsel.json");
@@ -92,9 +95,11 @@ fn packaged_replay_moves_without_original_manifest_paths() {
             .unwrap()
             .replace("std.identity(42)", "42");
         assert!(!text.contains("std."));
-        let input =
-            std::env::temp_dir().join(format!("hirsel-package-input-{}", std::process::id()));
-        std::fs::create_dir_all(&input).unwrap();
+        let input_scratch = tempfile::Builder::new()
+            .prefix("hirsel-package-input-")
+            .tempdir()
+            .unwrap();
+        let input = input_scratch.path().to_path_buf();
         let source = input.join("source.hir");
         std::fs::write(&source, &text).unwrap();
         let dependency = |name: &str, head: &str, module: &[&str]| {
@@ -118,8 +123,11 @@ fn packaged_replay_moves_without_original_manifest_paths() {
             ],
         });
         std::fs::write(source.with_extension("hir.json"), manifest.to_string()).unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-package-bundle-{}", std::process::id()));
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-package-bundle-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().join("bundle");
         let moved = dir.with_extension("moved");
         assert!(bundle_program(&source, &text, &dir).unwrap());
         std::fs::remove_dir_all(&input).unwrap();

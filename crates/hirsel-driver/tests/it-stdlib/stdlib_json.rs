@@ -71,8 +71,11 @@ fn native_measurement(source: &str, label: &str) -> String {
     let mut options = Options::new(target.clone());
     options.regions = false;
     let ready = native::build(&validated, &options).unwrap();
-    let dir = std::env::temp_dir().join(format!("hirsel-json-{label}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir_scratch = tempfile::Builder::new()
+        .prefix(&format!("hirsel-json-{label}-"))
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let tools = Toolchain::in_tree_with_runtime(
         &dir.join("runtime"),
         &[&target],
@@ -206,7 +209,11 @@ fn derived_byte_decoder_moves_recursive_results_without_detach() {
 // without changing the interpreter's one-million-step guard.
 fn execute_native_source(name: &str, source: &str) {
     with_compiler_stack(|| {
-        let dir = std::env::temp_dir().join(format!("hirsel-json-{name}-{}", std::process::id()));
+        let dir_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-json-{name}-"))
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("main.hir");
         std::fs::write(&path, source).unwrap();

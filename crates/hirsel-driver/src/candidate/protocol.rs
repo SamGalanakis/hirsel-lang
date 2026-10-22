@@ -675,9 +675,11 @@ mod matrix {
         }
     }
     fn cell(jobs: usize) {
-        let root =
-            std::env::temp_dir().join(format!("candidate-protocol-matrix-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix("candidate-protocol-matrix-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         let manifest = r#"{"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#;
         let before = "pub fn main()->u64{0}\n";
         std::fs::write(root.join("hirsel.json"), manifest).unwrap();

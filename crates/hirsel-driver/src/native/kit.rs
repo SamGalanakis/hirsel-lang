@@ -363,7 +363,11 @@ mod tests {
 
     #[test]
     fn kit_links_depend_on_neither_linker_threads_nor_directories() {
-        let root = std::env::temp_dir().join(format!("hirsel-kit-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("hirsel-kit-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         for target in [
             TargetSpec::x86_64_unknown_linux_gnu(),
             TargetSpec::aarch64_unknown_linux_gnu(),
@@ -393,7 +397,11 @@ mod tests {
     /// resolves against the kit alone.
     #[test]
     fn whole_runtime_archives_need_no_builtins_beyond_their_own() {
-        let root = std::env::temp_dir().join(format!("hirsel-kit-whole-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("hirsel-kit-whole-")
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         let kit = Kit::load(&input("HIRSEL_LINK_KIT")).unwrap();
         let lld = input("LLVM_SYS_211_PREFIX").join("bin/ld.lld");
         for target in [

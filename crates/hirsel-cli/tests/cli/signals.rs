@@ -44,15 +44,19 @@ const SLEEP: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
 struct Source(PathBuf);
 impl Source {
     fn new(name: &str, text: &str) -> Self {
-        let path =
-            std::env::temp_dir().join(format!("hirsel-signals-{name}-{}.hir", std::process::id()));
+        let path_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-signals-{name}-"))
+            .tempdir()
+            .unwrap();
+        let path = path_scratch.path().join("source.hir");
         std::fs::write(&path, text).unwrap();
+        let _ = path_scratch.keep();
         Self(path)
     }
 }
 impl Drop for Source {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
     }
 }
 

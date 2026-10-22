@@ -25,9 +25,11 @@ fn fixture_bytes(events: &[hirsel_rt::io::Event]) -> Vec<u8> {
 
 #[test]
 fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
-    let root = std::env::temp_dir().join(format!("hirsel-view-cli-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-view-cli-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     let tape = root.join("ordinary.tape");
     let out = root.join("view.json");
     use hirsel_rt::io::{Completion, Event, Request};
@@ -95,7 +97,11 @@ fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
 
 #[test]
 fn offline_view_redacts_recorded_secrets_in_json_and_perfetto() {
-    let root = std::env::temp_dir().join(format!("hirsel-view-secrets-{}", std::process::id()));
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-view-secrets-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     std::fs::create_dir_all(&root).unwrap();
     let secret = "recorded-credential-DO-NOT-PRINT";
     let encoded = hirsel_run_schema::hex(secret.as_bytes());

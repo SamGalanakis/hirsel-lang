@@ -345,7 +345,8 @@ fn binary_usage_and_io_errors_have_distinct_codes() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("usage:"));
-    let missing = std::env::temp_dir().join(format!("hirsel-missing-{}.hir", std::process::id()));
+    let missing_scratch = tempfile::tempdir().unwrap();
+    let missing = missing_scratch.path().join("missing.hir");
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("check")
         .arg(missing)
@@ -3381,9 +3382,13 @@ fn run_outcomes_are_reported_alike_by_both_engines() {
     };
     // Its own directory: a grant of the whole temporary directory would hold the native
     // driver's observation record, which admission refuses (recorder overlap).
-    let present = std::env::temp_dir().join(format!("hirsel-cli-present-{}", std::process::id()));
-    std::fs::create_dir_all(&present).unwrap();
-    let missing = std::env::temp_dir().join(format!("hirsel-cli-absent-{}", std::process::id()));
+    let present_scratch = tempfile::Builder::new()
+        .prefix("hirsel-cli-present-")
+        .tempdir()
+        .unwrap();
+    let present = present_scratch.path().to_path_buf();
+    let missing_scratch = tempfile::tempdir().unwrap();
+    let missing = missing_scratch.path().join("missing.hir");
     let plain = grants(serde_json::json!([]));
     let refused_grants =
         grants(serde_json::json!([{"path":"data","host":missing,"access":"read"}]));

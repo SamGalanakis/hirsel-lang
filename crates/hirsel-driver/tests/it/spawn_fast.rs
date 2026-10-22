@@ -60,8 +60,11 @@ fn clear_spawn_hints(program: &mut native::ReadyProgram) {
 #[test]
 fn spawn_await_preserves_the_queued_sibling_load_and_ordered_tape_in_both_backends() {
     hirsel_engine::with_compiler_stack(|| {
-        let dir = std::env::temp_dir().join(format!("hirsel-spawn-fast-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-spawn-fast-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let output = dir.join("linked");
         std::fs::create_dir_all(&output).unwrap();
         let root = output.join("root");

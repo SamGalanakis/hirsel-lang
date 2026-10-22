@@ -119,8 +119,11 @@ fn published_index_matches_every_core_and_std_export() {
 #[test]
 fn index_retains_source_contracts_comments_and_public_visibility() {
     hirsel_engine::with_compiler_stack(|| {
-        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("api-index-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("api-index-")
+            .tempdir_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(root.join("stdlib/std@1")).unwrap();
         std::fs::create_dir_all(root.join("docs/spec")).unwrap();
         for page in ["core-library.md", "std-library.md"] {
@@ -226,8 +229,11 @@ fn package_public_api_matches_readable_golden() {
 #[test]
 fn package_documentation_does_not_query_bodies_or_initializers() {
     hirsel_engine::with_compiler_stack(|| {
-        let root =
-            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("api-body-{}", std::process::id()));
+        let root_scratch = tempfile::Builder::new()
+            .prefix("api-body-")
+            .tempdir_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("hirsel.json"), r#"{"schema":1,"package":{"name":"probe","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}"#).unwrap();
         let source = root.join("api.hir");

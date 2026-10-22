@@ -2,11 +2,11 @@ use hirsel_driver::*;
 use hirsel_engine::*;
 
 fn keyed_work(kind: &str, count: u64) -> u64 {
-    let dir = std::env::temp_dir().join(format!(
-        "hirsel-interp-keyed-{kind}-{count}-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-interp-keyed-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let path = dir.join("main.hir");
     let (ty, insert, check) = if kind == "upsert" {
         (
@@ -92,10 +92,11 @@ fn map_and_set_drains_inspect_linearly_many_entries() {
     with_compiler_stack(|| {
         for kind in ["map", "set"] {
             for count in [2_000, 8_000] {
-                let dir = std::env::temp_dir().join(format!(
-                    "hirsel-keyed-drain-{kind}-{count}-{}",
-                    std::process::id()
-                ));
+                let dir_scratch = tempfile::Builder::new()
+                    .prefix("hirsel-keyed-drain-")
+                    .tempdir()
+                    .unwrap();
+                let dir = dir_scratch.path().to_path_buf();
                 std::fs::create_dir_all(&dir).unwrap();
                 let path = dir.join("main.hir");
                 let ty = if kind == "map" {

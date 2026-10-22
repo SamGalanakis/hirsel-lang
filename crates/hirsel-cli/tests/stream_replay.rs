@@ -18,11 +18,11 @@ struct Fixture(PathBuf);
 
 impl Fixture {
     fn new(name: &str, source: &str) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "hirsel-stream-replay-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-stream-replay-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(root.join("data")).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../stdlib/std@1/hirsel.json")
@@ -35,6 +35,7 @@ impl Fixture {
             "dependencies": [{"manifest": stdlib, "package": {"name": "std", "version": "1"}, "expose": []}],
             "entry": {"module": [], "name": "main"},
         }).to_string()).unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
 

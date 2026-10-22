@@ -16,12 +16,11 @@ fn cranelift_two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
 
 fn check_source_profile(backend: Backend) {
     hirsel_engine::with_compiler_stack(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "hirsel-source-profile-{}-{}",
-            std::process::id(),
-            backend.name()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-source-profile-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let root = dir.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let source = dir.join("known.hir");
@@ -250,11 +249,11 @@ fn check_profile_context(backend: Backend) {
     use std::process::Command;
 
     hirsel_engine::with_compiler_stack(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "hirsel-profile-context-{}-{}",
-            std::process::id(),
-            backend.name()
-        ));
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-profile-context-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("context.hir");
         std::fs::write(
@@ -456,11 +455,11 @@ fn llvm_generated_and_scoped_task_sites_keep_their_source_coordinates() {
 
 fn check_scoped_profile(backend: Backend) {
     hirsel_engine::with_compiler_stack(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "hirsel-profile-scoped-{}-{}",
-            std::process::id(),
-            backend.name()
-        ));
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-profile-scoped-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         std::fs::create_dir_all(dir.join("root")).unwrap();
         let source = dir.join("scoped.hir");
         let text = r#"fn generator() -> Result[Body[fn(Bytes) -> () uses {}], String] { Ok(codegen.body("fn(b: Bytes) -> () uses {} { let x = copy b }")) }

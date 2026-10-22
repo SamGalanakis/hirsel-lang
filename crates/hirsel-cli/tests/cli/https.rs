@@ -54,9 +54,11 @@ const RESPONSE: &[u8] = b"HTTP/1.1 200 \r\nContent-Length: 5\r\nConnection: clos
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("hirsel-https-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-https-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::write(root.join("main.hir"), program()).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../stdlib/std@1/hirsel.json")
@@ -76,6 +78,7 @@ impl Fixture {
             .to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn command(&self, native: Option<&str>) -> Command {

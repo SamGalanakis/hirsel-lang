@@ -5,11 +5,11 @@ use hirsel_engine::*;
 /// also reads through a borrowed parameter and a borrowed core operation each
 /// iteration. Every push and read is O(1), so copies stay linear in the count.
 fn copied_values(count: u64) -> u64 {
-    let dir = std::env::temp_dir().join(format!(
-        "hirsel-interp-values-{count}-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-interp-values-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let path = dir.join("main.hir");
     std::fs::write(
         &path,

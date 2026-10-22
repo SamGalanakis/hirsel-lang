@@ -378,9 +378,11 @@ fn local_immutable_and_concurrent_entries_stay_in_their_locality() {
 
 #[test]
 fn concurrent_services_remain_checked_when_called_from_local_entries() {
-    let root =
-        std::env::temp_dir().join(format!("hirsel-descriptor-locality-{}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-descriptor-locality-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     for (body, forbidden) in [
         ("", None),
         ("tasks::scheduler();", Some("tasks::scheduler")),
@@ -415,8 +417,11 @@ fn concurrent_services_remain_checked_when_called_from_local_entries() {
 
 #[test]
 fn lexical_bindings_do_not_become_calls_to_same_named_functions() {
-    let root =
-        std::env::temp_dir().join(format!("hirsel-descriptor-bindings-{}", std::process::id()));
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-descriptor-bindings-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     std::fs::create_dir_all(&root).unwrap();
     for (body, reaches) in [
         ("let saved = 1; consume(saved);", false),
@@ -460,8 +465,11 @@ fn lexical_bindings_do_not_become_calls_to_same_named_functions() {
 
 #[test]
 fn physical_budget_boundaries_preserve_the_other_audits() {
-    let root =
-        std::env::temp_dir().join(format!("hirsel-descriptor-budgets-{}", std::process::id()));
+    let root_scratch = tempfile::Builder::new()
+        .prefix("hirsel-descriptor-budgets-")
+        .tempdir()
+        .unwrap();
+    let root = root_scratch.path().to_path_buf();
     std::fs::create_dir_all(&root).unwrap();
     for (local, service, locality_red, semantic_red, run_red) in [
         ("", "crate::tasks::scheduler();", false, false, false),

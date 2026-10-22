@@ -73,10 +73,11 @@ fn run(command: &mut Command, tape: &Path, what: &str) -> Vec<u8> {
 #[test]
 fn every_engine_records_the_same_tape_under_every_schedule() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir: PathBuf =
-        std::env::temp_dir().join(format!("hirsel-tape-identity-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir_scratch = tempfile::Builder::new()
+        .prefix("hirsel-tape-identity-")
+        .tempdir()
+        .unwrap();
+    let dir = dir_scratch.path().to_path_buf();
     let dir = dir.canonicalize().unwrap();
     let tape = dir.join("tape");
     for path in PROGRAMS {

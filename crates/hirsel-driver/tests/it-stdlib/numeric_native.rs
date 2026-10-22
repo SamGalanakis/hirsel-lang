@@ -6,8 +6,8 @@ use std::{path::PathBuf, process::Command, sync::OnceLock};
 pub fn check(arguments: &[String], context: &str) {
     static CHECKER: OnceLock<PathBuf> = OnceLock::new();
     let checker = CHECKER.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("hirsel-numeric-vectors-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new().prefix("hirsel-numeric-vectors-").tempdir().unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let source = dir.join("vectors.hir");
         std::fs::write(&source, SOURCE).unwrap();
         let std_manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../stdlib/std@1/hirsel.json").canonicalize().unwrap();
@@ -22,6 +22,7 @@ pub fn check(arguments: &[String], context: &str) {
         let binary = dir.join("vectors");
         native::build_path_native_backend_with_validation(&source, &binary, TargetSpec::x86_64_unknown_linux_gnu(),
             BuildProfile::Release, native::Backend::Llvm, None, false, hirsel_engine::Verify::On, native::Validation::EveryStage).unwrap().unwrap();
+        let _ = dir_scratch.keep();
         binary
     });
     let result = Command::new(checker)

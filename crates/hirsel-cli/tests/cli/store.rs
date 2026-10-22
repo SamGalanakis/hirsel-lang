@@ -59,8 +59,11 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("hirsel-store-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-store-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -77,6 +80,7 @@ impl Fixture {
             serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"data","host":root.join("data"),"access":"read_write"}]},"args":[]}).to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn run(&self, args: &[&std::ffi::OsStr]) -> Output {

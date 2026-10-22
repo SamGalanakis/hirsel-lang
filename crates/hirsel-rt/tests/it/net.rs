@@ -1056,11 +1056,11 @@ fn udp_host_datagrams_discard_outside_senders_and_replay_without_sockets() {
 }
 
 /// A fresh directory for socket files, short enough for `sun_path`.
-fn socket_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::path::PathBuf::from(format!("/tmp/hirsel-unix-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir(&dir).unwrap();
-    dir
+fn socket_dir(name: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("hirsel-unix-{name}-"))
+        .tempdir_in("/tmp")
+        .unwrap()
 }
 
 /// Connect, write, accept and read over a real Unix socket through the host provider (Rust
@@ -1135,7 +1135,8 @@ fn unix_exchange(io: &mut impl Adapter, path: &str) -> Vec<u8> {
 
 #[test]
 fn unix_streams_connect_accept_and_replay_without_socket_files() {
-    let dir = socket_dir("exchange");
+    let dir_scratch = socket_dir("exchange");
+    let dir = dir_scratch.path().to_path_buf();
     let path = dir.join("app.sock").to_str().unwrap().to_owned();
     let rules = BTreeSet::from([
         rule(&path, 0, NetOperation::UnixConnect),
@@ -1158,7 +1159,8 @@ fn unix_streams_connect_accept_and_replay_without_socket_files() {
 
 #[test]
 fn unix_listen_removes_only_a_stale_socket_and_only_under_its_rule() {
-    let dir = socket_dir("stale");
+    let dir_scratch = socket_dir("stale");
+    let dir = dir_scratch.path().to_path_buf();
     let at = |name: &str| dir.join(name).to_str().unwrap().to_owned();
     let (stale, kept, live, file, moved, missing) = (
         at("stale.sock"),
@@ -1229,7 +1231,8 @@ fn unix_listen_removes_only_a_stale_socket_and_only_under_its_rule() {
 fn cooperative_unix_connect_parks_on_a_full_backlog_and_the_stale_probe_never_waits() {
     use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
     use std::os::fd::AsRawFd;
-    let dir = socket_dir("backlog");
+    let dir_scratch = socket_dir("backlog");
+    let dir = dir_scratch.path().to_path_buf();
     let path = dir.join("app.sock").to_str().unwrap().to_owned();
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
     // SAFETY: listener owns its descriptor; listening again sets the smallest backlog.

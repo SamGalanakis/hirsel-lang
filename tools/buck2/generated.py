@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import sys
 
 # Each part's outputs. Third-party dependency generation (Cargo metadata, then
@@ -136,9 +137,14 @@ def record(root: Path, part: str, reads: Reads) -> None:
     stamp = root / STAMP
     stamp.parent.mkdir(exist_ok=True)
     parts = load(root) | {part: {'reads': reads.record(), 'outputs': outputs(root, part)}}
-    pending = stamp.with_name(f'.{stamp.name}.{os.getpid()}')
-    pending.write_text(json.dumps({'parts': parts}, indent=1, sort_keys=True) + '\n')
-    pending.replace(stamp)
+    with tempfile.NamedTemporaryFile(mode='w', dir=stamp.parent, prefix=f'.{stamp.name}.', delete=False) as output:
+        pending = Path(output.name)
+        try:
+            output.write(json.dumps({'parts': parts}, indent=1, sort_keys=True) + '\n')
+            output.close()
+            pending.replace(stamp)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 def stale(root: Path) -> list[str]:

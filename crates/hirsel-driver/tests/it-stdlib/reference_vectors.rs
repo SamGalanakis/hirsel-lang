@@ -80,9 +80,11 @@ fn run_selected(
                 .unwrap_or_else(|error| panic!("{suite} {ids:?}: {error:?}\n{source}"));
             if native {
                 use hirsel_driver::native::{OptLevel, Options, Partition, TargetSpec, Toolchain};
-                let dir = std::env::temp_dir()
-                    .join(format!("hirsel-vectors-{suite}-{}", std::process::id()));
-                std::fs::create_dir_all(&dir).unwrap();
+                let dir_scratch = tempfile::Builder::new()
+                    .prefix("hirsel-vectors-")
+                    .tempdir()
+                    .unwrap();
+                let dir = dir_scratch.path().to_path_buf();
                 let input = loaded.engine.export_native_input().unwrap();
                 let validated = loaded.engine.import_native_input(input).unwrap();
                 let target = TargetSpec::x86_64_unknown_linux_gnu();

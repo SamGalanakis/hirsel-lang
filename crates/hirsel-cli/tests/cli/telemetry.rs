@@ -75,10 +75,11 @@ pub fn main(rt: Io) -> Result[(), E] {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("hirsel-telemetry-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root_scratch = tempfile::Builder::new()
+            .prefix(&format!("hirsel-telemetry-{name}-"))
+            .tempdir()
+            .unwrap();
+        let root = root_scratch.path().to_path_buf();
         std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
         let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../stdlib/std@1/hirsel.json")
@@ -89,6 +90,7 @@ impl Fixture {
             serde_json::json!({"schema":1,"package":{"name":"traced","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string(),
         )
         .unwrap();
+        let _ = root_scratch.keep();
         Self(root)
     }
     fn source(&self) -> PathBuf {

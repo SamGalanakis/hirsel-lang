@@ -4,9 +4,11 @@ use hirsel_engine::*;
 
 fn run_expanded(case_name: &str, replacements: &[(&str, &str)]) {
     with_compiler_stack(|| {
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-vectors-{case_name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_scratch = tempfile::Builder::new()
+            .prefix("hirsel-vectors-")
+            .tempdir()
+            .unwrap();
+        let dir = dir_scratch.path().to_path_buf();
         let case = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../conformance/SEM/{case_name}.hir"));
         let mut source = std::fs::read_to_string(&case).unwrap();
