@@ -1325,6 +1325,12 @@
       "module": [
         "json_patch"
       ]
+    },
+    {
+      "path": "html_tokenizer.hir",
+      "module": [
+        "html_tokenizer"
+      ]
     }
   ],
   "dependencies": []

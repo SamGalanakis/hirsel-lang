@@ -78,3 +78,4 @@ mod checked_h_put_bytes_15;
 mod dns_message_15;
 mod mail_address_15;
 mod json_patch_15;
+mod html_tokenizer_15;

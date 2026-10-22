@@ -1,0 +1,92 @@
+fn caps() -> () uses {} {
+  let zero = std@1/html_tokenizer.Limits(bytes: 0, tokens: 0, attributes: 0, work: 1)
+  core@1/failure.check(std@1/html_tokenizer.tokenize("", zero, false) == Ok([]), TextInvariant())
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x", zero, false) == Error(LimitExceeded(InputBytes(), 0)), TextInvariant()
+  )
+  let one_byte = std@1/html_tokenizer.Limits(bytes: 1, tokens: 10, attributes: 10, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("é", one_byte, false) == Error(LimitExceeded(InputBytes(), 1)), TextInvariant()
+  )
+  let one_token = std@1/html_tokenizer.Limits(bytes: 100, tokens: 1, attributes: 10, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x<a>", one_token, false) == Error(LimitExceeded(Tokens(), 1)), TextInvariant()
+  )
+  let one_attr = std@1/html_tokenizer.Limits(bytes: 100, tokens: 10, attributes: 1, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("<a x=1 X=2>", one_attr, false) == Error(LimitExceeded(Attributes(), 7)), TextInvariant()
+  )
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("<a x=1></a y=2>", one_attr, false) == Error(LimitExceeded(Attributes(), 11)), TextInvariant()
+  )
+  let two_attrs = std@1/html_tokenizer.Limits(bytes: 11, tokens: 1, attributes: 2, work: 1000)
+  let Ok(dups) = std@1/html_tokenizer.tokenize("<a x=1 X=2>", two_attrs, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(core@1/list.len(dups[0].attributes) == 1, TextInvariant())
+  let exact = std@1/html_tokenizer.Limits(bytes: 1, tokens: 1, attributes: 0, work: 4)
+  let Ok(text) = std@1/html_tokenizer.tokenize("x", exact, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(text[0].data == "x", TextInvariant())
+  let short = std@1/html_tokenizer.Limits(bytes: 1, tokens: 1, attributes: 0, work: 3)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x", short, false) == Error(LimitExceeded(Work(), 0)), TextInvariant()
+  )
+  // Every work cutoff, including UTF-8 continuation, entity expansion, rawtext
+  // reconsumption and incomplete tags. Failure repeats, and a successful next
+  // token stays owned while advancing or poisoning the scanner.
+  let sources: List[String] = ["é", "<a x='&amp;'>t</a>", "<script><!--<script>x</script>--></script>", "<!--\u{0}&amp;--!>", "<unfinished"]
+  for source in sources {
+    let mut work: u64 = 0
+    let mut succeeded = false
+    while work < 2000 {
+      let limits = std@1/html_tokenizer.Limits(bytes: 1000, tokens: 100, attributes: 100, work: work)
+      let mut Ok(z) = std@1/html_tokenizer.tokenizer(unique source, limits) else {
+        core@1/failure.check(false, TextInvariant()); return
+      }
+      let mut previous: Option[std@1/html_tokenizer.Token] = None()
+      while true {
+        match std@1/html_tokenizer.next(mut z, false) {
+          Ok(Some(token)) => {
+            previous = Some(take token)
+          },
+          Ok(None()) => { succeeded = true; break },
+          Error(error) => {
+            match error {
+              LimitExceeded(Work(), offset) => core@1/failure.check(offset <= core@1/string.byte_len(source), TextInvariant()),
+              _ => core@1/failure.check(false, TextInvariant()),
+            }
+            core@1/failure.check(std@1/html_tokenizer.next(mut z, true) == Error(error), TextInvariant())
+            break
+          },
+        }
+      }
+      if succeeded { break }
+      match previous {
+        Some(token) => core@1/failure.check(token.span.end <= core@1/string.byte_len(source), TextInvariant()),
+        None() => (),
+      }
+      work += 1
+    }
+    core@1/failure.check(succeeded, TextInvariant())
+  }
+  // Switch mode between calls. A tokenizer cannot infer SVG integration points.
+  let limits = std@1/html_tokenizer.Limits(bytes: 100, tokens: 10, attributes: 10, work: 10000)
+  let mut Ok(z) = std@1/html_tokenizer.tokenizer("<![CDATA[a]]><![CDATA[b]]>", limits) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  let Ok(Some(comment)) = std@1/html_tokenizer.next(mut z, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  let Ok(Some(text_token)) = std@1/html_tokenizer.next(mut z, true) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(comment.kind == Comment() && comment.data == "[CDATA[a]]", TextInvariant())
+  core@1/failure.check(text_token.kind == Text() && text_token.data == "b", TextInvariant())
+  // Invalid bytes are rejected by String construction, outside markup recovery.
+  match core@1/string.from_bytes(b"\xff") {
+    Error(_) => (),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}

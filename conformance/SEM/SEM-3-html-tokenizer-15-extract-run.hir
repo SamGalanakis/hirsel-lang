@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// exit: 0
+// Go x/net 7e562009 HTML token extraction, without tree building.
+fn links(take source: String) -> Result[List[String], html_tokenizer.TokenizeError] uses {} {
+  let limits = html_tokenizer.Limits(
+    bytes: 65536,
+    tokens: 4096,
+    attributes: 8192,
+    work: 1000000
+  )
+  let tokens = html_tokenizer.tokenize(take source, limits, false)?
+  let mut found: List[String] = []
+  for token in tokens {
+    if (token.kind == StartTag() || token.kind == SelfClosingTag()) && token.data == "a" {
+      for attr in token.attributes {
+        if attr.key == "href" {
+          list.push(mut found, copy attr.value)
+        }
+      }
+    }
+  }
+  Ok(take found)
+}
+
+pub fn main() -> Result[(), ()] {
+  let Ok(found) = links(
+    "<a href='one&amp;two'>x</a><script><a href='ignored'></script><A HREF=雪 HREF=duplicate/>"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(found == ["one&two", "雪"], TextInvariant())
+  Ok(())
+}

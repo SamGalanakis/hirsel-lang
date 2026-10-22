@@ -4692,6 +4692,121 @@ their ordinary formatting. Escape each untrusted hole individually.
 This is HTML text/attribute escaping; URL, JavaScript, CSS and unquoted
 attribute contexts need their own validation or encoding.
 
+## Bounded HTML tokens (`std@1/html_tokenizer`)
+
+`html_tokenizer` ports the lexical tokenizer in Go x/net `html/token.go`,
+`escape.go` and `entity.go` at `7e562009b3884a0845019b5f886f0242a7c0b970`.
+It does not build an HTML tree, validate nesting, sanitize content or make
+extracted URLs or script safe. `std@1/html` escaping is unchanged.
+
+```hirsel
+pub type Kind = Text | StartTag | EndTag | SelfClosingTag | Comment | Doctype
+pub type Span { start: u64, end: u64 }
+pub type Attribute { key: String, value: String }
+pub type Token { kind: Kind, span: Span, data: String, attributes: List[Attribute] }
+pub type Limits { bytes: u64, tokens: u64, attributes: u64, work: u64 }
+pub type Limit = InputBytes | Tokens | Attributes | Work
+pub type TokenizeError = LimitExceeded(Limit, u64)
+
+fn tokenizer(take source: String, limits: Limits) -> Result[Tokenizer, TokenizeError] uses {}
+fn next(mut tokenizer: Tokenizer, allow_cdata: bool) -> Result[Option[Token], TokenizeError] uses {}
+fn next_is_not_raw_text(mut tokenizer: Tokenizer) -> () uses {}
+fn tokenize(take source: String, limits: Limits, allow_cdata: bool) -> Result[List[Token], TokenizeError] uses {}
+```
+
+The input is a whole owned UTF-8 `String`; this API performs no I/O and accepts
+no streaming chunks. Invalid byte encodings must first be handled by
+`core@1/string.from_bytes`, whose encoding error is separate from HTML markup
+recovery. No invalid markup produces a syntax error. As in Go, unfinished tags
+at EOF are discarded, unfinished comments/declarations produce recovered
+comments/doctypes, and pending ordinary/raw text is emitted. `Ok(None())` is
+stable EOF, including after discarding an unfinished tag. There is no EOF token.
+
+Spans are zero-based, half-open byte ranges in the original UTF-8 input,
+including delimiters and original CR/CRLF bytes. They precede decoding and
+case conversion. Successive spans partition the consumed input up to any
+unfinished tag discarded at EOF. `data` is the lower-case tag name or decoded
+text/comment/doctype content. Attributes retain source order, with the first
+ASCII-case-insensitive key winning, exactly as this pinned Go tokenizer emits;
+end-tag attributes are scanned and discarded. NUL replacement occurs after
+attribute deduplication, so distinct raw keys can decode to the same key.
+Names are ASCII-lowercased, values preserve case, and all returned strings and
+lists own their storage independently of the input and tokenizer.
+
+The dispatch preserves Go's bogus-comment recovery, quoted/unquoted attribute
+states, script escape/double-escape states, rawtext (`style`, `script`, `iframe`,
+`noembed`, `noframes`, `noscript`, `xmp`, `plaintext`) and RCDATA (`textarea`,
+`title`). CR and CRLF normalize to LF in text, comment, doctype and attribute
+values. As upstream, plain data text preserves NUL; comments, rawtext/RCDATA,
+CDATA and tag/attribute names and values replace NUL with U+FFFD. Doctype NUL
+is preserved. Text/comment/doctype and attribute values decode character
+references, except rawtext. Numeric references include the Windows-1252
+replacement table and invalid-scalar replacement. Named references include
+all 2,231 pinned entries, including two-scalar expansions, missing semicolons
+and Go's attribute-specific ambiguous-ampersand handling. Decoding is one pass:
+a decoded `&` is not interpreted again, and decoded CR is not normalized again.
+
+`allow_cdata` is selected for **each call** to `next`: true enables
+`<![CDATA[...]]>` as text, false recovers it as a bogus comment. The caller is
+responsible for choosing true in SVG/MathML foreign content and false at HTML
+integration points; the tokenizer does not infer tree context. The convenience
+`tokenize` keeps one mode for the entire input. Call `next_is_not_raw_text`
+between a start tag and `next` when tree context disables its usual rawtext
+transition (for example an SVG `title`). This matches Go's explicit
+`AllowCDATA` and `NextIsNotRawText` controls without adding a tree builder.
+
+Every cap is inclusive and zero means zero, never unlimited. `bytes` limits
+the whole input before retaining it. `tokens` limits emitted tokens.
+`attributes` counts all scanned nonempty raw keys across the input, including
+duplicates and discarded end-tag attributes; it is checked after scanning each
+value, before retaining its key. `work` counts each attempted scanner byte read
+(including reconsumption and the first EOF probe), each decoder input-byte
+iteration, each entity-name comparison byte or entity scan byte, and each
+emitted decoded byte. These charged byte operations also bound the linear
+UTF-8 validation and attribute-key hashing performed by core primitives.
+Fixed state-dispatch bookkeeping and static-table loads need no separate unit.
+Cap checks precede the corresponding increment, avoiding counter overflow.
+Retained input, attribute metadata, token lists and decoded bytes are bounded
+by these caps; no output retains a source slice. The work count is deterministic
+across engines and is an implementation budget, not a promise of CPU cycles.
+
+`LimitExceeded(kind, offset)` is stable: input overflow names byte `limits.bytes`,
+token overflow names that token's raw start, attribute overflow names the raw
+key's start, and work overflow names the original input byte being read,
+compared or decoded (or input length at EOF). A work offset can name a UTF-8
+continuation byte or move backward when decoding a token. Errors poison the
+cursor; later `next` calls repeat the same error. Collection discards partial
+results on error; cursor users keep earlier owned tokens.
+
+Adaptations from Go are the owned whole-input API and explicit inclusive caps
+instead of `io.Reader` and `SetMaxBuf` (whose zero means unlimited), absolute
+spans, owned accessor results without mutating the source buffer, a sorted
+static entity index instead of runtime maps, iterative script-state dispatch
+instead of `goto`, and no atom interning or namespace/tree-building metadata.
+The entity tables and exact upstream token/value/span fixtures are reproducible
+with `crates/hirsel-driver/tests/fixtures/html-tokenizer-15/generate.py` and the
+pinned upstream checkout; pass a Go executable as its second argument to also
+reproduce the vectors. The copied structure, data and vectors retain Go's BSD
+license in that fixture directory and are listed in `third-party/NOTICES.md`.
+
+A small extraction example (also executed as a conformance case):
+
+```hirsel
+fn links(take source: String) -> Result[List[String], html_tokenizer.TokenizeError] uses {} {
+  let limits = html_tokenizer.Limits(bytes: 65536, tokens: 4096, attributes: 8192, work: 1000000)
+  let tokens = html_tokenizer.tokenize(take source, limits, false)?
+  let mut found: List[String] = []
+  for token in tokens {
+    if (token.kind == StartTag() || token.kind == SelfClosingTag()) && token.data == "a" {
+      for attr in token.attributes {
+        if attr.key == "href" { list.push(mut found, copy attr.value) }
+      }
+    }
+  }
+  Ok(take found)
+}
+```
+
 Observation views of recorded std-library effects are available through
 `hirsel view` (see [Offline observation views](determinism.md#offline-observation-views)).
 They are external tooling: they add no source API, ambient context or authority.

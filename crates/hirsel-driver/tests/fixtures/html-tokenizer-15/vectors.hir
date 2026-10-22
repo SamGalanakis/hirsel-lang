@@ -1,0 +1,855 @@
+// Reproduced by generate.py from pinned Go x/net tokenTests and oracle.go.
+// Copyright 2010 The Go Authors; BSD-3-Clause (GO-LICENSE.txt).
+@track_caller
+fn check(take source: String, cdata: bool, suppress: bool, expected: List[std@1/html_tokenizer.Token]) -> () uses {} {
+  let limits = std@1/html_tokenizer.Limits(bytes: 100000, tokens: 10000, attributes: 10000, work: 10000000)
+  let mut Ok(z) = std@1/html_tokenizer.tokenizer(take source, limits) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  let mut actual: List[std@1/html_tokenizer.Token] = []
+  while true {
+    if suppress { std@1/html_tokenizer.next_is_not_raw_text(mut z) }
+    match std@1/html_tokenizer.next(mut z, cdata) {
+      Ok(Some(t)) => core@1/list.push(mut actual, take t),
+      Ok(None()) => break,
+      Error(_) => { core@1/failure.check(false, TextInvariant()); return },
+    }
+  }
+  core@1/failure.check(actual == expected, TextInvariant())
+  core@1/failure.check(std@1/html_tokenizer.next(mut z, cdata) == Ok(None()), TextInvariant())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  // 0: additional
+  check("<p a=/><p a=//><p a=\"/\"/><p a=x a=/><p a=x a=\"\"/>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "/")]), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 7, end: 15), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "//")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 15, end: 25), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "/")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 25, end: 36), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "x")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 36, end: 49), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "x")])])
+  // 1: additional
+  check("<p a=/><p a=//><p a=\"/\"/><p a=x a=/><p a=x a=\"\"/>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "/")]), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 7, end: 15), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "//")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 15, end: 25), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "/")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 25, end: 36), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "x")]), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 36, end: 49), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "x")])])
+  // 2: additional
+  check("<P A=\"first\" a=\"second\" B=three></P ignored=1>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 32), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "first"), std@1/html_tokenizer.Attribute(key: "b", value: "three")]), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 32, end: 46), data: "p", attributes: [])])
+  // 3: additional
+  check("<P A=\"first\" a=\"second\" B=three></P ignored=1>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 32), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "first"), std@1/html_tokenizer.Attribute(key: "b", value: "three")]), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 32, end: 46), data: "p", attributes: [])])
+  // 4: additional
+  check("<p a\u{0}=1 a�=2 A\u{0}=3>\u{0}</p>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 20), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a�", value: "1"), std@1/html_tokenizer.Attribute(key: "a�", value: "2")]), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 20, end: 21), data: "\u{0}", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 21, end: 25), data: "p", attributes: [])])
+  // 5: additional
+  check("<p a\u{0}=1 a�=2 A\u{0}=3>\u{0}</p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 20), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a�", value: "1"), std@1/html_tokenizer.Attribute(key: "a�", value: "2")]), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 20, end: 21), data: "\u{0}", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 21, end: 25), data: "p", attributes: [])])
+  // 6: additional
+  check("é😀\r\n雪\r<İ Aİ=I></İ>", false, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 22), data: "é😀\n雪\n<İ Aİ=I>", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 22, end: 27), data: "İ", attributes: [])])
+  // 7: additional
+  check("é😀\r\n雪\r<İ Aİ=I></İ>", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 22), data: "é😀\n雪\n<İ Aİ=I>", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 22, end: 27), data: "İ", attributes: [])])
+  // 8: additional
+  check("&#0; &#xD800; &#1114112; &#x110000; &#99999999999999999999999; &#x80; &#x9F; &#13; &#x;", false, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 87), data: "� � � � � € Ÿ \r &#x;", attributes: [])])
+  // 9: additional
+  check("&#0; &#xD800; &#1114112; &#x110000; &#99999999999999999999999; &#x80; &#x9F; &#13; &#x;", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 87), data: "� � � � � € Ÿ \r &#x;", attributes: [])])
+  // 10: additional
+  check("&notit; &notin; &ampx &amp= &copy &NotEqualTilde; &acE; &nparsl; &CounterClockwiseContourIntegral;", false, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 98), data: "¬it; ∉ &x &= © ≂̸ ∾̳ ⫽⃥ ∳", attributes: [])])
+  // 11: additional
+  check("&notit; &notin; &ampx &amp= &copy &NotEqualTilde; &acE; &nparsl; &CounterClockwiseContourIntegral;", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 98), data: "¬it; ∉ &x &= © ≂̸ ∾̳ ⫽⃥ ∳", attributes: [])])
+  // 12: additional
+  check("<a x=\"&notit; &notin; &ampx &amp= &amp;= &copy &copy! &copy= &#13;\">", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 68), data: "a", attributes: [std@1/html_tokenizer.Attribute(key: "x", value: "&notit; ∉ &ampx &amp= &= © ©! &copy= \r")])])
+  // 13: additional
+  check("<a x=\"&notit; &notin; &ampx &amp= &amp;= &copy &copy! &copy= &#13;\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 68), data: "a", attributes: [std@1/html_tokenizer.Attribute(key: "x", value: "&notit; ∉ &ampx &amp= &= © ©! &copy= \r")])])
+  // 14: additional
+  check("<!--&amp;\u{0}\r\n--><!DOCTYPE html PUBLIC \"&amp;\u{0}\r\n\">", false, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 15), data: "&�\n", attributes: []), std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 15, end: 48), data: "html PUBLIC \"&\u{0}\n\"", attributes: [])])
+  // 15: additional
+  check("<!--&amp;\u{0}\r\n--><!DOCTYPE html PUBLIC \"&amp;\u{0}\r\n\">", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 15), data: "&�\n", attributes: []), std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 15, end: 48), data: "html PUBLIC \"&\u{0}\n\"", attributes: [])])
+  // 16: additional
+  check("<![CDATA[&amp;\u{0}\r\n<tag>]]>after", false, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 22), data: "[CDATA[&�\n<tag", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 22, end: 30), data: "]]>after", attributes: [])])
+  // 17: additional
+  check("<![CDATA[&amp;\u{0}\r\n<tag>]]>after", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 25), data: "&�\n<tag>", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 25, end: 30), data: "after", attributes: [])])
+  // 18: additional
+  check("<script><!--<script>inner</script>still--></script><p>end", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 42), data: "<!--<script>inner</script>still-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 42, end: 51), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 51, end: 54), data: "p", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 54, end: 57), data: "end", attributes: [])])
+  // 19: additional
+  check("<script><!--<script>inner</script>still--></script><p>end", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 42), data: "<!--<script>inner</script>still-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 42, end: 51), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 51, end: 54), data: "p", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 54, end: 57), data: "end", attributes: [])])
+  // 20: additional
+  check("<script><!--<ScRiPt/>inner</script >still--></script>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 44), data: "<!--<ScRiPt/>inner</script >still-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 44, end: 53), data: "script", attributes: [])])
+  // 21: additional
+  check("<script><!--<ScRiPt/>inner</script >still--></script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 44), data: "<!--<ScRiPt/>inner</script >still-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 44, end: 53), data: "script", attributes: [])])
+  // 22: additional
+  check("<script><!--<x>--!< /script>--></script>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 31), data: "<!--<x>--!< /script>-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 31, end: 40), data: "script", attributes: [])])
+  // 23: additional
+  check("<script><!--<x>--!< /script>--></script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 31), data: "<!--<x>--!< /script>-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 31, end: 40), data: "script", attributes: [])])
+  // 24: additional
+  check("<script/>x</script><style/>x</style>", false, false, [std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 9, end: 10), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 10, end: 19), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 19, end: 27), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 27, end: 28), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 28, end: 36), data: "style", attributes: [])])
+  // 25: additional
+  check("<script/>x</script><style/>x</style>", true, false, [std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 9, end: 10), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 10, end: 19), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 19, end: 27), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 27, end: 28), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 28, end: 36), data: "style", attributes: [])])
+  // 26: additional
+  check("<style>\u{0}\r\n&amp;<p></STYLE><textarea>\u{0}\r\n&amp;<p></textarea>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 18), data: "�\n&amp;<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 18, end: 26), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 26, end: 36), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 36, end: 47), data: "�\n&<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 47, end: 58), data: "textarea", attributes: [])])
+  // 27: additional
+  check("<style>\u{0}\r\n&amp;<p></STYLE><textarea>\u{0}\r\n&amp;<p></textarea>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 18), data: "�\n&amp;<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 18, end: 26), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 26, end: 36), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 36, end: 47), data: "�\n&<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 47, end: 58), data: "textarea", attributes: [])])
+  // 28: additional
+  check("<title>&notit;<b></title><iframe>x</iframe><noembed>y</noembed><noframes>z</noframes>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 17), data: "¬it;<b>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 17, end: 25), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 25, end: 33), data: "iframe", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 33, end: 34), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 34, end: 43), data: "iframe", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 43, end: 52), data: "noembed", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 52, end: 53), data: "y", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 53, end: 63), data: "noembed", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 63, end: 73), data: "noframes", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 73, end: 74), data: "z", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 74, end: 85), data: "noframes", attributes: [])])
+  // 29: additional
+  check("<title>&notit;<b></title><iframe>x</iframe><noembed>y</noembed><noframes>z</noframes>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 17), data: "¬it;<b>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 17, end: 25), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 25, end: 33), data: "iframe", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 33, end: 34), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 34, end: 43), data: "iframe", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 43, end: 52), data: "noembed", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 52, end: 53), data: "y", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 53, end: 63), data: "noembed", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 63, end: 73), data: "noframes", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 73, end: 74), data: "z", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 74, end: 85), data: "noframes", attributes: [])])
+  // 30: additional
+  check("<noscript>&amp;<p></noscript><xmp>x</xmp><plaintext>\u{0}&amp;<b></plaintext>", false, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "noscript", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 18), data: "&amp;<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 18, end: 29), data: "noscript", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 29, end: 34), data: "xmp", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 34, end: 35), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 35, end: 41), data: "xmp", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 41, end: 52), data: "plaintext", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 52, end: 73), data: "�&amp;<b></plaintext>", attributes: [])])
+  // 31: additional
+  check("<noscript>&amp;<p></noscript><xmp>x</xmp><plaintext>\u{0}&amp;<b></plaintext>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "noscript", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 18), data: "&amp;<p>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 18, end: 29), data: "noscript", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 29, end: 34), data: "xmp", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 34, end: 35), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 35, end: 41), data: "xmp", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 41, end: 52), data: "plaintext", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 52, end: 73), data: "�&amp;<b></plaintext>", attributes: [])])
+  // 32: foreign raw override
+  check("<svg><title><b>x</b></title></svg>", true, true, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "svg", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 5, end: 12), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 12, end: 15), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 15, end: 16), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 16, end: 20), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 20, end: 28), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 28, end: 34), data: "svg", attributes: [])])
+  // 33: EOF prefix
+  check("", true, false, [])
+  // 34: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 35: EOF prefix
+  check("<p", true, false, [])
+  // 36: EOF prefix
+  check("<p ", true, false, [])
+  // 37: EOF prefix
+  check("<p a", true, false, [])
+  // 38: EOF prefix
+  check("<p ab", true, false, [])
+  // 39: EOF prefix
+  check("<p abc", true, false, [])
+  // 40: EOF prefix
+  check("<p abc=", true, false, [])
+  // 41: EOF prefix
+  check("<p abc=\"", true, false, [])
+  // 42: EOF prefix
+  check("<p abc=\"q", true, false, [])
+  // 43: EOF prefix
+  check("<p abc=\"qu", true, false, [])
+  // 44: EOF prefix
+  check("<p abc=\"quo", true, false, [])
+  // 45: EOF prefix
+  check("<p abc=\"quot", true, false, [])
+  // 46: EOF prefix
+  check("<p abc=\"quote", true, false, [])
+  // 47: EOF prefix
+  check("<p abc=\"quoted", true, false, [])
+  // 48: EOF prefix
+  check("<p abc=\"quoted\"", true, false, [])
+  // 49: EOF prefix
+  check("<p abc=\"quoted\" ", true, false, [])
+  // 50: EOF prefix
+  check("<p abc=\"quoted\" s", true, false, [])
+  // 51: EOF prefix
+  check("<p abc=\"quoted\" si", true, false, [])
+  // 52: EOF prefix
+  check("<p abc=\"quoted\" sin", true, false, [])
+  // 53: EOF prefix
+  check("<p abc=\"quoted\" sing", true, false, [])
+  // 54: EOF prefix
+  check("<p abc=\"quoted\" singl", true, false, [])
+  // 55: EOF prefix
+  check("<p abc=\"quoted\" single", true, false, [])
+  // 56: EOF prefix
+  check("<p abc=\"quoted\" single=", true, false, [])
+  // 57: EOF prefix
+  check("<p abc=\"quoted\" single='", true, false, [])
+  // 58: EOF prefix
+  check("<p abc=\"quoted\" single='x", true, false, [])
+  // 59: EOF prefix
+  check("<p abc=\"quoted\" single='x'", true, false, [])
+  // 60: EOF prefix
+  check("<p abc=\"quoted\" single='x' ", true, false, [])
+  // 61: EOF prefix
+  check("<p abc=\"quoted\" single='x' u", true, false, [])
+  // 62: EOF prefix
+  check("<p abc=\"quoted\" single='x' un", true, false, [])
+  // 63: EOF prefix
+  check("<p abc=\"quoted\" single='x' unq", true, false, [])
+  // 64: EOF prefix
+  check("<p abc=\"quoted\" single='x' unqu", true, false, [])
+  // 65: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquo", true, false, [])
+  // 66: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquot", true, false, [])
+  // 67: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquote", true, false, [])
+  // 68: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquoted", true, false, [])
+  // 69: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquoted=", true, false, [])
+  // 70: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquoted=y", true, false, [])
+  // 71: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquoted=y/", true, false, [])
+  // 72: EOF prefix
+  check("<p abc=\"quoted\" single='x' unquoted=y/>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 39), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "abc", value: "quoted"), std@1/html_tokenizer.Attribute(key: "single", value: "x"), std@1/html_tokenizer.Attribute(key: "unquoted", value: "y/")])])
+  // 73: EOF prefix
+  check("", true, false, [])
+  // 74: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 75: EOF prefix
+  check("<!", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 2), data: "", attributes: [])])
+  // 76: EOF prefix
+  check("<!D", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "D", attributes: [])])
+  // 77: EOF prefix
+  check("<!DO", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 4), data: "DO", attributes: [])])
+  // 78: EOF prefix
+  check("<!DOC", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "DOC", attributes: [])])
+  // 79: EOF prefix
+  check("<!DOCT", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "DOCT", attributes: [])])
+  // 80: EOF prefix
+  check("<!DOCTY", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "DOCTY", attributes: [])])
+  // 81: EOF prefix
+  check("<!DOCTYP", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "DOCTYP", attributes: [])])
+  // 82: EOF prefix
+  check("<!DOCTYPE", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "", attributes: [])])
+  // 83: EOF prefix
+  check("<!DOCTYPE ", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "", attributes: [])])
+  // 84: EOF prefix
+  check("<!DOCTYPE h", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 11), data: "h", attributes: [])])
+  // 85: EOF prefix
+  check("<!DOCTYPE ht", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 12), data: "ht", attributes: [])])
+  // 86: EOF prefix
+  check("<!DOCTYPE htm", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 13), data: "htm", attributes: [])])
+  // 87: EOF prefix
+  check("<!DOCTYPE html", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 14), data: "html", attributes: [])])
+  // 88: EOF prefix
+  check("<!DOCTYPE html>", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 15), data: "html", attributes: [])])
+  // 89: EOF prefix
+  check("", true, false, [])
+  // 90: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 91: EOF prefix
+  check("<!", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 2), data: "", attributes: [])])
+  // 92: EOF prefix
+  check("<![", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "[", attributes: [])])
+  // 93: EOF prefix
+  check("<![C", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 4), data: "[C", attributes: [])])
+  // 94: EOF prefix
+  check("<![CD", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "[CD", attributes: [])])
+  // 95: EOF prefix
+  check("<![CDA", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "[CDA", attributes: [])])
+  // 96: EOF prefix
+  check("<![CDAT", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "[CDAT", attributes: [])])
+  // 97: EOF prefix
+  check("<![CDATA", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "[CDATA", attributes: [])])
+  // 98: EOF prefix
+  check("<![CDATA[", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "", attributes: [])])
+  // 99: EOF prefix
+  check("<![CDATA[x", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "x", attributes: [])])
+  // 100: EOF prefix
+  check("<![CDATA[x]", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 11), data: "x]", attributes: [])])
+  // 101: EOF prefix
+  check("<![CDATA[x]]", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 12), data: "x]]", attributes: [])])
+  // 102: EOF prefix
+  check("<![CDATA[x]]>", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 13), data: "x", attributes: [])])
+  // 103: EOF prefix
+  check("", true, false, [])
+  // 104: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 105: EOF prefix
+  check("<!", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 2), data: "", attributes: [])])
+  // 106: EOF prefix
+  check("<!-", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "-", attributes: [])])
+  // 107: EOF prefix
+  check("<!--", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 4), data: "", attributes: [])])
+  // 108: EOF prefix
+  check("<!--x", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "x", attributes: [])])
+  // 109: EOF prefix
+  check("<!--x-", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "x", attributes: [])])
+  // 110: EOF prefix
+  check("<!--x--", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "x", attributes: [])])
+  // 111: EOF prefix
+  check("<!--x--!", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "x", attributes: [])])
+  // 112: EOF prefix
+  check("<!--x--!>", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "x", attributes: [])])
+  // 113: EOF prefix
+  check("", true, false, [])
+  // 114: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 115: EOF prefix
+  check("<s", true, false, [])
+  // 116: EOF prefix
+  check("<sc", true, false, [])
+  // 117: EOF prefix
+  check("<scr", true, false, [])
+  // 118: EOF prefix
+  check("<scri", true, false, [])
+  // 119: EOF prefix
+  check("<scrip", true, false, [])
+  // 120: EOF prefix
+  check("<script", true, false, [])
+  // 121: EOF prefix
+  check("<script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: [])])
+  // 122: EOF prefix
+  check("<script><", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "<", attributes: [])])
+  // 123: EOF prefix
+  check("<script><!", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 10), data: "<!", attributes: [])])
+  // 124: EOF prefix
+  check("<script><!-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 11), data: "<!-", attributes: [])])
+  // 125: EOF prefix
+  check("<script><!--", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 12), data: "<!--", attributes: [])])
+  // 126: EOF prefix
+  check("<script><!--<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 13), data: "<!--<", attributes: [])])
+  // 127: EOF prefix
+  check("<script><!--<s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 14), data: "<!--<s", attributes: [])])
+  // 128: EOF prefix
+  check("<script><!--<sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 15), data: "<!--<sc", attributes: [])])
+  // 129: EOF prefix
+  check("<script><!--<scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 16), data: "<!--<scr", attributes: [])])
+  // 130: EOF prefix
+  check("<script><!--<scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 17), data: "<!--<scri", attributes: [])])
+  // 131: EOF prefix
+  check("<script><!--<scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 18), data: "<!--<scrip", attributes: [])])
+  // 132: EOF prefix
+  check("<script><!--<script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 19), data: "<!--<script", attributes: [])])
+  // 133: EOF prefix
+  check("<script><!--<script ", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 20), data: "<!--<script ", attributes: [])])
+  // 134: EOF prefix
+  check("<script><!--<script >", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 21), data: "<!--<script >", attributes: [])])
+  // 135: EOF prefix
+  check("<script><!--<script >x", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 22), data: "<!--<script >x", attributes: [])])
+  // 136: EOF prefix
+  check("<script><!--<script >x<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 23), data: "<!--<script >x<", attributes: [])])
+  // 137: EOF prefix
+  check("<script><!--<script >x</", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 24), data: "<!--<script >x</", attributes: [])])
+  // 138: EOF prefix
+  check("<script><!--<script >x</s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 25), data: "<!--<script >x</s", attributes: [])])
+  // 139: EOF prefix
+  check("<script><!--<script >x</sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 26), data: "<!--<script >x</sc", attributes: [])])
+  // 140: EOF prefix
+  check("<script><!--<script >x</scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 27), data: "<!--<script >x</scr", attributes: [])])
+  // 141: EOF prefix
+  check("<script><!--<script >x</scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 28), data: "<!--<script >x</scri", attributes: [])])
+  // 142: EOF prefix
+  check("<script><!--<script >x</scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 29), data: "<!--<script >x</scrip", attributes: [])])
+  // 143: EOF prefix
+  check("<script><!--<script >x</script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 30), data: "<!--<script >x</script", attributes: [])])
+  // 144: EOF prefix
+  check("<script><!--<script >x</script ", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 31), data: "<!--<script >x</script ", attributes: [])])
+  // 145: EOF prefix
+  check("<script><!--<script >x</script >", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 32), data: "<!--<script >x</script >", attributes: [])])
+  // 146: EOF prefix
+  check("<script><!--<script >x</script >-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 33), data: "<!--<script >x</script >-", attributes: [])])
+  // 147: EOF prefix
+  check("<script><!--<script >x</script >--", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 34), data: "<!--<script >x</script >--", attributes: [])])
+  // 148: EOF prefix
+  check("<script><!--<script >x</script >-->", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 35), data: "<!--<script >x</script >-->", attributes: [])])
+  // 149: EOF prefix
+  check("<script><!--<script >x</script >--><", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 36), data: "<!--<script >x</script >--><", attributes: [])])
+  // 150: EOF prefix
+  check("<script><!--<script >x</script >--></", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 37), data: "<!--<script >x</script >--></", attributes: [])])
+  // 151: EOF prefix
+  check("<script><!--<script >x</script >--></s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 38), data: "<!--<script >x</script >--></s", attributes: [])])
+  // 152: EOF prefix
+  check("<script><!--<script >x</script >--></sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 39), data: "<!--<script >x</script >--></sc", attributes: [])])
+  // 153: EOF prefix
+  check("<script><!--<script >x</script >--></scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 40), data: "<!--<script >x</script >--></scr", attributes: [])])
+  // 154: EOF prefix
+  check("<script><!--<script >x</script >--></scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 41), data: "<!--<script >x</script >--></scri", attributes: [])])
+  // 155: EOF prefix
+  check("<script><!--<script >x</script >--></scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 42), data: "<!--<script >x</script >--></scrip", attributes: [])])
+  // 156: EOF prefix
+  check("<script><!--<script >x</script >--></script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 43), data: "<!--<script >x</script >--></script", attributes: [])])
+  // 157: EOF prefix
+  check("<script><!--<script >x</script >--></script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 35), data: "<!--<script >x</script >-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 35, end: 44), data: "script", attributes: [])])
+  // 158: EOF prefix
+  check("", true, false, [])
+  // 159: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 160: EOF prefix
+  check("<s", true, false, [])
+  // 161: EOF prefix
+  check("<sc", true, false, [])
+  // 162: EOF prefix
+  check("<scr", true, false, [])
+  // 163: EOF prefix
+  check("<scri", true, false, [])
+  // 164: EOF prefix
+  check("<scrip", true, false, [])
+  // 165: EOF prefix
+  check("<script", true, false, [])
+  // 166: EOF prefix
+  check("<script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: [])])
+  // 167: EOF prefix
+  check("<script><", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "<", attributes: [])])
+  // 168: EOF prefix
+  check("<script><!", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 10), data: "<!", attributes: [])])
+  // 169: EOF prefix
+  check("<script><!-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 11), data: "<!-", attributes: [])])
+  // 170: EOF prefix
+  check("<script><!--", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 12), data: "<!--", attributes: [])])
+  // 171: EOF prefix
+  check("<script><!--<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 13), data: "<!--<", attributes: [])])
+  // 172: EOF prefix
+  check("<script><!--<s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 14), data: "<!--<s", attributes: [])])
+  // 173: EOF prefix
+  check("<script><!--<sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 15), data: "<!--<sc", attributes: [])])
+  // 174: EOF prefix
+  check("<script><!--<scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 16), data: "<!--<scr", attributes: [])])
+  // 175: EOF prefix
+  check("<script><!--<scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 17), data: "<!--<scri", attributes: [])])
+  // 176: EOF prefix
+  check("<script><!--<scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 18), data: "<!--<scrip", attributes: [])])
+  // 177: EOF prefix
+  check("<script><!--<script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 19), data: "<!--<script", attributes: [])])
+  // 178: EOF prefix
+  check("<script><!--<script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 20), data: "<!--<script>", attributes: [])])
+  // 179: EOF prefix
+  check("<script><!--<script>-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 21), data: "<!--<script>-", attributes: [])])
+  // 180: EOF prefix
+  check("<script><!--<script>--", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 22), data: "<!--<script>--", attributes: [])])
+  // 181: EOF prefix
+  check("<script><!--<script>--<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 23), data: "<!--<script>--<", attributes: [])])
+  // 182: EOF prefix
+  check("<script><!--<script>--<x", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 24), data: "<!--<script>--<x", attributes: [])])
+  // 183: EOF prefix
+  check("<script><!--<script>--<x>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 25), data: "<!--<script>--<x>", attributes: [])])
+  // 184: EOF prefix
+  check("<script><!--<script>--<x>-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 26), data: "<!--<script>--<x>-", attributes: [])])
+  // 185: EOF prefix
+  check("<script><!--<script>--<x>-x", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 27), data: "<!--<script>--<x>-x", attributes: [])])
+  // 186: EOF prefix
+  check("<script><!--<script>--<x>-x<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 28), data: "<!--<script>--<x>-x<", attributes: [])])
+  // 187: EOF prefix
+  check("<script><!--<script>--<x>-x</", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 29), data: "<!--<script>--<x>-x</", attributes: [])])
+  // 188: EOF prefix
+  check("<script><!--<script>--<x>-x</s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 30), data: "<!--<script>--<x>-x</s", attributes: [])])
+  // 189: EOF prefix
+  check("<script><!--<script>--<x>-x</sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 31), data: "<!--<script>--<x>-x</sc", attributes: [])])
+  // 190: EOF prefix
+  check("<script><!--<script>--<x>-x</scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 32), data: "<!--<script>--<x>-x</scr", attributes: [])])
+  // 191: EOF prefix
+  check("<script><!--<script>--<x>-x</scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 33), data: "<!--<script>--<x>-x</scri", attributes: [])])
+  // 192: EOF prefix
+  check("<script><!--<script>--<x>-x</scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 34), data: "<!--<script>--<x>-x</scrip", attributes: [])])
+  // 193: EOF prefix
+  check("<script><!--<script>--<x>-x</script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 35), data: "<!--<script>--<x>-x</script", attributes: [])])
+  // 194: EOF prefix
+  check("<script><!--<script>--<x>-x</script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 36), data: "<!--<script>--<x>-x</script>", attributes: [])])
+  // 195: EOF prefix
+  check("<script><!--<script>--<x>-x</script>-", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 37), data: "<!--<script>--<x>-x</script>-", attributes: [])])
+  // 196: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 38), data: "<!--<script>--<x>-x</script>--", attributes: [])])
+  // 197: EOF prefix
+  check("<script><!--<script>--<x>-x</script>-->", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 39), data: "<!--<script>--<x>-x</script>-->", attributes: [])])
+  // 198: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--><", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 40), data: "<!--<script>--<x>-x</script>--><", attributes: [])])
+  // 199: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 41), data: "<!--<script>--<x>-x</script>--></", attributes: [])])
+  // 200: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 42), data: "<!--<script>--<x>-x</script>--></s", attributes: [])])
+  // 201: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></sc", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 43), data: "<!--<script>--<x>-x</script>--></sc", attributes: [])])
+  // 202: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></scr", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 44), data: "<!--<script>--<x>-x</script>--></scr", attributes: [])])
+  // 203: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></scri", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 45), data: "<!--<script>--<x>-x</script>--></scri", attributes: [])])
+  // 204: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></scrip", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 46), data: "<!--<script>--<x>-x</script>--></scrip", attributes: [])])
+  // 205: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></script", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 47), data: "<!--<script>--<x>-x</script>--></script", attributes: [])])
+  // 206: EOF prefix
+  check("<script><!--<script>--<x>-x</script>--></script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 39), data: "<!--<script>--<x>-x</script>-->", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 39, end: 48), data: "script", attributes: [])])
+  // 207: EOF prefix
+  check("", true, false, [])
+  // 208: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 209: EOF prefix
+  check("<s", true, false, [])
+  // 210: EOF prefix
+  check("<st", true, false, [])
+  // 211: EOF prefix
+  check("<sty", true, false, [])
+  // 212: EOF prefix
+  check("<styl", true, false, [])
+  // 213: EOF prefix
+  check("<style", true, false, [])
+  // 214: EOF prefix
+  check("<style>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: [])])
+  // 215: EOF prefix
+  check("<style>x", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 8), data: "x", attributes: [])])
+  // 216: EOF prefix
+  check("<style>x<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 9), data: "x<", attributes: [])])
+  // 217: EOF prefix
+  check("<style>x</", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 10), data: "x</", attributes: [])])
+  // 218: EOF prefix
+  check("<style>x</s", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 11), data: "x</s", attributes: [])])
+  // 219: EOF prefix
+  check("<style>x</st", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 12), data: "x</st", attributes: [])])
+  // 220: EOF prefix
+  check("<style>x</sty", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 13), data: "x</sty", attributes: [])])
+  // 221: EOF prefix
+  check("<style>x</styl", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 14), data: "x</styl", attributes: [])])
+  // 222: EOF prefix
+  check("<style>x</style", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 15), data: "x</style", attributes: [])])
+  // 223: EOF prefix
+  check("<style>x</style>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 8), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 8, end: 16), data: "style", attributes: [])])
+  // 224: EOF prefix
+  check("", true, false, [])
+  // 225: EOF prefix
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 226: EOF prefix
+  check("<t", true, false, [])
+  // 227: EOF prefix
+  check("<te", true, false, [])
+  // 228: EOF prefix
+  check("<tex", true, false, [])
+  // 229: EOF prefix
+  check("<text", true, false, [])
+  // 230: EOF prefix
+  check("<texta", true, false, [])
+  // 231: EOF prefix
+  check("<textar", true, false, [])
+  // 232: EOF prefix
+  check("<textare", true, false, [])
+  // 233: EOF prefix
+  check("<textarea", true, false, [])
+  // 234: EOF prefix
+  check("<textarea>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: [])])
+  // 235: EOF prefix
+  check("<textarea>&", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 11), data: "&", attributes: [])])
+  // 236: EOF prefix
+  check("<textarea>&a", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 12), data: "&a", attributes: [])])
+  // 237: EOF prefix
+  check("<textarea>&am", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 13), data: "&am", attributes: [])])
+  // 238: EOF prefix
+  check("<textarea>&amp", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 14), data: "&", attributes: [])])
+  // 239: EOF prefix
+  check("<textarea>&amp;", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 15), data: "&", attributes: [])])
+  // 240: EOF prefix
+  check("<textarea>&amp;<", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 16), data: "&<", attributes: [])])
+  // 241: EOF prefix
+  check("<textarea>&amp;</", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 17), data: "&</", attributes: [])])
+  // 242: EOF prefix
+  check("<textarea>&amp;</t", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 18), data: "&</t", attributes: [])])
+  // 243: EOF prefix
+  check("<textarea>&amp;</te", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 19), data: "&</te", attributes: [])])
+  // 244: EOF prefix
+  check("<textarea>&amp;</tex", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 20), data: "&</tex", attributes: [])])
+  // 245: EOF prefix
+  check("<textarea>&amp;</text", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 21), data: "&</text", attributes: [])])
+  // 246: EOF prefix
+  check("<textarea>&amp;</texta", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 22), data: "&</texta", attributes: [])])
+  // 247: EOF prefix
+  check("<textarea>&amp;</textar", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 23), data: "&</textar", attributes: [])])
+  // 248: EOF prefix
+  check("<textarea>&amp;</textare", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 24), data: "&</textare", attributes: [])])
+  // 249: EOF prefix
+  check("<textarea>&amp;</textarea", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 25), data: "&</textarea", attributes: [])])
+  // 250: EOF prefix
+  check("<textarea>&amp;</textarea>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 15), data: "&", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 15, end: 26), data: "textarea", attributes: [])])
+  // 251: all 2231 named references
+  check("&AElig||&AElig;||&AMP||&AMP;||&Aacute||&Aacute;||&Abreve;||&Acirc||&Acirc;||&Acy;||&Afr;||&Agrave||&Agrave;||&Alpha;||&Amacr;||&And;||&Aogon;||&Aopf;||&ApplyFunction;||&Aring||&Aring;||&Ascr;||&Assign;||&Atilde||&Atilde;||&Auml||&Auml;||&Backslash;||&Barv;||&Barwed;||&Bcy;||&Because;||&Bernoullis;||&Beta;||&Bfr;||&Bopf;||&Breve;||&Bscr;||&Bumpeq;||&CHcy;||&COPY||&COPY;||&Cacute;||&Cap;||&CapitalDifferentialD;||&Cayleys;||&Ccaron;||&Ccedil||&Ccedil;||&Ccirc;||&Cconint;||&Cdot;||&Cedilla;||&CenterDot;||&Cfr;||&Chi;||&CircleDot;||&CircleMinus;||&CirclePlus;||&CircleTimes;||&ClockwiseContourIntegral;||&CloseCurlyDoubleQuote;||&CloseCurlyQuote;||&Colon;||&Colone;||&Congruent;||&Conint;||&ContourIntegral;||&Copf;||&Coproduct;||&CounterClockwiseContourIntegral;||&Cross;||&Cscr;||&Cup;||&CupCap;||&DD;||&DDotrahd;||&DJcy;||&DScy;||&DZcy;||&Dagger;||&Darr;||&Dashv;||&Dcaron;||&Dcy;||&Del;||&Delta;||&Dfr;||&DiacriticalAcute;||&DiacriticalDot;||&DiacriticalDoubleAcute;||&DiacriticalGrave;||&DiacriticalTilde;||&Diamond;||&DifferentialD;||&Dopf;||&Dot;||&DotDot;||&DotEqual;||&DoubleContourIntegral;||&DoubleDot;||&DoubleDownArrow;||&DoubleLeftArrow;||&DoubleLeftRightArrow;||&DoubleLeftTee;||&DoubleLongLeftArrow;||&DoubleLongLeftRightArrow;||&DoubleLongRightArrow;||&DoubleRightArrow;||&DoubleRightTee;||&DoubleUpArrow;||&DoubleUpDownArrow;||&DoubleVerticalBar;||&DownArrow;||&DownArrowBar;||&DownArrowUpArrow;||&DownBreve;||&DownLeftRightVector;||&DownLeftTeeVector;||&DownLeftVector;||&DownLeftVectorBar;||&DownRightTeeVector;||&DownRightVector;||&DownRightVectorBar;||&DownTee;||&DownTeeArrow;||&Downarrow;||&Dscr;||&Dstrok;||&ENG;||&ETH||&ETH;||&Eacute||&Eacute;||&Ecaron;||&Ecirc||&Ecirc;||&Ecy;||&Edot;||&Efr;||&Egrave||&Egrave;||&Element;||&Emacr;||&EmptySmallSquare;||&EmptyVerySmallSquare;||&Eogon;||&Eopf;||&Epsilon;||&Equal;||&EqualTilde;||&Equilibrium;||&Escr;||&Esim;||&Eta;||&Euml||&Euml;||&Exists;||&ExponentialE;||&Fcy;||&Ffr;||&FilledSmallSquare;||&FilledVerySmallSquare;||&Fopf;||&ForAll;||&Fouriertrf;||&Fscr;||&GJcy;||&GT||&GT;||&Gamma;||&Gammad;||&Gbreve;||&Gcedil;||&Gcirc;||&Gcy;||&Gdot;||&Gfr;||&Gg;||&Gopf;||&GreaterEqual;||&GreaterEqualLess;||&GreaterFullEqual;||&GreaterGreater;||&GreaterLess;||&GreaterSlantEqual;||&GreaterTilde;||&Gscr;||&Gt;||&HARDcy;||&Hacek;||&Hat;||&Hcirc;||&Hfr;||&HilbertSpace;||&Hopf;||&HorizontalLine;||&Hscr;||&Hstrok;||&HumpDownHump;||&HumpEqual;||&IEcy;||&IJlig;||&IOcy;||&Iacute||&Iacute;||&Icirc||&Icirc;||&Icy;||&Idot;||&Ifr;||&Igrave||&Igrave;||&Im;||&Imacr;||&ImaginaryI;||&Implies;||&Int;||&Integral;||&Intersection;||&InvisibleComma;||&InvisibleTimes;||&Iogon;||&Iopf;||&Iota;||&Iscr;||&Itilde;||&Iukcy;||&Iuml||&Iuml;||&Jcirc;||&Jcy;||&Jfr;||&Jopf;||&Jscr;||&Jsercy;||&Jukcy;||&KHcy;||&KJcy;||&Kappa;||&Kcedil;||&Kcy;||&Kfr;||&Kopf;||&Kscr;||&LJcy;||&LT||&LT;||&Lacute;||&Lambda;||&Lang;||&Laplacetrf;||&Larr;||&Lcaron;||&Lcedil;||&Lcy;||&LeftAngleBracket;||&LeftArrow;||&LeftArrowBar;||&LeftArrowRightArrow;||&LeftCeiling;||&LeftDoubleBracket;||&LeftDownTeeVector;||&LeftDownVector;||&LeftDownVectorBar;||&LeftFloor;||&LeftRightArrow;||&LeftRightVector;||&LeftTee;||&LeftTeeArrow;||&LeftTeeVector;||&LeftTriangle;||&LeftTriangleBar;||&LeftTriangleEqual;||&LeftUpDownVector;||&LeftUpTeeVector;||&LeftUpVector;||&LeftUpVectorBar;||&LeftVector;||&LeftVectorBar;||&Leftarrow;||&Leftrightarrow;||&LessEqualGreater;||&LessFullEqual;||&LessGreater;||&LessLess;||&LessSlantEqual;||&LessTilde;||&Lfr;||&Ll;||&Lleftarrow;||&Lmidot;||&LongLeftArrow;||&LongLeftRightArrow;||&LongRightArrow;||&Longleftarrow;||&Longleftrightarrow;||&Longrightarrow;||&Lopf;||&LowerLeftArrow;||&LowerRightArrow;||&Lscr;||&Lsh;||&Lstrok;||&Lt;||&Map;||&Mcy;||&MediumSpace;||&Mellintrf;||&Mfr;||&MinusPlus;||&Mopf;||&Mscr;||&Mu;||&NJcy;||&Nacute;||&Ncaron;||&Ncedil;||&Ncy;||&NegativeMediumSpace;||&NegativeThickSpace;||&NegativeThinSpace;||&NegativeVeryThinSpace;||&NestedGreaterGreater;||&NestedLessLess;||&NewLine;||&Nfr;||&NoBreak;||&NonBreakingSpace;||&Nopf;||&Not;||&NotCongruent;||&NotCupCap;||&NotDoubleVerticalBar;||&NotElement;||&NotEqual;||&NotEqualTilde;||&NotExists;||&NotGreater;||&NotGreaterEqual;||&NotGreaterFullEqual;||&NotGreaterGreater;||&NotGreaterLess;||&NotGreaterSlantEqual;||&NotGreaterTilde;||&NotHumpDownHump;||&NotHumpEqual;||&NotLeftTriangle;||&NotLeftTriangleBar;||&NotLeftTriangleEqual;||&NotLess;||&NotLessEqual;||&NotLessGreater;||&NotLessLess;||&NotLessSlantEqual;||&NotLessTilde;||&NotNestedGreaterGreater;||&NotNestedLessLess;||&NotPrecedes;||&NotPrecedesEqual;||&NotPrecedesSlantEqual;||&NotReverseElement;||&NotRightTriangle;||&NotRightTriangleBar;||&NotRightTriangleEqual;||&NotSquareSubset;||&NotSquareSubsetEqual;||&NotSquareSuperset;||&NotSquareSupersetEqual;||&NotSubset;||&NotSubsetEqual;||&NotSucceeds;||&NotSucceedsEqual;||&NotSucceedsSlantEqual;||&NotSucceedsTilde;||&NotSuperset;||&NotSupersetEqual;||&NotTilde;||&NotTildeEqual;||&NotTildeFullEqual;||&NotTildeTilde;||&NotVerticalBar;||&Nscr;||&Ntilde||&Ntilde;||&Nu;||&OElig;||&Oacute||&Oacute;||&Ocirc||&Ocirc;||&Ocy;||&Odblac;||&Ofr;||&Ograve||&Ograve;||&Omacr;||&Omega;||&Omicron;||&Oopf;||&OpenCurlyDoubleQuote;||&OpenCurlyQuote;||&Or;||&Oscr;||&Oslash||&Oslash;||&Otilde||&Otilde;||&Otimes;||&Ouml||&Ouml;||&OverBar;||&OverBrace;||&OverBracket;||&OverParenthesis;||&PartialD;||&Pcy;||&Pfr;||&Phi;||&Pi;||&PlusMinus;||&Poincareplane;||&Popf;||&Pr;||&Precedes;||&PrecedesEqual;||&PrecedesSlantEqual;||&PrecedesTilde;||&Prime;||&Product;||&Proportion;||&Proportional;||&Pscr;||&Psi;||&QUOT||&QUOT;||&Qfr;||&Qopf;||&Qscr;||&RBarr;||&REG||&REG;||&Racute;||&Rang;||&Rarr;||&Rarrtl;||&Rcaron;||&Rcedil;||&Rcy;||&Re;||&ReverseElement;||&ReverseEquilibrium;||&ReverseUpEquilibrium;||&Rfr;||&Rho;||&RightAngleBracket;||&RightArrow;||&RightArrowBar;||&RightArrowLeftArrow;||&RightCeiling;||&RightDoubleBracket;||&RightDownTeeVector;||&RightDownVector;||&RightDownVectorBar;||&RightFloor;||&RightTee;||&RightTeeArrow;||&RightTeeVector;||&RightTriangle;||&RightTriangleBar;||&RightTriangleEqual;||&RightUpDownVector;||&RightUpTeeVector;||&RightUpVector;||&RightUpVectorBar;||&RightVector;||&RightVectorBar;||&Rightarrow;||&Ropf;||&RoundImplies;||&Rrightarrow;||&Rscr;||&Rsh;||&RuleDelayed;||&SHCHcy;||&SHcy;||&SOFTcy;||&Sacute;||&Sc;||&Scaron;||&Scedil;||&Scirc;||&Scy;||&Sfr;||&ShortDownArrow;||&ShortLeftArrow;||&ShortRightArrow;||&ShortUpArrow;||&Sigma;||&SmallCircle;||&Sopf;||&Sqrt;||&Square;||&SquareIntersection;||&SquareSubset;||&SquareSubsetEqual;||&SquareSuperset;||&SquareSupersetEqual;||&SquareUnion;||&Sscr;||&Star;||&Sub;||&Subset;||&SubsetEqual;||&Succeeds;||&SucceedsEqual;||&SucceedsSlantEqual;||&SucceedsTilde;||&SuchThat;||&Sum;||&Sup;||&Superset;||&SupersetEqual;||&Supset;||&THORN||&THORN;||&TRADE;||&TSHcy;||&TScy;||&Tab;||&Tau;||&Tcaron;||&Tcedil;||&Tcy;||&Tfr;||&Therefore;||&Theta;||&ThickSpace;||&ThinSpace;||&Tilde;||&TildeEqual;||&TildeFullEqual;||&TildeTilde;||&Topf;||&TripleDot;||&Tscr;||&Tstrok;||&Uacute||&Uacute;||&Uarr;||&Uarrocir;||&Ubrcy;||&Ubreve;||&Ucirc||&Ucirc;||&Ucy;||&Udblac;||&Ufr;||&Ugrave||&Ugrave;||&Umacr;||&UnderBar;||&UnderBrace;||&UnderBracket;||&UnderParenthesis;||&Union;||&UnionPlus;||&Uogon;||&Uopf;||&UpArrow;||&UpArrowBar;||&UpArrowDownArrow;||&UpDownArrow;||&UpEquilibrium;||&UpTee;||&UpTeeArrow;||&Uparrow;||&Updownarrow;||&UpperLeftArrow;||&UpperRightArrow;||&Upsi;||&Upsilon;||&Uring;||&Uscr;||&Utilde;||&Uuml||&Uuml;||&VDash;||&Vbar;||&Vcy;||&Vdash;||&Vdashl;||&Vee;||&Verbar;||&Vert;||&VerticalBar;||&VerticalLine;||&VerticalSeparator;||&VerticalTilde;||&VeryThinSpace;||&Vfr;||&Vopf;||&Vscr;||&Vvdash;||&Wcirc;||&Wedge;||&Wfr;||&Wopf;||&Wscr;||&Xfr;||&Xi;||&Xopf;||&Xscr;||&YAcy;||&YIcy;||&YUcy;||&Yacute||&Yacute;||&Ycirc;||&Ycy;||&Yfr;||&Yopf;||&Yscr;||&Yuml;||&ZHcy;||&Zacute;||&Zcaron;||&Zcy;||&Zdot;||&ZeroWidthSpace;||&Zeta;||&Zfr;||&Zopf;||&Zscr;||&aacute||&aacute;||&abreve;||&ac;||&acE;||&acd;||&acirc||&acirc;||&acute||&acute;||&acy;||&aelig||&aelig;||&af;||&afr;||&agrave||&agrave;||&alefsym;||&aleph;||&alpha;||&amacr;||&amalg;||&amp||&amp;||&and;||&andand;||&andd;||&andslope;||&andv;||&ang;||&ange;||&angle;||&angmsd;||&angmsdaa;||&angmsdab;||&angmsdac;||&angmsdad;||&angmsdae;||&angmsdaf;||&angmsdag;||&angmsdah;||&angrt;||&angrtvb;||&angrtvbd;||&angsph;||&angst;||&angzarr;||&aogon;||&aopf;||&ap;||&apE;||&apacir;||&ape;||&apid;||&apos;||&approx;||&approxeq;||&aring||&aring;||&ascr;||&ast;||&asymp;||&asympeq;||&atilde||&atilde;||&auml||&auml;||&awconint;||&awint;||&bNot;||&backcong;||&backepsilon;||&backprime;||&backsim;||&backsimeq;||&barvee;||&barwed;||&barwedge;||&bbrk;||&bbrktbrk;||&bcong;||&bcy;||&bdquo;||&becaus;||&because;||&bemptyv;||&bepsi;||&bernou;||&beta;||&beth;||&between;||&bfr;||&bigcap;||&bigcirc;||&bigcup;||&bigodot;||&bigoplus;||&bigotimes;||&bigsqcup;||&bigstar;||&bigtriangledown;||&bigtriangleup;||&biguplus;||&bigvee;||&bigwedge;||&bkarow;||&blacklozenge;||&blacksquare;||&blacktriangle;||&blacktriangledown;||&blacktriangleleft;||&blacktriangleright;||&blank;||&blk12;||&blk14;||&blk34;||&block;||&bne;||&bnequiv;||&bnot;||&bopf;||&bot;||&bottom;||&bowtie;||&boxDL;||&boxDR;||&boxDl;||&boxDr;||&boxH;||&boxHD;||&boxHU;||&boxHd;||&boxHu;||&boxUL;||&boxUR;||&boxUl;||&boxUr;||&boxV;||&boxVH;||&boxVL;||&boxVR;||&boxVh;||&boxVl;||&boxVr;||&boxbox;||&boxdL;||&boxdR;||&boxdl;||&boxdr;||&boxh;||&boxhD;||&boxhU;||&boxhd;||&boxhu;||&boxminus;||&boxplus;||&boxtimes;||&boxuL;||&boxuR;||&boxul;||&boxur;||&boxv;||&boxvH;||&boxvL;||&boxvR;||&boxvh;||&boxvl;||&boxvr;||&bprime;||&breve;||&brvbar||&brvbar;||&bscr;||&bsemi;||&bsim;||&bsime;||&bsol;||&bsolb;||&bsolhsub;||&bull;||&bullet;||&bump;||&bumpE;||&bumpe;||&bumpeq;||&cacute;||&cap;||&capand;||&capbrcup;||&capcap;||&capcup;||&capdot;||&caps;||&caret;||&caron;||&ccaps;||&ccaron;||&ccedil||&ccedil;||&ccirc;||&ccups;||&ccupssm;||&cdot;||&cedil||&cedil;||&cemptyv;||&cent||&cent;||&centerdot;||&cfr;||&chcy;||&check;||&checkmark;||&chi;||&cir;||&cirE;||&circ;||&circeq;||&circlearrowleft;||&circlearrowright;||&circledR;||&circledS;||&circledast;||&circledcirc;||&circleddash;||&cire;||&cirfnint;||&cirmid;||&cirscir;||&clubs;||&clubsuit;||&colon;||&colone;||&coloneq;||&comma;||&commat;||&comp;||&compfn;||&complement;||&complexes;||&cong;||&congdot;||&conint;||&copf;||&coprod;||&copy||&copy;||&copysr;||&crarr;||&cross;||&cscr;||&csub;||&csube;||&csup;||&csupe;||&ctdot;||&cudarrl;||&cudarrr;||&cuepr;||&cuesc;||&cularr;||&cularrp;||&cup;||&cupbrcap;||&cupcap;||&cupcup;||&cupdot;||&cupor;||&cups;||&curarr;||&curarrm;||&curlyeqprec;||&curlyeqsucc;||&curlyvee;||&curlywedge;||&curren||&curren;||&curvearrowleft;||&curvearrowright;||&cuvee;||&cuwed;||&cwconint;||&cwint;||&cylcty;||&dArr;||&dHar;||&dagger;||&daleth;||&darr;||&dash;||&dashv;||&dbkarow;||&dblac;||&dcaron;||&dcy;||&dd;||&ddagger;||&ddarr;||&ddotseq;||&deg||&deg;||&delta;||&demptyv;||&dfisht;||&dfr;||&dharl;||&dharr;||&diam;||&diamond;||&diamondsuit;||&diams;||&die;||&digamma;||&disin;||&div;||&divide||&divide;||&divideontimes;||&divonx;||&djcy;||&dlcorn;||&dlcrop;||&dollar;||&dopf;||&dot;||&doteq;||&doteqdot;||&dotminus;||&dotplus;||&dotsquare;||&doublebarwedge;||&downarrow;||&downdownarrows;||&downharpoonleft;||&downharpoonright;||&drbkarow;||&drcorn;||&drcrop;||&dscr;||&dscy;||&dsol;||&dstrok;||&dtdot;||&dtri;||&dtrif;||&duarr;||&duhar;||&dwangle;||&dzcy;||&dzigrarr;||&eDDot;||&eDot;||&eacute||&eacute;||&easter;||&ecaron;||&ecir;||&ecirc||&ecirc;||&ecolon;||&ecy;||&edot;||&ee;||&efDot;||&efr;||&eg;||&egrave||&egrave;||&egs;||&egsdot;||&el;||&elinters;||&ell;||&els;||&elsdot;||&emacr;||&empty;||&emptyset;||&emptyv;||&emsp13;||&emsp14;||&emsp;||&eng;||&ensp;||&eogon;||&eopf;||&epar;||&eparsl;||&eplus;||&epsi;||&epsilon;||&epsiv;||&eqcirc;||&eqcolon;||&eqsim;||&eqslantgtr;||&eqslantless;||&equals;||&equest;||&equiv;||&equivDD;||&eqvparsl;||&erDot;||&erarr;||&escr;||&esdot;||&esim;||&eta;||&eth||&eth;||&euml||&euml;||&euro;||&excl;||&exist;||&expectation;||&exponentiale;||&fallingdotseq;||&fcy;||&female;||&ffilig;||&fflig;||&ffllig;||&ffr;||&filig;||&fjlig;||&flat;||&fllig;||&fltns;||&fnof;||&fopf;||&forall;||&fork;||&forkv;||&fpartint;||&frac12||&frac12;||&frac13;||&frac14||&frac14;||&frac15;||&frac16;||&frac18;||&frac23;||&frac25;||&frac34||&frac34;||&frac35;||&frac38;||&frac45;||&frac56;||&frac58;||&frac78;||&frasl;||&frown;||&fscr;||&gE;||&gEl;||&gacute;||&gamma;||&gammad;||&gap;||&gbreve;||&gcirc;||&gcy;||&gdot;||&ge;||&gel;||&geq;||&geqq;||&geqslant;||&ges;||&gescc;||&gesdot;||&gesdoto;||&gesdotol;||&gesl;||&gesles;||&gfr;||&gg;||&ggg;||&gimel;||&gjcy;||&gl;||&glE;||&gla;||&glj;||&gnE;||&gnap;||&gnapprox;||&gne;||&gneq;||&gneqq;||&gnsim;||&gopf;||&grave;||&gscr;||&gsim;||&gsime;||&gsiml;||&gt||&gt;||&gtcc;||&gtcir;||&gtdot;||&gtlPar;||&gtquest;||&gtrapprox;||&gtrarr;||&gtrdot;||&gtreqless;||&gtreqqless;||&gtrless;||&gtrsim;||&gvertneqq;||&gvnE;||&hArr;||&hairsp;||&half;||&hamilt;||&hardcy;||&harr;||&harrcir;||&harrw;||&hbar;||&hcirc;||&hearts;||&heartsuit;||&hellip;||&hercon;||&hfr;||&hksearow;||&hkswarow;||&hoarr;||&homtht;||&hookleftarrow;||&hookrightarrow;||&hopf;||&horbar;||&hscr;||&hslash;||&hstrok;||&hybull;||&hyphen;||&iacute||&iacute;||&ic;||&icirc||&icirc;||&icy;||&iecy;||&iexcl||&iexcl;||&iff;||&ifr;||&igrave||&igrave;||&ii;||&iiiint;||&iiint;||&iinfin;||&iiota;||&ijlig;||&imacr;||&image;||&imagline;||&imagpart;||&imath;||&imof;||&imped;||&in;||&incare;||&infin;||&infintie;||&inodot;||&int;||&intcal;||&integers;||&intercal;||&intlarhk;||&intprod;||&iocy;||&iogon;||&iopf;||&iota;||&iprod;||&iquest||&iquest;||&iscr;||&isin;||&isinE;||&isindot;||&isins;||&isinsv;||&isinv;||&it;||&itilde;||&iukcy;||&iuml||&iuml;||&jcirc;||&jcy;||&jfr;||&jmath;||&jopf;||&jscr;||&jsercy;||&jukcy;||&kappa;||&kappav;||&kcedil;||&kcy;||&kfr;||&kgreen;||&khcy;||&kjcy;||&kopf;||&kscr;||&lAarr;||&lArr;||&lAtail;||&lBarr;||&lE;||&lEg;||&lHar;||&lacute;||&laemptyv;||&lagran;||&lambda;||&lang;||&langd;||&langle;||&lap;||&laquo||&laquo;||&larr;||&larrb;||&larrbfs;||&larrfs;||&larrhk;||&larrlp;||&larrpl;||&larrsim;||&larrtl;||&lat;||&latail;||&late;||&lates;||&lbarr;||&lbbrk;||&lbrace;||&lbrack;||&lbrke;||&lbrksld;||&lbrkslu;||&lcaron;||&lcedil;||&lceil;||&lcub;||&lcy;||&ldca;||&ldquo;||&ldquor;||&ldrdhar;||&ldrushar;||&ldsh;||&le;||&leftarrow;||&leftarrowtail;||&leftharpoondown;||&leftharpoonup;||&leftleftarrows;||&leftrightarrow;||&leftrightarrows;||&leftrightharpoons;||&leftrightsquigarrow;||&leftthreetimes;||&leg;||&leq;||&leqq;||&leqslant;||&les;||&lescc;||&lesdot;||&lesdoto;||&lesdotor;||&lesg;||&lesges;||&lessapprox;||&lessdot;||&lesseqgtr;||&lesseqqgtr;||&lessgtr;||&lesssim;||&lfisht;||&lfloor;||&lfr;||&lg;||&lgE;||&lhard;||&lharu;||&lharul;||&lhblk;||&ljcy;||&ll;||&llarr;||&llcorner;||&llhard;||&lltri;||&lmidot;||&lmoust;||&lmoustache;||&lnE;||&lnap;||&lnapprox;||&lne;||&lneq;||&lneqq;||&lnsim;||&loang;||&loarr;||&lobrk;||&longleftarrow;||&longleftrightarrow;||&longmapsto;||&longrightarrow;||&looparrowleft;||&looparrowright;||&lopar;||&lopf;||&loplus;||&lotimes;||&lowast;||&lowbar;||&loz;||&lozenge;||&lozf;||&lpar;||&lparlt;||&lrarr;||&lrcorner;||&lrhar;||&lrhard;||&lrm;||&lrtri;||&lsaquo;||&lscr;||&lsh;||&lsim;||&lsime;||&lsimg;||&lsqb;||&lsquo;||&lsquor;||&lstrok;||&lt||&lt;||&ltcc;||&ltcir;||&ltdot;||&lthree;||&ltimes;||&ltlarr;||&ltquest;||&ltrPar;||&ltri;||&ltrie;||&ltrif;||&lurdshar;||&luruhar;||&lvertneqq;||&lvnE;||&mDDot;||&macr||&macr;||&male;||&malt;||&maltese;||&map;||&mapsto;||&mapstodown;||&mapstoleft;||&mapstoup;||&marker;||&mcomma;||&mcy;||&mdash;||&measuredangle;||&mfr;||&mho;||&micro||&micro;||&mid;||&midast;||&midcir;||&middot||&middot;||&minus;||&minusb;||&minusd;||&minusdu;||&mlcp;||&mldr;||&mnplus;||&models;||&mopf;||&mp;||&mscr;||&mstpos;||&mu;||&multimap;||&mumap;||&nGg;||&nGt;||&nGtv;||&nLeftarrow;||&nLeftrightarrow;||&nLl;||&nLt;||&nLtv;||&nRightarrow;||&nVDash;||&nVdash;||&nabla;||&nacute;||&nang;||&nap;||&napE;||&napid;||&napos;||&napprox;||&natur;||&natural;||&naturals;||&nbsp||&nbsp;||&nbump;||&nbumpe;||&ncap;||&ncaron;||&ncedil;||&ncong;||&ncongdot;||&ncup;||&ncy;||&ndash;||&ne;||&neArr;||&nearhk;||&nearr;||&nearrow;||&nedot;||&nequiv;||&nesear;||&nesim;||&nexist;||&nexists;||&nfr;||&ngE;||&nge;||&ngeq;||&ngeqq;||&ngeqslant;||&nges;||&ngsim;||&ngt;||&ngtr;||&nhArr;||&nharr;||&nhpar;||&ni;||&nis;||&nisd;||&niv;||&njcy;||&nlArr;||&nlE;||&nlarr;||&nldr;||&nle;||&nleftarrow;||&nleftrightarrow;||&nleq;||&nleqq;||&nleqslant;||&nles;||&nless;||&nlsim;||&nlt;||&nltri;||&nltrie;||&nmid;||&nopf;||&not||&not;||&notin;||&notinE;||&notindot;||&notinva;||&notinvb;||&notinvc;||&notni;||&notniva;||&notnivb;||&notnivc;||&npar;||&nparallel;||&nparsl;||&npart;||&npolint;||&npr;||&nprcue;||&npre;||&nprec;||&npreceq;||&nrArr;||&nrarr;||&nrarrc;||&nrarrw;||&nrightarrow;||&nrtri;||&nrtrie;||&nsc;||&nsccue;||&nsce;||&nscr;||&nshortmid;||&nshortparallel;||&nsim;||&nsime;||&nsimeq;||&nsmid;||&nspar;||&nsqsube;||&nsqsupe;||&nsub;||&nsubE;||&nsube;||&nsubset;||&nsubseteq;||&nsubseteqq;||&nsucc;||&nsucceq;||&nsup;||&nsupE;||&nsupe;||&nsupset;||&nsupseteq;||&nsupseteqq;||&ntgl;||&ntilde||&ntilde;||&ntlg;||&ntriangleleft;||&ntrianglelefteq;||&ntriangleright;||&ntrianglerighteq;||&nu;||&num;||&numero;||&numsp;||&nvDash;||&nvHarr;||&nvap;||&nvdash;||&nvge;||&nvgt;||&nvinfin;||&nvlArr;||&nvle;||&nvlt;||&nvltrie;||&nvrArr;||&nvrtrie;||&nvsim;||&nwArr;||&nwarhk;||&nwarr;||&nwarrow;||&nwnear;||&oS;||&oacute||&oacute;||&oast;||&ocir;||&ocirc||&ocirc;||&ocy;||&odash;||&odblac;||&odiv;||&odot;||&odsold;||&oelig;||&ofcir;||&ofr;||&ogon;||&ograve||&ograve;||&ogt;||&ohbar;||&ohm;||&oint;||&olarr;||&olcir;||&olcross;||&oline;||&olt;||&omacr;||&omega;||&omicron;||&omid;||&ominus;||&oopf;||&opar;||&operp;||&oplus;||&or;||&orarr;||&ord;||&order;||&orderof;||&ordf||&ordf;||&ordm||&ordm;||&origof;||&oror;||&orslope;||&orv;||&oscr;||&oslash||&oslash;||&osol;||&otilde||&otilde;||&otimes;||&otimesas;||&ouml||&ouml;||&ovbar;||&par;||&para||&para;||&parallel;||&parsim;||&parsl;||&part;||&pcy;||&percnt;||&period;||&permil;||&perp;||&pertenk;||&pfr;||&phi;||&phiv;||&phmmat;||&phone;||&pi;||&pitchfork;||&piv;||&planck;||&planckh;||&plankv;||&plus;||&plusacir;||&plusb;||&pluscir;||&plusdo;||&plusdu;||&pluse;||&plusmn||&plusmn;||&plussim;||&plustwo;||&pm;||&pointint;||&popf;||&pound||&pound;||&pr;||&prE;||&prap;||&prcue;||&pre;||&prec;||&precapprox;||&preccurlyeq;||&preceq;||&precnapprox;||&precneqq;||&precnsim;||&precsim;||&prime;||&primes;||&prnE;||&prnap;||&prnsim;||&prod;||&profalar;||&profline;||&profsurf;||&prop;||&propto;||&prsim;||&prurel;||&pscr;||&psi;||&puncsp;||&qfr;||&qint;||&qopf;||&qprime;||&qscr;||&quaternions;||&quatint;||&quest;||&questeq;||&quot||&quot;||&rAarr;||&rArr;||&rAtail;||&rBarr;||&rHar;||&race;||&racute;||&radic;||&raemptyv;||&rang;||&rangd;||&range;||&rangle;||&raquo||&raquo;||&rarr;||&rarrap;||&rarrb;||&rarrbfs;||&rarrc;||&rarrfs;||&rarrhk;||&rarrlp;||&rarrpl;||&rarrsim;||&rarrtl;||&rarrw;||&ratail;||&ratio;||&rationals;||&rbarr;||&rbbrk;||&rbrace;||&rbrack;||&rbrke;||&rbrksld;||&rbrkslu;||&rcaron;||&rcedil;||&rceil;||&rcub;||&rcy;||&rdca;||&rdldhar;||&rdquo;||&rdquor;||&rdsh;||&real;||&realine;||&realpart;||&reals;||&rect;||&reg||&reg;||&rfisht;||&rfloor;||&rfr;||&rhard;||&rharu;||&rharul;||&rho;||&rhov;||&rightarrow;||&rightarrowtail;||&rightharpoondown;||&rightharpoonup;||&rightleftarrows;||&rightleftharpoons;||&rightrightarrows;||&rightsquigarrow;||&rightthreetimes;||&ring;||&risingdotseq;||&rlarr;||&rlhar;||&rlm;||&rmoust;||&rmoustache;||&rnmid;||&roang;||&roarr;||&robrk;||&ropar;||&ropf;||&roplus;||&rotimes;||&rpar;||&rpargt;||&rppolint;||&rrarr;||&rsaquo;||&rscr;||&rsh;||&rsqb;||&rsquo;||&rsquor;||&rthree;||&rtimes;||&rtri;||&rtrie;||&rtrif;||&rtriltri;||&ruluhar;||&rx;||&sacute;||&sbquo;||&sc;||&scE;||&scap;||&scaron;||&sccue;||&sce;||&scedil;||&scirc;||&scnE;||&scnap;||&scnsim;||&scpolint;||&scsim;||&scy;||&sdot;||&sdotb;||&sdote;||&seArr;||&searhk;||&searr;||&searrow;||&sect||&sect;||&semi;||&seswar;||&setminus;||&setmn;||&sext;||&sfr;||&sfrown;||&sharp;||&shchcy;||&shcy;||&shortmid;||&shortparallel;||&shy||&shy;||&sigma;||&sigmaf;||&sigmav;||&sim;||&simdot;||&sime;||&simeq;||&simg;||&simgE;||&siml;||&simlE;||&simne;||&simplus;||&simrarr;||&slarr;||&smallsetminus;||&smashp;||&smeparsl;||&smid;||&smile;||&smt;||&smte;||&smtes;||&softcy;||&sol;||&solb;||&solbar;||&sopf;||&spades;||&spadesuit;||&spar;||&sqcap;||&sqcaps;||&sqcup;||&sqcups;||&sqsub;||&sqsube;||&sqsubset;||&sqsubseteq;||&sqsup;||&sqsupe;||&sqsupset;||&sqsupseteq;||&squ;||&square;||&squarf;||&squf;||&srarr;||&sscr;||&ssetmn;||&ssmile;||&sstarf;||&star;||&starf;||&straightepsilon;||&straightphi;||&strns;||&sub;||&subE;||&subdot;||&sube;||&subedot;||&submult;||&subnE;||&subne;||&subplus;||&subrarr;||&subset;||&subseteq;||&subseteqq;||&subsetneq;||&subsetneqq;||&subsim;||&subsub;||&subsup;||&succ;||&succapprox;||&succcurlyeq;||&succeq;||&succnapprox;||&succneqq;||&succnsim;||&succsim;||&sum;||&sung;||&sup1||&sup1;||&sup2||&sup2;||&sup3||&sup3;||&sup;||&supE;||&supdot;||&supdsub;||&supe;||&supedot;||&suphsol;||&suphsub;||&suplarr;||&supmult;||&supnE;||&supne;||&supplus;||&supset;||&supseteq;||&supseteqq;||&supsetneq;||&supsetneqq;||&supsim;||&supsub;||&supsup;||&swArr;||&swarhk;||&swarr;||&swarrow;||&swnwar;||&szlig||&szlig;||&target;||&tau;||&tbrk;||&tcaron;||&tcedil;||&tcy;||&tdot;||&telrec;||&tfr;||&there4;||&therefore;||&theta;||&thetasym;||&thetav;||&thickapprox;||&thicksim;||&thinsp;||&thkap;||&thksim;||&thorn||&thorn;||&tilde;||&times||&times;||&timesb;||&timesbar;||&timesd;||&tint;||&toea;||&top;||&topbot;||&topcir;||&topf;||&topfork;||&tosa;||&tprime;||&trade;||&triangle;||&triangledown;||&triangleleft;||&trianglelefteq;||&triangleq;||&triangleright;||&trianglerighteq;||&tridot;||&trie;||&triminus;||&triplus;||&trisb;||&tritime;||&trpezium;||&tscr;||&tscy;||&tshcy;||&tstrok;||&twixt;||&twoheadleftarrow;||&twoheadrightarrow;||&uArr;||&uHar;||&uacute||&uacute;||&uarr;||&ubrcy;||&ubreve;||&ucirc||&ucirc;||&ucy;||&udarr;||&udblac;||&udhar;||&ufisht;||&ufr;||&ugrave||&ugrave;||&uharl;||&uharr;||&uhblk;||&ulcorn;||&ulcorner;||&ulcrop;||&ultri;||&umacr;||&uml||&uml;||&uogon;||&uopf;||&uparrow;||&updownarrow;||&upharpoonleft;||&upharpoonright;||&uplus;||&upsi;||&upsih;||&upsilon;||&upuparrows;||&urcorn;||&urcorner;||&urcrop;||&uring;||&urtri;||&uscr;||&utdot;||&utilde;||&utri;||&utrif;||&uuarr;||&uuml||&uuml;||&uwangle;||&vArr;||&vBar;||&vBarv;||&vDash;||&vangrt;||&varepsilon;||&varkappa;||&varnothing;||&varphi;||&varpi;||&varpropto;||&varr;||&varrho;||&varsigma;||&varsubsetneq;||&varsubsetneqq;||&varsupsetneq;||&varsupsetneqq;||&vartheta;||&vartriangleleft;||&vartriangleright;||&vcy;||&vdash;||&vee;||&veebar;||&veeeq;||&vellip;||&verbar;||&vert;||&vfr;||&vltri;||&vnsub;||&vnsup;||&vopf;||&vprop;||&vrtri;||&vscr;||&vsubnE;||&vsubne;||&vsupnE;||&vsupne;||&vzigzag;||&wcirc;||&wedbar;||&wedge;||&wedgeq;||&weierp;||&wfr;||&wopf;||&wp;||&wr;||&wreath;||&wscr;||&xcap;||&xcirc;||&xcup;||&xdtri;||&xfr;||&xhArr;||&xharr;||&xi;||&xlArr;||&xlarr;||&xmap;||&xnis;||&xodot;||&xopf;||&xoplus;||&xotime;||&xrArr;||&xrarr;||&xscr;||&xsqcup;||&xuplus;||&xutri;||&xvee;||&xwedge;||&yacute||&yacute;||&yacy;||&ycirc;||&ycy;||&yen||&yen;||&yfr;||&yicy;||&yopf;||&yscr;||&yucy;||&yuml||&yuml;||&zacute;||&zcaron;||&zcy;||&zdot;||&zeetrf;||&zeta;||&zfr;||&zhcy;||&zigrarr;||&zopf;||&zscr;||&zwj;||&zwnj;|", false, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 23333), data: "Æ||Æ||&||&||Á||Á||Ă||Â||Â||А||𝔄||À||À||Α||Ā||⩓||Ą||𝔸||⁡||Å||Å||𝒜||≔||Ã||Ã||Ä||Ä||∖||⫧||⌆||Б||∵||ℬ||Β||𝔅||𝔹||˘||ℬ||≎||Ч||©||©||Ć||⋒||ⅅ||ℭ||Č||Ç||Ç||Ĉ||∰||Ċ||¸||·||ℭ||Χ||⊙||⊖||⊕||⊗||∲||”||’||∷||⩴||≡||∯||∮||ℂ||∐||∳||⨯||𝒞||⋓||≍||ⅅ||⤑||Ђ||Ѕ||Џ||‡||↡||⫤||Ď||Д||∇||Δ||𝔇||´||˙||˝||`||˜||⋄||ⅆ||𝔻||¨||⃜||≐||∯||¨||⇓||⇐||⇔||⫤||⟸||⟺||⟹||⇒||⊨||⇑||⇕||∥||↓||⤓||⇵||̑||⥐||⥞||↽||⥖||⥟||⇁||⥗||⊤||↧||⇓||𝒟||Đ||Ŋ||Ð||Ð||É||É||Ě||Ê||Ê||Э||Ė||𝔈||È||È||∈||Ē||◻||▫||Ę||𝔼||Ε||⩵||≂||⇌||ℰ||⩳||Η||Ë||Ë||∃||ⅇ||Ф||𝔉||◼||▪||𝔽||∀||ℱ||ℱ||Ѓ||>||>||Γ||Ϝ||Ğ||Ģ||Ĝ||Г||Ġ||𝔊||⋙||𝔾||≥||⋛||≧||⪢||≷||⩾||≳||𝒢||≫||Ъ||ˇ||^||Ĥ||ℌ||ℋ||ℍ||─||ℋ||Ħ||≎||≏||Е||Ĳ||Ё||Í||Í||Î||Î||И||İ||ℑ||Ì||Ì||ℑ||Ī||ⅈ||⇒||∬||∫||⋂||⁣||⁢||Į||𝕀||Ι||ℐ||Ĩ||І||Ï||Ï||Ĵ||Й||𝔍||𝕁||𝒥||Ј||Є||Х||Ќ||Κ||Ķ||К||𝔎||𝕂||𝒦||Љ||<||<||Ĺ||Λ||⟪||ℒ||↞||Ľ||Ļ||Л||⟨||←||⇤||⇆||⌈||⟦||⥡||⇃||⥙||⌊||↔||⥎||⊣||↤||⥚||⊲||⧏||⊴||⥑||⥠||↿||⥘||↼||⥒||⇐||⇔||⋚||≦||≶||⪡||⩽||≲||𝔏||⋘||⇚||Ŀ||⟵||⟷||⟶||⟸||⟺||⟹||𝕃||↙||↘||ℒ||↰||Ł||≪||⤅||М|| ||ℳ||𝔐||∓||𝕄||ℳ||Μ||Њ||Ń||Ň||Ņ||Н||​||​||​||​||≫||≪||\n||𝔑||⁠|| ||ℕ||⫬||≢||≭||∦||∉||≠||≂̸||∄||≯||≱||≧̸||≫̸||≹||⩾̸||≵||≎̸||≏̸||⋪||⧏̸||⋬||≮||≰||≸||≪̸||⩽̸||≴||⪢̸||⪡̸||⊀||⪯̸||⋠||∌||⋫||⧐̸||⋭||⊏̸||⋢||⊐̸||⋣||⊂⃒||⊈||⊁||⪰̸||⋡||≿̸||⊃⃒||⊉||≁||≄||≇||≉||∤||𝒩||Ñ||Ñ||Ν||Œ||Ó||Ó||Ô||Ô||О||Ő||𝔒||Ò||Ò||Ō||Ω||Ο||𝕆||“||‘||⩔||𝒪||Ø||Ø||Õ||Õ||⨷||Ö||Ö||‾||⏞||⎴||⏜||∂||П||𝔓||Φ||Π||±||ℌ||ℙ||⪻||≺||⪯||≼||≾||″||∏||∷||∝||𝒫||Ψ||\"||\"||𝔔||ℚ||𝒬||⤐||®||®||Ŕ||⟫||↠||⤖||Ř||Ŗ||Р||ℜ||∋||⇋||⥯||ℜ||Ρ||⟩||→||⇥||⇄||⌉||⟧||⥝||⇂||⥕||⌋||⊢||↦||⥛||⊳||⧐||⊵||⥏||⥜||↾||⥔||⇀||⥓||⇒||ℝ||⥰||⇛||ℛ||↱||⧴||Щ||Ш||Ь||Ś||⪼||Š||Ş||Ŝ||С||𝔖||↓||←||→||↑||Σ||∘||𝕊||√||□||⊓||⊏||⊑||⊐||⊒||⊔||𝒮||⋆||⋐||⋐||⊆||≻||⪰||≽||≿||∋||∑||⋑||⊃||⊇||⋑||Þ||Þ||™||Ћ||Ц||\t||Τ||Ť||Ţ||Т||𝔗||∴||Θ||  || ||∼||≃||≅||≈||𝕋||⃛||𝒯||Ŧ||Ú||Ú||↟||⥉||Ў||Ŭ||Û||Û||У||Ű||𝔘||Ù||Ù||Ū||_||⏟||⎵||⏝||⋃||⊎||Ų||𝕌||↑||⤒||⇅||↕||⥮||⊥||↥||⇑||⇕||↖||↗||ϒ||Υ||Ů||𝒰||Ũ||Ü||Ü||⊫||⫫||В||⊩||⫦||⋁||‖||‖||∣|||||❘||≀|| ||𝔙||𝕍||𝒱||⊪||Ŵ||⋀||𝔚||𝕎||𝒲||𝔛||Ξ||𝕏||𝒳||Я||Ї||Ю||Ý||Ý||Ŷ||Ы||𝔜||𝕐||𝒴||Ÿ||Ж||Ź||Ž||З||Ż||​||Ζ||ℨ||ℤ||𝒵||á||á||ă||∾||∾̳||∿||â||â||´||´||а||æ||æ||⁡||𝔞||à||à||ℵ||ℵ||α||ā||⨿||&||&||∧||⩕||⩜||⩘||⩚||∠||⦤||∠||∡||⦨||⦩||⦪||⦫||⦬||⦭||⦮||⦯||∟||⊾||⦝||∢||Å||⍼||ą||𝕒||≈||⩰||⩯||≊||≋||'||≈||≊||å||å||𝒶||*||≈||≍||ã||ã||ä||ä||∳||⨑||⫭||≌||϶||‵||∽||⋍||⊽||⌅||⌅||⎵||⎶||≌||б||„||∵||∵||⦰||϶||ℬ||β||ℶ||≬||𝔟||⋂||◯||⋃||⨀||⨁||⨂||⨆||★||▽||△||⨄||⋁||⋀||⤍||⧫||▪||▴||▾||◂||▸||␣||▒||░||▓||█||=⃥||≡⃥||⌐||𝕓||⊥||⊥||⋈||╗||╔||╖||╓||═||╦||╩||╤||╧||╝||╚||╜||╙||║||╬||╣||╠||╫||╢||╟||⧉||╕||╒||┐||┌||─||╥||╨||┬||┴||⊟||⊞||⊠||╛||╘||┘||└||│||╪||╡||╞||┼||┤||├||‵||˘||¦||¦||𝒷||⁏||∽||⋍||\\||⧅||⟈||•||•||≎||⪮||≏||≏||ć||∩||⩄||⩉||⩋||⩇||⩀||∩︀||⁁||ˇ||⩍||č||ç||ç||ĉ||⩌||⩐||ċ||¸||¸||⦲||¢||¢||·||𝔠||ч||✓||✓||χ||○||⧃||ˆ||≗||↺||↻||®||Ⓢ||⊛||⊚||⊝||≗||⨐||⫯||⧂||♣||♣||:||≔||≔||,||@||∁||∘||∁||ℂ||≅||⩭||∮||𝕔||∐||©||©||℗||↵||✗||𝒸||⫏||⫑||⫐||⫒||⋯||⤸||⤵||⋞||⋟||↶||⤽||∪||⩈||⩆||⩊||⊍||⩅||∪︀||↷||⤼||⋞||⋟||⋎||⋏||¤||¤||↶||↷||⋎||⋏||∲||∱||⌭||⇓||⥥||†||ℸ||↓||‐||⊣||⤏||˝||ď||д||ⅆ||‡||⇊||⩷||°||°||δ||⦱||⥿||𝔡||⇃||⇂||⋄||⋄||♦||♦||¨||ϝ||⋲||÷||÷||÷||⋇||⋇||ђ||⌞||⌍||$||𝕕||˙||≐||≑||∸||∔||⊡||⌆||↓||⇊||⇃||⇂||⤐||⌟||⌌||𝒹||ѕ||⧶||đ||⋱||▿||▾||⇵||⥯||⦦||џ||⟿||⩷||≑||é||é||⩮||ě||≖||ê||ê||≕||э||ė||ⅇ||≒||𝔢||⪚||è||è||⪖||⪘||⪙||⏧||ℓ||⪕||⪗||ē||∅||∅||∅|| || || ||ŋ|| ||ę||𝕖||⋕||⧣||⩱||ε||ε||ϵ||≖||≕||≂||⪖||⪕||=||≟||≡||⩸||⧥||≓||⥱||ℯ||≐||≂||η||ð||ð||ë||ë||€||!||∃||ℰ||ⅇ||≒||ф||♀||ﬃ||ﬀ||ﬄ||𝔣||ﬁ||fj||♭||ﬂ||▱||ƒ||𝕗||∀||⋔||⫙||⨍||½||½||⅓||¼||¼||⅕||⅙||⅛||⅔||⅖||¾||¾||⅗||⅜||⅘||⅚||⅝||⅞||⁄||⌢||𝒻||≧||⪌||ǵ||γ||ϝ||⪆||ğ||ĝ||г||ġ||≥||⋛||≥||≧||⩾||⩾||⪩||⪀||⪂||⪄||⋛︀||⪔||𝔤||≫||⋙||ℷ||ѓ||≷||⪒||⪥||⪤||≩||⪊||⪊||⪈||⪈||≩||⋧||𝕘||`||ℊ||≳||⪎||⪐||>||>||⪧||⩺||⋗||⦕||⩼||⪆||⥸||⋗||⋛||⪌||≷||≳||≩︀||≩︀||⇔|| ||½||ℋ||ъ||↔||⥈||↭||ℏ||ĥ||♥||♥||…||⊹||𝔥||⤥||⤦||⇿||∻||↩||↪||𝕙||―||𝒽||ℏ||ħ||⁃||‐||í||í||⁣||î||î||и||е||¡||¡||⇔||𝔦||ì||ì||ⅈ||⨌||∭||⧜||℩||ĳ||ī||ℑ||ℐ||ℑ||ı||⊷||Ƶ||∈||℅||∞||⧝||ı||∫||⊺||ℤ||⊺||⨗||⨼||ё||į||𝕚||ι||⨼||¿||¿||𝒾||∈||⋹||⋵||⋴||⋳||∈||⁢||ĩ||і||ï||ï||ĵ||й||𝔧||ȷ||𝕛||𝒿||ј||є||κ||ϰ||ķ||к||𝔨||ĸ||х||ќ||𝕜||𝓀||⇚||⇐||⤛||⤎||≦||⪋||⥢||ĺ||⦴||ℒ||λ||⟨||⦑||⟨||⪅||«||«||←||⇤||⤟||⤝||↩||↫||⤹||⥳||↢||⪫||⤙||⪭||⪭︀||⤌||❲||{||[||⦋||⦏||⦍||ľ||ļ||⌈||{||л||⤶||“||„||⥧||⥋||↲||≤||←||↢||↽||↼||⇇||↔||⇆||⇋||↭||⋋||⋚||≤||≦||⩽||⩽||⪨||⩿||⪁||⪃||⋚︀||⪓||⪅||⋖||⋚||⪋||≶||≲||⥼||⌊||𝔩||≶||⪑||↽||↼||⥪||▄||љ||≪||⇇||⌞||⥫||◺||ŀ||⎰||⎰||≨||⪉||⪉||⪇||⪇||≨||⋦||⟬||⇽||⟦||⟵||⟷||⟼||⟶||↫||↬||⦅||𝕝||⨭||⨴||∗||_||◊||◊||⧫||(||⦓||⇆||⌟||⇋||⥭||\u{200e}||⊿||‹||𝓁||↰||≲||⪍||⪏||[||‘||‚||ł||<||<||⪦||⩹||⋖||⋋||⋉||⥶||⩻||⦖||◃||⊴||◂||⥊||⥦||≨︀||≨︀||∺||¯||¯||♂||✠||✠||↦||↦||↧||↤||↥||▮||⨩||м||—||∡||𝔪||℧||µ||µ||∣||*||⫰||·||·||−||⊟||∸||⨪||⫛||…||∓||⊧||𝕞||∓||𝓂||∾||μ||⊸||⊸||⋙̸||≫⃒||≫̸||⇍||⇎||⋘̸||≪⃒||≪̸||⇏||⊯||⊮||∇||ń||∠⃒||≉||⩰̸||≋̸||ŉ||≉||♮||♮||ℕ|| || ||≎̸||≏̸||⩃||ň||ņ||≇||⩭̸||⩂||н||–||≠||⇗||⤤||↗||↗||≐̸||≢||⤨||≂̸||∄||∄||𝔫||≧̸||≱||≱||≧̸||⩾̸||⩾̸||≵||≯||≯||⇎||↮||⫲||∋||⋼||⋺||∋||њ||⇍||≦̸||↚||‥||≰||↚||↮||≰||≦̸||⩽̸||⩽̸||≮||≴||≮||⋪||⋬||∤||𝕟||¬||¬||∉||⋹̸||⋵̸||∉||⋷||⋶||∌||∌||⋾||⋽||∦||∦||⫽⃥||∂̸||⨔||⊀||⋠||⪯̸||⊀||⪯̸||⇏||↛||⤳̸||↝̸||↛||⋫||⋭||⊁||⋡||⪰̸||𝓃||∤||∦||≁||≄||≄||∤||∦||⋢||⋣||⊄||⫅̸||⊈||⊂⃒||⊈||⫅̸||⊁||⪰̸||⊅||⫆̸||⊉||⊃⃒||⊉||⫆̸||≹||ñ||ñ||≸||⋪||⋬||⋫||⋭||ν||#||№|| ||⊭||⤄||≍⃒||⊬||≥⃒||>⃒||⧞||⤂||≤⃒||<⃒||⊴⃒||⤃||⊵⃒||∼⃒||⇖||⤣||↖||↖||⤧||Ⓢ||ó||ó||⊛||⊚||ô||ô||о||⊝||ő||⨸||⊙||⦼||œ||⦿||𝔬||˛||ò||ò||⧁||⦵||Ω||∮||↺||⦾||⦻||‾||⧀||ō||ω||ο||⦶||⊖||𝕠||⦷||⦹||⊕||∨||↻||⩝||ℴ||ℴ||ª||ª||º||º||⊶||⩖||⩗||⩛||ℴ||ø||ø||⊘||õ||õ||⊗||⨶||ö||ö||⌽||∥||¶||¶||∥||⫳||⫽||∂||п||%||.||‰||⊥||‱||𝔭||φ||ϕ||ℳ||☎||π||⋔||ϖ||ℏ||ℎ||ℏ||+||⨣||⊞||⨢||∔||⨥||⩲||±||±||⨦||⨧||±||⨕||𝕡||£||£||≺||⪳||⪷||≼||⪯||≺||⪷||≼||⪯||⪹||⪵||⋨||≾||′||ℙ||⪵||⪹||⋨||∏||⌮||⌒||⌓||∝||∝||≾||⊰||𝓅||ψ|| ||𝔮||⨌||𝕢||⁗||𝓆||ℍ||⨖||?||≟||\"||\"||⇛||⇒||⤜||⤏||⥤||∽̱||ŕ||√||⦳||⟩||⦒||⦥||⟩||»||»||→||⥵||⇥||⤠||⤳||⤞||↪||↬||⥅||⥴||↣||↝||⤚||∶||ℚ||⤍||❳||}||]||⦌||⦎||⦐||ř||ŗ||⌉||}||р||⤷||⥩||”||”||↳||ℜ||ℛ||ℜ||ℝ||▭||®||®||⥽||⌋||𝔯||⇁||⇀||⥬||ρ||ϱ||→||↣||⇁||⇀||⇄||⇌||⇉||↝||⋌||˚||≓||⇄||⇌||\u{200f}||⎱||⎱||⫮||⟭||⇾||⟧||⦆||𝕣||⨮||⨵||)||⦔||⨒||⇉||›||𝓇||↱||]||’||’||⋌||⋊||▹||⊵||▸||⧎||⥨||℞||ś||‚||≻||⪴||⪸||š||≽||⪰||ş||ŝ||⪶||⪺||⋩||⨓||≿||с||⋅||⊡||⩦||⇘||⤥||↘||↘||§||§||;||⤩||∖||∖||✶||𝔰||⌢||♯||щ||ш||∣||∥||­||­||σ||ς||ς||∼||⩪||≃||≃||⪞||⪠||⪝||⪟||≆||⨤||⥲||←||∖||⨳||⧤||∣||⌣||⪪||⪬||⪬︀||ь||/||⧄||⌿||𝕤||♠||♠||∥||⊓||⊓︀||⊔||⊔︀||⊏||⊑||⊏||⊑||⊐||⊒||⊐||⊒||□||□||▪||▪||→||𝓈||∖||⌣||⋆||☆||★||ϵ||ϕ||¯||⊂||⫅||⪽||⊆||⫃||⫁||⫋||⊊||⪿||⥹||⊂||⊆||⫅||⊊||⫋||⫇||⫕||⫓||≻||⪸||≽||⪰||⪺||⪶||⋩||≿||∑||♪||¹||¹||²||²||³||³||⊃||⫆||⪾||⫘||⊇||⫄||⟉||⫗||⥻||⫂||⫌||⊋||⫀||⊃||⊇||⫆||⊋||⫌||⫈||⫔||⫖||⇙||⤦||↙||↙||⤪||ß||ß||⌖||τ||⎴||ť||ţ||т||⃛||⌕||𝔱||∴||∴||θ||ϑ||ϑ||≈||∼|| ||≈||∼||þ||þ||˜||×||×||⊠||⨱||⨰||∭||⤨||⊤||⌶||⫱||𝕥||⫚||⤩||‴||™||▵||▿||◃||⊴||≜||▹||⊵||◬||≜||⨺||⨹||⧍||⨻||⏢||𝓉||ц||ћ||ŧ||≬||↞||↠||⇑||⥣||ú||ú||↑||ў||ŭ||û||û||у||⇅||ű||⥮||⥾||𝔲||ù||ù||↿||↾||▀||⌜||⌜||⌏||◸||ū||¨||¨||ų||𝕦||↑||↕||↿||↾||⊎||υ||ϒ||υ||⇈||⌝||⌝||⌎||ů||◹||𝓊||⋰||ũ||▵||▴||⇈||ü||ü||⦧||⇕||⫨||⫩||⊨||⦜||ϵ||ϰ||∅||ϕ||ϖ||∝||↕||ϱ||ς||⊊︀||⫋︀||⊋︀||⫌︀||ϑ||⊲||⊳||в||⊢||∨||⊻||≚||⋮||||||||𝔳||⊲||⊂⃒||⊃⃒||𝕧||∝||⊳||𝓋||⫋︀||⊊︀||⫌︀||⊋︀||⦚||ŵ||⩟||∧||≙||℘||𝔴||𝕨||℘||≀||≀||𝓌||⋂||◯||⋃||▽||𝔵||⟺||⟷||ξ||⟸||⟵||⟼||⋻||⨀||𝕩||⨁||⨂||⟹||⟶||𝓍||⨆||⨄||△||⋁||⋀||ý||ý||я||ŷ||ы||¥||¥||𝔶||ї||𝕪||𝓎||ю||ÿ||ÿ||ź||ž||з||ż||ℨ||ζ||𝔷||ж||⇝||𝕫||𝓏||‍||‌|", attributes: [])])
+  // 252: upstream/empty
+  check("", true, false, [])
+  // 253: upstream/text
+  check("foo  bar", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "foo  bar", attributes: [])])
+  // 254: upstream/entity
+  check("one &lt; two", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 12), data: "one < two", attributes: [])])
+  // 255: upstream/tags
+  check("<a>b<c/>d</e>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 3, end: 4), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: SelfClosingTag(), span: std@1/html_tokenizer.Span(start: 4, end: 8), data: "c", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "d", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 9, end: 13), data: "e", attributes: [])])
+  // 256: upstream/not a tag #0
+  check("<", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: [])])
+  // 257: upstream/not a tag #1
+  check("</", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 2), data: "</", attributes: [])])
+  // 258: upstream/not a tag #2
+  check("</>", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "", attributes: [])])
+  // 259: upstream/not a tag #3
+  check("a</>b", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 4), data: "", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 4, end: 5), data: "b", attributes: [])])
+  // 260: upstream/not a tag #4
+  check("</ >", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 4), data: " ", attributes: [])])
+  // 261: upstream/not a tag #5
+  check("</.", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: ".", attributes: [])])
+  // 262: upstream/not a tag #6
+  check("</.>", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 4), data: ".", attributes: [])])
+  // 263: upstream/not a tag #7
+  check("a < b", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "a < b", attributes: [])])
+  // 264: upstream/not a tag #8
+  check("<.>", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "<.>", attributes: [])])
+  // 265: upstream/not a tag #9
+  check("a<<<b>>>c", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "a<<", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 3, end: 6), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 6, end: 9), data: ">>c", attributes: [])])
+  // 266: upstream/not a tag #10
+  check("if x<0 and y < 0 then x*y>0", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 27), data: "if x<0 and y < 0 then x*y>0", attributes: [])])
+  // 267: upstream/not a tag #11
+  check("<<p>", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "<", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 1, end: 4), data: "p", attributes: [])])
+  // 268: upstream/tag name eof #0
+  check("<a", true, false, [])
+  // 269: upstream/tag name eof #1
+  check("<a ", true, false, [])
+  // 270: upstream/tag name eof #2
+  check("a<b", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: [])])
+  // 271: upstream/tag name eof #3
+  check("<a><b", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "a", attributes: [])])
+  // 272: upstream/tag name eof #4
+  check("<a x", true, false, [])
+  // 273: upstream/malformed tag #0
+  check("<p</p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "p<", attributes: [std@1/html_tokenizer.Attribute(key: "p", value: "")])])
+  // 274: upstream/malformed tag #1
+  check("<p </p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "<", value: ""), std@1/html_tokenizer.Attribute(key: "p", value: "")])])
+  // 275: upstream/malformed tag #2
+  check("<p id", true, false, [])
+  // 276: upstream/malformed tag #3
+  check("<p id=", true, false, [])
+  // 277: upstream/malformed tag #4
+  check("<p id=>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "")])])
+  // 278: upstream/malformed tag #5
+  check("<p id=0", true, false, [])
+  // 279: upstream/malformed tag #6
+  check("<p id=0</p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 11), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "0</p")])])
+  // 280: upstream/malformed tag #7
+  check("<p id=\"0</p>", true, false, [])
+  // 281: upstream/malformed tag #8
+  check("<p id=\"0\"</p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 13), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "0"), std@1/html_tokenizer.Attribute(key: "<", value: ""), std@1/html_tokenizer.Attribute(key: "p", value: "")])])
+  // 282: upstream/malformed tag #9
+  check("<p></p id", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "p", attributes: [])])
+  // 283: upstream/basic raw text
+  check("<script><a></b></script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 15), data: "<a></b>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 15, end: 24), data: "script", attributes: [])])
+  // 284: upstream/unfinished script end tag
+  check("<SCRIPT>a</SCR", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 14), data: "a</SCR", attributes: [])])
+  // 285: upstream/broken script end tag
+  check("<SCRIPT>a</SCR ipt>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 19), data: "a</SCR ipt>", attributes: [])])
+  // 286: upstream/EOF in script end tag
+  check("<SCRIPT>a</SCRipt", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 17), data: "a</SCRipt", attributes: [])])
+  // 287: upstream/scriptx end tag
+  check("<SCRIPT>a</SCRiptx", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 18), data: "a</SCRiptx", attributes: [])])
+  // 288: upstream/' ' completes script end tag
+  check("<SCRIPT>a</SCRipt ", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "a", attributes: [])])
+  // 289: upstream/'>' completes script end tag
+  check("<SCRIPT>a</SCRipt>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 9, end: 18), data: "script", attributes: [])])
+  // 290: upstream/self-closing script end tag
+  check("<SCRIPT>a</SCRipt/>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 9), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 9, end: 19), data: "script", attributes: [])])
+  // 291: upstream/nested script tag
+  check("<SCRIPT>a</SCRipt<script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 25), data: "a</SCRipt<script>", attributes: [])])
+  // 292: upstream/script end tag after unfinished
+  check("<SCRIPT>a</SCRipt</script>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 17), data: "a</SCRipt", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 17, end: 26), data: "script", attributes: [])])
+  // 293: upstream/script/style mismatched tags
+  check("<script>a</style>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "script", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 8, end: 17), data: "a</style>", attributes: [])])
+  // 294: upstream/style element with entity
+  check("<style>&apos;", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "style", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 13), data: "&apos;", attributes: [])])
+  // 295: upstream/textarea with tag
+  check("<textarea><div></textarea>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "textarea", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 15), data: "<div>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 15, end: 26), data: "textarea", attributes: [])])
+  // 296: upstream/title with tag and entity
+  check("<title><b>K&amp;R C</b></title>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 23), data: "<b>K&R C</b>", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 23, end: 31), data: "title", attributes: [])])
+  // 297: upstream/title with trailing '&lt;' entity
+  check("<title>foobar<</title>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "title", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 14), data: "foobar<", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 14, end: 22), data: "title", attributes: [])])
+  // 298: upstream/Proper DOCTYPE
+  check("<!DOCTYPE html>", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 15), data: "html", attributes: [])])
+  // 299: upstream/DOCTYPE with no space
+  check("<!doctypehtml>", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 14), data: "html", attributes: [])])
+  // 300: upstream/DOCTYPE with two spaces
+  check("<!doctype  html>", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 16), data: "html", attributes: [])])
+  // 301: upstream/looks like DOCTYPE but isn't
+  check("<!DOCUMENT html>", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 16), data: "DOCUMENT html", attributes: [])])
+  // 302: upstream/DOCTYPE at EOF
+  check("<!DOCtype", true, false, [std@1/html_tokenizer.Token(kind: Doctype(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "", attributes: [])])
+  // 303: upstream/XML processing instruction
+  check("<?xml?>", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "?xml?", attributes: [])])
+  // 304: upstream/comment0
+  check("abc<b><!-- skipme --></b>def", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 3), data: "abc", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 3, end: 6), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 6, end: 21), data: " skipme ", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 21, end: 25), data: "b", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 25, end: 28), data: "def", attributes: [])])
+  // 305: upstream/comment1
+  check("a<!-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 6), data: "", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 6, end: 7), data: "z", attributes: [])])
+  // 306: upstream/comment2
+  check("a<!--->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 7), data: "", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 7, end: 8), data: "z", attributes: [])])
+  // 307: upstream/comment3
+  check("a<!--x>-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 10), data: "x>", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 11), data: "z", attributes: [])])
+  // 308: upstream/comment4
+  check("a<!--x->-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 11), data: "x->", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 11, end: 12), data: "z", attributes: [])])
+  // 309: upstream/comment5
+  check("a<!>z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 4), data: "", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 4, end: 5), data: "z", attributes: [])])
+  // 310: upstream/comment6
+  check("a<!->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 5), data: "-", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 5, end: 6), data: "z", attributes: [])])
+  // 311: upstream/comment7
+  check("a<!---<>z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 9), data: "-<>z", attributes: [])])
+  // 312: upstream/comment8
+  check("a<!--z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 6), data: "z", attributes: [])])
+  // 313: upstream/comment9
+  check("a<!--z-", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 7), data: "z", attributes: [])])
+  // 314: upstream/comment10
+  check("a<!--z--", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 8), data: "z", attributes: [])])
+  // 315: upstream/comment11
+  check("a<!--z---", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 9), data: "z-", attributes: [])])
+  // 316: upstream/comment12
+  check("a<!--z----", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 10), data: "z--", attributes: [])])
+  // 317: upstream/comment13
+  check("a<!--x--!>z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 10), data: "x", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 11), data: "z", attributes: [])])
+  // 318: upstream/comment14
+  check("a<!--!-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 9), data: "!", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 9, end: 10), data: "z", attributes: [])])
+  // 319: upstream/comment15
+  check("a<!-- !-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 10), data: " !", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 11), data: "z", attributes: [])])
+  // 320: upstream/comment16
+  check("a<!--i\u{0}j-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 11), data: "i�j", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 11, end: 12), data: "z", attributes: [])])
+  // 321: upstream/comment17
+  check("a<!--\u{0}", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 6), data: "�", attributes: [])])
+  // 322: upstream/comment18
+  check("a<!--<!-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 10), data: "<!", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 10, end: 11), data: "z", attributes: [])])
+  // 323: upstream/comment19
+  check("a<!--<!--", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 9), data: "<!", attributes: [])])
+  // 324: upstream/comment20
+  check("a<!--ij--kl-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 14), data: "ij--kl", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 14, end: 15), data: "z", attributes: [])])
+  // 325: upstream/comment21
+  check("a<!--ij--kl--!>z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 15), data: "ij--kl", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 15, end: 16), data: "z", attributes: [])])
+  // 326: upstream/comment22
+  check("a<!--!--!<--!-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 16), data: "!--!<--!", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 16, end: 17), data: "z", attributes: [])])
+  // 327: upstream/comment23
+  check("a<!--&gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 12), data: ">", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 12, end: 13), data: "z", attributes: [])])
+  // 328: upstream/comment24
+  check("a<!--&gt;>x", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 11), data: ">>x", attributes: [])])
+  // 329: upstream/comment25
+  check("a<!--&gt;&gt;", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 13), data: ">>", attributes: [])])
+  // 330: upstream/comment26
+  check("a<!--&gt;&gt;-", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 14), data: ">>", attributes: [])])
+  // 331: upstream/comment27
+  check("a<!--&gt;&gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 16), data: ">>", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 16, end: 17), data: "z", attributes: [])])
+  // 332: upstream/comment28
+  check("a<!--&amp;&gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 17), data: "&>", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 17, end: 18), data: "z", attributes: [])])
+  // 333: upstream/comment29
+  check("a<!--&amp;gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 16), data: "&gt;", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 16, end: 17), data: "z", attributes: [])])
+  // 334: upstream/comment30
+  check("a<!--&nosuchentity;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 22), data: "&nosuchentity;", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 22, end: 23), data: "z", attributes: [])])
+  // 335: upstream/comment31
+  check("a<!--i>>j-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 12), data: "i>>j", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 12, end: 13), data: "z", attributes: [])])
+  // 336: upstream/comment32
+  check("a<!--i!>>j-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 13), data: "i!>>j", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 13, end: 14), data: "z", attributes: [])])
+  // 337: upstream/issue48237CommentWithAmpgtsemi1
+  check("a<!--<p></p>&lt;!--[video]--&gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 35), data: "<p></p><!--[video]-->", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 35, end: 36), data: "z", attributes: [])])
+  // 338: upstream/issue48237CommentWithAmpgtsemi2
+  check("a<!--<p></p>&lt;!--[video]--!&gt;-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 36), data: "<p></p><!--[video]--!>", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 36, end: 37), data: "z", attributes: [])])
+  // 339: upstream/issue58246MicrosoftOutlookComment1
+  check("a<!--[if mso]> your code <![endif]-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 37), data: "[if mso]> your code <![endif]", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 37, end: 38), data: "z", attributes: [])])
+  // 340: upstream/issue58246MicrosoftOutlookComment2
+  check("a<!--[if gte mso 12]>\n  <xml>\n      <o:OfficeDocumentSettings>\n      <o:AllowPNG/>\n      <o:PixelsPerInch>96</o:PixelsPerInch>\n      </o:OfficeDocumentSettings>\n    </xml>\n<![endif]-->z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 1, end: 184), data: "[if gte mso 12]>\n  <xml>\n      <o:OfficeDocumentSettings>\n      <o:AllowPNG/>\n      <o:PixelsPerInch>96</o:PixelsPerInch>\n      </o:OfficeDocumentSettings>\n    </xml>\n<![endif]", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 184, end: 185), data: "z", attributes: [])])
+  // 341: upstream/backslash
+  check("<p id=\"a\\\"b\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 13), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "a\\"), std@1/html_tokenizer.Attribute(key: "b\"", value: "")])])
+  // 342: upstream/tricky
+  check("<p \t\n iD=\"a&quot;B\"  foo=\"bar\"><EM>te&lt;&amp;;xt</em></p>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 31), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "a\"B"), std@1/html_tokenizer.Attribute(key: "foo", value: "bar")]), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 31, end: 35), data: "em", attributes: []), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 35, end: 49), data: "te<&;xt", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 49, end: 54), data: "em", attributes: []), std@1/html_tokenizer.Token(kind: EndTag(), span: std@1/html_tokenizer.Span(start: 54, end: 58), data: "p", attributes: [])])
+  // 343: upstream/noSuchEntity
+  check("<a b=\"c&noSuchEntity;d\">&lt;&alsoDoesntExist;&", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 24), data: "a", attributes: [std@1/html_tokenizer.Attribute(key: "b", value: "c&noSuchEntity;d")]), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 24, end: 46), data: "<&alsoDoesntExist;&", attributes: [])])
+  // 344: upstream/entity without semicolon
+  check("&notit;&notin;<a b=\"q=z&amp=5&notice=hello&not;=world\">", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 14), data: "¬it;∉", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 14, end: 55), data: "a", attributes: [std@1/html_tokenizer.Attribute(key: "b", value: "q=z&amp=5&notice=hello¬=world")])])
+  // 345: upstream/entity with digits
+  check("&frac12;", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "½", attributes: [])])
+  // 346: upstream/Empty attribute
+  check("<input disabled FOO>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 20), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "disabled", value: ""), std@1/html_tokenizer.Attribute(key: "foo", value: "")])])
+  // 347: upstream/Empty attribute, whitespace
+  check("<input disabled FOO >", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 21), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "disabled", value: ""), std@1/html_tokenizer.Attribute(key: "foo", value: "")])])
+  // 348: upstream/Unquoted attribute value
+  check("<input value=yes FOO=BAR>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 25), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "yes"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 349: upstream/Unquoted attribute value, spaces
+  check("<input value = yes FOO = BAR>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 29), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "yes"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 350: upstream/Unquoted attribute value, trailing space
+  check("<input value=yes FOO=BAR >", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 26), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "yes"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 351: upstream/Single-quoted attribute value
+  check("<input value='yes' FOO='BAR'>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 29), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "yes"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 352: upstream/Single-quoted attribute value, trailing space
+  check("<input value='yes' FOO='BAR' >", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 30), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "yes"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 353: upstream/Double-quoted attribute value
+  check("<input value=\"I'm an attribute\" FOO=\"BAR\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 42), data: "input", attributes: [std@1/html_tokenizer.Attribute(key: "value", value: "I'm an attribute"), std@1/html_tokenizer.Attribute(key: "foo", value: "BAR")])])
+  // 354: upstream/Attribute name characters
+  check("<meta http-equiv=\"content-type\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 32), data: "meta", attributes: [std@1/html_tokenizer.Attribute(key: "http-equiv", value: "content-type")])])
+  // 355: upstream/Mixed attributes
+  check("a<P V=\"0 1\" w='2' X=3 y>z", true, false, [std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 0, end: 1), data: "a", attributes: []), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 1, end: 24), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "v", value: "0 1"), std@1/html_tokenizer.Attribute(key: "w", value: "2"), std@1/html_tokenizer.Attribute(key: "x", value: "3"), std@1/html_tokenizer.Attribute(key: "y", value: "")]), std@1/html_tokenizer.Token(kind: Text(), span: std@1/html_tokenizer.Span(start: 24, end: 25), data: "z", attributes: [])])
+  // 356: upstream/Attributes with a solitary single quote
+  check("<p id=can't><p id=won't>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 12), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "can't")]), std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 12, end: 24), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "id", value: "won't")])])
+  // 357: upstream/equals sign before attribute name
+  check("<p  =>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "=", value: "")])])
+  // 358: upstream/equals sign before attribute name, extra cruft
+  check("<p  =asd>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "=asd", value: "")])])
+  // 359: upstream/forward slash before attribute name
+  check("<p/=\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "=\"", value: "")])])
+  // 360: upstream/forward slash before attribute name with spaces around
+  check("<p / =\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 8), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "=\"", value: "")])])
+  // 361: upstream/forward slash after attribute name followed by a character
+  check("<p a/ =\"\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 10), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: ""), std@1/html_tokenizer.Attribute(key: "=\"\"", value: "")])])
+  // 362: upstream/slash at end of unquoted attribute value
+  check("<p a=\"\\\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "\\")])])
+  // 363: upstream/self-closing tag with attribute
+  check("<p a=/>", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 7), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "a", value: "/")])])
+  // 364: upstream/duplicate attributes
+  check("<p foo=\"bar\" foo=\"baz\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 23), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "foo", value: "bar")])])
+  // 365: upstream/duplicate attributes, different case
+  check("<p FOO=\"bar\" foo=\"baz\">", true, false, [std@1/html_tokenizer.Token(kind: StartTag(), span: std@1/html_tokenizer.Span(start: 0, end: 23), data: "p", attributes: [std@1/html_tokenizer.Attribute(key: "foo", value: "bar")])])
+  // 366: upstream/partial doctype
+  check("<!doc", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 5), data: "doc", attributes: [])])
+  // 367: upstream/partial cdata
+  check("<![CDA", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 6), data: "[CDA", attributes: [])])
+  // 368: upstream/partial comment
+  check("<!comment", true, false, [std@1/html_tokenizer.Token(kind: Comment(), span: std@1/html_tokenizer.Span(start: 0, end: 9), data: "comment", attributes: [])])
+  caps()
+  Ok(())
+}
+fn caps() -> () uses {} {
+  let zero = std@1/html_tokenizer.Limits(bytes: 0, tokens: 0, attributes: 0, work: 1)
+  core@1/failure.check(std@1/html_tokenizer.tokenize("", zero, false) == Ok([]), TextInvariant())
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x", zero, false) == Error(LimitExceeded(InputBytes(), 0)), TextInvariant()
+  )
+  let one_byte = std@1/html_tokenizer.Limits(bytes: 1, tokens: 10, attributes: 10, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("é", one_byte, false) == Error(LimitExceeded(InputBytes(), 1)), TextInvariant()
+  )
+  let one_token = std@1/html_tokenizer.Limits(bytes: 100, tokens: 1, attributes: 10, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x<a>", one_token, false) == Error(LimitExceeded(Tokens(), 1)), TextInvariant()
+  )
+  let one_attr = std@1/html_tokenizer.Limits(bytes: 100, tokens: 10, attributes: 1, work: 1000)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("<a x=1 X=2>", one_attr, false) == Error(LimitExceeded(Attributes(), 7)), TextInvariant()
+  )
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("<a x=1></a y=2>", one_attr, false) == Error(LimitExceeded(Attributes(), 11)), TextInvariant()
+  )
+  let two_attrs = std@1/html_tokenizer.Limits(bytes: 11, tokens: 1, attributes: 2, work: 1000)
+  let Ok(dups) = std@1/html_tokenizer.tokenize("<a x=1 X=2>", two_attrs, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(core@1/list.len(dups[0].attributes) == 1, TextInvariant())
+  let exact = std@1/html_tokenizer.Limits(bytes: 1, tokens: 1, attributes: 0, work: 4)
+  let Ok(text) = std@1/html_tokenizer.tokenize("x", exact, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(text[0].data == "x", TextInvariant())
+  let short = std@1/html_tokenizer.Limits(bytes: 1, tokens: 1, attributes: 0, work: 3)
+  core@1/failure.check(
+    std@1/html_tokenizer.tokenize("x", short, false) == Error(LimitExceeded(Work(), 0)), TextInvariant()
+  )
+  // Every work cutoff, including UTF-8 continuation, entity expansion, rawtext
+  // reconsumption and incomplete tags. Failure repeats, and a successful next
+  // token stays owned while advancing or poisoning the scanner.
+  let sources: List[String] = ["é", "<a x='&amp;'>t</a>", "<script><!--<script>x</script>--></script>", "<!--\u{0}&amp;--!>", "<unfinished"]
+  for source in sources {
+    let mut work: u64 = 0
+    let mut succeeded = false
+    while work < 2000 {
+      let limits = std@1/html_tokenizer.Limits(bytes: 1000, tokens: 100, attributes: 100, work: work)
+      let mut Ok(z) = std@1/html_tokenizer.tokenizer(unique source, limits) else {
+        core@1/failure.check(false, TextInvariant()); return
+      }
+      let mut previous: Option[std@1/html_tokenizer.Token] = None()
+      while true {
+        match std@1/html_tokenizer.next(mut z, false) {
+          Ok(Some(token)) => {
+            previous = Some(take token)
+          },
+          Ok(None()) => { succeeded = true; break },
+          Error(error) => {
+            match error {
+              LimitExceeded(Work(), offset) => core@1/failure.check(offset <= core@1/string.byte_len(source), TextInvariant()),
+              _ => core@1/failure.check(false, TextInvariant()),
+            }
+            core@1/failure.check(std@1/html_tokenizer.next(mut z, true) == Error(error), TextInvariant())
+            break
+          },
+        }
+      }
+      if succeeded { break }
+      match previous {
+        Some(token) => core@1/failure.check(token.span.end <= core@1/string.byte_len(source), TextInvariant()),
+        None() => (),
+      }
+      work += 1
+    }
+    core@1/failure.check(succeeded, TextInvariant())
+  }
+  // Switch mode between calls. A tokenizer cannot infer SVG integration points.
+  let limits = std@1/html_tokenizer.Limits(bytes: 100, tokens: 10, attributes: 10, work: 10000)
+  let mut Ok(z) = std@1/html_tokenizer.tokenizer("<![CDATA[a]]><![CDATA[b]]>", limits) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  let Ok(Some(comment)) = std@1/html_tokenizer.next(mut z, false) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  let Ok(Some(text_token)) = std@1/html_tokenizer.next(mut z, true) else {
+    core@1/failure.check(false, TextInvariant()); return
+  }
+  core@1/failure.check(comment.kind == Comment() && comment.data == "[CDATA[a]]", TextInvariant())
+  core@1/failure.check(text_token.kind == Text() && text_token.data == "b", TextInvariant())
+  // Invalid bytes are rejected by String construction, outside markup recovery.
+  match core@1/string.from_bytes(b"\xff") {
+    Error(_) => (),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}
