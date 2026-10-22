@@ -77,7 +77,9 @@ READS = generated.Reads(ROOT)
 # What the engine's build script reads (crates/hirsel-engine/build.rs), as
 # repository paths: it hashes these into the frozen runtime revision.
 BUILD_SCRIPT_INPUTS = {
+    "hirsel-rt-operations": ["native-tests/library/operations.tsv"],
     "hirsel-engine": [
+        "crates/hirsel-engine/src/registry/**",
         "crates/hirsel-driver/src/network.rs",
         "crates/hirsel-interp/src/**",
         "crates/hirsel-interp/Cargo.toml",
@@ -876,7 +878,7 @@ def first_party(meta: dict) -> str:
                 "hirsel_build_script",
                 name=build_script,
                 crate_root=relative(src),
-                srcs=[relative(src)],
+                srcs=Raw('glob(["crates/hirsel-engine/build.rs", "crates/hirsel-engine/src/registry/**"])') if name == "hirsel-engine" else [relative(src)],
                 deps=sorted(deps["build"]),
                 inputs=Raw(f"glob({starlark(BUILD_SCRIPT_INPUTS[name], 4)})"),
                 features=features,

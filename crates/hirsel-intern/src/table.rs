@@ -35,15 +35,35 @@ impl<T> AppendTable<T> {
 
     /// Publish `value` at `index`. Each index is written once, by its assigner.
     pub fn set(&self, index: u32, value: T) {
-        let (chunk, offset) = Self::place(index);
-        let rows = self.chunks[chunk].get_or_init(|| {
-            (0..1usize << (chunk as u32 + BASE_BITS))
-                .map(|_| OnceLock::new())
-                .collect()
-        });
+        let rows = self.chunk(index);
+        let (_, offset) = Self::place(index);
         if rows[offset].set(value).is_err() {
             panic!("append-only table row {index} written twice");
         }
+    }
+
+    fn chunk(&self, index: u32) -> &[OnceLock<T>] {
+        let (chunk, _) = Self::place(index);
+        self.chunks[chunk].get_or_init(|| {
+            (0..1usize << (chunk as u32 + BASE_BITS))
+                .map(|_| OnceLock::new())
+                .collect()
+        })
+    }
+
+    /// Initialize a row on its first read. Concurrent readers share one value.
+    pub fn get_or_init(&self, index: u32, init: impl FnOnce() -> T) -> &T {
+        let (_, offset) = Self::place(index);
+        self.chunk(index)[offset].get_or_init(init)
+    }
+
+    /// Bytes reserved for row slots, including slots not initialized yet.
+    pub fn allocated_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .filter_map(OnceLock::get)
+            .map(|chunk| std::mem::size_of_val(&**chunk))
+            .sum()
     }
 
     /// The row at `index`, once it is published.
@@ -68,6 +88,33 @@ mod tests {
             }
         }
         assert_eq!(AppendTable::<()>::place(u32::MAX).0, CHUNKS - 1);
+    }
+
+    #[test]
+    fn lazy_rows_initialize_once_under_concurrent_reads() {
+        let table = AppendTable::new();
+        assert_eq!(table.allocated_bytes(), 0);
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    assert_eq!(
+                        *table.get_or_init(192, || {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            42
+                        }),
+                        42
+                    );
+                });
+            }
+        });
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(table.get(191), None);
+        assert_eq!(table.get(193), None);
+        assert_eq!(
+            table.allocated_bytes(),
+            256 * std::mem::size_of::<OnceLock<i32>>()
+        );
     }
 
     #[test]

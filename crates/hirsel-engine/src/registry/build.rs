@@ -5,7 +5,7 @@ use hirsel_type_analysis::cleanup::{
     CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup,
 };
 
-pub(super) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRef> {
+pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRef> {
     let mut out = BTreeMap::new();
     // DROP-4 declares this intrinsic outside the core library ledger.
     let mut forget = Builder::new(types, "T");
@@ -1242,7 +1242,7 @@ fn type_definition(
         destructor_allocation: Allocation::NoAlloc,
     }
 }
-pub(super) struct Builder {
+pub(crate) struct Builder {
     pub types: Arc<TypeInterner>,
     pub generics: Vec<GenericParameter>,
     names: Vec<String>,
@@ -1304,7 +1304,7 @@ impl Builder {
             siblings: vec![],
         }
     }
-    pub(super) fn with_schema(mut self, schema: Vec<SchemaConstraint>) -> Self {
+    pub(crate) fn with_schema(mut self, schema: Vec<SchemaConstraint>) -> Self {
         self.schema = schema;
         self
     }

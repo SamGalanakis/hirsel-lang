@@ -734,7 +734,7 @@ pub(crate) fn load_program_inputs(
     };
     // A dependency whose image matches is adopted before anything is parsed:
     // the session's interner is built over the image's rows.
-    if let Some(toolchain) = images.get() {
+    if let Some(toolchain) = (!revisions.is_empty()).then(|| images.get()).flatten() {
         for revision in &revisions {
             let key = crate::StdImage::key_of(program.identity, revision.key, limits);
             let candidates: Vec<_> = toolchain

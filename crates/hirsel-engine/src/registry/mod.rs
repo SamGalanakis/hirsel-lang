@@ -1,13 +1,11 @@
 //! Declared core@1 signatures. This module reads only the normative declaration
 //! ledger, never executable operation bodies (LANG-6). Package identity: #36.
-mod build;
+mod declarations;
+pub use declarations::nominal_roles;
 mod dictionaries;
-mod heap;
-mod loops;
 pub mod review;
 #[cfg(test)]
 mod tests;
-mod text;
 use hirsel_syntax::{ContentHash, DefId, DefPath, FileContext, Path};
 use hirsel_types::*;
 use std::{
@@ -23,28 +21,16 @@ pub const OMITTED: &[(&str, u32)] = &[
     ("comptime step-budget API", 7),
     ("frame/arena/scratch charge and depth constants", 16),
 ];
-pub fn nominal_roles() -> NominalRoles {
-    NominalRoles {
-        unsafe_capability: Some(hirsel_syntax::DefPath::core("Unsafe")),
-        result_type: Some(hirsel_syntax::DefPath::core("Result")),
-        tasks_capability: Some(hirsel_syntax::DefPath::core("Tasks")),
-        scope_capability: Some(hirsel_syntax::DefPath::core("Scope")),
-        heap: Some(HeapRole {
-            arena: hirsel_syntax::DefPath::core("Arena"),
-            operation: hirsel_syntax::DefPath::core("$intrinsic.heap"),
-        }),
-    }
-}
 #[derive(Clone)]
 pub struct BuiltinRegistry {
     /// The interner the signatures' rows were built into.
     types: Arc<TypeInterner>,
-    signatures: Arc<BTreeMap<DefId, SignatureRef>>,
+    signatures: Arc<BTreeMap<DefId, OnceLock<SignatureRef>>>,
+    image: Option<hirsel_image::Image>,
     revision: ContentHash,
 }
-/// The process's core rows: the registry built once into a scratch interner,
-/// frozen as an interner base at the same positions, so its signatures name
-/// rows of every interner built over [`base`].
+/// The compiler build freezes the core rows and declarations in an indexed
+/// image. Its type rows form the base; signatures decode on their first lookup.
 struct Shared {
     base: Arc<TypeBase>,
     registry: BuiltinRegistry,
@@ -53,20 +39,28 @@ struct Shared {
 fn shared() -> &'static Shared {
     static SHARED: OnceLock<Shared> = OnceLock::new();
     SHARED.get_or_init(|| {
-        let scratch = TypeInterner::new(None);
-        let registry = BuiltinRegistry::build(&scratch);
-        let mut variants = std::collections::BTreeSet::new();
-        let base = TypeBase::build(scratch.len(), |ids| {
-            ids.iter()
-                .map(|id| {
-                    let row = scratch.row(*id);
-                    if let hirsel_types::TypeKind::Variant(cases) = &row.kind {
-                        variants.extend(cases.iter().map(|v| v.name.as_str().to_string()));
-                    }
-                    row.clone()
-                })
-                .collect()
-        });
+        let image = hirsel_image::Image::from_static(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/core.image"
+        )))
+        .expect("build-time core image");
+        let base = image.base();
+        let variants = image
+            .blob(hirsel_image::FIRST_KIND + 1)
+            .expect("core variant names")
+            .expect("core variant section");
+        let signatures = image
+            .keys(hirsel_image::FIRST_KIND)
+            .expect("core definitions")
+            .into_iter()
+            .map(|d| (d, OnceLock::new()))
+            .collect();
+        let registry = BuiltinRegistry {
+            types: TypeInterner::new(Some(base.clone())),
+            signatures: Arc::new(signatures),
+            revision: image.key(),
+            image: Some(image),
+        };
         Shared {
             base,
             registry,
@@ -103,14 +97,20 @@ impl BuiltinRegistry {
     }
     /// The core signatures, built into `types`.
     pub fn build(types: &Arc<TypeInterner>) -> Self {
-        let signatures = build::registry(types);
+        let signatures = declarations::build::registry(types);
         let revision = ContentHash::of_parts(
             "hirsel.core.registry.v9",
             signatures.values().map(|s| s.fingerprint.0.as_slice()),
         );
         Self {
             types: types.clone(),
-            signatures: Arc::new(signatures),
+            signatures: Arc::new(
+                signatures
+                    .into_iter()
+                    .map(|(d, s)| (d, OnceLock::from(s)))
+                    .collect(),
+            ),
+            image: None,
             revision,
         }
     }
@@ -124,10 +124,27 @@ impl BuiltinRegistry {
         &self.types
     }
     pub fn get(&self, definition: impl Into<DefId>) -> Option<SignatureRef> {
-        self.signatures.get(&definition.into()).cloned()
+        let d = definition.into();
+        self.signatures
+            .get(&d)
+            .map(|slot| self.decode(d, slot).clone())
     }
     pub fn signatures(&self) -> impl Iterator<Item = &SignatureRef> {
-        self.signatures.values()
+        self.signatures
+            .iter()
+            .map(|(&d, slot)| self.decode(d, slot))
+    }
+    fn decode<'a>(&self, d: DefId, slot: &'a OnceLock<SignatureRef>) -> &'a SignatureRef {
+        slot.get_or_init(|| {
+            Arc::new(
+                self.image
+                    .as_ref()
+                    .expect("lazy registry image")
+                    .entry(hirsel_image::FIRST_KIND, d)
+                    .expect("core signature")
+                    .expect("core entry"),
+            )
+        })
     }
     pub fn revision(&self) -> ContentHash {
         self.revision
@@ -167,85 +184,4 @@ impl SignatureProvider for BuiltinRegistry {
             result: self.lookup_name(path).ok_or(QueryError::NotImplemented),
         }
     }
-}
-fn publish(
-    t: &TypeInterner,
-    mut signature: Signature,
-    signatures: &mut BTreeMap<DefId, SignatureRef>,
-) {
-    signature.fingerprint = hirsel_types::encoding::fingerprint(t, &signature, &[])
-        .expect("well-formed core signature");
-    assert!(
-        signatures
-            .insert(signature.definition, Arc::new(signature))
-            .is_none(),
-        "duplicate core declaration"
-    );
-}
-
-/// This is the only ledger of intrinsic scalar constraints. Every domain is
-/// checked through the signature on calls and type annotations.
-fn schema(name: &str) -> Vec<SchemaConstraint> {
-    use ScalarDomain::*;
-    use SchemaConstraint::*;
-    let domains = match name {
-        "int.widen" | "int.try_narrow" | "int.narrow" | "int.truncate" => {
-            vec![
-                (TypeParameterRef::bound(TypeParamId(0)), Integer),
-                (TypeParameterRef::bound(TypeParamId(1)), Integer),
-            ]
-        }
-        "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.wrapping_sub"
-        | "int.saturating_sub" | "int.checked_sub" | "int.wrapping_mul" | "int.checked_mul"
-        | "int.leading_zeros" | "int.trailing_zeros" | "int.count_ones" | "int.swap_bytes"
-        | "int.reverse_bits" | "int.div_floor" | "int.mod" | "int.div_exact"
-        | "int.unchecked_add" | "simd.add" => {
-            vec![(TypeParameterRef::bound(TypeParamId(0)), Integer)]
-        }
-        "float.from_int" => vec![
-            (TypeParameterRef::bound(TypeParamId(0)), Integer),
-            (TypeParameterRef::bound(TypeParamId(1)), Float),
-        ],
-        "float.min" | "float.max" | "float.min_number" | "float.max_number" | "float.mul_add"
-        | "float.sqrt" | "float.floor" | "float.ceil" | "float.trunc" | "float.round"
-        | "float.abs" | "float.to_i32" => {
-            vec![(TypeParameterRef::bound(TypeParamId(0)), Float)]
-        }
-        "atomic.create" | "atomic.load" | "atomic.store" | "Atomic" | "simd.splat" | "Simd" => {
-            vec![(TypeParameterRef::bound(TypeParamId(0)), Scalar)]
-        }
-        _ => return vec![],
-    };
-    let mut constraints = vec![];
-    for (parameter, domain) in domains {
-        constraints.push(Domain {
-            parameter,
-            domain,
-            rule: match domain {
-                Integer => const { hirsel_diag::RuleId::of("SEM-1") },
-                Float if name == "float.from_int" => const { hirsel_diag::RuleId::of("SEM-1") },
-                Float => const { hirsel_diag::RuleId::of("SEM-2") },
-                Scalar if name.starts_with("simd.") || name == "Simd" => {
-                    const { hirsel_diag::RuleId::of("MEM-8") }
-                }
-                Scalar => const { hirsel_diag::RuleId::of("CONC-7") },
-            },
-        });
-        constraints.push(NoallocDrop(parameter));
-    }
-    match name {
-        "int.widen" => constraints.push(CompleteRangeFits {
-            source: TypeParameterRef::bound(TypeParamId(0)),
-            destination: TypeParameterRef::bound(TypeParamId(1)),
-        }),
-        "int.truncate" => constraints.push(DestinationNoWider {
-            source: TypeParameterRef::bound(TypeParamId(0)),
-            destination: TypeParameterRef::bound(TypeParamId(1)),
-        }),
-        "simd.splat" | "simd.add" | "Simd" => {
-            constraints.push(PositiveSize(SizeParameterRef::bound(SizeParamId(1))))
-        }
-        _ => (),
-    }
-    constraints
 }

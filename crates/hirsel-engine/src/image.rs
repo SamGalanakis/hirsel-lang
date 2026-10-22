@@ -364,7 +364,12 @@ fn lazy<T>(count: usize) -> Box<[OnceLock<T>]> {
 /// Which std images a program load adopts. A missing or stale image only
 /// means checking the package from source.
 #[derive(Clone, Default)]
-pub struct StdImages(Option<Arc<ToolchainImages>>);
+pub struct StdImages(Option<ImageSource>);
+#[derive(Clone)]
+enum ImageSource {
+    Toolchain,
+    Explicit(Arc<ToolchainImages>),
+}
 /// The toolchain's images: `$HIRSEL_IMAGE`, or `hirsel-std.image` beside the
 /// executable.
 pub(crate) struct ToolchainImages {
@@ -436,7 +441,7 @@ impl StdImages {
     }
     /// The toolchain's image (`$HIRSEL_IMAGE` or beside the executable).
     pub fn toolchain() -> Self {
-        Self(Some(toolchain_images()))
+        Self(Some(ImageSource::Toolchain))
     }
     /// The host-selected image file. A stale image is rebuilt atomically;
     /// a missing or unreadable file falls back to source checking.
@@ -446,22 +451,25 @@ impl StdImages {
             Ok(image) => (vec![image], None),
             Err(error) => (vec![], Some(format!("no image: {error}"))),
         };
-        Self(Some(Arc::new(ToolchainImages {
+        Self(Some(ImageSource::Explicit(Arc::new(ToolchainImages {
             images,
             path: Some(path.to_path_buf()),
             missing,
-        })))
+        }))))
     }
     /// Exactly `images`.
     pub fn of(images: Vec<Arc<StdImage>>) -> Self {
-        Self(Some(Arc::new(ToolchainImages {
+        Self(Some(ImageSource::Explicit(Arc::new(ToolchainImages {
             images,
             path: None,
             missing: None,
-        })))
+        }))))
     }
-    pub(crate) fn get(&self) -> Option<&ToolchainImages> {
-        self.0.as_deref()
+    pub(crate) fn get(&self) -> Option<Arc<ToolchainImages>> {
+        self.0.as_ref().map(|source| match source {
+            ImageSource::Toolchain => toolchain_images(),
+            ImageSource::Explicit(images) => images.clone(),
+        })
     }
 }
 

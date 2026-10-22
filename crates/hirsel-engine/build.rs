@@ -17,7 +17,51 @@ fn files(path: &Path, result: &mut Vec<PathBuf>) {
     }
 }
 
+#[allow(dead_code)]
+#[path = "src/registry/declarations.rs"]
+mod registry;
+
+struct Encoded<T>(T);
+impl<T: serde::Serialize + Send> hirsel_image::Encode for Encoded<T> {
+    fn encode(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        hirsel_image::encode_value(&self.0, out)
+    }
+}
+fn core_image(out: &Path) {
+    use hirsel_types::{TypeBase, TypeInterner, TypeKind};
+    let scratch = TypeInterner::new(None);
+    let signatures = registry::build::registry(&scratch);
+    let revision = hirsel_syntax::ContentHash::of_parts(
+        "hirsel.core.registry.v9",
+        signatures.values().map(|s| s.fingerprint.0.as_slice()),
+    );
+    let mut variants = std::collections::BTreeSet::<String>::new();
+    let base = TypeBase::build(scratch.len(), |ids| {
+        ids.iter()
+            .map(|id| {
+                let row = scratch.row(*id);
+                if let TypeKind::Variant(cases) = &row.kind {
+                    variants.extend(cases.iter().map(|v| v.name.as_str().to_string()));
+                }
+                row.clone()
+            })
+            .collect()
+    });
+    let mut writer = hirsel_image::ImageWriter::new(revision, TypeInterner::new(Some(base)));
+    for (d, signature) in signatures {
+        writer.entry(hirsel_image::FIRST_KIND, d, Box::new(Encoded(signature)));
+    }
+    writer.blob(hirsel_image::FIRST_KIND + 1, Box::new(Encoded(variants)));
+    let written = writer.finish().expect("encode core image");
+    assert!(
+        written.dropped.is_empty(),
+        "core declarations must all encode"
+    );
+    fs::write(out.join("core.image"), written.bytes).unwrap();
+}
+
 fn main() {
+    core_image(&PathBuf::from(env::var_os("OUT_DIR").unwrap()));
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.parent().unwrap().parent().unwrap();
     let mut selected = Vec::new();

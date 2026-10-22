@@ -318,3 +318,31 @@ fn declaration_digests_match_the_reviewed_native_inventory() {
         include_str!("../../../../native-tests/library/operations.tsv")
     );
 }
+
+#[test]
+fn compiled_review_rejects_changed_digest_and_ownership() {
+    let rows = rows();
+    let row = rows
+        .iter()
+        .find(|row| !row.ownership.as_ref().unwrap().parameters.is_empty())
+        .unwrap();
+    assert!(hirsel_rt_operations::classify(row.clone()).is_ok());
+    let mut digest = row.clone();
+    digest.id.declaration_digest.0[0] ^= 1;
+    assert!(
+        hirsel_rt_operations::classify(digest)
+            .unwrap_err()
+            .contains("unreviewed native declaration digest")
+    );
+    let mut ownership = row.clone();
+    let parameter = &mut ownership.ownership.as_mut().unwrap().parameters[0];
+    parameter.passing = match parameter.passing {
+        Passing::Borrow => Passing::Take,
+        Passing::Take | Passing::Mut => Passing::Borrow,
+    };
+    assert!(
+        hirsel_rt_operations::classify(ownership)
+            .unwrap_err()
+            .contains("native ownership disagrees")
+    );
+}

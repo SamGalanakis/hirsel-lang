@@ -6,6 +6,8 @@ use hirsel_core_contract::{
     Passing, Unavailable,
 };
 
+include!(concat!(env!("OUT_DIR"), "/reviewed.rs"));
+
 /// Classify exactly the reserved inventory. The declaration producer supplies digest/ownership.
 /// Runtime ABI emission for aggregate wrappers awaits I/K; those rows explicitly say unavailable.
 pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
@@ -20,24 +22,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(".");
-    let expected = include_str!("../../../native-tests/library/operations.tsv")
-        .lines()
-        .find_map(|line| {
-            let (path, rest) = line.split_once('\t')?;
-            (path == name).then_some(rest)
-        })
-        .ok_or_else(|| format!("missing native declaration identity: {name}"))?;
-    let digest: String = row
-        .id
-        .declaration_digest
-        .0
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let (expected_digest, expected_ownership) = expected
-        .split_once('\t')
-        .ok_or("invalid native inventory fixture")?;
-    if digest != expected_digest {
+    let (expected_digest, expected_ownership) =
+        reviewed(&name).ok_or_else(|| format!("missing native declaration identity: {name}"))?;
+    if row.id.declaration_digest.0 != expected_digest {
         return Err(format!("unreviewed native declaration digest: {name}"));
     }
     let ownership = row

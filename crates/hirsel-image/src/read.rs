@@ -103,6 +103,11 @@ impl Image {
         Self::new(Bytes::Owned(bytes))
     }
 
+    /// An immutable image embedded by the compiler build, without a heap copy.
+    pub fn from_static(bytes: &'static [u8]) -> Result<Self, String> {
+        Self::new(Bytes::Static(bytes))
+    }
+
     fn new(bytes: Bytes) -> Result<Self, String> {
         let (key, sections) = directory(bytes.as_slice())?;
         let count = |kind: u32| sections.get(&kind).map_or(0, |s| s.0 as usize);

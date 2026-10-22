@@ -181,7 +181,7 @@ pub struct TypeInterner {
     // Like rustc15c1044 ty/context.rs:140-145,759-763, ids and caches that
     // can allocate ids stay within one owning context. Base TypeIds are stable;
     // their normal forms can refer to private rows beyond the shared prefix.
-    base_normals: Box<[NormalForms]>,
+    base_normals: AppendTable<NormalForms>,
     entries: AppendTable<Entry>,
     assigned: AtomicU32,
     shards: [RwLock<HashMap<u64, Ids, IdHasher>>; SHARDS],
@@ -201,19 +201,14 @@ struct Counters {
 impl TypeInterner {
     pub fn new(base: Option<Arc<TypeBase>>) -> Arc<Self> {
         let base_len = base.as_ref().map_or(0, |b| b.len() as u32);
-        let base_normals: Box<[_]> = (0..base_len).map(|_| NormalForms::default()).collect();
-        let cache_bytes = std::mem::size_of_val(&*base_normals) as u64;
         Arc::new(Self {
             base,
             base_len,
-            base_normals,
+            base_normals: AppendTable::new(),
             entries: AppendTable::new(),
             assigned: AtomicU32::new(0),
             shards: [const { RwLock::new(HashMap::with_hasher(IdHasher::new())) }; SHARDS],
-            counters: Counters {
-                row_bytes: AtomicU64::new(cache_bytes),
-                ..Counters::default()
-            },
+            counters: Counters::default(),
         })
     }
 
@@ -340,7 +335,10 @@ impl TypeInterner {
     pub(crate) fn normal_forms(&self, id: TypeId) -> Option<&NormalForms> {
         let position = id.position()?;
         if position < self.base_len {
-            return self.base_normals.get(position as usize);
+            return Some(
+                self.base_normals
+                    .get_or_init(position, NormalForms::default),
+            );
         }
         self.entries
             .get(position - self.base_len)
@@ -378,7 +376,7 @@ impl TypeInterner {
         InternerStats {
             rows: u64::from(self.assigned.load(Ordering::Relaxed)),
             hits: load(&c.hits),
-            row_bytes: load(&c.row_bytes),
+            row_bytes: load(&c.row_bytes) + self.base_normals.allocated_bytes() as u64,
             lock_wait_ns: load(&c.lock_wait_ns),
             sem_computed: load(&c.sem_computed),
             sem_hits: load(&c.sem_hits),

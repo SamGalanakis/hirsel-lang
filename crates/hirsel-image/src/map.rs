@@ -10,6 +10,7 @@ pub(crate) enum Bytes {
         len: usize,
     },
     Owned(Vec<u8>),
+    Static(&'static [u8]),
 }
 
 // SAFETY: a mapping is read-only and lives until `drop`; nothing writes through it.
@@ -57,6 +58,7 @@ impl Bytes {
             // SAFETY: the mapping covers `len` readable bytes until `drop`.
             Bytes::Mapped { address, len } => unsafe { std::slice::from_raw_parts(*address, *len) },
             Bytes::Owned(bytes) => bytes,
+            Bytes::Static(bytes) => bytes,
         }
     }
 }

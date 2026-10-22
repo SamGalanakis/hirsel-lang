@@ -1,3 +1,4 @@
+use super::declarations::{build, schema};
 use super::review::*;
 use super::*;
 use hirsel_intern::Symbol;
@@ -1049,4 +1050,21 @@ fn content_parameters(store: &TypeInterner, root: TypeId) -> BTreeSet<TypeParamI
         }
     }
     found
+}
+
+#[test]
+fn embedded_registry_matches_declaration_builder() {
+    let types = TypeInterner::new(None);
+    let expected = BuiltinRegistry::build(&types);
+    let actual = BuiltinRegistry::shared();
+    assert_eq!(actual.revision(), expected.revision());
+    assert_eq!(actual.signatures().count(), expected.signatures().count());
+    for signature in expected.signatures() {
+        let decoded = actual.get(signature.definition).unwrap();
+        assert_eq!(decoded.fingerprint, signature.fingerprint);
+        assert_eq!(
+            hirsel_types::encoding::fingerprint(actual.types(), &decoded, &[]).unwrap(),
+            hirsel_types::encoding::fingerprint(&types, signature, &[]).unwrap()
+        );
+    }
 }
