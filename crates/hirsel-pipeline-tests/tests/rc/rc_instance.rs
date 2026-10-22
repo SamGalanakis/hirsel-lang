@@ -309,3 +309,47 @@ fn ordinary_nested_generic_captures_validate() {
         }
     }
 }
+
+/// A lexical generic name carries only its captured data at a direct call.
+/// It must not claim the callable-only CLO-1 contract of its source name.
+#[test]
+fn nested_generic_data_captures_have_no_callable_contract() {
+    let source = "fn relay(xs: Inline[u8, 3]) -> u64 { let bias = 2u64; fn length[n: size](ys: Inline[u8, n]) -> u64 { n + bias } fn forward[m: size](ys: Inline[u8, m]) -> u64 { length(ys) + m } forward(xs) }\nfn main() -> u64 { relay([1u8, 2u8, 3u8]) }";
+    let (program, mut lowered) = lower_valid(source);
+    let (&instance, captures) = lowered
+        .instances
+        .direct_captures
+        .iter()
+        .find(|(_, captures)| {
+            captures.iter().any(|capture| {
+                matches!(
+                    lowered.table.layouts[capture.layout.0 as usize].kind,
+                    hirsel_lir::layout_types::LayoutKind::Aggregate
+                )
+            })
+        })
+        .expect("forward captures length's ordinary environment record");
+    assert_eq!(captures.len(), 1);
+    let abi_id = lowered.instances.abis[instance.index()];
+    let abi = &mut lowered.table.fn_abis[abi_id.0 as usize];
+    assert!(abi.nonretaining.is_empty());
+    assert!(abi.nonretaining_captures.is_empty());
+    assert!(abi.scoped_entries.is_empty());
+
+    // Negative control: restore the old callable claim on the data parameter.
+    // Even a matching digest must not persuade the independent validator.
+    abi.nonretaining.push(hirsel_lir::abi_types::ParameterPath {
+        parameter: 1,
+        fields: Vec::new(),
+    });
+    abi.scoped_contract = hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &[]);
+    assert!(
+        violations(&program, &lowered)
+            .iter()
+            .flat_map(|(_, v)| v)
+            .any(|v| {
+                matches!(&v.kind, hirsel_lir::validate::ViolationKind::Layout(error)
+            if error.contains("invalid scoped nonretaining contract"))
+            })
+    );
+}

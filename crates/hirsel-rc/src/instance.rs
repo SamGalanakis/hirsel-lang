@@ -1082,7 +1082,11 @@ impl Expander<'_, '_, '_> {
             let ordinal = views.len();
             let usage = capture_use(operand.usage);
             views.push(CaptureView {
-                scoped: scoped_captures.contains(&(source_ordinal as u32)),
+                // A lexical generic function lowers to its ordinary data
+                // environment, with no callable entry in this field. Its
+                // source CLO-1 membership cannot describe that physical data.
+                scoped: scoped_captures.contains(&(source_ordinal as u32))
+                    && !generic_function(types, local.ty),
                 ordinal: ordinal as u32,
                 usage,
             });
