@@ -3350,7 +3350,24 @@ fn read_write(
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let (buffer, max) = if name == "bytes.append_from_history" {
+    let (buffer, max) = if name == "bytes.replace_range" {
+        let Some(Value::Sequence { elements, .. }) = arguments.first() else {
+            return None;
+        };
+        let Some(Value::Integer(start)) = arguments.get(1) else {
+            return None;
+        };
+        let Some(Value::Bytes(data)) = arguments.get(2) else {
+            return None;
+        };
+        let start = u64::try_from(start.bits()).ok()?;
+        let len = elements.len() as u64;
+        // Invalid and empty calls never preflight a destination copy.
+        if start > len || data.len() as u64 > len - start || data.is_empty() {
+            return None;
+        }
+        (0, 0)
+    } else if name == "bytes.append_from_history" {
         let Some(Value::Sequence { elements, .. }) = arguments.first() else {
             return None;
         };

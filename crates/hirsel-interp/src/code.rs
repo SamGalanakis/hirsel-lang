@@ -143,6 +143,7 @@ impl ArenaCall {
             }
         }
         for name in [
+            "bytes.replace_range",
             "bytes.append_from_history",
             "bytes.append",
             "stdin.read",

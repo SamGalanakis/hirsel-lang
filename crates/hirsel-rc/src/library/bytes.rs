@@ -126,3 +126,58 @@ pub(super) fn prepare_history(b: &mut super::builder::Body<'_, '_>) -> R<()> {
     b.set_reaching(list.slot, version);
     Ok(())
 }
+
+/// Direct calls and function values share validation and branch-local COW.
+pub static REPLACE_RANGE: super::LibraryBody = super::LibraryBody {
+    path: || hirsel_syntax::DefPath::core("bytes.replace_range"),
+    build: super::value::forward,
+};
+
+pub(super) fn prepare_replace_range(b: &mut super::builder::Body<'_, '_>) -> R<()> {
+    use hirsel_lir::ir::*;
+    let list = b.parameters[0];
+    let start = b.read_bits(b.parameters[1].address)?;
+    let (view, loan) = b.borrow(list.address, false)?;
+    let len = b.seq_len(view)?;
+    b.end_loan(loan);
+    let (source, loan) = b.borrow(b.parameters[2].address, false)?;
+    let count = b.seq_len(source)?;
+    b.end_loan(loan);
+    let within = b.compare(BinaryOp::Le, start, len)?;
+    let failure = b.failure(Some("MEM-14"));
+    b.push(Inst::Check {
+        condition: within,
+        failure,
+    });
+    let room = b.value(b.layout_of(len), Holding::Plain);
+    let failure = b.failure(Some("MEM-14"));
+    b.push(Inst::Binary {
+        result: room,
+        op: BinaryOp::Sub,
+        left: len,
+        right: start,
+        failure,
+    });
+    let fits = b.compare(BinaryOp::Le, count, room)?;
+    let failure = b.failure(Some("MEM-14"));
+    b.push(Inst::Check {
+        condition: fits,
+        failure,
+    });
+    let zero = b.u64(0)?;
+    let empty = b.compare(BinaryOp::Eq, count, zero)?;
+    let done = b.block(BlockKind::Body, &[]);
+    let write = b.block(BlockKind::Body, &[]);
+    b.branch(empty, done, write);
+    b.at(done);
+    let unit =
+        b.cx.fn_abi()
+            .result
+            .map(|r| b.constant(r.layout, ConstantValue::Unit));
+    b.ret(unit);
+    b.at(write);
+    // P4 recognizes only the leaf's held-list write. Its address must be
+    // prepared here so COW cannot migrate above validation or the empty branch.
+    b.parameters[0].address = b.place(AddressBase::Slot(list.slot), &[], list.layout, None)?;
+    Ok(())
+}

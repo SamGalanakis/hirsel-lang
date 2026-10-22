@@ -51,3 +51,4 @@ mod line_scan_7;
 mod lru_cache_7;
 mod base32_8;
 mod utf16_8;
+mod http_replace_range;

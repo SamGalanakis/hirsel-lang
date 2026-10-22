@@ -88,6 +88,7 @@ bytes.append	b29ae84f6277a9dd7cf3cb64d73f0612af68c8453f2277cbe95cd48d87317729	0:
 bytes.append_from_history	e476591f56ab5d2c5bed7bf4e17a9b2f250224f2f4d848d29ca520b9c736fbcc	0:m:n;1:b:n;2:b:n->n
 bytes.from_list	085214666081030ac924e2ea1567e489c7214d3dcaad5ed82c444708cf5bf789	0:t:n->n
 bytes.len	fa0e8671cc4dd70b0bbda1f14bc23a0de11472f89953d2fd476e3ad20821db44	0:b:n->n
+bytes.replace_range	19e02e44aa00db2cc0a65a58123414bc555dabcbf5c255e064e2ba6f1da9a638	0:m:n;1:b:n;2:b:n->n
 bytes.slice	b6b07b214f11813abf7aae794a6704cfe2837f8253660bc3d23332b4377595aa	0:b:n;1:b:n;2:b:n->n
 capture.begin	e8d6cfbcd7f0a299adba33580f7d83ec57b1febe2a401a1b66c82b1d3147b9f2	0:b:n;1:b:n;2:b:n->n
 capture.context	97016bf321b85d0451e506b252d4a83432b82185a28c0ca8f5ef7d52b222568f	0:b:n;1:b:n->n

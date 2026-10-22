@@ -4259,6 +4259,18 @@ pub(crate) fn copy_on_write(
                     written.insert(address);
                     if a.passing == Passing::Mut {
                         lent.insert(address);
+                        // The checked replacement wrapper reaches this leaf only
+                        // after validation and its empty return. Unlike ordinary
+                        // mut calls, the leaf writes the list held in this slot.
+                        let site = &unit.tables.calls[call.index()];
+                        if let hirsel_lir::ir::Callee::Operation(op) = site.callee
+                            && unit.tables.operations[op.index()]
+                                .definition
+                                .is_core("bytes.replace_range")
+                            && a.parameter == 0
+                        {
+                            holding.insert(address);
+                        }
                     }
                 }
             }

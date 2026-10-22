@@ -247,6 +247,45 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
     STATUS_OK
 }
 
+/// Replace initialized bytes without growth or length publication. The wrapper
+/// validates before making the destination writable; this repeats ABI checks.
+/// Based on Rust slice::copy_within (core/src/slice/mod.rs:4372-4388,
+/// f6c1107f8be1), under MIT/Apache-2.0; see third-party/NOTICES.md.
+/// # Safety
+/// Context and list slot are live. For nonempty input the destination backing
+/// is writable and the borrowed source interval stays live across wrapper COW.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_replace_range(
+    _ctx: *mut TaskCtx,
+    builder: *mut *mut Header,
+    start: u64,
+    owner: *mut Header,
+    origin: u64,
+    length: u64,
+) -> u8 {
+    unsafe {
+        let block = builder.read();
+        let len = payload(block).cast::<u64>().read();
+        if !replacement_fits(len, start, length) {
+            return STATUS_FAILURE;
+        }
+        if length == 0 {
+            return STATUS_OK;
+        }
+        std::ptr::copy(
+            payload(owner).add(8 + origin as usize),
+            payload(block).add(sequence_elements_offset(1) as usize + start as usize),
+            length as usize,
+        );
+    }
+    STATUS_OK
+}
+
+/// Ordered subtraction avoids overflow and host-index narrowing.
+pub fn replacement_fits(len: u64, start: u64, count: u64) -> bool {
+    start <= len && count <= len - start
+}
+
 /// Append a forward LZ match without exposing a mutable alias to source code.
 /// The compiled wrapper validates and charges arena room before this leaf.
 /// Validation is repeated at the ABI boundary. Zero count never detaches.

@@ -125,6 +125,9 @@ pub(super) fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         });
         b.set_reaching(list.slot, version);
     }
+    if path.is_core("bytes.replace_range") {
+        super::bytes::prepare_replace_range(&mut b)?;
+    }
     let mut arguments = Vec::new();
     let mut loans = Vec::new();
     for (p, parameter) in b.parameters.clone().into_iter().zip(sources) {

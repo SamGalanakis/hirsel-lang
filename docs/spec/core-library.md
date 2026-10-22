@@ -291,6 +291,7 @@ N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in 
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
+@preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()
 @preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()
 @preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes
 N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
@@ -1492,6 +1493,22 @@ The destination follows ordinary copy-on-write; other holders keep their content
 It preserves destination uniqueness and introduces no source ownership. Growth is
 amortized and the copy is bulk. Tracked arena destinations charge the appended
 bytes under MEM-6 before mutation, including detachment of shared storage.
+
+**Initialized byte replacement.** `bytes.replace_range(mut builder, start, data)`
+replaces an initialized interval without changing length or capacity. After argument
+and mutable-place evaluation, it checks `start <= L`, then `N <= L - start`, where
+`L` is the original list length and `N` is the source length. Either failure raises
+MEM-14 before replacement, detachment or operation-owned arena charges. A valid
+empty source returns without these effects, even when shared or in a full arena.
+For nonempty input ordinary COW preserves every existing immutable alias and the
+source snapshot, including same-owner overlapping intervals. The copy is overlap
+safe; bytes outside the interval remain unchanged. Spare capacity is never an
+initialized destination. A shared tracked arena charges exactly `L` bytes before
+copying; a writable arena charges nothing. Exhaustion leaves destination and
+aliases unchanged. This ordinary MayAllocate operation borrows but does not retain
+source provenance, has no capability or new error arm, and uses normal completion,
+cleanup and FAIL-3 shielding. See `docs/http-replace-range.md` for implementation
+constraints and prior art.
 
 **History byte append.** `bytes.append_from_history(mut out, distance, count)`
 appends `count` bytes using forward LZ copying: each appended byte is the byte

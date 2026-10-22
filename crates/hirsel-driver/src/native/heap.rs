@@ -1747,6 +1747,43 @@ fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome>
     let value = match (module, name, args) {
         (
             Some("bytes"),
+            "replace_range",
+            [
+                OpValue::Elements {
+                    scalar: ScalarKind::U8,
+                    bits,
+                },
+                OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits: start,
+                },
+                OpValue::Bytes(bytes),
+            ],
+        ) => {
+            let len = bits.len() as u128;
+            if *start > len || bytes.len() as u128 > len - start {
+                return Some(OpOutcome::Fail("MEM-14".into()));
+            }
+            if bytes.is_empty() {
+                return Some(OpOutcome::Value(OpValue::Unit));
+            }
+            let mut bits = bits.clone();
+            for (slot, byte) in bits[*start as usize..].iter_mut().zip(bytes) {
+                *slot = u128::from(*byte);
+            }
+            return Some(OpOutcome::Updated {
+                value: OpValue::Unit,
+                arguments: vec![(
+                    0,
+                    OpValue::Elements {
+                        scalar: ScalarKind::U8,
+                        bits,
+                    },
+                )],
+            });
+        }
+        (
+            Some("bytes"),
             "append",
             [
                 OpValue::Elements {

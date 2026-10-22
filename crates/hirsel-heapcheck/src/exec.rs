@@ -8033,7 +8033,11 @@ impl<'p, S: Stage> Machine<'p, S> {
                     let ArgumentValue::Address { address, .. } = argument.value else {
                         return fail(V::Malformed, "update without an address");
                     };
-                    self.operation_update(f, address, value)?;
+                    if id.definition.is_core("bytes.replace_range") {
+                        self.replacement_update(f, address, value)?;
+                    } else {
+                        self.operation_update(f, address, value)?;
+                    }
                 }
                 OpOutcome::Value(value)
             }
@@ -8267,6 +8271,46 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
     /// Install pointer-free scalar buffer updates while retaining H's own storage
     /// and credit accounting. The external model never supplies a heap pointer.
+    /// The wrapper has already established writable, initialized storage and
+    /// accounted any arena COW. Replacement cannot publish a different owner,
+    /// length or capacity as generic append/update marshalling does.
+    fn replacement_update(&mut self, f: &Frame, address: AddressId, value: OpValue) -> Checked<()> {
+        let OpValue::Elements { scalar, bits } = value else {
+            return fail(V::Malformed, "replacement update is not a byte buffer");
+        };
+        let r = self.resolve_use(f, address)?;
+        self.check_writable(&r)?;
+        let LayoutKind::Block { payload } = self.record(r.layout)?.kind else {
+            return fail(V::TypeConfusion, "replacement owner layout");
+        };
+        let LayoutKind::Sequence { element } = self.record(payload)?.kind else {
+            return fail(V::TypeConfusion, "replacement sequence layout");
+        };
+        if scalar != hirsel_lir::layout_types::ScalarKind::U8
+            || self.record(element)?.kind != LayoutKind::Scalar(scalar)
+        {
+            return fail(V::TypeConfusion, "replacement element layout");
+        }
+        let owner = self.read_ptr(r.ptr)?;
+        self.check_private(owner)?;
+        let len = self.read_scalar(owner, 8)? as u64;
+        if bits.len() as u64 != len {
+            return fail(V::OutOfExtent, "replacement changed initialized length");
+        }
+        let (start, stride) = self.sequence_shape(element)?;
+        // Require all original bytes to be initialized before updating them.
+        let extent = &self.ledger.check(owner)?.extent;
+        extent.check_range(owner.offset + start, len * stride)?;
+        if !extent.all_init(owner.offset + start, len * stride) {
+            return fail(V::UninitializedRead, "replacement of uninitialized bytes");
+        }
+        let extent = &mut self.ledger.get_mut(owner.alloc).extent;
+        for (i, byte) in bits.into_iter().enumerate() {
+            extent.write_bytes(owner.offset + start + i as u64 * stride, &[byte as u8]);
+        }
+        Ok(())
+    }
+
     fn operation_update(&mut self, f: &Frame, address: AddressId, value: OpValue) -> Checked<()> {
         let OpValue::Elements { scalar, bits } = value else {
             return fail(V::Malformed, "operation update is not a scalar buffer");

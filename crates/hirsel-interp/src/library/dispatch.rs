@@ -2147,6 +2147,23 @@ primary_operations! { library, call, context, name, a, value;
     },
     Primitive: "string.as_bytes" => Value::Bytes(text(arg(a, 0)?)?.as_bytes().to_vec()),
     Primitive: "bytes.len" => u64_value(bytes(arg(a, 0)?)?.len() as u64),
+    Primitive: "bytes.replace_range" => {
+        let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing replacement arguments"))?;
+        let Value::Integer(start) = arg(rest, 0)? else { return Err(invalid("replacement start")); };
+        let start = u64::try_from(start.bits()).map_err(|_| invalid("replacement start is not u64"))?;
+        let data = bytes(arg(rest, 1)?)?;
+        let Value::Sequence { kind: BuiltinType::List, elements, .. } = list else {
+            return Err(invalid("replacement destination"));
+        };
+        let len = elements.len() as u64;
+        if start > len || data.len() as u64 > len - start {
+            return Ok(Some(OperationResult::Failed(fail(&call, context, "MEM-14", "invalid byte replacement interval"))));
+        }
+        for (slot, &byte) in elements[start as usize..].iter_mut().zip(data) {
+            *slot = Some(Value::Integer(Integer::new(Primitive::U8, byte.into()).unwrap()));
+        }
+        Value::Unit
+    },
     Primitive: "bytes.append" => {
         let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
         let data = bytes(arg(rest, 0)?)?;

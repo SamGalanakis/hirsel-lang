@@ -143,6 +143,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "string.slice" | "bytes.slice" | "bytes.append_from_history"
     )
     .then(|| hirsel_core_contract::RuleCode("SEM-3".into()));
+    if name == "bytes.replace_range" {
+        row.failure = Some(hirsel_core_contract::RuleCode("MEM-14".into()));
+    }
     let symbol = match name.as_str() {
         // Fixed declaration signatures: every entry has its exact physical ABI
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
@@ -151,6 +154,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "io.stdout"
         | "bytes.append"
         | "bytes.append_from_history"
+        | "bytes.replace_range"
         | "string.position"
         | "string.byte_offset"
         | "bytes.slice"
@@ -1394,6 +1398,19 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_replace_range",
+        destination: false,
+        result: None,
+        parameters: &[
+            Physical::Pointer,
+            Physical::I64,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_bytes_append",
         destination: false,
         result: None,
@@ -2392,6 +2409,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "bytes.from_list",
     "bytes.append",
     "bytes.append_from_history",
+    "bytes.replace_range",
     "bytes.slice",
     "string.as_bytes",
     "string.position",
