@@ -1,0 +1,138 @@
+// rule: MEM-6
+// expect: run
+// entry: exercise
+// boundary: Shared-buffer copy plus maximum read charge precedes input consumption.
+// MEM-6 supplies logical byte counts; allocator capacity is never an oracle.
+fn remainder(t: Test, d: Dir, mut input: File of d, rest: Bytes) {
+  let mut tail: List[u8] = []
+  let got = file.read(d, mut input, mut tail, 8u64)
+  test.check(t, got == Ok(bytes.len(rest)))
+  test.check(t, bytes.from_list(copy_to(heap, tail)) == rest)
+}
+
+fn probe(
+  t: Test,
+  d: Dir,
+  cap: u64,
+  length: u64,
+  shared: bool,
+  max: u64,
+  after: bool,
+  fits: bool,
+  delivered: u64,
+  rest: Bytes
+) -> Result[(), FileError] {
+  let status = arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let opened = file.open(d, path.of("input"))
+      let Ok(f) = take opened else {
+        failure.check(false, Bounds())
+        return 0u64
+      }
+      let mut input = take f
+      let mut buffer: List[u8] in a = []
+      let mut i = 0u64
+      while i < length {
+        list.push(mut buffer, 11u8)
+        i = i + 1
+      }
+      if shared {
+        let alias = copy buffer
+        let got = file.read(d, mut input, mut buffer, max)
+        test.check(t, got == Ok(delivered))
+        test.check(t, list.len(buffer) == length + delivered)
+        test.check(t, list.len(alias) == length)
+        if length > 0 {
+          test.check(t, alias[0] == 11u8)
+        }
+      } else {
+        let got = file.read(d, mut input, mut buffer, max)
+        test.check(t, got == Ok(delivered))
+        test.check(t, list.len(buffer) == length + delivered)
+      }
+      if after {
+        list.push(mut buffer, 22u8)
+      }
+      remainder(t, d, mut input, rest)
+      list.len(buffer)
+    }
+  )
+  test.check(
+    t,
+    if fits {
+      status == Ok(
+        length + delivered + if after {
+          1u64
+        } else {
+          0u64
+        }
+      )
+    } else {
+      status == Error(OutOfSpace())
+    }
+  )
+  Ok(())
+}
+
+fn bounds(t: Test, d: Dir) -> Result[(), FileError] {
+  let tasks = test.tasks(t)
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let _ = arena.bounded(
+        4u64,
+        fn(a: Arena) {
+          let opened = file.open(d, path.of("input"))
+          let Ok(f) = take opened else {
+            failure.check(false, Bounds())
+            return
+          }
+          let mut input = take f
+          let mut buffer: List[u8] in a = [11u8, 11u8]
+          let alias = copy buffer
+          let index = 2u64
+          let _ = file.read(
+            d,
+            mut input,
+            mut buffer,
+            if buffer[index] == 11u8 {
+              1u64
+            } else {
+              2u64
+            }
+          )
+          failure.check(list.len(alias) == 2, Bounds())
+        }
+      )
+    }
+  )
+  test.check(
+    t,
+    match status {
+      Error(caught) => caught.rule == "MEM-14" && caught.cause == None,
+      Ok(_) => false,
+    }
+  )
+  Ok(())
+}
+
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("input"), b"AB")])
+  bounds(t, d)?
+  probe(t, d, 0, 0, false, 1, false, false, 0, b"AB")?
+  probe(t, d, 1, 0, false, 1, false, true, 1, b"B")?
+  probe(t, d, 2, 0, false, 1, false, true, 1, b"B")?
+  probe(t, d, 2, 2, false, 1, false, false, 0, b"AB")?
+  probe(t, d, 3, 2, false, 1, false, true, 1, b"B")?
+  probe(t, d, 4, 2, false, 1, false, true, 1, b"B")?
+  probe(t, d, 4, 2, true, 1, false, false, 0, b"AB")?
+  probe(t, d, 5, 2, true, 1, false, true, 1, b"B")?
+  probe(t, d, 6, 2, true, 1, false, true, 1, b"B")?
+  probe(t, d, 7, 2, true, 4, false, false, 0, b"AB")?
+  probe(t, d, 8, 2, true, 4, false, true, 2, b"")?
+  probe(t, d, 4, 2, true, 0, false, true, 0, b"AB")?
+  probe(t, d, 5, 2, true, 1, true, false, 1, b"B")?
+  probe(t, d, 6, 2, true, 1, true, true, 1, b"B")?
+  Ok(())
+}
