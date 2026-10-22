@@ -8,7 +8,7 @@ use hirsel_run_schema::RunOutcome;
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     path::PathBuf,
     time::Instant,
 };
@@ -16,10 +16,13 @@ use std::{
 pub(crate) struct TimingJournal {
     inner: Box<dyn Journal>,
     tape: PathBuf,
-    output: File,
-    capture: String,
+    output: BufWriter<File>,
+    digest_offset: u64,
+    position: u64,
+    confirmed: u64,
+    count: u64,
+    failed: bool,
     epoch: Instant,
-    samples: Vec<u64>,
     saved: bool,
 }
 impl TimingJournal {
@@ -29,55 +32,63 @@ impl TimingJournal {
         output: File,
         capture: String,
     ) -> Self {
+        let prefix = format!(
+            "{{\"schema\":\"hirsel-observation-timing\",\"version\":1,\"evidence\":{{\"capture\":\"{capture}\",\"sha256\":\""
+        );
+        let digest_offset = prefix.len() as u64;
+        let mut output = BufWriter::new(output);
+        // Reserve the fixed-width digest, then stream samples straight to the sink.
+        // A sidecar remains incomplete until save patches the digest and closes JSON.
+        let failed = write!(
+            output,
+            "{prefix}{}\"}},\"clock\":\"host-monotonic-ns\",\"samples\":[",
+            "0".repeat(64)
+        )
+        .is_err();
+        let position =
+            digest_offset + 64 + b"\"},\"clock\":\"host-monotonic-ns\",\"samples\":[".len() as u64;
         Self {
             inner,
             tape,
             output,
-            capture,
+            digest_offset,
+            position,
+            confirmed: position,
+            count: 0,
+            failed,
             epoch: Instant::now(),
-            samples: vec![],
             saved: false,
         }
+    }
+    fn sample(&mut self, ns: u64) -> io::Result<()> {
+        let sample = format!(
+            "{}{{\"ordinal\":{},\"ns\":{ns}}}",
+            if self.count == 0 { "" } else { "," },
+            self.count
+        );
+        self.output.write_all(sample.as_bytes())?;
+        self.position += sample.len() as u64;
+        self.count += 1;
+        Ok(())
     }
     // Diagnostic storage failure must never become an application completion or
     // prevent a journal barrier. A missing/partial sidecar provides no timing.
     fn save(&mut self) -> io::Result<()> {
-        if self.saved {
+        if self.saved || self.failed {
             return Ok(());
         }
-        let bytes = std::fs::read(&self.tape)?;
-        let count = if crate::journal::is_journal(&bytes) {
-            crate::journal::recover(&bytes)
-                .map_err(|e| io::Error::other(e.to_string()))?
-                .recording
-                .events
-                .len()
-        } else {
-            let end = crate::tape_binary::confirmed_prefix(&bytes).map_err(io::Error::other)?;
-            crate::tape_binary::parse_prefix(&bytes[..end])
-                .map_err(io::Error::other)?
-                .0
-                .events
-                .len()
-        };
-        let digest = hirsel_run_schema::hex(&Sha256::digest(&bytes));
-        // capture is restricted to safe ASCII by the host tooling configuration.
-        let mut text = format!(
-            "{{\"schema\":\"hirsel-observation-timing\",\"version\":1,\"evidence\":{{\"capture\":\"{}\",\"sha256\":\"{}\"}},\"clock\":\"host-monotonic-ns\",\"samples\":[",
-            self.capture, digest
-        );
-        for (ordinal, ns) in self.samples.iter().take(count).enumerate() {
-            if ordinal != 0 {
-                text.push(',');
-            }
-            use std::fmt::Write;
-            write!(text, "{{\"ordinal\":{ordinal},\"ns\":{ns}}}").expect("String write");
-        }
-        text.push_str("]}\n");
         self.saved = true;
-        self.output.write_all(text.as_bytes())?;
+        let digest = tape_digest(&mut File::open(&self.tape)?)?;
         self.output.flush()?;
-        Ok(())
+        // Durable events become evidence only after a successful journal barrier.
+        // Discard unconfirmed samples on interrupted runs without decoding payloads.
+        self.output.get_ref().set_len(self.confirmed)?;
+        self.output.seek(SeekFrom::Start(self.digest_offset))?;
+        self.output
+            .write_all(hirsel_run_schema::hex(&digest).as_bytes())?;
+        self.output.seek(SeekFrom::Start(self.confirmed))?;
+        self.output.write_all(b"]}\n")?;
+        self.output.flush()
     }
 }
 impl Drop for TimingJournal {
@@ -93,31 +104,60 @@ impl Journal for TimingJournal {
         self.inner.durable()
     }
     fn prepare(&mut self, prepared: &Prepared) -> io::Result<()> {
-        self.inner.prepare(prepared)
+        self.inner
+            .prepare(prepared)
+            .inspect_err(|_| self.failed = true)
     }
     fn event(&mut self, id: Option<u64>, event: &Event) -> io::Result<()> {
         let ns = u64::try_from(self.epoch.elapsed().as_nanos()).ok();
-        self.inner.event(id, event)?;
-        // More than 584 years of recording cannot be represented by v1. Stop
-        // sampling rather than wrap or invent a timestamp.
-        if let Some(ns) = ns {
-            self.samples.push(ns);
+        self.inner
+            .event(id, event)
+            .inspect_err(|_| self.failed = true)?;
+        // More than 584 years of recording cannot be represented by v1.
+        if !self.failed
+            && let Some(ns) = ns
+        {
+            self.failed = self.sample(ns).is_err();
+            if !self.inner.durable() {
+                self.confirmed = self.position;
+            }
         }
         Ok(())
     }
     fn withdraw(&mut self, id: u64) -> io::Result<()> {
-        self.inner.withdraw(id)
+        self.inner.withdraw(id).inspect_err(|_| self.failed = true)
     }
     fn barrier(&mut self) -> io::Result<()> {
-        self.inner.barrier()
+        self.inner.barrier().inspect_err(|_| self.failed = true)?;
+        self.confirmed = self.position;
+        Ok(())
     }
     fn pending(&self) -> usize {
         self.inner.pending()
     }
     fn end(&mut self, outcome: &RunOutcome) -> io::Result<()> {
-        self.inner.end(outcome)?;
+        self.inner
+            .end(outcome)
+            .inspect_err(|_| self.failed = true)?;
+        self.confirmed = self.position;
         let _ = self.save();
         Ok(())
+    }
+}
+
+// Rust's io::copy stack-buffer loop (rust 1a2c4797ef25,
+// library/alloc/src/io/copy/generic.rs:232-254, stack_buffer_copy): bounded reads,
+// retry interrupted reads, stop at EOF. Feed SHA-256 instead of another writer.
+fn tape_digest(input: &mut impl Read) -> io::Result<[u8; 32]> {
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        match input.read(&mut buffer) {
+            Ok(0) => return Ok(hash.finalize().into()),
+            Ok(n) => hash.update(&buffer[..n]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -257,6 +297,8 @@ mod tests {
                 assert_eq!(off, on, "durable={durable}, finish={finish}");
                 assert_eq!(on.1, b"same output\n");
                 let text = std::fs::read_to_string(root.join("on.timing")).unwrap();
+                let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(value["samples"].as_array().unwrap().len(), on.2);
                 assert!(text.contains(&hirsel_run_schema::hex(&Sha256::digest(&on.0))));
                 assert!(text.contains("\"clock\":\"host-monotonic-ns\""));
                 for ordinal in 0..on.2 {
@@ -265,6 +307,161 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn digest_handles_short_interrupted_reads_and_copy_vectors() {
+        struct ShortReader {
+            input: std::io::Cursor<Vec<u8>>,
+            interrupted: bool,
+        }
+        impl Read for ShortReader {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                self.interrupted = false;
+                let size = bytes.len().min(1337);
+                self.input.read(&mut bytes[..size])
+            }
+        }
+        // Rust library/alloctests/tests/io/copy.rs:6-14, copy_copies, plus
+        // empty input and a nonzero byte across the hash buffer boundary.
+        for size in [0, 4, 1 << 17] {
+            let mut bytes = vec![0; size];
+            if size > 65536 {
+                bytes[65536] = 42;
+            }
+            let expected: [u8; 32] = Sha256::digest(&bytes).into();
+            let mut reader = ShortReader {
+                input: std::io::Cursor::new(bytes),
+                interrupted: false,
+            };
+            assert_eq!(tape_digest(&mut reader).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn interrupted_durable_sidecar_keeps_only_barrier_confirmed_events() {
+        let root = std::env::temp_dir().join(format!("timing-barrier-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let tape = root.join("tape");
+        let journal = DurableJournal::create(File::create(&tape).unwrap(), &header()).unwrap();
+        let sidecar = root.join("timing");
+        let mut timed = TimingJournal::new(
+            Box::new(journal),
+            tape.clone(),
+            File::create(&sidecar).unwrap(),
+            "barrier".into(),
+        );
+        let event = Event {
+            request: Request::Stdout { io: 1 },
+            completion: Completion::Handle(Ok(2)),
+            fault: None,
+        };
+        timed.event(None, &event).unwrap();
+        timed.barrier().unwrap();
+        timed.event(None, &event).unwrap();
+        drop(timed);
+        let bytes = std::fs::read(tape).unwrap();
+        let recovered = crate::journal::recover(&bytes).unwrap();
+        assert_eq!(recovered.recording.events.len(), 1);
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+        assert_eq!(value["samples"].as_array().unwrap().len(), 1);
+        assert_eq!(value["samples"][0]["ordinal"], 0);
+        assert_eq!(
+            value["evidence"]["sha256"],
+            hirsel_run_schema::hex(&Sha256::digest(bytes))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // Separate processes make the peak independent of the harness and other tests.
+    #[test]
+    fn recording_memory_probe() {
+        let Ok(count) = std::env::var("HIRSEL_TIMING_MEMORY_REQUESTS") else {
+            return;
+        };
+        let count: usize = count.parse().unwrap();
+        let payload: usize = std::env::var("HIRSEL_TIMING_MEMORY_PAYLOAD")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let root = std::env::temp_dir().join(format!("timing-memory-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let tape = root.join("tape");
+        let journal =
+            TapeJournal(RecordingWriter::new(File::create(&tape).unwrap(), &header()).unwrap());
+        let mut timed = TimingJournal::new(
+            Box::new(journal),
+            tape,
+            File::create(root.join("timing")).unwrap(),
+            "memory".into(),
+        );
+        let event = Event {
+            request: Request::Print {
+                stdout: 2,
+                bytes: vec![42; payload],
+            },
+            completion: Completion::Unit(Ok(())),
+            fault: None,
+        };
+        for _ in 0..count {
+            timed.event(None, &event).unwrap();
+        }
+        timed
+            .end(&RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            .unwrap();
+        drop(timed);
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage initializes this live output on success.
+        assert_eq!(
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+            0
+        );
+        let peak = unsafe { usage.assume_init() }.ru_maxrss;
+        println!("TIMING_PEAK_RSS_KIB={peak}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recording_peak_memory_is_flat_in_request_count() {
+        fn peak(count: usize, payload: usize) -> i64 {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "observation_timing::tests::recording_memory_probe",
+                    "--nocapture",
+                ])
+                .env("HIRSEL_TIMING_MEMORY_REQUESTS", count.to_string())
+                .env("HIRSEL_TIMING_MEMORY_PAYLOAD", payload.to_string())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .split_once("TIMING_PEAK_RSS_KIB=")
+                .expect("memory probe ran")
+                .1
+                .lines()
+                .next()
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        }
+        // Catch both payload readback at close and retained per-event timestamps.
+        for (small, large, payload) in [(16, 256, 1 << 20), (1024, 2_097_152, 0)] {
+            let before = peak(small, payload);
+            let after = peak(large, payload);
+            println!("payload={payload}: N={small} peak={before} KiB; N={large} peak={after} KiB");
+            assert!(
+                after <= before + 8 * 1024,
+                "recording RSS grows with N: {small} requests={before} KiB, {large}={after} KiB (payload {payload})"
+            );
+        }
     }
 
     #[test]

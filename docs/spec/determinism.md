@@ -820,9 +820,11 @@ The tooling environment `HIRSEL_TIMING=off` disables this observer;
 digits, `-`, `_` or `.`. Otherwise tooling draws an independent 128-bit archival
 identity, recorded only in the sidecar. Use that identity with `view --capture`.
 These variables are host tooling inputs, never implicit application environment
-or run-record fields. Sidecars are written on orderly recording completion or
-observer teardown, with a SHA-256 digest of the exact persisted tape/journal bytes.
-Teardown of an incomplete recording includes only persisted event ordinals. A
+or run-record fields. Samples stream to a buffered sidecar as events are appended;
+recording completion or observer teardown finalizes it with a SHA-256 digest of the
+exact persisted tape/journal bytes, hashed in fixed-size chunks. The observer keeps
+no event payloads or per-event index in memory and never decodes the tape at close.
+Teardown of an incomplete recording includes only barrier-confirmed event ordinals. A
 process killed before teardown may have no usable sidecar; it keeps a logical
 view. Replay never opens, rewrites or regenerates the original sidecar.
 
