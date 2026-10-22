@@ -1,0 +1,109 @@
+// rule: SEM-1
+// expect: run
+// hyper b0733787 src/proto/h1/role.rs:419-423 never sends a partial invalid head.
+// Hirsel validates all header syntax before reserved-header encoding checks.
+fn network(e: NetError) -> http.HttpError uses {} {
+  Net(e)
+}
+
+fn invalid(t: Test, status: u16, headers: List[http.Header], expected: http.HttpError) -> Result[
+  (),
+  http.HttpError
+] {
+  let alias = copy headers
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open([Send(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"), Stall()])
+        ]
+      )
+    ],
+    []
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = http.server_connection(
+    test.tasks(t),
+    n,
+    take socket,
+    http.default_config()
+  )
+  test.check(
+    t,
+    http.serve_next(
+      mut c,
+      None(),
+      fn(r: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {} {
+        Ok(
+          http.ServerResponse(
+            status: status,
+            headers: unique headers,
+            body: b"unsent",
+            close: false
+          )
+        )
+      }
+    ) == Error(expected)
+  )
+  test.check(t, headers == alias)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  invalid(t, 199u16, [http.Header(name: "bad name", value: "v")], Malformed(Status()))?
+  invalid(t, 600u16, [], Malformed(Status()))?
+  invalid(
+    t,
+    200u16,
+    [http.Header(name: "bad name", value: "v")],
+    Malformed(HeaderName())
+  )?
+  invalid(
+    t,
+    200u16,
+    [http.Header(name: "X-Good", value: "v\r\ninject: yes")],
+    Malformed(HeaderValue())
+  )?
+  invalid(
+    t,
+    200u16,
+    [http.Header(name: "Content-Length", value: "0")],
+    Malformed(ContentLength())
+  )?
+  invalid(
+    t,
+    200u16,
+    [http.Header(name: "Transfer-Encoding", value: "chunked")],
+    Malformed(ContentLength())
+  )?
+  invalid(
+    t,
+    200u16,
+    [http.Header(name: "Connection", value: "close")],
+    Malformed(ContentLength())
+  )?
+  invalid(
+    t,
+    204u16,
+    [
+      http.Header(name: "Content-Length", value: "0"),
+      http.Header(name: "bad name", value: "v")
+    ],
+    Malformed(HeaderName())
+  )?
+  invalid(
+    t,
+    304u16,
+    [
+      http.Header(name: "Content-Length", value: "0"),
+      http.Header(name: "X-Good", value: "v\r\ninject: yes")
+    ],
+    Malformed(HeaderValue())
+  )?
+  Ok(())
+}

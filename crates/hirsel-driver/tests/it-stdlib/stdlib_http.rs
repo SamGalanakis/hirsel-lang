@@ -735,6 +735,12 @@ fn assert_http_script_replay(relative: &str, connection: impl Fn(&str) -> HttpSc
         assert!(observation.blocked.is_none(), "{relative}::{name}");
         assert!(observation.signaled.is_none(), "{relative}::{name}");
         assert!(events.iter().any(|e| e.operation == "net.close"));
+        if relative.ends_with("http-server-inline-errors-run.hir") {
+            assert_eq!(count("net.write"), 0, "invalid response emitted bytes");
+            assert_eq!(count("net.write_all"), 0, "invalid response emitted bytes");
+            assert_eq!(count("net.close"), 9, "one close per rejected exchange");
+            assert_eq!(count("net.shutdown"), 0);
+        }
         if relative.ends_with("http-server-stream-drop-run.hir") {
             assert_eq!(
                 events.iter().filter(|e| e.operation == "net.close").count(),
@@ -770,6 +776,7 @@ fn streaming_http_scripts_replay_writes_completion_and_drop() {
         for relative in [
             "conformance/SEM/SEM-1-http-server-inline-run.hir",
             "conformance/SEM/SEM-1-http-server-output-reuse-run.hir",
+            "conformance/SEM/SEM-1-http-server-inline-errors-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-drop-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-malformed-run.hir",
@@ -905,6 +912,185 @@ fn http2_session_freeze_controls_agree_with_checked_interpreter() {
                 "{}",
                 test.definition
             );
+        }
+    });
+}
+// Bodies around the existing inline/direct-write boundary exceed the corpus
+// budget. The Rust control keeps its own fixed budget and compares full IO
+// observations on H, LLVM and Cranelift, as well as scripted replay.
+#[test]
+fn inline_output_boundary_aliases_and_replay() {
+    with_compiler_stack(|| {
+        let payload = "x".repeat(65537);
+        let mut source = format!(
+            r#"
+fn network(e: NetError) -> http.HttpError {{ Net(e) }}
+pub fn main(t: Test) -> Result[(), http.HttpError] {{
+  let payload = b{payload:?}
+  let name = "X-Alias"
+  let value = "kept"
+"#
+        );
+        // Each connection grows once, then reuses its initialized prefix for
+        // shorter replies. The separate native/socket experiment also covers
+        // repeated full large-body overwrites; keep H's audited case bounded.
+        for size in [0, 3, 65535, 65536, 65537] {
+            let mut requests = String::new();
+            let mut expectations = String::new();
+            let mut responses = String::new();
+            for (i, (body, method, status)) in [
+                (size, "GET", 200),
+                (0, "HEAD", 200),
+                (0, "GET", 204),
+                (0, "GET", 304),
+                (3, "GET", 200),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                requests.push_str(&format!(
+                    "{method} /{i} HTTP/1.1\r\nHost: example.com\r\n\r\n"
+                ));
+                let mut wire = format!("HTTP/1.1 {status} \r\nX-Alias: kept\r\n");
+                if status == 200 {
+                    let length = if method == "HEAD" { 65537 } else { body };
+                    wire.push_str(&format!("Content-Length: {length}\r\n"));
+                }
+                wire.push_str("Connection: keep-alive\r\n\r\n");
+                wire.push_str(&payload[..body]);
+                expectations.push_str(&format!("Expect(b{wire:?}),\n"));
+                let body_size = if method == "HEAD" || status != 200 {
+                    65537
+                } else {
+                    body
+                };
+                responses.push_str(&format!(
+                    r#"
+if http.server_request_target(r) == "/{i}" {{
+  return Ok(http.ServerResponse(status: {status}u16,
+    headers: [http.Header(name: unique name, value: unique value)],
+    body: unique bytes.slice(payload, 0, {body_size}), close: false))
+}}
+"#
+                ));
+            }
+            source.push_str(&format!(
+                r#"
+{{
+  let n = test.net(t, [NetPeer(address: "example.com", port: 80u16,
+    resolves_to: [], tls: Plain(), connections: [Open([
+      Send(b{requests:?}), {expectations} Close()
+    ])])], [])
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = http.server_connection(test.tasks(t), n, take socket, http.default_config())
+  for _ in 0u64..5u64 {{
+    test.check(t, http.serve_next(mut c, None(),
+      fn(r: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {{}} {{
+        {responses}
+        Error(OutOfOrder())
+      }} )?)
+    test.check(t, bytes.len(payload) == 65537 && payload[0] == 120u8 && payload[65536] == 120u8)
+    test.check(t, name == "X-Alias" && value == "kept")
+  }}
+}}
+"#
+            ));
+        }
+        source.push_str("Ok(())\n}\n");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/std_source/main.hir");
+        let mut program =
+            load_program_source(&path, Some(&source)).unwrap_or_else(|e| panic!("{}", details(&e)));
+        program
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{}", details(&e)));
+        program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps: Some(16_000_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let recorded =
+            run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        assert!(
+            matches!(
+                recorded.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ),
+            "{:?}",
+            recorded.outcome
+        );
+        let observation = recorded.observation.unwrap();
+        let checked =
+            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        assert_eq!(checked.observation.as_ref(), Some(&observation));
+        let events = observation
+            .effects
+            .iter()
+            .filter_map(|e| match &e.effect {
+                hirsel_interp::observation::Effect::CapabilityConsumed(e) => Some(e.clone()),
+                _ => None,
+            })
+            .collect();
+        let replayed = run_observed_snapshot(
+            &mut program.engine,
+            &RunConfiguration {
+                inputs: events,
+                ..config
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(replayed.observation.as_ref(), Some(&observation));
+        let expected = native::Observation::of_reference(&observation);
+        let input = program.engine.export_native_input().unwrap();
+        let validated = program.engine.import_native_input(input).unwrap();
+        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+        let matrix = vec![
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Heap { campaign: false },
+            },
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Native {
+                    opt: native::OptLevel::Speed,
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+            native::Configuration {
+                options,
+                engine: native::Engine::Cranelift {
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+        ];
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("http1-output-boundary");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tools = native::Toolchain::for_matrix(&dir.join("runtime"), &matrix).unwrap();
+        for (name, result) in native::differential_in(
+            &validated,
+            &program.entry,
+            &expected,
+            &matrix,
+            &tools,
+            &dir,
+            &native::Fixture {
+                steps: Some(16_000_000),
+                ..Default::default()
+            },
+        ) {
+            assert_eq!(result, native::Outcome::Agree, "{name}: {result:?}");
         }
     });
 }
