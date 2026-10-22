@@ -40,3 +40,7 @@ pub const VALUE_INDIRECT: u64 = 6;
 /// Counted fixed-stride payload (ABI 41). VALUE operands: kind, minimum
 /// extent, stride, element-start offset, linked element layout, zero, zero.
 pub const VALUE_SEQUENCE: u64 = 7;
+
+/// String/Bytes view (ABI 42). VALUE operands: kind, extent (24), linked
+/// byte element layout, then zeros. Owner and start are physical provenance.
+pub const VALUE_SLICE: u64 = 8;

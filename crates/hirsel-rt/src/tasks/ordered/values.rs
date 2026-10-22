@@ -49,6 +49,9 @@ pub(super) enum Node {
         stride: usize,
         node: usize,
     },
+    Slice {
+        byte: usize,
+    },
     /// Missing metadata is never permission to inspect arbitrary bytes.
     Unsupported {
         extent: usize,
@@ -60,6 +63,7 @@ impl Node {
         match self {
             Self::Bits(bytes) => *bytes,
             Self::Bool => 1,
+            Self::Slice { .. } => 24,
             Self::Handle(_) | Self::Indirect { .. } => 8,
             Self::Sequence { minimum, .. } => *minimum,
             Self::Fields { extent, .. }
@@ -82,6 +86,41 @@ pub(super) enum Error {
 pub(super) struct Program {
     nodes: Vec<Node>,
     root: usize,
+    /// Owner layouts may differ from the view layout (including flat views).
+    /// Copy immutable extent facts only; no worker/heap borrow spans encoding.
+    owners: Vec<OwnerBounds>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OwnerBounds {
+    size: u64,
+    flags: u32,
+    #[cfg(feature = "system-allocator")]
+    align: u64,
+}
+
+impl OwnerBounds {
+    /// Match alloc::Heap::usable without retaining its worker-local heap.
+    /// # Safety
+    /// The live owner has this linked layout and matching allocation metadata.
+    unsafe fn capacity(self, owner: *const crate::Header) -> Result<usize, Error> {
+        let header = unsafe { &*owner };
+        let bytes = match header.kind() {
+            #[cfg(feature = "system-allocator")]
+            crate::alloc::KIND_SMALL => {
+                if self.flags & (crate::LAYOUT_NO_EXTENT | crate::release::LAYOUT_WIDE_CURSOR)
+                    != crate::LAYOUT_NO_EXTENT
+                    || self.align > 8
+                {
+                    return Err(Error::Value);
+                }
+                crate::alloc::request_capacity(self.size, 8)
+            }
+            crate::alloc::KIND_REGION if self.flags & crate::LAYOUT_NO_EXTENT != 0 => self.size,
+            _ => unsafe { header.capacity() },
+        };
+        usize::try_from(bytes).map_err(|_| Error::Value)
+    }
 }
 
 impl Program {
@@ -201,12 +240,34 @@ impl Program {
                         node,
                     }
                 }
+                VALUE_SLICE if extent == 24 => {
+                    let byte = field(&[VALUE_FIELD, 0, header[3], u64::MAX, 0, 0, 0, 0])?.node;
+                    Node::Slice { byte }
+                }
                 VALUE_UNKNOWN => Node::Unsupported { extent },
                 _ => return Err(Error::Program),
             };
             nodes.push(node);
         }
-        Self::new(nodes, 0)
+        let needs_owners = nodes.iter().any(|node| matches!(node, Node::Slice { .. }));
+        let mut program = Self::new(nodes, 0)?;
+        if needs_owners {
+            if count as usize > WORK_MAX {
+                return Err(Error::Limit);
+            }
+            program.owners = (0..count)
+                .map(|id| {
+                    let layout = unsafe { &*descriptor(id) };
+                    OwnerBounds {
+                        size: layout.size,
+                        flags: layout.flags,
+                        #[cfg(feature = "system-allocator")]
+                        align: layout.align,
+                    }
+                })
+                .collect();
+        }
+        Ok(program)
     }
 
     pub(super) fn new(nodes: Vec<Node>, root: usize) -> Result<Self, Error> {
@@ -239,6 +300,9 @@ impl Program {
                     return Err(Error::Program);
                 }
                 Node::Indirect { node, .. } if *node >= nodes.len() => return Err(Error::Program),
+                Node::Slice { byte } if !matches!(nodes.get(*byte), Some(Node::Bits(1))) => {
+                    return Err(Error::Program);
+                }
                 Node::Sequence {
                     minimum,
                     offset,
@@ -278,7 +342,11 @@ impl Program {
                 _ => {}
             }
         }
-        Ok(Self { nodes, root })
+        Ok(Self {
+            nodes,
+            root,
+            owners: Vec::new(),
+        })
     }
 
     pub(super) fn extent(&self) -> usize {
@@ -344,6 +412,56 @@ impl Program {
                     if out.len() > BYTES_MAX {
                         return Err(Error::Limit);
                     }
+                    continue;
+                }
+                Node::Slice { .. } => {
+                    // Same byte range as codec.rs::text_bytes; the physical
+                    // owner and start never enter the canonical value.
+                    let owner = unsafe { at.cast::<*const crate::Header>().read_unaligned() };
+                    if owner.is_null() {
+                        return Err(Error::Value);
+                    }
+                    let bounds = self
+                        .owners
+                        .get(unsafe { (*owner).index() } as usize)
+                        .ok_or(Error::Value)?;
+                    let capacity = unsafe { bounds.capacity(owner)? };
+                    let start = unsafe { at.add(8).cast::<u64>().read_unaligned() };
+                    let length = unsafe { at.add(16).cast::<u64>().read_unaligned() };
+                    let start = usize::try_from(start)
+                        .ok()
+                        .and_then(|n| n.checked_add(8))
+                        .ok_or(Error::Value)?;
+                    let length = usize::try_from(length).map_err(|_| Error::Value)?;
+                    let end = start.checked_add(length).ok_or(Error::Value)?;
+                    if end > capacity || end > isize::MAX as usize {
+                        return Err(Error::Value);
+                    }
+                    if bounds.flags & crate::LAYOUT_SEQUENCE != 0 {
+                        if capacity < 16 || start < 16 {
+                            return Err(Error::Value);
+                        }
+                        let live = unsafe { owner.add(1).cast::<u64>().read_unaligned() };
+                        let live_end = usize::try_from(live)
+                            .ok()
+                            .and_then(|n| n.checked_add(16))
+                            .ok_or(Error::Value)?;
+                        if live_end > capacity || end > live_end {
+                            return Err(Error::Value);
+                        }
+                    }
+                    if out
+                        .len()
+                        .checked_add(8)
+                        .and_then(|n| n.checked_add(length))
+                        .is_none_or(|n| n > BYTES_MAX)
+                    {
+                        return Err(Error::Limit);
+                    }
+                    out.extend_from_slice(&(length as u64).to_le_bytes());
+                    out.extend_from_slice(unsafe {
+                        std::slice::from_raw_parts(owner.add(1).cast::<u8>().add(start), length)
+                    });
                     continue;
                 }
                 Node::Indirect { node, descriptor } => {
@@ -1002,6 +1120,346 @@ mod tests {
                                     if sequence { &sequence_count[..] } else { &[] },
                                     &[1],
                                     &42u64.to_le_bytes(),
+                                ]
+                                .concat();
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Value {
+                                        status: 0,
+                                        payload: expected.clone()
+                                    }));
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Received {
+                                        status: crate::channels::DONE,
+                                        payload: Some(expected.clone())
+                                    }));
+                                *seen.lock().unwrap() = rows.to_vec();
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn linked_slice_values_ignore_backing_storage_and_view_offsets() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::TargetSpec;
+        use hirsel_types::{Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            for primitive in [Primitive::String, Primitive::Bytes] {
+                let mut types = Types::default();
+                let slice = types.p(primitive);
+                let byte = types.p(Primitive::U8);
+                let inline = types.inline(byte, 40);
+                let owners = Owners::default();
+                let mut builder = LayoutBuilder::new(&target, &owners);
+                let root = builder.layout(&types.store, slice).unwrap();
+                let flat = builder.flat(&types.store, slice).unwrap();
+                let fixed = builder.flat(&types.store, inline).unwrap();
+                let table = builder.finish();
+                for rotation in [0, 1] {
+                    let count = table.layouts.len();
+                    let linked =
+                        |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                    let (_words, layouts) = native_layouts(&table, rotation);
+                    let mut pointers = vec![
+                        &crate::text::hirsel_rt_v2_bytes_descriptor.0 as *const crate::Layout,
+                        &crate::io::hirsel_rt_v2_file_walk_descriptor.0,
+                    ];
+                    pointers.extend((0..count).map(|id| {
+                        &layouts[(id + count - rotation) % count] as *const crate::Layout
+                    }));
+                    let program = unsafe {
+                        Program::from_layouts(linked(root), pointers.len() as u32, |id| {
+                            pointers[id as usize]
+                        })
+                    }
+                    .unwrap();
+                    let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+                    let mut view = crate::alloc::View::new();
+                    unsafe { heap.bind(&mut view) };
+                    for bytes in [b"".as_slice(), "h\u{e9}llo".as_bytes()] {
+                        let expected =
+                            [(bytes.len() as u64).to_le_bytes().as_slice(), bytes].concat();
+                        for (descriptor, offset) in
+                            [(0, 16usize), (linked(flat), 9), (linked(fixed), 13)]
+                        {
+                            unsafe {
+                                let (owner, _) = heap.allocate(descriptor, 40, 8);
+                                let data = crate::alloc::payload(owner);
+                                if descriptor == 0 {
+                                    data.cast::<u64>().write((offset - 16 + bytes.len()) as u64);
+                                    data.add(8).cast::<u64>().write(24);
+                                } else {
+                                    // Fixed flat storage is an initialized inline byte array.
+                                    if descriptor == linked(fixed) {
+                                        data.write_bytes(0xee, 40);
+                                    }
+                                    data.cast::<u64>().write(bytes.len() as u64);
+                                }
+                                std::ptr::copy_nonoverlapping(
+                                    bytes.as_ptr(),
+                                    data.add(offset),
+                                    bytes.len(),
+                                );
+                                let slice = crate::views::Slice {
+                                    owner,
+                                    start: (offset - 8) as u64,
+                                    length: bytes.len() as u64,
+                                };
+                                let observed = program
+                                    .encode(
+                                        (&slice as *const crate::views::Slice).cast(),
+                                        |_, _| None,
+                                    )
+                                    .unwrap();
+                                assert_eq!(observed, expected);
+                                data.add(offset).write_bytes(0xff, bytes.len());
+                                heap.free(owner);
+                                assert_eq!(observed, expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn slice_values_reject_invalid_ranges_and_bounded_output_before_reading_bytes() {
+        let mut program = Program::new(vec![Node::Slice { byte: 1 }, Node::Bits(1)], 0).unwrap();
+        program.owners = vec![OwnerBounds {
+            size: 16,
+            flags: crate::LAYOUT_DYNAMIC | crate::LAYOUT_SEQUENCE,
+            #[cfg(feature = "system-allocator")]
+            align: 8,
+        }];
+        let layout = &crate::text::hirsel_rt_v2_bytes_descriptor.0 as *const crate::Layout;
+        let mut heap = crate::alloc::Heap::new(Box::new([layout]), false, 0);
+        let mut view = crate::alloc::View::new();
+        unsafe {
+            heap.bind(&mut view);
+            let (owner, capacity) = heap.allocate(0, 32, 8);
+            crate::alloc::payload(owner).cast::<u64>().write(2);
+            crate::alloc::payload(owner)
+                .add(8)
+                .cast::<u64>()
+                .write(capacity - 16);
+            for (start, length) in [(u64::MAX, 0), (8, u64::MAX), (0, 1), (8, 3), (capacity, 0)] {
+                let slice = crate::views::Slice {
+                    owner,
+                    start,
+                    length,
+                };
+                assert_eq!(
+                    program.encode((&slice as *const crate::views::Slice).cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+            }
+            let null = crate::views::Slice {
+                owner: std::ptr::null_mut(),
+                start: 8,
+                length: 0,
+            };
+            assert_eq!(
+                program.encode((&null as *const crate::views::Slice).cast(), |_, _| None),
+                Err(Error::Value)
+            );
+            // Out-of-registry provenance fails before looking for block metadata.
+            (*owner).descriptor = 1;
+            let bad = crate::views::Slice {
+                owner,
+                start: 8,
+                length: 0,
+            };
+            assert_eq!(
+                program.encode((&bad as *const crate::views::Slice).cast(), |_, _| None),
+                Err(Error::Value)
+            );
+            (*owner).descriptor = 0;
+            heap.free(owner);
+            let (large, _) = heap.allocate(0, BYTES_MAX as u64 + 16, 8);
+            crate::alloc::payload(large)
+                .cast::<u64>()
+                .write(BYTES_MAX as u64);
+            let slice = crate::views::Slice {
+                owner: large,
+                start: 8,
+                length: BYTES_MAX as u64,
+            };
+            // No element needs to be initialized: the output limit wins first.
+            assert_eq!(
+                program.encode((&slice as *const crate::views::Slice).cast(), |_, _| None),
+                Err(Error::Limit)
+            );
+            heap.free(large);
+        }
+        for byte in [0, 2] {
+            assert!(Program::new(vec![Node::Slice { byte }, Node::Bits(1)], 0).is_err());
+        }
+        assert!(Program::new(vec![Node::Slice { byte: 1 }, Node::Bits(8)], 0).is_err());
+    }
+
+    #[test]
+    fn native_slice_message_events_own_visible_bytes_before_mutation_and_release() {
+        use crate::tasks::*;
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
+        use hirsel_types::{Primitive, testing::Types};
+        use std::sync::{Arc, Mutex};
+        for primitive in [Primitive::String, Primitive::Bytes] {
+            let mut types = Types::default();
+            let text = types.p(primitive);
+            let option = types.variant(&[&[], &[text]]);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&TargetSpec::x86_64_unknown_linux_gnu(), &owners);
+            let root = builder.layout(&types.store, option).unwrap();
+            let table = builder.finish();
+            let option = &table.layouts[root.0 as usize];
+            let tag = option.tag.as_ref().unwrap();
+            let slice_offset = tag.variants[1].fields[0].offset as usize;
+            let tag_offset = tag.offset as usize;
+            let explicit_tag = matches!(tag.form, TagForm::Ordinal);
+            let SizeSpec::Fixed(extent) = option.size else {
+                panic!("fixed slice option")
+            };
+            let mut reference = None;
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let pointers: Vec<_> = (0..count)
+                    .map(|id| &layouts[(id + count - rotation) % count] as *const crate::Layout)
+                    .collect();
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = pointers.as_ptr();
+                        run.config.layout_count = pointers.len() as u32;
+                        unsafe { run.use_physical_dispatch() };
+                        let descriptor = linked(root);
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy =
+                                    crate::ordered::Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                super::super::events::enable(ctx);
+                            },
+                            move |ctx| unsafe {
+                                let mut endpoints = [0u64; 2];
+                                let none = vec![0u64; extent.div_ceil(8) as usize];
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_open(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        endpoints.as_mut_ptr(),
+                                        &0,
+                                        none.as_ptr().cast(),
+                                        descriptor
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut slice =
+                                    crate::text::allocate_bytes(ctx, b"left-visible-right");
+                                slice.start += 5;
+                                slice.length = 7;
+                                let mut image = none.clone();
+                                if explicit_tag {
+                                    image
+                                        .as_mut_ptr()
+                                        .cast::<u8>()
+                                        .add(tag_offset)
+                                        .cast::<u32>()
+                                        .write(1);
+                                }
+                                image
+                                    .as_mut_ptr()
+                                    .cast::<u8>()
+                                    .add(slice_offset)
+                                    .cast::<crate::views::Slice>()
+                                    .write(slice);
+                                let mut status = u32::MAX;
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_send(
+                                        ctx,
+                                        &mut status,
+                                        &mut endpoints[0],
+                                        image.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                assert_eq!(image, none);
+                                let mut received = none.clone();
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_receive(
+                                        ctx,
+                                        0,
+                                        0,
+                                        &mut status,
+                                        &mut endpoints[1],
+                                        received.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                let returned = received
+                                    .as_ptr()
+                                    .cast::<u8>()
+                                    .add(slice_offset)
+                                    .cast::<crate::views::Slice>()
+                                    .read();
+                                assert_eq!(returned.owner, slice.owner);
+                                assert_eq!(returned.start, slice.start);
+                                assert_eq!(returned.length, slice.length);
+                                crate::alloc::payload(slice.owner)
+                                    .add(8 + slice.start as usize)
+                                    .write_bytes(0xff, 7);
+                                received.fill(0);
+                                assert_eq!(
+                                    crate::release::hirsel_rt_v2_release(
+                                        ctx,
+                                        slice.owner,
+                                        0,
+                                        std::ptr::null(),
+                                        0,
+                                        0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[0], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[1], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                let _role = role::Guard::new(ctx);
+                                super::super::engine::at_head(ctx).unwrap();
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows = log.canonical().unwrap();
+                                let expected = [
+                                    1u32.to_le_bytes().as_slice(),
+                                    &7u64.to_le_bytes(),
+                                    b"visible",
                                 ]
                                 .concat();
                                 assert!(rows.iter().any(|row| row.outcome

@@ -142,6 +142,10 @@ impl Program {
                 self.words[at + 1] = VALUE_INDIRECT;
                 self.reference(at + 3, *payload);
             }
+            LayoutKind::Slice { element } if size == 24 => {
+                self.words[at + 1] = VALUE_SLICE;
+                self.reference(at + 3, *element);
+            }
             LayoutKind::Handle => {
                 if let [
                     ScanStep::Handle {
