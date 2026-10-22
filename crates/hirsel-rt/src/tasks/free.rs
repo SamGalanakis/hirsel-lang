@@ -15,6 +15,7 @@ mod finalizer_replay_tests;
 pub(crate) mod foreign;
 pub(crate) mod gate;
 pub(crate) mod home;
+pub(crate) mod host;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod record;

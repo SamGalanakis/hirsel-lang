@@ -162,6 +162,9 @@ pub struct TaskCtx {
     /// Detached Free object images retained across yielding finalizers and
     /// returned by context destruction when a stop abandons their frames.
     pub(crate) detached_images: crate::tasks::free::cleanup::Images,
+    /// A native Free request retains its buffers and late completion even
+    /// when its task's host-call frame is abandoned after a terminal cut.
+    pub(crate) pending_host: Option<Box<crate::tasks::free::host::Pending>>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -342,6 +345,7 @@ impl TaskCtx {
             #[cfg(feature = "measurement")]
             site: 0,
             detached_images: Default::default(),
+            pending_host: None,
         }
     }
 

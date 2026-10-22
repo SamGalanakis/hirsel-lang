@@ -5,8 +5,10 @@
 //!
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
 //! channel/task boundaries, root entry tails, thaw, mutex closes and foreign
-//! callbacks on compute, home and pool threads, without host requests.
-//! General activation requires every boundary and stop to use this protocol.
+//! callbacks on compute, home and pool threads. A separate test-only host
+//! foundation proves request ownership and claim/withdraw phases; host keys,
+//! handles and replay remain gated. General activation requires every boundary
+//! and stop to use this protocol.
 
 use crate::TaskCtx;
 use crate::stop::{Stop, Stopped};
@@ -17,8 +19,9 @@ use hirsel_free::session::Marked;
 use std::sync::{Arc, Mutex};
 
 pub(crate) struct Recording {
-    pub(crate) recorder: Recorder<Marked>,
+    pub(crate) recorder: Recorder<Marked, crate::io::Request>,
     trace: Mutex<Vec<Stamped>>,
+    requests: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) struct Task {
@@ -81,6 +84,31 @@ impl Drop for Task {
 pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
     // SAFETY: only the running owner reaches its task-local recorder.
     unsafe { (*ctx).recording.is_some() }
+}
+
+pub(super) fn owner(ctx: *mut TaskCtx) -> Option<Arc<Recording>> {
+    unsafe { (*ctx).recording.as_ref() }.map(|task| task.shared.clone())
+}
+
+pub(super) fn position(ctx: *mut TaskCtx) -> (Vec<u32>, Progress) {
+    let task = unsafe { (*ctx).recording.as_ref() }.expect("a recorded host request");
+    (
+        task.log.path().to_vec(),
+        Progress::new(task.ordinal, Phase::Entered),
+    )
+}
+
+impl Recording {
+    pub(super) fn prepare_request(
+        &self,
+        request: crate::io::Request,
+    ) -> Arc<hirsel_free::claim::Request<crate::io::Request>> {
+        let id = self
+            .requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert_ne!(id, u64::MAX, "host request identity overflow");
+        self.recorder.prepare(id, request)
+    }
 }
 
 /// The running task supplies bounded runtime work. Table actions hold the
@@ -334,6 +362,7 @@ impl Recording {
             )
             .unwrap(),
             trace: Mutex::new(Vec::new()),
+            requests: std::sync::atomic::AtomicU64::new(1),
         })
     }
 
