@@ -106,11 +106,17 @@ its rule and exact primary span, including UTF-8 byte offsets.
 | dogfood7 F02: partial record move | `partial-move.hir`: `take value.assets` | `paths` consumes/destructures Manifest, iterates `take assets`, then `path_taken` consumes/destructures each Asset | OWN-8 |
 | dogfood7 F02: later use after consumption | `record-reuse.hir`: `asset.path` after `let Asset(path: name) = take asset`; `field-reuse.hir`: `name` after `take name` | `path_taken` returns the owned field at its last use; `records` reads the returned path | OWN-2 |
 | dogfood7 F03: mutable match binding | `mutable-pattern.hir`: `let Ok(mut f) = ... else { ... }` | `read`: `let Ok(f) = ... else { ... }`, then `let mut file = take f` and `file.read(d, mut file, ...)` | LANG-13 |
-| dogfood7 F04: sequence context | `sequence-context.hir`: `for name in ["a", "b"]` | `bindings_and_literals`: `let names: List[String] = ["a", "b"]`, then iterate `names` | LANG-2 |
+| dogfood7 F04: sequence context | `empty-sequence-context.hir`: `for name in []` | `sequence-context.hir`: `for name in ["a", "b"]`; `bindings_and_literals` supplies an explicit `List[String]` context | LANG-2 |
 | dogfood7 F05: capability error domains | `file-error.hir`: plain `?` on `io.dir` with only `Grant(GrantError)`; `grant-error.hir`: stdout with only `File(FileError)` | `directory` uses `? File`, `output` uses `? Grant`; `AppError = File(FileError) \| Grant(GrantError)` | LANG-8 |
 | dogfood8 F02: take versus unique | `unique-take.hir`: `Ok(take config)` returned as `Result[unique V2, ()]` | `migrate`: `Ok(unique config)` | MODE-2 |
 | dogfood8 F03: UTF-8 byte spelling | `byte-literal.hir`: `b"雪"` | `bindings_and_literals`: `b"\xE9\x9B\xAA" == string.as_bytes("雪")` | SEM-3 |
 | dogfood8 F04: integer receiver context | `numeric-context.hir`: `65537 - list.len(data)` | `bindings_and_literals`: `65537u64 - list.len(data)` gives `65534` for three bytes | LANG-2 |
+
+Since 81c2fd39, [LANG-2](spec/language.md#lang-2-prefix-law) defaults a
+context-free nonempty sequence to core `List` from its first element. The original
+`sequence-context.hir` is therefore an accepted control on H, checked heap, LLVM
+and Cranelift; the empty literal retains the missing-context rejection and exact
+span check.
 
 `copy asset.path` shares counted path storage and retains the borrowed
 parameter's region. A result relation keeps that borrow explicit; `records`

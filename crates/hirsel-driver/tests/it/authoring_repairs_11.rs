@@ -16,12 +16,7 @@ fn authoring_repairs_11_rejected_twins_have_one_intended_rule_and_span() {
             ("dogfood7-F02", "record-reuse", "OWN-2", "asset.path"),
             ("dogfood7-F02", "field-reuse", "OWN-2", "name"),
             ("dogfood7-F03", "mutable-pattern", "LANG-13", "mut"),
-            (
-                "dogfood7-F04",
-                "sequence-context",
-                "LANG-2",
-                "[\"a\", \"b\"]",
-            ),
+            ("dogfood7-F04", "empty-sequence-context", "LANG-2", "[]"),
             ("dogfood7-F05", "file-error", "LANG-8", "?"),
             ("dogfood7-F05", "grant-error", "LANG-8", "?"),
             ("dogfood8-F02", "unique-take", "MODE-2", "Ok(take config)"),
@@ -81,11 +76,14 @@ fn authoring_repairs_11_rejected_twins_have_one_intended_rule_and_span() {
 fn authoring_repairs_11_accepted_twins_agree_on_h_llvm_and_cranelift() {
     with_compiler_stack(|| {
         for (name, manifest) in [
-            ("pure", "authoring.hir.json"),
-            ("io", "authoring-io.hir.json"),
+            ("pure", "examples/ownership-repairs/authoring.hir.json"),
+            ("io", "examples/ownership-repairs/authoring-io.hir.json"),
+            (
+                "sequence-context",
+                "crates/hirsel-driver/tests/fixtures/authoring-repairs-11/sequence-context.hir.json",
+            ),
         ] {
-            let mut program =
-                load_program(&root().join("examples/ownership-repairs").join(manifest)).unwrap();
+            let mut program = load_program(&root().join(manifest)).unwrap();
             program.check_for_execution().unwrap();
             let config = RunConfiguration {
                 entry: program.entry.clone(),
@@ -99,7 +97,7 @@ fn authoring_repairs_11_accepted_twins_agree_on_h_llvm_and_cranelift() {
             )
             .unwrap();
             let observation = execution.observation.as_ref().unwrap();
-            if name == "pure" {
+            if name != "io" {
                 assert!(observation.effects.is_empty());
             } else {
                 assert!(
