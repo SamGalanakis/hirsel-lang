@@ -1277,6 +1277,12 @@
       "module": [
         "varint"
       ]
+    },
+    {
+      "path": "toposort.hir",
+      "module": [
+        "toposort"
+      ]
     }
   ],
   "dependencies": []

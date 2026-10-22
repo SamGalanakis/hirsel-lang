@@ -1,0 +1,95 @@
+// CPython 8b7d6c53eee2226b08bed761d5a1742b5adb8507,
+// Lib/graphlib.py:56-85,125-135,189-200 (PSF-2.0; third-party/NOTICES.md).
+// Dense IDs replace hash keys; append-linked edge indices preserve successor
+// order without nested owned lists. The output doubles as a FIFO ready queue.
+
+/// An edge says `from` must precede `to`.
+pub type Edge {
+  from: u64,
+  to: u64,
+}
+
+/// Limit payloads are supplied counts; Endpoint carries the first invalid
+/// edge's input index and endpoint (from is checked first). Blocked is sorted
+/// and includes downstream vertices that cannot be released, not just cycles.
+pub type GraphError = NodeLimit(u64) | EdgeLimit(u64) | Endpoint(u64, u64) | Blocked(
+  List[u64]
+)
+
+/// Order vertices 0..node_count within caller-supplied inclusive caps.
+/// Initially ready IDs are ascending, then newly ready IDs join the FIFO in
+/// input successor order. This is deterministic, not lexicographically minimal.
+/// Counts and all endpoints are checked before allocating graph storage.
+pub fn order(node_count: u64, edges: List[Edge], max_nodes: u64, max_edges: u64) -> Result[
+  List[u64],
+  GraphError
+] uses {} {
+  let edge_count = core@1/list.len(edges)
+  if node_count > max_nodes {
+    return Error(NodeLimit(node_count))
+  }
+  if edge_count > max_edges {
+    return Error(EdgeLimit(edge_count))
+  }
+  for i in 0u64..edge_count {
+    if edges[i].from >= node_count {
+      return Error(Endpoint(i, edges[i].from))
+    }
+    if edges[i].to >= node_count {
+      return Error(Endpoint(i, edges[i].to))
+    }
+  }
+  // edge_count is an out-of-range sentinel; no node_count+1 arithmetic.
+  let mut first: unique List[u64] = []
+  let mut last: unique List[u64] = []
+  let mut indegree: unique List[u64] = []
+  let mut next: unique List[u64] = []
+  for v in 0u64..node_count {
+    core@1/list.push(mut first, edge_count)
+    core@1/list.push(mut last, edge_count)
+    core@1/list.push(mut indegree, 0)
+  }
+  for i in 0u64..edge_count {
+    core@1/list.push(mut next, edge_count)
+    let a = edges[i].from
+    let b = edges[i].to
+    if first[a] == edge_count {
+      first[a] = i
+    } else {
+      next[last[a]] = i
+    }
+    last[a] = i
+    // At most edge_count additions overall, so each count fits u64.
+    indegree[b] += 1
+  }
+  let mut ready: unique List[u64] = []
+  for v in 0u64..node_count {
+    if indegree[v] == 0 {
+      core@1/list.push(mut ready, v)
+    }
+  }
+  let mut head = 0u64
+  while head < core@1/list.len(ready) {
+    let v = ready[head]
+    head += 1
+    let mut i = first[v]
+    while i != edge_count {
+      let b = edges[i].to
+      indegree[b] -= 1
+      if indegree[b] == 0 {
+        core@1/list.push(mut ready, b)
+      }
+      i = next[i]
+    }
+  }
+  if head == node_count {
+    return Ok(take ready)
+  }
+  let mut blocked: List[u64] = []
+  for v in 0u64..node_count {
+    if indegree[v] != 0 {
+      core@1/list.push(mut blocked, v)
+    }
+  }
+  Error(Blocked(take blocked))
+}
