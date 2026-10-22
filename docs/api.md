@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2018 exported definitions; 843 variants.
+2037 exported definitions; 848 variants.
 
 ## Types and roots
 
@@ -2644,6 +2644,24 @@ References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
 
 ## binary
 
+<a id="def-std_401_2fbinary_2fByteOrder"></a>
+
+- `pub type binary.ByteOrder = LittleEndian | BigEndian`
+
+Explicit wire order, independent of host endianness and alignment.
+
+<a id="def-std_401_2fbinary_2fByteOrder_23BigEndian"></a>
+
+- `BigEndian -> binary.ByteOrder`
+
+Variant of binary.ByteOrder.
+
+<a id="def-std_401_2fbinary_2fByteOrder_23LittleEndian"></a>
+
+- `LittleEndian -> binary.ByteOrder`
+
+Variant of binary.ByteOrder.
+
 <a id="def-std_401_2fbinary_2fDecodeError"></a>
 
 - `pub type binary.DecodeError = Truncated(u64) | Syntax(u64) | Unsupported(u64) | Utf8(u64) | DuplicateKey( u64 ) | Nesting(u64) | Trailing(u64) | InvalidNumber`
@@ -2714,6 +2732,63 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 Variant of binary.DecodeError.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fReadError"></a>
+
+- `pub type binary.ReadError { offset: u64, }`
+
+Incomplete fixed-width read. The offset is exactly the requested byte offset,
+including when it is past the end of the input.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fappend_5fu16"></a>
+
+- `@preserves_unique(out) pub fn binary.append_u16(value: u16, order: ByteOrder, mut out: List[u8]) -> () uses {}`
+
+Append two bytes, preserving the destination prefix and uniqueness.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u16`](#def-core_401_2fu16), [`core@1/u8`](#def-core_401_2fu8), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder)
+
+<a id="def-std_401_2fbinary_2fappend_5fu32"></a>
+
+- `@preserves_unique(out) pub fn binary.append_u32(value: u32, order: ByteOrder, mut out: List[u8]) -> () uses {}`
+
+Append four bytes, preserving the destination prefix and uniqueness.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u8`](#def-core_401_2fu8), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder)
+
+<a id="def-std_401_2fbinary_2fappend_5fu64"></a>
+
+- `@preserves_unique(out) pub fn binary.append_u64(value: u64, order: ByteOrder, mut out: List[u8]) -> () uses {}`
+
+Append eight bytes, preserving the destination prefix and uniqueness.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder)
+
+<a id="def-std_401_2fbinary_2fread_5fu16"></a>
+
+- `@noalloc pub fn binary.read_u16(data: Bytes, offset: u64, order: ByteOrder) -> Result[u16, ReadError] uses {}`
+
+Read two bytes at any offset, or return the requested offset on truncation.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u16`](#def-core_401_2fu16), [`core@1/u64`](#def-core_401_2fu64), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder), [`std@1/binary/ReadError`](#def-std_401_2fbinary_2fReadError)
+
+<a id="def-std_401_2fbinary_2fread_5fu32"></a>
+
+- `@noalloc pub fn binary.read_u32(data: Bytes, offset: u64, order: ByteOrder) -> Result[u32, ReadError] uses {}`
+
+Read four bytes at any offset, or return the requested offset on truncation.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder), [`std@1/binary/ReadError`](#def-std_401_2fbinary_2fReadError)
+
+<a id="def-std_401_2fbinary_2fread_5fu64"></a>
+
+- `@noalloc pub fn binary.read_u64(data: Bytes, offset: u64, order: ByteOrder) -> Result[u64, ReadError] uses {}`
+
+Read eight bytes at any offset, or return the requested offset on truncation.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/binary/ByteOrder`](#def-std_401_2fbinary_2fByteOrder), [`std@1/binary/ReadError`](#def-std_401_2fbinary_2fReadError)
 
 
 ## blake2b
@@ -2887,11 +2962,43 @@ Variant of bufio.ReadError.
 
 - `pub opaque type bufio.Reader: copyable + inert + noalloc_drop uses {}`
 
+<a id="def-std_401_2fbufio_2fWriteError"></a>
+
+- `@serializable pub type bufio.WriteError[E] = Sink(E) | WriteZero | InvalidWrite`
+
+<a id="def-std_401_2fbufio_2fWriteError_23InvalidWrite"></a>
+
+- `InvalidWrite -> bufio.WriteError[E]`
+
+Variant of bufio.WriteError.
+
+<a id="def-std_401_2fbufio_2fWriteError_23Sink"></a>
+
+- `Sink(E) -> bufio.WriteError[E]`
+
+Variant of bufio.WriteError.
+
+<a id="def-std_401_2fbufio_2fWriteError_23WriteZero"></a>
+
+- `WriteZero -> bufio.WriteError[E]`
+
+Variant of bufio.WriteError.
+
+<a id="def-std_401_2fbufio_2fWriter"></a>
+
+- `pub opaque type bufio.Writer: () uses {}`
+
 <a id="def-std_401_2fbufio_2fbuffered"></a>
 
 - `pub fn bufio.buffered(r: Reader) -> u64 uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fbuffered_5flen"></a>
+
+- `pub fn bufio.buffered_len(w: Writer) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Writer`](#def-std_401_2fbufio_2fWriter)
 
 <a id="def-std_401_2fbufio_2fconsume"></a>
 
@@ -2937,11 +3044,29 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2
 
 References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
+<a id="def-std_401_2fbufio_2fflush"></a>
+
+- `pub fn bufio.flush[S, E]( mut w: unique Writer, mut sink: S, write: fn(mut S, List[u8], u64, u64) -> Result[u64, E] ) -> Result[(), WriteError[E]] uses {write}`
+
+The callback borrows initialized storage, offering only [start,end).
+Ok(n) commits exactly that prefix; Error(e) must accept no bytes this call.
+A successful short write is retried. No empty callback, hidden error or drop I/O.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/WriteError`](#def-std_401_2fbufio_2fWriteError), [`std@1/bufio/Writer`](#def-std_401_2fbufio_2fWriter)
+
 <a id="def-std_401_2fbufio_2fnew"></a>
 
 - `pub fn bufio.new(capacity: u64) -> Reader uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fnew_5fwriter"></a>
+
+- `pub fn bufio.new_writer(capacity: u64) -> unique Writer uses {}`
+
+Fixed pending-payload capacity; zero is normalized to one.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Writer`](#def-std_401_2fbufio_2fWriter)
 
 <a id="def-std_401_2fbufio_2fpeek"></a>
 
@@ -3040,6 +3165,14 @@ References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_4
 - `@preserves_unique(out) pub fn bufio.stream_read_until( n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[NetError]]`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fwrite_5fbuffered"></a>
+
+- `pub fn bufio.write_buffered(mut w: unique Writer, data: Bytes) -> u64 uses {}`
+
+Accept only the available prefix; never call a sink. Reclaim committed space.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Writer`](#def-std_401_2fbufio_2fWriter)
 
 
 ## bytes
@@ -4211,6 +4344,8 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 
 Derive `type_from_json_bytes(Bytes)`: one complete UTF-8 document. Declare
 type_from_json_reader as well, so recursive/nested types share the reader.
+The reader decoder constructs owned fields; move its result without detaching
+the completed graph. Token views remain bounded by the Reader.
 
 References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
 
@@ -5682,6 +5817,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 - `pub fn hex.encode(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fhex_2fencode_5finto"></a>
+
+- `@preserves_unique(out) pub fn hex.encode_into(data: Bytes, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8)
 
 
 ## hkdf
@@ -10346,6 +10487,18 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/priority_queue/He
 
 References: [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
 
+<a id="def-std_401_2fpriority_5fqueue_2fpush_5fpop"></a>
+
+- `pub fn priority_queue.push_pop[T](mut h: unique Heap[T], take value: unique T) -> unique T uses {h, value}`
+
+References: [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+
+<a id="def-std_401_2fpriority_5fqueue_2freplace_5ftop"></a>
+
+- `pub fn priority_queue.replace_top[T](mut h: unique Heap[T], take value: unique T) -> unique Option[T] uses {h, value}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+
 
 ## prng
 
@@ -10544,6 +10697,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `pub fn regex.find(re: Regex, text: String, work_limit: u64) -> Result[ Option[Span], MatchError ] uses {}`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex), [`std@1/regex/Span`](#def-std_401_2fregex_2fSpan)
+
+<a id="def-std_401_2fregex_2ffind_5fall"></a>
+
+- `pub fn regex.find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> Result[ List[Span], MatchError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/regex/MatchError`](#def-std_401_2fregex_2fMatchError), [`std@1/regex/Regex`](#def-std_401_2fregex_2fRegex), [`std@1/regex/Span`](#def-std_401_2fregex_2fSpan)
 
 <a id="def-std_401_2fregex_2fis_5fmatch"></a>
 
@@ -13679,6 +13838,12 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-co
 - `pub fn string.split_whitespace(take s: String) -> List[String] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2fsplitn"></a>
+
+- `pub fn string.splitn(take s: String, separator: String, limit: u64) -> List[String] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fstring_2fstarts_5fwith"></a>
 
