@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2170 exported definitions; 907 variants.
+2194 exported definitions; 938 variants.
 
 ## Types and roots
 
@@ -5054,6 +5054,290 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core
 - `fn dir.remove_all(d: Dir, p: Path) -> Result[(), FileError]`
 
 
+## dns_message
+
+<a id="def-std_401_2fdns_5fmessage_2fCodecError"></a>
+
+- `pub type dns_message.CodecError { kind: ErrorKind, offset: u64, }`
+
+Decode offsets are absolute packet positions: offending control byte,
+first missing byte, or first unconsumed byte. Limit errors point to header
+count/packet end or the name byte exhausting work. Encode offsets identify
+the prospective uncompressed field start; InvalidLimits uses zero.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/dns_message/ErrorKind`](#def-std_401_2fdns_5fmessage_2fErrorKind)
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind"></a>
+
+- `pub type dns_message.ErrorKind = InvalidLimits | PacketLimit | RecordLimit | WorkLimit | Truncated | ReservedLabel | PointerLimit | InvalidPointer | NameTooLong | InvalidLabel | InvalidRdata | UnknownEncoding | Trailing`
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23InvalidLabel"></a>
+
+- `InvalidLabel -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23InvalidLimits"></a>
+
+- `InvalidLimits -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23InvalidPointer"></a>
+
+- `InvalidPointer -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23InvalidRdata"></a>
+
+- `InvalidRdata -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23NameTooLong"></a>
+
+- `NameTooLong -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23PacketLimit"></a>
+
+- `PacketLimit -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23PointerLimit"></a>
+
+- `PointerLimit -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23RecordLimit"></a>
+
+- `RecordLimit -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23ReservedLabel"></a>
+
+- `ReservedLabel -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23Trailing"></a>
+
+- `Trailing -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23Truncated"></a>
+
+- `Truncated -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23UnknownEncoding"></a>
+
+- `UnknownEncoding -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fErrorKind_23WorkLimit"></a>
+
+- `WorkLimit -> dns_message.ErrorKind`
+
+Variant of dns_message.ErrorKind.
+
+<a id="def-std_401_2fdns_5fmessage_2fHeader"></a>
+
+- `pub type dns_message.Header { id: u16, flags: u16, }`
+
+All 16 flag bits are retained, including the reserved bit. Opcode occupies
+bits 11..14, response code bits 0..3; no opcode or class policy is applied.
+
+References: [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2fdns_5fmessage_2fLimits"></a>
+
+- `pub type dns_message.Limits { packet_bytes: u64, records: u64, name_work: u64, }`
+
+Caller may lower these hard ceilings: 65535 packet bytes, 4096 total
+questions + records, 1048576 expanded-name work units. Each visited name
+control byte/pointer second byte and copied label byte consumes one unit.
+A name follows at most 128 pointers, including forward pointers.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdns_5fmessage_2fMessage"></a>
+
+- `pub type dns_message.Message { header: Header, questions: List[Question], answers: List[Record], authorities: List[Record], additionals: List[Record], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/dns_message/Header`](#def-std_401_2fdns_5fmessage_2fHeader), [`std@1/dns_message/Question`](#def-std_401_2fdns_5fmessage_2fQuestion), [`std@1/dns_message/Record`](#def-std_401_2fdns_5fmessage_2fRecord)
+
+<a id="def-std_401_2fdns_5fmessage_2fMx"></a>
+
+- `pub type dns_message.Mx { preference: u16, exchange: Name, }`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fName"></a>
+
+- `pub type dns_message.Name { labels: List[Bytes], }`
+
+Root is an empty list. Labels contain arbitrary wire octets, never UTF-8.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList)
+
+<a id="def-std_401_2fdns_5fmessage_2fQuestion"></a>
+
+- `pub type dns_message.Question { name: Name, qtype: u16, class: u16, }`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData"></a>
+
+- `pub type dns_message.RData = A(Bytes) | AAAA(Bytes) | CNAME(Name) | NS(Name) | PTR(Name) | MX(Mx) | TXT( List[Bytes] ) | SOA(Soa) | SRV(Srv) | Unknown(kind: u16, raw: Bytes)`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u16`](#def-core_401_2fu16), [`std@1/dns_message/Mx`](#def-std_401_2fdns_5fmessage_2fMx), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName), [`std@1/dns_message/Soa`](#def-std_401_2fdns_5fmessage_2fSoa), [`std@1/dns_message/Srv`](#def-std_401_2fdns_5fmessage_2fSrv)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23A"></a>
+
+- `A(Bytes) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23AAAA"></a>
+
+- `AAAA(Bytes) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23CNAME"></a>
+
+- `CNAME(Name) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23MX"></a>
+
+- `MX(Mx) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Mx`](#def-std_401_2fdns_5fmessage_2fMx)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23NS"></a>
+
+- `NS(Name) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23PTR"></a>
+
+- `PTR(Name) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23SOA"></a>
+
+- `SOA(Soa) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Soa`](#def-std_401_2fdns_5fmessage_2fSoa)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23SRV"></a>
+
+- `SRV(Srv) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`std@1/dns_message/Srv`](#def-std_401_2fdns_5fmessage_2fSrv)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23TXT"></a>
+
+- `TXT( List[Bytes] ) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList)
+
+<a id="def-std_401_2fdns_5fmessage_2fRData_23Unknown"></a>
+
+- `Unknown(kind: u16, raw: Bytes) -> dns_message.RData`
+
+Variant of dns_message.RData.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2fdns_5fmessage_2fRecord"></a>
+
+- `pub type dns_message.Record { name: Name, class: u16, ttl: u32, data: RData, }`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`core@1/u32`](#def-core_401_2fu32), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName), [`std@1/dns_message/RData`](#def-std_401_2fdns_5fmessage_2fRData)
+
+<a id="def-std_401_2fdns_5fmessage_2fSoa"></a>
+
+- `pub type dns_message.Soa { primary: Name, mailbox: Name, serial: u32, refresh: u32, retry: u32, expire: u32, minimum: u32, }`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fSrv"></a>
+
+- `pub type dns_message.Srv { priority: u16, weight: u16, port: u16, target: Name, }`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fdecode"></a>
+
+- `pub fn dns_message.decode(packet: Bytes, limits: Limits) -> Result[Message, CodecError] uses {}`
+
+Parse exactly one owned DNS packet. No transport framing, I/O or authority.
+Unknown RDATA is opaque inspection data; it may contain packet-relative
+pointers. We never infer compression by scanning arbitrary opaque bytes.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/dns_message/CodecError`](#def-std_401_2fdns_5fmessage_2fCodecError), [`std@1/dns_message/Limits`](#def-std_401_2fdns_5fmessage_2fLimits), [`std@1/dns_message/Message`](#def-std_401_2fdns_5fmessage_2fMessage)
+
+<a id="def-std_401_2fdns_5fmessage_2fdefault_5flimits"></a>
+
+- `pub fn dns_message.default_limits() -> Limits uses {}`
+
+References: [`std@1/dns_message/Limits`](#def-std_401_2fdns_5fmessage_2fLimits)
+
+<a id="def-std_401_2fdns_5fmessage_2fdisplay_5fname"></a>
+
+- `pub fn dns_message.display_name(name: Name) -> Result[String, CodecError] uses {}`
+
+ASCII absolute display name. Dot, backslash, whitespace and nonprintable
+octets use a backslash and three decimal digits, so labels stay unambiguous.
+This is display only; no dotted-name parser or IDNA policy is provided.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/dns_message/CodecError`](#def-std_401_2fdns_5fmessage_2fCodecError), [`std@1/dns_message/Name`](#def-std_401_2fdns_5fmessage_2fName)
+
+<a id="def-std_401_2fdns_5fmessage_2fencode"></a>
+
+- `pub fn dns_message.encode(message: Message, limits: Limits) -> Result[Bytes, CodecError] uses {}`
+
+Preflight validates all counts, labels, typed lengths and the complete packet
+size before allocating the output. Counts and RDLENGTH are derived, never
+truncated. Every Unknown record is rejected, even if its bytes look plain:
+reconstructing a packet cannot safely relocate unknown compression pointers.
+Keeping the original Bytes for whole-packet passthrough is a separate action.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/dns_message/CodecError`](#def-std_401_2fdns_5fmessage_2fCodecError), [`std@1/dns_message/Limits`](#def-std_401_2fdns_5fmessage_2fLimits), [`std@1/dns_message/Message`](#def-std_401_2fdns_5fmessage_2fMessage)
+
+
 ## duration
 
 <a id="def-std_401_2fduration_2ffrom_5fparts"></a>
@@ -10037,6 +10321,123 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/lru/Cache`](#def-std_40
 Reports presence and makes a hit most recently used, without observing its payload.
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/lru/Cache`](#def-std_401_2flru_2fCache)
+
+
+## mail
+
+<a id="def-std_401_2fmail_2fAddress"></a>
+
+- `pub type mail.Address { display_name: String, address: String, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmail_2fLimits"></a>
+
+- `pub type mail.Limits { max_input_bytes: u64, max_comment_depth: u64, max_addresses: u64, max_output_bytes: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError"></a>
+
+- `pub type mail.MailError = Syntax(u64) | Injection(u64) | UnsupportedCharset(u64) | InvalidUtf8( u64 ) | InputLimit(u64) | NestingLimit(u64) | AddressLimit(u64) | OutputLimit(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23AddressLimit"></a>
+
+- `AddressLimit(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23Injection"></a>
+
+- `Injection(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23InputLimit"></a>
+
+- `InputLimit(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23InvalidUtf8"></a>
+
+- `InvalidUtf8( u64 ) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23NestingLimit"></a>
+
+- `NestingLimit(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23OutputLimit"></a>
+
+- `OutputLimit(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23Syntax"></a>
+
+- `Syntax(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fMailError_23UnsupportedCharset"></a>
+
+- `UnsupportedCharset(u64) -> mail.MailError`
+
+Variant of mail.MailError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmail_2fdefault_5flimits"></a>
+
+- `pub fn mail.default_limits() -> Limits uses {}`
+
+References: [`std@1/mail/Limits`](#def-std_401_2fmail_2fLimits)
+
+<a id="def-std_401_2fmail_2fformat"></a>
+
+- `pub fn mail.format(value: Address, limits: Limits) -> Result[unique String, MailError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/mail/Address`](#def-std_401_2fmail_2fAddress), [`std@1/mail/Limits`](#def-std_401_2fmail_2fLimits), [`std@1/mail/MailError`](#def-std_401_2fmail_2fMailError)
+
+<a id="def-std_401_2fmail_2fformat_5flist"></a>
+
+- `pub fn mail.format_list(values: List[Address], limits: Limits) -> Result[ unique String, MailError ] uses {}`
+
+Canonical mailboxes in order, separated by comma-space. Groups stay flattened.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/mail/Address`](#def-std_401_2fmail_2fAddress), [`std@1/mail/Limits`](#def-std_401_2fmail_2fLimits), [`std@1/mail/MailError`](#def-std_401_2fmail_2fMailError)
+
+<a id="def-std_401_2fmail_2fparse"></a>
+
+- `pub fn mail.parse(value: String, limits: Limits) -> Result[Address, MailError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/mail/Address`](#def-std_401_2fmail_2fAddress), [`std@1/mail/Limits`](#def-std_401_2fmail_2fLimits), [`std@1/mail/MailError`](#def-std_401_2fmail_2fMailError)
+
+<a id="def-std_401_2fmail_2fparse_5flist"></a>
+
+- `pub fn mail.parse_list(value: String, limits: Limits) -> Result[List[Address], MailError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/mail/Address`](#def-std_401_2fmail_2fAddress), [`std@1/mail/Limits`](#def-std_401_2fmail_2fLimits), [`std@1/mail/MailError`](#def-std_401_2fmail_2fMailError)
 
 
 ## map
