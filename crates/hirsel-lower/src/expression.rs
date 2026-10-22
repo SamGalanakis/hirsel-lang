@@ -564,6 +564,19 @@ impl Builder<'_, '_> {
                     return Ok(None);
                 };
                 let right = self.prepare_operand(right, span);
+                let (left, right) = if matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::Ne
+                        | BinaryOp::Lt
+                        | BinaryOp::Le
+                        | BinaryOp::Gt
+                        | BinaryOp::Ge
+                ) {
+                    self.comparison_operands(left, right, span)
+                } else {
+                    (left, right)
+                };
                 self.evaluation_holders.truncate(pending);
                 let failure = self.cleanup();
                 let left = self.consume(left);
@@ -895,6 +908,50 @@ impl Builder<'_, '_> {
             }
         }
         Ok(values.pop().expect("materialized tree has a root"))
+    }
+    /// A reconstructed tuple can hold a projected view where the other tuple
+    /// still has its owned field row. Compare through common access lifetimes,
+    /// as shared tuple operands do in Rust MIR, without changing their payload
+    /// contracts or arena placement. Ordinary Use assignments and loans let V
+    /// independently check the views and their source lifetimes.
+    fn comparison_operands(&mut self, left: Value, right: Value, span: Span) -> (Value, Value) {
+        fn tuple_views(builder: &Builder<'_, '_>, left: TypeId, right: TypeId) -> (TypeId, TypeId) {
+            let mut l = builder.types.get(left).unwrap().clone();
+            let mut r = builder.types.get(right).unwrap().clone();
+            let (TypeKind::Tuple(ls), TypeKind::Tuple(rs)) = (&mut l.kind, &mut r.kind) else {
+                return (left, right);
+            };
+            if ls.len() != rs.len() {
+                return (left, right);
+            }
+            for (lt, rt) in ls.iter_mut().zip(rs.iter_mut()) {
+                let (lv, rv) = tuple_views(builder, *lt, *rt);
+                let mut lv = builder.types.get(lv).unwrap().clone();
+                let mut rv = builder.types.get(rv).unwrap().clone();
+                let lifetime = builder
+                    .lifetime(&lv.modes.relation)
+                    .union(&builder.lifetime(&rv.modes.relation));
+                for row in [&mut lv, &mut rv] {
+                    let placement = row.modes.relation.retain(|reach| {
+                        matches!(reach, hirsel_types::Reach::Place(origin) if builder.arena_place(origin))
+                    });
+                    row.modes.relation = placement.union(&lifetime);
+                }
+                *lt = builder.types.intern(lv);
+                *rt = builder.types.intern(rv);
+            }
+            (builder.types.intern(l), builder.types.intern(r))
+        }
+        let views = tuple_views(self, self.ty(left.place), self.ty(right.place));
+        let mut view = |mut value: Value, ty| {
+            if ty != self.ty(value.place) {
+                value.usage = UseKind::Borrow;
+                self.transport_typed(value, ty, Storage::Temporary, span)
+            } else {
+                value
+            }
+        };
+        (view(left, views.0), view(right, views.1))
     }
     fn prepare_operand(&mut self, mut value: Value, span: Span) -> Value {
         if matches!(value.usage, UseKind::Borrow | UseKind::Mut) {

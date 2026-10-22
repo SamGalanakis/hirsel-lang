@@ -1,0 +1,40 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// A reconstructed borrowed tuple compares with an owned list element.
+fn visible(m: Map[u64, List[u64]], take expected: List[(u64, List[u64])]) -> bool {
+  let mut i: u64 = 0
+  for (k, v) in m {
+    if !((k, v) == expected[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Equality boundaries from Rust coretests/tests/tuple.rs:10-17.
+fn equality_vectors() -> bool {
+  let small = (1u64, 2u64, 3u64)
+  let big = (3u64, 2u64, 1u64)
+  small == small && big == big && small != big && big != small
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let empty: Map[u64, List[u64]] = map.empty()
+  let mut m: unique Map[u64, List[u64]] = map.empty()
+  map.insert(mut m, 7, [11, 13])
+  let ok = equality_vectors() && visible(empty, []) && visible(m, [(7, [11, 13])]) && !visible(
+    m,
+    [(7, [11, 14])]
+  )
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

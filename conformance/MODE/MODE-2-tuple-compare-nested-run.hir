@@ -1,0 +1,23 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+fn same(pair: (u64, List[u64]), take expected: List[((u64, List[u64]), u64)]) -> bool {
+  let (k, v) = pair
+  ((k, v), k) == expected[0]
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = same((7, [11, 13]), [((7, [11, 13]), 7)]) && !same(
+    (7, [11]),
+    [((7, [12]), 7)]
+  )
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

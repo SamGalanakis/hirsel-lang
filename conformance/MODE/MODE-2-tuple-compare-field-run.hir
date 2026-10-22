@@ -1,0 +1,37 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+type Row {
+  pair: (u64, List[u64]),
+}
+
+fn same(row: Row, k: u64, v: List[u64]) -> bool {
+  row.pair == (k, v)
+}
+
+fn reconstructed(row: Row) -> bool {
+  let (k, v) = row.pair
+  row.pair == (k, v)
+}
+
+fn reversed(row: Row) -> bool {
+  let (k, v) = row.pair
+  (k, v) == row.pair
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = reversed(Row(pair: (7, [11, 13]))) && reconstructed(Row(pair: (7, [11, 13]))) && same(
+    Row(pair: (7, [11, 13])),
+    7,
+    [11, 13]
+  ) && !same(Row(pair: (7, [11])), 7, [12])
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
