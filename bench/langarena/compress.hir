@@ -365,13 +365,16 @@ fn huff_encode(data: List[u8]) -> Huff {
 
 // compress.rs:432-473: load each encoded byte once, then walk its bits MSB
 // first. Keep the upstream boxed tree, bit-count-sized initialized scratch,
-// and zero-byte filtering. Rebindable borrowed cursors, bulk List zero fill
-// and list.truncate are missing; see /workspace/code/hirsel-briefs/la-port-fidelity-8/repo-evidence/bench/langarena/RESULTS-la-port-fidelity-8.md.
+// and zero-byte filtering. The owned tree lends its root to the walk cursor.
 fn huff_decode(encoded: Huff) -> unique List[u8] {
   let Some(root) = huff_tree(encoded.freq) else {
     return []
   }
-  let mut node = copy root
+  huff_walk(root, encoded)
+}
+
+fn huff_walk(root: box Node, encoded: Huff) -> unique List[u8] {
+  let mut node = root
   let mut out = zero_bytes(int.narrow(encoded.bits))
   let mut size: u64 = 0
   let mut bits_processed: i32 = 0
@@ -387,25 +390,31 @@ fn huff_decode(encoded: Huff) -> unique List[u8] {
       bit_pos -= 1
       let bit = byte >> bit_pos & 1 == 1
       bits_processed += 1
-      let next = if bit {
-        node.right
+      if bit {
+        match node {
+          Node(frequency: _, byte: _, is_leaf: _, left: _, right: Some(child)) => {
+            node = child
+          },
+          Node(frequency: _, byte: _, is_leaf: _, left: _, right: None) => {
+            failure.check(false, TextInvariant())
+          },
+        }
       } else {
-        node.left
-      }
-      match take next {
-        Some(child) => {
-          node = take child
-        },
-        None => {
-          failure.check(false, TextInvariant())
-        },
+        match node {
+          Node(frequency: _, byte: _, is_leaf: _, left: Some(child), right: _) => {
+            node = child
+          },
+          Node(frequency: _, byte: _, is_leaf: _, left: None, right: _) => {
+            failure.check(false, TextInvariant())
+          },
+        }
       }
       if node.is_leaf {
         if node.byte != 0 {
           out[size] = node.byte
           size += 1
         }
-        node = copy root
+        node = root
       }
     }
   }
@@ -822,4 +831,20 @@ fn codec_vectors(t: Test) {
   test.check(t, bwt_decode(bwt_encode(binary)) == binary)
   test.check(t, arith_decode(arith_encode(binary)) == binary)
   test.check(t, lzw_decode(lzw_encode(binary)) == binary)
+}
+
+@test
+fn huff_decode_cursor_vectors(t: Test) {
+  // Upstream compress.rs:438-475: bit-sized initialized scratch, input and
+  // bit-count bounds, zero-leaf filtering, then truncate to emitted length.
+  let encoded = huff_encode([65u8, 66u8])
+  test.check(t, encoded.bits == 2 && encoded.data == [64u8])
+  test.check(t, huff_decode(encoded) == [65u8, 66u8])
+  test.check(
+    t,
+    huff_decode(Huff(data: [64u8], bits: 1, freq: copy encoded.freq)) == [65u8]
+  )
+  test.check(t, huff_decode(Huff(data: [64u8], bits: 0, freq: copy encoded.freq)) == [])
+  test.check(t, huff_decode(Huff(data: [], bits: 2, freq: copy encoded.freq)) == [])
+  test.check(t, huff_decode(huff_encode([0u8, 65u8, 0u8, 66u8])) == [65u8, 66u8])
 }
