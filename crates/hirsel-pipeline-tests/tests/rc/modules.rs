@@ -35,3 +35,4 @@ mod rc_bytes_replace_range;
 mod scoped_consumer_9;
 mod packed_list_9;
 mod rc_borrow_cursor_8;
+mod rc_borrow_cursor_field_match_13;

@@ -1,0 +1,19 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 17
+// twin: LANG/LANG-15-borrow-cursor-field-loop-ok.hir
+type Node {
+  value: u64,
+  left: Option[box Node],
+}
+
+fn walk(root: box Node) -> u64 {
+  let mut node = root
+  match node.left {
+    Some(child) => {
+      node = child
+    },
+    None => {},
+  }
+  node.left = None()
+  node.value
+}

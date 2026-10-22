@@ -1,0 +1,22 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 17
+// twin: LANG/LANG-15-borrow-cursor-nested-field-match-ok.hir
+type Kids {
+  first: Option[box Node],
+}
+
+type Node {
+  value: u64,
+  kids: Kids,
+}
+
+fn walk(root: box Node, other: box Node) -> u64 {
+  let mut node = root
+  match other.kids.first {
+    Some(child) => {
+      node = child
+    },
+    None => {},
+  }
+  node.value
+}

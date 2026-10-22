@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 13
+// twin: LANG/LANG-15-borrow-cursor-field-match-ok.hir
+type Node {
+  value: u64,
+  left: Option[box Node],
+}
+
+fn walk(root: box Node, other: box Node) -> u64 {
+  let mut node = root
+  match other.left {
+    Some(child) => {
+      node = child
+    },
+    None => {},
+  }
+  node.value
+}

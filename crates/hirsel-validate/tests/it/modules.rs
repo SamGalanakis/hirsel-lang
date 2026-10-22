@@ -6,3 +6,4 @@ mod support;
 mod borrow_cursor_8;
 mod borrow_cursor_tree_8;
 mod borrow_cursor_contracts_8;
+mod borrow_cursor_field_match_13;

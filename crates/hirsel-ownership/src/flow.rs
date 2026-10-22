@@ -4493,6 +4493,16 @@ impl Checker<'_, '_> {
                     // loan on the part's place, no count, and the owner stays
                     // unique (MODE-2/OWN-8, #76 Option 2).
                     Context::View if !property.plain => UseKind::Borrow,
+                    // A cursor projection is still a view of its fixed owner.
+                    // Staging a match scrutinee must not acquire a part copy and
+                    // make its payload appear to originate in a fresh local.
+                    Context::Read
+                        if !property.plain
+                            && value.borrowed_only
+                            && value.cursor_views.cursor_derived() =>
+                    {
+                        UseKind::Borrow
+                    }
                     _ if property.plain || !place.projections.is_empty() && property.copyable => {
                         UseKind::Copy
                     }

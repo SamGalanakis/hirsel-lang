@@ -1716,8 +1716,12 @@ conformance/LANG/LANG-15-borrow-binding-readonly-ok.hir
 conformance/LANG/LANG-15-borrow-binding.hir
 conformance/LANG/LANG-15-borrow-cursor-call-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-call-ok.hir
+conformance/LANG/LANG-15-borrow-cursor-field-loop-ok.hir
+conformance/LANG/LANG-15-borrow-cursor-field-match-ok.hir
+conformance/LANG/LANG-15-borrow-cursor-field-match-write-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-json-pointer-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-json-pointer-ok.hir
+conformance/LANG/LANG-15-borrow-cursor-nested-field-match-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-project-bad.hir
 conformance/LANG/LANG-15-borrow-cursor-project-ok.hir
 conformance/LANG/LANG-15-borrow-cursor-readonly-bad.hir
@@ -2821,6 +2825,7 @@ conformance/MODE/MODE-1-borrow-capture-function-element-call-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-block-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-block-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-field-bad.hir
+conformance/MODE/MODE-1-borrow-cursor-field-match-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-field-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-inferred-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-inferred-ok.hir
@@ -2830,6 +2835,7 @@ conformance/MODE/MODE-1-borrow-cursor-json-pointer-return-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-json-pointer-return-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-loop-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-loop-ok.hir
+conformance/MODE/MODE-1-borrow-cursor-nested-field-match-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-owned-getter-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-return-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-return-ok.hir

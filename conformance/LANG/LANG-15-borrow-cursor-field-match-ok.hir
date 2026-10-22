@@ -1,0 +1,17 @@
+// rule: LANG-15
+// expect: accept
+type Node {
+  value: u64,
+  left: Option[box Node],
+}
+
+fn walk(root: box Node) -> u64 {
+  let mut node = root
+  match node.left {
+    Some(child) => {
+      node = child
+    },
+    None => {},
+  }
+  node.value
+}
