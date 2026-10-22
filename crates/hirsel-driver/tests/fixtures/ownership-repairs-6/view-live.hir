@@ -1,0 +1,9 @@
+fn peer(data: Bytes) -> NetPeer in data {
+  NetPeer(address: "127.0.0.1", port: 18766, resolves_to: [], tls: Plain(), connections: [Open([Send(data), Close()])])
+}
+pub fn main() {
+  let mut data = bytes.from_list([1u8, 2u8, 3u8])
+  let p = peer(data)
+  data = b"changed"
+  let _ = p.port
+}

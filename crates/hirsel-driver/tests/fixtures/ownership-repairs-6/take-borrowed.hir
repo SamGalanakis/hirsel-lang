@@ -1,0 +1,7 @@
+fn peer(take data: Bytes) -> NetPeer {
+  NetPeer(address: "127.0.0.1", port: 18766, resolves_to: [], tls: Plain(), connections: [Open([Send(take data), Close()])])
+}
+fn relay(data: Bytes) -> NetPeer {
+  peer(take data)
+}
+pub fn main() {}

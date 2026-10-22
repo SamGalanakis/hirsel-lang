@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "ownership_repairs_6_copy_still_borrows",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "copy-still-borrows.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

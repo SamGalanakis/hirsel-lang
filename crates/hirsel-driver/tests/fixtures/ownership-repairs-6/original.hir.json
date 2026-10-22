@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "ownership_repairs_6_original",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "original.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

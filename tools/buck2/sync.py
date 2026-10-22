@@ -185,6 +185,9 @@ TEST_DATA = {
     "hirsel-types-test-wire": ["crates/hirsel-types/tests/wire/**"],
 }
 
+# Ownership repair lab runs its clean package in place.
+TEST_DATA["hirsel-driver-test-it"].append("examples/ownership-repairs/**")
+
 # Crates whose tests link native programs: they get the runtime archives
 # (HIRSEL_RUNTIME_ARCHIVES) instead of building them with Cargo.
 NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}

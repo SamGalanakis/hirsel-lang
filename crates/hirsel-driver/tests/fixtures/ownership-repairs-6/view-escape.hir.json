@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "ownership_repairs_6_view_escape",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "view-escape.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

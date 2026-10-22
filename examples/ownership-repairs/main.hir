@@ -1,0 +1,98 @@
+// NetPeer is fixture data here: no Net capability and no network effects.
+fn peer_view(data: Bytes) -> NetPeer in data {
+  NetPeer(
+    address: "127.0.0.1",
+    port: 18766,
+    resolves_to: [],
+    tls: Plain(),
+    connections: [Open([Send(data), Close()])]
+  )
+}
+
+fn peer_taken(take data: Bytes) -> NetPeer {
+  NetPeer(
+    address: "127.0.0.1",
+    port: 18766,
+    resolves_to: [],
+    tls: Plain(),
+    connections: [Open([Send(take data), Close()])]
+  )
+}
+
+fn peer_copied(data: Bytes) -> NetPeer {
+  peer_taken(unique data)
+}
+
+fn carries(p: NetPeer, expected: Bytes) -> bool {
+  match p.connections[0] {
+    Open(steps) => match steps[0] {
+      Send(data) => data == expected,
+      _ => false,
+    },
+    _ => false,
+  }
+}
+
+// Independent owned and borrowed inputs must carry the same binary payload.
+fn equal_payloads() -> bool {
+  let input = bytes.from_list([0u8, 255u8, 13u8, 10u8])
+  let viewed = peer_view(input)
+  let transferred = peer_taken(bytes.from_list([0u8, 255u8, 13u8, 10u8]))
+  let copied = peer_copied(input)
+  carries(viewed, b"\0\xff\r\n") && carries(transferred, b"\0\xff\r\n") && carries(
+    copied,
+    b"\0\xff\r\n"
+  )
+}
+
+fn view_last_use() -> bool {
+  let mut data = bytes.from_list([1u8, 2u8, 3u8])
+  let p = peer_view(data)
+  let matched = carries(p, b"\x01\x02\x03") // Last use ends the source freeze.
+  data = b"changed"
+  matched && data == b"changed"
+}
+
+fn transfer_last_use() -> bool {
+  let data = bytes.from_list([1u8, 2u8, 3u8])
+  let p = peer_taken(take data)
+  // data is unavailable; p can leave the input's scope.
+  carries(p, b"\x01\x02\x03")
+}
+
+fn transferred_outlives_input() -> NetPeer {
+  let data = bytes.from_list([1u8, 2u8, 3u8])
+  peer_taken(take data)
+}
+
+fn copied_outlives_input() -> NetPeer {
+  let data = bytes.from_list([1u8, 2u8, 3u8])
+  peer_copied(data)
+}
+
+// A heap argument adds no bound loan. The result owns counted shares, so
+// the binding may end; this does not permit replacing a still-borrowed source.
+fn heap_view_outlives_input() -> NetPeer {
+  let data = bytes.from_list([1u8, 2u8, 3u8])
+  peer_view(data)
+}
+
+fn copy_independence() -> bool {
+  let mut data = bytes.from_list([1u8, 2u8, 3u8])
+  let mut p = peer_copied(data)
+  data = b"changed" // Allowed while p remains live.
+  let matched = carries(p, b"\x01\x02\x03")
+  p = peer_taken(b"other") // Source remains usable after replacing the result.
+  matched && data == b"changed" && carries(p, b"other")
+}
+
+pub fn main() -> Result[(), ()] {
+  if carries(heap_view_outlives_input(), b"\x01\x02\x03") && equal_payloads() && view_last_use() && transfer_last_use() && copy_independence() && carries(
+    transferred_outlives_input(),
+    b"\x01\x02\x03"
+  ) && carries(copied_outlives_input(), b"\x01\x02\x03") {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

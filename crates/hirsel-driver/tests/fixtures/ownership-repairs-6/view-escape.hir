@@ -1,0 +1,7 @@
+fn peer(data: Bytes) -> NetPeer in data {
+  NetPeer(address: "127.0.0.1", port: 18766, resolves_to: [], tls: Plain(), connections: [Open([Send(data), Close()])])
+}
+fn escape(data: Bytes) -> NetPeer {
+  peer(data)
+}
+pub fn main() {}

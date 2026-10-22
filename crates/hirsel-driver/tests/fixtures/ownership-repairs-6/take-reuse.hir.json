@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "ownership_repairs_6_take_reuse",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "take-reuse.hir"
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
