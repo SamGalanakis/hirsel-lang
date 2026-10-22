@@ -1,0 +1,10 @@
+fn views(source: String, expected: Expected) -> () {
+  failure.check(source == expected.text, TextInvariant())
+  failure.check(string.as_bytes(source) == expected.data, TextInvariant())
+  let mut scalar: u64 = 0
+  for ch in string.scalars(source) {
+    failure.check(ch == expected.scalars[scalar], TextInvariant())
+    scalar += 1
+  }
+  failure.check(scalar == list.len(expected.scalars), TextInvariant())
+}

@@ -1,0 +1,36 @@
+fn views(source: String, expected: Expected) -> () {
+  failure.check(source == expected.text, TextInvariant())
+  failure.check(string.as_bytes(source) == expected.data, TextInvariant())
+  let mut count: u64 = 0
+  let mut slice: u64 = 0
+  for start in string.positions(source) {
+    let begin = string.byte_offset(source, start)
+    failure.check(begin == expected.offsets[count], TextInvariant())
+    count += 1
+    // Both positions come from this live source, including its terminal position.
+    for end in string.positions(source) {
+      if begin <= string.byte_offset(source, end) {
+        let part = string.slice(source, start, end)
+        failure.check(part == expected.slices[slice], TextInvariant())
+        slice += 1
+      }
+    }
+  }
+  failure.check(count == list.len(expected.offsets), TextInvariant())
+  failure.check(slice == list.len(expected.slices), TextInvariant())
+  for byte in 0u64..string.byte_len(source) + 2 {
+    let mut boundary = false
+    for offset in expected.offsets {
+      if byte == offset {
+        boundary = true
+      }
+    }
+    match string.position(source, byte) {
+      Some(p) => {
+        failure.check(boundary, TextInvariant())
+        failure.check(string.byte_offset(source, p) == byte, TextInvariant())
+      },
+      None() => failure.check(!boundary, TextInvariant()),
+    }
+  }
+}

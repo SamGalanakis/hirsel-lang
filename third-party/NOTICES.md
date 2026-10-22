@@ -1628,3 +1628,11 @@ ports the enabled `specs/tests.json` and `specs/spec_tests.json` vectors using t
 Copyright (c) 2017 Ivan Dubrov. Full text:
 `docs/json-merge-patch-LICENSE-MIT.txt`. Hirsel adaptations are documented in the
 JSON Patch section of `docs/spec/std-library.md`.
+
+UTF-8 construction model: `crates/hirsel-driver/tests/fixtures/utf8-construction-model-16/go-scalars.tsv`
+adapts the 32 scalar/encoding pairs and two surrogate pairs from Go
+`ebe2feefc400f813aefdc8a036e66d2619da6649`, `src/unicode/utf8/utf8_test.go:30-75`.
+Copyright 2009 The Go Authors. BSD-3-Clause (Go), full license above.
+The host test calls Rust's validator; its rejection-class descriptions refer to
+rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`,
+`library/core/src/str/validations.rs:128-188`; no Rust validator source is copied.

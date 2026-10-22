@@ -1,0 +1,31 @@
+fn owned() -> String {
+  let mut input: List[u8] = [0u8, 194u8, 128u8, 239u8, 191u8, 189u8]
+  let Ok(finished) = std@1/text.finish(copy input) else {
+    return "bad"
+  }
+  input[1] = 255u8
+  failure.check(
+    string.as_bytes(finished) == b"\x00\xc2\x80\xef\xbf\xbd",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/text.finish(take input) == Error(b"\x00\xff\x80\xef\xbf\xbd"),
+    TextInvariant()
+  )
+  f"é{finished}𐀀"
+}
+
+pub fn main() -> Result[(), ()] {
+  let value = owned()
+  failure.check(value == "é\0\u{80}�𐀀", TextInvariant())
+  let raw = bytes.from_list([240u8, 144u8, 128u8, 128u8])
+  let Ok(decoded) = string.from_bytes(copy raw) else {
+    return Error(())
+  }
+  failure.check(string.as_bytes(decoded) == raw, TextInvariant())
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, value)
+  std@1/text.append(mut out, decoded)
+  failure.check(std@1/text.finish_valid(take out) == "é\0\u{80}�𐀀𐀀", TextInvariant())
+  Ok(())
+}

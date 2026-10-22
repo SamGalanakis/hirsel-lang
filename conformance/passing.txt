@@ -6616,6 +6616,8 @@ conformance/SEM/SEM-3-uri-zig-19-percent-decoding-run.hir
 conformance/SEM/SEM-3-uri-zig-20-query-encoding-run.hir
 conformance/SEM/SEM-3-uri-zig-21-format-run.hir
 conformance/SEM/SEM-3-uri-zig-22-malformed-run.hir
+conformance/SEM/SEM-3-utf8-construction-model-16-invalid-run.hir
+conformance/SEM/SEM-3-utf8-construction-model-16-run.hir
 conformance/SEM/SEM-3-utf8-run.hir
 conformance/SEM/SEM-3-utf8-stream-5-run.hir
 conformance/SEM/SEM-3-uuid-layout-run.hir

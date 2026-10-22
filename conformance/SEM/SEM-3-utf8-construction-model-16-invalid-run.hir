@@ -1,0 +1,27 @@
+// rule: SEM-3
+// expect: run
+// boundary: malformed construction returns exactly the original bytes.
+pub fn main() -> Result[(), ()] {
+  let malformed: List[Bytes] = [
+    b"\x80",
+    b"\xc0\x80",
+    b"\xe0\x9f\xbf",
+    b"\xed\xa0\x80",
+    b"\xf0\x8f\xbf\xbf",
+    b"\xf4\x90\x80\x80",
+    b"\xf8\x88\x80\x80\x80",
+    b"\xe2\x82",
+    b"\x00\xc2\x7f\x00"
+  ]
+  for input in malformed {
+    failure.check(string.from_bytes(copy input) == Error(copy input), TextInvariant())
+    let mut builder: List[u8] = []
+    for byte in input {
+      list.push(mut builder, byte)
+    }
+    failure.check(std@1/text.finish(take builder) == Error(copy input), TextInvariant())
+  }
+  // A replacement scalar is valid text, distinct from malformed byte sequences.
+  failure.check(string.from_bytes(b"\xef\xbf\xbd") == Ok("�"), TextInvariant())
+  Ok(())
+}

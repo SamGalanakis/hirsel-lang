@@ -1,0 +1,7 @@
+pub fn main() -> Result[(), ()] {
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "é")
+  list.push(mut out, 255u8)
+  let _ = std@1/text.finish_valid(take out)
+  Ok(())
+}

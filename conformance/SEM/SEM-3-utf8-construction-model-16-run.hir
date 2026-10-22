@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// boundary: owned construction, formatting and scalar-position slicing compose.
+pub fn main() -> Result[(), ()] {
+  let raw = b"\x00\xc2\x80\xe0\xa0\x80\xef\xbf\xbd\xf4\x8f\xbf\xbf"
+  let Ok(source) = string.from_bytes(copy raw) else {
+    return Error(())
+  }
+  failure.check(string.as_bytes(source) == raw, TextInvariant())
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "é")
+  std@1/text.append(mut out, source)
+  let Ok(finished) = std@1/text.finish(take out) else {
+    return Error(())
+  }
+  failure.check(finished == f"é{source}", TextInvariant())
+  failure.check(string.as_bytes(source) == raw, TextInvariant())
+  let offsets: List[u64] = [0, 1, 3, 6, 9, 13]
+  let suffixes: List[String] = [
+    "\0\u{80}\u{800}�\u{10ffff}",
+    "\u{80}\u{800}�\u{10ffff}",
+    "\u{800}�\u{10ffff}",
+    "�\u{10ffff}",
+    "\u{10ffff}",
+    ""
+  ]
+  let Some(end) = string.position(source, 13) else {
+    return Error(())
+  }
+  let mut i: u64 = 0
+  for p in string.positions(source) {
+    failure.check(string.byte_offset(source, p) == offsets[i], TextInvariant())
+    failure.check(string.slice(source, p, end) == suffixes[i], TextInvariant())
+    i += 1
+  }
+  failure.check(i == 6, TextInvariant())
+  failure.check(string.position(source, 2) == None(), TextInvariant())
+  Ok(())
+}
