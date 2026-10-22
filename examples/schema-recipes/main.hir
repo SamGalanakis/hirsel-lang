@@ -1,0 +1,214 @@
+// Explicit nested DTOs; see docs/schema-recipes.md for the wire contract.
+type Service {
+  name: String,
+}
+
+type Retry {
+  attempts: u32,
+}
+
+type Outer {
+  service: Service,
+  retry: Retry,
+}
+
+fn outer_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Outer,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Outer), schema.strict_policy())
+
+fn outer_schema_encode(value: Outer, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Outer), schema.strict_policy())
+
+fn service_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Service,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Service), schema.strict_policy())
+
+fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Service), schema.strict_policy())
+
+fn retry_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Retry,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Retry), schema.strict_policy())
+
+fn retry_schema_encode(value: Retry, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Retry), schema.strict_policy())
+
+// Use a fresh state for each complete direction. Nested hooks share that state.
+fn decode(text: String, options: schema.Options) -> Result[unique Outer, String] uses {} {
+  let Ok(wire) = json.parse(unique text) else {
+    return Error("JSON")
+  }
+  let mut check = match schema.check_state(options) {
+    Ok(c) => take c,
+    Error(_) => return Error("options"),
+  }
+  match outer_schema_decode(wire, mut check) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error("schema"),
+  }
+}
+
+fn encode(value: Outer) -> Result[unique String, String] uses {} {
+  let mut check = match schema.check_state(schema.default_options()) {
+    Ok(c) => take c,
+    Error(_) => return Error("options"),
+  }
+  let Ok(wire) = outer_schema_encode(value, mut check) else {
+    return Error("schema")
+  }
+  match json.stringify(wire) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error("JSON"),
+  }
+}
+
+// This owns its nested String even though the parameter is borrowed.
+fn owned(name: String, attempts: u32) -> unique Outer uses {} {
+  Outer(service: Service(name: unique name), retry: Retry(attempts: attempts))
+}
+
+fn roundtrip() -> Result[(), String] uses {} {
+  // Read order may differ; the writer emits declaration order, with no spaces.
+  let value = decode(
+    "{\"retry\":{\"attempts\":3},\"service\":{\"name\":\"雪\"}}",
+    schema.default_options()
+  )?
+  if value.service.name != "雪" || value.retry.attempts != 3 {
+    return Error("decoded fields")
+  }
+  let expected = "{\"service\":{\"name\":\"雪\"},\"retry\":{\"attempts\":3}}"
+  if encode(value)? != expected || encode(owned("雪", 3))? != expected {
+    return Error("encode golden")
+  }
+  let again = decode(expected, schema.default_options())?
+  if again.service.name != "雪" || again.retry.attempts != 3 {
+    return Error("roundtrip fields")
+  }
+  // Neither returned DTO nor returned wire text borrows the local input.
+  let retained = {
+    let scoped = string.concat("wo", "ol")
+    owned(scoped, 0)
+  }
+  let retained_text = {
+    let scoped = owned("wool", 0)
+    encode(scoped)?
+  }
+  if retained.service.name != "wool" || retained_text != "{\"service\":{\"name\":\"wool\"},\"retry\":{\"attempts\":0}}" {
+    return Error("owned return")
+  }
+  Ok(())
+}
+
+fn strict_errors() -> Result[(), String] uses {} {
+  // Valid JSON, invalid schema: (wire, stable issue code, declaration-name path).
+  let cases: List[(String, String, List[schema.Segment])] = [
+    ("{}", "Missing", [Field("service")]),
+    ("{\"service\":{\"name\":\"w\"}}", "Missing", [Field("retry")]),
+    (
+      "{\"service\":{},\"retry\":{\"attempts\":0}}",
+      "Missing",
+      [Field("service"), Field("name")]
+    ),
+    (
+      "{\"service\":{\"name\":\"w\"},\"retry\":{}}",
+      "Missing",
+      [Field("retry"), Field("attempts")]
+    ),
+    (
+      "{\"service\":{\"name\":4},\"retry\":{\"attempts\":0}}",
+      "Type",
+      [Field("service"), Field("name")]
+    ),
+    (
+      "{\"service\":{\"name\":\"w\"},\"retry\":{\"attempts\":\"0\"}}",
+      "Type",
+      [Field("retry"), Field("attempts")]
+    ),
+    (
+      "{\"service\":{\"name\":\"w\",\"extra\":0},\"retry\":{\"attempts\":0}}",
+      "UnknownField",
+      [Field("service"), Field("extra")]
+    ),
+    (
+      "{\"service\":{\"name\":\"w\"},\"retry\":{\"attempts\":0},\"extra\":0}",
+      "UnknownField",
+      [Field("extra")]
+    )
+  ]
+  for (text, code, path) in cases {
+    let Ok(wire) = json.parse(unique text) else {
+      return Error("strict vector must parse")
+    }
+    let mut check = match schema.check_state(schema.default_options()) {
+      Ok(c) => take c,
+      Error(_) => return Error("options"),
+    }
+    let Error(Invalid(issues)) = outer_schema_decode(wire, mut check) else {
+      return Error("expected schema invalidity")
+    }
+    if list.len(issues.items) != 1 || issues.items[0].code != code || issues.items[0].path != path || issues.items[0].stage != Wire {
+      return Error("schema issue golden")
+    }
+  }
+  // Parser errors happen before schema traversal, including escaped duplicates.
+  let duplicates: List[String] = [
+    "{\"service\":{\"name\":\"a\",\"name\":\"b\"},\"retry\":{\"attempts\":0}}",
+    "{\"service\":{\"name\":\"a\",\"na\\u006de\":\"b\"},\"retry\":{\"attempts\":0}}"
+  ]
+  for text in duplicates {
+    let Error(DuplicateKey(_)) = json.parse(unique text) else {
+      return Error("expected duplicate key")
+    }
+  }
+  Ok(())
+}
+
+fn limits() -> Result[(), String] uses {} {
+  let Ok(wire) = json.parse("{\"service\":{\"name\":\"w\"},\"retry\":{\"attempts\":0}}") else {
+    return Error("limit vector must parse")
+  }
+  let value = owned("w", 0)
+  let kinds: List[schema.LimitKind] = [Depth, Work]
+  for kind in kinds {
+    let mut options = schema.default_options()
+    if kind == Depth {
+      options.limits.max_depth = 1
+    } else {
+      options.limits.max_work = 1
+    }
+    let mut read_check = match schema.check_state(options) {
+      Ok(c) => take c,
+      Error(_) => return Error("options"),
+    }
+    let mut write_check = match schema.check_state(options) {
+      Ok(c) => take c,
+      Error(_) => return Error("options"),
+    }
+    let Error(Limit(read_limit)) = outer_schema_decode(wire, mut read_check) else {
+      return Error("decode limit")
+    }
+    let Error(Limit(write_limit)) = outer_schema_encode(value, mut write_check) else {
+      return Error("encode limit")
+    }
+    if read_limit.kind != kind || write_limit.kind != kind || read_limit.limit != 1 || write_limit.limit != 1 {
+      return Error("limit golden")
+    }
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), String] uses {} {
+  roundtrip()?
+  strict_errors()?
+  limits()?
+  Ok(())
+}

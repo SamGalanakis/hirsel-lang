@@ -931,6 +931,11 @@ their corresponding hooks. `time.Date` already supplies checked ISO-date hooks.
 The [snapshot library](../examples/snapshift/README.md) shows all declarations;
 the [API index](api.md#derive) gives their complete signatures.
 
+For strict checked DTOs with nested records, see the [explicit schema converter
+cookbook](schema-recipes.md): complete decode/encode hooks, owned results and
+missing-hook repairs. These use `schema_decode` / `schema_encode`, separately
+from the direct JSON reader/writer hooks above.
+
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)
 

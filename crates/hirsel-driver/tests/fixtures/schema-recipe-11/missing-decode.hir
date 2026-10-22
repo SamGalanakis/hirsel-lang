@@ -1,0 +1,18 @@
+// Missing nested hooks: accepted twin is examples/schema-recipes/main.hir.
+type Service {
+  name: String,
+}
+
+type Retry {
+  attempts: u32,
+}
+
+type Outer {
+  service: Service,
+  retry: Retry,
+}
+
+fn outer_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Outer,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Outer), schema.strict_policy())
