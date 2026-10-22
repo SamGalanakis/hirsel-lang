@@ -1,0 +1,192 @@
+// Independent json-patch/specs vectors, revision 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c.
+// MIT, Copyright (c) 2017 Ivan Dubrov; see docs/json-merge-patch-LICENSE-MIT.txt.
+fn read(source: String) -> std@1/json.Value uses {} {
+  match std@1/json.parse(unique source) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+}
+
+// Independent structural oracle: map insertion order is deliberately ignored.
+// Numeric lexemes in these edit-result vectors are preserved exactly.
+fn same_value(a: std@1/json.Value, b: std@1/json.Value) -> bool uses {} {
+  match (a, b) {
+    (Object(x), Object(y)) => {
+      if core@1/map.len(x) != core@1/map.len(y) {
+        return false
+      }
+      for (key, child) in x {
+        let Some(other) = core@1/map.get(y, key) else {
+          return false
+        }
+        if !same_value(child, other) {
+          return false
+        }
+      }
+      true
+    },
+    (Array(x), Array(y)) => {
+      if core@1/list.len(x) != core@1/list.len(y) {
+        return false
+      }
+      for i in 0u64..core@1/list.len(x) {
+        if !same_value(x[i], y[i]) {
+          return false
+        }
+      }
+      true
+    },
+    _ => a == b,
+  }
+}
+
+fn check_case(doc: String, patch_text: String, expected: String, fails: bool) -> () uses {} {
+  let limits = std@1/json_patch.default_limits()
+  let original = Some(read(doc))
+  let alias = copy original
+  let parsed = std@1/json_patch.parse_text(unique patch_text, limits)
+  match parsed {
+    Error(_) => core@1/failure.check(fails, TextInvariant()),
+    Ok(patch) => {
+      let outcome = std@1/json_patch.apply(original, patch, limits)
+      match outcome {
+        Error(_) => core@1/failure.check(fails, TextInvariant()),
+        Ok(actual) => {
+          core@1/failure.check(!fails, TextInvariant())
+          let Some(actual_value) = actual else {
+            core@1/failure.check(false, TextInvariant())
+            return
+          }
+          core@1/failure.check(
+            same_value(actual_value, read(expected)),
+            TextInvariant()
+          )
+        },
+      }
+    },
+  }
+  // Compare both the borrowed input and a retained alias after every outcome.
+  let preserved_inputs: List[Option[std@1/json.Value]] = [copy original, copy alias]
+  for preserved in preserved_inputs {
+    let Some(v) = preserved else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(text) = std@1/json.stringify(v) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(original_text) = std@1/json.stringify(read(doc)) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    core@1/failure.check(text == original_text, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  // 0: empty list, empty docs
+  check_case("{}", "[]", "{}", false)
+  // 1: empty patch list
+  check_case("{\"foo\":1}", "[]", "{\"foo\":1}", false)
+  // 2: rearrangements OK?
+  check_case("{\"foo\":1,\"bar\":2}", "[]", "{\"bar\":2,\"foo\":1}", false)
+  // 3: rearrangements OK?  How about one level down ... array
+  check_case("[{\"foo\":1,\"bar\":2}]", "[]", "[{\"bar\":2,\"foo\":1}]", false)
+  // 4: rearrangements OK?  How about one level down...
+  check_case(
+    "{\"foo\":{\"foo\":1,\"bar\":2}}",
+    "[]",
+    "{\"foo\":{\"bar\":2,\"foo\":1}}",
+    false
+  )
+  // 5: add replaces any existing field
+  check_case(
+    "{\"foo\":null}",
+    "[{\"op\":\"add\",\"path\":\"/foo\",\"value\":1}]",
+    "{\"foo\":1}",
+    false
+  )
+  // 6: toplevel array
+  check_case(
+    "[]",
+    "[{\"op\":\"add\",\"path\":\"/0\",\"value\":\"foo\"}]",
+    "[\"foo\"]",
+    false
+  )
+  // 7: toplevel array, no change
+  check_case("[\"foo\"]", "[]", "[\"foo\"]", false)
+  // 8: toplevel object, numeric string
+  check_case(
+    "{}",
+    "[{\"op\":\"add\",\"path\":\"/foo\",\"value\":\"1\"}]",
+    "{\"foo\":\"1\"}",
+    false
+  )
+  // 9: toplevel object, integer
+  check_case(
+    "{}",
+    "[{\"op\":\"add\",\"path\":\"/foo\",\"value\":1}]",
+    "{\"foo\":1}",
+    false
+  )
+  // 11: replace object document with array document?
+  check_case("{}", "[{\"op\":\"add\",\"path\":\"\",\"value\":[]}]", "[]", false)
+  // 12: replace array document with object document?
+  check_case("[]", "[{\"op\":\"add\",\"path\":\"\",\"value\":{}}]", "{}", false)
+  // 13: append to root array document?
+  check_case(
+    "[]",
+    "[{\"op\":\"add\",\"path\":\"/-\",\"value\":\"hi\"}]",
+    "[\"hi\"]",
+    false
+  )
+  // 14: Add, / target
+  check_case("{}", "[{\"op\":\"add\",\"path\":\"/\",\"value\":1}]", "{\"\":1}", false)
+  // 15: Add, /foo/ deep target (trailing slash)
+  check_case(
+    "{\"foo\":{}}",
+    "[{\"op\":\"add\",\"path\":\"/foo/\",\"value\":1}]",
+    "{\"foo\":{\"\":1}}",
+    false
+  )
+  // 16: Add composite value at top level
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"add\",\"path\":\"/bar\",\"value\":[1,2]}]",
+    "{\"foo\":1,\"bar\":[1,2]}",
+    false
+  )
+  // 17: Add into composite value
+  check_case(
+    "{\"foo\":1,\"baz\":[{\"qux\":\"hello\"}]}",
+    "[{\"op\":\"add\",\"path\":\"/baz/0/foo\",\"value\":\"world\"}]",
+    "{\"foo\":1,\"baz\":[{\"qux\":\"hello\",\"foo\":\"world\"}]}",
+    false
+  )
+  // 18:
+  check_case(
+    "{\"bar\":[1,2]}",
+    "[{\"op\":\"add\",\"path\":\"/bar/8\",\"value\":\"5\"}]",
+    "{\"bar\":[1,2]}",
+    true
+  )
+  // 19:
+  check_case(
+    "{\"bar\":[1,2]}",
+    "[{\"op\":\"add\",\"path\":\"/bar/-1\",\"value\":\"5\"}]",
+    "{\"bar\":[1,2]}",
+    true
+  )
+  // 20:
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"add\",\"path\":\"/bar\",\"value\":true}]",
+    "{\"foo\":1,\"bar\":true}",
+    false
+  )
+  Ok(())
+}

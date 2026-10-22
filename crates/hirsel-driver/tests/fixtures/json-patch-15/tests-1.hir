@@ -1,0 +1,232 @@
+// Independent json-patch/specs vectors, revision 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c.
+// MIT, Copyright (c) 2017 Ivan Dubrov; see docs/json-merge-patch-LICENSE-MIT.txt.
+fn read(source: String) -> std@1/json.Value uses {} {
+  match std@1/json.parse(unique source) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+}
+
+// Independent structural oracle: map insertion order is deliberately ignored.
+// Numeric lexemes in these edit-result vectors are preserved exactly.
+fn same_value(a: std@1/json.Value, b: std@1/json.Value) -> bool uses {} {
+  match (a, b) {
+    (Object(x), Object(y)) => {
+      if core@1/map.len(x) != core@1/map.len(y) {
+        return false
+      }
+      for (key, child) in x {
+        let Some(other) = core@1/map.get(y, key) else {
+          return false
+        }
+        if !same_value(child, other) {
+          return false
+        }
+      }
+      true
+    },
+    (Array(x), Array(y)) => {
+      if core@1/list.len(x) != core@1/list.len(y) {
+        return false
+      }
+      for i in 0u64..core@1/list.len(x) {
+        if !same_value(x[i], y[i]) {
+          return false
+        }
+      }
+      true
+    },
+    _ => a == b,
+  }
+}
+
+fn check_case(doc: String, patch_text: String, expected: String, fails: bool) -> () uses {} {
+  let limits = std@1/json_patch.default_limits()
+  let original = Some(read(doc))
+  let alias = copy original
+  let parsed = std@1/json_patch.parse_text(unique patch_text, limits)
+  match parsed {
+    Error(_) => core@1/failure.check(fails, TextInvariant()),
+    Ok(patch) => {
+      let outcome = std@1/json_patch.apply(original, patch, limits)
+      match outcome {
+        Error(_) => core@1/failure.check(fails, TextInvariant()),
+        Ok(actual) => {
+          core@1/failure.check(!fails, TextInvariant())
+          let Some(actual_value) = actual else {
+            core@1/failure.check(false, TextInvariant())
+            return
+          }
+          core@1/failure.check(
+            same_value(actual_value, read(expected)),
+            TextInvariant()
+          )
+        },
+      }
+    },
+  }
+  // Compare both the borrowed input and a retained alias after every outcome.
+  let preserved_inputs: List[Option[std@1/json.Value]] = [copy original, copy alias]
+  for preserved in preserved_inputs {
+    let Some(v) = preserved else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(text) = std@1/json.stringify(v) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(original_text) = std@1/json.stringify(read(doc)) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    core@1/failure.check(text == original_text, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  // 21:
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"add\",\"path\":\"/bar\",\"value\":false}]",
+    "{\"foo\":1,\"bar\":false}",
+    false
+  )
+  // 22:
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"add\",\"path\":\"/bar\",\"value\":null}]",
+    "{\"foo\":1,\"bar\":null}",
+    false
+  )
+  // 23: 0 can be an array index or object element name
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"add\",\"path\":\"/0\",\"value\":\"bar\"}]",
+    "{\"foo\":1,\"0\":\"bar\"}",
+    false
+  )
+  // 24:
+  check_case(
+    "[\"foo\"]",
+    "[{\"op\":\"add\",\"path\":\"/1\",\"value\":\"bar\"}]",
+    "[\"foo\",\"bar\"]",
+    false
+  )
+  // 25:
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/1\",\"value\":\"bar\"}]",
+    "[\"foo\",\"bar\",\"sil\"]",
+    false
+  )
+  // 26:
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/0\",\"value\":\"bar\"}]",
+    "[\"bar\",\"foo\",\"sil\"]",
+    false
+  )
+  // 27: push item to array via last index + 1
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/2\",\"value\":\"bar\"}]",
+    "[\"foo\",\"sil\",\"bar\"]",
+    false
+  )
+  // 28: add item to array at index > length should fail
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/3\",\"value\":\"bar\"}]",
+    "[\"foo\",\"sil\"]",
+    true
+  )
+  // 29: test against implementation-specific numeric parsing
+  check_case(
+    "{\"1e0\":\"foo\"}",
+    "[{\"op\":\"test\",\"path\":\"/1e0\",\"value\":\"foo\"}]",
+    "{\"1e0\":\"foo\"}",
+    false
+  )
+  // 30: test with bad number should fail
+  check_case(
+    "[\"foo\",\"bar\"]",
+    "[{\"op\":\"test\",\"path\":\"/1e0\",\"value\":\"bar\"}]",
+    "[\"foo\",\"bar\"]",
+    true
+  )
+  // 31:
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/bar\",\"value\":42}]",
+    "[\"foo\",\"sil\"]",
+    true
+  )
+  // 32: value in array add not flattened
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"add\",\"path\":\"/1\",\"value\":[\"bar\",\"baz\"]}]",
+    "[\"foo\",[\"bar\",\"baz\"],\"sil\"]",
+    false
+  )
+  // 33:
+  check_case(
+    "{\"foo\":1,\"bar\":[1,2,3,4]}",
+    "[{\"op\":\"remove\",\"path\":\"/bar\"}]",
+    "{\"foo\":1}",
+    false
+  )
+  // 34:
+  check_case(
+    "{\"foo\":1,\"baz\":[{\"qux\":\"hello\"}]}",
+    "[{\"op\":\"remove\",\"path\":\"/baz/0/qux\"}]",
+    "{\"foo\":1,\"baz\":[{}]}",
+    false
+  )
+  // 35:
+  check_case(
+    "{\"foo\":1,\"baz\":[{\"qux\":\"hello\"}]}",
+    "[{\"op\":\"replace\",\"path\":\"/foo\",\"value\":[1,2,3,4]}]",
+    "{\"foo\":[1,2,3,4],\"baz\":[{\"qux\":\"hello\"}]}",
+    false
+  )
+  // 36:
+  check_case(
+    "{\"foo\":[1,2,3,4],\"baz\":[{\"qux\":\"hello\"}]}",
+    "[{\"op\":\"replace\",\"path\":\"/baz/0/qux\",\"value\":\"world\"}]",
+    "{\"foo\":[1,2,3,4],\"baz\":[{\"qux\":\"world\"}]}",
+    false
+  )
+  // 37:
+  check_case(
+    "[\"foo\"]",
+    "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":\"bar\"}]",
+    "[\"bar\"]",
+    false
+  )
+  // 38:
+  check_case(
+    "[\"\"]",
+    "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":0}]",
+    "[0]",
+    false
+  )
+  // 39:
+  check_case(
+    "[\"\"]",
+    "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":true}]",
+    "[true]",
+    false
+  )
+  // 40:
+  check_case(
+    "[\"\"]",
+    "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":false}]",
+    "[false]",
+    false
+  )
+  Ok(())
+}

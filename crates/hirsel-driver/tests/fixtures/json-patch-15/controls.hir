@@ -1,0 +1,292 @@
+fn read(source: String) -> std@1/json.Value uses {} {
+  match std@1/json.parse(unique source) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+}
+
+fn patch(source: String) -> std@1/json_patch.Patch uses {} {
+  match std@1/json_patch.parse_text(unique source, std@1/json_patch.default_limits()) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      patch("[]")
+    },
+  }
+}
+
+fn check_error(
+  doc: Option[std@1/json.Value],
+  source: String,
+  operation_at: u64,
+  location: String,
+  expected: std@1/json_patch.ErrorKind
+) -> () uses {} {
+  let alias = copy doc
+  match std@1/json_patch.apply(doc, patch(source), std@1/json_patch.default_limits()) {
+    Error(e) => core@1/failure.check(
+      e.operation == operation_at && e.path == location && e.kind == expected,
+      TextInvariant()
+    ),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  core@1/failure.check(alias == doc, TextInvariant())
+}
+
+fn check_parse(source: String, expected: std@1/json_patch.ErrorKind) -> () uses {} {
+  match std@1/json_patch.parse_text(unique source, std@1/json_patch.default_limits()) {
+    Error(e) => core@1/failure.check(e.kind == expected, TextInvariant()),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+fn equal_numbers(a: String, b: String, same: bool) -> () uses {} {
+  let mut fields: Map[String, std@1/json.Value] = core@1/map.empty()
+  core@1/map.insert(mut fields, "op", Text("test"))
+  core@1/map.insert(mut fields, "path", Text(""))
+  core@1/map.insert(mut fields, "value", Number(unique b))
+  let Ok(probe) = std@1/json_patch.parse(
+    Array([Object(take fields)]),
+    std@1/json_patch.default_limits()
+  ) else {
+    core@1/failure.check(false, TextInvariant())
+    return
+  }
+  let original: Option[std@1/json.Value] = Some(Number(unique a))
+  let outcome = std@1/json_patch.apply(
+    original,
+    probe,
+    std@1/json_patch.default_limits()
+  )
+  match outcome {
+    Ok(actual) => core@1/failure.check(same && actual == original, TextInvariant()),
+    Error(e) => core@1/failure.check(!same && e.kind == TestFailed(), TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let limits = std@1/json_patch.default_limits()
+  let typed = patch(
+    "[{\"op\":\"add\",\"path\":\"/x\",\"value\":null},{\"op\":\"remove\",\"path\":\"/y\"}]"
+  )
+  let typed_ops = std@1/json_patch.operations(typed)
+  core@1/failure.check(core@1/list.len(typed_ops) == 2, TextInvariant())
+  match typed_ops[0u64] {
+    Add(p, Null) => core@1/failure.check(
+      std@1/json_patch.path_text(p) == "/x",
+      TextInvariant()
+    ),
+    _ => core@1/failure.check(false, TextInvariant()),
+  }
+  let initial: Option[std@1/json.Value] = Some(read("{\"a\":[1,2],\"-\":3}"))
+  let alias = copy initial
+  let removed = std@1/json_patch.apply(
+    initial,
+    patch("[{\"op\":\"remove\",\"path\":\"\"}]"),
+    limits
+  )
+  core@1/failure.check(removed == Ok(None()), TextInvariant())
+  core@1/failure.check(initial == alias, TextInvariant())
+  let recreated = std@1/json_patch.apply(
+    initial,
+    patch(
+      "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"add\",\"path\":\"\",\"value\":null}]"
+    ),
+    limits
+  )
+  core@1/failure.check(recreated == Ok(Some(Null())), TextInvariant())
+  let empty = std@1/json_patch.apply(None(), patch("[]"), limits)
+  core@1/failure.check(empty == Ok(None()), TextInvariant())
+  let new_doc = std@1/json_patch.apply(
+    None(),
+    patch("[{\"op\":\"add\",\"path\":\"\",\"value\":false}]"),
+    limits
+  )
+  core@1/failure.check(new_doc == Ok(Some(Bool(false))), TextInvariant())
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"replace\",\"path\":\"\",\"value\":1}]",
+    1,
+    "",
+    MissingTarget()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"add\",\"path\":\"/x\",\"value\":1}]",
+    1,
+    "/x",
+    MissingTarget()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"test\",\"path\":\"\",\"value\":null}]",
+    1,
+    "",
+    MissingTarget()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"remove\",\"path\":\"\"}]",
+    1,
+    "",
+    MissingTarget()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"copy\",\"from\":\"\",\"path\":\"\"}]",
+    1,
+    "",
+    MissingSource()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"move\",\"from\":\"\",\"path\":\"\"}]",
+    1,
+    "",
+    MissingSource()
+  )
+  check_error(
+    None(),
+    "[{\"op\":\"replace\",\"path\":\"\",\"value\":1}]",
+    0,
+    "",
+    MissingTarget()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/a/0\"}]",
+    0,
+    "/a/0",
+    MoveDescendant()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"move\",\"from\":\"\",\"path\":\"/a\"}]",
+    0,
+    "/a",
+    MoveDescendant()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"move\",\"from\":\"/missing\",\"path\":\"/missing\"}]",
+    0,
+    "/missing",
+    MissingSource()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"copy\",\"from\":\"/missing\",\"path\":\"/dest\"}]",
+    0,
+    "/missing",
+    MissingSource()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"/a/-\"}]",
+    0,
+    "/a/-",
+    InvalidIndex()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"replace\",\"path\":\"/a/-\",\"value\":0}]",
+    0,
+    "/a/-",
+    InvalidIndex()
+  )
+  check_error(
+    initial,
+    "[{\"op\":\"remove\",\"path\":\"/a/18446744073709551616\"}]",
+    0,
+    "/a/18446744073709551616",
+    InvalidIndex()
+  )
+  let same = std@1/json_patch.apply(
+    initial,
+    patch(
+      "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/a\"},{\"op\":\"move\",\"from\":\"\",\"path\":\"\"}]"
+    ),
+    limits
+  )
+  core@1/failure.check(same == Ok(copy initial), TextInvariant())
+  let escaped = Some(read("{\"\":{\"é/😀~\":{\"~1\":4}},\"-\":5}"))
+  let escaped_result = std@1/json_patch.apply(
+    escaped,
+    patch(
+      "[{\"op\":\"test\",\"path\":\"//é~1😀~0/~01\",\"value\":4},{\"op\":\"replace\",\"path\":\"//é~1😀~0/~01\",\"value\":6},{\"op\":\"remove\",\"path\":\"/-\"}]"
+    ),
+    limits
+  )
+  core@1/failure.check(
+    escaped_result == Ok(Some(read("{\"\":{\"é/😀~\":{\"~1\":6}}}"))),
+    TextInvariant()
+  )
+  check_parse("null", Shape())
+  check_parse("[1]", Shape())
+  check_parse("[{}]", Field("op"))
+  check_parse("[{\"op\":1}]", Field("op"))
+  check_parse("[{\"op\":\"add\"}]", Field("path"))
+  check_parse("[{\"op\":\"add\",\"path\":\"\"}]", Field("value"))
+  check_parse("[{\"op\":\"copy\",\"path\":\"\"}]", Field("from"))
+  check_parse("[{\"op\":\"move\",\"path\":\"\",\"from\":false}]", Field("from"))
+  check_parse("[{\"op\":\"unknown\",\"path\":\"\"}]", UnknownOperation())
+  check_parse("[{\"op\":\"remove\",\"path\":\"no-slash\"}]", InvalidPath(0))
+  check_parse("[{\"op\":\"remove\",\"path\":\"/é~2\"}]", InvalidPath(3))
+  check_parse("[{\"op\":\"remove\",\"path\":\"/~\"}]", InvalidPath(1))
+  match std@1/json_patch.parse_text(
+    "[{\"op\":\"add\",\"op\":\"remove\",\"path\":\"\"}]",
+    limits
+  ) {
+    Error(e) => core@1/failure.check(
+      match e.kind {
+        InvalidJson(DuplicateKey(_)) => true,
+        _ => false,
+      },
+      TextInvariant()
+    ),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  equal_numbers("1", "1.0", true)
+  equal_numbers("-0", "0.000e99999999999999999999999999999999999999999", true)
+  equal_numbers("10e-1", "1e+0", true)
+  equal_numbers("12300e-4", "1.23000", true)
+  equal_numbers("-2.5e+0001", "-25", true)
+  equal_numbers(
+    "1e99999999999999999999999999999999999999999",
+    "10e99999999999999999999999999999999999999998",
+    true
+  )
+  equal_numbers(
+    "1e-99999999999999999999999999999999999999999",
+    "0.1e-99999999999999999999999999999999999999998",
+    true
+  )
+  equal_numbers("9007199254740992", "9007199254740993", false)
+  equal_numbers(
+    "1e99999999999999999999999999999999999999999",
+    "1e99999999999999999999999999999999999999998",
+    false
+  )
+  equal_numbers("0.10000000000000000000000000001", "0.1", false)
+  equal_numbers("-1", "1", false)
+  let object_order = Some(read("{\"a\":[1,2],\"b\":{\"c\":3,\"d\":4}}"))
+  let object_test = std@1/json_patch.apply(
+    object_order,
+    patch(
+      "[{\"op\":\"test\",\"path\":\"\",\"value\":{\"b\":{\"d\":4.0,\"c\":3.00},\"a\":[1.0,2e0]}}]"
+    ),
+    limits
+  )
+  core@1/failure.check(object_test == Ok(copy object_order), TextInvariant())
+  check_error(
+    Some(read("[1,2]")),
+    "[{\"op\":\"test\",\"path\":\"\",\"value\":[2,1]}]",
+    0,
+    "",
+    TestFailed()
+  )
+  Ok(())
+}

@@ -16,7 +16,8 @@
     "native-tests/library/vectors/LICENSE.cpython",
     "native-tests/library/vectors/LICENSE.wycheproof",
     "native-tests/library/vectors/LICENSE.xsum",
-    "native-tests/library/vectors/dectest/CPYTHON-LICENSE.txt"
+    "native-tests/library/vectors/dectest/CPYTHON-LICENSE.txt",
+    "docs/json-merge-patch-LICENSE-MIT.txt"
   ],
   "required_texts": {
     "libmimalloc-sys-0.1.49": [

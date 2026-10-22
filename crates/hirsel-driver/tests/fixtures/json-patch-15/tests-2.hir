@@ -1,0 +1,227 @@
+// Independent json-patch/specs vectors, revision 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c.
+// MIT, Copyright (c) 2017 Ivan Dubrov; see docs/json-merge-patch-LICENSE-MIT.txt.
+fn read(source: String) -> std@1/json.Value uses {} {
+  match std@1/json.parse(unique source) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+}
+
+// Independent structural oracle: map insertion order is deliberately ignored.
+// Numeric lexemes in these edit-result vectors are preserved exactly.
+fn same_value(a: std@1/json.Value, b: std@1/json.Value) -> bool uses {} {
+  match (a, b) {
+    (Object(x), Object(y)) => {
+      if core@1/map.len(x) != core@1/map.len(y) {
+        return false
+      }
+      for (key, child) in x {
+        let Some(other) = core@1/map.get(y, key) else {
+          return false
+        }
+        if !same_value(child, other) {
+          return false
+        }
+      }
+      true
+    },
+    (Array(x), Array(y)) => {
+      if core@1/list.len(x) != core@1/list.len(y) {
+        return false
+      }
+      for i in 0u64..core@1/list.len(x) {
+        if !same_value(x[i], y[i]) {
+          return false
+        }
+      }
+      true
+    },
+    _ => a == b,
+  }
+}
+
+fn check_case(doc: String, patch_text: String, expected: String, fails: bool) -> () uses {} {
+  let limits = std@1/json_patch.default_limits()
+  let original = Some(read(doc))
+  let alias = copy original
+  let parsed = std@1/json_patch.parse_text(unique patch_text, limits)
+  match parsed {
+    Error(_) => core@1/failure.check(fails, TextInvariant()),
+    Ok(patch) => {
+      let outcome = std@1/json_patch.apply(original, patch, limits)
+      match outcome {
+        Error(_) => core@1/failure.check(fails, TextInvariant()),
+        Ok(actual) => {
+          core@1/failure.check(!fails, TextInvariant())
+          let Some(actual_value) = actual else {
+            core@1/failure.check(false, TextInvariant())
+            return
+          }
+          core@1/failure.check(
+            same_value(actual_value, read(expected)),
+            TextInvariant()
+          )
+        },
+      }
+    },
+  }
+  // Compare both the borrowed input and a retained alias after every outcome.
+  let preserved_inputs: List[Option[std@1/json.Value]] = [copy original, copy alias]
+  for preserved in preserved_inputs {
+    let Some(v) = preserved else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(text) = std@1/json.stringify(v) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(original_text) = std@1/json.stringify(read(doc)) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    core@1/failure.check(text == original_text, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  // 41:
+  check_case(
+    "[\"\"]",
+    "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":null}]",
+    "[null]",
+    false
+  )
+  // 42: value in array replace not flattened
+  check_case(
+    "[\"foo\",\"sil\"]",
+    "[{\"op\":\"replace\",\"path\":\"/1\",\"value\":[\"bar\",\"baz\"]}]",
+    "[\"foo\",[\"bar\",\"baz\"]]",
+    false
+  )
+  // 43: replace whole document
+  check_case(
+    "{\"foo\":\"bar\"}",
+    "[{\"op\":\"replace\",\"path\":\"\",\"value\":{\"baz\":\"qux\"}}]",
+    "{\"baz\":\"qux\"}",
+    false
+  )
+  // 44: spurious patch properties
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":1,\"spurious\":1}]",
+    "{\"foo\":1}",
+    false
+  )
+  // 45: null value should be valid obj property
+  check_case(
+    "{\"foo\":null}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":null}]",
+    "{\"foo\":null}",
+    false
+  )
+  // 46: null value should be valid obj property to be replaced with something truthy
+  check_case(
+    "{\"foo\":null}",
+    "[{\"op\":\"replace\",\"path\":\"/foo\",\"value\":\"truthy\"}]",
+    "{\"foo\":\"truthy\"}",
+    false
+  )
+  // 47: null value should be valid obj property to be moved
+  check_case(
+    "{\"foo\":null}",
+    "[{\"op\":\"move\",\"from\":\"/foo\",\"path\":\"/bar\"}]",
+    "{\"bar\":null}",
+    false
+  )
+  // 48: null value should be valid obj property to be copied
+  check_case(
+    "{\"foo\":null}",
+    "[{\"op\":\"copy\",\"from\":\"/foo\",\"path\":\"/bar\"}]",
+    "{\"foo\":null,\"bar\":null}",
+    false
+  )
+  // 49: null value should be valid obj property to be removed
+  check_case("{\"foo\":null}", "[{\"op\":\"remove\",\"path\":\"/foo\"}]", "{}", false)
+  // 50: null value should still be valid obj property replace other value
+  check_case(
+    "{\"foo\":\"bar\"}",
+    "[{\"op\":\"replace\",\"path\":\"/foo\",\"value\":null}]",
+    "{\"foo\":null}",
+    false
+  )
+  // 51: test should pass despite rearrangement
+  check_case(
+    "{\"foo\":{\"foo\":1,\"bar\":2}}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":{\"bar\":2,\"foo\":1}}]",
+    "{\"foo\":{\"foo\":1,\"bar\":2}}",
+    false
+  )
+  // 52: test should pass despite (nested) rearrangement
+  check_case(
+    "{\"foo\":[{\"foo\":1,\"bar\":2}]}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":[{\"bar\":2,\"foo\":1}]}]",
+    "{\"foo\":[{\"foo\":1,\"bar\":2}]}",
+    false
+  )
+  // 53: test should pass - no error
+  check_case(
+    "{\"foo\":{\"bar\":[1,2,5,4]}}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":{\"bar\":[1,2,5,4]}}]",
+    "{\"foo\":{\"bar\":[1,2,5,4]}}",
+    false
+  )
+  // 54:
+  check_case(
+    "{\"foo\":{\"bar\":[1,2,5,4]}}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":[1,2]}]",
+    "{\"foo\":{\"bar\":[1,2,5,4]}}",
+    true
+  )
+  // 56: Empty-string element
+  check_case(
+    "{\"\":1}",
+    "[{\"op\":\"test\",\"path\":\"/\",\"value\":1}]",
+    "{\"\":1}",
+    false
+  )
+  // 57:
+  check_case(
+    "{\"foo\":[\"bar\",\"baz\"],\"\":0,\"a/b\":1,\"c%d\":2,\"e^f\":3,\"g|h\":4,\"i\\\\j\":5,\"k\\\"l\":6,\" \":7,\"m~n\":8}",
+    "[{\"op\":\"test\",\"path\":\"/foo\",\"value\":[\"bar\",\"baz\"]},{\"op\":\"test\",\"path\":\"/foo/0\",\"value\":\"bar\"},{\"op\":\"test\",\"path\":\"/\",\"value\":0},{\"op\":\"test\",\"path\":\"/a~1b\",\"value\":1},{\"op\":\"test\",\"path\":\"/c%d\",\"value\":2},{\"op\":\"test\",\"path\":\"/e^f\",\"value\":3},{\"op\":\"test\",\"path\":\"/g|h\",\"value\":4},{\"op\":\"test\",\"path\":\"/i\\\\j\",\"value\":5},{\"op\":\"test\",\"path\":\"/k\\\"l\",\"value\":6},{\"op\":\"test\",\"path\":\"/ \",\"value\":7},{\"op\":\"test\",\"path\":\"/m~0n\",\"value\":8}]",
+    "{\"foo\":[\"bar\",\"baz\"],\"\":0,\"a/b\":1,\"c%d\":2,\"e^f\":3,\"g|h\":4,\"i\\\\j\":5,\"k\\\"l\":6,\" \":7,\"m~n\":8}",
+    false
+  )
+  // 58: Move to same location has no effect
+  check_case(
+    "{\"foo\":1}",
+    "[{\"op\":\"move\",\"from\":\"/foo\",\"path\":\"/foo\"}]",
+    "{\"foo\":1}",
+    false
+  )
+  // 59:
+  check_case(
+    "{\"foo\":1,\"baz\":[{\"qux\":\"hello\"}]}",
+    "[{\"op\":\"move\",\"from\":\"/foo\",\"path\":\"/bar\"}]",
+    "{\"baz\":[{\"qux\":\"hello\"}],\"bar\":1}",
+    false
+  )
+  // 60:
+  check_case(
+    "{\"baz\":[{\"qux\":\"hello\"}],\"bar\":1}",
+    "[{\"op\":\"move\",\"from\":\"/baz/0/qux\",\"path\":\"/baz/1\"}]",
+    "{\"baz\":[{},\"hello\"],\"bar\":1}",
+    false
+  )
+  // 61:
+  check_case(
+    "{\"baz\":[{\"qux\":\"hello\"}],\"bar\":1}",
+    "[{\"op\":\"copy\",\"from\":\"/baz/0\",\"path\":\"/boo\"}]",
+    "{\"baz\":[{\"qux\":\"hello\"}],\"bar\":1,\"boo\":{\"qux\":\"hello\"}}",
+    false
+  )
+  Ok(())
+}

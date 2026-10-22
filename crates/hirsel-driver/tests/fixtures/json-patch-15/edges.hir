@@ -1,0 +1,220 @@
+// Additional RFC6902 edge cases (independent expectations).
+// Independent json-patch/specs vectors, revision 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c.
+// MIT, Copyright (c) 2017 Ivan Dubrov; see docs/json-merge-patch-LICENSE-MIT.txt.
+fn read(source: String) -> std@1/json.Value uses {} {
+  match std@1/json.parse(unique source) {
+    Ok(v) => take v,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+}
+
+// Independent structural oracle: map insertion order is deliberately ignored.
+// Numeric lexemes in these edit-result vectors are preserved exactly.
+fn same_value(a: std@1/json.Value, b: std@1/json.Value) -> bool uses {} {
+  match (a, b) {
+    (Object(x), Object(y)) => {
+      if core@1/map.len(x) != core@1/map.len(y) {
+        return false
+      }
+      for (key, child) in x {
+        let Some(other) = core@1/map.get(y, key) else {
+          return false
+        }
+        if !same_value(child, other) {
+          return false
+        }
+      }
+      true
+    },
+    (Array(x), Array(y)) => {
+      if core@1/list.len(x) != core@1/list.len(y) {
+        return false
+      }
+      for i in 0u64..core@1/list.len(x) {
+        if !same_value(x[i], y[i]) {
+          return false
+        }
+      }
+      true
+    },
+    _ => a == b,
+  }
+}
+
+fn check_case(doc: String, patch_text: String, expected: String, fails: bool) -> () uses {} {
+  let limits = std@1/json_patch.default_limits()
+  let original = Some(read(doc))
+  let alias = copy original
+  let parsed = std@1/json_patch.parse_text(unique patch_text, limits)
+  match parsed {
+    Error(_) => core@1/failure.check(fails, TextInvariant()),
+    Ok(patch) => {
+      let outcome = std@1/json_patch.apply(original, patch, limits)
+      match outcome {
+        Error(_) => core@1/failure.check(fails, TextInvariant()),
+        Ok(actual) => {
+          core@1/failure.check(!fails, TextInvariant())
+          let Some(actual_value) = actual else {
+            core@1/failure.check(false, TextInvariant())
+            return
+          }
+          core@1/failure.check(
+            same_value(actual_value, read(expected)),
+            TextInvariant()
+          )
+        },
+      }
+    },
+  }
+  // Compare both the borrowed input and a retained alias after every outcome.
+  let preserved_inputs: List[Option[std@1/json.Value]] = [copy original, copy alias]
+  for preserved in preserved_inputs {
+    let Some(v) = preserved else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(text) = std@1/json.stringify(v) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    let Ok(original_text) = std@1/json.stringify(read(doc)) else {
+      core@1/failure.check(false, TextInvariant())
+      return
+    }
+    core@1/failure.check(text == original_text, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  // edge 0
+  check_case(
+    "{\"a\":{\"b\":{\"x\":1},\"c\":2}}",
+    "[{\"op\":\"move\",\"from\":\"/a/b\",\"path\":\"/a\"}]",
+    "{\"a\":{\"x\":1}}",
+    false
+  )
+  // edge 1
+  check_case(
+    "{\"a\":{\"x\":1}}",
+    "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"/a/child\"}]",
+    "{\"a\":{\"x\":1,\"child\":{\"x\":1}}}",
+    false
+  )
+  // edge 2
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"copy\",\"from\":\"\",\"path\":\"/snapshot\"}]",
+    "{\"a\":1,\"snapshot\":{\"a\":1}}",
+    false
+  )
+  // edge 3
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"/a\"}]",
+    "{\"a\":1}",
+    false
+  )
+  // edge 4
+  check_case(
+    "[0,1,2,3]",
+    "[{\"op\":\"move\",\"from\":\"/3\",\"path\":\"/0\"}]",
+    "[3,0,1,2]",
+    false
+  )
+  // edge 5
+  check_case(
+    "[0,1,2,3]",
+    "[{\"op\":\"move\",\"from\":\"/0\",\"path\":\"/2\"}]",
+    "[1,2,0,3]",
+    false
+  )
+  // edge 6
+  check_case(
+    "[0,1]",
+    "[{\"op\":\"move\",\"from\":\"/0\",\"path\":\"/2\"}]",
+    "[0,1]",
+    true
+  )
+  // edge 7
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/missing/child\"}]",
+    "{\"a\":1}",
+    true
+  )
+  // edge 8
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"add\",\"path\":\"/b\",\"value\":2},{\"op\":\"remove\",\"path\":\"/nope\"}]",
+    "{\"a\":1}",
+    true
+  )
+  // edge 9
+  check_case(
+    "null",
+    "[{\"op\":\"replace\",\"path\":\"\",\"value\":false}]",
+    "false",
+    false
+  )
+  // edge 10
+  check_case(
+    "\"foo\"",
+    "[{\"op\":\"replace\",\"path\":\"\",\"value\":\"bar\"}]",
+    "\"bar\"",
+    false
+  )
+  // edge 11
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"remove\",\"path\":\"\"},{\"op\":\"add\",\"path\":\"\",\"value\":null},{\"op\":\"test\",\"path\":\"\",\"value\":false}]",
+    "{\"a\":1}",
+    true
+  )
+  // edge 12
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"\"}]",
+    "1",
+    false
+  )
+  // edge 13
+  check_case(
+    "{\"a\":1}",
+    "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"\"}]",
+    "1",
+    false
+  )
+  // edge 14
+  check_case("[]", "[{\"op\":\"remove\",\"path\":\"/-\"}]", "[]", true)
+  // edge 15
+  check_case("[]", "[{\"op\":\"replace\",\"path\":\"/-\",\"value\":1}]", "[]", true)
+  // edge 16
+  check_case(
+    "[]",
+    "[{\"op\":\"add\",\"path\":\"/18446744073709551615\",\"value\":1}]",
+    "[]",
+    true
+  )
+  // edge 17
+  check_case(
+    "[]",
+    "[{\"op\":\"add\",\"path\":\"/18446744073709551616\",\"value\":1}]",
+    "[]",
+    true
+  )
+  // edge 18
+  check_case("[1]", "[{\"op\":\"add\",\"path\":\"/+0\",\"value\":1}]", "[1]", true)
+  // edge 19
+  check_case("[1]", "[{\"op\":\"add\",\"path\":\"/0.0\",\"value\":1}]", "[1]", true)
+  // edge 20
+  check_case(
+    "{\"\":{\"\":1}}",
+    "[{\"op\":\"remove\",\"path\":\"//\"}]",
+    "{\"\":{}}",
+    false
+  )
+  Ok(())
+}

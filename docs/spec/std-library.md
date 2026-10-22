@@ -5556,3 +5556,84 @@ size. Formatting uses byte offsets in the semantic mailbox/name,
 `OutputLimit(0)` for a single rendered mailbox, and a zero-based mailbox index
 for list count/output failures. UTF-8 cannot be invalid in an input String, only
 in decoded word bytes.
+
+## JSON Patch (`std@1/json_patch`)
+
+`json_patch` implements RFC6902 over the shipped `json.Value` and strict
+RFC6901 `json_pointer`. It parses an owned patch list into an opaque `Patch`
+containing typed `Add`, `Remove`, `Replace`, `Move`, `Copy` and `Test` operations.
+Move and Copy carry destination first, then source. `operations` and `path_text`
+provide borrowed inspection; the opaque patch owns every path and value.
+Extra operation members are ignored. Required `op`, `path`, `from` and `value`
+members are checked before application; `value: null` is a present value.
+`parse_text` uses `json.parse`, including duplicate-key rejection.
+
+```text
+fn json_patch.default_limits() -> Limits uses {}
+fn json_patch.operations(patch: Patch) -> List[Operation] in patch uses {}
+fn json_patch.path_text(selected: Path) -> String in selected uses {}
+fn json_patch.parse(take value: json.Value, limits: Limits) -> Result[Patch, PatchError] uses {}
+fn json_patch.parse_text(take text: String, limits: Limits) -> Result[Patch, PatchError] uses {}
+fn json_patch.apply(document: Option[json.Value], patch: Patch, limits: Limits)
+  -> Result[Option[json.Value], PatchError] uses {}
+```
+
+`apply` borrows both inputs and returns a new owned document only after every
+operation succeeds. Retained aliases and the input document remain unchanged
+on success and on any failure, including a late failure after root removal.
+`None()` means document absence; `Some(Null())` means JSON null. Root add creates
+or replaces a document, root replace requires one, and root remove returns
+absence. An empty patch preserves absence. After removal, only root add can
+create a document; test, remove, replace, copy and move require existing targets
+or sources. Move to the same decoded path checks source existence then succeeds;
+moving a value into its own descendant is rejected. Array destinations are
+resolved after source removal, so indexes account for shifts.
+
+Paths accept the string form of RFC6901, with strict `~0` and `~1` escapes,
+Unicode and empty keys. Parents must already exist. Array indexes are `0` or
+`[1-9][0-9]*` accumulated with checked `u64` arithmetic. Only an add destination
+(including the add phase of move/copy) accepts final `-` as append. An object
+member named `-` is ordinary data. Test compares objects without key order,
+arrays in order and numbers by exact decimal value: `1`, `1.0` and `10e-1`
+are equal, as are positive and negative zero. Exponents normalize with bounded
+exact integer arithmetic; no `f64` conversion or power-of-ten expansion occurs.
+
+`Limits` has inclusive `max_bytes`, `max_operations`, `max_depth`, `max_tokens`
+and `max_work` fields. Defaults are 1,048,576 bytes, 1,024 operations, depth 64,
+64 tokens per path and 10,000,000 work units. Hard ceilings are respectively
+16,777,216, 4,096, 128, 128 and 100,000,000; larger settings return `LimitsError`.
+Zero is a valid limit. DOM bytes count one per node plus UTF-8 string, number
+and object-key bytes. The root is depth zero; empty containers have no children.
+Parsing checks the complete patch DOM, including the list and operation-object
+wrappers, against byte/depth limits. `parse_text` also checks raw encoded bytes
+before calling JSON parsing. The shipped parser retains its own nesting cap.
+
+Work is cumulative within each parse or apply call. Tree preflight charges
+nine units per node and one per payload byte; paths charge eight per encoded
+byte plus one. Text parsing charges eight per raw input byte. Equality charges
+eight per visited node, string bytes and object-key lookup bytes. Decimal
+normalization charges four per number byte plus one, then the square of the
+exponent substring length plus eight per exponent byte before BigInt parsing.
+Complete scans precede document cloning, pointer traversal and each edit, and
+check every result. The bounded depth also bounds recursive traversal stacks.
+Apply rechecks the patch's operation/path/value limits under its own settings,
+so parsing with generous limits cannot bypass a later restrictive apply.
+
+`PatchError` contains zero-based `operation`, original encoded `path` and
+`kind: ErrorKind`. Whole-input errors use operation 0 and path `""`. Missing
+move/copy sources identify `from`; other application errors identify `path`.
+Kinds distinguish invalid settings, each limit, JSON parsing, operation shape,
+missing/wrong-typed fields, unknown operations, invalid pointer byte offsets,
+missing targets/sources, invalid mutation indexes, descendant moves, failed
+tests and invalid manually constructed number spellings. Limits and malformed
+inputs return errors without publishing a partially edited document.
+
+The operation dispatch and atomic contract are ported from json-patch
+`src/lib.rs:318–502` at `1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c`.
+Hirsel uses an owned working document instead of an in-place undo log, finite
+caps, precise lexeme-number equality, document absence after root removal and
+strict remove/replace append-token rejection. The enabled official vectors
+from `specs/tests.json` and `specs/spec_tests.json` are independent expectations;
+disabled duplicate-key cases are covered as raw JSON input. License texts and
+attribution are in `third-party/NOTICES.md`. The generated signature index is
+updated by the existing `tools/main-runs` catalogue workflow.

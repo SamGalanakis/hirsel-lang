@@ -1,0 +1,743 @@
+// RFC6902 dispatch adapted from json-patch src/lib.rs:318-434,435-502,
+// 1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c (MIT, Ivan Dubrov).
+// See docs/json-merge-patch-LICENSE-MIT.txt and third-party/NOTICES.md.
+// Adaptations: owned private working document instead of an undo log; bounded
+// work/depth/bytes; exact decimal equality; strict array '-' rules; absent root.
+
+/// Limits are inclusive. Hard ceilings: 16 MiB, 4096 operations, depth 128,
+/// 128 tokens/path, 100 million work units. Invalid limits return LimitsError.
+/// Bytes count UTF-8 payload bytes plus one per node (and object key bytes).
+/// parse_text additionally bounds the complete encoded input before parsing.
+pub type Limits {
+  max_bytes: u64,
+  max_operations: u64,
+  max_depth: u64,
+  max_tokens: u64,
+  max_work: u64,
+}
+
+pub fn default_limits() -> Limits uses {} {
+  Limits(
+    max_bytes: 1048576,
+    max_operations: 1024,
+    max_depth: 64,
+    max_tokens: 64,
+    max_work: 10000000
+  )
+}
+
+@serializable
+pub type ErrorKind = LimitsError | BytesLimit | OperationsLimit | DepthLimit | TokensLimit | WorkLimit | InvalidJson(
+  json.JsonError
+) | Shape | Field(String) | UnknownOperation | InvalidPath(u64) | MissingTarget | MissingSource | InvalidIndex | MoveDescendant | TestFailed | InvalidNumber
+
+/// operation is zero-based. Errors before operation dispatch use operation 0
+/// and path "". For source failures path is the original `from` string.
+@serializable
+pub type PatchError {
+  operation: u64,
+  path: String,
+  kind: ErrorKind,
+}
+
+/// Validated RFC6901 path. Both the shipped pointer and decoded mutation tokens
+/// are owned; no source JSON or source text is borrowed by a parsed patch.
+pub opaque type Path: copyable + inert + noalloc_drop uses {} {
+  text: String,
+  pointer: json_pointer.Pointer,
+  tokens: List[String],
+}
+
+/// Move and Copy carry destination first, then source; other paths are targets.
+pub type Operation = Add(Path, json.Value) | Remove(Path) | Replace(Path, json.Value) | Move(
+  Path,
+  Path
+) | Copy(Path, Path) | Test(Path, json.Value)
+
+pub opaque type Patch: copyable + inert + noalloc_drop uses {} {
+  operations: List[Operation],
+}
+
+/// Borrows the typed operation sequence from a parsed patch.
+pub fn operations(patch: Patch) -> List[Operation] in patch uses {} {
+  patch.operations
+}
+
+/// Borrows a path's original encoded RFC6901 text.
+pub fn path_text(selected: Path) -> String in selected uses {} {
+  selected.text
+}
+
+fn limits_ok(limits: Limits) -> Result[(), ErrorKind] uses {} {
+  if limits.max_bytes > 16777216 || limits.max_operations > 4096 || limits.max_depth > 128 || limits.max_tokens > 128 || limits.max_work > 100000000 {
+    return Error(LimitsError())
+  }
+  Ok(())
+}
+
+fn spend(mut work: u64, amount: u64) -> Result[(), ErrorKind] uses {} {
+  if amount > work {
+    return Error(WorkLimit())
+  }
+  work -= amount
+  Ok(())
+}
+
+fn payload(mut bytes: u64, amount: u64, limits: Limits, mut work: u64) -> Result[
+  (),
+  ErrorKind
+] uses {} {
+  if amount > limits.max_bytes - bytes {
+    return Error(BytesLimit())
+  }
+  spend(mut work, amount)?
+  bytes += amount
+  Ok(())
+}
+
+fn number_valid(number: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(number)
+  let mut reader = json.reader(data)
+  match json.read_number(mut reader) {
+    Ok(raw) => core@1/bytes.len(raw) == core@1/bytes.len(data),
+    Error(_) => false,
+  }
+}
+
+// Bound the whole tree before any deep copy, equality, pointer lookup or edit.
+// Root is depth zero. Work counts nodes, bytes and container entry visits.
+fn scan(value: json.Value, depth: u64, limits: Limits, mut bytes: u64, mut work: u64) -> Result[
+  (),
+  ErrorKind
+] uses {} {
+  if depth > limits.max_depth {
+    return Error(DepthLimit())
+  }
+  payload(mut bytes, 1, limits, mut work)?
+  spend(mut work, 8)?
+  match value {
+    Number(s) => {
+      payload(mut bytes, core@1/string.byte_len(s), limits, mut work)?
+      if !number_valid(s) {
+        return Error(InvalidNumber())
+      }
+    },
+    Text(s) => payload(mut bytes, core@1/string.byte_len(s), limits, mut work)?,
+    Array(items) => {
+      for item in items {
+        scan(item, depth + 1, limits, mut bytes, mut work)?
+      }
+    },
+    Object(entries) => {
+      for (key, item) in entries {
+        payload(mut bytes, core@1/string.byte_len(key), limits, mut work)?
+        scan(item, depth + 1, limits, mut bytes, mut work)?
+      }
+    },
+    _ => {},
+  }
+  Ok(())
+}
+
+fn preflight(value: json.Value, limits: Limits, mut work: u64) -> Result[(), ErrorKind] uses {} {
+  let mut bytes: u64 = 0
+  scan(value, 0, limits, mut bytes, mut work)
+}
+
+fn make_path(take text: String, limits: Limits, mut work: u64) -> Result[
+  Path,
+  ErrorKind
+] uses {} {
+  let size = core@1/string.byte_len(text)
+  if size > limits.max_bytes {
+    return Error(BytesLimit())
+  }
+  spend(mut work, size * 8 + 1)?
+  // Count tokens before the shipped decoder allocates them.
+  let mut count: u64 = 0
+  for c in core@1/string.as_bytes(text) {
+    if c == 47 {
+      count += 1
+    }
+  }
+  if count > limits.max_tokens {
+    return Error(TokensLimit())
+  }
+  let pointer = match json_pointer.parse(text) {
+    Ok(p) => p,
+    Error(e) => {
+      return Error(
+        InvalidPath(
+          match e {
+            MissingSlash(at) => at,
+            InvalidEscape(at) => at,
+          }
+        )
+      )
+    },
+  }
+  let mut tokens: List[String] = []
+  if size != 0 {
+    let raw = std@1/string.split(copy text, "/")
+    for i in 1u64..core@1/list.len(raw) {
+      // Escape order matters: ~01 must become the literal ~1.
+      let slash = std@1/string.replace(raw[i], "~1", "/")
+      core@1/list.push(mut tokens, std@1/string.replace(slash, "~0", "~"))
+    }
+  }
+  Ok(Path(text: copy text, pointer: take pointer, tokens: take tokens))
+}
+
+fn text_field(entries: Map[String, json.Value], name: String) -> Result[
+  String,
+  ErrorKind
+] uses {} {
+  match core@1/map.get(entries, name) {
+    Some(Text(s)) => Ok(unique s),
+    _ => Error(Field(unique name)),
+  }
+}
+
+fn value_field(entries: Map[String, json.Value]) -> Result[json.Value, ErrorKind] uses {} {
+  match core@1/map.get(entries, "value") {
+    Some(v) => Ok(unique v),
+    None => Error(Field("value")),
+  }
+}
+
+fn parse_operation(
+  value: json.Value,
+  limits: Limits,
+  mut work: u64,
+  mut location: String
+) -> Result[Operation, ErrorKind] uses {} {
+  let Object(entries) = value else {
+    return Error(Shape())
+  }
+  let name = text_field(entries, "op")?
+  let destination = make_path(text_field(entries, "path")?, limits, mut work)?
+  if name == "add" {
+    return Ok(Add(take destination, value_field(entries)?))
+  }
+  if name == "remove" {
+    return Ok(Remove(take destination))
+  }
+  if name == "replace" {
+    return Ok(Replace(take destination, value_field(entries)?))
+  }
+  if name == "test" {
+    return Ok(Test(take destination, value_field(entries)?))
+  }
+  if name == "move" || name == "copy" {
+    let source_text = text_field(entries, "from")?
+    location = copy source_text
+    let source = make_path(copy source_text, limits, mut work)?
+    if name == "move" {
+      return Ok(Move(take destination, take source))
+    }
+    return Ok(Copy(take destination, take source))
+  }
+  Error(UnknownOperation())
+}
+
+fn patch_error(index: u64, path: String, kind: ErrorKind) -> PatchError uses {} {
+  PatchError(operation: index, path: unique path, kind: unique kind)
+}
+
+fn parse_inner(value: json.Value, limits: Limits, mut work: u64) -> Result[
+  Patch,
+  PatchError
+] uses {} {
+  let Array(items) = value else {
+    return Error(patch_error(0, "", Shape()))
+  }
+  if core@1/list.len(items) > limits.max_operations {
+    return Error(patch_error(0, "", OperationsLimit()))
+  }
+  if let Error(kind) = preflight(value, limits, mut work) {
+    return Error(patch_error(0, "", kind))
+  }
+  let mut parsed_ops: List[Operation] = []
+  let mut index: u64 = 0
+  for item in items {
+    let mut location = match item {
+      Object(entries) => match core@1/map.get(entries, "path") {
+        Some(Text(s)) => unique s,
+        _ => "",
+      },
+      _ => "",
+    }
+    match parse_operation(item, limits, mut work, mut location) {
+      Ok(op) => core@1/list.push(mut parsed_ops, take op),
+      Error(kind) => {
+        return Error(patch_error(index, location, kind))
+      },
+    }
+    index += 1
+  }
+  Ok(Patch(operations: take parsed_ops))
+}
+
+/// Validates the complete owned patch list before application. Extra operation
+/// members are ignored, as RFC6902 requires. Duplicate keys are json.parse errors.
+pub fn parse(take value: json.Value, limits: Limits) -> Result[Patch, PatchError] uses {} {
+  if let Error(kind) = limits_ok(limits) {
+    return Error(patch_error(0, "", kind))
+  }
+  let mut work = limits.max_work
+  parse_inner(value, limits, mut work)
+}
+
+/// Bounds raw UTF-8 bytes and parser work before calling the shipped JSON parser.
+pub fn parse_text(take text: String, limits: Limits) -> Result[Patch, PatchError] uses {} {
+  if let Error(kind) = limits_ok(limits) {
+    return Error(patch_error(0, "", kind))
+  }
+  let size = core@1/string.byte_len(text)
+  if size > limits.max_bytes {
+    return Error(patch_error(0, "", BytesLimit()))
+  }
+  let mut work = limits.max_work
+  if let Error(kind) = spend(mut work, size * 8) {
+    return Error(patch_error(0, "", kind))
+  }
+  let value = match json.parse(take text) {
+    Ok(value) => take value,
+    Error(kind) => {
+      return Error(patch_error(0, "", InvalidJson(kind)))
+    },
+  }
+  parse_inner(value, limits, mut work)
+}
+
+// Checked RFC6901 array index grammar. Only add at the final token accepts '-'.
+fn array_index(token: String, length: u64, add: bool) -> Result[u64, ErrorKind] uses {} {
+  if add && token == "-" {
+    return Ok(length)
+  }
+  let data = core@1/string.as_bytes(token)
+  let size = core@1/bytes.len(data)
+  if size == 0 || size > 1 && data[0] == 48 {
+    return Error(InvalidIndex())
+  }
+  let mut n: u64 = 0
+  for c in data {
+    if c < 48 || c > 57 {
+      return Error(InvalidIndex())
+    }
+    let digit: u64 = core@1/int.widen(c - 48)
+    if n > (18446744073709551615u64 - digit) / 10 {
+      return Error(InvalidIndex())
+    }
+    n = n * 10 + digit
+  }
+  if n > length || !add && n == length {
+    return Error(InvalidIndex())
+  }
+  Ok(n)
+}
+
+// list has remove and swap, but no insert. Push then rotate the new slot back.
+fn insert(mut items: unique List[json.Value], at: u64, take value: unique json.Value) -> () uses {} {
+  let mut end = core@1/list.len(items)
+  core@1/list.push(mut items, take value)
+  while end > at {
+    core@1/list.swap(mut items, end, end - 1)
+    end -= 1
+  }
+}
+
+type Edit = Insert | Delete | Set
+
+// All ancestors are unique. Removing a child transfers its ownership; insertion
+// rebuilds the same ancestor without exposing a partially edited document.
+fn edit(
+  take target: unique json.Value,
+  tokens: List[String],
+  at: u64,
+  mode: Edit,
+  take replacement: unique json.Value
+) -> Result[unique json.Value, ErrorKind] uses {} {
+  let last = at + 1 == core@1/list.len(tokens)
+  let token = tokens[at]
+  match take target {
+    Object(entries) => {
+      let mut members = take entries
+      let old = take core@1/map.remove(mut members, token)
+      if last {
+        if mode != Insert() && !match old {
+          Some(_) => true,
+          None => false,
+        } {
+          return Error(MissingTarget())
+        }
+        if mode != Delete() {
+          core@1/map.insert(mut members, unique token, take replacement)
+        }
+      } else {
+        let Some(child) = take old else {
+          return Error(MissingTarget())
+        }
+        let changed = edit(take child, tokens, at + 1, mode, take replacement)?
+        core@1/map.insert(mut members, unique token, take changed)
+      }
+      Ok(Object(take members))
+    },
+    Array(entries) => {
+      let mut items = take entries
+      let position = array_index(
+        token,
+        core@1/list.len(items),
+        last && mode == Insert()
+      )?
+      if last {
+        if mode != Insert() {
+          let _ = take core@1/list.remove(mut items, position)
+        }
+        if mode != Delete() {
+          insert(mut items, position, take replacement)
+        }
+      } else {
+        let child = take core@1/list.remove(mut items, position)
+        let changed = edit(take child, tokens, at + 1, mode, take replacement)?
+        insert(mut items, position, take changed)
+      }
+      Ok(Array(take items))
+    },
+    _ => Error(MissingTarget()),
+  }
+}
+
+fn change(
+  take document: unique Option[json.Value],
+  selected_path: Path,
+  mode: Edit,
+  take replacement: unique json.Value
+) -> Result[unique Option[json.Value], ErrorKind] uses {} {
+  if core@1/list.len(selected_path.tokens) == 0 {
+    if mode != Insert() && !match document {
+      Some(_) => true,
+      None => false,
+    } {
+      return Error(MissingTarget())
+    }
+    if mode == Delete() {
+      return Ok(None())
+    }
+    return Ok(Some(take replacement))
+  }
+  let Some(target) = take document else {
+    return Error(MissingTarget())
+  }
+  Ok(Some(edit(take target, selected_path.tokens, 0, mode, take replacement)?))
+}
+
+// Canonical nonzero decimal: signed significant digits and an exact exponent.
+// Only the exponent uses BigInt; its squared digit count is charged BEFORE the
+// bounded parse/add. No powers of ten or floating point are ever constructed.
+type Decimal {
+  negative: bool,
+  digits: List[u8],
+  exponent: bigint.BigInt,
+}
+
+fn decimal(number: String, mut work: u64) -> Result[Decimal, ErrorKind] uses {} {
+  let data = core@1/string.as_bytes(number)
+  let size = core@1/bytes.len(data)
+  spend(mut work, size * 4 + 1)?
+  let negative = data[0] == 45
+  let mut pos: u64 = if negative {
+    1
+  } else {
+    0
+  }
+  let mut digits: List[u8] = []
+  let mut fractional: u64 = 0
+  let mut dot = false
+  while pos < size && data[pos] != 101 && data[pos] != 69 {
+    let c = data[pos]
+    if c == 46 {
+      dot = true
+    } else {
+      core@1/list.push(mut digits, c)
+      if dot {
+        fractional += 1
+      }
+    }
+    pos += 1
+  }
+  let mut first: u64 = 0
+  while first < core@1/list.len(digits) && digits[first] == 48 {
+    first += 1
+  }
+  if first == core@1/list.len(digits) {
+    return Ok(Decimal(negative: false, digits: [], exponent: bigint.from_u64(0)))
+  }
+  let mut end = core@1/list.len(digits)
+  while end > first && digits[end - 1] == 48 {
+    end -= 1
+  }
+  let trailing = core@1/list.len(digits) - end
+  let mut significant: List[u8] = []
+  for i in first..end {
+    core@1/list.push(mut significant, digits[i])
+  }
+  let mut exponent = bigint.from_u64(0)
+  if pos < size {
+    pos += 1
+    if data[pos] == 43 {
+      pos += 1
+    }
+    let count = size - pos
+    spend(mut work, count * count + count * 8)?
+    let raw = json.number_text(core@1/bytes.slice(data, pos, size))
+    exponent = match bigint.parse(raw) {
+      Ok(e) => e,
+      Error(_) => {
+        return Error(InvalidNumber())
+      },
+    }
+  }
+  exponent = bigint.sub(
+    bigint.add(exponent, bigint.from_u64(trailing)),
+    bigint.from_u64(fractional)
+  )
+  Ok(Decimal(negative: negative, digits: take significant, exponent: take exponent))
+}
+
+fn equivalent(a: json.Value, b: json.Value, mut work: u64) -> Result[bool, ErrorKind] uses {} {
+  spend(mut work, 8)?
+  match (a, b) {
+    (Null, Null) => Ok(true),
+    (Bool(x), Bool(y)) => Ok(x == y),
+    (Text(x), Text(y)) => {
+      spend(mut work, core@1/string.byte_len(x) + core@1/string.byte_len(y))?
+      Ok(x == y)
+    },
+    (Number(x), Number(y)) => {
+      let left = decimal(x, mut work)?
+      let right = decimal(y, mut work)?
+      Ok(
+        left.negative == right.negative && left.digits == right.digits && bigint.compare(
+          left.exponent,
+          right.exponent
+        ) == 0
+      )
+    },
+    (Array(x), Array(y)) => {
+      if core@1/list.len(x) != core@1/list.len(y) {
+        return Ok(false)
+      }
+      for i in 0u64..core@1/list.len(x) {
+        if !equivalent(x[i], y[i], mut work)? {
+          return Ok(false)
+        }
+      }
+      Ok(true)
+    },
+    (Object(x), Object(y)) => {
+      if core@1/map.len(x) != core@1/map.len(y) {
+        return Ok(false)
+      }
+      for (key, child) in x {
+        spend(mut work, core@1/string.byte_len(key) + 1)?
+        let Some(other) = core@1/map.get(y, key) else {
+          return Ok(false)
+        }
+        if !equivalent(child, other, mut work)? {
+          return Ok(false)
+        }
+      }
+      Ok(true)
+    },
+    _ => Ok(false),
+  }
+}
+
+fn op_path(op: Operation) -> Path in op uses {} {
+  match op {
+    Add(p, _) => p,
+    Remove(p) => p,
+    Replace(p, _) => p,
+    Move(p, _) => p,
+    Copy(p, _) => p,
+    Test(p, _) => p,
+  }
+}
+
+fn check_path(p: Path, limits: Limits, mut work: u64) -> Result[(), ErrorKind] uses {} {
+  if core@1/list.len(p.tokens) > limits.max_tokens {
+    return Error(TokensLimit())
+  }
+  if core@1/string.byte_len(p.text) > limits.max_bytes {
+    return Error(BytesLimit())
+  }
+  spend(mut work, core@1/string.byte_len(p.text) * 8 + 1)
+}
+
+fn check_test(
+  document: Option[json.Value],
+  selected: Path,
+  expected: json.Value,
+  mut work: u64
+) -> Result[(), ErrorKind] uses {} {
+  let matched: Result[bool, ErrorKind] = match document {
+    Some(target) => match json_pointer.get(target, selected.pointer) {
+      Some(actual) => equivalent(actual, expected, mut work),
+      None => Error(MissingTarget()),
+    },
+    None => Error(MissingTarget()),
+  }
+  if !matched? {
+    return Error(TestFailed())
+  }
+  Ok(())
+}
+
+fn execute(
+  take document: unique Option[json.Value],
+  op: Operation,
+  limits: Limits,
+  mut work: u64
+) -> Result[unique Option[json.Value], ErrorKind] uses {} {
+  match op {
+    Add(p, v) => change(take document, p, Insert(), unique v),
+    Remove(p) => change(take document, p, Delete(), Null()),
+    Replace(p, v) => change(take document, p, Set(), unique v),
+    Move(p, source) => {
+      let from_size = core@1/list.len(source.tokens)
+      let to_size = core@1/list.len(p.tokens)
+      if to_size > from_size {
+        let mut prefix = true
+        for i in 0u64..from_size {
+          if source.tokens[i] != p.tokens[i] {
+            prefix = false
+          }
+        }
+        if prefix {
+          return Error(MoveDescendant())
+        }
+      }
+      let value = match document {
+        Some(target) => match json_pointer.get(target, source.pointer) {
+          Some(v) => unique v,
+          None => {
+            return Error(MissingSource())
+          },
+        },
+        None => {
+          return Error(MissingSource())
+        },
+      }
+      // Same path is a no-op only AFTER verifying the source exists.
+      if source.tokens == p.tokens {
+        return Ok(take document)
+      }
+      let removed = change(take document, source, Delete(), Null())?
+      change(take removed, p, Insert(), take value)
+    },
+    Copy(p, source) => {
+      let value = match document {
+        Some(target) => match json_pointer.get(target, source.pointer) {
+          Some(v) => unique v,
+          None => {
+            return Error(MissingSource())
+          },
+        },
+        None => {
+          return Error(MissingSource())
+        },
+      }
+      change(take document, p, Insert(), take value)
+    },
+    Test(p, expected) => {
+      check_test(document, p, expected, mut work)?
+      Ok(take document)
+    },
+  }
+}
+
+/// Borrows both inputs and publishes only a completely successful owned result.
+/// None is document absence, distinct from Some(Null()). Only root add creates
+/// an absent document. An empty patch preserves absence. Root remove returns
+/// None; later root add may recreate it. All failures leave both inputs intact.
+/// Each call has one work budget across preflight, copies, edits and tests.
+pub fn apply(document: Option[json.Value], patch: Patch, limits: Limits) -> Result[
+  Option[json.Value],
+  PatchError
+] uses {} {
+  if let Error(kind) = limits_ok(limits) {
+    return Error(patch_error(0, "", kind))
+  }
+  if core@1/list.len(patch.operations) > limits.max_operations {
+    return Error(patch_error(0, "", OperationsLimit()))
+  }
+  let mut work = limits.max_work
+  if let Some(value) = document {
+    if let Error(kind) = preflight(value, limits, mut work) {
+      return Error(patch_error(0, "", kind))
+    }
+  }
+  // Revalidate all patch bounds under THIS call's limits before editing.
+  let mut index_at: u64 = 0
+  for op in patch.operations {
+    let p = op_path(op)
+    if let Error(kind) = check_path(p, limits, mut work) {
+      return Error(patch_error(index_at, p.text, kind))
+    }
+    let checked: Result[(), ErrorKind] = match op {
+      Add(_, v) => preflight(v, limits, mut work),
+      Replace(_, v) => preflight(v, limits, mut work),
+      Test(_, v) => preflight(v, limits, mut work),
+      Move(_, source) => check_path(source, limits, mut work),
+      Copy(_, source) => check_path(source, limits, mut work),
+      _ => Ok(()),
+    }
+    if let Error(kind) = checked {
+      let location = match op {
+        Move(_, source) => source.text,
+        Copy(_, source) => source.text,
+        _ => p.text,
+      }
+      return Error(patch_error(index_at, location, kind))
+    }
+    index_at += 1
+  }
+  let mut current = unique document
+  index_at = 0
+  for op in patch.operations {
+    let p = op_path(op)
+    // Charge another complete scan before pointer traversal, cloning or editing.
+    if let Some(value) = current {
+      if let Error(kind) = preflight(value, limits, mut work) {
+        return Error(patch_error(index_at, p.text, kind))
+      }
+    }
+    current = match execute(take current, op, limits, mut work) {
+      Ok(next) => take next,
+      Error(kind) => {
+        let location = match op {
+          Move(_, source) => if kind == MissingSource() {
+            source.text
+          } else {
+            p.text
+          },
+          Copy(_, source) => if kind == MissingSource() {
+            source.text
+          } else {
+            p.text
+          },
+          _ => p.text,
+        }
+        return Error(patch_error(index_at, location, kind))
+      },
+    }
+    if let Some(value) = current {
+      if let Error(kind) = preflight(value, limits, mut work) {
+        return Error(patch_error(index_at, p.text, kind))
+      }
+    }
+    index_at += 1
+  }
+  Ok(take current)
+}

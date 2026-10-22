@@ -1616,3 +1616,12 @@ Copyright 2009 The Go Authors; BSD-3-Clause (Go), license above. Hirsel retains
 its formatter and syntax, prepares the entire direct-source batch before writes,
 skips dependencies, and uses its existing exit codes; Go-specific rewriting,
 fragment, diff and flag vectors do not apply.
+
+JSON Patch: `stdlib/std@1/json_patch.hir` adapts json-patch
+`src/lib.rs:318-434,435-502`; `crates/hirsel-driver/tests/fixtures/json-patch-15/`
+ports the enabled `specs/tests.json` and `specs/spec_tests.json` vectors using the
+`tests/suite.rs:1-95` harness structure, at revision
+`1b0f707f9f4aad1009f0364f6ca73c5e88cdd85c`. Implementation and vectors MIT,
+Copyright (c) 2017 Ivan Dubrov. Full text:
+`docs/json-merge-patch-LICENSE-MIT.txt`. Hirsel adaptations are documented in the
+JSON Patch section of `docs/spec/std-library.md`.

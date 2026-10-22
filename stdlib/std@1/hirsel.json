@@ -1319,6 +1319,12 @@
       "module": [
         "mail"
       ]
+    },
+    {
+      "path": "json_patch.hir",
+      "module": [
+        "json_patch"
+      ]
     }
   ],
   "dependencies": []

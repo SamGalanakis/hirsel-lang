@@ -1,0 +1,176 @@
+fn patch(source: String) -> std@1/json_patch.Patch uses {} {
+  match std@1/json_patch.parse_text(unique source, std@1/json_patch.default_limits()) {
+    Ok(p) => take p,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      patch("[]")
+    },
+  }
+}
+
+fn check_apply(
+  doc: Option[std@1/json.Value],
+  p: std@1/json_patch.Patch,
+  limits: std@1/json_patch.Limits,
+  expected: std@1/json_patch.ErrorKind
+) -> () uses {} {
+  let alias = copy doc
+  match std@1/json_patch.apply(doc, p, limits) {
+    Error(e) => core@1/failure.check(e.kind == expected, TextInvariant()),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  core@1/failure.check(doc == alias, TextInvariant())
+}
+
+fn check_parse(
+  source: String,
+  limits: std@1/json_patch.Limits,
+  expected: std@1/json_patch.ErrorKind
+) -> () uses {} {
+  match std@1/json_patch.parse_text(unique source, limits) {
+    Error(e) => core@1/failure.check(e.kind == expected, TextInvariant()),
+    Ok(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let default = std@1/json_patch.default_limits()
+  let empty = patch("[]")
+  let add = patch("[{\"op\":\"add\",\"path\":\"/a\",\"value\":1}]")
+  let mut settings = copy default
+  settings.max_operations = 0
+  check_apply(Some(Null()), add, settings, OperationsLimit())
+  check_parse("[{\"op\":\"remove\",\"path\":\"\"}]", settings, OperationsLimit())
+  core@1/failure.check(
+    std@1/json_patch.apply(None(), empty, settings) == Ok(None()),
+    TextInvariant()
+  )
+  settings = copy default
+  settings.max_bytes = 1
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(Null()), empty, settings) == Ok(Some(Null())),
+    TextInvariant()
+  )
+  check_apply(Some(Text("x")), empty, settings, BytesLimit())
+  settings.max_bytes = 2
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(Text("x")), empty, settings) == Ok(Some(Text("x"))),
+    TextInvariant()
+  )
+  check_parse(" []", settings, BytesLimit())
+  core@1/failure.check(
+    match std@1/json_patch.parse_text("[]", settings) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  settings = copy default
+  settings.max_depth = 0
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(Array([])), empty, settings) == Ok(Some(Array([]))),
+    TextInvariant()
+  )
+  check_apply(Some(Array([Null()])), empty, settings, DepthLimit())
+  settings.max_depth = 1
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(Array([Null()])), empty, settings) == Ok(
+      Some(Array([Null()]))
+    ),
+    TextInvariant()
+  )
+  check_apply(Some(Array([Array([Null()])])), empty, settings, DepthLimit())
+  let mut members: Map[String, std@1/json.Value] = core@1/map.empty()
+  core@1/map.insert(mut members, "a", Null())
+  let nested_add = patch("[{\"op\":\"add\",\"path\":\"/a\",\"value\":[null]}]")
+  check_apply(Some(Object(take members)), nested_add, settings, DepthLimit())
+  settings = copy default
+  settings.max_tokens = 0
+  check_apply(Some(Null()), add, settings, TokensLimit())
+  check_parse("[{\"op\":\"remove\",\"path\":\"/a\"}]", settings, TokensLimit())
+  let root = patch("[{\"op\":\"add\",\"path\":\"\",\"value\":1}]")
+  core@1/failure.check(
+    std@1/json_patch.apply(None(), root, settings) == Ok(Some(Number("1"))),
+    TextInvariant()
+  )
+  settings.max_tokens = 1
+  check_apply(
+    Some(Null()),
+    patch("[{\"op\":\"copy\",\"from\":\"/a/b\",\"path\":\"\"}]"),
+    settings,
+    TokensLimit()
+  )
+  settings = copy default
+  settings.max_work = 8
+  check_apply(Some(Null()), empty, settings, WorkLimit())
+  settings.max_work = 9
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(Null()), empty, settings) == Ok(Some(Null())),
+    TextInvariant()
+  )
+  settings.max_work = 24
+  check_parse("[]", settings, WorkLimit())
+  settings.max_work = 25
+  core@1/failure.check(
+    match std@1/json_patch.parse_text("[]", settings) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  settings = copy default
+  settings.max_depth = 129
+  check_apply(None(), empty, settings, LimitsError())
+  settings = copy default
+  settings.max_operations = 4097
+  check_parse("[]", settings, LimitsError())
+  settings = copy default
+  settings.max_bytes = 16777217
+  check_apply(None(), empty, settings, LimitsError())
+  settings = copy default
+  settings.max_tokens = 129
+  check_apply(None(), empty, settings, LimitsError())
+  settings = copy default
+  settings.max_work = 100000001
+  check_apply(None(), empty, settings, LimitsError())
+  let invalid_numbers: List[String] = [
+    "",
+    "01",
+    "1.",
+    "+1",
+    "1e",
+    "1e+",
+    " 1",
+    "1 ",
+    "NaN"
+  ]
+  for number in invalid_numbers {
+    check_apply(Some(Number(copy number)), empty, default, InvalidNumber())
+  }
+  // Big exponent normalization must reject original_text arbitrary-precision growth.
+  let mut exponent = "1e"
+  for _ in 0u64..4000 {
+    exponent = std@1/string.join([copy exponent, "9"], "")
+  }
+  let mut fields: Map[String, std@1/json.Value] = core@1/map.empty()
+  core@1/map.insert(mut fields, "op", Text("test"))
+  core@1/map.insert(mut fields, "path", Text(""))
+  core@1/map.insert(mut fields, "value", Number(copy exponent))
+  let Ok(huge) = std@1/json_patch.parse(Array([Object(take fields)]), default) else {
+    return Error(1)
+  }
+  check_apply(Some(Number(take exponent)), huge, default, WorkLimit())
+  // Byte/work/depth caps remain bounded on the largest admitted traversal depth.
+  let mut deep: std@1/json.Value = Null()
+  for _ in 0u64..128 {
+    deep = Array([take deep])
+  }
+  settings = copy default
+  settings.max_depth = 128
+  core@1/failure.check(
+    std@1/json_patch.apply(Some(copy deep), empty, settings) == Ok(Some(copy deep)),
+    TextInvariant()
+  )
+  check_apply(Some(take deep), empty, default, DepthLimit())
+  Ok(())
+}
