@@ -2,7 +2,7 @@
 //! record owns canonical type rows and relocates spans while decoding. Reads
 //! are verified before payload decoding; a bad or obsolete record is a miss.
 use super::*;
-use crate::store::{Entry as StoredEntry, EntryKey, Variant};
+use crate::store::{Entry as StoredEntry, EntryKey, Variant, VariantRef};
 use hirsel_span::{Anchor, AnchorCodec};
 use hirsel_types::{OwnershipFacts, TypeId, TypeTable};
 use serde::{Deserialize, Serialize};
@@ -517,12 +517,10 @@ impl EncodedWriter {
             }
         }
         let mut entry = StoredEntry::load(&*self.store, &self.key);
-        let mut variant = Variant {
-            inputs: self.key.1,
-            reads: reads.clone(),
-            payload: payload.into(),
+        let Some(variant) = VariantRef::publish(&*self.store, &self.key, reads.clone(), &payload)
+        else {
+            return Ok(());
         };
-        variant.bind_payload(&self.key);
         entry.insert(variant);
         self.store.put_query(
             self.kind,
@@ -737,14 +735,12 @@ impl QueryEngine {
         let store = self.result_store.clone()?;
         let key = self.store_key(path, kind)?;
         let mut entry = StoredEntry::load(&*store, &key);
-        entry.variants.retain(|variant| variant.inputs == key.1);
+        entry
+            .variants
+            .retain(|variant| variant.inputs == key.1 && variant.valid(&key));
         let hit = entry
             .hit(|read| self.observe(path, read))
-            .cloned()
-            .and_then(|mut variant| {
-                variant.unbind_payload(&key)?;
-                Some(variant)
-            });
+            .and_then(|variant| variant.resolve(&*store, &key));
         if hit.is_none() {
             timings::count(Count::StoreMisses);
         }
