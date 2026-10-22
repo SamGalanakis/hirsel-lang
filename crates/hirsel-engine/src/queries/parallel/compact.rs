@@ -441,6 +441,9 @@ impl QueryEngine {
         self.active.remove(&(path.clone(), kind));
         let durability = stage.reads.durability(|read| self.durability_of(read));
         if let Some(error) = stage.error {
+            if kind == QueryKind::Check {
+                self.retire_after_check_rejection(key.def);
+            }
             let memo = self
                 .graph
                 .insert(key, text, Err(error), stage.reads, durability, false);

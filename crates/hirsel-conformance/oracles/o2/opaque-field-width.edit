@@ -1,0 +1,8 @@
+// o2: an opaque field's width changes while its owner's public signature stays identical
+=== main.hir
+pub opaque type Secret: data uses {} { level:u64, }
+fn view(x:Secret)->u64{x.level}
+pub fn main()->u64{1}
+~~~ main.hir
+- level:u64
++ level:u32

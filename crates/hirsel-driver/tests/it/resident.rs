@@ -87,6 +87,86 @@ fn session_rechecks_edits_and_recovers_from_invalid_sources() {
     });
 }
 
+fn session_representation_edit_matches_cold(opaque: bool, reads_field: bool) {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let visibility = if opaque { "opaque " } else { "" };
+        let body = if reads_field { "x.level" } else { "1" };
+        let parameter = if reads_field { "x:Secret" } else { "" };
+        let initial = format!(
+            "pub {visibility}type Secret: data uses {{}} {{ level:u64, }}\n\
+             fn view({parameter})->u64{{{body}}}\npub fn main()->u64{{1}}\n"
+        );
+        std::fs::write(&source, &initial).unwrap();
+        let config = CompileConfig {
+            retention: memo::Retention::Resident,
+            store: Arc::new(store::NoneStore),
+            ..CompileConfig::default()
+        };
+        let mut session = session::Session::open_configured(&source, config.clone());
+        assert!(session.check_applied().unwrap().diagnostics.is_empty());
+        let program = session.program_applied().unwrap();
+        program.engine.checked_products(&program.entry).unwrap();
+        let mut view = program.entry.clone();
+        view.0.name = "view".into();
+        let before = [QueryKind::Resolve, QueryKind::Check]
+            .map(|kind| program.engine.recompute_count(&view, kind));
+
+        let edited = initial.replace("level:u64", "level:u32");
+        std::fs::write(&source, &edited).unwrap();
+        session.apply(vec![session::FileChange {
+            path: source.clone(),
+            bytes: Some(edited.into_bytes()),
+        }]);
+        let actual = session.check_applied().unwrap();
+        assert_eq!(session.stats().loads, 1);
+        assert_eq!(session.stats().replaced, 1);
+        let program = session.program_applied().unwrap();
+        let receipt = program.engine.checked_products(&program.entry).unwrap();
+        if !reads_field {
+            assert_eq!(
+                [QueryKind::Resolve, QueryKind::Check]
+                    .map(|kind| program.engine.recompute_count(&view, kind)),
+                before,
+                "a view that does not read the representation stays cached"
+            );
+        }
+
+        let mut cold = hirsel_driver::COMPILER
+            .clone()
+            .with_config(config)
+            .with_owned_engines()
+            .load_program(&source)
+            .unwrap();
+        let expected = cold.check_configured().unwrap();
+        let expected_receipt = cold.engine.checked_products(&cold.entry).unwrap();
+        assert_eq!(diagnostics(&actual), diagnostics(&expected));
+        assert_eq!(actual.completion, expected.completion);
+        assert_eq!(receipt.digest, expected_receipt.digest);
+        assert_eq!(receipt.canonical, expected_receipt.canonical);
+        assert_eq!(
+            receipt.canonical_reads(),
+            expected_receipt.canonical_reads()
+        );
+    });
+}
+
+#[test]
+fn session_opaque_representation_edit_matches_cold_including_receipt() {
+    session_representation_edit_matches_cold(true, true);
+}
+
+#[test]
+fn session_unread_opaque_representation_edit_keeps_check_cached() {
+    session_representation_edit_matches_cold(true, false);
+}
+
+#[test]
+fn session_transparent_representation_edit_matches_cold_including_receipt() {
+    session_representation_edit_matches_cold(false, true);
+}
+
 #[test]
 fn persistent_reads_cover_lookups_private_shapes_constants_and_moves() {
     with_compiler_stack(|| {

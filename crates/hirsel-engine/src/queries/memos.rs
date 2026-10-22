@@ -511,6 +511,9 @@ impl QueryEngine {
         detail: DependencyReads,
         observed: &Observed,
     ) -> Entry<T> {
+        if key.kind == QueryKind::Check && result.is_err() {
+            self.retire_after_check_rejection(key.def);
+        }
         let owner = key.def.path();
         let (reads, consistent) = match self.typed_reads(owner, &detail, observed) {
             Ok(reads) => (reads, true),
@@ -527,6 +530,21 @@ impl QueryEngine {
             covered: vec![],
             depth: None,
             consistent,
+        }
+    }
+
+    /// Check rejection stops the pipeline before its descendants can validate their
+    /// reads. Their earlier successful products no longer describe this check.
+    /// Retire them through the graph as well as the typed/aggregate tables;
+    /// unrelated definitions and independently usable predecessors survive.
+    pub(super) fn retire_after_check_rejection(&mut self, definition: DefId) {
+        for kind in [
+            QueryKind::CheckedSummary,
+            QueryKind::Modes,
+            QueryKind::Summary,
+            QueryKind::Lower,
+        ] {
+            self.forget(&MemoKey::new(kind, definition));
         }
     }
 
