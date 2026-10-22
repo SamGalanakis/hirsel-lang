@@ -1143,3 +1143,136 @@ fn bounded_candidates_match_the_exhaustive_spelling_scan() {
         }
     }
 }
+
+#[test]
+fn shadow_binding_sites_locate_module_declaration() {
+    let mut t = Tree::new("fn counts() {}\nlet counts = 0u64\n");
+    let body = t.block(vec![], None, 1);
+    t.function(
+        "counts",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Private,
+        1,
+    );
+    let zero = t.number("0u64", 2);
+    let local = t.let_("counts", None, zero, 2);
+    let body = t.block(vec![local], None, 2);
+    let main = t.function(
+        "main",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Public,
+        2,
+    );
+    let output = t.run(main);
+    assert_eq!(output.query.diagnostics.len(), 1);
+    let diagnostic = &output.query.diagnostics[0];
+    assert_eq!(diagnostic.rule.as_str(), "LANG-4");
+    assert_eq!(diagnostic.primary, t.origin(2).span);
+    assert_eq!(diagnostic.secondary.len(), 1);
+    assert_eq!(diagnostic.secondary[0].span, t.origin(1).span);
+    assert!(diagnostic.secondary[0].message.contains("test@1"));
+    assert!(diagnostic.fix.is_none());
+}
+
+#[test]
+fn shadow_binding_sites_unavailable_source_has_qualified_note() {
+    let mut t = Tree::new("let counts = 0u64\n");
+    let zero = t.number("0u64", 1);
+    let local = t.let_("counts", None, zero, 1);
+    let body = t.block(vec![local], None, 1);
+    let main = t.function(
+        "main",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Public,
+        1,
+    );
+    // Both source-less indexed declarations and provider-only declarations
+    // retain their stable identity without a new signature/source query.
+    for indexed in [true, false] {
+        let counts = own("counts");
+        let entries = vec![entry(counts.clone(), Namespace::Value, Visibility::Private)];
+        let (provider_index, _) = ManifestIndex::new(fixture(entries.clone()));
+        let (index, _) = ManifestIndex::new(fixture(if indexed { entries } else { vec![] }));
+        let mut fake = Fake::new(&provider_index);
+        fake.signatures.insert(
+            counts.clone(),
+            constant(counts, ty::TypeKind::Primitive(ty::Primitive::U64)),
+        );
+        let output = resolve_item(&t.file, &t.file.items[main], &index, session(), &mut fake);
+        assert_eq!(output.query.diagnostics.len(), 1);
+        let d = &output.query.diagnostics[0];
+        assert_eq!(d.primary, t.origin(1).span);
+        assert!(d.secondary.is_empty());
+        assert!(d.notes.iter().any(|n| n.contains("test@1/counts")));
+        assert!(d.notes.iter().any(|n| n.contains("unavailable")));
+        assert!(d.fix.is_none());
+        assert_eq!(fake.reads.len(), usize::from(!indexed));
+    }
+}
+
+#[test]
+fn shadow_binding_sites_nested_local_retains_primary_order() {
+    let mut t = Tree::new("outer counts\ninner counts\n");
+    let zero = t.number("0u64", 1);
+    let outer = t.let_("counts", None, zero, 1);
+    let zero = t.number("0u64", 2);
+    let inner = t.let_("counts", None, zero, 2);
+    let inner = t.block(vec![inner], None, 2);
+    let body = t.block(vec![outer], Some(inner), 1);
+    let main = t.function(
+        "main",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Public,
+        1,
+    );
+    let output = t.run(main);
+    assert_eq!(output.query.diagnostics.len(), 1);
+    let d = &output.query.diagnostics[0];
+    assert_eq!(d.rule.as_str(), "LANG-4");
+    assert_eq!(d.message, "a local cannot shadow another local");
+    assert_eq!(d.primary, t.origin(2).span);
+    assert_eq!(d.secondary[0].span, t.origin(1).span);
+    assert_eq!(d.secondary[0].message, "earlier local");
+}
+
+#[test]
+fn shadow_binding_sites_imported_heads_and_values_remain_allowed() {
+    let mut t = Tree::new("let counts = 0u64\nlet helpers = 0u64\n");
+    let zero = t.number("0u64", 1);
+    let counts = t.let_("counts", None, zero, 1);
+    let zero = t.number("0u64", 2);
+    let helpers = t.let_("helpers", None, zero, 2);
+    let body = t.block(vec![counts, helpers], None, 1);
+    let main = t.function(
+        "main",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Public,
+        1,
+    );
+    let dependency = definition(package("library", "1"), &[], "counts");
+    let mut fixture = fixture(vec![entry(
+        dependency.clone(),
+        Namespace::Value,
+        Visibility::Public,
+    )]);
+    fixture.exposures.push(DependencyExposure {
+        head: "helpers".into(),
+        package: dependency.0.package,
+        modules: vec![],
+    });
+    let (index, diagnostics) = ManifestIndex::new(fixture);
+    assert!(diagnostics.is_empty());
+    let mut fake = Fake::new(&index);
+    clean(&resolve_item(
+        &t.file,
+        &t.file.items[main],
+        &index,
+        session(),
+        &mut fake,
+    ));
+}

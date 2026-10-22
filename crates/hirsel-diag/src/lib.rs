@@ -306,6 +306,48 @@ fn render_site(out: &mut String, span: Span, message: &str, sources: &SourceMap)
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shadow_binding_sites_human_and_json_preserve_both_utf8_sites() {
+        let mut sources = SourceMap::default();
+        let local = sources
+            .add("local.hir", "// 雪\nlet café = 0u64".into())
+            .unwrap();
+        let other = sources
+            .add("other.hir", "// λ\nfn café() {}".into())
+            .unwrap();
+        let primary = Span::new(sources.file_anchor(local), 11, 16).unwrap();
+        let secondary = Span::new(sources.file_anchor(other), 9, 14).unwrap();
+        assert_eq!(sources.slice(primary), Some("café"));
+        assert_eq!(sources.slice(secondary), Some("café"));
+        let mut d = Diagnostic::error(
+            RuleId::of("LANG-4"),
+            primary,
+            "local shadows module declaration",
+        );
+        d.secondary.push(Label {
+            span: secondary,
+            message: "conflicting declaration in module `app@1/work`".into(),
+        });
+        d.notes
+            .push("conflicting top-level declaration: `app@1/work/café`".into());
+        d.notes.push(
+            "help: choose an unused local name and update every reference to this binding".into(),
+        );
+        let human = d.render_human(&sources);
+        let json = d.to_json(&sources);
+        assert_eq!(json["primary"]["start"], 11);
+        assert_eq!(json["primary"]["column"], 5);
+        assert_eq!(json["secondary"][0]["span"]["start"], 9);
+        assert_eq!(json["secondary"][0]["span"]["column"], 4);
+        assert_eq!(json["secondary"][0]["message"], d.secondary[0].message);
+        assert!(human.find("local.hir:2:5").unwrap() < human.find("other.hir:2:4").unwrap());
+        assert!(human.contains(&d.secondary[0].message));
+        for note in json["notes"].as_array().unwrap() {
+            assert!(human.contains(note.as_str().unwrap()));
+        }
+        assert!(json["fix"].is_null());
+    }
+
     use super::*;
     #[test]
     fn rule_ids_are_validated() {

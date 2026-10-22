@@ -170,3 +170,192 @@ fn authoring_repairs_11_accepted_twins_agree_on_h_llvm_and_cranelift() {
         }
     });
 }
+
+fn shadow_fixture(source: &str, extra: Option<(&str, &[&str])>) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("main.hir"), source).unwrap();
+    let mut sources = vec![serde_json::json!({"path":"main.hir","module":["work"]})];
+    if let Some((text, module)) = extra {
+        std::fs::write(dir.path().join("other.hir"), text).unwrap();
+        sources.push(serde_json::json!({"path":"other.hir","module":module}));
+    }
+    std::fs::write(
+        dir.path().join("hirsel.json"),
+        serde_json::json!({
+            "schema":1,"package":{"name":"shadow","version":"1"},
+            "sources":sources,"dependencies":[],"entry":{"module":["work"],"name":"main"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    dir
+}
+
+fn assert_shadow_sites(source: &str, declaration: &str, other: bool, name: &str) {
+    let extra = other.then_some((declaration, &["work"][..]));
+    let dir = shadow_fixture(source, extra);
+    let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
+    let output = program.check(LoweringPolicy::Comptime).unwrap();
+    assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == hirsel_diag::Severity::Error)
+        .collect();
+    assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+    let d = errors[0];
+    assert_eq!(d.rule.as_str(), "LANG-4");
+    let local_start = source.find(&format!("let {name}")).unwrap() + 4;
+    let primary = output.sources.resolve(d.primary);
+    assert_eq!(
+        (primary.start as usize, primary.end as usize),
+        (local_start, local_start + name.len())
+    );
+    assert_eq!(output.sources.slice(d.primary), Some(name));
+    assert_eq!(d.secondary.len(), 1);
+    let label = &d.secondary[0];
+    let declaration_source = if other { declaration } else { source };
+    let declaration_start =
+        declaration_source.find(declaration).unwrap() + declaration.find(name).unwrap();
+    let secondary = output.sources.resolve(label.span);
+    assert_eq!(
+        (secondary.start as usize, secondary.end as usize),
+        (declaration_start, declaration_start + name.len())
+    );
+    assert_eq!(output.sources.slice(label.span), Some(name));
+    assert_eq!(primary.file == secondary.file, !other);
+    assert!(label.message.contains("shadow@1/work"));
+    assert!(
+        d.notes
+            .iter()
+            .any(|n| n.contains("regardless of source order"))
+    );
+    assert!(d.notes.iter().any(|n| n.contains("update every reference")));
+    assert!(d.fix.is_none());
+    let human = d.render_human(&output.sources);
+    let json = d.to_json(&output.sources);
+    assert_eq!(json["primary"]["start"], primary.start);
+    assert_eq!(json["secondary"][0]["span"]["start"], secondary.start);
+    assert_eq!(json["secondary"][0]["message"], label.message);
+    assert!(human.contains(&label.message));
+    for note in json["notes"].as_array().unwrap() {
+        assert!(human.contains(note.as_str().unwrap()));
+    }
+    assert!(
+        human.find("main.hir").unwrap()
+            < human
+                .rfind(if other { "other.hir" } else { "main.hir" })
+                .unwrap()
+    );
+}
+
+#[test]
+fn authoring_repairs_11_shadow_binding_sites_order_and_witnesses() {
+    with_compiler_stack(|| {
+        for (source, name) in [
+            (
+                include_str!("../../../../examples/wc2/repros/incident-7.hir"),
+                "counts",
+            ),
+            (
+                include_str!("../../../../examples/linkcheck/repros/incident-1.hir"),
+                "deadline",
+            ),
+        ] {
+            assert_shadow_sites(source, &format!("fn {name}() {{}}"), false, name);
+        }
+        for declaration in [
+            "fn counts() {}",
+            "const counts: u64 = 1",
+            "@test\nfn counts() {}",
+        ] {
+            let main = "pub fn main() { let counts = 0u64 }";
+            for source in [
+                format!("{declaration}\n{main}\n"),
+                format!("{main}\n{declaration}\n"),
+            ] {
+                assert_shadow_sites(&source, declaration, false, "counts");
+            }
+        }
+    });
+}
+
+#[test]
+fn authoring_repairs_11_shadow_binding_sites_multifile_and_utf8() {
+    with_compiler_stack(|| {
+        for name in ["counts", "deadline"] {
+            let source = format!("// 雪\npub fn main() {{ let {name} = 0u64 }}\n");
+            let declaration = format!("// λ\nfn {name}() {{}}\n");
+            assert_shadow_sites(&source, &declaration, true, name);
+        }
+    });
+}
+
+#[test]
+fn authoring_repairs_11_shadow_binding_sites_allowed_namespace_twins() {
+    with_compiler_stack(|| {
+        for (source, extra) in [
+            (
+                "pub fn main() { let counts = 0u64 }",
+                Some(("fn counts() {}", &[][..])),
+            ),
+            (
+                "type counts { value: u64 }\npub fn main() { let counts = 0u64 }",
+                None,
+            ),
+            (
+                "fn counts() {}\npub fn main() { let count_total = 0u64 }",
+                None,
+            ),
+        ] {
+            let dir = shadow_fixture(source, extra);
+            let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
+            let output = program.check(LoweringPolicy::Comptime).unwrap();
+            assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+            assert!(
+                output.diagnostics.is_empty(),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+            assert!(
+                !program
+                    .engine
+                    .export_tir(&program.entry)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    });
+}
+
+#[test]
+fn authoring_repairs_11_shadow_binding_sites_follow_relocated_declarations() {
+    with_compiler_stack(|| {
+        let main = "pub fn main() { let counts = 0u64 }\n";
+        let mut engine = hirsel_engine::QueryEngine::new(
+            hirsel_engine::default_environment(),
+            hirsel_driver::compiler_adapters(),
+        );
+        for source in [
+            format!("fn counts() {{}}\n{main}"),
+            format!("{main}// 雪\nfn counts() {{}}\n"),
+            format!("{main}// λ\nfn counts() {{ let _ = 1u64 }}\n"),
+        ] {
+            let file = engine.sources.add("edits.hir", source.clone()).unwrap();
+            let output =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+            let d = &output.diagnostics[0];
+            assert_eq!(output.sources.slice(d.primary), Some("counts"));
+            assert_eq!(d.secondary.len(), 1);
+            assert_eq!(output.sources.slice(d.secondary[0].span), Some("counts"));
+            let at = output.sources.resolve(d.secondary[0].span);
+            let expected = source.find("fn counts").unwrap() + 3;
+            assert_eq!(
+                (at.start as usize, at.end as usize),
+                (expected, expected + 6)
+            );
+        }
+    });
+}

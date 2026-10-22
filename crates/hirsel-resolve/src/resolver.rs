@@ -624,19 +624,55 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             segments,
         };
         let read = self.lookup_using(&path);
-        let provider_value = if let Ok(definition) = &read {
-            definition.0.package == self.context.package
-                && definition.0.modules == self.context.modules
-                && self.namespace(definition) == Some(Namespace::Value)
-        } else {
-            false
-        };
-        if provider_value {
-            self.diagnostic(
+        if let Ok(definition) = read
+            && definition.0.package == self.context.package
+            && definition.0.modules == self.context.modules
+            && self.namespace(&definition) == Some(Namespace::Value)
+        {
+            let mut diagnostic = Diagnostic::error(
                 const { RuleId::of("LANG-4") },
                 binding.span,
                 "a local cannot shadow a top-level value in the same module",
             );
+            let module = std::iter::once(format!(
+                "{}@{}",
+                definition.0.package.name, definition.0.package.version
+            ))
+            .chain(definition.0.modules.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("/");
+            // Declaration metadata already includes other files and later items.
+            // Do not read another body or signature just to obtain a location.
+            // Use the existing citation read when available so edits invalidate
+            // the diagnostic. The index also locates declarations in other files.
+            let declaration_span = self
+                .provider
+                .cite_name(&definition)
+                .or_else(|| self.index.entry(&definition).map(|entry| entry.span));
+            if let Some(span) = declaration_span
+                && span.anchor != hirsel_span::Anchor(0)
+            {
+                diagnostic.secondary.push(Label {
+                    span,
+                    message: format!("conflicting declaration in module `{module}`"),
+                });
+            } else {
+                diagnostic
+                    .notes
+                    .push("the conflicting declaration's source is unavailable".into());
+            }
+            // Keep the identity even if a renderer lacks the indexed source map.
+            diagnostic
+                .notes
+                .push(format!("conflicting top-level declaration: `{definition}`"));
+            diagnostic.notes.push(format!(
+                "top-level declarations share module `{module}`'s namespace regardless of source order, including later test functions"
+            ));
+            // A binder-only fix would leave its uses unresolved or captured.
+            diagnostic.notes.push(
+                "help: choose a distinct, non-reserved local name unused in this scope and module, and update every reference to this binding".into(),
+            );
+            self.output.query.diagnostics.push(diagnostic);
             return;
         }
         self.scopes.last_mut().unwrap().values.insert(name, binding);
