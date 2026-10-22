@@ -3,21 +3,55 @@
 //! records execute inside the same production recorder phase, before its
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
-//! Admission is still limited to explicit runtime tests: atomic, mutex and
-//! channel/task boundaries, root entry tails, thaw, mutex closes and foreign
-//! callbacks on compute, home and pool threads. A separate test-only host
-//! path proves request ownership, claim/withdraw, bounded key epochs, owned
-//! home readiness, logical result handles and replay for admitted payloads.
-//! General adapter routing and activation require every boundary
-//! and stop to use this protocol.
+//! Production launch wiring is staged behind the F1 qualification gate.
+//! Explicit runtime proofs also install these owners directly. All admitted
+//! boundaries and stops share this protocol; the recording-off host path uses
+//! the same request ownership without sections, ordinals or tape allocation.
 
 use crate::TaskCtx;
 use crate::stop::{Stop, Stopped};
 use hirsel_free::concurrent::{Recorder, Writer};
 use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::Stamped;
-use hirsel_free::session::Marked;
 use std::sync::{Arc, Mutex};
+
+/// Production recordings stream to a pinned file; explicit runtime tests keep
+/// the same bytes and barrier offsets in memory. No production tape is retained
+/// a second time in a growing Vec.
+#[derive(Default)]
+pub(crate) struct Sink {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) marks: Vec<usize>,
+    file: Option<std::fs::File>,
+    durable: bool,
+}
+
+impl hirsel_free::recorder::TapeSink for Sink {
+    fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        match &mut self.file {
+            Some(file) => file.write_all(bytes),
+            None => {
+                self.bytes.extend_from_slice(bytes);
+                Ok(())
+            }
+        }
+    }
+
+    fn barrier(&mut self) -> std::io::Result<()> {
+        use std::io::Write;
+        match &mut self.file {
+            Some(file) => {
+                file.flush()?;
+                if self.durable {
+                    file.sync_all()?;
+                }
+            }
+            None => self.marks.push(self.bytes.len()),
+        }
+        Ok(())
+    }
+}
 
 /// The host stop path retains only this owner and the stable recorder logs.
 /// It never needs the scheduler role, a saved stack, or the home adapter.
@@ -39,11 +73,33 @@ impl Terminal {
 
 impl crate::stop::Terminal for Terminal {
     fn stop(&self, cause: &Stop) -> std::io::Result<()> {
+        self.stop_at(cause, None, None)
+    }
+    fn stop_at(
+        &self,
+        cause: &Stop,
+        task: Option<&[u32]>,
+        observed: Option<&hirsel_run_schema::RunOutcome>,
+    ) -> std::io::Result<()> {
         use crate::tape_wire::Wire;
         let mut bytes = Vec::new();
         cause.encode(&mut bytes);
         let outcome = format!("native-stop-v1/{}", hirsel_run_schema::hex(&bytes));
-        let receipt = self.recording.recorder.stop(&outcome, None)?;
+        let receipt = self.recording.recorder.stop_with(
+            |sweep| {
+                if self.recording.production {
+                    match observed {
+                        Some(outcome) => {
+                            crate::free_launch::terminal_bytes("native-outcome-v2", outcome, sweep)
+                        }
+                        None => crate::free_launch::terminal_bytes("native-stop-v2", cause, sweep),
+                    }
+                } else {
+                    outcome
+                }
+            },
+            task,
+        )?;
         if let Some(receipt) = receipt {
             *self.receipt.lock().unwrap() = Some(receipt);
         }
@@ -68,10 +124,12 @@ pub(crate) fn bind_terminal(ctx: &TaskCtx) {
 mod terminal_tests;
 
 pub(crate) struct Recording {
-    pub(crate) recorder: Recorder<Marked, crate::io::Request>,
+    pub(crate) recorder: Recorder<Sink, crate::io::Request>,
     trace: Mutex<Vec<Stamped>>,
     requests: std::sync::atomic::AtomicU64,
     pub(super) host_keys: crate::io_keys::KeyTable,
+    pub(super) authorities: super::host::requests::Authorities,
+    production: bool,
 }
 
 pub(crate) struct Task {
@@ -328,10 +386,31 @@ pub(super) fn object(ctx: *mut TaskCtx) -> Option<hirsel_free::record::ObjectId>
     })
 }
 
-pub(super) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T> {
+pub(crate) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T> {
     begin(ctx);
     publish(ctx, Phase::Entered, |_| ())?;
     publish(ctx, Phase::Done, |_| action())
+}
+
+/// A root's public outcome is deterministic engine data, checked before its
+/// final phase. Keep the bytes task-owned across deterministic release tails.
+pub(crate) fn end_observed(ctx: *mut TaskCtx, bytes: Vec<u8>) -> Stopped<()> {
+    assert!(unsafe { (*ctx).free_terminal.is_none() });
+    unsafe { (*ctx).free_terminal = Some(bytes) };
+    begin(ctx);
+    let token = super::replay::token(ctx);
+    publish_with_replay(ctx, Phase::Entered, token.as_ref(), |_| ())?;
+    publish_with_replay(ctx, Phase::Done, token.as_ref(), |writer| {
+        let bytes = unsafe { (*ctx).free_terminal.as_ref().unwrap() };
+        if let Some(writer) = writer {
+            writer.observation(bytes);
+        } else if let Some(token) = &token {
+            token.observation(bytes)?;
+        }
+        Ok(())
+    })??;
+    unsafe { (*ctx).free_terminal.take() };
+    Ok(())
 }
 
 fn entry(ctx: *mut TaskCtx) {
@@ -453,29 +532,62 @@ pub(crate) unsafe fn atomic_store(
     result
 }
 
-#[cfg(test)]
 impl Recording {
-    pub(crate) fn new(binding: &[u8], durable: bool) -> Arc<Self> {
-        Arc::new(Self {
+    /// The caller pinned and checked this destination against every granted
+    /// mount and output. Header bytes bind the complete admission evidence.
+    pub(crate) fn open(
+        file: std::fs::File,
+        binding: &[u8],
+        durable: bool,
+    ) -> std::io::Result<Arc<Self>> {
+        Self::with_sink(
+            Sink {
+                file: Some(file),
+                durable,
+                ..Default::default()
+            },
+            binding,
+            durable,
+            false,
+        )
+    }
+
+    fn with_sink(
+        sink: Sink,
+        binding: &[u8],
+        durable: bool,
+        trace: bool,
+    ) -> std::io::Result<Arc<Self>> {
+        let production = sink.file.is_some();
+        Ok(Arc::new(Self {
+            production,
             recorder: Recorder::new(
-                Marked::default(),
+                sink,
                 binding,
                 crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1,
                 durable,
-                true,
+                trace,
                 None,
-            )
-            .unwrap(),
+            )?,
             trace: Mutex::new(Vec::new()),
             requests: std::sync::atomic::AtomicU64::new(1),
             host_keys: Default::default(),
-        })
+            authorities: Default::default(),
+        }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(binding: &[u8], durable: bool) -> Arc<Self> {
+        Self::with_sink(Sink::default(), binding, durable, true).unwrap()
     }
 
     /// # Safety
     /// Admission only, before any task runs; no F0 session is installed.
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
+        if unsafe { (*ctx).run_ref().free_production } {
+            self.authorities.root();
+        }
         let mut worker = self.recorder.worker(0).unwrap();
         let log = self.recorder.root(&mut worker).unwrap();
         unsafe {
@@ -488,6 +600,7 @@ impl Recording {
         };
     }
 
+    #[cfg(test)]
     pub(crate) fn trace(&self) -> Vec<Stamped> {
         self.trace.lock().unwrap().clone()
     }

@@ -13,7 +13,7 @@
 //! Process-fatal by design: a broken invariant ([`crate::fault`]), host exhaustion
 //! ([`crate::environmental`]), a PROG-4 violation, a stack overflow, and a stop raised inside a
 //! foreign call, whose C frames cannot be abandoned.
-use hirsel_run_schema::{BudgetKind, Environmental};
+use hirsel_run_schema::{BudgetKind, Environmental, RunOutcome};
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -144,6 +144,14 @@ pub(crate) struct Control {
 /// adapter borrow. Stops are requested only outside operation sections.
 pub(crate) trait Terminal: Send + Sync {
     fn stop(&self, cause: &Stop) -> std::io::Result<()>;
+    fn stop_at(
+        &self,
+        cause: &Stop,
+        _task: Option<&[u32]>,
+        _outcome: Option<&RunOutcome>,
+    ) -> std::io::Result<()> {
+        self.stop(cause)
+    }
 }
 
 impl Control {
@@ -169,15 +177,21 @@ impl Control {
 
     /// Request `stop`: the run's stop, unless another won first. The run's waits wake.
     pub(crate) fn request(&self, stop: Stop) -> Stop {
-        self.decide(stop, true)
+        self.decide(stop, true, None, None)
     }
     /// Request `stop` from the thread running the run's code, which then leaves its task and
     /// wakes the home loop itself once idle (`crate::pool::abandon`): the loop then finds the
     /// thread no longer holding the run.
     pub(crate) fn request_inside(&self, stop: Stop) -> Stop {
-        self.decide(stop, false)
+        self.decide(stop, false, None, None)
     }
-    fn decide(&self, stop: Stop, wake_home: bool) -> Stop {
+    fn decide(
+        &self,
+        stop: Stop,
+        wake_home: bool,
+        task: Option<&[u32]>,
+        outcome: Option<&RunOutcome>,
+    ) -> Stop {
         let mut won = self.stop.lock().unwrap();
         if let Some(winner) = &*won {
             return winner.clone();
@@ -191,7 +205,7 @@ impl Control {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|terminal| terminal.stop(&stop))
+            .map(|terminal| terminal.stop_at(&stop, task, outcome))
         {
             Some(Err(error)) => Stop::Environmental(Environmental::Recording(error.to_string())),
             _ => stop,
@@ -364,7 +378,7 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
     let run = unsafe { (*ctx).run_ref() };
     if crate::pool::wide(run) {
         // A wide run has no callee runs (runners execute at width 1, `crate::launch`).
-        run.control.request_inside(stop);
+        request_from(ctx, &run.control, stop, false);
         // SAFETY: caller contract: nothing on this fiber is needed again.
         unsafe { crate::pool::abandon(ctx) }
     }
@@ -381,11 +395,19 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
     if run.driver.sp.is_null() {
         crate::environmental(&format!("a run stopped without a launcher: {stop:?}"));
     }
-    run.control.request(stop);
+    request_from(ctx, &run.control, stop, true);
     let mut abandoned = std::ptr::null_mut();
     // SAFETY: the launcher is suspended at `driver.sp` in `run_root` and nothing else resumes it.
     unsafe { fiber::switch(&raw mut abandoned, run.driver.sp) };
     crate::fault("a stopped run was resumed")
+}
+
+// Drop the owned path before abandoning the caller's continuation.
+fn request_from(ctx: *mut TaskCtx, control: &Control, stop: Stop, wake_home: bool) {
+    let path = unsafe { (*ctx).recording.as_ref() }.map(|task| task.path().to_vec());
+    let outcome = (stop == Stop::Failed && unsafe { (*ctx).run_ref().free_production })
+        .then(|| crate::free_launch::failure(ctx));
+    control.decide(stop, wake_home, path.as_deref(), outcome.as_ref());
 }
 
 /// The root task's entry: compiled entry code that writes the run's result into its words.
@@ -522,6 +544,10 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
         }
         if (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) {
             check(ctx, crate::tasks::ordered::engine::root_end(ctx, status));
+        }
+        if (*ctx).run_ref().free_production {
+            crate::free_launch::root_end(ctx, status, &(*frame).words.result);
+            crate::tasks::free::replay::start(ctx);
         }
         (*frame).status = status;
         (*frame).done.store(true, Ordering::Release);

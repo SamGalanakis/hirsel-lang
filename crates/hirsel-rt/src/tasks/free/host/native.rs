@@ -6,7 +6,11 @@ use std::sync::atomic::Ordering;
 /// # Safety
 /// Sole-root admission, before native Io entries and child dispatch.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
-    assert!(super::super::record::on(ctx) || super::super::replay::on(ctx));
+    assert!(
+        super::super::record::on(ctx)
+            || super::super::replay::on(ctx)
+            || unsafe { (*ctx).run_ref().free_io.get().is_some() }
+    );
     unsafe {
         (*ctx)
             .run_ref()
@@ -32,9 +36,12 @@ pub(crate) unsafe fn issue(
             .unwrap()
             .host_keys(&request)?;
         unsafe { replay_request(ctx, request, keys) }?
-    } else {
+    } else if super::super::record::on(ctx) {
         let keys = unsafe { concurrent::native_keys(ctx, &request) }?;
         unsafe { concurrent::request_with_keys(ctx, request, keys) }?
+    } else {
+        let keys = unsafe { concurrent::native_keys(ctx, &request) }?;
+        unsafe { super::live::request(ctx, request, keys) }?
     };
     // The existing native caller performs its bounded quantum check after
     // delivery. Waiting attempts already released their key positions.
@@ -86,6 +93,7 @@ pub(super) fn request_keys_with_process(
         | R::Signals { io: 1 }
         | R::Stdin { io: 1 }
         | R::Random { io: 1 }
+        | R::Tasks { io: 1 }
         | R::Stdout { io: 1 }
         | R::Stderr { io: 1 } => vec![(ROOT, Mode::Shared)],
         R::Print { stdout: word, .. }

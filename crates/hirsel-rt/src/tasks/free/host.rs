@@ -1,7 +1,6 @@
-//! Request ownership and native recorded host phases. This foundation
-//! admits explicit bounded host tests, home readiness, cancellation and retries.
-//! General adapter routing, resource discovery and terminal activation remain
-//! gated.
+//! Request ownership and native host phases. Production launch admission is
+//! staged behind the F1 qualification gate. Host requests own claim/withdraw,
+//! bounded key transitions, readiness, cancellation and result substitution.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};
 use crate::io_keys::{KeySet, Mode, Positions};
@@ -11,7 +10,9 @@ use hirsel_free::phase::Progress;
 use std::sync::Arc;
 pub(crate) mod concurrent;
 pub(super) mod handles;
+pub(crate) mod live;
 pub(crate) mod native;
+pub(super) mod requests;
 use handles::{Created, Envelope};
 
 fn output_bytes(request: &Request) -> Option<&[u8]> {
@@ -66,6 +67,7 @@ pub(crate) struct Pending {
     home_token: Option<u64>,
     canceled: Option<u32>,
     created: Vec<Created>,
+    request_observation: Option<Vec<u8>>,
 }
 
 /// # Safety
@@ -92,6 +94,11 @@ pub(crate) unsafe fn prepare_with_keys(
         .collect();
     assert!(unsafe { (*ctx).pending_host.is_none() });
     let track_output = native::enabled(ctx) && output_bytes(&request).is_some();
+    let request_observation = if unsafe { (*ctx).run_ref().free_production } {
+        Some(shared.authorities.project(&request)?)
+    } else {
+        None
+    };
     let request = shared.prepare_request(request);
     // The task owns all buffers before begin can reject a replay cut or
     // another runtime entry can observe an external stop.
@@ -113,6 +120,7 @@ pub(crate) unsafe fn prepare_with_keys(
             home_token: None,
             canceled: None,
             created: Vec::new(),
+            request_observation,
         }));
     }
     super::record::begin(ctx);
@@ -128,6 +136,9 @@ pub(crate) unsafe fn prepare_with_keys(
         writer.prepare(&(*pending).request);
         take_positions(&mut *pending, writer);
         observe_cancel(&mut *pending, &mut *s, shield, writer);
+        if let Some(bytes) = &(*pending).request_observation {
+            writer.observation(bytes);
+        }
     })
 }
 
@@ -540,6 +551,12 @@ unsafe fn invoke_resolved(
             ));
         }
     }
+    if unsafe { (*ctx).run_ref().free_production } {
+        pending
+            .shared
+            .authorities
+            .observe(&pending.path, pending.entered.op, &completion)?;
+    }
     let encoded = native::observe_span(ctx, pending.request.buffers(), &completion)
         .and_then(|()| handles::encode(pending, &mut completion));
     pending.completion = Some(completion);
@@ -757,6 +774,9 @@ pub(crate) unsafe fn replay_request(
             {
                 token.cancel(None)?;
             }
+            if unsafe { (*ctx).run_ref().free_production } {
+                token.host_request(&host._request)?;
+            }
             Ok::<_, Stop>(())
         })??;
     }
@@ -789,6 +809,7 @@ pub(crate) unsafe fn replay_request(
                         &host.positions,
                         sink,
                         &output_bytes(&host._request).unwrap()[..count as usize],
+                        matches!(host._request, Request::PrintStderr { .. }),
                     )?;
                 }
                 host.positions.clear();

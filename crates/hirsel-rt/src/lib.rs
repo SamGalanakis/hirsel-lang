@@ -36,6 +36,7 @@ pub mod io_metrics;
 pub mod io_net_script;
 mod io_observation;
 pub mod io_real;
+mod io_request_observation;
 pub mod io_sim;
 pub mod isolate;
 pub mod journal;
@@ -78,6 +79,7 @@ pub mod finalize;
 pub mod foreign;
 mod free;
 pub mod free_driver;
+mod free_launch;
 mod heaps;
 pub mod host;
 #[cfg(feature = "measurement")]

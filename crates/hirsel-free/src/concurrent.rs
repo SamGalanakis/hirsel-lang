@@ -365,6 +365,16 @@ impl<S: TapeSink, B> Recorder<S, B> {
     /// A terminal cut arbitrates against claimed requests before writing. It
     /// waits for sections, never for a syscall, foreign call or whole segment.
     pub fn stop(&self, outcome: &str, task: Option<&[u32]>) -> io::Result<Option<(Cut, Sweep)>> {
+        self.stop_with(|_| outcome.into(), task)
+    }
+
+    /// Build the terminal payload from the request sweep while the terminal
+    /// gate is closed. The sink observes the cut, receipt and cause atomically.
+    pub fn stop_with(
+        &self,
+        outcome: impl FnOnce(&Sweep) -> String,
+        task: Option<&[u32]>,
+    ) -> io::Result<Option<(Cut, Sweep)>> {
         let Some(terminal) = self.arbiter.stop(0, &[&self.requests]) else {
             return Ok(None);
         };
@@ -383,7 +393,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
         let mut output = self.output.lock().unwrap();
         let keys = self.keys.lock().unwrap();
         let end = End {
-            outcome: outcome.into(),
+            outcome: outcome(&terminal.sweep),
             task: task.map(<[u32]>::to_vec),
         };
         let bytes = tape::stop(&keys[output.named..], &tasks, &end);

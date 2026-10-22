@@ -59,6 +59,9 @@ impl ReplayTape {
 }
 #[derive(Clone, Debug)]
 pub struct SimIo {
+    /// Bound native Free phases, consumed by the native production admission.
+    /// Ordinary completion replay must never serve this tape as empty Io.
+    pub(crate) free_tape: Option<Vec<u8>>,
     state: State,
     tree: Tree,
     tape: ReplayTape,
@@ -108,6 +111,7 @@ impl SimIo {
     }
     pub fn new(tree: Tree, tape: Vec<Event>) -> Self {
         Self {
+            free_tape: None,
             state: State::default(),
             detached_roots: Default::default(),
             mount_pins: MountPins {
@@ -200,6 +204,11 @@ impl SimIo {
         &self.state.fake_trees
     }
     pub fn finish(&self) -> Result<(), AdapterError> {
+        if self.free_tape.is_some() {
+            return Err(AdapterError::Unsupported(
+                "Free tape requires phase replay admission".into(),
+            ));
+        }
         if self.position == self.tape.len() {
             Ok(())
         } else {
@@ -346,6 +355,11 @@ impl Adapter for SimIo {
         self.state.stdout.clone()
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.free_tape.is_some() {
+            return Err(AdapterError::Unsupported(
+                "Free tape requires phase replay admission".into(),
+            ));
+        }
         if self.state.awaits_injection(&request) {
             return Err(AdapterError::Blocked);
         }

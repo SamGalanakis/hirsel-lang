@@ -42,23 +42,37 @@ impl Drop for ProcessStdin {
 
 /// One output stream of a run, shared by the run's Io and its launcher.
 #[derive(Clone)]
-pub struct Sink(Rc<RefCell<dyn Write>>);
+pub struct Sink {
+    writer: Rc<RefCell<dyn Write>>,
+    send: Option<SendSink>,
+}
 impl Sink {
     pub fn new(output: impl Write + 'static) -> Self {
-        Self(Rc::new(RefCell::new(output)))
+        Self {
+            writer: Rc::new(RefCell::new(output)),
+            send: None,
+        }
+    }
+    /// Preserve transportable storage for native Free admission. Local custom
+    /// writers keep the home-affine constructor and its existing semantics.
+    pub fn from_send(output: SendSink) -> Self {
+        Self {
+            writer: Rc::new(RefCell::new(output.clone())),
+            send: Some(output),
+        }
     }
     /// A sink that keeps what the run writes, readable through the returned buffer.
     pub fn capture() -> (Self, Captured) {
         let buffer = Captured::default();
-        (Self::new(buffer.clone()), buffer)
+        (Self::from_send(SendSink::shared(buffer.0.clone())), buffer)
     }
 }
 impl Write for Sink {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().write(bytes)
+        self.writer.borrow_mut().write(bytes)
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        self.0.borrow_mut().flush()
+        self.writer.borrow_mut().flush()
     }
 }
 
@@ -89,6 +103,12 @@ impl SendSink {
         Self {
             writer: Arc::new(Mutex::new(file)),
             resource,
+        }
+    }
+    fn descriptor(output: impl Write + Send + 'static, fd: i32) -> Self {
+        Self {
+            writer: Arc::new(Mutex::new(output)),
+            resource: crate::io_keys::Storage::of_descriptor(fd),
         }
     }
     pub fn resource_storage(&self) -> crate::io_keys::Storage {
@@ -143,15 +163,15 @@ impl Write for SendCaptured {
 
 /// What a [`Sink::capture`] sink received.
 #[derive(Clone, Default)]
-pub struct Captured(Rc<RefCell<Vec<u8>>>);
+pub struct Captured(Arc<Mutex<Vec<u8>>>);
 impl Captured {
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.borrow().clone()
+        self.0.lock().unwrap().clone()
     }
 }
 impl Write for Captured {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(bytes);
+        self.0.lock().unwrap().extend_from_slice(bytes);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -173,8 +193,8 @@ impl Sinks {
     /// reaches the program as a recorded outcome (`RawStdout`).
     pub fn process() -> Self {
         Self {
-            stdout: Sink::new(crate::launch::RawStdout),
-            stderr: Sink::new(std::io::stderr()),
+            stdout: Sink::from_send(SendSink::descriptor(crate::launch::RawStdout, 1)),
+            stderr: Sink::from_send(SendSink::descriptor(std::io::stderr(), 2)),
             report: Sink::new(std::io::stderr()),
         }
     }
@@ -261,7 +281,14 @@ impl Host {
             detail: "out of range".into(),
         })?;
         let admitted = run.admit(&mut host, now)?;
-        Ok((admitted, host.into_io()))
+        let mut io = host.into_io();
+        if let Some(output) = &sinks.stdout.send {
+            io.set_send_output(output.clone());
+        }
+        if let Some(output) = &sinks.stderr.send {
+            io.set_send_stderr(output.clone());
+        }
+        Ok((admitted, io))
     }
 
     /// Start a run of `program`: `selection` names what it executes, `arguments` are the

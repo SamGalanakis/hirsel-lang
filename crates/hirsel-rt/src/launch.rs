@@ -1612,6 +1612,13 @@ pub(crate) unsafe fn execute(
     let ordered_enabled = ordered
         .as_ref()
         .is_some_and(|admission| admission.enabled());
+    let production_free = crate::free_launch::ENABLED
+        && requested
+            .as_ref()
+            .and_then(|run| run.record().io.as_ref())
+            .and_then(|io| io.tasks.as_deref())
+            == Some("tasks.free@1");
+    let mut free_session = None;
     let seed = launch_config.test_seed;
     if !(1..=RESULT_MAX).contains(&result_size) || (program.return_kind != 1 && result_size < 4) {
         return Err("the entry result is not a Result of at most 64 bytes".into());
@@ -1770,11 +1777,21 @@ pub(crate) unsafe fn execute(
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
     let mut initial_tree = Tree::new(Default::default()).expect("empty tree");
+    if production_free && !runners.is_empty() {
+        return Err("production Free runners require dedicated admission".into());
+    }
     let mut real = None;
     let mut zero_recording = None;
     let mut replay = None;
-    let adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
-        if let Err(error) =
+    let mut adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
+        if production_free {
+            free_session = crate::free_launch::Session::record(
+                &mut io,
+                &admitted,
+                tape.as_deref(),
+                &output_grants,
+            )?;
+        } else if let Err(error) =
             crate::host_launch::journal(&mut io, &admitted, tape.as_deref(), &output_grants)
         {
             return Err(error);
@@ -1787,6 +1804,15 @@ pub(crate) unsafe fn execute(
         real = Some(io.clone());
         Box::new(Shared(io))
     } else if let Some(mut io) = production_replay {
+        if production_free {
+            let bytes = io
+                .free_tape
+                .take()
+                .ok_or("tasks.free@1 requires a Free phase tape")?;
+            free_session = Some(crate::free_launch::Session::replay(&bytes)?);
+        } else if io.free_tape.is_some() {
+            return Err("Free phase tape requires tasks.free@1".into());
+        }
         if entry.is_test() {
             io.test_context(seed);
         }
@@ -1992,7 +2018,7 @@ pub(crate) unsafe fn execute(
                     crate::host::RunControl::from_inner(std::sync::Arc::clone(&options.control)),
                     // Explicit worker knobs exercise the substrate; production activation
                     // belongs to the ordered/free differential gate (E1/F1).
-                    options.workers.is_some() || ordered_enabled,
+                    options.workers.is_some() || ordered_enabled || production_free,
                 )?);
                 let metrics_pin = placement
                     .metrics
@@ -2087,6 +2113,20 @@ pub(crate) unsafe fn execute(
         Ok(file) => file,
         Err(error) => return Err(error.to_string()),
     };
+    // All recorder/diagnostic/sidecar paths were checked against the admitted
+    // mounts while RealIo was still home-owned. Only now move its explicitly
+    // transportable state to the concurrent service.
+    let mut free_adapter = None;
+    if production_free && replay.is_none() {
+        adapter = Box::new(SimIo::new(initial_tree.clone(), Vec::new()));
+        let io = Rc::try_unwrap(real.take().expect("live Free Io"))
+            .map_err(|_| "Free admission retained a home adapter alias")?
+            .into_inner();
+        let io = io
+            .into_concurrent()
+            .map_err(|_| "Free admission requires transportable streams")?;
+        free_adapter = Some(std::sync::Arc::new(io));
+    }
     let config = RuntimeConfig {
         layouts,
         layout_count,
@@ -2152,13 +2192,44 @@ pub(crate) unsafe fn execute(
         .and_then(|run| run.record().io.as_ref())
         .and_then(|io| io.tasks.as_deref())
         == Some("tasks.free@1");
+    unsafe { &mut *ctx }.run().free_production = production_free;
+    unsafe { &mut *ctx }.run().free_return = (program.return_kind, program.success_offset);
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
+    if production_free {
+        if replay.is_some() {
+            let requested = control.width.load(std::sync::atomic::Ordering::Acquire);
+            if requested != 0 {
+                width = requested;
+            }
+        }
+        if unsafe { (*ctx).run_ref().free.is_some() } {
+            unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+            return Err("production Free admission cannot use the F0 test channel".into());
+        }
+        unsafe {
+            crate::tasks::free::enable(ctx);
+        }
+        if let Some(session) = &free_session {
+            unsafe {
+                session.install(ctx);
+            }
+        }
+    }
     crate::tasks::free::record::bind_terminal(unsafe { &*ctx });
+    if let Some(io) = free_adapter.take()
+        && let Err(error) =
+            unsafe { crate::tasks::free::host::concurrent::Service::install(ctx, io) }
+    {
+        unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+        control.finish(0);
+        return Err(format!("Free host admission: {error:?}"));
+    }
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.
     if (ordered_enabled
+        || production_free
         || width > 1
         || (options.workers.is_some()
             && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
@@ -2167,6 +2238,14 @@ pub(crate) unsafe fn execute(
     {
         // SAFETY: the root context, on the admission thread, before the run's code runs.
         unsafe { crate::pool::start(ctx, width, migrate) };
+    }
+    if production_free {
+        unsafe {
+            crate::pool::free::enable(ctx);
+        }
+        unsafe {
+            crate::tasks::free::host::native::enable(ctx);
+        }
     }
     // After the workers start: a run with compute workers takes its fuel in chunks, and a
     // memory budget meters every worker's heap.
@@ -2211,7 +2290,24 @@ pub(crate) unsafe fn execute(
     // The replay output already echoed to the real streams.
     let echoed = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
     let echo_replay = || -> Result<(), String> {
-        if let Some(io) = &replay {
+        if let Some(driver) = free_session
+            .as_ref()
+            .and_then(|session| session.replay_driver())
+        {
+            let (stdout, stderr) = driver.output();
+            let (out, err) = echoed.get();
+            sinks
+                .stdout
+                .clone()
+                .write_all(&stdout[out..])
+                .map_err(|e| format!("standard output: {e}"))?;
+            sinks
+                .stderr
+                .clone()
+                .write_all(&stderr[err..])
+                .map_err(|e| format!("standard error: {e}"))?;
+            echoed.set((stdout.len(), stderr.len()));
+        } else if let Some(io) = &replay {
             let io = io.borrow();
             let (out, err) = echoed.get();
             sinks
@@ -2276,7 +2372,28 @@ pub(crate) unsafe fn execute(
     // SAFETY: `report` outlives the run's root, which reports only while `run_root` runs.
     let frame =
         unsafe { crate::stop::LaunchFrame::new(root, IO_HANDLE, ARGS_HANDLE, roots, &mut report) };
-    let ran = unsafe { crate::stop::run_root(ctx, frame) };
+    let mut ran = unsafe { crate::stop::run_root(ctx, frame) };
+    let mut replay_outcome = None;
+    if let Some(session) = &free_session
+        && session.replay_driver().is_some()
+        && !matches!(
+            ran,
+            Err(crate::stop::Stop::Diverged(_) | crate::stop::Stop::Requested)
+        )
+    {
+        match session.finish_replay() {
+            Ok(Some(crate::free_launch::Terminal::Stop(stop))) => ran = Err(stop),
+            Ok(Some(crate::free_launch::Terminal::Outcome(outcome))) => {
+                ran = match &outcome {
+                    RunOutcome::Returned(_) => Ok(STATUS_OK),
+                    _ => ran,
+                };
+                replay_outcome = Some(outcome);
+            }
+            Ok(None) => {}
+            Err(error) => ran = Err(crate::stop::Stop::Diverged(error)),
+        }
+    }
     // A stopped run whose workers still run its code: the launcher leaves it to them, and
     // the last to leave frees it; home state is destroyed here, on the admission thread.
     let pending = match &ran {
@@ -2309,67 +2426,77 @@ pub(crate) unsafe fn execute(
     // but its tasks still hold their storage, so it is abandoned like a stopped run.
     let ended = matches!(ran, Err(crate::stop::Stop::Failed));
     let ran = if ended { Ok(STATUS_FAILURE) } else { ran };
-    let outcome = match ran {
-        Ok(STATUS_OK) => {
-            let _ = writeln!(record, "status {STATUS_OK}");
-            record.push_str("result ");
-            for b in &bytes {
-                let _ = write!(record, "{b:02x}");
+    let outcome = if let Some(outcome) = replay_outcome {
+        outcome
+    } else {
+        match ran {
+            Ok(STATUS_OK) => {
+                let _ = writeln!(record, "status {STATUS_OK}");
+                record.push_str("result ");
+                for b in &bytes {
+                    let _ = write!(record, "{b:02x}");
+                }
+                record.push('\n');
+                let code = if program.return_kind == 1 {
+                    bytes[program.success_offset as usize]
+                } else if bytes[..4] != [0, 0, 0, 0] {
+                    1
+                } else if program.return_kind == 2 {
+                    bytes[program.success_offset as usize]
+                } else {
+                    0
+                };
+                let _ = writeln!(record, "exit_code {code}");
+                hirsel_run_schema::RunOutcome::Returned(
+                    hirsel_run_schema::Returned::from_exit_code(code),
+                )
             }
-            record.push('\n');
-            let code = if program.return_kind == 1 {
-                bytes[program.success_offset as usize]
-            } else if bytes[..4] != [0, 0, 0, 0] {
-                1
-            } else if program.return_kind == 2 {
-                bytes[program.success_offset as usize]
-            } else {
-                0
-            };
-            let _ = writeln!(record, "exit_code {code}");
-            hirsel_run_schema::RunOutcome::Returned(hirsel_run_schema::Returned::from_exit_code(
-                code,
-            ))
-        }
-        Ok(STATUS_FAILURE) => {
-            let _ = writeln!(record, "status {STATUS_FAILURE}");
-            let mut records = Vec::new();
-            let mut failure = FailureRecord {
-                kind: 0,
-                rule: 0,
-                site: 0,
-                operation_site: 0,
-            };
-            if unsafe { hirsel_rt_v2_failure_primary(ctx, &mut failure) } == 0 {
-                crate::fault("a failure status without a recorded failure");
-            }
-            records.push(failure);
-            for index in 0..unsafe { hirsel_rt_v2_failure_cause_count(ctx) } {
-                if unsafe { hirsel_rt_v2_failure_cause(ctx, index, &mut failure) } == 0 {
-                    crate::fault("a failure cause out of range");
+            Ok(STATUS_FAILURE) => {
+                let _ = writeln!(record, "status {STATUS_FAILURE}");
+                let mut records = Vec::new();
+                let mut failure = FailureRecord {
+                    kind: 0,
+                    rule: 0,
+                    site: 0,
+                    operation_site: 0,
+                };
+                if unsafe { hirsel_rt_v2_failure_primary(ctx, &mut failure) } == 0 {
+                    crate::fault("a failure status without a recorded failure");
                 }
                 records.push(failure);
+                for index in 0..unsafe { hirsel_rt_v2_failure_cause_count(ctx) } {
+                    if unsafe { hirsel_rt_v2_failure_cause(ctx, index, &mut failure) } == 0 {
+                        crate::fault("a failure cause out of range");
+                    }
+                    records.push(failure);
+                }
+                for failure in &records {
+                    let _ = writeln!(
+                        record,
+                        "failure {} {} {:016x} {:016x}",
+                        failure.kind, failure.rule, failure.site, failure.operation_site
+                    );
+                }
+                let table = program.failure_table.unwrap_or_else(|| {
+                    crate::fault("a failed run without its program's failure table")
+                });
+                let mut failures = records.iter().map(|record| table.failure(record));
+                let primary = failures.next().expect("a primary failure");
+                hirsel_run_schema::RunOutcome::Failed {
+                    primary,
+                    causes: failures.collect(),
+                }
             }
-            for failure in &records {
-                let _ = writeln!(
-                    record,
-                    "failure {} {} {:016x} {:016x}",
-                    failure.kind, failure.rule, failure.site, failure.operation_site
-                );
-            }
-            let table = program.failure_table.unwrap_or_else(|| {
-                crate::fault("a failed run without its program's failure table")
-            });
-            let mut failures = records.iter().map(|record| table.failure(record));
-            let primary = failures.next().expect("a primary failure");
-            hirsel_run_schema::RunOutcome::Failed {
-                primary,
-                causes: failures.collect(),
-            }
+            Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
+            Err(stop) => stop.outcome(),
         }
-        Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
-        Err(stop) => stop.outcome(),
     };
+    let mut outcome = outcome;
+    if let Some(session) = &free_session
+        && let Err(error) = session.finish_recording(&outcome)
+    {
+        outcome = RunOutcome::Environmental(hirsel_run_schema::Environmental::Recording(error));
+    }
     if !detached {
         crate::free::finish(unsafe { &mut *ctx }, &outcome);
     }

@@ -55,7 +55,7 @@ pub fn recording_level(
 /// The recording's header: it binds the canonical run record, its admission time and the
 /// mounts' initial tree. The destination must lie outside every granted mount and output
 /// file.
-fn header(
+pub(crate) fn header(
     io: &mut RealIo,
     admitted: &AdmittedRun,
     path: &Path,
@@ -166,7 +166,15 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
         field: "recording".into(),
         detail: e.to_string(),
     })?;
-    let (recording, binary) = if crate::journal::is_journal(&bytes) {
+    let mut free = None;
+    let (recording, binary) = if bytes.starts_with(hirsel_free::tape::MAGIC) {
+        let header = crate::free_launch::header(&bytes).map_err(|detail| RunRefusal::Invalid {
+            field: "recording".into(),
+            detail,
+        })?;
+        free = Some(bytes);
+        (header, None)
+    } else if crate::journal::is_journal(&bytes) {
         (read_recording(path)?, None)
     } else {
         crate::tape_binary::replay(bytes).map_err(|detail| RunRefusal::Invalid {
@@ -180,6 +188,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
         Some(tape) => SimIo::from_binary(recording.tree, tape),
         None => SimIo::new(recording.tree, recording.events),
     };
+    io.free_tape = free;
     io.instance = instance;
     io.set_projections(run.io_projections());
     io.set_mounts(

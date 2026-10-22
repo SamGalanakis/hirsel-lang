@@ -509,6 +509,19 @@ impl Session {
         replayer.positions(path, op, index, keys)
     }
 
+    /// Compare the engine's canonical request before its claim can replay.
+    /// The engine appends this observation in Entered after key positions.
+    pub fn replay_host_request(&mut self, path: &[u32], expected: &[u8]) -> Result<(), Diverged> {
+        let op = self.op(path);
+        let Side::Replay(replayer) = &mut self.side else {
+            return Err(Diverged("host request needs replay".into()));
+        };
+        if replayer.observation(path, op)? != expected {
+            return Err(Diverged("host request differs".into()));
+        }
+        Ok(())
+    }
+
     /// Check without advancing or retaining a session borrow across a save.
     pub fn replay_host_ready(&self, positions: &[Position]) -> bool {
         let Side::Replay(replayer) = &self.side else {

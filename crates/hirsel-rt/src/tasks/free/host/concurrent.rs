@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const CONCURRENT: u64 = 1 << 63;
 
 pub(crate) struct Service {
-    adapter: Arc<dyn ConcurrentAdapter>,
+    pub(super) adapter: Arc<dyn ConcurrentAdapter>,
+    pub(super) live: Arc<super::live::State>,
     driver: Option<crate::readiness::Readiness>,
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
@@ -33,6 +34,10 @@ impl Service {
         let run = unsafe { (*ctx).run_ref() };
         assert!(run.free_mode);
         let driver = adapter.readiness();
+        let live = Arc::new(super::live::State::default());
+        if run.free_production && !super::super::record::on(ctx) && !super::super::replay::on(ctx) {
+            run.control.terminal(live.clone());
+        }
         if let Some(driver) = &driver {
             driver.notify().map_err(Stop::refusal)?;
             let fd = run
@@ -45,6 +50,7 @@ impl Service {
             run.free_io
                 .set(Arc::new(Self {
                     adapter,
+                    live,
                     driver,
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
@@ -67,7 +73,16 @@ impl Service {
         self.pending.load(Ordering::Acquire) != 0
     }
 
-    fn register(&self, token: u64, request: Request) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn test_waiting(&self) -> bool {
+        self.rows
+            .lock()
+            .unwrap()
+            .values()
+            .any(|row| row.task.is_some())
+    }
+
+    pub(super) fn register(&self, token: u64, request: Request) -> u64 {
         assert_eq!(token >> 48, 0, "request token below driver tag bits");
         let wait = token | CONCURRENT;
         assert!(
@@ -99,7 +114,7 @@ impl Service {
         true
     }
 
-    fn retry(&self, token: u64) {
+    pub(super) fn retry(&self, token: u64) {
         let mut rows = self.rows.lock().unwrap();
         let row = rows.get_mut(&token).unwrap();
         row.task = None;
@@ -107,7 +122,7 @@ impl Service {
         row.notified = false;
     }
 
-    fn finish(&self, token: u64) {
+    pub(super) fn finish(&self, token: u64) {
         assert!(self.rows.lock().unwrap().remove(&token).is_some());
         self.pending.fetch_sub(1, Ordering::Release);
     }

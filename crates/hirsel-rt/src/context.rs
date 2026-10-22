@@ -165,6 +165,8 @@ pub struct TaskCtx {
     /// A native Free request retains its buffers and late completion even
     /// when its task's host-call frame is abandoned after a terminal cut.
     pub(crate) pending_host: Option<Box<crate::tasks::free::host::Pending>>,
+    pub(crate) live_host: Option<Box<crate::tasks::free::host::live::Pending>>,
+    pub(crate) free_terminal: Option<Vec<u8>>,
     /// Native Free result across its post-effect quantum, owned outside Rust frames.
     pub(crate) native_host_result: Option<Box<Result<crate::io::Completion, ()>>>,
     /// Replay holds request and transition buffers across admitted-prefix saves.
@@ -290,6 +292,9 @@ pub(crate) struct RunShared {
     pub(crate) free_mode: bool,
     /// Fixed at native replay admission before any task starts.
     pub(crate) free_replay: bool,
+    /// Ordinary configured native Free admission, distinct from F0/BodyRun tests.
+    pub(crate) free_production: bool,
+    pub(crate) free_return: (u64, u64),
     /// Published at ordered admission, read without borrowing policy state.
     pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
     /// Fast allocation preflight selector; MAX means no physical allowance cap.
@@ -363,6 +368,8 @@ impl TaskCtx {
             site: 0,
             detached_images: Default::default(),
             pending_host: None,
+            live_host: None,
+            free_terminal: None,
             pending_ordered_host: None,
             native_host_result: None,
             replay_host: None,
@@ -861,6 +868,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free: RoleCell::new(None),
         free_mode: false,
         free_replay: false,
+        free_production: false,
+        free_return: (0, 0),
         ordered_mode: Default::default(),
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
         ordered_memory: Default::default(),

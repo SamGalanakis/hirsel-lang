@@ -2,7 +2,6 @@
 //! A mutex serializes session mutations. No session borrow or lock
 //! crosses a physical save; atomic carriers are released before cut parking.
 use super::super::*;
-#[cfg(test)]
 use hirsel_free::projection::Projection;
 use hirsel_free::replay::Diverged;
 use hirsel_free::session::Session;
@@ -13,10 +12,11 @@ pub(crate) struct Replay {
     session: Mutex<Option<Session>>,
     published: AtomicBool,
     handles: Mutex<super::host::handles::Handles>,
+    output: Mutex<(Vec<u8>, Vec<u8>)>,
+    authorities: super::host::requests::Authorities,
 }
 
 impl Replay {
-    #[cfg(test)]
     pub(crate) fn new(tape: &[u8]) -> Result<Arc<Self>, Diverged> {
         let mut session = Session::replay(tape)?;
         session.start(&[]);
@@ -24,6 +24,8 @@ impl Replay {
             session: Mutex::new(Some(session)),
             published: AtomicBool::new(false),
             handles: Mutex::default(),
+            output: Mutex::default(),
+            authorities: Default::default(),
         }))
     }
 
@@ -37,16 +39,17 @@ impl Replay {
     /// results use admitted scalar/byte forms or creator-qualified Handle
     /// creations; general host dispatch and other handle shapes remain gated. Deterministic yielding object finalizers
     /// must use only these admitted operations and task-owned detached images.
-    #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
+        if unsafe { (*ctx).run_ref().free_production } {
+            self.authorities.root();
+        }
         unsafe { (*ctx).run().free_replay = true };
         scheduler(ctx).logical = Logical::Free(super::Driver {
             replay: Some(self.clone()),
         });
     }
 
-    #[cfg(test)]
     pub(crate) fn finish(&self) -> Result<Projection, Diverged> {
         self.session
             .lock()
@@ -59,6 +62,10 @@ impl Replay {
     fn with<T>(&self, action: impl FnOnce(&mut Session) -> T) -> T {
         let mut session = self.session.lock().unwrap();
         action(session.as_mut().expect("an unfinished replay"))
+    }
+
+    pub(crate) fn output(&self) -> (Vec<u8>, Vec<u8>) {
+        self.output.lock().unwrap().clone()
     }
 }
 
@@ -380,8 +387,21 @@ impl Token {
                 "host creation belongs to a different task".into(),
             ));
         }
-        self.shared.handles.lock().unwrap().substitute(envelope)
+        let result = self.shared.handles.lock().unwrap().substitute(envelope)?;
+        let op = self.shared.with(|session| session.op(&self.path));
+        self.shared.authorities.observe(&self.path, op, &result)?;
+        Ok(result)
     }
+    pub(super) fn host_request(&self, request: &crate::io::Request) -> Stopped<()> {
+        let actual = self.shared.authorities.project(request)?;
+        self.observation(&actual)
+    }
+    pub(super) fn observation(&self, bytes: &[u8]) -> Stopped<()> {
+        self.shared
+            .with(|session| session.replay_host_request(&self.path, bytes))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
     pub(super) fn host_keys(
         &self,
         request: &crate::io::Request,
@@ -439,10 +459,18 @@ impl Token {
         positions: &[hirsel_free::recorder::Position],
         sink: &str,
         bytes: &[u8],
+        stderr: bool,
     ) -> Stopped<()> {
         self.shared
             .with(|session| session.replay_host_output(&self.path, positions, sink, bytes))
-            .map_err(|error| Stop::Diverged(error.0))
+            .map_err(|error| Stop::Diverged(error.0))?;
+        let mut output = self.shared.output.lock().unwrap();
+        if stderr {
+            output.1.extend_from_slice(bytes);
+        } else {
+            output.0.extend_from_slice(bytes);
+        }
+        Ok(())
     }
 
     pub(super) fn host_completion(&self) -> Stopped<Vec<u8>> {
