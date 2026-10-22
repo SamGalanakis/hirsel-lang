@@ -141,5 +141,9 @@ class NativeProtocol(unittest.TestCase):
         self.assertIn('no implemented tasks selected', output.stderr)
 
 
+# Custom Python harness registration; Buck2 forwards unittest selectors.
+from tests_bwt_9 import BwtOracles  # noqa: E402, F401
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

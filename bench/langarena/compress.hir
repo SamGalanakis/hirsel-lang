@@ -60,7 +60,6 @@ type Bwt {
 type Pair {
   first: u64,
   second: u64,
-  order: u64,
   suffix: u64,
 }
 
@@ -78,17 +77,19 @@ fn pair_compare(a: Pair, b: Pair) -> i32 uses {} {
   if a.second > b.second {
     return 1
   }
-  if a.order < b.order {
+  if a.suffix < b.suffix {
     return -1
   }
-  if a.order > b.order {
+  if a.suffix > b.suffix {
     return 1
   }
   0
 }
 
-// compress.rs:32-126. Explicit previous order gives Rust's stable sort ties
-// while calling Hirsel's standard sort without a capturing comparator.
+// compress.rs:32-123. Initial counting order is ascending suffix index.
+// Equal rank pairs already tied in the previous round, so stable sorting keeps
+// that index order inductively. The suffix itself is therefore the stable tie
+// key for the noncapturing comparator; no separate previous-order field is needed.
 fn bwt_encode(input: List[u8]) -> Bwt {
   let n = list.len(input)
   if n == 0 {
@@ -119,55 +120,61 @@ fn bwt_encode(input: List[u8]) -> Bwt {
       }
       rank[index] = current
     }
+    // Pairs snapshot both old ranks before sorting. Once sorted, every suffix
+    // rank can be overwritten in place; no fresh zeroed rank buffer is needed.
+    let mut pairs: List[Pair] = []
+    list.reserve(mut pairs, n)
+    for index in sa {
+      list.push(
+        mut pairs,
+        Pair(first: rank[index], second: rank[(index + 1) % n], suffix: index)
+      )
+    }
     let mut k: u64 = 1
     while k < n {
-      let mut pairs: List[Pair] = []
-      list.reserve(mut pairs, n)
-      for i in 0u64..n {
-        let index = sa[i]
-        list.push(
-          mut pairs,
-          Pair(
-            first: rank[index],
-            second: rank[(index + k) % n],
-            order: i,
-            suffix: index
-          )
-        )
-      }
       list.sort(mut pairs, pair_compare)
-      let mut new_rank = zeros(n)
+      let mut next_rank: u64 = 0
       for i in 0u64..n {
-        sa[i] = pairs[i].suffix
+        let pair = pairs[i]
+        sa[i] = pair.suffix
         if i > 0 {
           let previous_pair = pairs[i - 1]
-          let pair = pairs[i]
-          new_rank[sa[i]] = new_rank[sa[i - 1]] + if pair.first == previous_pair.first && pair.second == previous_pair.second {
-            0
-          } else {
-            1
+          if pair.first != previous_pair.first || pair.second != previous_pair.second {
+            next_rank += 1
           }
         }
+        rank[pair.suffix] = next_rank
       }
-      rank = take new_rank
       k = k << 1
+      if k < n {
+        for i in 0u64..n {
+          let index = sa[i]
+          pairs[i] = Pair(
+            first: rank[index],
+            second: rank[(index + k) % n],
+            suffix: index
+          )
+        }
+      }
     }
   }
-  let mut transformed = zero_bytes(n)
+  let mut transformed: List[u8] = []
+  list.reserve(mut transformed, n)
   let mut original: u64 = 0
   for i in 0u64..n {
     let suffix = sa[i]
     if suffix == 0 {
-      transformed[i] = input[n - 1]
+      list.push(mut transformed, input[n - 1])
       original = i
     } else {
-      transformed[i] = input[suffix - 1]
+      list.push(mut transformed, input[suffix - 1])
     }
   }
   Bwt(data: take transformed, original: original)
 }
 
-// compress.rs:176-221.
+// compress.rs:159-197. Stable inverse mapping; reserve the output once and
+// initialize each byte at its final value, avoiding a scalar zero-fill pass.
 fn bwt_decode(encoded: Bwt) -> unique List[u8] {
   let n = list.len(encoded.data)
   if n == 0 {
@@ -187,11 +194,12 @@ fn bwt_decode(encoded: Bwt) -> unique List[u8] {
     next[positions[byte] + used[byte]] = i
     used[byte] += 1
   }
-  let mut out = zero_bytes(n)
+  let mut out: List[u8] = []
+  list.reserve(mut out, n)
   let mut index = encoded.original
   for i in 0u64..n {
     index = next[index]
-    out[i] = encoded.data[index]
+    list.push(mut out, encoded.data[index])
   }
   take out
 }
