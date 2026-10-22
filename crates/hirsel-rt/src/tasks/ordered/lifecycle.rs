@@ -398,7 +398,9 @@ pub(crate) unsafe fn join(
     let s = scheduler(ctx);
     let scope = s.scope_handle(scope_word);
     let child = s.task_handle(child_word, scope);
-    match s.task(child).state {
+    let state = s.task(child).state;
+    super::events::prepare_join(ctx, scope_word, child_word);
+    match state {
         State::Holding => {
             unsafe {
                 call(

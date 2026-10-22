@@ -149,6 +149,13 @@ pub(super) enum CanonicalOutcome {
         scope: ObjectId,
         path: Vec<u32>,
     },
+    Joining,
+    Joined {
+        status: u8,
+        rank: u64,
+        payload: Option<Vec<u8>>,
+        failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
+    },
     TaskEnd {
         holding: bool,
         result: Option<Vec<u8>>,
@@ -222,6 +229,7 @@ pub(super) struct Log {
     pub task_results: BTreeMap<Vec<u32>, TaskResult>,
     pub receive_polls: Vec<ReceivePollCompletion>,
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
+    joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -299,9 +307,45 @@ pub(crate) fn record_host_poll(
 }
 
 impl Log {
+    fn subevents(&mut self, boundary: &Boundary, name: &'static str, events: Subevents) {
+        for (item, outcome) in events {
+            let next = self
+                .next_subevent
+                .entry((boundary.task.clone(), boundary.ordinal))
+                .or_default();
+            let subevent = *next;
+            *next = next
+                .checked_add(1)
+                .expect("canonical subevent index overflow");
+            let version = self.versions.entry(item.clone()).or_default();
+            *version = version
+                .checked_add(1)
+                .expect("canonical object version overflow");
+            if matches!(
+                outcome,
+                CanonicalOutcome::Created(_) | CanonicalOutcome::Spawned { .. }
+            ) {
+                assert_eq!(*version, 1, "creation is the first object subevent");
+            }
+            self.canonical.push(CanonicalEvent {
+                task: boundary.task.clone(),
+                ordinal: boundary.ordinal,
+                subevent,
+                op: name,
+                transition: boundary.transition.clone(),
+                item,
+                version: *version,
+                outcome,
+                retirement: boundary.retirement,
+                before: boundary.before.clone(),
+                credit: boundary.credit,
+            });
+        }
+    }
+
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
-        if self.unsupported.is_empty() {
+        if self.unsupported.is_empty() && self.joins.is_empty() {
             Ok(&self.canonical)
         } else {
             Err(&self.unsupported)
@@ -657,6 +701,41 @@ pub(super) fn complete_owner(
     });
 }
 
+/// Fix generation-qualified join identities before its first head boundary.
+/// No saved frame or result storage is retained by this binding.
+pub(super) fn prepare_join(ctx: *mut TaskCtx, scope: u64, child: u64) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    if let (Some(scope), Some(child)) = (log.scopes.get(&scope), log.tasks.get(&child)) {
+        assert!(
+            log.joins
+                .insert(path, (scope.clone(), child.clone()))
+                .is_none()
+        );
+    }
+}
+
+fn join_subevents(log: &Log, path: &[u32]) -> Option<Subevents> {
+    let (scope, child) = log.joins.get(path)?;
+    Some(vec![
+        (
+            CanonicalItem::Object(scope.clone()),
+            CanonicalOutcome::Alias(child.clone()),
+        ),
+        (
+            CanonicalItem::Object(child.clone()),
+            CanonicalOutcome::Joining,
+        ),
+    ])
+}
+
 /// Capture the consumed child's outcome before its generation-qualified row
 /// is vacated. Results come from TaskFinish's owned initialized-field snapshot;
 /// no join output or inactive failure carrier is read.
@@ -703,6 +782,34 @@ pub(super) fn complete_join(
                 .collect()
         }),
     };
+    // Completion runs in the caller's current head turn. There is no
+    // language computation or budget charge between resume and this observer,
+    // and no extra scheduling point is introduced to publish the outcome.
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let ordinal = log.ordinals[&path] - 1;
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let canonical = match (&scope, &child, &failures) {
+        (Some(scope), Some(child), Some(failures)) if chain.is_some() || payload.is_some() => {
+            Some(vec![
+                (
+                    CanonicalItem::Object(child.clone()),
+                    CanonicalOutcome::Joined {
+                        status,
+                        rank,
+                        payload: payload.clone(),
+                        failures: failures.clone(),
+                    },
+                ),
+                (CanonicalItem::Object(scope.clone()), CanonicalOutcome::Unit),
+            ])
+        }
+        _ => None,
+    };
     complete_owner(ctx, "task.join", || OwnerOutcome::Join {
         scope,
         child,
@@ -712,6 +819,31 @@ pub(super) fn complete_join(
         payload,
         failures,
     });
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    log.joins.remove(&path);
+    if let Some(events) = canonical {
+        let boundary = Boundary {
+            task: path,
+            ordinal,
+            op: None,
+            transition: Transition::Keep,
+            retirement,
+            before,
+            credit: 0,
+            native_outcome: None,
+        };
+        log.subevents(&boundary, "task.join", events);
+    } else {
+        log.unsupported.push(Unsupported {
+            task: path,
+            ordinal,
+            op: Some("task.join"),
+        });
+    }
 }
 
 /// Fix the chosen member and its actual completion rank in the owner's
@@ -871,6 +1003,7 @@ pub(super) fn record(
                     ),
                 ]);
             }
+            Command::Head { name: "task.join" } => return join_subevents(log, &path),
             Command::Head { name: "task.end" } => {
                 return end_subevents(s, task, false, matches!(retirement.transition, Next::Hold));
             }
@@ -1018,9 +1151,11 @@ pub(super) fn record(
             let Logical::Ordered(driver) = &s.logical else {
                 unreachable!()
             };
-            if matches!(retirement.transition, Next::End)
-                && driver.events.as_ref()?.end_ordinals.contains_key(&path)
-            {
+            let log = driver.events.as_ref()?;
+            if log.last_ops.get(&path) == Some(&"task.join") {
+                return join_subevents(log, &path);
+            }
+            if matches!(retirement.transition, Next::End) && log.end_ordinals.contains_key(&path) {
                 return end_subevents(s, task, true, matches!(retirement.transition, Next::Hold));
             }
         }
@@ -1138,39 +1273,17 @@ pub(super) fn record(
             },
             |(op, _)| op.descriptor.name,
         );
-        for (item, outcome) in events {
-            let next = log
-                .next_subevent
-                .entry((path.clone(), ordinal))
-                .or_default();
-            let subevent = *next;
-            *next = next
-                .checked_add(1)
-                .expect("canonical subevent index overflow");
-            let version = log.versions.entry(item.clone()).or_default();
-            *version = version
-                .checked_add(1)
-                .expect("canonical object version overflow");
-            if matches!(
-                outcome,
-                CanonicalOutcome::Created(_) | CanonicalOutcome::Spawned { .. }
-            ) {
-                assert_eq!(*version, 1, "creation is the first object subevent");
-            }
-            log.canonical.push(CanonicalEvent {
-                task: path.clone(),
-                ordinal,
-                subevent,
-                op: name,
-                transition: transition.clone(),
-                item,
-                version: *version,
-                outcome,
-                retirement: retirement.index,
-                before: retirement.before.clone(),
-                credit: retirement.credit,
-            });
-        }
+        let boundary = Boundary {
+            task: path.clone(),
+            ordinal,
+            op: operation.map(|(op, _)| op.descriptor.name),
+            transition: transition.clone(),
+            retirement: retirement.index,
+            before: retirement.before.clone(),
+            credit: retirement.credit,
+            native_outcome: None,
+        };
+        log.subevents(&boundary, name, events);
     } else {
         log.unsupported.push(Unsupported {
             task: path.clone(),
@@ -2304,10 +2417,18 @@ mod tests {
 
     unsafe extern "C" fn typed_result_child(
         ctx: *mut TaskCtx,
-        _: *mut crate::Header,
+        environment: *mut crate::Header,
         _: u64,
         _: u64,
     ) -> u8 {
+        if unsafe { crate::alloc::payload(environment).cast::<u64>().read() } != 0 {
+            let mut cause = 99;
+            assert_eq!(
+                unsafe { crate::tasks::hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+                crate::STATUS_OK
+            );
+            assert_eq!(cause, 0);
+        }
         let mut result = [1u64, 42];
         assert_eq!(
             unsafe {
@@ -2356,169 +2477,236 @@ mod tests {
             ..environment
         };
         let layouts = [&environment as *const crate::Layout, &image];
-        let mut reference = None;
-        for width in [1, 2, 4, 8] {
-            for reorder in [
-                hirsel_run_config::Reorder::Off,
-                hirsel_run_config::Reorder::Auto,
-            ] {
-                let output = Arc::new(Mutex::new((Vec::new(), Vec::new())));
-                let seen = output.clone();
-                let mut run = crate::host::BodyRun::new(width, true);
-                run.config.layouts = layouts.as_ptr();
-                run.config.layout_count = 2;
-                unsafe { run.use_physical_dispatch() };
-                let outcome = run.run(
-                    |ctx| unsafe {
-                        let mut policy = Policy::admit(&Default::default(), None);
-                        policy.reorder = reorder;
-                        super::super::engine::enable(ctx, policy);
-                        enable(ctx);
-                        install_value(ctx, 3, received_integer_program());
-                    },
-                    move |ctx| unsafe {
-                        let mut scope = 0;
-                        assert_eq!(
-                            hirsel_rt_v2_task_scope_enter(
-                                ctx,
-                                std::ptr::null_mut(),
-                                &mut scope,
-                                &0
-                            ),
-                            crate::STATUS_OK
-                        );
-                        let env = crate::alloc::hirsel_rt_v2_alloc(
-                            ctx,
-                            2,
-                            8,
-                            8,
-                            crate::alloc::DOMAIN_HEAP,
-                            0,
-                        );
-                        crate::alloc::payload(env).cast::<u64>().write(0);
-                        let mut child = 0;
-                        assert_eq!(
-                            hirsel_rt_v2_task_spawn(
-                                ctx,
-                                0,
-                                0,
-                                std::ptr::null_mut(),
-                                &mut child,
-                                &scope,
-                                typed_result_child,
-                                env,
-                                0
-                            ),
-                            crate::STATUS_OK
-                        );
-                        let mut result = [0u64; 2];
-                        assert_eq!(
-                            hirsel_rt_v2_task_join(
-                                ctx,
-                                0,
-                                0,
-                                &scope,
-                                &mut child,
-                                result.as_mut_ptr().cast(),
-                                16
-                            ),
-                            crate::STATUS_OK
-                        );
-                        assert_eq!(result, [1, 42]);
-                        result.fill(0);
-                        let _role = role::Guard::new(ctx);
-                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
-                        let ends: Vec<_> = log
-                            .canonical
-                            .iter()
-                            .filter(|row| row.op == "task.end")
-                            .cloned()
-                            .collect();
-                        assert_eq!(ends.len(), 3);
-                        let child_id = ObjectId {
-                            creator: vec![],
-                            ordinal: 1,
-                        };
-                        let scope_id = ObjectId {
-                            creator: vec![],
-                            ordinal: 0,
-                        };
-                        assert_eq!(ends[0].item, CanonicalItem::Object(child_id.clone()));
-                        assert_eq!(ends[0].version, 2);
-                        assert_eq!(
-                            ends[0].outcome,
-                            CanonicalOutcome::TaskEnd {
-                                holding: true,
-                                result: Some(
-                                    [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat()
-                                )
-                            }
-                        );
-                        assert_eq!(ends[1].item, CanonicalItem::CompletionRank(scope_id));
-                        assert_eq!(ends[1].version, 2);
-                        assert_eq!(
-                            ends[1].outcome,
-                            CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec())
-                        );
-                        assert_eq!(ends[2].item, CanonicalItem::Object(child_id));
-                        assert_eq!(ends[2].version, 3);
-                        assert_eq!(
-                            ends[2].outcome,
-                            CanonicalOutcome::TaskEnd {
-                                holding: false,
-                                result: None
-                            }
-                        );
-                        assert!(ends.iter().all(|row| row.task == [0] && row.ordinal == 0));
-                        assert_eq!(ends[0].subevent, 0);
-                        assert_eq!(ends[1].subevent, 1);
-                        assert_eq!(ends[2].subevent, 2);
-                        assert_eq!(ends[0].transition, Transition::Hold);
-                        assert_eq!(ends[2].transition, Transition::End);
-                        let joins: Vec<_> = log
-                            .owner_completions
-                            .iter()
-                            .filter(|row| row.op == "task.join")
-                            .cloned()
-                            .collect();
-                        assert_eq!(joins.len(), 1);
-                        assert_eq!(joins[0].task, Vec::<u32>::new());
-                        assert_eq!(joins[0].ordinal, 2);
-                        assert_eq!(
-                            joins[0].outcome,
-                            OwnerOutcome::Join {
-                                scope: Some(ObjectId {
-                                    creator: vec![],
-                                    ordinal: 0
-                                }),
-                                child: Some(ObjectId {
-                                    creator: vec![],
-                                    ordinal: 1
-                                }),
-                                child_path: vec![0],
-                                status: crate::STATUS_OK,
-                                rank: 0,
-                                payload: Some(
-                                    [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat()
+        let mut references = [None, None];
+        for parked in [false, true] {
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let output = Arc::new(Mutex::new((Vec::new(), Vec::new(), Vec::new())));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = layouts.as_ptr();
+                    run.config.layout_count = 2;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            enable(ctx);
+                            install_value(ctx, 3, received_integer_program());
+                        },
+                        move |ctx| unsafe {
+                            let mut scope = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut scope,
+                                    &0
                                 ),
-                                failures: Some(Vec::new()),
+                                crate::STATUS_OK
+                            );
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                8,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env)
+                                .cast::<u64>()
+                                .write(u64::from(parked));
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    typed_result_child,
+                                    env,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            let mut result = [0u64; 2];
+                            assert_eq!(
+                                hirsel_rt_v2_task_join(
+                                    ctx,
+                                    0,
+                                    0,
+                                    &scope,
+                                    &mut child,
+                                    result.as_mut_ptr().cast(),
+                                    16
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(result, [1, 42]);
+                            result.fill(0);
+                            let _role = role::Guard::new(ctx);
+                            let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                            let ends: Vec<_> = log
+                                .canonical
+                                .iter()
+                                .filter(|row| row.op == "task.end")
+                                .cloned()
+                                .collect();
+                            assert_eq!(ends.len(), 3);
+                            let child_id = ObjectId {
+                                creator: vec![],
+                                ordinal: 1,
+                            };
+                            let scope_id = ObjectId {
+                                creator: vec![],
+                                ordinal: 0,
+                            };
+                            assert_eq!(ends[0].item, CanonicalItem::Object(child_id.clone()));
+                            assert_eq!(ends[0].version, if parked { 3 } else { 2 });
+                            assert_eq!(
+                                ends[0].outcome,
+                                CanonicalOutcome::TaskEnd {
+                                    holding: true,
+                                    result: Some(
+                                        [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()]
+                                            .concat()
+                                    )
+                                }
+                            );
+                            assert_eq!(ends[1].item, CanonicalItem::CompletionRank(scope_id));
+                            assert_eq!(ends[1].version, 2);
+                            assert_eq!(
+                                ends[1].outcome,
+                                CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec())
+                            );
+                            assert_eq!(ends[2].item, CanonicalItem::Object(child_id));
+                            assert_eq!(ends[2].version, if parked { 6 } else { 4 });
+                            assert_eq!(
+                                ends[2].outcome,
+                                CanonicalOutcome::TaskEnd {
+                                    holding: false,
+                                    result: None
+                                }
+                            );
+                            assert!(
+                                ends.iter()
+                                    .all(|row| row.task == [0] && row.ordinal == u64::from(parked))
+                            );
+                            assert_eq!(ends[0].subevent, 0);
+                            assert_eq!(ends[1].subevent, 1);
+                            assert_eq!(ends[2].subevent, 2);
+                            assert_eq!(ends[0].transition, Transition::Hold);
+                            assert_eq!(ends[2].transition, Transition::End);
+                            let joins: Vec<_> = log
+                                .owner_completions
+                                .iter()
+                                .filter(|row| row.op == "task.join")
+                                .cloned()
+                                .collect();
+                            assert_eq!(joins.len(), 1);
+                            assert_eq!(joins[0].task, Vec::<u32>::new());
+                            assert_eq!(joins[0].ordinal, 2);
+                            assert_eq!(
+                                joins[0].outcome,
+                                OwnerOutcome::Join {
+                                    scope: Some(ObjectId {
+                                        creator: vec![],
+                                        ordinal: 0
+                                    }),
+                                    child: Some(ObjectId {
+                                        creator: vec![],
+                                        ordinal: 1
+                                    }),
+                                    child_path: vec![0],
+                                    status: crate::STATUS_OK,
+                                    rank: 0,
+                                    payload: Some(
+                                        [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()]
+                                            .concat()
+                                    ),
+                                    failures: Some(Vec::new()),
+                                }
+                            );
+                            let canonical_joins: Vec<_> = log
+                                .canonical
+                                .iter()
+                                .filter(|row| row.op == "task.join")
+                                .cloned()
+                                .collect();
+                            assert_eq!(canonical_joins.len(), if parked { 8 } else { 4 });
+                            assert!(
+                                canonical_joins
+                                    .iter()
+                                    .all(|row| row.task.is_empty() && row.ordinal == 2)
+                            );
+                            assert!(
+                                log.unsupported
+                                    .iter()
+                                    .all(|row| row.op != Some("task.join"))
+                            );
+                            for (index, row) in canonical_joins.iter().enumerate() {
+                                assert_eq!(row.subevent as usize, index);
                             }
-                        );
-                        *seen.lock().unwrap() = (ends, joins);
-                        drop(_role);
-                        assert_eq!(
-                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            let completed = if parked {
+                                assert_eq!(canonical_joins[0].transition, Transition::Yield);
+                                assert_eq!(canonical_joins[2].transition, Transition::Park);
+                                assert_eq!(
+                                    canonical_joins[4].transition,
+                                    Transition::Call {
+                                        members: vec![vec![0]],
+                                        then_yield: false,
+                                    }
+                                );
+                                6
+                            } else {
+                                assert_eq!(
+                                    canonical_joins[0].transition,
+                                    Transition::Call {
+                                        members: vec![vec![0]],
+                                        then_yield: true,
+                                    }
+                                );
+                                2
+                            };
+                            assert_eq!(canonical_joins[completed].transition, Transition::Keep);
+                            assert_eq!(
+                                canonical_joins[completed].version,
+                                if parked { 7 } else { 5 }
+                            );
+                            assert_eq!(
+                                canonical_joins[completed].outcome,
+                                CanonicalOutcome::Joined {
+                                    status: crate::STATUS_OK,
+                                    rank: 0,
+                                    payload: Some(
+                                        [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()]
+                                            .concat()
+                                    ),
+                                    failures: Vec::new(),
+                                }
+                            );
+                            *seen.lock().unwrap() = (ends, joins, canonical_joins);
+                            drop(_role);
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                                crate::STATUS_OK
+                            );
                             crate::STATUS_OK
-                        );
-                        crate::STATUS_OK
-                    },
-                );
-                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
-                let ends = output.lock().unwrap().clone();
-                if let Some(reference) = &reference {
-                    assert_eq!(&ends, reference);
-                } else {
-                    reference = Some(ends);
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let ends = output.lock().unwrap().clone();
+                    if let Some(reference) = &references[usize::from(parked)] {
+                        assert_eq!(&ends, reference);
+                    } else {
+                        references[usize::from(parked)] = Some(ends);
+                    }
                 }
             }
         }
@@ -3118,79 +3306,152 @@ mod tests {
     #[test]
     fn failed_join_evidence_does_not_read_a_result_or_guess_failure_locations() {
         use crate::tasks::{State, Task, handle, scheduler};
-        let mut run = crate::host::BodyRun::new(1, true);
-        unsafe { run.use_physical_dispatch() };
-        let outcome = run.run(
-            |ctx| unsafe {
-                super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
-                enable(ctx);
-            },
-            |ctx| unsafe {
-                let _role = crate::tasks::role::Guard::new(ctx);
-                let s = scheduler(ctx);
-                let mut child = Task::new(7, std::ptr::null_mut(), None, vec![3], None);
-                child.state = State::Done;
-                child.completed = 12;
-                s.tasks.push(Some(child));
-                let word = handle(1, 7);
-                let scope = handle(4, 9);
-                let Logical::Ordered(driver) = &mut s.logical else {
-                    unreachable!()
-                };
-                let log = driver.events.as_mut().unwrap();
-                log.ordinals.insert(vec![], 6);
-                log.last_ops.insert(vec![], "task.join");
-                let scope_id = ObjectId {
-                    creator: vec![],
-                    ordinal: 1,
-                };
-                let child_id = ObjectId {
-                    creator: vec![],
-                    ordinal: 2,
-                };
-                log.scopes.insert(scope, scope_id.clone());
-                log.tasks.insert(word, child_id.clone());
-                // A stale successful snapshot must never be used for failure.
-                log.task_results.insert(
-                    vec![3],
-                    TaskResult {
-                        descriptor: u32::MAX,
-                        payload: Some(vec![99]),
-                    },
-                );
-                let chain = [(
-                    crate::failure::FailureRecord {
-                        kind: 1,
-                        rule: 1,
-                        site: 999,
-                        operation_site: 999,
-                    },
-                    vec![3],
-                )];
-                complete_join(ctx, scope, word, Some(&chain));
-                let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
-                assert_eq!(
-                    log.owner_completions,
-                    [OwnerCompletion {
-                        task: vec![],
-                        ordinal: 5,
-                        op: "task.join",
-                        outcome: OwnerOutcome::Join {
-                            scope: Some(scope_id),
-                            child: Some(child_id),
-                            child_path: vec![3],
-                            status: crate::STATUS_FAILURE,
-                            rank: 12,
-                            payload: None,
-                            failures: None,
-                        }
-                    }]
-                );
-                scheduler(ctx).tasks.pop();
-                crate::STATUS_OK
-            },
-        );
-        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        for known in [false, true] {
+            let mut run = crate::host::BodyRun::new(1, true);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    enable(ctx);
+                    if known {
+                        static TABLE: [u8; 53] = {
+                            let mut bytes = [0; 53];
+                            bytes[0] = 1;
+                            bytes[8] = 0xe7;
+                            bytes[9] = 3; // site999
+                            bytes[16] = 17;
+                            bytes[20] = 3; // source line/column
+                            bytes[28] = 5;
+                            bytes[32] = 5;
+                            bytes[36] = 8;
+                            let text = *b"childtest.hir";
+                            let mut i = 0;
+                            while i < text.len() {
+                                bytes[40 + i] = text[i];
+                                i += 1;
+                            }
+                            bytes
+                        };
+                        (*ctx).run().failure_table = crate::isolate::FailureTable::new(&TABLE);
+                    }
+                },
+                move |ctx| unsafe {
+                    let _role = crate::tasks::role::Guard::new(ctx);
+                    let s = scheduler(ctx);
+                    let mut child = Task::new(7, std::ptr::null_mut(), None, vec![3], None);
+                    child.state = State::Done;
+                    child.completed = 12;
+                    s.tasks.push(Some(child));
+                    let word = handle(1, 7);
+                    let scope = handle(4, 9);
+                    let Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    let log = driver.events.as_mut().unwrap();
+                    log.ordinals.insert(vec![], 6);
+                    log.last_ops.insert(vec![], "task.join");
+                    let scope_id = ObjectId {
+                        creator: vec![],
+                        ordinal: 1,
+                    };
+                    let child_id = ObjectId {
+                        creator: vec![],
+                        ordinal: 2,
+                    };
+                    log.scopes.insert(scope, scope_id.clone());
+                    log.tasks.insert(word, child_id.clone());
+                    // A stale successful snapshot must never be used for failure.
+                    log.task_results.insert(
+                        vec![3],
+                        TaskResult {
+                            descriptor: u32::MAX,
+                            payload: Some(vec![99]),
+                        },
+                    );
+                    let chain = [(
+                        crate::failure::FailureRecord {
+                            kind: 1,
+                            rule: hirsel_core_contract::RUNTIME_RULE_BASE,
+                            site: 999,
+                            operation_site: 999,
+                        },
+                        vec![3],
+                    )];
+                    prepare_join(ctx, scope, word);
+                    assert!(
+                        super::super::engine::driver(ctx)
+                            .events
+                            .as_ref()
+                            .unwrap()
+                            .canonical()
+                            .is_err(),
+                        "an unfinished join cannot certify a complete trace"
+                    );
+                    let failures = known.then(|| {
+                        vec![(
+                            hirsel_run_schema::Failure {
+                                rule: hirsel_core_contract::RUNTIME_RULES[0].into(),
+                                site: hirsel_run_schema::Site {
+                                    definition: "child".into(),
+                                    file: "test.hir".into(),
+                                    line: 17,
+                                    column: 3,
+                                },
+                                operation: None,
+                            },
+                            vec![3],
+                        )]
+                    });
+                    complete_join(ctx, scope, word, Some(&chain));
+                    let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(
+                        log.owner_completions,
+                        [OwnerCompletion {
+                            task: vec![],
+                            ordinal: 5,
+                            op: "task.join",
+                            outcome: OwnerOutcome::Join {
+                                scope: Some(scope_id.clone()),
+                                child: Some(child_id.clone()),
+                                child_path: vec![3],
+                                status: crate::STATUS_FAILURE,
+                                rank: 12,
+                                payload: None,
+                                failures: failures.clone(),
+                            }
+                        }]
+                    );
+                    if let Some(failures) = failures {
+                        let rows = log.canonical().unwrap();
+                        assert_eq!(rows.len(), 2);
+                        assert_eq!(rows[0].item, CanonicalItem::Object(child_id));
+                        assert_eq!(
+                            rows[0].outcome,
+                            CanonicalOutcome::Joined {
+                                status: crate::STATUS_FAILURE,
+                                rank: 12,
+                                payload: None,
+                                failures,
+                            }
+                        );
+                        assert_eq!(rows[1].item, CanonicalItem::Object(scope_id));
+                        assert_eq!(rows[1].outcome, CanonicalOutcome::Unit);
+                        assert_eq!(
+                            (rows[0].ordinal, rows[0].subevent, rows[1].subevent),
+                            (5, 0, 1)
+                        );
+                    } else {
+                        assert!(log.canonical().is_err());
+                        assert_eq!(log.unsupported.last().unwrap().op, Some("task.join"));
+                        assert!(log.canonical.is_empty());
+                    }
+                    assert!(log.joins.is_empty());
+                    scheduler(ctx).tasks.pop();
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        }
     }
 
     #[test]
