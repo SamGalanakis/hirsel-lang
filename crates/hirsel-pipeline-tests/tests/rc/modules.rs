@@ -54,3 +54,4 @@ mod native_caller_placement_18;
 mod native_nested_loan_18;
 mod native_byte_view_18;
 mod native_peekable_address_18;
+mod native_scoped_view_18;
