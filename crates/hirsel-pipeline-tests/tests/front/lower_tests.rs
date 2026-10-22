@@ -695,6 +695,122 @@ fn formal_frame_result_rows_override_pre_mode_results_and_require_complete_owner
     );
 }
 
+// The annotation selects an owning copy; the unannotated twin borrows.
+// Both read the original box after the closure's block has destroyed it.
+fn source_capture_preserves_selected_types(annotation: &str, context: CaptureContext, usage: U) {
+    use hirsel_engine::DefinitionQueries;
+
+    let source = format!(
+        "type P {{ a: u8 }}\nfn main() -> u8 {{ let t: unique box P = box P(a: 4u8); let n = {{ let c{annotation} = fn() -> u8 {{ t.a }}; c() }}; n + t.a }}"
+    );
+    let mut engine = hirsel_engine::QueryEngine::new(
+        hirsel_engine::default_environment(),
+        hirsel_driver::compiler_adapters(),
+    );
+    let file_context = hirsel_engine::default_context();
+    let file = engine.sources.add("capture.hir", source.clone()).unwrap();
+    let parsed = engine.parse_file(file, &file_context).unwrap();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let path = hirsel_engine::entry_path(&file_context);
+    let analyzed = engine.mode_definition(&path).unwrap();
+    assert!(
+        analyzed.diagnostics.is_empty(),
+        "{:?}",
+        analyzed.diagnostics
+    );
+    let checked = &analyzed.value.typed.checked;
+    let [closure] = checked.closures.as_slice() else {
+        panic!("expected one source closure");
+    };
+    assert_eq!(closure.context, context);
+    let [capture] = closure.captures.as_slice() else {
+        panic!("expected one boxed capture");
+    };
+    assert_eq!(capture.usage, usage);
+    let [mode] = analyzed.value.ownership.captures.as_slice() else {
+        panic!("expected one capture mode");
+    };
+    assert_eq!((mode.context, mode.usage), (context, usage));
+    let source_type = checked
+        .bindings
+        .iter()
+        .find(|b| b.owner == NameSite::Item && b.binding == capture.binding)
+        .unwrap()
+        .ty;
+    let types = engine.types();
+    assert!(matches!(types.row(source_type).kind, TypeKind::Box(_)));
+    assert_eq!(types.row(source_type).modes.uniqueness, Uniqueness::Unique);
+    if usage == U::Copy {
+        assert_eq!(types.row(capture.ty).modes.uniqueness, Uniqueness::Aliased);
+    }
+    let boxed = analyzed
+        .value
+        .typed
+        .syntax
+        .tree
+        .expressions
+        .iter()
+        .position(|e| {
+            matches!(
+                e.kind,
+                ExprKind::Unary {
+                    op: UnaryOp::Box,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert_eq!(checked.expressions[boxed].ty, source_type);
+
+    let definition = engine.lower_to_tir(&path).unwrap();
+    let snapshot = engine.signature_snapshot();
+    let signatures = snapshot.validation(&path.0.package);
+    hirsel_validate::assert_valid(&definition.value, engine.types(), signatures);
+    let parent = &definition.value.bodies[definition.value.entry.0 as usize];
+    let (child, operand) = parent
+        .rvalues
+        .iter()
+        .find_map(|r| match r {
+            Rvalue::Closure {
+                context: actual,
+                body,
+                captures,
+                ..
+            } => {
+                assert_eq!(*actual, context);
+                let [operand] = captures.as_slice() else {
+                    panic!("expected one operand")
+                };
+                Some((*body, operand))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(operand.usage, usage);
+    assert_eq!(parent.places[operand.place.0 as usize].ty, source_type);
+    let child = &definition.value.bodies[child.0 as usize];
+    let field = child
+        .locals
+        .iter()
+        .find(|l| l.storage == Storage::Capture)
+        .unwrap();
+    assert_eq!(field.ty, capture.ty);
+    assert_eq!(
+        crate::check_support::bits(crate::check_support::execute_source(&source)),
+        8
+    );
+}
+
+#[test]
+fn source_copy_capture_preserves_selected_types() {
+    source_capture_preserves_selected_types(": fn() -> u8", CaptureContext::Escaping, U::Copy);
+}
+
+#[test]
+fn source_borrow_capture_preserves_selected_types() {
+    source_capture_preserves_selected_types("", CaptureContext::Scoped, U::Borrow);
+}
+
 #[test]
 fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() {
     let mut f = Fixture::new(P::U8);
@@ -738,7 +854,8 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
     );
     f.closure(
         hirsel_types::ClosureInfo {
-            context: hirsel_types::CaptureContext::Scoped,
+            // A counted copy owns its capture; Scoped would claim a borrow.
+            context: hirsel_types::CaptureContext::Escaping,
             result_evidence: None,
             expression: closure,
             ty: function,
@@ -751,6 +868,7 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
         f.scalar,
         f.owner,
     );
+    assert_eq!(f.ownership.captures[0].context, CaptureContext::Escaping);
     let call = f.expr(
         ExprKind::Call {
             callee: closure,
@@ -774,11 +892,29 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
             .ty,
         capture_type
     );
-    assert!(
-        definition.bodies[0]
-            .rvalues
-            .iter()
-            .any(|r| matches!(r, Rvalue::Closure { captures, .. } if captures[0].usage == U::Copy))
+    let parent = &definition.bodies[0];
+    let operand = parent
+        .rvalues
+        .iter()
+        .find_map(|r| match r {
+            Rvalue::Closure {
+                context, captures, ..
+            } => {
+                assert_eq!(*context, CaptureContext::Escaping);
+                Some(&captures[0])
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(operand.usage, U::Copy);
+    assert_eq!(parent.places[operand.place.0 as usize].ty, source_type);
+    assert_eq!(
+        session().row(source_type).modes.uniqueness,
+        Uniqueness::Unique
+    );
+    assert_eq!(
+        session().row(capture_type).modes.uniqueness,
+        Uniqueness::Aliased
     );
     assert_eq!(bits(execute(vec![definition], vec![])), 7);
 }

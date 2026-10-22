@@ -477,7 +477,7 @@ impl Fixture {
                         ordinal: i as u32,
                         owner: capture_owner,
                         usage: capture.usage,
-                        context: CaptureContext::Scoped,
+                        context: info.context,
                     }),
             );
         self.checked.closures.push(info);
