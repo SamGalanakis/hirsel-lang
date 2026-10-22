@@ -814,6 +814,15 @@ fn source_borrow_capture_preserves_selected_types() {
 
 #[test]
 fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() {
+    copy_capture_preserves_selected_types(true);
+}
+
+#[test]
+fn immutable_copy_capture_keeps_unique_source_and_j_selected_aliased_capture_type() {
+    copy_capture_preserves_selected_types(false);
+}
+
+fn copy_capture_preserves_selected_types(mutable: bool) {
     let mut f = Fixture::new(P::U8);
     let mut source_type = ty(TypeKind::Box(f.scalar));
     source_type.modes.uniqueness = hirsel_types::Uniqueness::Unique;
@@ -830,6 +839,12 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
         1,
     );
     let (let_, binding) = f.let_(value);
+    let StmtKind::Let { mutable: mode, .. } = &mut f.syntax.tree.statements[let_.0 as usize].kind
+    else {
+        unreachable!()
+    };
+    *mode = mutable;
+    f.checked.bindings.last_mut().unwrap().mutable = mutable;
     let body = f.integer(7, 1);
     let function = f.type_(TypeKind::Function(hirsel_types::FunctionType {
         state_promises: Default::default(),
@@ -908,7 +923,21 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
         })
         .unwrap();
     assert_eq!(operand.usage, U::Copy);
-    assert_eq!(parent.places[operand.place.0 as usize].ty, source_type);
+    // MODE-2: copying ends current uniqueness. Since d75d714d, a mutable
+    // binding's receiving storage is aliased; its checked source type stays unique.
+    let source_place_type = parent.places[operand.place.0 as usize].ty;
+    assert_eq!(
+        source_place_type,
+        if mutable { capture_type } else { source_type }
+    );
+    assert_eq!(
+        session().row(source_place_type).modes.uniqueness,
+        if mutable {
+            Uniqueness::Aliased
+        } else {
+            Uniqueness::Unique
+        }
+    );
     assert_eq!(
         session().row(source_type).modes.uniqueness,
         Uniqueness::Unique
