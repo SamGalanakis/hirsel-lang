@@ -4033,6 +4033,8 @@ conformance/OWN/OWN-2-let-else-take-bad.hir
 conformance/OWN/OWN-2-let-else-take-ok.hir
 conformance/OWN/OWN-2-local-result-propagation-bad.hir
 conformance/OWN/OWN-2-local-result-propagation-ok.hir
+conformance/OWN/OWN-2-map-loop-validity-17-bad.hir
+conformance/OWN/OWN-2-map-loop-validity-17-run.hir
 conformance/OWN/OWN-2-moved-storage-compound-write-bad.hir
 conformance/OWN/OWN-2-moved-storage-projected-write-bad.hir
 conformance/OWN/OWN-2-moved-storage-write-branch.hir

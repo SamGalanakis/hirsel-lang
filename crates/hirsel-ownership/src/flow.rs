@@ -1338,6 +1338,10 @@ struct Checker<'a, 's> {
     let_patterns: Arc<BTreeSet<hirsel_syntax::PatternId>>,
     mutation_sites: Vec<ExprId>,
     replacement_live: BTreeMap<ExprId, Option<bool>>,
+    /// Extraction is one static action at each source site. A converged join
+    /// requiring a deep copy must not retain availability from earlier moves.
+    unique_copies: BTreeSet<ExprId>,
+    unique_moves: BTreeSet<ExprId>,
     retention_depth: usize,
     parameters: Vec<usize>,
     return_uniqueness: BTreeMap<ParamId, bool>,
@@ -1774,6 +1778,8 @@ pub(super) fn check(
         let_patterns: initial_storage.let_patterns.clone(),
         mutation_sites: Vec::new(),
         replacement_live: BTreeMap::new(),
+        unique_copies: BTreeSet::new(),
+        unique_moves: BTreeSet::new(),
         retention_depth: initial_storage.retention_depth,
         parameters,
         return_uniqueness: BTreeMap::new(),
@@ -1824,7 +1830,35 @@ pub(super) fn check(
             };
         }
     }
-    let inputs = solve(&mut checker, initial, &live);
+    // Each site publishes one extraction action, even when its loop executes
+    // first with unique content and later with shared content. The first solve
+    // can propagate MOVED before discovering that the final action is a copy.
+    // Restart only those changed sites; retaining their moves would make the
+    // replacement facts disagree with the emitted copy. Each restart adds a
+    // site to a finite set, with no iteration cap or weakened availability.
+    let inputs = loop {
+        let inputs = solve(&mut checker, initial.clone(), &live);
+        let mut changed = false;
+        for (node, input) in graph.nodes.iter().zip(&inputs) {
+            let (Op::Finish { expression, .. }, Some(input)) = (&node.op, input) else {
+                continue;
+            };
+            let ExprKind::Unary {
+                op: UnaryOp::Unique,
+                value: child,
+            } = tree.expressions[expression.0 as usize].kind
+            else {
+                continue;
+            };
+            let value = checker.value(input, child);
+            if value.deep_copy && checker.unique_moves.contains(&child) {
+                changed |= checker.unique_copies.insert(child);
+            }
+        }
+        if !changed {
+            break inputs;
+        }
+    };
     checker.emit = true;
     for (id, input) in inputs.into_iter().enumerate() {
         checker.node = id;
@@ -4527,7 +4561,8 @@ impl Checker<'_, '_> {
                             && value.aliased().is_none()
                             && place.projections.is_empty()
                             && value.element_place.is_none()
-                            && value.modes.uniqueness == Uniqueness::Unique =>
+                            && value.modes.uniqueness == Uniqueness::Unique
+                            && !self.unique_copies.contains(expression) =>
                     {
                         UseKind::Take
                     }
@@ -4819,7 +4854,11 @@ impl Checker<'_, '_> {
                     }
                 }
                 if *context == Context::Unique {
-                    if (value.modes.uniqueness != Uniqueness::Unique
+                    if usage == UseKind::Take {
+                        self.unique_moves.insert(*expression);
+                    }
+                    if (self.unique_copies.contains(expression)
+                        || value.modes.uniqueness != Uniqueness::Unique
                         || value.aliased().is_some()
                         || !place.projections.is_empty()
                         || value.element_place.is_some())

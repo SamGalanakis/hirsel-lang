@@ -1,0 +1,154 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 83
+// twin: OWN/OWN-2-map-loop-validity-17-run.hir
+// boundary: Loop-carried deep-copy extraction and owned replacement stay consistent.
+// Removal lifecycle structure: indexmap 41a870887c4c77adf665886e63df08f406bfe37a,
+// src/map/tests.rs:243-288 (MIT OR Apache-2.0). Hirsel preserves insertion order,
+// uses explicit unique extraction and counted List payloads, and stays below 1M steps.
+fn visible(m: Map[u64, List[u64]], expected: List[(u64, List[u64])]) -> bool {
+  if map.len(m) != list.len(expected) {
+    return false
+  }
+  let mut i: u64 = 0
+  for (k, v) in m {
+    if (k, v) != expected[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn consume(take m: Map[u64, List[u64]]) -> Option[(u64, List[u64])] {
+  let mut first: Option[(u64, List[u64])] = None
+  for (k, v) in take m {
+    first = Some((take k, take v))
+    break
+  }
+  take first
+}
+
+fn trace(
+  take ops: List[(u64, u64, u64)],
+  take answers: List[Option[List[u64]]],
+  take states: List[List[(u64, List[u64])]]
+) -> u64 {
+  let mut m: unique Map[u64, List[u64]] = map.empty()
+  map.insert(mut m, 4, [10, 110])
+  let mut step: u64 = 0
+  for (tag, k, v) in ops {
+    if tag == 0 {
+      map.insert(mut m, unique copy k, [v, v + 100])
+      if map.get(m, k) != answers[step] {
+        return 1
+      }
+    } else if tag == 2 {
+      m = unique m
+      let removed = map.remove(mut m, k)
+      if removed != answers[step] {
+        return 2
+      }
+    } else {
+      let mut first: Option[List[u64]] = None
+      for (_, value) in m {
+        first = Some(unique value)
+        break
+      }
+      if first != answers[step] {
+        return 3
+      }
+    }
+    if !visible(m, states[step]) {
+      return 4
+    }
+    step += 1
+  }
+  if step == 0 {
+    return if visible(m, [(4, [10, 110])]) {
+      0
+    } else {
+      5
+    }
+  }
+  let last = states[step - 1]
+  let expected: Option[(u64, List[u64])] = if list.len(last) == 0 {
+    None
+  } else {
+    Some(copy last[0])
+  }
+  let saved = copy m
+  if consume(take m) != expected {
+    return 6
+  }
+  let _ = map.len(m)
+  if !visible(saved, last) {
+    return 7
+  }
+  if consume(take saved) != expected {
+    return 8
+  }
+  0
+}
+
+fn exits(take tags: List[u64], stop: u64) -> u64 {
+  let mut m: unique Map[u64, List[u64]] = map.empty()
+  map.insert(mut m, 4, [10, 110])
+  let mut sum: u64 = 0
+  for tag in tags {
+    if tag == 0 {
+      continue
+    }
+    let mut held: Option[List[u64]] = None
+    for (_, value) in m {
+      held = Some(unique value)
+      break
+    }
+    if tag == stop {
+      return if held == Some([10, 110]) {
+        sum + 10
+      } else {
+        999
+      }
+    }
+    if held != Some([10, 110]) {
+      return 999
+    }
+    if tag == 2 {
+      break
+    }
+    sum += 1
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = trace([(2, 4, 0), (2, 99, 0)], [Some([10, 110]), None], [[], []]) == 0 && trace(
+    [],
+    [],
+    []
+  ) == 0 && trace(
+    [(0, 4, 20), (3, 0, 0)],
+    [Some([20, 120]), Some([20, 120])],
+    [[(4, [20, 120])], [(4, [20, 120])]]
+  ) == 0 && trace(
+    [(2, 4, 0), (0, 4, 30)],
+    [Some([10, 110]), Some([30, 130])],
+    [[], [(4, [30, 130])]]
+  ) == 0 && trace(
+    [(0, 7, 20), (2, 4, 0)],
+    [Some([20, 120]), Some([10, 110])],
+    [[(4, [10, 110]), (7, [20, 120])], [(7, [20, 120])]]
+  ) == 0 && trace([(0, 4, 20)], [Some([99])], [[(4, [20, 120])]]) == 1 && exits(
+    [0, 1, 2, 1],
+    99
+  ) == 1 && exits([0, 1], 1) == 10
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

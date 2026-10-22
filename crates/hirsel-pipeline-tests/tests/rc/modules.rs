@@ -46,3 +46,4 @@ mod simd_native_widths_17;
 mod native_simd_eq_17;
 mod destructure_failure_order_17;
 mod flat_native_copy_oracle_17;
+mod map_loop_validity_17;
