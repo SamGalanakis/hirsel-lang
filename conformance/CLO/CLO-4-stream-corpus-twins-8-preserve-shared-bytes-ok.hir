@@ -1,0 +1,11 @@
+// rule: CLO-4
+// expect: accept
+resource type Request {
+  input: Bytes,
+}
+drop(s) {}
+
+@preserves_captures(s)
+fn read(take bytes: Bytes, mut s: Request) -> () {
+  s.input = unique bytes
+}

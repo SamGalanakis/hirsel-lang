@@ -1,0 +1,10 @@
+// rule: CLO-4
+// expect: accept
+resource type Request {
+  input: Dir,
+}
+drop(s) {}
+
+fn read(dir: Dir, mut s: Request) -> () {
+  s.input = dir
+}

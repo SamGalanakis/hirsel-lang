@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 10
+// expect: reject CLO-4 at line 11
+// twin: CLO/CLO-4-stream-corpus-twins-8-preserve-authority-ok.hir
 resource type Request {
   input: Dir,
 }

@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 12
+// expect: reject CLO-4 at line 13
+// twin: CLO/CLO-4-stream-preserve-counted-list-ok.hir
 pub type Event = Data(Bytes) | Idle
 
 resource type Request {
