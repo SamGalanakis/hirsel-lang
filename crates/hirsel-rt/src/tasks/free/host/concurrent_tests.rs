@@ -305,6 +305,9 @@ impl ConcurrentAdapter for Timer {
     fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
         self.real.ready()
     }
+    fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
+        self.real.wait_sources()
+    }
     fn readiness(&self) -> Option<crate::readiness::Readiness> {
         self.real.readiness()
     }
@@ -341,6 +344,175 @@ unsafe fn sleep_program(ctx: *mut TaskCtx, adapter: Option<&dyn ConcurrentAdapte
         },
         Completion::Wait(Ok(()))
     );
+}
+
+unsafe fn mixed_timer_program(
+    ctx: *mut TaskCtx,
+    adapter: Option<&dyn ConcurrentAdapter>,
+    clock: u64,
+    home_first: bool,
+) {
+    let mut registry = Registry::default();
+    let sampled = unsafe {
+        crate::stop::check(
+            ctx,
+            if adapter.is_some() {
+                request_home(ctx, Request::Monotonic { clock }, KeySet::coupled())
+            } else {
+                replay_request(ctx, Request::Monotonic { clock }, KeySet::coupled())
+            },
+        )
+    };
+    let Ok(Completion::Monotonic(Ok(now))) = sampled else {
+        panic!("home clock")
+    };
+    let home_delay = if home_first {
+        100_000_000
+    } else {
+        2_000_000_000
+    };
+    let concurrent_delay = if home_first {
+        2_000_000_000
+    } else {
+        100_000_000
+    };
+    let mut scope = 0;
+    unsafe {
+        crate::stop::check(
+            ctx,
+            super::super::lifecycle::scope_enter_until(ctx, &mut scope, &[clock, now + home_delay]),
+        );
+    }
+    let Completion::ClockGrant(Ok(concurrent_clock)) = (unsafe {
+        request(
+            ctx,
+            Request::MonotonicClock { io: 1 },
+            adapter,
+            &mut registry,
+        )
+    }) else {
+        panic!("concurrent clock grant")
+    };
+    assert_eq!(
+        unsafe {
+            request(
+                ctx,
+                Request::SleepUntil {
+                    clock: concurrent_clock,
+                    deadline: now + concurrent_delay,
+                },
+                adapter,
+                &mut registry,
+            )
+        },
+        Completion::Wait(if home_first {
+            Err(crate::io::WaitError::Canceled(CANCEL_DEADLINE))
+        } else {
+            Ok(())
+        })
+    );
+    let mut expired = 99;
+    unsafe {
+        crate::stop::check(
+            ctx,
+            super::super::lifecycle::scope_exit_until(ctx, scope, 0, 0, &mut expired),
+        );
+    }
+    assert_eq!(expired, u8::from(home_first));
+}
+
+#[test]
+fn mixed_home_deadline_and_concurrent_sleep_wake_the_earliest_source_and_replay() {
+    use crate::io::Adapter;
+    for width in [1, 8] {
+        for durable in [false, true] {
+            for home_first in [false, true] {
+                let mut home = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
+                home.discard_history();
+                home.clock_grants(true, false);
+                home.set_cooperative(crate::readiness::Readiness::default());
+                let Completion::ClockGrant(Ok(clock)) =
+                    home.call(Request::MonotonicClock { io: 1 }).unwrap()
+                else {
+                    panic!("initial home clock")
+                };
+                let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
+                real.discard_history();
+                real.clock_grants(true, false);
+                let adapter = Arc::new(Timer {
+                    real: real
+                        .into_concurrent()
+                        .unwrap_or_else(|_| panic!("Send clock")),
+                    parks: Default::default(),
+                });
+                let mut admitted = Some(adapter.clone());
+                let observed = adapter.clone();
+                let recording =
+                    super::super::record::Recording::new(b"mixed native clocks", durable);
+                let install = recording.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.adapter = Some(Box::new(home));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        {
+                            let _segment = role::Segment::new(ctx);
+                            concurrent::Service::install(ctx, admitted.take().unwrap()).unwrap();
+                        }
+                        mixed_timer_program(ctx, Some(&*observed), clock, home_first);
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert!(adapter.parks.load(std::sync::atomic::Ordering::Acquire) > 0);
+                assert_eq!(Arc::strong_count(&adapter), 1);
+                drop(adapter);
+                let cut = recording
+                    .recorder
+                    .stop("returned", None)
+                    .unwrap()
+                    .unwrap()
+                    .0;
+                let projection = Projection::new("returned", &cut.progress, &recording.trace());
+                let bytes = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink()
+                    .bytes;
+                for width in [1, 8] {
+                    let replay = super::super::replay::Replay::new(&bytes).unwrap();
+                    let install = replay.clone();
+                    let mut run = crate::host::BodyRun::new(width, false);
+                    run.free = true;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe {
+                            install.root(ctx);
+                        },
+                        move |ctx| unsafe {
+                            let _role = role::Guard::new(ctx);
+                            mixed_timer_program(ctx, None, clock, home_first);
+                            super::super::replay::start(ctx);
+                            unreachable!("mixed timer replay beyond cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(replay.finish().unwrap(), projection);
+                }
+            }
+        }
+    }
 }
 
 #[test]

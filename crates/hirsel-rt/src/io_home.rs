@@ -162,6 +162,10 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.deliver(_token, _completion))
     }
 
+    fn wait_sources(&mut self) -> Result<Option<WaitSources>, AdapterError> {
+        self.with(|adapter| adapter.wait_sources())
+    }
+
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.with(|adapter| adapter.wait())
     }

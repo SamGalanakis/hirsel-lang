@@ -71,8 +71,7 @@ impl ConcurrentIo {
     }
     /// Idle driving never holds the core lock: workers must be able to register interests.
     pub fn wait(&self) -> Result<bool, AdapterError> {
-        let readiness = self.readiness().unwrap();
-        readiness.wait()
+        self.wait_sources()?.wait()
     }
     fn attempt(&self, token: u64, request: Request) -> Result<Completion, AdapterError> {
         // Ready/Schedule are recorder notifications, never host call payloads.
@@ -219,6 +218,14 @@ impl ConcurrentAdapter for ConcurrentIo {
     }
     fn ready(&self) -> Result<Ready, AdapterError> {
         self.core.lock().unwrap().ready()
+    }
+    fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
+        Ok(self
+            .core
+            .lock()
+            .unwrap()
+            .wait_sources()?
+            .expect("real concurrent source preparation"))
     }
     fn readiness(&self) -> Option<crate::readiness::Readiness> {
         self.core.lock().unwrap().readiness()

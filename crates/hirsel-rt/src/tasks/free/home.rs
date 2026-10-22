@@ -146,6 +146,10 @@ unsafe fn poll_home(
     }
     // A deadline or another source can change cancellation while home waits.
     // Return to the role snapshot before deciding which owners to wake.
-    let sources = unsafe { crate::host_waits::wait_home(run) }?;
+    let sources = if unsafe { super::host::concurrent::pending(run) } {
+        unsafe { super::host::concurrent::wait(run) }?
+    } else {
+        unsafe { crate::host_waits::wait_home(run) }?
+    };
     Ok((ready, sources))
 }

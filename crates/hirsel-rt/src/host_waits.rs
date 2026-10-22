@@ -794,6 +794,15 @@ pub(crate) struct CompletedHost {
 }
 
 /// # Safety
+/// Home only, outside the scheduler role and all adapter loans.
+pub(crate) unsafe fn wait_sources_home(
+    run: *mut crate::context::RunShared,
+) -> Stopped<Option<crate::io::WaitSources>> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    binding.adapter.wait_sources().map_err(Stop::refusal)
+}
+
+/// # Safety
 /// Home only, after no running segment or runnable turn remains. No role is held.
 pub(crate) unsafe fn wait_home(run: *mut crate::context::RunShared) -> Stopped<bool> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };

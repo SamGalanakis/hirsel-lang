@@ -186,6 +186,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
         self.0.borrow_mut().deliver(token, completion);
     }
+    fn wait_sources(&mut self) -> Result<Option<crate::io::WaitSources>, AdapterError> {
+        self.0.borrow_mut().wait_sources()
+    }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().wait()
     }

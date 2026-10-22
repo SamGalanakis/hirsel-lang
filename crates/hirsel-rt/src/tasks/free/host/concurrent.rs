@@ -262,31 +262,49 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         }
         unsafe { super::super::publish_ready(s, run) };
     }
-    // Independent home and concurrent drivers cannot yet sleep together.
-    // Fail closed rather than strand a source on the other epoll instance.
     let mixed = unsafe { (*run).host_waits.load(Ordering::Acquire) != 0 };
-    if mixed && waiting {
-        unsafe {
-            (*run).control.request_inside(Stop::Refused(
-                "mixed concurrent and home readiness drivers".into(),
-            ))
-        };
-        return true;
-    }
     drop(_guard);
-    if changed || !idle || !waiting {
+    if mixed || changed || !idle || !waiting {
+        // The home service polls its sources too, then owns the combined wait.
         return changed;
     }
-    let sources = io.driver.as_ref().map_or(Ok(false), |d| d.wait());
+    let sources = unsafe { wait(run) };
     if !matches!(sources, Ok(true)) {
         let _guard = unsafe { role::IdleGuard::new(run) };
         match sources {
             Ok(false) => unsafe { super::super::check_quiet_without_sources(run) },
-            Err(error) => {
-                unsafe { (*run).control.request_inside(Stop::refusal(error)) };
+            Err(stop) => {
+                unsafe { (*run).control.request_inside(stop) };
             }
             Ok(true) => unreachable!(),
         }
     }
     true
+}
+
+/// Prepare both source sets without role/adapter loans across the shared wait.
+/// # Safety
+/// Home only, with no running or runnable task and no scheduler role.
+pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
+    let io = unsafe { (*run).free_io.get().expect("concurrent admission") };
+    let concurrent = io.adapter.wait_sources().map_err(Stop::refusal)?;
+    let home = if unsafe { (*run).host_waits.load(Ordering::Acquire) != 0 } {
+        unsafe { crate::host_waits::wait_sources_home(run) }?
+            .ok_or_else(|| Stop::Refused("mixed wait needs home adapter source exposure".into()))?
+    } else {
+        crate::io::WaitSources::Drivers(Vec::new())
+    };
+    let waited = match (concurrent, home) {
+        (crate::io::WaitSources::Ready, _) | (_, crate::io::WaitSources::Ready) => true,
+        (crate::io::WaitSources::Drivers(mut a), crate::io::WaitSources::Drivers(b)) => {
+            a.extend(b);
+            crate::io::WaitSources::Drivers(a)
+                .wait()
+                .map_err(Stop::refusal)?
+        }
+    };
+    if let Some(stop) = unsafe { (*run).control.stopped() } {
+        return Err(stop);
+    }
+    Ok(waited)
 }

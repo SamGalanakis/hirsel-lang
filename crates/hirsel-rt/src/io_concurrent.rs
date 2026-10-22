@@ -40,6 +40,12 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn readiness(&self) -> Option<crate::readiness::Readiness> {
         None
     }
+    /// Bounded idle preparation, with every source exposed for a shared wait.
+    fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
+        Ok(crate::io::WaitSources::Drivers(
+            self.readiness().into_iter().collect(),
+        ))
+    }
     /// Check argument validity and authority without an effect or tape event.
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
     /// One bounded host call.

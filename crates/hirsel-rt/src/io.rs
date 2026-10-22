@@ -2459,6 +2459,13 @@ pub trait Adapter {
     }
     /// The outcome of the runner call parked under `token` arrived (`RealIo::deliver`).
     fn deliver(&mut self, _token: u64, _completion: hirsel_run_schema::RunnerCompletion) {}
+    /// Prepare an idle wait without blocking on a driver. A source-aware
+    /// adapter flushes/delivers its idle observations here, then exposes all
+    /// remaining drivers so another adapter's sources can be waited together.
+    /// None preserves an opaque custom adapter's existing wait implementation.
+    fn wait_sources(&mut self) -> Result<Option<WaitSources>, AdapterError> {
+        Ok(None)
+    }
     /// With no runnable task, wait until some parked request may be ready. False when no
     /// source can make one ready.
     fn wait(&mut self) -> Result<bool, AdapterError> {
@@ -2474,6 +2481,25 @@ pub trait Adapter {
     /// whose waits do not block on the host needs not.
     fn wake_on(&mut self, _fd: std::os::fd::RawFd) -> bool {
         false
+    }
+}
+
+/// The bounded preparation of an adapter's idle wait.
+pub enum WaitSources {
+    /// An idle observation or a script advanced; return to the scheduler.
+    Ready,
+    /// All remaining event sources. Empty means no external progress source.
+    Drivers(Vec<crate::readiness::Readiness>),
+}
+impl WaitSources {
+    pub(crate) fn wait(self) -> Result<bool, AdapterError> {
+        match self {
+            Self::Ready => Ok(true),
+            Self::Drivers(drivers) if drivers.len() == 1 => drivers[0].wait(),
+            Self::Drivers(drivers) => {
+                crate::readiness::Readiness::wait_many(&drivers.iter().collect::<Vec<_>>())
+            }
+        }
     }
 }
 

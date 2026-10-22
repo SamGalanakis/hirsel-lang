@@ -456,50 +456,19 @@ impl Readiness {
     /// result means this provider has no external readiness source (e.g. the remaining waits
     /// are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
-        let mut state = self.0.lock().unwrap();
-        state.sync()?;
-        if !state.progressed_scripts().is_empty() {
-            return Ok(true);
-        }
-        if let Some(now) = state.virtual_time {
-            let next = state.next_virtual();
-            if let Some(next) = next {
-                state.virtual_time = Some(now.max(next));
-                return Ok(true);
-            }
-            return Ok(false);
-        }
-        if !state.always.is_empty() || !state.woken.is_empty() {
-            return Ok(true);
-        }
-        let deadline = state.next_timer();
-        // No descriptor and no timer: nothing external can make progress. With only
-        // timers left, the wait below sleeps until the earliest is due.
-        let sources = state
-            .fds
-            .iter_unordered()
-            .any(|(fd, _)| !state.wakes.contains(&fd));
-        if !sources && deadline.is_none() {
-            return Ok(false);
-        }
-        let timeout = deadline.map_or(-1, |d| {
-            let left = d.saturating_duration_since(Instant::now());
-            left.as_millis()
-                .saturating_add(u128::from(!left.is_zero()))
-                .min(libc::c_int::MAX as u128) as libc::c_int
-        });
-        state.driver_wake()?;
-        // Keep epoll alive, but release the state lock across the blocking syscall.
-        // A provider's PendingGuard wakes this descriptor after changing an interest.
-        let epoll = state
-            .epoll
-            .as_ref()
-            .unwrap()
-            .try_clone()
-            .map_err(|_| AdapterError::Unsupported("host readiness epoll clone".into()))?;
-        drop(state);
+        let (epoll, deadline) = match self.wait_source(false)? {
+            WaitSource::Ready => return Ok(true),
+            WaitSource::Empty => return Ok(false),
+            WaitSource::Driver(epoll, deadline, _) => (epoll, deadline),
+        };
         let mut events = [libc::epoll_event { events: 0, u64: 0 }; 256];
         let n = loop {
+            let timeout = deadline.map_or(-1, |deadline| {
+                let left = deadline.saturating_duration_since(Instant::now());
+                left.as_millis()
+                    .saturating_add(u128::from(left.subsec_nanos() % 1_000_000 != 0))
+                    .min(libc::c_int::MAX as u128) as libc::c_int
+            });
             // SAFETY: epoll is owned and events has room for every returned event.
             let n = unsafe {
                 libc::epoll_wait(
@@ -522,6 +491,124 @@ impl Readiness {
         state.woken = woken;
         Ok(true)
     }
+
+    /// One idle wait across independent driver sets. Like Rust's Unix socket
+    /// poll loop, snapshot owned descriptors, release all state locks, poll
+    /// against the earliest absolute deadline, and retry EINTR without extending
+    /// that deadline. epoll descriptors are themselves pollable (epoll(7)).
+    pub(crate) fn wait_many(drivers: &[&Self]) -> Result<bool, AdapterError> {
+        let mut unique: Vec<&Self> = Vec::new();
+        let mut sources = Vec::new();
+        let mut external = false;
+        for &driver in drivers {
+            if unique.iter().any(|other| Arc::ptr_eq(&driver.0, &other.0)) {
+                continue;
+            }
+            unique.push(driver);
+            match driver.wait_source(true)? {
+                WaitSource::Ready => return Ok(true),
+                WaitSource::Empty => {}
+                WaitSource::Driver(epoll, deadline, source) => {
+                    external |= source;
+                    sources.push((driver, epoll, deadline));
+                }
+            }
+        }
+        if !external {
+            return Ok(false);
+        }
+        let deadline = sources
+            .iter()
+            .filter_map(|(_, _, deadline)| *deadline)
+            .min();
+        let mut fds = sources
+            .iter()
+            .map(|(_, epoll, _)| libc::pollfd {
+                fd: epoll.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect::<Vec<_>>();
+        loop {
+            let timeout = deadline.map_or(-1, |deadline| {
+                let left = deadline.saturating_duration_since(Instant::now());
+                left.as_millis()
+                    .saturating_add(u128::from(left.subsec_nanos() % 1_000_000 != 0))
+                    .min(libc::c_int::MAX as u128) as libc::c_int
+            });
+            // SAFETY: fds owns this many initialized writable poll rows.
+            let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
+            if n >= 0 {
+                break;
+            }
+            if errno() != libc::EINTR {
+                return Err(AdapterError::Unsupported("host readiness poll".into()));
+            }
+        }
+        for ((driver, _, _), fd) in sources.iter().zip(&fds) {
+            if fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                return Err(AdapterError::Unsupported(
+                    "host readiness descriptor".into(),
+                ));
+            }
+            let mut state = driver.0.lock().unwrap();
+            let mut woken = std::mem::take(&mut state.woken);
+            state.epoll_events(0, &mut woken)?;
+            state.woken = woken;
+        }
+        Ok(true)
+    }
+
+    fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
+        let mut state = self.0.lock().unwrap();
+        state.sync()?;
+        if !state.progressed_scripts().is_empty() {
+            return Ok(WaitSource::Ready);
+        }
+        if let Some(now) = state.virtual_time {
+            if let Some(next) = state.next_virtual() {
+                state.virtual_time = Some(now.max(next));
+                return Ok(WaitSource::Ready);
+            }
+            if !include_wake_only {
+                return Ok(WaitSource::Empty);
+            }
+        }
+        if !state.always.is_empty() || !state.woken.is_empty() {
+            return Ok(WaitSource::Ready);
+        }
+        let deadline = if state.virtual_time.is_none() {
+            state.next_timer()
+        } else {
+            None
+        };
+        let sources = state.virtual_time.is_none()
+            && state
+                .fds
+                .iter_unordered()
+                .any(|(fd, _)| !state.wakes.contains(&fd));
+        if !sources && deadline.is_none() && !include_wake_only {
+            return Ok(WaitSource::Empty);
+        }
+        state.driver_wake()?;
+        let epoll = state
+            .epoll
+            .as_ref()
+            .unwrap()
+            .try_clone()
+            .map_err(|_| AdapterError::Unsupported("host readiness epoll clone".into()))?;
+        Ok(WaitSource::Driver(
+            epoll,
+            deadline,
+            sources || deadline.is_some(),
+        ))
+    }
+}
+
+enum WaitSource {
+    Ready,
+    Empty,
+    Driver(OwnedFd, Option<Instant>, bool),
 }
 
 impl ReadyState {
@@ -1175,6 +1262,82 @@ mod tests {
 mod concurrent_tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn shared_idle_wait_observes_delivery_into_a_driver_without_an_external_source() {
+        let delivery = Readiness::default();
+        delivery.enter(1);
+        delivery.await_delivery();
+        delivery.parked(1);
+        let timer = Readiness::default();
+        timer.enter(2);
+        timer.pending().deadline = Some(Instant::now() + Duration::from_secs(5));
+        timer.parked(2);
+        let worker = delivery.clone();
+        let joined = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            worker.deliver(1);
+        });
+        let start = Instant::now();
+        assert!(Readiness::wait_many(&[&delivery, &timer]).unwrap());
+        joined.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "delivery driver was excluded from the wait"
+        );
+        assert_eq!(delivery.ready().unwrap(), [1]);
+        assert!(timer.ready().unwrap().is_empty());
+    }
+    #[test]
+    fn shared_idle_wait_uses_the_earliest_deadline_from_either_driver() {
+        for reverse in [false, true] {
+            let slow = Readiness::default();
+            let fast = Readiness::default();
+            for (driver, token, delay) in [(&slow, 1, 5000), (&fast, 2, 10)] {
+                driver.enter(token);
+                driver.pending().deadline = Some(Instant::now() + Duration::from_millis(delay));
+                driver.parked(token);
+            }
+            let start = Instant::now();
+            let drivers = if reverse {
+                [&fast, &slow]
+            } else {
+                [&slow, &fast]
+            };
+            assert!(Readiness::wait_many(&drivers).unwrap());
+            assert!(start.elapsed() < Duration::from_secs(1));
+            assert_eq!(fast.ready().unwrap(), [2]);
+            assert!(slow.ready().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn shared_idle_wait_latches_either_descriptor_and_ignores_wake_only_sources() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        for second in [false, true] {
+            let a = Readiness::default();
+            let b = Readiness::default();
+            let (read, mut write) = UnixStream::pair().unwrap();
+            let active = if second { &b } else { &a };
+            a.notify().unwrap();
+            b.notify().unwrap();
+            assert!(!Readiness::wait_many(&[&a, &b]).unwrap());
+            active.enter(7);
+            active.await_descriptor(read.as_raw_fd());
+            active.parked(7);
+            // Drain setup wakeups before forcing the descriptor edge.
+            assert!(a.ready().unwrap().is_empty());
+            assert!(b.ready().unwrap().is_empty());
+            write.write_all(b"x").unwrap();
+            assert!(Readiness::wait_many(&[&a, &b]).unwrap());
+            assert_eq!(active.ready().unwrap(), [7]);
+            assert!(
+                if second { a.ready() } else { b.ready() }
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
     #[test]
     fn explicit_driver_notification_survives_before_first_wait_without_readying_a_token() {
         let readiness = Readiness::default();

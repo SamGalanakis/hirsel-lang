@@ -1060,16 +1060,16 @@ impl<S: Streams> Adapter for RealCore<S> {
         }
     }
     /// An idle point delivers the signal script's next arrival before anything waits.
-    fn wait(&mut self) -> Result<bool, AdapterError> {
+    fn wait_sources(&mut self) -> Result<Option<crate::io::WaitSources>, AdapterError> {
         // The run would wait for the host: first close the journal's batch.
         if self.journal.idle().map_err(recording_failed)? {
-            return Ok(true);
+            return Ok(Some(crate::io::WaitSources::Ready));
         }
         if let Some(source) = &mut self.signals {
             match source.deliver() {
                 crate::signals::Delivery::Pending => {
                     self.signal_delivered = true;
-                    return Ok(true);
+                    return Ok(Some(crate::io::WaitSources::Ready));
                 }
                 crate::signals::Delivery::Default(kind) => {
                     return Err(AdapterError::Signaled(kind));
@@ -1080,12 +1080,16 @@ impl<S: Streams> Adapter for RealCore<S> {
         if let Some(clock) = &self.test_clock
             && clock.wait()?
         {
-            return Ok(true);
+            return Ok(Some(crate::io::WaitSources::Ready));
         }
-        match &self.cooperative {
-            Some((readiness, _)) => readiness.wait(),
-            None => Ok(false),
-        }
+        Ok(Some(crate::io::WaitSources::Drivers(
+            self.readiness().into_iter().collect(),
+        )))
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        self.wait_sources()?
+            .expect("real adapter source preparation")
+            .wait()
     }
     fn scripted_input(&self) -> bool {
         self.signals.as_ref().is_some_and(|s| s.scripted())
