@@ -599,7 +599,9 @@ fn lzw_encode(input: List[u8]) -> unique List[u8] {
   for i in 1u64..list.len(input) {
     let byte = input[i]
     list.push(mut current, byte)
-    let key = bytes.from_list(copy_bytes(current))
+    // Borrow the full byte key for lookup, then retain its storage on insertion.
+    // A hit drops this view before the next push; a miss replaces current.
+    let key = bytes.from_list(copy current)
     if !map.contains(dict, key) {
       let prefix = bytes.slice(key, 0, bytes.len(key) - 1)
       let code = option.unwrap_or(map.get(dict, prefix), 0)
