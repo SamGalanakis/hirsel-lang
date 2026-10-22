@@ -455,3 +455,49 @@ pub fn main() -> Result[(), u64] {{
         assert_eq!(counts[0].2, counts[0].3, "all allocations must be freed");
     });
 }
+
+#[test]
+fn compose_13_checked_interpreter_retains_underlying_bounds() {
+    use hirsel_engine::*;
+    for (name, source) in [
+        ("immutable", IMMUTABLE),
+        ("join", JOIN),
+        ("loop", LOOP),
+        ("object", OBJECT),
+    ] {
+        with_compiler_stack(|| {
+            let mut engine =
+                QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
+            let file = engine
+                .sources
+                .add("checked-compose.hir", source.into())
+                .unwrap();
+            let context = default_context();
+            let checked = check_progress(&mut engine, file, &context).unwrap();
+            assert!(
+                checked.diagnostics.is_empty(),
+                "{name}: {:?}",
+                checked.diagnostics
+            );
+            let execution = run_observed_checked(
+                &mut engine,
+                &RunConfiguration {
+                    entry: entry_path(&context),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            let observation = execution
+                .observation
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: {execution:?}"));
+            assert_eq!(
+                hirsel_driver::native::Observation::of_reference(observation).exit_code,
+                Some(0),
+                "{name}: {execution:?}"
+            );
+        });
+    }
+}

@@ -3610,9 +3610,16 @@ fn composed_view(
 ) -> Result<bool, Error> {
     let root = frame.place(operand.place)?.root;
     let body = &frame.definition.bodies[frame.body_id.0 as usize];
-    if operand.usage != hirsel_types::UseKind::Borrow
-        || body.locals[root.0 as usize].storage != Storage::Local
-    {
+    if operand.usage != hirsel_types::UseKind::Borrow {
+        return Ok(false);
+    }
+    let storage = body.locals[root.0 as usize].storage;
+    let borrowed_carrier = storage == Storage::Temporary
+        && frame
+            .check
+            .as_ref()
+            .is_some_and(|check| check.borrowed.contains(&root.0));
+    if storage != Storage::Local && !borrowed_carrier {
         return Ok(false);
     }
     Ok(frame
@@ -3747,6 +3754,19 @@ fn execute_instruction(
                 frame.body().rvalues.get(value.0 as usize),
                 Some(Rvalue::Construct { .. })
             );
+            let borrowed = frame.check.as_ref().is_some_and(|check| {
+                let body = frame.body();
+                match body.rvalues.get(value.0 as usize) {
+                    Some(Rvalue::Use(operand)) => match operand.usage {
+                        hirsel_types::UseKind::Borrow | hirsel_types::UseKind::Mut => true,
+                        hirsel_types::UseKind::Take => check
+                            .borrowed
+                            .contains(&body.places[operand.place.0 as usize].root.0),
+                        hirsel_types::UseKind::Copy => false,
+                    },
+                    _ => false,
+                }
+            });
             let copied = frame.check.as_ref().is_some_and(|check| {
                 let body = frame.body();
                 let from = |operand: &Operand| {
@@ -3791,6 +3811,13 @@ fn execute_instruction(
             arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             frame.assign_shadow(destination, value, shadow)?;
+            if borrowed {
+                let place = frame.place(destination)?;
+                if place.projection.is_empty() {
+                    let root = place.root.0;
+                    frame.check.as_mut().unwrap().borrowed.insert(root);
+                }
+            }
             if copied {
                 let place = frame.place(destination)?;
                 if place.projection.is_empty() {

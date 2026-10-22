@@ -1117,6 +1117,9 @@ pub(crate) struct FrameCheck {
     /// Locals whose whole value is a semantic copy: owned, so a result related
     /// to one lends only that local, never what its copy came from (MODE-1).
     pub copies: BTreeSet<u32>,
+    /// Actual nonowning Use(Borrow/Mut) values, propagated through administrative
+    /// moves. Their compiler slots are carriers, not additional storage bounds.
+    pub borrowed: BTreeSet<u32>,
 }
 /// What a caller knows about one argument.
 #[derive(Clone, Debug, Default)]
@@ -1258,6 +1261,7 @@ impl FrameCheck {
             noalloc,
             closes_arena: None,
             copies: BTreeSet::new(),
+            borrowed: BTreeSet::new(),
         }
     }
     /// Whether a bound names no scope, region or environment instance of
@@ -1320,6 +1324,7 @@ impl FrameCheck {
         }
     }
     pub fn storage_live(&mut self, local: LocalId) {
+        self.borrowed.remove(&local.0);
         if let Some(s) = self.shadows.get_mut(local.0 as usize) {
             *s = Shadow::default();
         }

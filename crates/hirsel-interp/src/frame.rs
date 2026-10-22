@@ -951,6 +951,7 @@ impl Frame {
         let root = place.root.0 as usize;
         if place.projection.is_empty() {
             check.copies.remove(&place.root.0);
+            check.borrowed.remove(&place.root.0);
         }
         let mut value = slots.get(root).and_then(Option::as_ref);
         let mut node = check
