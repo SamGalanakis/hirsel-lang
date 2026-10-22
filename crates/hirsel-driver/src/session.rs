@@ -9,7 +9,9 @@
 //! changed source under its old logical name, so the engine's memos decide
 //! what to recompute, and any change loading itself read (a manifest, a
 //! sidecar appearing, a prechecked package's source) loads the program again.
-use hirsel_engine::{CheckOutput, LoadedProgram, ToolError, Verify};
+use hirsel_engine::{
+    CheckOutput, LoadedProgram, QueryError, ToolError, Verify, select_diagnostics,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -276,6 +278,23 @@ impl Session {
     /// Check the explicitly applied snapshot without polling input bytes;
     /// an event/request host must deliver all input changes through `apply`.
     pub fn check_applied(&mut self) -> Result<CheckOutput, ToolError> {
+        // Like Compiler::check_path, checking exposes loader parse diagnostics
+        // as a rejection output. Program requests keep their loader boundary;
+        // I/O, manifest and non-diagnostic query failures remain tool errors.
+        self.check_applied_inner().or_else(|error| match error {
+            ToolError::Query {
+                error: QueryError::Diagnostics(diagnostics),
+                sources,
+                ..
+            } => Ok(CheckOutput {
+                diagnostics: select_diagnostics(diagnostics, Some(&sources)),
+                sources,
+                ..Default::default()
+            }),
+            error => Err(error),
+        })
+    }
+    fn check_applied_inner(&mut self) -> Result<CheckOutput, ToolError> {
         let before = self.touched_before_apply.take().unwrap_or_else(|| {
             self.program
                 .as_ref()

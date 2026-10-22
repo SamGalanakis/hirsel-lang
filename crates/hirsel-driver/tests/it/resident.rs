@@ -267,33 +267,202 @@ fn switching_verification_on_checks_memory_and_disk_lowerings_without_evidence()
     });
 }
 
+fn manifest_check_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+    let fixture = tempfile::tempdir().unwrap();
+    std::fs::write(fixture.path().join("main.hir"), "fn main() {}\n").unwrap();
+    let manifest = fixture.path().join("hirsel.json");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema": 1, "package": {"name":"application", "version":"1"},
+            "entry": {"module":[], "name":"main"},
+            "sources":[{"path":"main.hir", "module":[]}], "dependencies":[],
+            "unsafe_ffi":{"link":[], "headers_checked":false, "wrappers":[]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    (fixture, manifest)
+}
+
+fn diagnostic_objects(output: &CheckOutput) -> Vec<serde_json::Value> {
+    output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.to_json(&output.sources))
+        .collect()
+}
+
+fn assert_manifest_check_parity(session: &mut session::Session) -> CheckOutput {
+    // Use the compiler directly so this oracle cannot lease a resident session.
+    let cold = hirsel_driver::COMPILER.check_path(session.entry()).unwrap();
+    let actual = session.check().unwrap();
+    assert_eq!(actual.completion, cold.completion);
+    assert_eq!(diagnostic_objects(&actual), diagnostic_objects(&cold));
+    // An unchanged check must retain the same rejection or acceptance.
+    let repeated = session.check().unwrap();
+    assert_eq!(repeated.completion, cold.completion);
+    assert_eq!(diagnostic_objects(&repeated), diagnostic_objects(&cold));
+    actual
+}
+
 #[test]
 fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
     with_compiler_stack(|| {
-        let fixture = crate::image_fixture::Fixture::new();
-        let source = fixture.0.join("main.hir");
-        let manifest = fixture.0.join("hirsel.json");
-        std::fs::write(&source, "fn main() {}\n").unwrap();
-        std::fs::write(
-            &manifest,
-            serde_json::json!({
-                "schema": 1, "package": {"name":"application", "version":"1"},
-                "entry": {"module":[], "name":"main"},
-                "sources":[{"path":"main.hir", "module":[]}], "dependencies":[],
-                "unsafe_ffi":{"link":[], "headers_checked":false, "wrappers":[]}
+        let (fixture, manifest) = manifest_check_fixture();
+        let source = fixture.path().join("main.hir");
+        let mut session = session::Session::open(&manifest, Verify::On);
+        let valid = assert_manifest_check_parity(&mut session);
+        assert!(valid.diagnostics.is_empty());
+        assert_eq!(valid.completion, CheckCompletion::Complete);
+        std::fs::write(&source, "fn main(").unwrap();
+        let invalid = assert_manifest_check_parity(&mut session);
+        assert_eq!(invalid.diagnostics.len(), 1);
+        let diagnostic = &invalid.diagnostics[0];
+        assert_eq!(diagnostic.rule.as_str(), "LANG-1");
+        assert_eq!(diagnostic.severity, hirsel_diag::Severity::Error);
+        let span = invalid.sources.resolve(diagnostic.primary);
+        assert_eq!(invalid.sources.file(span.file).unwrap().path, source);
+        assert_eq!((span.start, span.end), (8, 8));
+        assert_eq!(invalid.completion, CheckCompletion::Complete);
+        // Checking exposes diagnostics, but requesting a program still cannot
+        // return the old valid product while its source no longer parses.
+        assert!(matches!(
+            session.program_applied(),
+            Err(ToolError::Query {
+                error: QueryError::Diagnostics(_),
+                ..
             })
-            .to_string(),
-        )
-        .unwrap();
+        ));
+        std::fs::write(&source, "fn main() {}\n").unwrap();
+        let repaired = assert_manifest_check_parity(&mut session);
+        assert!(repaired.diagnostics.is_empty());
+        assert_eq!(repaired.completion, valid.completion);
+        assert_eq!(session.stats().loads, 1);
+        assert_eq!(session.stats().replaced, 2);
+        let program = session.program_applied().unwrap();
+        let receipt = program.engine.checked_products(&program.entry).unwrap();
+        let mut fresh = hirsel_driver::COMPILER
+            .load_check_package(&manifest)
+            .unwrap();
+        assert!(fresh.check_configured().unwrap().diagnostics.is_empty());
+        let expected = fresh.engine.checked_products(&fresh.entry).unwrap();
+        assert_eq!(receipt.canonical, expected.canonical);
+        assert_eq!(receipt.digest, expected.digest);
+        // The error output owns the invalid snapshot even after the repair.
+        assert_eq!(invalid.sources.file(span.file).unwrap().text(), "fn main(");
+    });
+}
+
+#[test]
+fn manifest_session_reports_semantic_diagnostics_and_repairs() {
+    with_compiler_stack(|| {
+        let (fixture, manifest) = manifest_check_fixture();
+        let mut session = session::Session::open(&manifest, Verify::On);
+        assert!(
+            assert_manifest_check_parity(&mut session)
+                .diagnostics
+                .is_empty()
+        );
+        std::fs::write(fixture.path().join("main.hir"), "fn main() { missing }\n").unwrap();
+        let rejected = assert_manifest_check_parity(&mut session);
+        assert!(
+            rejected
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == hirsel_diag::Severity::Error)
+        );
+        std::fs::write(fixture.path().join("main.hir"), "fn main() {}\n").unwrap();
+        assert!(
+            assert_manifest_check_parity(&mut session)
+                .diagnostics
+                .is_empty()
+        );
+    });
+}
+
+#[test]
+fn manifest_session_missing_source_remains_an_io_error() {
+    with_compiler_stack(|| {
+        let (fixture, manifest) = manifest_check_fixture();
         let mut session = session::Session::open(&manifest, Verify::On);
         assert!(session.check().unwrap().diagnostics.is_empty());
-        std::fs::write(&source, "fn main(").unwrap();
-        assert_eq!(
-            session.check().unwrap_err().to_string(),
-            check_path(&manifest).unwrap_err().to_string()
+        std::fs::remove_file(fixture.path().join("main.hir")).unwrap();
+        for result in [
+            session.check(),
+            hirsel_driver::COMPILER.check_path(&manifest),
+        ] {
+            let Err(ToolError::Io(error)) = result else {
+                panic!("missing source must remain an I/O error: {result:?}");
+            };
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        }
+        std::fs::write(fixture.path().join("main.hir"), "fn main() {}\n").unwrap();
+        assert!(
+            assert_manifest_check_parity(&mut session)
+                .diagnostics
+                .is_empty()
         );
-        std::fs::write(&source, "fn main() {}\n").unwrap();
+    });
+}
+
+#[test]
+fn manifest_session_malformed_manifest_remains_a_tool_error() {
+    with_compiler_stack(|| {
+        let (_fixture, manifest) = manifest_check_fixture();
+        let bytes = std::fs::read(&manifest).unwrap();
+        let mut session = session::Session::open(&manifest, Verify::On);
         assert!(session.check().unwrap().diagnostics.is_empty());
+        std::fs::write(&manifest, "{").unwrap();
+        for result in [
+            session.check(),
+            hirsel_driver::COMPILER.check_path(&manifest),
+        ] {
+            let Err(ToolError::Runtime(message)) = result else {
+                panic!("malformed manifest must remain a tool error: {result:?}");
+            };
+            assert!(message.starts_with("package manifest:"), "{message}");
+        }
+        std::fs::write(&manifest, bytes).unwrap();
+        assert!(
+            assert_manifest_check_parity(&mut session)
+                .diagnostics
+                .is_empty()
+        );
+    });
+}
+
+#[test]
+fn manifest_session_preserves_non_diagnostic_query_errors() {
+    struct FailingLexer(QueryError);
+    impl LexerPhase for FailingLexer {
+        fn lex(
+            &self,
+            _: hirsel_span::FileId,
+            _: &hirsel_span::SourceMap,
+        ) -> Result<QueryOutput<Vec<hirsel_syntax::Token>>, QueryError> {
+            Err(self.0.clone())
+        }
+    }
+    with_compiler_stack(|| {
+        for error in [
+            QueryError::NotImplemented,
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "fixture-transport".into(),
+                message: "connection lost".into(),
+            }),
+        ] {
+            let (fixture, manifest) = manifest_check_fixture();
+            let mut session = session::Session::open(&manifest, Verify::On);
+            session.program_applied().unwrap().engine.adapters.lexer =
+                Some(Arc::new(FailingLexer(error.clone())));
+            // Force a new parse, with the injected failure at the loader seam.
+            std::fs::write(fixture.path().join("main.hir"), "fn main() { }\n").unwrap();
+            let Err(ToolError::Query { error: actual, .. }) = session.check() else {
+                panic!("non-diagnostic query error was flattened");
+            };
+            assert_eq!(actual, error);
+        }
     });
 }
 
@@ -2382,7 +2551,11 @@ fn first_failed_manifest_load_keeps_the_invalid_import_as_a_watched_input() {
         )
         .unwrap();
         let mut session = session::Session::open(&manifest, Verify::On);
-        assert!(session.check().is_err());
+        let rejected = assert_manifest_check_parity(&mut session);
+        assert!(rejected.diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule.as_str() == "LANG-1"
+                && diagnostic.severity == hirsel_diag::Severity::Error
+        }));
         assert!(session.watched().any(|input| input == source));
         assert!(
             session.poll().is_empty(),
