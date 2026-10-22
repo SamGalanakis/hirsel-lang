@@ -1,0 +1,10 @@
+// rule: OWN-4
+// twin: OWN/OWN-4-map-update-value-17-copyable.hir
+// expect: reject GEN-1 at line 5
+fn change[V](mut m: Map[u64, V], f: fn(mut v: V) -> () uses {}) {
+  let _ = std@1/map.update_value(mut m, 1, f)
+}
+
+pub fn main() -> Result[(), String] {
+  Ok(())
+}

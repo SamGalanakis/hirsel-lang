@@ -218,7 +218,7 @@ pub struct Block(std::sync::Arc<BlockData>);
 struct BlockData {
     elements: Vec<Option<Value>>,
     dead: usize,
-    index: std::sync::OnceLock<Option<Box<keyed::KeyIndex>>>,
+    index: std::sync::OnceLock<Option<std::sync::Arc<keyed::KeyIndex>>>,
 }
 impl Clone for BlockData {
     fn clone(&self) -> Self {

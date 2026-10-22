@@ -8,6 +8,7 @@ struct Writeback {
     callback: Value,
     native: bool,
     invalid: bool,
+    target_argument: usize,
 }
 impl Operations for Writeback {
     fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
@@ -61,7 +62,7 @@ impl Operations for Writeback {
             mut_arguments: vec![0],
             writebacks: vec![CallbackWriteback {
                 parameter: 0,
-                argument: 0,
+                argument: self.target_argument,
                 fields: if middle {
                     vec![]
                 } else if self.invalid {
@@ -122,7 +123,23 @@ fn a_callback_writeback_cannot_target_a_missing_field() {
         if matches!(error.error, Error::InvalidTir(ref message) if message == "callback writeback field")));
 }
 
+#[test]
+fn a_callback_writeback_rejects_an_out_of_range_argument_before_origin_lookup() {
+    assert!(
+        matches!(execute_writeback_target(false, 0, false, 1), Err(error)
+        if matches!(error.error, Error::InvalidTir(ref message) if message == "invalid callback mut writeback"))
+    );
+}
+
 fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Execution, ExecutionError> {
+    execute_writeback_target(native, ending, invalid, 0)
+}
+fn execute_writeback_target(
+    native: bool,
+    ending: u8,
+    invalid: bool,
+    target_argument: usize,
+) -> Result<Execution, ExecutionError> {
     let state_kind = || TypeKind::Named {
         definition: hirsel_syntax::DefId::intern(&path("State")),
         arguments: vec![].into(),
@@ -263,6 +280,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
     );
     let finalizer = finalizer.finish("State_drop", result);
     let runtime = RuntimeTypes {
+        checked: (target_argument != 0).then(hirsel_interp::checked::CheckedRuntime::default),
         trace_mode: Default::default(),
         nominals: vec![Nominal {
             definition: path("State"),
@@ -297,6 +315,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
         },
         native,
         invalid,
+        target_argument,
     };
     let mut too_deep = Builder::new();
     let result = too_deep.local(TypeKind::Tuple(vec![].into()), Storage::Temporary);

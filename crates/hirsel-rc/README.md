@@ -718,3 +718,10 @@ failure-cleanup loops adapted from the consuming cursor's drop body. The tail
 is retired before propagating a finalizer failure, leaving the prefix and
 capacity to the caller. `reserve` checks logical capacity and physical minimum
 stride against the runtime extent limit before requesting storage (SEM-1).
+
+`map.update_value_with` first probes read-only and returns false directly on a
+miss. Its hit block prepares a fresh path to the value and lends ordinary mut
+access. Unlike the unique edit bodies it carries no unique parameter proof:
+P4 shallow-detaches every shared crossed block before preparing the final slot,
+using existing tracked-arena charge-before-copy detaches. It never warms or
+compacts the map. Callback writebacks survive failure; no key is lent.

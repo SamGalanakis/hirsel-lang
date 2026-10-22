@@ -1,0 +1,15 @@
+// rule: OWN-3
+// twin: SEM/SEM-5-map-update-value-17-run.hir
+// expect: reject OWN-3 at line 7
+pub fn main() -> Result[(), String] {
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 1, 10)
+  let _ = std@1/map.update_value(
+    mut m,
+    1,
+    fn(mut v: u64) -> () uses {} {
+      v = map.len(m)
+    }
+  )
+  Ok(())
+}

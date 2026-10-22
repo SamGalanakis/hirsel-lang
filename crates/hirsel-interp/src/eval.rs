@@ -653,18 +653,35 @@ pub(crate) fn execute_frames(
                     consumed,
                     continuation,
                 } => {
+                    validate_callback_writebacks(&state, &mut_arguments, &writebacks)?;
                     let callback_inputs = state
                         .bounds
                         .as_ref()
                         .map(|bounds| {
                             arguments
                                 .iter()
-                                .map(|value| {
-                                    let shadow = crate::checked::native_shadow(
-                                        value,
-                                        &state.arguments,
-                                        bounds,
-                                    )
+                                .enumerate()
+                                .map(|(parameter, value)| {
+                                    // A lent slot has an exact origin. Structural
+                                    // equality can also match the lookup key or
+                                    // another argument with a shorter lifetime.
+                                    let shadow = if let Some(target) = writebacks
+                                        .iter()
+                                        .find(|target| target.parameter == parameter)
+                                    {
+                                        let mut shadow =
+                                            bounds.inputs[target.argument].shadow.clone();
+                                        for &field in &target.fields {
+                                            shadow = shadow.part(field);
+                                        }
+                                        shadow
+                                    } else {
+                                        crate::checked::native_shadow(
+                                            value,
+                                            &state.arguments,
+                                            bounds,
+                                        )
+                                    }
                                     .for_value(value);
                                     crate::checked::Argument {
                                         lifetime: shadow.total(),
@@ -701,7 +718,6 @@ pub(crate) fn execute_frames(
                             None
                         }
                     });
-                    validate_callback_writebacks(&state, &mut_arguments, &writebacks)?;
                     transfer_operation(&mut state, consumed)?;
                     update_operation(&mut state, updates)?;
                     state.owned = owned;

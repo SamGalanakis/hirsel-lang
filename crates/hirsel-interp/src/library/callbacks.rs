@@ -338,6 +338,40 @@ impl Library {
             None => result,
         })
     }
+    /// The unique operations keep their existing path. Ordinary value access
+    /// prepares the selected owner before the callback is published, under
+    /// the same charge wrapper and failure writeback protocol.
+    pub(super) fn map_update_value(
+        &mut self,
+        args: &[Value],
+    ) -> Result<OperationResult, collection::KeyedError> {
+        let mut result = self.map_edit(args, false)?;
+        let mut prepared = &mut result;
+        if let OperationResult::ArenaCharge { result, .. } = prepared {
+            prepared = result;
+        }
+        if let OperationResult::Call {
+            updates,
+            writebacks,
+            ..
+        } = prepared
+        {
+            let ordinal = writebacks[0].fields[0];
+            let Value::Map { entries, .. } = &mut updates[0].1 else {
+                return Err(invalid("map update owner").into());
+            };
+            entries.prepare_map_value(ordinal)?;
+            // MEM-6: a collection lent through an entry is shared even when
+            // the outer map is unshared. The callback snapshot shares this
+            // arena marker with the selected value.
+            entries
+                .map_value_mut(ordinal)?
+                .as_ref()
+                .unwrap()
+                .share_arena_storage();
+        }
+        Ok(result)
+    }
     pub(super) fn sorted_insert(&mut self, args: &[Value]) -> Result<OperationResult, Error> {
         let [by, map, key, value] = args else {
             return Err(invalid("sorted_map.insert arguments"));

@@ -2775,6 +2775,7 @@ conformance/MEM/MEM-6-map-insert-charges-entry-run.hir
 conformance/MEM/MEM-6-map-nested-insert-copies-run.hir
 conformance/MEM/MEM-6-map-shared-copy-charge-run.hir
 conformance/MEM/MEM-6-map-tombstones-copy-charge-run.hir
+conformance/MEM/MEM-6-map-update-value-17-run.hir
 conformance/MEM/MEM-6-map-upsert-charge-run.hir
 conformance/MEM/MEM-6-map-value-copy-charge-run.hir
 conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
@@ -4161,6 +4162,9 @@ conformance/OWN/OWN-3-map-after-borrow-loop-ok.hir
 conformance/OWN/OWN-3-map-borrow-sibling-field-ok.hir
 conformance/OWN/OWN-3-map-borrow-structural-mutation-bad.hir
 conformance/OWN/OWN-3-map-borrow-structural-mutation-used-bad.hir
+conformance/OWN/OWN-3-map-update-value-17-borrow.hir
+conformance/OWN/OWN-3-map-update-value-17-capture.hir
+conformance/OWN/OWN-3-map-update-value-17-failure.hir
 conformance/OWN/OWN-3-mut-alternatives-bad.hir
 conformance/OWN/OWN-3-mut-alternatives-ok.hir
 conformance/OWN/OWN-3-mut-block-bad.hir
@@ -4204,6 +4208,9 @@ conformance/OWN/OWN-4-heap-capacity-map-append-run.hir
 conformance/OWN/OWN-4-heap-capacity-map-replace-run.hir
 conformance/OWN/OWN-4-heap-capacity-set-append-run.hir
 conformance/OWN/OWN-4-heap-capacity-sorted-closure-run.hir
+conformance/OWN/OWN-4-map-update-value-17-copyable.hir
+conformance/OWN/OWN-4-map-update-value-17-generic.hir
+conformance/OWN/OWN-4-map-update-value-17-resource.hir
 conformance/OWN/OWN-4-nested-markers-run.hir
 conformance/OWN/OWN-4-plain-implicit-copy.hir
 conformance/OWN/OWN-4-redundant-copy-repair-ok.hir
@@ -6990,6 +6997,7 @@ conformance/SEM/SEM-5-map-sequence-key-hash-run.hir
 conformance/SEM/SEM-5-map-string-sliced-updates-run.hir
 conformance/SEM/SEM-5-map-tombstones-consume-shared-run.hir
 conformance/SEM/SEM-5-map-tombstones-nested-borrow-run.hir
+conformance/SEM/SEM-5-map-update-value-17-run.hir
 conformance/SEM/SEM-5-map-upsert-update-run.hir
 conformance/SEM/SEM-5-mut-map-value-ok.hir
 conformance/SEM/SEM-5-pqcombined-example-run.hir

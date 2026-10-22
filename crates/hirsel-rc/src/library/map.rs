@@ -36,8 +36,9 @@ body!(CONTAINS, "set.contains", contains);
 body!(INSERT_MAP, "map.insert", insert_map);
 body!(UPSERT_MAP, "map.upsert_with", upsert_with);
 body!(UPDATE_MAP, "map.update_with", update_with);
+body!(UPDATE_VALUE_MAP, "map.update_value_with", update_value_with);
 mod edit;
-use edit::{update as update_with, upsert as upsert_with};
+use edit::{update as update_with, update_value as update_value_with, upsert as upsert_with};
 body!(INSERT_SET, "set.insert", insert_set);
 pub static MAP_PROBE: LibraryBody = LibraryBody {
     path: || native_path("map_probe"),

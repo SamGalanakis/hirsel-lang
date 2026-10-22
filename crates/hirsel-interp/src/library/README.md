@@ -241,3 +241,9 @@ capability operations; neither is a cancellation point.
 `watcher.next` records the next queued event, relative to its Dir, or parks its task
 until `test.dir_event` delivers one into its `test.dir` tree or the task is canceled. A
 simulated tree derives no events from the program's own effects.
+
+`map.update_value_with` uses the same callback failure writeback mechanism with
+ordinary mutable rows and copyable V. After a successful read-only lookup it
+prepares detached entry storage without invalidating the hash index or ordinals.
+The arena-charge wrapper runs before publishing that owner or entering the
+callback. A miss bypasses preparation and charge entirely.

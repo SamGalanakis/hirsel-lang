@@ -49,3 +49,4 @@ mod flat_native_copy_oracle_17;
 mod map_loop_validity_17;
 mod scoped_proof_context_17;
 mod isolate_bytes_leak_17;
+mod map_update_value_17;

@@ -24,6 +24,7 @@ impl KeyKind {
         pair[0].as_ref().ok_or_else(|| invalid("dead map key"))
     }
 }
+#[derive(Clone)]
 pub(super) struct KeyIndex {
     kind: KeyKind,
     buckets: HashMap<u64, Vec<usize>, hirsel_intern::IdHasher>,
@@ -69,7 +70,7 @@ impl Block {
         let index = self
             .0
             .index
-            .get_or_init(|| KeyIndex::build(self, kind).map(Box::new));
+            .get_or_init(|| KeyIndex::build(self, kind).map(std::sync::Arc::new));
         let Some(index) = index.as_ref().filter(|index| index.kind == kind) else {
             for (ordinal, element) in self.iter().enumerate() {
                 count(Counter::InterpKeyedRows);
@@ -116,9 +117,20 @@ impl Block {
         data.elements.push(Some(entry));
         if let Some(Some(index)) = data.index.get_mut() {
             if index.kind == kind {
+                let index = std::sync::Arc::make_mut(index);
                 index.buckets.entry(hash).or_default().push(ordinal);
             }
         }
+    }
+    /// Shallow detach without rebuilding hashes or changing physical ordinals.
+    /// Operation snapshots also hold this block, so preserve its cached index
+    /// explicitly instead of the general mutation path's invalidation.
+    pub(crate) fn prepare_map_value(&mut self, ordinal: usize) -> Result<(), Error> {
+        let index = self.0.index.clone();
+        let data = self.make_mut();
+        data.index = index;
+        self.map_value_mut(ordinal)?;
+        Ok(())
     }
     /// Map values may change while their immutable keys keep the index valid.
     pub(crate) fn map_value_mut(&mut self, ordinal: usize) -> Result<&mut Option<Value>, Error> {

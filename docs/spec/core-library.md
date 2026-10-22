@@ -305,6 +305,7 @@ fn map.empty[K: key, V]() -> unique Map[K, V]
 @preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], take k: K, take v: V) -> ()
 @preserves_unique(m) @unretained(k, initial, update) fn map.upsert_with[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, update: fn(mut value: unique V) -> () uses {}) -> ()
 @preserves_unique(m) @unretained(k, update) fn map.update_with[K: key, V](mut m: unique Map[K, V], k: K, update: fn(mut value: unique V) -> () uses {}) -> bool
+fn map.update_value_with[K: key, V: copyable](mut m: Map[K, V], k: K, change: fn(mut value: V) -> () uses {}) -> bool uses {}
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 N fn map.contains[K: key, V](m: Map[K, V], k: K) -> bool
 N fn map.len[K: key, V](m: Map[K, V]) -> u64
@@ -1667,6 +1668,20 @@ capacity) time without copying payloads.
 ## SortedMap access
 
 Length is O(1). Get requires copyable V and returns an owned copy `in m`.
+`map.update_value_with` probes before any mutation. A miss returns false without
+calling the callback, detaching storage or charging an arena. A hit shallow-detaches
+every shared backing on the path to the selected value, preserving keys, cached
+hashes, tombstones, length and insertion order, then calls `change` once with
+ordinary exclusive `mut V` access. Arena copies are charged before publication;
+the value slot is resolved in the detached owner. Writes inside V use ordinary
+COW. A saved map copy and aliased values remain unchanged. Successful unit return
+yields true; failure keeps prior writes and unwinds with valid owners, without
+rollback. V must be copyable. This operation promises neither uniqueness,
+no allocation nor the `@unretained` ledger contract. Shared unqualified payloads
+copy receipts only; nested qualified receiving contracts still require their
+ordinary semantic copies. Lookup keys remain read-only, and OWN-3 still forbids
+a live borrowed view of m across the call. `map.update_with` is unchanged.
+
 Removal requires a unique map and returns a unique option, transferring V with
 its deep uniqueness and dropping the stored K exactly once. Missing keys return `None`; remaining entries
 stay in comparator order. Lookup and removal use the same fixed binary-search probes

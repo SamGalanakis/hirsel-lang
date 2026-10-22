@@ -49,3 +49,14 @@ pub fn update[K: key, V](
 ) -> bool uses {} {
   core@1/map.update_with(mut m, k, change)
 }
+
+// Change only a present value, with ordinary copy-on-write access. Keys and
+// insertion order stay unchanged. A miss calls nothing and copies nothing.
+// A saved copy of m keeps its contents; callback failure keeps prior writes.
+pub fn update_value[K: key, V: copyable](
+  mut m: Map[K, V],
+  k: K,
+  change: fn(mut value: V) -> () uses {}
+) -> bool uses {} {
+  core@1/map.update_value_with(mut m, k, change)
+}

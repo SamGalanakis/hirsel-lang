@@ -9,6 +9,47 @@ pub(super) fn upsert(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 pub(super) fn update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     edit(cx, false)
 }
+/// Unlike the unique operations, this callable has no uniqueness proof for
+/// parameter 0. P4 therefore detaches every shared block crossed by the value
+/// argument's freshly prepared address, outermost first, before lending it.
+/// Tracked arena detaches charge before copying; the miss has no write path.
+pub(super) fn update_value(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let mut b = Body::new(cx)?;
+    let probe = probe_call(&mut b)?;
+    let container = b.parameters[0];
+    let entries = field(&mut b, container.address, 0)?;
+    let count = len(&mut b, entries)?;
+    let hit = b.compare(BinaryOp::Lt, probe.ordinal, count)?;
+    let before = b.reaching(container.slot)?;
+    let found_v = b.version(container.slot);
+    let missing_v = b.version(container.slot);
+    let found = b.block(BlockKind::Body, &[found_v]);
+    let missing = b.block(BlockKind::Body, &[missing_v]);
+    let yes = b.edge(found, &[before]);
+    let no = b.edge(missing, &[before]);
+    b.terminate(Terminator::Branch {
+        condition: hit,
+        yes,
+        no,
+    });
+    let held = b.held_state();
+    b.at(found);
+    b.set_reaching(container.slot, found_v);
+    // Prepare the entire path after the hit. P4 inserts shallow detaches
+    // before these projections and resolves them in the installed owner.
+    // Append maintenance could compact and invalidate the saved ordinal.
+    let entries = field(&mut b, container.address, 0)?;
+    let entry = b.slot_place(entries, probe.ordinal)?;
+    let pair = live_pair(&mut b, entry)?;
+    let value = field(&mut b, pair, 1)?;
+    callback(&mut b, 2, Some(value))?;
+    b.ret(Some(hit));
+    b.at(missing);
+    b.set_reaching(container.slot, missing_v);
+    b.restore_held(&held);
+    b.ret(Some(hit));
+    Ok(b.finish())
+}
 fn callback(
     b: &mut Body<'_, '_>,
     parameter: usize,

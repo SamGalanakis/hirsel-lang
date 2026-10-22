@@ -102,6 +102,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &map::INSERT_MAP,
     &map::UPSERT_MAP,
     &map::UPDATE_MAP,
+    &map::UPDATE_VALUE_MAP,
     &map::INSERT_SET,
     &map::MAP_PROBE,
     &map::SET_PROBE,

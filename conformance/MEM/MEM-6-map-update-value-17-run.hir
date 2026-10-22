@@ -1,0 +1,127 @@
+// rule: MEM-6
+// expect: run
+fn charged(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m: Map[u64, u64] in a = map.empty()
+      map.insert(mut m, 1, 10)
+      let saved = copy m
+      failure.check(
+        !std@1/map.update_value(
+          mut m,
+          2,
+          fn(mut v: u64) -> () uses {} {
+            failure.check(false, Bounds())
+          }
+        ),
+        Bounds()
+      )
+      let _ = std@1/map.update_value(
+        mut m,
+        1,
+        fn(mut v: u64) -> () uses {} {
+          v += 1
+        }
+      )
+      failure.check(
+        map.get(saved, 1) == Some(10u64) && map.get(m, 1) == Some(11u64),
+        Bounds()
+      )
+      11
+    }
+  )
+}
+
+// Copy_to: 16 entry + 8 child; outer copy: 16; nested copy + push: 8 + 8.
+fn nested(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, List[u64]] = map.empty()
+  map.insert(mut h, 1, [10])
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, h)
+      let saved = copy m
+      let _ = std@1/map.update_value(
+        mut m,
+        1,
+        fn(mut v: List[u64]) -> () uses {} {
+          list.push(mut v, 20)
+        }
+      )
+      failure.check(
+        map.get(saved, 1) == Some([10u64]) && map.get(m, 1) == Some([10u64, 20u64]),
+        Bounds()
+      )
+      2
+    }
+  )
+}
+
+fn nested_unshared(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, List[u64]] = map.empty()
+  map.insert(mut h, 1, [10])
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, h)
+      let _ = std@1/map.update_value(
+        mut m,
+        1,
+        fn(mut v: List[u64]) -> () uses {} {
+          list.push(mut v, 20)
+        }
+      )
+      2
+    }
+  )
+}
+
+pub fn main() -> Result[(), String] {
+  failure.check(
+    charged(32) == Ok(11u64) && charged(31) == Error(OutOfSpace()),
+    Bounds()
+  )
+  let missing = arena.bounded(
+    16u64,
+    fn(a: Arena) -> u64 {
+      let mut m: Map[u64, u64] in a = map.empty()
+      map.insert(mut m, 1, 10)
+      let saved = copy m
+      let _ = std@1/map.update_value(
+        mut m,
+        2,
+        fn(mut v: u64) -> () uses {} {
+          failure.check(false, Bounds())
+        }
+      )
+      failure.check(map.get(saved, 1) == Some(10u64), Bounds())
+      10
+    }
+  )
+  failure.check(missing == Ok(10u64), Bounds())
+  let before_callback = arena.bounded(
+    31u64,
+    fn(a: Arena) -> u64 {
+      let mut m: Map[u64, u64] in a = map.empty()
+      map.insert(mut m, 1, 10)
+      let saved = copy m
+      let _ = std@1/map.update_value(
+        mut m,
+        1,
+        fn(mut v: u64) -> () uses {} {
+          failure.check(false, Bounds())
+        }
+      )
+      failure.check(map.get(saved, 1) == Some(10u64), Bounds())
+      0
+    }
+  )
+  failure.check(before_callback == Error(OutOfSpace()), Bounds())
+  failure.check(nested(56) == Ok(2u64) && nested(55) == Error(OutOfSpace()), Bounds())
+  failure.check(
+    nested_unshared(40) == Ok(2u64) && nested_unshared(39) == Error(OutOfSpace()),
+    Bounds()
+  )
+  Ok(())
+}

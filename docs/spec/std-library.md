@@ -146,6 +146,7 @@ fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 @preserves_unique(m) fn map.upsert[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, change: fn(mut value: unique V) -> () uses {}) -> () uses {}
 @preserves_unique(m) fn map.update[K: key, V](mut m: unique Map[K, V], k: K, change: fn(mut value: unique V) -> () uses {}) -> bool uses {}
+fn map.update_value[K: key, V: copyable](mut m: Map[K, V], k: K, change: fn(mut value: V) -> () uses {}) -> bool uses {}
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
@@ -1500,6 +1501,18 @@ with mutable access to the stored value, copying neither key nor value.
 `map.update` only calls `change` for a present key and returns whether it found
 one. Neither function changes an existing entry's position. Callback mutations
 remain visible if the callback fails, under the ordinary mutable-call contract.
+
+`map.update_value` accepts an ordinary `mut Map[K, V]` and a callback with
+ordinary `mut V`, for `V: copyable`. It returns false on a miss without invoking
+the callback, detaching storage or charging an arena. On a hit it preserves keys
+and insertion order, detaches shared storage only along the selected value's
+path, charges arena copies before publishing them, and calls `change` once.
+A saved `copy m` retains its contents. Callback writes use ordinary COW; failure
+keeps writes already made with no rollback. The operation makes no uniqueness,
+no-allocation or nonretention promise. Nested qualified payloads retain their
+normal copy contracts. A shared owned key is allowed; a borrowed view of m live
+across the call is still an OWN-3 conflict. This is the source wrapper for
+`core@1/map.update_value_with`; `map.update` retains its unique contract.
 
 `std@1/list` provides `reverse`, `rotate` (left rotation by `amount`), `sort` (in place,
 unstable pattern-defeating quicksort with a heapsort fallback, `O(n log n)`, by a
