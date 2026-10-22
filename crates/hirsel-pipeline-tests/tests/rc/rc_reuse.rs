@@ -11,7 +11,6 @@ use hirsel_lir::layout_types::LayoutTable;
 use hirsel_lir::stage::{Reuse, Stage};
 use hirsel_lir::validate::Inputs;
 use hirsel_rc::insert::Proofs;
-use hirsel_rc::instance::InstanceId;
 use hirsel_rc::placement::Options as PlaceOptions;
 use hirsel_rc::reuse::Options;
 use support::*;
@@ -44,6 +43,7 @@ const MODES: [Mode; 4] = [
 struct Built {
     units: Vec<LirUnit<Reuse>>,
     table: LayoutTable,
+    specializations: usize,
 }
 
 #[test]
@@ -85,12 +85,21 @@ fn check<S: Stage>(
 
 /// Lower, place, insert, elide and reuse, validating every stage.
 fn build(source: &str, mode: Mode) -> Built {
-    let (program, lowered) = lower_valid(source);
+    build_with_scoped(source, mode, true)
+}
+
+fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
+    let (program, lowered) = if scoped {
+        lower_valid(source)
+    } else {
+        crate::scoped_consumer_9::lower_disabled(source)
+    };
+    let specializations = lowered.units.len() - lowered.instances.len();
     let table = lowered.table.clone();
     let manifest = manifest(&program);
     let mut units = Vec::new();
-    for (i, u) in lowered.units.into_iter().enumerate() {
-        let id = InstanceId(i as u32);
+    assert_eq!(lowered.units.len(), lowered.unit_origins.len());
+    for (u, id) in lowered.units.into_iter().zip(lowered.unit_origins) {
         let options = PlaceOptions::for_instance(mode.regions, &lowered.instances, id);
         let placed = hirsel_rc::placement::place(u, &table, &options).expect("placement");
         let proofs = Proofs::for_instance(&lowered.instances, id);
@@ -108,7 +117,11 @@ fn build(source: &str, mode: Mode) -> Built {
         units.push(reused);
     }
     check(&program, &manifest, &table, &units, source);
-    Built { units, table }
+    Built {
+        units,
+        table,
+        specializations,
+    }
 }
 
 fn heap_program(built: &Built) -> hirsel_heapcheck::Program<Reuse> {
@@ -139,9 +152,13 @@ struct Outcome {
 /// injected in turn as well; every audit is clean and reuse-on and
 /// reuse-off observe the same thing with the same terminal exemptions.
 fn run_all(source: &str) -> Vec<(Mode, Outcome)> {
+    run_all_with_scoped(source, true)
+}
+
+fn run_all_with_scoped(source: &str, scoped: bool) -> Vec<(Mode, Outcome)> {
     let mut out: Vec<(Mode, Outcome)> = Vec::new();
     for mode in MODES {
-        let built = build(source, mode);
+        let built = build_with_scoped(source, mode, scoped);
         let campaign = hirsel_heapcheck::fault_campaign(
             &heap_program(&built),
             &path("main"),
@@ -237,14 +254,36 @@ fn a_dropped_closure_donates_its_environment() {
          let r = {{ let c = fn() -> u64 {{ k + 1 }}; c() }}\n  \
          let v: box P = box P(a: r, b: 2)\n  3\n}}"
     );
-    // With regions on, these blocks are region-placed and never donate.
-    let outcomes = run_all(&source);
+    // Keep the heap-lowering control: it has an environment to donate.
+    // The optimized twin adds generated units and eliminates that environment.
+    let outcomes = run_all_with_scoped(&source, false);
+    let optimized = run_all(&source);
+    for (mode, outcome) in &optimized {
+        assert!(outcome.built.specializations > 0);
+        assert_eq!(outcome.counters.reuses, 0);
+        assert_eq!(returned_u64(&outcome.observation), 3);
+        assert!(
+            outcome
+                .observation
+                .equivalent(&on(&outcomes, mode.regions, mode.reuse).observation)
+        );
+        assert_eq!(
+            count(&outcome.built.units, |i| matches!(i, Inst::Reset { .. })),
+            0
+        );
+    }
     {
         let regions = false;
         let (on, off) = (on(&outcomes, regions, true), on(&outcomes, regions, false));
         assert_eq!(returned_u64(&on.observation), 3);
         assert_eq!(on.counters.reuses, 1, "regions {regions}");
+        assert_eq!(off.counters.reuses, 0, "reuse-disabled negative control");
         assert_eq!(on.counters.allocations + 1, off.counters.allocations);
+        assert_eq!(
+            super_off(&optimized, regions).counters.allocations + 1,
+            off.counters.allocations,
+            "eliminating the environment removes one allocation without reuse"
+        );
         let callable_resets = on
             .built
             .units
