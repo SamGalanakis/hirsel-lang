@@ -34,8 +34,9 @@ fn feed(mut s: State, a: f64, b: f64) {
   for n in 2u64..13u64 {
     let mut activation: f64 = 0.0
     for k in s.neurons[n].incoming {
-      let syn = s.synapses[k]
-      activation += syn.weight * s.neurons[syn.source].output
+      let weight = s.synapses[k].weight
+      let source = s.synapses[k].source
+      activation += weight * s.neurons[source].output
     }
     activation -= s.neurons[n].threshold
     s.neurons[n].output = 1.0 / (1.0 + f64.exp(-activation))
@@ -43,16 +44,20 @@ fn feed(mut s: State, a: f64, b: f64) {
 }
 
 fn update(mut s: State, n: u64) {
+  // These neuron scalars stay fixed throughout this incoming-synapse pass.
+  let error = s.neurons[n].error
   for k in s.neurons[n].incoming {
-    let mut syn = s.synapses[k]
-    let temp = syn.weight
-    syn.weight += 0.3 * 1.0 * s.neurons[n].error * s.neurons[syn.source].output + 0.3 * (syn.weight - syn.prev_weight)
-    syn.prev_weight = temp
-    s.synapses[k] = syn
+    let weight = s.synapses[k].weight
+    let prev_weight = s.synapses[k].prev_weight
+    let source = s.synapses[k].source
+    let source_output = s.neurons[source].output
+    s.synapses[k].weight = weight + (0.3 * 1.0 * error * source_output + 0.3 * (weight - prev_weight))
+    s.synapses[k].prev_weight = weight
   }
-  let temp = s.neurons[n].threshold
-  s.neurons[n].threshold += 0.3 * 1.0 * s.neurons[n].error * -1.0 + 0.3 * (s.neurons[n].threshold - s.neurons[n].prev_threshold)
-  s.neurons[n].prev_threshold = temp
+  let threshold = s.neurons[n].threshold
+  let prev_threshold = s.neurons[n].prev_threshold
+  s.neurons[n].threshold = threshold + (0.3 * 1.0 * error * -1.0 + 0.3 * (threshold - prev_threshold))
+  s.neurons[n].prev_threshold = threshold
 }
 
 fn train(mut s: State, a: f64, b: f64, target: f64) {
@@ -63,8 +68,9 @@ fn train(mut s: State, a: f64, b: f64, target: f64) {
   for n in 2u64..12u64 {
     let mut sum: f64 = 0.0
     for k in s.neurons[n].outgoing {
-      let syn = s.synapses[k]
-      sum += syn.prev_weight * s.neurons[syn.dest].error
+      let prev_weight = s.synapses[k].prev_weight
+      let dest = s.synapses[k].dest
+      sum += prev_weight * s.neurons[dest].error
     }
     let value = s.neurons[n].output
     s.neurons[n].error = sum * (value * (1.0 - value))

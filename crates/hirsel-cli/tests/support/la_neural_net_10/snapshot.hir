@@ -1,0 +1,25 @@
+// Little-endian IEEE words avoid spending the interpreter budget formatting.
+fn bits(mut data: List[u8], value: f64) {
+  let word: u64 = core@1/f64.bits(value)
+  for i in 0u64..8u64 {
+    list.push(mut data, int.narrow((word >> (i * 8u64)) & 255u64))
+  }
+}
+
+fn snapshot(out: Stdout, s: State) -> Result[(), String] {
+  let mut data: List[u8] = []
+  for n in 0u64..13u64 {
+    bits(mut data, s.neurons[n].threshold)
+    bits(mut data, s.neurons[n].prev_threshold)
+    bits(mut data, s.neurons[n].output)
+    bits(mut data, s.neurons[n].error)
+  }
+  for k in 0u64..30u64 {
+    bits(mut data, s.synapses[k].weight)
+    bits(mut data, s.synapses[k].prev_weight)
+  }
+  match out.write(out, bytes.from_list(take data)) {
+    Ok(_) => Ok(()),
+    Error(_) => Error("stdout"),
+  }
+}
