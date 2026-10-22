@@ -137,21 +137,37 @@ impl Checker<'_> {
         required: Span,
     ) -> Explanation {
         let cause = self.sendability_cause(result);
-        let mut explanation = Explanation::default()
-            .provided(Fact::new(
-                Cause::NotSendable,
-                provided,
-                &cause.as_deref().into_iter().collect::<Vec<_>>(),
-            ))
-            .required(Fact::new(Requirement::Sendable, required, &[]));
-        let ExprKind::Call { arguments, .. } = &self.tree.expressions[call.0 as usize].kind else {
-            return explanation;
-        };
-        let Some(argument) = arguments.last() else {
+        // Both producers inspect the complete result of this actual callback.
+        // Use the call's declaration-ordinal mapping, including labelled calls,
+        // and a definition-local source identity rather than a type spelling.
+        let callback = self.call_row(call).and_then(|row| {
+            row.arguments
+                .iter()
+                .filter_map(|a| a.parameter.as_ref().map(|(i, _)| (*i, a.expression)))
+                .max_by_key(|(i, _)| *i)
+                .map(|(_, expression)| expression)
+        });
+        let site = self.span(call);
+        let mut explanation = Explanation {
+            root: callback.map(|_| {
+                hirsel_modes::explain::root_key(
+                    self.signature.definition.path(),
+                    ("callback-result", site.start, site.end),
+                )
+            }),
+            ..Explanation::default()
+        }
+        .provided(Fact::new(
+            Cause::NotSendable,
+            callback.map_or(provided, |e| self.span(e)),
+            &cause.as_deref().into_iter().collect::<Vec<_>>(),
+        ))
+        .required(Fact::new(Requirement::Sendable, required, &[]));
+        let Some(callback) = callback else {
             return explanation;
         };
         let ExprKind::Closure { signature, body } =
-            &self.tree.expressions[argument.value.0 as usize].kind
+            &self.tree.expressions[callback.0 as usize].kind
         else {
             return explanation;
         };
@@ -161,13 +177,10 @@ impl Checker<'_> {
             return explanation;
         };
         let site = self.tree.types[annotation.0 as usize].origin.span;
-        let Some(function) = self
-            .ty(argument.value)
-            .and_then(|t| match &self.t.get(t)?.kind {
-                TypeKind::Function(f) => Some(f.clone()),
-                _ => None,
-            })
-        else {
+        let Some(function) = self.ty(callback).and_then(|t| match &self.t.get(t)?.kind {
+            TypeKind::Function(f) => Some(f.clone()),
+            _ => None,
+        }) else {
             return explanation;
         };
         let declared = function.result;

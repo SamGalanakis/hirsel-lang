@@ -827,6 +827,8 @@ pub struct Explanation {
     pub also_required: Vec<Fact<Requirement>>,
     pub repairs: Vec<Repair>,
     pub cautions: Vec<Caution>,
+    /// Definition-local identity of the provided proof, shared across its
+    /// requirements. Producers must use the same provided source site too.
     pub root: Option<u64>,
     /// A mechanical edit whose source expression is known by the producer.
     pub fix: Option<hirsel_diag::Fix>,
@@ -1481,6 +1483,23 @@ mod tests {
         assert_ne!(key(7, Cause::Moved, 1), key(7, Cause::Moved, 2));
         assert_ne!(key(7, Cause::Moved, 1), key(8, Cause::Moved, 1));
         assert_ne!(key(7, Cause::Moved, 1), key(7, Cause::Uninitialised, 1));
+    }
+    #[test]
+    fn one_provided_callback_result_keeps_its_key_across_requirements() {
+        let key = |required, requirement_site, field: &str| {
+            let mut d = Diagnostic::error(const { RuleId::of("MODE-4") }, span(9), "base");
+            Explanation {
+                root: Some(7),
+                ..Explanation::default()
+            }
+            .provided(Fact::new(Cause::NotSendable, span(1), &[field]))
+            .required(Fact::new(required, span(requirement_site), &[]))
+            .render(&mut d);
+            d.root_cause.unwrap()
+        };
+        let generic = key(Requirement::Sendable, 2, "Payload.left");
+        assert_eq!(generic, key(Requirement::SendableType, 3, "Payload.left"));
+        assert_ne!(generic, key(Requirement::Sendable, 2, "Payload.right"));
     }
     #[test]
     fn the_repair_table_holds_only_verified_rows() {

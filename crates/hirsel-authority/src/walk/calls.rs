@@ -2156,6 +2156,12 @@ impl Checker<'_> {
                         self.span(e)
                     };
                     actual = self.complete_value_type(actual);
+                    // Only the last callback's whole result is the same proof
+                    // as static_intrinsic's callback-result bound. A parameter
+                    // or a nested field is an independent generic occurrence.
+                    let callback_result = args.last().is_some_and(|a| a.value == arg.value)
+                        && matches!(&self.t.get(actual).unwrap().kind,
+                            TypeKind::Function(f) if path.as_slice() == [f.parameters.len()]);
                     let mut valid = true;
                     for index in &path {
                         if let Some(child) =
@@ -2193,14 +2199,15 @@ impl Checker<'_> {
                         self.sendable(actual)
                     };
                     if bounds.contains(&Bound::Sendable) && !sendable {
-                        let explanation = if matches!(
-                            intrinsic,
-                            Some(
-                                Intrinsic::TaskAsync
-                                    | Intrinsic::TaskIsolate
-                                    | Intrinsic::MutexWith
-                            )
-                        ) {
+                        let explanation = if callback_result
+                            && matches!(
+                                intrinsic,
+                                Some(
+                                    Intrinsic::TaskAsync
+                                        | Intrinsic::TaskIsolate
+                                        | Intrinsic::MutexWith
+                                )
+                            ) {
                             self.callback_sendability_explanation(
                                 e,
                                 actual,
