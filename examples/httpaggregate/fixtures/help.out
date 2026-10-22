@@ -1,0 +1,6 @@
+Usage: httpaggregate URL...
+
+Fetch 1–16 JSON item collections and sum values by name.
+
+Options:
+  -h, --help  Print help

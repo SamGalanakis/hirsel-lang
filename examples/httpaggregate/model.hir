@@ -1,0 +1,168 @@
+/// Strict, bounded wire conversion; no effects or generated schema hooks.
+pub type Item {
+  name: String,
+  value: u32,
+}
+
+pub type InputError = BodyLimit | InvalidJson | InvalidShape | NameLimit | ItemLimit | Overflow
+
+pub fn decode(data: Bytes) -> Result[unique List[Item], InputError] uses {} {
+  if bytes.len(data) > 65536 {
+    return Error(BodyLimit())
+  }
+  let Ok(text) = string.from_bytes(unique data) else {
+    return Error(InvalidJson())
+  }
+  let Ok(wire) = json.parse(take text) else {
+    return Error(InvalidJson())
+  }
+  let Object(fields) = wire else {
+    return Error(InvalidShape())
+  }
+  if map.len(fields) != 1 {
+    return Error(InvalidShape())
+  }
+  let Some(Array(items)) = map.get(fields, "items") else {
+    return Error(InvalidShape())
+  }
+  if list.len(items) > 1024 {
+    return Error(ItemLimit())
+  }
+  let mut decoded: List[Item] = []
+  for item in items {
+    let Object(members) = item else {
+      return Error(InvalidShape())
+    }
+    if map.len(members) != 2 {
+      return Error(InvalidShape())
+    }
+    let Some(Text(name)) = map.get(members, "name") else {
+      return Error(InvalidShape())
+    }
+    let Some(Number(raw)) = map.get(members, "value") else {
+      return Error(InvalidShape())
+    }
+    if bytes.len(string.as_bytes(name)) == 0 || bytes.len(string.as_bytes(name)) > 256 {
+      return Error(NameLimit())
+    }
+    let Ok(value) = u32.parse(raw) else {
+      return Error(InvalidShape())
+    }
+    list.push(mut decoded, Item(name: unique name, value: value))
+  }
+  Ok(take decoded)
+}
+
+/// Guard before addition; also testable independently of reachable wire totals.
+pub fn checked_sum(a: u64, b: u64) -> Result[u64, InputError] uses {} {
+  if b > 18446744073709551615u64 - a {
+    return Error(Overflow())
+  }
+  Ok(a + b)
+}
+
+pub fn aggregate(items: List[Item], mut totals: Map[String, u64]) -> Result[
+  (),
+  InputError
+] uses {} {
+  for item in items {
+    let old = match map.get(totals, item.name) {
+      Some(value) => value,
+      None() => 0u64,
+    }
+    let value: u64 = int.widen(item.value)
+    let total = checked_sum(old, value)?
+    map.insert(mut totals, unique item.name, total)
+  }
+  Ok(())
+}
+
+pub fn render(totals: Map[String, u64]) -> unique Bytes uses {} {
+  let mut names: List[String] = []
+  for (name, _) in totals {
+    list.push(mut names, unique name)
+  }
+  list.sort(mut names, string.compare)
+  let mut out: List[u8] = []
+  list.push(mut out, b'[')
+  let mut first = true
+  for name in names {
+    if !first {
+      list.push(mut out, b',')
+    }
+    first = false
+    text.append(mut out, "{\"name\":")
+    json.write_text_into(name, mut out)
+    text.append(mut out, ",\"total\":")
+    if let Some(total) = map.get(totals, name) {
+      u64.format_into(total, mut out)
+    }
+    list.push(mut out, b'}')
+  }
+  text.append(mut out, "]\n")
+  bytes.from_list(take out)
+}
+
+@test
+fn aggregate_and_render(t: Test) -> Result[(), InputError] {
+  let mut totals: Map[String, u64] = map.empty()
+  aggregate(
+    decode(
+      b"{\"items\":[{\"name\":\"z\",\"value\":4294967295},{\"name\":\"a\",\"value\":0}]}"
+    )?,
+    mut totals
+  )?
+  aggregate(
+    decode(
+      b"{\"items\":[{\"name\":\"z\",\"value\":1},{\"name\":\"\\u96ea\",\"value\":2}]}"
+    )?,
+    mut totals
+  )?
+  test.check(
+    t,
+    render(totals) == b"[{\"name\":\"a\",\"total\":0},{\"name\":\"z\",\"total\":4294967296},{\"name\":\"\xe9\x9b\xaa\",\"total\":2}]\n"
+  )
+  let empty: Map[String, u64] = map.empty()
+  test.check(t, render(empty) == b"[]\n")
+  test.check(t, list.len(decode(b"{\"items\":[]}")?) == 0)
+  Ok(())
+}
+
+@test
+fn reject_strict_wire(t: Test) {
+  let invalid: List[Bytes] = [
+    b"{",
+    b"[]",
+    b"{}",
+    b"{\"items\":null}",
+    b"{\"items\":[],\"extra\":0}",
+    b"{\"items\":[],\"items\":[]}",
+    b"{\"items\":[{}]}",
+    b"{\"items\":[{\"name\":\"a\"}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":1,\"x\":0}]}",
+    b"{\"items\":[{\"name\":\"a\",\"na\\u006de\":\"a\",\"value\":1}]}",
+    b"{\"items\":[{\"name\":\"\",\"value\":1}]}",
+    b"{\"items\":[{\"name\":1,\"value\":1}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":\"1\"}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":true}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":-1}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":0.5}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":1e0}]}",
+    b"{\"items\":[{\"name\":\"a\",\"value\":4294967296}]}"
+  ]
+  for data in invalid {
+    test.check(t, results.is_error(decode(data)))
+  }
+}
+
+@test
+fn checked_totals(t: Test) -> Result[(), InputError] {
+  test.check(t, checked_sum(18446744073709551615, 0)? == 18446744073709551615)
+  test.check(t, checked_sum(18446744073709551614, 1)? == 18446744073709551615)
+  test.check(t, checked_sum(18446744073709551615, 1) == Error(Overflow()))
+  test.check(t, checked_sum(1, 18446744073709551615) == Error(Overflow()))
+  let mut totals: Map[String, u64] = map.empty()
+  map.insert(mut totals, "quote\"\n", 3)
+  test.check(t, render(totals) == b"[{\"name\":\"quote\\\"\\n\",\"total\":3}]\n")
+  Ok(())
+}

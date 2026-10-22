@@ -1,0 +1,65 @@
+// Request/body lifecycle: Go net/http/client.go:450–476, ebe2feefc400,
+// BSD-3-Clause, Go Authors. See GUIDE.md and fixtures/GO-LICENSE.txt.
+pub type AppError = Usage | Arguments(ArgError) | Grant(GrantError) | Http(
+  http.HttpError
+) | Status(u16) | Encoding | Input(model.InputError) | Output(OutputError)
+
+const HELP: String = "Usage: httpaggregate URL...\n\nFetch 1–16 JSON item collections and sum values by name.\n\nOptions:\n  -h, --help  Print help\n"
+
+fn fetch(n: Net, url: String) -> Result[unique List[model.Item], AppError] {
+  let mut config = http.default_config()
+  config.max_redirects = 0
+  config.max_body_bytes = 65536
+  config.status_as_error = false
+  config.decompress = false
+  config.connect_timeout = Some(time.Duration(nanoseconds: 5000000000))
+  config.read_timeout = Some(time.Duration(nanoseconds: 5000000000))
+  config.write_timeout = Some(time.Duration(nanoseconds: 5000000000))
+  let mut request = http.request(n, config, Get(), url, [])?
+  http.send_bodiless(mut request)?
+  let head = http.receive_head(mut request)?
+  if head.status != 200 {
+    return Error(Status(head.status))
+  }
+  if let Some(coding) = http.header(head.headers, "content-encoding") {
+    if string.ascii_lower(coding) != "identity" {
+      return Error(Encoding())
+    }
+  }
+  let data = http.read_all(mut request, 65536)?
+  Ok(model.decode(data) ? Input)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let flags: List[cli.Flag] = [
+    cli.Flag(name: "help", short: Some(b'h'), kind: Switch, help: "Print help")
+  ]
+  let Ok(parsed) = cli.parse(take argv, flags) else {
+    return Error(Usage())
+  }
+  if map.get(parsed.flags, "help") == Some(["true"]) && map.len(parsed.flags) == 1 && list.len(
+    parsed.positional
+  ) == 0 {
+    out.write(io.stdout(rt)?, string.as_bytes(HELP))?
+    return Ok(())
+  }
+  if map.len(parsed.flags) != 0 || list.len(parsed.positional) == 0 || list.len(
+    parsed.positional
+  ) > 16 {
+    return Error(Usage())
+  }
+  let n = io.net(rt)?
+  // Validate stdout authority before effects; write only after all inputs succeed.
+  let output = io.stdout(rt)?
+  let mut totals: Map[String, u64] = map.empty()
+  for url in parsed.positional {
+    model.aggregate(fetch(n, url)?, mut totals) ? Input
+  }
+  let rendered = model.render(totals)
+  out.write(output, rendered)?
+  Ok(())
+}
