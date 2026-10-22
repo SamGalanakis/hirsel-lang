@@ -388,7 +388,7 @@ impl Parser<'_> {
             let mut diagnostic = Diagnostic::error(
                 const { RuleId::of("LANG-13") },
                 self.span(),
-                "nested `mut` is unsupported; put `mut` on a local binding after `let`",
+                "nested `mut` is unsupported; put `mut` on a local binding after `let`, as in `let mut (stream, _) = ...` for a local destructuring binding",
             );
             diagnostic.notes.push(format!(
                 "help: bind the payload immutably as `{payload}`; for a plain value or borrowed data view, in the successful scope (after any guard) add `let mut {local} = {payload}` and update that binding's body uses to `{local}`"
