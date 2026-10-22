@@ -383,6 +383,12 @@ pub fn permute_parameters(
             p
         })
         .collect();
+    for path in &mut abi.nonretaining {
+        path.parameter = new_of[path.parameter as usize];
+    }
+    abi.nonretaining.sort();
+    abi.scoped_contract =
+        hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures);
     let order_bytes: Vec<u8> = order.iter().flat_map(|o| o.to_le_bytes()).collect();
     abi.key.callable = hirsel_syntax::ContentHash::of_parts(
         "hirsel-rc.permuted-parameters",

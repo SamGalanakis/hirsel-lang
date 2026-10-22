@@ -89,7 +89,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v8\" 8"));
+        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v9\" 9"));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -165,12 +165,12 @@ fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
         let other = text.replacen(
-            "(Header \"hirsel.tir.export.v8\" 8",
-            "(Header \"hirsel.tir.export.v8\" 9",
+            "(Header \"hirsel.tir.export.v9\" 9",
+            "(Header \"hirsel.tir.export.v9\" 10",
             1,
         );
         assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v8", "hirsel.tir.export.v0", 1);
+        let other = text.replacen("hirsel.tir.export.v9", "hirsel.tir.export.v0", 1);
         assert_eq!(import(&other).unwrap_err().at, "header.format");
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
@@ -870,5 +870,32 @@ fn a_forged_or_unsorted_annotation_is_refused() {
         assert!(error.message.contains("dotted analysis name"), "{error}");
         let error = refused(&|a| a[0].path = named("nothing"));
         assert!(error.message.contains("no exported signature"), "{error}");
+    });
+}
+
+#[test]
+fn scoped_contract_and_classification_round_trip_and_cannot_be_stripped() {
+    with_compiler_stack(|| {
+        let source = "fn invoke(f:fn()->u64 uses {})->u64 uses {f} {f()}\npub fn main()->Result[(),u64] {let n=3u64;Error(invoke(fn()->u64 uses {} {n}))}";
+        let (text, export) = exported(source);
+        assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
+        let mut input = export.to_input();
+        let path = named("invoke");
+        let mut forged = (*input.definitions[&path]).clone();
+        let body = &mut forged.bodies[forged.entry.0 as usize];
+        assert_eq!(body.scoped_parameters.len(), 1);
+        body.scoped_parameters.clear();
+        input.definitions.insert(path, std::sync::Arc::new(forged));
+        let error = import(&hirsel_proof_export::export(&input)).unwrap_err();
+        assert!(error.message.starts_with("V rejects"), "{error}");
+    });
+}
+
+#[test]
+fn unsupported_generic_borrow_keeps_export_import_acceptance() {
+    with_compiler_stack(|| {
+        let source = "fn discard[T](x:T) {}\nfn invoke(f:fn()->u64 uses {})->u64 uses {f} {discard(f);f()}\npub fn main()->Result[(),u64] {let n=3u64;Error(invoke(fn()->u64 uses {} {n}))}";
+        let (text, export) = exported(source);
+        assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
     });
 }

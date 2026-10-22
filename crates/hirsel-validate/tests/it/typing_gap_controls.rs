@@ -258,6 +258,7 @@ fn a_noalloc_closure_cleanup_owns_only_noalloc_captures() {
         f.assign(
             c,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![take(g)],
                 destination: Destination::Inferred,
@@ -314,6 +315,7 @@ fn contract_clause(result: Primitive) -> Fixture {
     f.assign(
         function,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -731,6 +733,7 @@ fn promised_closure(promise: bool) -> Fixture {
     f.assign(
         g,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -766,6 +769,7 @@ fn claimed_sendability(claim: Sendability) -> Fixture {
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -941,6 +945,7 @@ fn caller_body_sets_follow_entry_contract_producers_and_exclude_nested_contracts
     f.assign(
         function,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(2),
             captures: vec![],
             destination: Destination::Inferred,
@@ -975,6 +980,7 @@ fn only_contract_function_values_forward_the_caller() {
         f.assign(
             function,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![],
                 destination: Destination::Inferred,

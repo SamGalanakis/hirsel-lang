@@ -919,6 +919,7 @@ pub struct Capture {
 /// Mode-checked environment layout in capture evaluation order (MODE-5, LANG-3).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ClosureInfo {
+    pub context: CaptureContext,
     /// Complete body result, independently of the contextual callable promise.
     pub result_evidence: Option<TypeId>,
     pub expression: ExprId,

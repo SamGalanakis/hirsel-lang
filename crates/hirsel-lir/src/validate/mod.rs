@@ -51,8 +51,13 @@ mod flat_walk;
 mod flow;
 mod ownership;
 mod ready;
+mod scoped_transport;
 mod structure;
 mod tokens;
+pub use scoped_transport::{
+    check_calls as check_scoped_calls, check_heap_links as check_scoped_links,
+    qualify as qualify_scoped_transport,
+};
 
 use crate::effect::Opcode;
 use crate::ir::{
@@ -324,7 +329,7 @@ impl<'a> ValidationContext<'a> {
         if !self.matches(inputs) {
             return check(unit, inputs);
         }
-        check_with_context(unit, inputs, self)
+        check_with_context(unit, inputs, self, false)
     }
 }
 
@@ -383,6 +388,12 @@ pub enum ViolationKind {
     Representation(LirTypeId),
     /// A value's declared holding is impossible for its definition.
     Holding(ValueId),
+    /// An independently reconstructed scoped origin reaches a retaining operation.
+    ScopedRetention {
+        value: ValueId,
+        origin: ValueId,
+        operation: &'static str,
+    },
     Undefined(ValueId),
     Redefined(ValueId),
     /// A use the definition does not dominate.
@@ -590,10 +601,17 @@ pub fn check<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation>
     ValidationContext::new(inputs).check(unit, inputs)
 }
 
+/// Strict per-unit scoped obligations, without linked-module evidence.
+/// An ordinary stage receipt alone does not establish these obligations.
+pub fn check_scoped_transport<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation> {
+    check_with_context(unit, inputs, &ValidationContext::new(inputs), true)
+}
+
 fn check_with_context<S: Stage>(
     unit: &LirUnit<S>,
     inputs: &Inputs<'_>,
     context: &ValidationContext<'_>,
+    strict_scoped: bool,
 ) -> Vec<Violation> {
     if let Err(error) = unit.check_identity(inputs.layouts) {
         return vec![Violation {
@@ -627,6 +645,9 @@ fn check_with_context<S: Stage>(
     if let Some(facts) = facts.filter(|_| report.0.is_empty()) {
         ownership::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
+        if strict_scoped {
+            scoped_transport::check(&cx, &facts, &mut report);
+        }
         arena::check(&cx, &facts, &mut report);
         if cx.stage == StageKind::Ready {
             ready::check(&cx, &mut report);

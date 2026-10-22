@@ -44,6 +44,7 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
         ..Type::with_kind(TypeKind::Tuple(vec![].into()))
     });
     let body = Body {
+        scoped_parameters: Vec::new(),
         parameter_scope: hirsel_types::LexicalOwner::first(&path)
             .site(hirsel_types::NameSite::Item),
         locals: vec![Local {
@@ -202,6 +203,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
         entry: BodyId(0),
         contracts: vec![],
         bodies: vec![Body {
+            scoped_parameters: Vec::new(),
             parameter_scope: hirsel_types::LexicalOwner::first(signature.definition.path())
                 .site(hirsel_types::NameSite::Item),
             locals: local_types

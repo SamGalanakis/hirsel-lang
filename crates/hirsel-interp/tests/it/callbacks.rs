@@ -101,6 +101,7 @@ fn fixture(failing: bool, mutating: bool) -> Definition {
     b.assign(
         f,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: hirsel_types::Destination::Heap,
@@ -441,6 +442,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
                     }
                 } else {
                     Rvalue::Closure {
+                        context: hirsel_types::CaptureContext::OwningScoped,
                         body: BodyId(1),
                         captures: vec![],
                         destination: hirsel_types::Destination::Heap,
@@ -669,6 +671,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
         b.assign(
             f,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![],
                 destination: hirsel_types::Destination::Heap,

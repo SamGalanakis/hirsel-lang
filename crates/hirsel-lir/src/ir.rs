@@ -1283,6 +1283,7 @@ pub struct CaptureValue {
 /// through `Callee::Bound`, which names each instantiation's code.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ClosureSite {
+    pub scoped: bool,
     pub code: Option<ClosureCode>,
     pub environment: LayoutId,
     pub captures: PoolRange<CaptureValue>,
@@ -3161,6 +3162,7 @@ snapshot_enum!(CaptureUse {
 snapshot_struct!(CaptureValue { value, usage });
 snapshot_struct!(ClosureCode { symbol, abi });
 snapshot_struct!(ClosureSite {
+    scoped,
     code,
     environment,
     captures,

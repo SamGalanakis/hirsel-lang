@@ -541,6 +541,7 @@ pub struct ParameterView {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct CaptureView {
+    pub scoped: bool,
     pub ordinal: u32,
     pub usage: CaptureUse,
 }

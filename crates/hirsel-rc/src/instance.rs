@@ -263,6 +263,32 @@ impl Instances {
         let abi = layouts
             .fn_abi(&self.types, callable, shape)
             .map_err(|e| InstanceError::Layout(path, e))?;
+        let capture_paths = view
+            .captures
+            .iter()
+            .filter(|c| c.scoped)
+            .map(|c| hirsel_lir::abi_types::ParameterPath {
+                parameter: c.ordinal,
+                fields: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let parameters = view
+            .definition
+            .bodies
+            .get(view.body.0 as usize)
+            .map(|b| {
+                b.scoped_parameters
+                    .iter()
+                    .map(|p| hirsel_lir::abi_types::ParameterPath {
+                        parameter: p.parameter,
+                        fields: p.fields.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(|| layouts.table().fn_abis[abi.0 as usize].nonretaining.clone());
+        let abi = layouts
+            .with_scoped_contract(abi, parameters, capture_paths)
+            .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?;
         let abi = if role.is_library() || view.definition.tracks_caller(view.body) {
             layouts
                 .with_caller_site(abi)
@@ -1034,6 +1060,7 @@ impl Expander<'_, '_, '_> {
             )));
         }
         let taken = taken_capture_locals(body);
+        let scoped_captures = source_scoped_captures(definition, body_id);
         let mut movable = Vec::new();
         let mut views = Vec::new();
         let mut shape = Vec::new();
@@ -1050,6 +1077,7 @@ impl Expander<'_, '_, '_> {
             let ordinal = views.len();
             let usage = capture_use(operand.usage);
             views.push(CaptureView {
+                scoped: scoped_captures.contains(&(source_ordinal as u32)),
                 ordinal: ordinal as u32,
                 usage,
             });
@@ -1080,7 +1108,20 @@ impl Expander<'_, '_, '_> {
             .map_err(|e| InstanceError::Layout(path.clone(), e))?;
         // A closure symbol survives import replay in a different program. Its
         // environment identity must include child content, never LayoutId numbering.
-        let digest = hirsel_lir::LayoutKeys::rooted(self.layouts.table(), environment).0;
+        let layout_digest = hirsel_lir::LayoutKeys::rooted(self.layouts.table(), environment).0;
+        let paths: Vec<_> = views
+            .iter()
+            .filter(|c| c.scoped)
+            .map(|c| hirsel_lir::abi_types::ParameterPath {
+                parameter: c.ordinal,
+                fields: Vec::new(),
+            })
+            .collect();
+        let contract = hirsel_lir::abi::scoped_contract_digest(&[], &paths);
+        let digest = ContentHash::of_parts(
+            "hirsel.scoped-environment-instance.v1",
+            [layout_digest.0.as_slice(), contract.0.as_slice()],
+        );
         Ok((environment, digest, views))
     }
 
@@ -1695,4 +1736,86 @@ fn taken_capture_locals(body: &hirsel_tir::Body) -> BTreeSet<u32> {
         }
     }
     out
+}
+
+/// Source membership for physical capture selectors. This compiler-produced
+/// metadata is checked again by V and by C; it is never a validation receipt.
+fn source_scoped_captures(
+    definition: &hirsel_tir::Definition,
+    selected: BodyId,
+) -> std::collections::BTreeSet<u32> {
+    use hirsel_tir::{InstructionKind, Rvalue, Storage};
+    if definition.bodies.get(selected.0 as usize).is_none() {
+        return Default::default();
+    }
+    let mut local: Vec<Vec<bool>> = definition
+        .bodies
+        .iter()
+        .map(|b| vec![false; b.locals.len()])
+        .collect();
+    for (b, body) in definition.bodies.iter().enumerate() {
+        for p in &body.scoped_parameters {
+            if let Some(l) = body.parameters.get(p.parameter as usize) {
+                local[b][l.0 as usize] = true;
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (b, body) in definition.bodies.iter().enumerate() {
+            for inst in body.blocks.iter().flat_map(|b| &b.instructions) {
+                let InstructionKind::Assign { destination, value } = inst.kind else {
+                    continue;
+                };
+                let value = &body.rvalues[value.0 as usize];
+                let mut scoped = match value {
+                    Rvalue::Closure {
+                        context: hirsel_types::CaptureContext::Scoped,
+                        ..
+                    } => true,
+                    Rvalue::Use(o) => local[b][body.places[o.place.0 as usize].root.0 as usize],
+                    Rvalue::Construct { fields, .. } => fields
+                        .iter()
+                        .any(|f| local[b][body.places[f.value.place.0 as usize].root.0 as usize]),
+                    _ => false,
+                };
+                if let Rvalue::Closure {
+                    body: child,
+                    captures,
+                    ..
+                } = value
+                {
+                    let slots = definition.bodies[child.0 as usize]
+                        .locals
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.storage == Storage::Capture);
+                    for ((i, _), capture) in slots.zip(captures) {
+                        let from = local[b][body.places[capture.place.0 as usize].root.0 as usize];
+                        scoped |= from;
+                        if from && !local[child.0 as usize][i] {
+                            local[child.0 as usize][i] = true;
+                            changed = true;
+                        }
+                    }
+                }
+                let to = body.places[destination.0 as usize].root.0 as usize;
+                if scoped && !local[b][to] {
+                    local[b][to] = true;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    definition.bodies[selected.0 as usize]
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.storage == hirsel_tir::Storage::Capture)
+        .enumerate()
+        .filter_map(|(ordinal, (i, _))| local[selected.0 as usize][i].then_some(ordinal as u32))
+        .collect()
 }

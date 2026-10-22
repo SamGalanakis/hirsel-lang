@@ -1667,10 +1667,43 @@ impl<'a> Validator<'a> {
         out
     }
 
+    fn scoped_path(&self, mut layout: LayoutId, fields: &[u32]) -> bool {
+        for field in fields {
+            let Some(record) = self.table.layouts.get(layout.0 as usize) else {
+                return false;
+            };
+            let Some(next) = record.fields.iter().find(|f| f.ordinal == *field) else {
+                return false;
+            };
+            layout = next.layout;
+        }
+        self.table
+            .layouts
+            .get(layout.0 as usize)
+            .is_some_and(|r| matches!(r.kind, LayoutKind::Callable { .. }))
+    }
+
     fn fn_abi(&mut self, id: FnAbiId, abi: &FnAbi) {
         let s = Subject::FnAbi(id);
         if abi.version != crate::ABI_VERSION || abi.key.abi_version != crate::ABI_VERSION {
             self.fail(s.clone(), Obligation::Identity, "stale ABI version");
+        }
+        if abi.scoped_contract
+            != crate::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures)
+            || !abi.nonretaining.windows(2).all(|w| w[0] < w[1])
+            || !abi.nonretaining_captures.windows(2).all(|w| w[0] < w[1])
+            || abi.nonretaining.iter().any(|p| {
+                abi.parameters.get(p.parameter as usize).is_none_or(|a| {
+                    a.convention == hirsel_core_contract::Passing::Take
+                        || !self.scoped_path(a.layout, &p.fields)
+                })
+            })
+        {
+            self.fail(
+                s.clone(),
+                Obligation::Abi,
+                "invalid scoped nonretaining contract",
+            );
         }
         let foreign = abi.shape == CallableShape::Foreign;
         if abi.context == foreign {

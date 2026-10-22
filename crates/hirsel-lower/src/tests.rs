@@ -464,6 +464,7 @@ fn captures_require_one_scoped_owner_row() {
         );
         f.closure(
             hirsel_types::ClosureInfo {
+                context: hirsel_types::CaptureContext::Scoped,
                 result_evidence: None,
                 expression: closure,
                 ty: function,
@@ -577,6 +578,7 @@ fn closure_bodies_copy_at_most_linear_type_rows() {
             );
             f.closure(
                 hirsel_types::ClosureInfo {
+                    context: hirsel_types::CaptureContext::Scoped,
                     result_evidence: None,
                     expression: closure,
                     ty: callable,

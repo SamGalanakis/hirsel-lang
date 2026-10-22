@@ -120,6 +120,17 @@ impl Builder<'_, '_> {
             let place = child.slot(ty, Storage::Parameter, span, usage == UseKind::Take);
             child.state.live.insert(child.root(place).0);
             child.body.parameters.push(child.root(place));
+            if usage != UseKind::Take
+                && matches!(
+                    child.types.get(ty).unwrap().kind,
+                    hirsel_types::TypeKind::Function(_)
+                )
+            {
+                child.body.scoped_parameters.push(ScopedParameter {
+                    parameter: ordinal as u32,
+                    fields: Vec::new(),
+                });
+            }
             child.bindings.push((
                 owner,
                 ResolvedName::Parameter(ParamId(ordinal as u32)),
@@ -143,6 +154,7 @@ impl Builder<'_, '_> {
                 .rvalue(
                     capture_ty,
                     Rvalue::Closure {
+                        context: hirsel_types::CaptureContext::Scoped,
                         body,
                         captures: vec![],
                         destination: child.row_destination(capture_ty),
@@ -273,6 +285,7 @@ impl Builder<'_, '_> {
         Ok(self.rvalue_with_failure(
             row.ty,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::Scoped,
                 body: body_id,
                 captures,
                 destination: self.row_destination(row.ty),

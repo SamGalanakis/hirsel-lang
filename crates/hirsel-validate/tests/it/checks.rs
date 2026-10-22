@@ -803,6 +803,7 @@ fn closure_fixture() -> Fixture {
     });
     let capture_ty = f.body().places[1].ty;
     let nested = Body {
+        scoped_parameters: Vec::new(),
         parameter_scope: scoped(hirsel_types::NameSite::Item),
 
         locals: vec![Local {
@@ -863,6 +864,7 @@ fn closure_fixture() -> Fixture {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(source, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -932,6 +934,7 @@ fn copied_capture_fixture(source: Uniqueness, capture: Uniqueness) -> Fixture {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![copy(1)],
             destination: Destination::Inferred,
@@ -1050,6 +1053,7 @@ fn taken_slot_capture_fixture(
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![take(1)],
             destination: Destination::Inferred,
@@ -7644,6 +7648,7 @@ fn literal_result_promises_weaken_but_cannot_invent_evidence() {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -8179,6 +8184,7 @@ fn local_closure_results_retain_capture_content_but_not_callable_access() {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(capture, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -8494,6 +8500,7 @@ fn closure_parameter_brands_use_the_installed_capture_identity() {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![copy(owner)],
             destination: Destination::Inferred,

@@ -136,6 +136,7 @@ mod tests {
         let a = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
         let b = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U16)));
         let row = |expression, ty| ClosureInfo {
+            context: hirsel_types::CaptureContext::Scoped,
             expression: ExprId(expression),
             ty,
             captures: vec![],

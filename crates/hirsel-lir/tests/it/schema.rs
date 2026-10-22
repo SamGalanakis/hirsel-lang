@@ -307,6 +307,9 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
         (CallableShape::Foreign, CallMultiplicity::Many),
     ] {
         t.fn_abis.push(FnAbi {
+            nonretaining: Vec::new(),
+            nonretaining_captures: Vec::new(),
+            scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
             key: FnAbiKey {
                 callable: hash(&format!("{shape:?}")),
                 abi_version: hirsel_lir::ABI_VERSION,
@@ -610,6 +613,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     })
     .collect();
     t.closures = vec![ClosureSite {
+        scoped: false,
         code: Some(ClosureCode {
             symbol: SymbolId(0),
             abi: FnAbiId(1),
@@ -1917,6 +1921,7 @@ mod instance_keys {
                 },
             ],
             captures: vec![CaptureView {
+                scoped: false,
                 ordinal: 0,
                 usage: CaptureUse::Borrow,
             }],
@@ -1946,6 +1951,7 @@ mod instance_keys {
 
 fn tir_coverage_body() -> hirsel_tir::Body {
     hirsel_tir::Body {
+        scoped_parameters: Vec::new(),
         parameter_scope: hirsel_syntax::LexicalOwner::first(&path("f"))
             .site(hirsel_types::NameSite::Item),
         locals: Vec::new(),

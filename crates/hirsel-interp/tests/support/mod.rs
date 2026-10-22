@@ -73,6 +73,7 @@ impl Builder {
         Self {
             types,
             body: Body {
+                scoped_parameters: Vec::new(),
                 parameter_scope: item_scope(),
                 locals: vec![],
                 places: vec![],

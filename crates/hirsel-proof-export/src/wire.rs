@@ -19,15 +19,15 @@ use hirsel_tir::{
     CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField, Constructor, Definition,
     Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm, MatchPattern, MatchPatternId,
     MatchPatternKind, MatchTable, MatchTableId, Materialized, Operand, OriginBindingKind, Place,
-    PlaceId, Projection, ProtocolAssociationReceipt, Rvalue, RvalueId, Scope, ScopeId, Storage,
-    TailKind, TailSite, Terminator, ValueKind, ValueNode,
+    PlaceId, Projection, ProtocolAssociationReceipt, Rvalue, RvalueId, Scope, ScopeId,
+    ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind, ValueNode,
 };
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,
-    CapabilityKind, Contract, Destination, DropAllocation, ErasedCaptures, Field, FieldId,
-    ForeignContract, ForeignWrapper, FunctionType, GenericArgument, GenericParameter, HeapRole,
-    Layout, LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin, OriginRoot,
-    ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
+    CapabilityKind, CaptureContext, Contract, Destination, DropAllocation, ErasedCaptures, Field,
+    FieldId, ForeignContract, ForeignWrapper, FunctionType, GenericArgument, GenericParameter,
+    HeapRole, Layout, LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin,
+    OriginRoot, ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
     ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SerializableCheck,
     SharedPath, SharedSlice, Signature, SignatureDependency, SignatureKind, SignatureMetadata,
     Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeInterner, TypeKind,
@@ -923,7 +923,7 @@ snapshot_enum!(Rvalue {
     Unary { op, value },
     Binary { op, left, right },
     Construct { constructor, fields, destination },
-    Closure { body, captures, destination },
+    Closure { context, body, captures, destination },
     Shape(t)
 } in Cx);
 snapshot_enum!(OriginBindingKind { Alias, Fresh } in Cx);
@@ -989,6 +989,8 @@ snapshot_struct!(TailSite {
     kind,
     owned_loop_arguments
 } in Cx);
+snapshot_struct!(ScopedParameter { parameter, fields } in Cx);
+snapshot_enum!(CaptureContext { Scoped, OwningScoped, Escaping, Task } in Cx);
 snapshot_struct!(Body {
     parameter_scope,
     locals,
@@ -1002,7 +1004,8 @@ snapshot_struct!(Body {
     parameters,
     result,
     tail_sites,
-    matches
+    matches,
+    scoped_parameters
 } in Cx);
 snapshot_struct!(MatchTable {
     scrutinee,

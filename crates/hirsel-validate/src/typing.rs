@@ -737,6 +737,27 @@ impl<'a> Checker<'a> {
             // Generic bodies retain declaration-scope parameters; import without
             // substitution here. Concrete calls substitute in the caller store.
         }
+        let expected: Vec<_> = f
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.passing != PassingMode::Take
+                    && matches!(
+                        self.t.get(p.ty).map(|t| &t.kind),
+                        Some(TypeKind::Function(_))
+                    )
+            })
+            .map(|(i, _)| ScopedParameter {
+                parameter: i as u32,
+                fields: Vec::new(),
+            })
+            .collect();
+        if self.body.scoped_parameters != expected {
+            self.error(ViolationKind::TypeMismatch {
+                entity: "scoped parameter contract",
+            });
+        }
         if f.parameters.len() != self.body.parameters.len() {
             self.error(ViolationKind::Arity {
                 entity: "body parameters",
@@ -3151,11 +3172,30 @@ impl<'a> Checker<'a> {
                 }
             }
             Rvalue::Closure {
+                context,
                 body,
                 captures,
                 destination,
             } => {
                 self.construction_placement(ty, destination, "closure placement");
+                // Classification is a claim about the source envelope, never
+                // inferred from Borrow capture operands alone.
+                if *context == CaptureContext::Scoped
+                    && captures.iter().any(|c| {
+                        !matches!(c.usage, UseKind::Borrow | UseKind::Mut)
+                            && !(c.usage == UseKind::Copy
+                                && self.bound(
+                                    self.t,
+                                    self.place_type(c.place),
+                                    Bound::Plain,
+                                    &self.generic_declarations(),
+                                ))
+                    })
+                {
+                    self.error(ViolationKind::TypeMismatch {
+                        entity: "closure source classification",
+                    });
+                }
                 let TypeKind::Function(f) = kind else {
                     self.error(ViolationKind::TypeMismatch { entity: "closure" });
                     return;
@@ -3362,6 +3402,27 @@ impl<'a> Checker<'a> {
                     }) {
                         self.error(ViolationKind::InvalidOrigin(operand.place));
                     }
+                }
+                let expected: Vec<_> = f
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.passing != PassingMode::Take
+                            && matches!(
+                                self.t.get(p.ty).map(|t| &t.kind),
+                                Some(TypeKind::Function(_))
+                            )
+                    })
+                    .map(|(i, _)| ScopedParameter {
+                        parameter: i as u32,
+                        fields: Vec::new(),
+                    })
+                    .collect();
+                if nested.scoped_parameters != expected {
+                    self.error(ViolationKind::TypeMismatch {
+                        entity: "nested scoped parameter contract",
+                    });
                 }
                 if nested.parameters.len() != f.parameters.len() {
                     self.error(ViolationKind::Arity {

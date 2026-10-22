@@ -171,7 +171,7 @@ struct At {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Usage {
+pub(super) enum Usage {
     /// An ordinary operand; never a version name.
     Operand,
     /// A `reaching` operand; always a version name.
@@ -4379,7 +4379,7 @@ pub(super) fn propagate<S, T: Clone + PartialEq>(
 }
 
 /// Value operands of an instruction, excluding the values it defines.
-fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
+pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
     let unit = cx.unit;
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();

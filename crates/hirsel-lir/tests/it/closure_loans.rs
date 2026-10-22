@@ -41,6 +41,7 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
         }],
     );
     t.builder.unit.tables.closures.push(ClosureSite {
+        scoped: false,
         code: Some(ClosureCode { symbol: code, abi }),
         environment: l::ENV,
         captures,

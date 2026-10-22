@@ -27,6 +27,18 @@ pub fn abi_digest(abi: &FnAbi) -> ContentHash {
     snapshot::digest("fn-abi-physical", &physical)
 }
 
+/// Contract identity is part of serialized and linked callable identity, even
+/// when two entries have exactly the same machine slots.
+pub fn scoped_contract_digest(
+    parameters: &[ParameterPath],
+    captures: &[ParameterPath],
+) -> ContentHash {
+    snapshot::digest(
+        "scoped-contract-v1",
+        &(parameters.to_vec(), captures.to_vec()),
+    )
+}
+
 /// The physical slot of a scalar on `target`.
 pub fn slot(target: &TargetSpec, scalar: ScalarKind) -> PhysicalSlot {
     PhysicalSlot {

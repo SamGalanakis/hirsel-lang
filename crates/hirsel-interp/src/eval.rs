@@ -3174,6 +3174,7 @@ fn rvalue(
             value
         }
         Rvalue::Closure {
+            context: _,
             body,
             ref captures,
             destination: ref placement,

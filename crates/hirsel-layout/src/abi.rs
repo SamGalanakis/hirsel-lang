@@ -1,4 +1,4 @@
-//! Hirsel cross-unit ABI v2 derivation (Target and ABI).
+//! Hirsel cross-unit ABI v4 derivation (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type. Its
 //! passing classes read only the declared parameter convention and the
@@ -83,6 +83,26 @@ impl<'o> LayoutBuilder<'o> {
         for p in &borrowed_parameters {
             atom(&mut key, &p.to_le_bytes());
         }
+        // Only declaration-typed callable parameters imply CLO-1. A type
+        // parameter that later specializes to a callable grants no new promise.
+        let nonretaining: Vec<_> = function
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.passing != hirsel_types::PassingMode::Take
+                    && matches!(
+                        types.get(p.ty).map(|t| &t.kind),
+                        Some(TypeKind::Function(_))
+                    )
+            })
+            .map(|(i, _)| ParameterPath {
+                parameter: i as u32,
+                fields: Vec::new(),
+            })
+            .collect();
+        let scoped_contract = hirsel_lir::abi::scoped_contract_digest(&nonretaining, &[]);
+        atom(&mut key, &scoped_contract.0);
         let callable_key = ContentHash::of_parts("hirsel.fn-abi-key.v1", [key.as_slice()]);
         if let Some(&id) = self.abi_memo.get(&(callable_key, shape)) {
             return Ok(id);
@@ -160,6 +180,9 @@ impl<'o> LayoutBuilder<'o> {
             && result.is_some()
             && self.may_hold_blocks(types, function.result, 0)?;
         let abi = FnAbi {
+            nonretaining,
+            nonretaining_captures: Vec::new(),
+            scoped_contract,
             key: FnAbiKey {
                 callable: callable_key,
                 abi_version: hirsel_lir::ABI_VERSION,
@@ -188,6 +211,42 @@ impl<'o> LayoutBuilder<'o> {
         let id = FnAbiId(self.table_mut_fn_abis().len() as u32);
         self.table_mut_fn_abis().push(abi);
         self.abi_memo.insert((callable_key, shape), id);
+        Ok(id)
+    }
+
+    /// Add definition-owned capture selectors without changing any machine slots.
+    pub fn with_scoped_contract(
+        &mut self,
+        base: FnAbiId,
+        parameters: Vec<ParameterPath>,
+        captures: Vec<ParameterPath>,
+    ) -> Result<FnAbiId, LayoutError> {
+        let mut abi = self
+            .table()
+            .fn_abis
+            .get(base.0 as usize)
+            .ok_or(LayoutError::MissingType)?
+            .clone();
+        if abi.nonretaining == parameters && abi.nonretaining_captures == captures {
+            return Ok(base);
+        }
+        abi.nonretaining = parameters;
+        abi.nonretaining_captures = captures;
+        abi.scoped_contract =
+            hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures);
+        abi.key.callable = ContentHash::of_parts(
+            "hirsel.scoped-capture-abi.v1",
+            [
+                abi.key.callable.0.as_slice(),
+                abi.scoped_contract.0.as_slice(),
+            ],
+        );
+        if let Some(&id) = self.abi_memo.get(&(abi.key.callable, abi.shape)) {
+            return Ok(id);
+        }
+        let id = FnAbiId(self.table().fn_abis.len() as u32);
+        self.abi_memo.insert((abi.key.callable, abi.shape), id);
+        self.table_mut_fn_abis().push(abi);
         Ok(id)
     }
 
@@ -233,6 +292,15 @@ impl<'o> LayoutBuilder<'o> {
             .get(base.0 as usize)
             .ok_or(LayoutError::MissingType)?
             .clone();
+        let parameter_count = abi.parameters.len() as u32;
+        for capture in std::mem::take(&mut abi.nonretaining_captures) {
+            abi.nonretaining.push(ParameterPath {
+                parameter: parameter_count + capture.parameter,
+                fields: capture.fields,
+            });
+        }
+        abi.nonretaining.sort();
+        abi.scoped_contract = hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &[]);
         abi.shape = CallableShape::Definition;
         abi.environment = false;
         let borrowed_result = borrows_captures

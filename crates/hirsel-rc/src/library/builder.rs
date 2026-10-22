@@ -46,6 +46,12 @@ pub trait Layouts {
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError>;
     fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError>;
+    fn with_scoped_contract(
+        &mut self,
+        base: FnAbiId,
+        parameters: Vec<hirsel_lir::abi_types::ParameterPath>,
+        captures: Vec<hirsel_lir::abi_types::ParameterPath>,
+    ) -> Result<FnAbiId, LayoutError>;
     fn table(&self) -> &LayoutTable;
     fn owners(&self) -> &Owners;
     /// The cursor's opaque source (`OwnerRepresentation::Cursor`).
@@ -79,6 +85,14 @@ impl Layouts for LayoutBuilder<'_> {
     }
     fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::with_caller_site(self, base)
+    }
+    fn with_scoped_contract(
+        &mut self,
+        base: FnAbiId,
+        parameters: Vec<hirsel_lir::abi_types::ParameterPath>,
+        captures: Vec<hirsel_lir::abi_types::ParameterPath>,
+    ) -> Result<FnAbiId, LayoutError> {
+        LayoutBuilder::with_scoped_contract(self, base, parameters, captures)
     }
     fn table(&self) -> &LayoutTable {
         LayoutBuilder::table(self)

@@ -123,6 +123,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             types,
             projection_paths: Default::default(),
             body: Body {
+                scoped_parameters: Vec::new(),
                 parameter_scope: decisions.lexical.site(owner),
                 locals: vec![],
                 places: vec![],
@@ -194,6 +195,17 @@ impl<'a, 'b> Builder<'a, 'b> {
             let place = this.slot(b.ty, Storage::Parameter, Span::default(), own);
             this.state.live.insert(this.root(place).0);
             this.body.parameters.push(this.root(place));
+            if !own
+                && matches!(
+                    this.types.get(b.ty).unwrap().kind,
+                    hirsel_types::TypeKind::Function(_)
+                )
+            {
+                this.body.scoped_parameters.push(ScopedParameter {
+                    parameter: ordinal as u32,
+                    fields: Vec::new(),
+                });
+            }
             this.body.places[place.0 as usize].binding =
                 Self::binding_origin(decisions.lexical, b.owner, &b.binding);
             this.bindings.push((b.owner, b.binding, place));

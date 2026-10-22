@@ -1659,6 +1659,7 @@ impl Builder<'_, '_> {
         Ok(self.rvalue_with_failure(
             info.ty,
             Rvalue::Closure {
+                context: info.context,
                 body: body_id,
                 captures,
                 destination,

@@ -269,6 +269,7 @@ impl Unit<'_> {
                 .map(|&(value, usage)| CaptureValue { value, usage }),
         );
         self.builder.unit.tables.closures.push(ClosureSite {
+            scoped: false,
             code: Some(ClosureCode {
                 symbol: code,
                 abi: self.table.abi(abi),

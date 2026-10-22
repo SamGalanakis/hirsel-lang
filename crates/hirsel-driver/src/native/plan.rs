@@ -590,18 +590,26 @@ fn check(
                 let abi = *abis
                     .get(&call.abi)
                     .ok_or_else(|| failed("call ABI outside catalog"))?;
-                if abi.result_arena.is_some() {
-                    let symbol = call
-                        .direct
-                        .as_ref()
-                        .ok_or_else(|| failed("an indirect call claims a result arena"))?;
+                if let Some(symbol) = &call.direct {
                     let callee = symbol
                         .instance
-                        .and_then(|i| targets.get(&(&symbol.definition, i)))
-                        .ok_or_else(|| failed("result-arena callee absent"))?;
-                    if plan.table.fn_abis.get(callee.abi.0 as usize) != Some(abi) {
-                        return Err(failed("call forges its complete result-arena ABI"));
+                        .and_then(|i| targets.get(&(&symbol.definition, i)));
+                    if let Some(callee) = callee {
+                        let actual = &plan.table.fn_abis[callee.abi.0 as usize];
+                        if abi.nonretaining != actual.nonretaining
+                            || abi.nonretaining_captures != actual.nonretaining_captures
+                            || abi.scoped_contract != actual.scoped_contract
+                        {
+                            return Err(failed("call forges its scoped body contract"));
+                        }
+                        if abi.result_arena.is_some() && actual != abi {
+                            return Err(failed("call forges its complete result-arena ABI"));
+                        }
+                    } else if abi.result_arena.is_some() {
+                        return Err(failed("result-arena callee absent"));
                     }
+                } else if abi.result_arena.is_some() {
+                    return Err(failed("an indirect call claims a result arena"));
                 }
             }
         }

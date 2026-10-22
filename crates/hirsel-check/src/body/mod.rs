@@ -2493,6 +2493,7 @@ impl Checker<'_, '_> {
                     ty = self.types.intern(row);
                 }
                 self.body.closures.push(ClosureInfo {
+                    context: hirsel_types::CaptureContext::Scoped,
                     result_evidence: Some(result),
                     expression: id,
                     captures: vec![],

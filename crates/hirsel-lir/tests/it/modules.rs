@@ -33,3 +33,4 @@ mod schema;
 mod shared;
 mod tokens;
 mod validation_context;
+mod scoped_transport;

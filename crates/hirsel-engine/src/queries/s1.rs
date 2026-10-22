@@ -248,6 +248,7 @@ mod tests {
         let ty = types.intern(hirsel_types::Type::unit());
         let site = Span::default();
         let body = Body {
+            scoped_parameters: Vec::new(),
             parameter_scope: hirsel_syntax::LexicalOwner::first(root)
                 .site(hirsel_types::NameSite::Item),
             locals: vec![Local {

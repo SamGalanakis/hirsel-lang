@@ -33,6 +33,11 @@ pub enum Effect {
     },
     /// `with_caller_site` of the `FnAbi` entry at this index.
     CallerSite(u32),
+    ScopedContract {
+        base: u32,
+        parameters: Vec<(u32, Vec<u32>)>,
+        selectors: Vec<(u32, Vec<u32>)>,
+    },
     CursorSource,
     Environment {
         definition: DefId,
@@ -112,7 +117,10 @@ impl Effects {
                         arguments(&mut out, outer);
                     }
                 }
-                Effect::CallerSite(_) | Effect::CursorSource | Effect::FlatBuilder(_) => {}
+                Effect::ScopedContract { .. }
+                | Effect::CallerSite(_)
+                | Effect::CursorSource
+                | Effect::FlatBuilder(_) => {}
             }
         }
         out
@@ -282,6 +290,37 @@ impl Layouts for Recorder<'_> {
             }
         }
     }
+    fn with_scoped_contract(
+        &mut self,
+        base: FnAbiId,
+        parameters: Vec<hirsel_lir::abi_types::ParameterPath>,
+        captures: Vec<hirsel_lir::abi_types::ParameterPath>,
+    ) -> Result<FnAbiId, LayoutError> {
+        if self.inner.table().fn_abis[base.0 as usize].nonretaining == parameters
+            && self.inner.table().fn_abis[base.0 as usize].nonretaining_captures == captures
+        {
+            return Ok(base);
+        }
+        let Some(&entry) = self.abis.get(&base) else {
+            return Err(LayoutError::Invalid("unrecorded scoped ABI".into()));
+        };
+        let index = self.push(Effect::ScopedContract {
+            base: entry,
+            parameters: parameters
+                .iter()
+                .map(|p| (p.parameter, p.fields.clone()))
+                .collect(),
+            selectors: captures
+                .iter()
+                .map(|p| (p.parameter, p.fields.clone()))
+                .collect(),
+        });
+        let abi = self
+            .inner
+            .with_scoped_contract(base, parameters, captures)?;
+        self.abis.entry(abi).or_insert(index);
+        Ok(abi)
+    }
     fn table(&self) -> &LayoutTable {
         self.inner.table()
     }
@@ -354,86 +393,123 @@ pub fn replay(
         }
     };
     for entry in &effects.entries {
-        let (layout, abi) = match entry {
-            Effect::Layout(t) => (
-                Some(layouts.layout(&types, *t).map_err(ReplayError::Layout)?),
-                None,
-            ),
-            Effect::FnAbi { callable, shape } => (
-                None,
-                Some(
-                    layouts
-                        .fn_abi(&types, *callable, (*shape).into())
-                        .map_err(ReplayError::Layout)?,
+        let (layout, abi) =
+            match entry {
+                Effect::Layout(t) => (
+                    Some(layouts.layout(&types, *t).map_err(ReplayError::Layout)?),
+                    None,
                 ),
-            ),
-            Effect::CallerSite(i) => {
-                let base =
-                    abis.get(*i as usize).copied().flatten().ok_or_else(|| {
+                Effect::FnAbi { callable, shape } => (
+                    None,
+                    Some(
+                        layouts
+                            .fn_abi(&types, *callable, (*shape).into())
+                            .map_err(ReplayError::Layout)?,
+                    ),
+                ),
+                Effect::ScopedContract {
+                    base,
+                    parameters,
+                    selectors,
+                } => {
+                    let base =
+                        abis.get(*base as usize).copied().flatten().ok_or_else(|| {
+                            ReplayError::Malformed("missing scoped base ABI".into())
+                        })?;
+                    let paths = selectors
+                        .iter()
+                        .map(|(parameter, fields)| hirsel_lir::abi_types::ParameterPath {
+                            parameter: *parameter,
+                            fields: fields.clone(),
+                        })
+                        .collect();
+                    (
+                        None,
+                        Some(
+                            layouts
+                                .with_scoped_contract(
+                                    base,
+                                    parameters
+                                        .iter()
+                                        .map(|(parameter, fields)| {
+                                            hirsel_lir::abi_types::ParameterPath {
+                                                parameter: *parameter,
+                                                fields: fields.clone(),
+                                            }
+                                        })
+                                        .collect(),
+                                    paths,
+                                )
+                                .map_err(ReplayError::Layout)?,
+                        ),
+                    )
+                }
+                Effect::CallerSite(i) => {
+                    let base = abis.get(*i as usize).copied().flatten().ok_or_else(|| {
                         ReplayError::Malformed(format!("entry {i} derived no FnAbi"))
                     })?;
-                (
-                    None,
-                    Some(
-                        layouts
-                            .with_caller_site(base)
-                            .map_err(ReplayError::Layout)?,
-                    ),
-                )
-            }
-            Effect::CursorSource => (Some(layouts.cursor_source()), None),
-            Effect::Environment {
-                definition,
-                body,
-                captures,
-                sizes,
-                movable,
-            } => {
-                let captures: Vec<(TypeId, Passing)> =
-                    captures.iter().map(|&(t, c)| (t, c.into())).collect();
-                let shape = EnvironmentShape {
-                    definition: *definition,
-                    body: *body,
-                    captures: &captures,
+                    (
+                        None,
+                        Some(
+                            layouts
+                                .with_caller_site(base)
+                                .map_err(ReplayError::Layout)?,
+                        ),
+                    )
+                }
+                Effect::CursorSource => (Some(layouts.cursor_source()), None),
+                Effect::Environment {
+                    definition,
+                    body,
+                    captures,
                     sizes,
                     movable,
-                };
-                (
-                    Some(
-                        layouts
-                            .environment(&types, &shape)
-                            .map_err(ReplayError::Layout)?,
-                    ),
-                    None,
-                )
-            }
-            Effect::FlatBuilder(element) => {
-                let element = resolve(&derived, *element)?;
-                (
-                    Some(layouts.flat_builder(element).map_err(ReplayError::Layout)?),
-                    None,
-                )
-            }
-            Effect::Request(r) => {
-                let environment = r.environment.map(|e| resolve(&derived, e)).transpose()?;
-                let request = Request {
-                    body: r.body as usize,
-                    path: r.path.clone(),
-                    actuals: Actuals {
-                        binder: r.binder,
-                        arguments: r.arguments.clone(),
-                        outer: r.outer.clone(),
-                    },
-                    callable: r.callable,
-                    shape: r.shape.into(),
-                    environment,
-                    finalizer: r.finalizer,
-                };
-                crate::library::instantiate(layouts, instances, request)
-                    .map_err(ReplayError::Instance)?;
-                (None, None)
-            }
-        };
+                } => {
+                    let captures: Vec<(TypeId, Passing)> =
+                        captures.iter().map(|&(t, c)| (t, c.into())).collect();
+                    let shape = EnvironmentShape {
+                        definition: *definition,
+                        body: *body,
+                        captures: &captures,
+                        sizes,
+                        movable,
+                    };
+                    (
+                        Some(
+                            layouts
+                                .environment(&types, &shape)
+                                .map_err(ReplayError::Layout)?,
+                        ),
+                        None,
+                    )
+                }
+                Effect::FlatBuilder(element) => {
+                    let element = resolve(&derived, *element)?;
+                    (
+                        Some(layouts.flat_builder(element).map_err(ReplayError::Layout)?),
+                        None,
+                    )
+                }
+                Effect::Request(r) => {
+                    let environment = r.environment.map(|e| resolve(&derived, e)).transpose()?;
+                    let request = Request {
+                        body: r.body as usize,
+                        path: r.path.clone(),
+                        actuals: Actuals {
+                            binder: r.binder,
+                            arguments: r.arguments.clone(),
+                            outer: r.outer.clone(),
+                        },
+                        callable: r.callable,
+                        shape: r.shape.into(),
+                        environment,
+                        finalizer: r.finalizer,
+                    };
+                    crate::library::instantiate(layouts, instances, request)
+                        .map_err(ReplayError::Instance)?;
+                    (None, None)
+                }
+            };
         derived.push(layout);
         abis.push(abi);
     }

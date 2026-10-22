@@ -591,6 +591,7 @@ pub fn build_program(
     })?;
     timed(Phase::LirValidate, || {
         hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
+            .and_then(|()| hirsel_lir::validate::check_scoped_links(&lowered.units, &lowered.table))
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
     let value_units = std::mem::take(&mut lowered.units);

@@ -100,6 +100,7 @@ impl Builder<'_, '_> {
         let value = self.rvalue(
             clause.function,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::Scoped,
                 body: body_id,
                 captures: vec![],
                 destination: self.row_destination(clause.function),

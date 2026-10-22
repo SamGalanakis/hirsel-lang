@@ -568,6 +568,7 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     );
     let closure = ClosureId(b.ed.unit.tables.closures.len() as u32);
     b.ed.unit.tables.closures.push(ClosureSite {
+        scoped: false,
         code: Some(ClosureCode {
             symbol: code,
             abi: awaited.abi,

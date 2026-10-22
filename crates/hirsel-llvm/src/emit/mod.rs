@@ -1013,6 +1013,9 @@ mod tests {
         let context = Context::new();
         let module = Module::new(&context, "root-pointers");
         let abi = FnAbi {
+            nonretaining: Vec::new(),
+            nonretaining_captures: Vec::new(),
+            scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
             key: FnAbiKey {
                 callable: ContentHash::of_bytes(b"root"),
                 abi_version: 1,

@@ -734,6 +734,9 @@ impl<S: Stage> Lir<S> {
             })
             .collect();
         self.table.fn_abis.push(FnAbi {
+            nonretaining: Vec::new(),
+            nonretaining_captures: Vec::new(),
+            scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
             key: FnAbiKey {
                 callable: hash(&format!("callable {}", id.0)),
                 abi_version: hirsel_lir::ABI_VERSION,

@@ -48,6 +48,7 @@ mod origin_types;
 mod proofs;
 mod protocol;
 mod scope_locals;
+mod scoped_transport;
 mod scratch;
 mod serialization;
 mod shared;
@@ -192,6 +193,26 @@ pub fn validate(
         );
     }
     validation
+}
+
+/// Independent scoped proof qualification in addition to ordinary V acceptance.
+/// Unsupported borrowed generic/erased forwarding keeps its safe heap behavior
+/// under `validate`, but cannot satisfy this stronger proof boundary.
+pub fn qualify_scoped_transport(
+    definition: &Definition,
+    t: &TypeInterner,
+    signatures: &dyn SignatureLookup,
+    reads: &mut Vec<VRead>,
+) -> Validation {
+    let reader = Reader::new(signatures);
+    let mut result = validate_input(definition, t, &reader);
+    if result.violations.is_empty() {
+        result
+            .violations
+            .extend(scoped_transport::check(definition, t, &reader));
+    }
+    reader.finish(reads);
+    result
 }
 
 fn profile_start() -> Option<std::time::Instant> {

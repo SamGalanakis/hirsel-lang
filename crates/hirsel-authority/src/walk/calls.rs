@@ -334,6 +334,7 @@ impl Checker<'_> {
             self.closures.insert(
                 e,
                 ClosureInfo {
+                    context: hirsel_types::CaptureContext::Scoped,
                     result_evidence: Some(result),
                     expression: e,
                     captures: vec![],
@@ -3245,6 +3246,7 @@ impl Checker<'_> {
         self.closures.insert(
             e,
             ClosureInfo {
+                context: ctx,
                 result_evidence: None,
                 expression: e,
                 captures: captures

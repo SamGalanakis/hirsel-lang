@@ -327,6 +327,7 @@ fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_t
         _ => unreachable!(),
     };
     Body {
+        scoped_parameters: Vec::new(),
         parameter_scope: syntax.owner().site(NameSite::Item),
         locals: vec![Local {
             ty: unit,

@@ -1,4 +1,4 @@
-//! The Hirsel cross-unit ABI v3 schema (Target and ABI).
+//! The Hirsel cross-unit ABI v4 schema (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type and its
 //! layouts (`abi.rs`); both emitters and the heap executor consume it.
@@ -117,6 +117,15 @@ pub struct FnAbiKey {
     pub abi_version: u32,
 }
 
+/// Invocation-bounded nonretention of a physical parameter's selected content.
+/// The empty field path selects the whole value. This grants no ownership or authority.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct ParameterPath {
+    pub parameter: u32,
+    pub fields: Vec<u32>,
+}
+snapshot_struct!(ParameterPath { parameter, fields });
+
 /// Physical order: context, [environment], [caller and operation sites],
 /// [caller destination], [result output pointer], then declared parameters.
 /// Both native backends return a typed scalar as (value, u8 status) in
@@ -145,6 +154,11 @@ pub struct FnAbi {
     pub result_arena: Option<u32>,
     pub parameters: Vec<AbiParameter>,
     pub version: u32,
+    pub nonretaining: Vec<ParameterPath>,
+    /// Capture ordinals use the environment field order, never source local ids.
+    pub nonretaining_captures: Vec<ParameterPath>,
+    /// Binds the complete selector lists; independent validation recomputes it.
+    pub scoped_contract: ContentHash,
 }
 
 snapshot_enum!(PhysicalType {
@@ -204,7 +218,10 @@ snapshot_struct!(FnAbi {
     diverges,
     result_arena,
     parameters,
-    version
+    version,
+    nonretaining,
+    nonretaining_captures,
+    scoped_contract
 });
 impl hirsel_codec::Snapshot for FnAbiId {
     fn write(&self, w: &mut hirsel_codec::Writer) {

@@ -203,6 +203,7 @@ fn consuming_closure(capture_usage: UseKind, multiplicity: Multiplicity, calls: 
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(y, capture_usage)],
             destination: Destination::Inferred,
@@ -288,6 +289,7 @@ fn p5a_closure_type_forges_authority_of_its_captures() {
         f.assign(
             c,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![copy(d)],
                 destination: Destination::Inferred,
@@ -346,6 +348,7 @@ fn p5b_closure_type_forges_sendability() {
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![copy(x)],
             destination: Destination::Inferred,
@@ -443,6 +446,7 @@ fn borrowed_resources_allow_many_but_owned_resources_require_once() {
         f.assign(
             closure,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![operand(
                     captured,
@@ -601,6 +605,7 @@ fn p4_one_body_two_producers_with_different_capture_usage() {
     f.assign(
         a,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(via, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -611,6 +616,7 @@ fn p4_one_body_two_producers_with_different_capture_usage() {
     f.assign(
         b,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![take(y)],
             destination: Destination::Inferred,
@@ -843,6 +849,7 @@ fn p5c_global_closure_borrowing_a_borrowed_parameter_is_returned() {
         f.assign(
             c,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![operand(x, UseKind::Borrow)],
                 destination: Destination::Inferred,
@@ -1213,6 +1220,7 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -1314,6 +1322,7 @@ fn scoped_construction_placements_are_exact_for_aggregates_and_closures() {
             let nested = empty_body(&mut f);
             f.definition.bodies.push(nested);
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![],
                 destination: destination.clone(),
@@ -1390,6 +1399,7 @@ fn nested_generic_parameter(outer: Vec<Bound>, inner: Option<Vec<Bound>>) -> Fix
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -1889,6 +1899,7 @@ fn callback_bounds_inspect_complete_return_values_and_their_flowing_modes() {
         f.assign(
             c,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![],
                 destination: Destination::Inferred,
@@ -2121,6 +2132,7 @@ fn scoped_closures_cannot_claim_unique_borrowed_counted_captures() {
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(view, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -3641,6 +3653,7 @@ fn n1_mut_captured_variant_keeps_creation_time_tag_across_calls() {
         let rc = push_rvalue(
             &mut f,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![
                     operand(
@@ -4323,6 +4336,7 @@ fn scoped_capture_result_fixture() -> Fixture {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(via, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -5048,6 +5062,7 @@ fn borrowed_capture_promises_follow_current_source_modes() {
                 f.assign(
                     closure,
                     Rvalue::Closure {
+                        context: hirsel_types::CaptureContext::OwningScoped,
                         body: BodyId(1),
                         captures: vec![operand(via, UseKind::Borrow)],
                         destination: Destination::Inferred,
@@ -5116,6 +5131,7 @@ fn closure_bodies_intern_working_rows_bounded_by_the_owner() {
             f.assign(
                 destination,
                 Rvalue::Closure {
+                    context: hirsel_types::CaptureContext::OwningScoped,
                     body: BodyId(index + 1),
                     captures: vec![],
                     destination: Destination::Inferred,
@@ -5365,6 +5381,7 @@ fn contract_clause_fixture(passing: PassingMode) -> Fixture {
     f.assign(
         function,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -5792,6 +5809,10 @@ fn closure_call_effect_fixture(allocation: Allocation, callback: bool) -> Fixtur
         let argument = add_capture(&mut child, callback);
         child.locals[argument as usize].storage = Storage::Parameter;
         child.parameters.push(LocalId(argument));
+        child.scoped_parameters = vec![ScopedParameter {
+            parameter: 0,
+            fields: vec![],
+        }];
         function.parameters = vec![Parameter {
             name: None,
             label: None,
@@ -5840,6 +5861,7 @@ fn closure_call_effect_fixture(allocation: Allocation, callback: bool) -> Fixtur
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -6249,6 +6271,7 @@ fn derived_capability_closure_fixture(derive: bool, permitted: bool, parameter: 
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: if parameter {
                 vec![]
@@ -6523,6 +6546,7 @@ fn closure_string_construction_fixture(allocation: Allocation, escapes: bool) ->
     f.assign(
         value,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -6650,6 +6674,7 @@ fn closure_pair_part_fixture(field: u32) -> Fixture {
     f.assign(
         value,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -8337,6 +8362,7 @@ fn literal_body_fixture(
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,
@@ -8953,6 +8979,7 @@ fn borrowed_qualified_capture_inputs_are_rechecked_when_invoked() {
             f.assign(
                 closure,
                 Rvalue::Closure {
+                    context: hirsel_types::CaptureContext::OwningScoped,
                     body: BodyId(1),
                     captures: vec![operand(view, UseKind::Borrow)],
                     destination: Destination::Inferred,
@@ -9282,6 +9309,7 @@ fn copied_aggregate_captures_do_not_reuse_descendant_proofs() {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![copy(x)],
             destination: Destination::Inferred,
@@ -9776,6 +9804,7 @@ fn ordinary_generic_moves_do_not_supply_borrowed_capture_obligations() {
         f.assign(
             closure,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![operand(borrowed, UseKind::Borrow)],
                 destination: Destination::Inferred,
@@ -9862,6 +9891,7 @@ fn scoped_seal_global_capture_has_an_independent_ir_control() {
         f.assign(
             closure,
             Rvalue::Closure {
+                context: hirsel_types::CaptureContext::OwningScoped,
                 body: BodyId(1),
                 captures: vec![take(source)],
                 destination: Destination::Inferred,

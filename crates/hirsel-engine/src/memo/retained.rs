@@ -628,6 +628,7 @@ impl Weight {
     }
     fn body(&mut self, body: &Body) {
         let Body {
+            scoped_parameters,
             parameter_scope: _,
             locals,
             places,
@@ -658,6 +659,7 @@ impl Weight {
         self.flat_vec(cleanups);
         self.flat_vec(cleanup_nodes);
         self.flat_vec(parameters);
+        self.vec(scoped_parameters, |w, p| w.flat_vec(&p.fields));
         self.vec(tail_sites, |w, site| {
             w.flat_vec(&site.owned_loop_arguments);
             match &site.kind {
@@ -687,6 +689,7 @@ mod tests {
             path: hirsel_syntax::DefId::intern(&DefPath::core("held")),
             signature_hash: Default::default(),
             bodies: vec![Body {
+                scoped_parameters: Vec::new(),
                 parameter_scope: hirsel_types::LexicalOwner::first(&DefPath::core("held"))
                     .site(hirsel_types::NameSite::Item),
                 locals: vec![],

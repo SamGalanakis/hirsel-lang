@@ -337,6 +337,7 @@ fn iterator_closure(result: LayoutId) -> Vec<K> {
         }],
     );
     t.builder.unit.tables.closures.push(ClosureSite {
+        scoped: false,
         code: Some(ClosureCode {
             symbol: code,
             abi: abi,

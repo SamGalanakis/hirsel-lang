@@ -399,6 +399,7 @@ fn snapshot_shape_comptime_todo_and_local_function() {
         foreign: None,
     }));
     f.checked.closures.push(hirsel_types::ClosureInfo {
+        context: hirsel_types::CaptureContext::Scoped,
         result_evidence: None,
         expression: body,
         ty: function,
@@ -666,6 +667,7 @@ fn formal_frame_result_rows_override_pre_mode_results_and_require_complete_owner
     );
     f.closure(
         hirsel_types::ClosureInfo {
+            context: hirsel_types::CaptureContext::Scoped,
             result_evidence: None,
             expression: closure,
             ty: function,
@@ -736,6 +738,7 @@ fn copy_capture_preserves_the_source_type_and_j_selected_aliased_capture_type() 
     );
     f.closure(
         hirsel_types::ClosureInfo {
+            context: hirsel_types::CaptureContext::Scoped,
             result_evidence: None,
             expression: closure,
             ty: function,

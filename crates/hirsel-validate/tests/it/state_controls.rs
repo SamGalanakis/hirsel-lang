@@ -318,6 +318,7 @@ fn captured_state(mutable: bool) -> Fixture {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(
                 access,
@@ -1069,6 +1070,7 @@ fn closure_creation(hidden: bool) -> Fixture {
     f.assign(
         closure,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![],
             destination: Destination::Inferred,

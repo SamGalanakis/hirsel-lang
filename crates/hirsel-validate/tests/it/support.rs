@@ -161,6 +161,7 @@ impl Fixture {
                 entry: BodyId(0),
                 contracts: vec![],
                 bodies: vec![Body {
+                    scoped_parameters: Vec::new(),
                     parameter_scope: scoped(hirsel_types::NameSite::Item),
                     locals: vec![Local {
                         ty: unit,
@@ -421,6 +422,24 @@ pub(crate) fn owner_signature(f: &mut Fixture, passing: PassingMode) {
             })
             .collect();
     }
+    if let SignatureKind::Function(fun) = &s.kind {
+        f.definition.bodies[0].scoped_parameters = fun
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.passing != PassingMode::Take
+                    && matches!(
+                        interner().get(p.ty).map(|t| &t.kind),
+                        Some(TypeKind::Function(_))
+                    )
+            })
+            .map(|(i, _)| ScopedParameter {
+                parameter: i as u32,
+                fields: vec![],
+            })
+            .collect();
+    }
     f.signatures.insert(id("main"), s);
 }
 
@@ -477,6 +496,22 @@ pub(crate) fn owner_sig(f: &mut Fixture, passing: &[PassingMode]) {
         for (p, m) in fun.parameters.iter_mut().zip(passing) {
             p.passing = *m;
         }
+        f.definition.bodies[0].scoped_parameters = fun
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.passing != PassingMode::Take
+                    && matches!(
+                        interner().get(p.ty).map(|t| &t.kind),
+                        Some(TypeKind::Function(_))
+                    )
+            })
+            .map(|(i, _)| ScopedParameter {
+                parameter: i as u32,
+                fields: vec![],
+            })
+            .collect();
     }
 }
 
@@ -575,6 +610,7 @@ pub(crate) fn captured_generic_copy(outer_plain: bool, inner_plain: bool, alias:
     f.assign(
         c,
         Rvalue::Closure {
+            context: hirsel_types::CaptureContext::OwningScoped,
             body: BodyId(1),
             captures: vec![operand(x, UseKind::Borrow)],
             destination: Destination::Inferred,
@@ -624,6 +660,7 @@ pub(crate) fn empty_body(f: &mut Fixture) -> Body {
     // Closure type IDs refer to the definition store.
     let unit = f.body().locals[0].ty;
     Body {
+        scoped_parameters: Vec::new(),
         parameter_scope: scoped(hirsel_types::NameSite::Statement(hirsel_syntax::StmtId(
             f.definition.bodies.len() as u32,
         ))),

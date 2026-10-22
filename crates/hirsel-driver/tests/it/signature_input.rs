@@ -47,6 +47,7 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
             entry: BodyId(0),
             contracts: vec![],
             bodies: vec![Body {
+                scoped_parameters: Vec::new(),
                 parameter_scope: hirsel_types::LexicalOwner::first(&build)
                     .site(hirsel_types::NameSite::Item),
                 locals: vec![

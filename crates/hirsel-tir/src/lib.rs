@@ -17,8 +17,9 @@ use hirsel_types::{
 /// v5 adds the order-bearing SortedMap constructor;
 /// v6 adds size actuals to constant reads;
 /// v7 qualifies body binders and origins with their owning definition occurrence;
-/// v8 retains ordinary generic actuals in declared dictionary constant graphs.
-pub const TIR_VERSION: u32 = 8;
+/// v8 retains ordinary generic actuals in declared dictionary constant graphs;
+/// v9 transports source scoped selectors and closure classification.
+pub const TIR_VERSION: u32 = 9;
 
 pub mod representation;
 
@@ -161,6 +162,8 @@ pub enum Rvalue {
         destination: Destination,
     },
     Closure {
+        /// Checked source creation context; backing storage is still heap-owned.
+        context: hirsel_types::CaptureContext,
         body: BodyId,
         captures: Vec<Operand>,
         destination: Destination,
@@ -435,6 +438,13 @@ pub struct TailSite {
     pub owned_loop_arguments: Vec<(hirsel_types::ParamId, PlaceId)>,
 }
 /// A monomorphic or generic body whose TypeIds refer to Definition.types (GEN-4).
+/// A declaration-derived scoped callable path, independent of its physical passing class.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct ScopedParameter {
+    pub parameter: u32,
+    pub fields: Vec<u32>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Body {
     /// Declaring source scope for value-parameter references, separate from storage scopes.
@@ -451,6 +461,7 @@ pub struct Body {
     pub result: TypeId,
     pub tail_sites: Vec<TailSite>,
     pub matches: Vec<MatchTable>,
+    pub scoped_parameters: Vec<ScopedParameter>,
 }
 /// Ordered source arms. Patterns are an acyclic arena owned by this table.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -600,6 +611,7 @@ mod tests {
         });
         let span = Span::default();
         let body = Body {
+            scoped_parameters: Vec::new(),
             parameter_scope: hirsel_types::LexicalOwner::first(&hirsel_syntax::DefPath::core(
                 "main",
             ))

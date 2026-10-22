@@ -51,15 +51,15 @@ pub use stage::{
 /// The front-end interface version these schemas consume
 /// (`QueryEnvironment.interface_version`). A change invalidates every artifact.
 pub const INTERFACE_VERSION: u32 = 11;
-pub const LIR_VERSION: u32 = 49;
+pub const LIR_VERSION: u32 = 50;
 pub const LAYOUT_VERSION: u32 = 8;
-/// Hirsel cross-unit ABI v3: scalar register results are (value, status).
-pub const ABI_VERSION: u32 = 3;
+/// Hirsel cross-unit ABI v4: adds nonretaining contract identity to v3 register results.
+pub const ABI_VERSION: u32 = 4;
 /// `hirsel_rt_v2`.
 pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.
 pub const FLAT_FORMAT_VERSION: u32 = 0;
-pub const VALIDATOR_VERSION: u32 = 14;
+pub const VALIDATOR_VERSION: u32 = 15;
 
 /// Shared hand-built LIR assembly, available only with the `testing` feature.
 #[cfg(feature = "testing")]

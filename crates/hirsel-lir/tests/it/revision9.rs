@@ -30,6 +30,7 @@ fn closure_call(code: bool, callee: impl Fn(&mut Lir<Rc>, ValueId) -> Callee) ->
         }],
     );
     t.builder.unit.tables.closures.push(ClosureSite {
+        scoped: false,
         code,
         environment: l::ENV,
         captures,
