@@ -74,6 +74,8 @@ run_stage "native library bodies on both targets" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
 run_stage "native Map and Set laws: hash seeds, structural order and failure sites" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_maps_native:: --include-ignored --test-threads=1)
+run_stage "joined SSA loop views: heap and both native backends" \
+  buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_import::loop_version_matches_reference_heap_llvm_and_cranelift --ignored --test-threads=1)
 # Cursor parity and RC assertions are explicit full/native controls, not fast-tier tests.
 run_stage "borrow cursor projection, parity, deep walks and RC evidence" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)

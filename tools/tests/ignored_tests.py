@@ -15,6 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 # Sources whose ignored cases tools/check-native.sh runs, with the stage's selection.
 NATIVE = [
+    ('crates/hirsel-pipeline-tests/tests/rc/rc_import.rs', '$(libtest rc_import::loop_version_matches_reference_heap_llvm_and_cranelift --ignored --test-threads=1)'),
     ('crates/hirsel-llvm/src/', '//:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)'),
     ('crates/hirsel-llvm/tests/it/', '//:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)'),
     ('crates/hirsel-lir/tests/it/layout.rs', '//:hirsel-lir-test-it -- "${timeout[@]}" $(libtest layout:: --ignored)'),
