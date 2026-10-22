@@ -84,6 +84,26 @@ impl super::Log {
         if self.host_polled.contains(&key) || boundary.transition != super::Transition::Keep {
             return Err("parked host phases need a dedicated projection");
         }
+        let output = self
+            .host_outputs
+            .get(&key)
+            .ok_or("missing host output observation")?
+            .as_ref()
+            .map_err(|error| *error)?;
+        let sink = if output.is_some() {
+            let mut exclusive = keys.iter().filter(|(_, mode)| *mode == Mode::Exclusive);
+            let sink = exclusive
+                .next()
+                .ok_or("output has no exclusive sink")?
+                .0
+                .clone();
+            if exclusive.next().is_some() {
+                return Err("output has ambiguous sink");
+            }
+            Some(sink)
+        } else {
+            None
+        };
         let operation = crate::ordered::footprint::ObjectId {
             creator: task.to_vec(),
             ordinal,
@@ -117,6 +137,9 @@ impl super::Log {
                 O::HostCreated(row)
             };
             events.push((item, outcome));
+        }
+        if let (Some(sink), Some(bytes)) = (sink, output) {
+            events.push((I::HostResource(sink), O::HostOutput(bytes.clone())));
         }
         events.push((I::HostOperation(operation), O::HostResult(result)));
         self.subevents(&boundary, boundary.op.unwrap(), events);

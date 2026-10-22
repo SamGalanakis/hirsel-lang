@@ -71,7 +71,7 @@ pub(crate) unsafe fn request(
     if let Some(keys) = keys {
         super::super::events::request_keys(ctx, &keys);
     }
-    let (result, discovered) = {
+    let (result, discovered, output) = {
         let _segment = unsafe { role::Segment::new(ctx) };
         invoke(
             adapter,
@@ -95,6 +95,7 @@ pub(crate) unsafe fn request(
     let discovery = discovered
         .and_then(|discovered| super::super::events::discover_host(ctx, &result, &discovered));
     super::super::events::complete_host(ctx, close, &result);
+    super::super::events::host_output::record(ctx, output);
     discovery.map_err(|error| Stop::Refused(error.into()))?;
     if matches!(result, Err(AdapterError::Blocked)) {
         return Err(Stop::Refused(
@@ -125,15 +126,32 @@ fn invoke(
     cause: Option<u32>,
     request: Request,
     observing: bool,
-) -> (Result<Completion, AdapterError>, Discovered) {
-    let mut result = if let Some(cause) = cause {
+) -> (
+    Result<Completion, AdapterError>,
+    Discovered,
+    Result<Option<Vec<u8>>, &'static str>,
+) {
+    let bytes = observing
+        .then(|| match &request {
+            Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
+                Some(bytes.clone())
+            }
+            _ => None,
+        })
+        .flatten();
+    let (mut result, count) = if let Some(cause) = cause {
         match crate::io_checks::cancel_concurrent(adapter, token, &request, cause) {
-            Ok(Some(completion)) => Ok(completion),
-            Ok(None) => adapter.call_at(token, request),
-            Err(error) => Err(error),
+            Ok(Some(completion)) => (Ok(completion), bytes.as_ref().map(|_| 0)),
+            Ok(None) => adapter.call_observed_at(token, request),
+            Err(error) => (Err(error), bytes.as_ref().map(|_| 0)),
         }
     } else {
-        adapter.call_at(token, request)
+        adapter.call_observed_at(token, request)
+    };
+    let output = if observing {
+        super::super::events::host_output::project(bytes.as_deref(), &result, count)
+    } else {
+        Ok(None)
     };
     let discovered = if observing {
         discover(&mut result, adapter)
@@ -141,7 +159,7 @@ fn invoke(
         Ok(BTreeMap::new())
     };
     adapter.finish(token);
-    (result, discovered)
+    (result, discovered, output)
 }
 
 fn discover(

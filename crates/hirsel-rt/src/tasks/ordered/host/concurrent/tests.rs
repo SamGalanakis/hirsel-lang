@@ -11,6 +11,7 @@ struct Checked {
     run: AtomicPtr<crate::context::RunShared>,
     tokens: Mutex<Vec<u64>>,
     finished: Mutex<Vec<u64>>,
+    hide_output_count: bool,
 }
 impl Checked {
     fn role(&self) -> role::IdleGuard {
@@ -39,6 +40,16 @@ impl ConcurrentAdapter for Checked {
         let _role = self.role();
         self.tokens.lock().unwrap().push(token);
         self.real.call_at(token, request)
+    }
+    fn call_observed_at(
+        &self,
+        token: u64,
+        request: Request,
+    ) -> (Result<Completion, AdapterError>, Option<u64>) {
+        let _role = self.role();
+        self.tokens.lock().unwrap().push(token);
+        let (result, count) = self.real.call_observed_at(token, request);
+        (result, if self.hide_output_count { None } else { count })
     }
     fn finish(&self, token: u64) {
         let _role = self.role();
@@ -71,6 +82,7 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                 run: Default::default(),
                 tokens: Default::default(),
                 finished: Default::default(),
+                hide_output_count: false,
             });
             let install = adapter.clone();
             let calls = adapter.clone();
@@ -245,6 +257,7 @@ fn ordered_concurrent_bounded_cancellation_preserves_checks_and_rejects_waits_be
             run: Default::default(),
             tokens: Default::default(),
             finished: Default::default(),
+            hide_output_count: false,
         });
         let install = adapter.clone();
         let calls = adapter.clone();
@@ -345,5 +358,166 @@ fn ordered_concurrent_bounded_cancellation_preserves_checks_and_rejects_waits_be
         assert!(std::fs::read(root.path().join("data")).unwrap().is_empty());
         assert_eq!(*adapter.tokens.lock().unwrap(), [1, 2, 5]);
         assert_eq!(*adapter.finished.lock().unwrap(), [1, 2, 3, 4, 5]);
+    }
+}
+
+struct Output {
+    bytes: Vec<u8>,
+    mode: u8,
+}
+impl std::io::Write for Output {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = if self.mode == 1 {
+            let left = 5usize.saturating_sub(self.bytes.len());
+            if left == 0 {
+                return Err(std::io::Error::other("partial output"));
+            }
+            left.min(bytes.len())
+        } else {
+            bytes.len()
+        };
+        self.bytes.extend_from_slice(&bytes[..count]);
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.mode == 2 {
+            Err(std::io::Error::other("flush failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn ordered_concurrent_output_canonical_traces_keep_actual_prefixes_and_refuse_unknown_counts() {
+    use super::super::super::events::{CanonicalItem, CanonicalOutcome};
+    for mode in 0..5 {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let storage = Arc::new(Mutex::new(Output {
+                    bytes: vec![],
+                    mode,
+                }));
+                let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
+                real.set_send_output(crate::host::SendSink::shared(storage.clone()));
+                real.set_send_stderr(crate::host::SendSink::shared(storage.clone()));
+                let adapter = Arc::new(Checked {
+                    real: real
+                        .into_concurrent()
+                        .unwrap_or_else(|_| panic!("Send output")),
+                    run: Default::default(),
+                    tokens: Default::default(),
+                    finished: Default::default(),
+                    hide_output_count: mode == 4,
+                });
+                let install = adapter.clone();
+                let calls = adapter.clone();
+                let output = Arc::new(Mutex::new(None));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        engine::enable(ctx, policy);
+                        super::super::super::events::enable(ctx);
+                        super::super::super::events::initial_host(ctx, Some(1), None);
+                        install.run.store((*ctx).run_ptr(), Ordering::Release);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        let stdout =
+                            word(request(ctx, &*calls, Request::Stdout { io: 1 }).unwrap());
+                        let stderr =
+                            word(request(ctx, &*calls, Request::Stderr { io: 1 }).unwrap());
+                        assert_ne!(stdout, stderr);
+                        if mode == 3 {
+                            scheduler(ctx).cancel(0, 7);
+                        }
+                        for request_value in [
+                            Request::Print {
+                                stdout,
+                                bytes: b"stdout\0\xff".to_vec(),
+                            },
+                            Request::PrintStderr {
+                                stderr,
+                                bytes: b"stderr\n".to_vec(),
+                            },
+                        ] {
+                            let expected = match mode {
+                                1 | 2 => Err(crate::io::IoError::Fault(1)),
+                                3 => Err(crate::io::IoError::Canceled(7)),
+                                _ => Ok(()),
+                            };
+                            assert_eq!(
+                                request(ctx, &*calls, request_value).unwrap(),
+                                Ok(Completion::Unit(expected))
+                            );
+                        }
+                        assert!((*ctx).pending_ordered_host.is_none());
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        if mode == 4 {
+                            assert!(log.canonical().is_err());
+                            assert!(log.jsonl().is_err());
+                            assert!(!log.canonical.iter().any(|event| matches!(
+                                event.outcome,
+                                CanonicalOutcome::HostOutput(_)
+                            )));
+                        } else {
+                            let events = log.canonical().unwrap();
+                            let outputs: Vec<_> = events
+                                .iter()
+                                .filter_map(|event| {
+                                    if let CanonicalOutcome::HostOutput(bytes) = &event.outcome {
+                                        Some((event, bytes))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            assert_eq!(outputs.len(), 2);
+                            assert!(matches!(outputs[0].0.item, CanonicalItem::HostResource(_)));
+                            assert_eq!(
+                                outputs[0].0.item, outputs[1].0.item,
+                                "aliased logical sink"
+                            );
+                            assert_eq!(outputs[1].0.version, outputs[0].0.version + 2);
+                            let actual: Vec<_> = outputs
+                                .iter()
+                                .flat_map(|(_, bytes)| bytes.iter().copied())
+                                .collect();
+                            let expected = match mode {
+                                1 => &b"stdou"[..],
+                                3 => &b""[..],
+                                _ => &b"stdout\0\xffstderr\n"[..],
+                            };
+                            assert_eq!(actual, expected);
+                            *seen.lock().unwrap() = Some(log.jsonl().unwrap());
+                        }
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let expected = match mode {
+                    1 => &b"stdou"[..],
+                    3 => &b""[..],
+                    _ => &b"stdout\0\xffstderr\n"[..],
+                };
+                assert_eq!(storage.lock().unwrap().bytes, expected);
+                let serialized = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&serialized, reference);
+                } else {
+                    reference = Some(serialized);
+                }
+                assert_eq!(*adapter.finished.lock().unwrap(), [1, 2, 3, 4]);
+            }
+        }
     }
 }

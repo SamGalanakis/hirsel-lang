@@ -11,6 +11,7 @@ use crate::ordered::{Next, Operation, Retirement};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod host_keys;
+pub(super) mod host_output;
 mod host_requests;
 pub(super) use host_requests::HostAuthority;
 mod host_values;
@@ -179,6 +180,7 @@ pub(super) enum CanonicalOutcome {
     HostAlias(host_keys::Creation),
     HostResult(host_values::HostValue),
     HostFinished,
+    HostOutput(Vec<u8>),
     Created(ObjectId),
     Alias(ObjectId),
     Scalar(Vec<u8>),
@@ -366,6 +368,7 @@ pub(super) struct Log {
     pub host_roots: BTreeMap<u64, HostAuthority>,
     host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
     host_certified: BTreeSet<(Vec<u32>, u64)>,
+    host_outputs: BTreeMap<(Vec<u32>, u64), Result<Option<Vec<u8>>, &'static str>>,
     host_creations: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Creation>>,
     pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_requests::HostRequestValue>>,
     pub host_completions: Vec<HostCompletion>,

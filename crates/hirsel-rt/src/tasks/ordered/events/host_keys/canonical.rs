@@ -42,6 +42,8 @@ fn pending() -> Log {
         key.clone(),
         Some(vec![(Resource::Coupled, Mode::Exclusive)]),
     );
+    log.host_outputs
+        .insert(key.clone(), Ok(Some(vec![0, 255, 7])));
     log.host_creations.insert(key, vec![]);
     let result = Ok(Completion::Unit(Ok(())));
     let observation = super::super::host_values::project(&result, |_| None).unwrap();
@@ -57,7 +59,7 @@ fn pending() -> Log {
 
 #[test]
 fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent() {
-    for missing in 0..11 {
+    for missing in 0..12 {
         let mut log = pending();
         let key = (vec![1], 0);
         match missing {
@@ -95,6 +97,9 @@ fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent(
                     },
                     field: 0,
                 }),
+            11 => {
+                log.host_outputs.remove(&key);
+            }
             _ => unreachable!(),
         }
         assert!(log.certify_host(&[1], 0).is_err());
@@ -112,7 +117,7 @@ fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent(
         log.canonical().is_err(),
         "completion evidence cannot replace its post-effect continuation"
     );
-    assert_eq!(log.canonical.len(), 3);
+    assert_eq!(log.canonical.len(), 4);
     assert!(matches!(
         log.canonical[0].outcome,
         CanonicalOutcome::HostRequest(_)
@@ -130,7 +135,7 @@ fn canonical_host_requires_every_owned_observation_before_emitting_any_subevent(
         log.certify_host(&[1], 0).is_err(),
         "one completion cannot emit twice"
     );
-    assert_eq!(log.canonical.len(), 3);
+    assert_eq!(log.canonical.len(), 4);
 }
 
 #[test]
@@ -165,6 +170,7 @@ fn canonical_host_alias_observations_keep_the_original_handle_creation_version()
     let request = log.host_requests[&(vec![1], 0)].clone();
     log.host_requests.insert(key.clone(), request);
     log.host_key_observations.insert(key.clone(), Some(vec![]));
+    log.host_outputs.insert(key.clone(), Ok(None));
     log.host_creations.insert(key, vec![row]);
     let mut completion = log.host_completions[0].clone();
     completion.ordinal = 1;

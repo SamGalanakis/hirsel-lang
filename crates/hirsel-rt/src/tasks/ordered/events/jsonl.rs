@@ -115,6 +115,7 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
         O::HostCreated(row) => json!({"kind":"host_created", "creation":creation(row)}),
         O::HostAlias(row) => json!({"kind":"host_alias", "creation":creation(row)}),
         O::HostResult(result) => json!({"kind":"host_result", "result":host(result)}),
+        O::HostOutput(value) => json!({"kind":"host_output", "bytes":bytes(value)}),
         O::HostFinished => json!({"kind":"host_finished"}),
         O::Created(id) => json!({"kind":"created", "id":object(id)}),
         O::Alias(id) => json!({"kind":"alias", "id":object(id)}),
