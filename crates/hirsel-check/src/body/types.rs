@@ -720,6 +720,13 @@ impl Checker<'_, '_> {
                 }
             }
             _ => {
+                // H can receive a branch context that P did not yet know.
+                // It overrides P's provisional constructor owner.
+                if let Some(expected) = expected
+                    && let Some(variant) = self.expected_variant(id, path, expected, callee)?
+                {
+                    return Ok(variant);
+                }
                 let ctx = self
                     .body
                     .resolution

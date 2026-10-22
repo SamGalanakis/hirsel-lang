@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 7
+// twin: LANG/LANG-2-payload-shadow-ok.hir
+type Label[T] = Some(T) | Empty
+
+fn probe() {
+  let value = Some(1)
+}

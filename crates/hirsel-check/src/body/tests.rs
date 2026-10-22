@@ -362,3 +362,26 @@ fn usefulness_work_grows_with_patterns_not_recursive_types() {
         );
     }
 }
+
+#[test]
+fn variant_payloads_determine_arguments_without_later_text() {
+    for source in [
+        "type Wrap[T] = Wrapped(T) | Empty\nfn main() { let unused = Wrapped(1u8) }",
+        "fn main() { let unused = Some(\"raw.bin\") }",
+        "fn main(c:bool) { let unused = if c { Some(\"raw.bin\") } else { None() } }",
+        "type Wrap[T] = Wrapped(T) | Empty\nfn main(c:bool) { let unused = match c { true => Wrapped(1u8), false => Empty() } }",
+    ] {
+        let (ds, _, _) = support::check_source(source);
+        assert!(ds.is_empty(), "{source}: {ds:?}");
+    }
+    for source in [
+        "type Wrap[T] = Wrapped(T) | Empty\nfn main() { let unused = Wrapped(1) }",
+        "type Either[T,U] = First(T) | Second(U)\nfn main() { let unused = First(1u8) }",
+        "fn main() { let unused = None() }",
+        "fn main(c:bool) { let unused = if c { None() } else { Some(\"raw.bin\") } }",
+    ] {
+        let (ds, _, _) = support::check_source(source);
+        assert_eq!(ds.len(), 1, "{source}: {ds:?}");
+        assert_eq!(ds[0].rule.as_str(), "LANG-2", "{source}: {ds:?}");
+    }
+}

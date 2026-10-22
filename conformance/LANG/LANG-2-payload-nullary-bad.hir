@@ -1,0 +1,6 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 5
+// twin: LANG/LANG-2-payload-nullary-ok.hir
+fn probe() {
+  let value = None()
+}

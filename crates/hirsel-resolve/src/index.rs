@@ -277,6 +277,23 @@ impl ManifestIndex {
         }
     }
 
+    /// Type names available without a module head, including core defaults.
+    /// The caller records the manifest lookup that led to this candidate search.
+    pub fn unqualified_types(&self, context: &FileContext) -> Vec<DefPath> {
+        self.entries
+            .values()
+            .filter(|entry| {
+                let path = &entry.definition;
+                entry.namespace == Namespace::Type
+                    && ((path.0.package == context.package
+                        && (path.0.modules == context.modules || path.0.modules.is_empty()))
+                        || (path.package_is("core", "1") && path.0.modules.is_empty()))
+                    && self.access(context, path).is_ok()
+            })
+            .map(|entry| entry.definition.clone())
+            .collect()
+    }
+
     pub fn entry(&self, definition: &DefPath) -> Option<&DefinitionEntry> {
         self.entries.get(&DefId::intern(definition))
     }

@@ -1,0 +1,10 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 9
+// twin: LANG/LANG-2-payload-ambiguous-ok.hir
+type Left[T] = Item(T) | NoLeft
+
+type Right[T] = Item(T) | NoRight
+
+fn probe() {
+  let value = Item("label")
+}

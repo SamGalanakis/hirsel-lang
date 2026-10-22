@@ -1792,6 +1792,16 @@ conformance/LANG/LANG-2-operand-context.hir
 conformance/LANG/LANG-2-option-comparison-context-run.hir
 conformance/LANG/LANG-2-option-comparison-slots-ok.hir
 conformance/LANG/LANG-2-option-comparison-slots-run.hir
+conformance/LANG/LANG-2-payload-ambiguous-bad.hir
+conformance/LANG/LANG-2-payload-ambiguous-ok.hir
+conformance/LANG/LANG-2-payload-determined-bad.hir
+conformance/LANG/LANG-2-payload-determined-ok.hir
+conformance/LANG/LANG-2-payload-nullary-bad.hir
+conformance/LANG/LANG-2-payload-nullary-ok.hir
+conformance/LANG/LANG-2-payload-shadow-bad.hir
+conformance/LANG/LANG-2-payload-shadow-ok.hir
+conformance/LANG/LANG-2-payload-undetermined-bad.hir
+conformance/LANG/LANG-2-payload-undetermined-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-bad.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-ok.hir

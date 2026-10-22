@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: accept
+type Label[T] = Some(T) | Empty
+
+fn probe() {
+  let value = Some("label")
+  let checked: Label[String] = take value
+}

@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: accept
+type Wrapped[T] = Wrap(T) | Empty
+
+fn probe() {
+  let a = Wrap("raw.bin")
+  let b = Some(1u8)
+}

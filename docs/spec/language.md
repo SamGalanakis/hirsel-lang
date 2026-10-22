@@ -49,6 +49,22 @@ parameter. Lexical instantiations follow ordinary closure capture rules. The ins
 retains its declared modes, `uses`, allocation and relation contracts
 ([GEN-1](generics.md#gen-1-bounds)); ordinary callable receipt checks still apply. An
 error-mapper path under [LANG-8](#lang-8-errors) is instantiated from the error it maps.
+A variant constructor call without an expected type selects an unambiguous variant
+declaration in scope and infers its type arguments from its payload arguments'
+already determined types, left to right, as for a generic function call. This applies
+to user variants as well as core variants: `Some("raw.bin")` determines `Option[String]`.
+A local callable or a contextual variant keeps its ordinary precedence. Multiple
+user declarations of the same variant name require an expected type; payload
+types never choose between declarations. A user variant shadows a core default.
+Every type argument must be determined by the payloads or an expected type:
+`None()` alone and `Only("raw.bin")` for `type Choice[T, U] = Only(T) | Other(U)`
+are LANG-2 because a type argument is undetermined. A later argument cannot give an
+earlier unsuffixed literal its type. As in Rust's constructor call checking
+([callee.rs:1108](https://github.com/rust-lang/rust/blob/1a2c4797ef2570bd76ca5dee34449169bc7dc457/compiler/rustc_hir_typeck/src/callee.rs#L1108)),
+payloads constrain the selected constructor's declared parameters and result.
+Hirsel reuses its ordinary generic call inference and does not introduce full
+unification or payload-based overload selection.
+
 Without an expectation, the first valid, non-bottom branch of a conditional or match
 supplies the context for later branches in source order; later text never types an
 earlier literal. A call whose labels are invalid withholds only the contextual typing that

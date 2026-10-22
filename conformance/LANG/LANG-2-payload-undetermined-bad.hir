@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 7
+// twin: LANG/LANG-2-payload-undetermined-ok.hir
+type Choice[T, U] = Only(T) | Other(U)
+
+fn probe() {
+  let a = Only("raw.bin")
+}

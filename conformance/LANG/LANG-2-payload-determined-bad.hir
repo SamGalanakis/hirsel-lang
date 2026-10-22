@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 7
+// twin: LANG/LANG-2-payload-determined-ok.hir
+type Wrapped[T] = Wrap(T) | Empty
+
+fn probe() {
+  let a = Wrap(1)
+}

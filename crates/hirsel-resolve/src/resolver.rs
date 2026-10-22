@@ -1775,6 +1775,48 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         });
         found
     }
+    /// Choose a declaration, never a type argument. H infers arguments from
+    /// the call's payloads in source order, using ordinary constructor inference.
+    fn inferred_variant_owner(&mut self, name: Symbol) -> Option<DefPath> {
+        let mut declarations: BTreeSet<_> = self
+            .index
+            .unqualified_types(&self.context)
+            .into_iter()
+            .collect();
+        // Types reached through declared signatures are also in view, as for
+        // contextual variant deferral. No implementation body is consulted.
+        declarations.extend(self.signatures.values().flatten().filter_map(|s| {
+            matches!(s.kind, ty::SignatureKind::Type(_)).then(|| s.definition.path().clone())
+        }));
+        let spelling = self.spelling(name);
+        let mut candidates = BTreeSet::new();
+        for owner in declarations {
+            let Some(signature) = self.signature(&owner) else {
+                continue;
+            };
+            if signature.metadata.alias
+                || self.index.access(&self.context, &owner).is_err()
+                || (signature.metadata.visibility == Visibility::PublicOpaque
+                    && owner.0.package != self.context.package)
+            {
+                continue;
+            }
+            if self
+                .shape(&owner, &[])
+                .variants
+                .iter()
+                .any(|(n, _)| n == &spelling)
+            {
+                candidates.insert(owner);
+            }
+        }
+        // A user declaration shadows a core default; two user owners remain
+        // ambiguous. Payload types never select between overloaded declarations.
+        if candidates.iter().any(|p| !p.package_is("core", "1")) {
+            candidates.retain(|p| !p.package_is("core", "1"));
+        }
+        (candidates.len() == 1).then(|| candidates.into_iter().next().unwrap())
+    }
     fn variant(
         &mut self,
         name: Symbol,
@@ -2204,6 +2246,25 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 expected
             }
             Err(e) => {
+                if matches!(e, LookupError::Missing | LookupError::Provider(_))
+                    && path.package.is_none()
+                    && path.segments.len() == 1
+                    && matches!(expected, ExpectedType::Unknown)
+                    && self.callees.contains(&id)
+                    && let Some(owner) = self.inferred_variant_owner(path.segments[0])
+                {
+                    let nominal = ExpectedType::nominal(owner);
+                    if let Some((variant, ..)) =
+                        self.variant(path.segments[0], &nominal, NameSite::Expression(id), span)
+                    {
+                        self.output
+                            .query
+                            .value
+                            .expressions
+                            .push((id, ResolvedName::Variant(variant)));
+                        return nominal;
+                    }
+                }
                 if matches!(e, LookupError::Missing | LookupError::Provider(_))
                     && path.package.is_none()
                     && path.segments.len() == 1

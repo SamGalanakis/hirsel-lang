@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: accept
+type Choice[T, U] = Only(T) | Other(U)
+
+fn probe() {
+  let a: Choice[String, u8] = Only("raw.bin")
+}

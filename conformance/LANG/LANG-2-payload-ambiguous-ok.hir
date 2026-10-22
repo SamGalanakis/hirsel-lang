@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: accept
+type Left[T] = Item(T) | NoLeft
+
+type Right[T] = Item(T) | NoRight
+
+fn probe() {
+  let value: Left[String] = Item("label")
+}
