@@ -434,6 +434,7 @@ impl Backend<Command> for Objects<'_> {
                 }
                 Command::TaskDetach { scope, child: word } => {
                     assert!(!early, "detach only retires");
+                    let canonical = events::detach_observed(s, *scope, *word);
                     let scope = s.scope_handle(*scope);
                     let child = s.task_handle(*word, scope);
                     let row = s.task(child);
@@ -451,7 +452,9 @@ impl Backend<Command> for Objects<'_> {
                         }
                         Next::Yield
                     };
-                    (Outcome::image(0, Vec::new()), next)
+                    let mut outcome = Outcome::image(0, Vec::new());
+                    outcome.canonical = canonical;
+                    (outcome, next)
                 }
                 Command::SenderClose { sender } => {
                     assert!(!early, "a sender close only retires");
