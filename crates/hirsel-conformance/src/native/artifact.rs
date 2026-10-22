@@ -60,17 +60,36 @@ pub trait Probe {
 /// The reference observation of `source`, in an engine that first checked
 /// `warm` when one is given. None when the source does not check or run.
 pub fn reference(source: &str, warm: Option<&str>) -> Option<Observation> {
+    prepare_reference(source, warm).ok().map(|c| c.reference)
+}
+
+/// The reference observation and its standalone process status. Status belongs to
+/// `RunOutcome::exit_code`; `Observation::exit_code` only records an entry return.
+/// Missing execution observations and tooling errors remain errors, never failures.
+pub fn reference_status(source: &str, warm: Option<&str>) -> Result<(Observation, i32), String> {
+    let prepared = prepare_reference(source, warm)?;
+    let sites = hirsel_driver::native::Sites::new(prepared.input.snapshot());
+    // Wait details do not affect process status. Keep the observation unchanged.
+    let outcome = prepared
+        .reference
+        .outcome(&sites, vec![])
+        .map_err(|e| format!("reference outcome: {e:?}"))?;
+    Ok((prepared.reference, outcome.exit_code()))
+}
+
+fn prepare_reference(source: &str, warm: Option<&str>) -> Result<super::Prepared, String> {
     let mut engine = hirsel_engine::QueryEngine::new(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
     if let Some(warm) = warm {
-        let file = engine.sources.add("warm.hir", warm.into())?;
+        let file = engine
+            .sources
+            .add("warm.hir", warm.into())
+            .ok_or("warm source too large")?;
         let _ = hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context());
     }
     super::checked(&mut engine, "<reference>", source, None)
-        .ok()
-        .map(|c| c.reference)
 }
 
 /// The reference interpreter against one native configuration.

@@ -379,6 +379,75 @@ fn generated_programs_are_valid_and_directed_failures_fail_by_their_rule() {
     });
 }
 
+/// A failure carries a rule and source site; an absent return code alone is
+/// insufficient (Blocked and tooling errors are not language failures).
+fn assert_reference_failure(observed: &Observation, status: i32, rule: &str, definition: &str) {
+    assert_eq!(status, 2, "{}", observed.render());
+    assert_eq!(observed.failures.len(), 1, "{}", observed.render());
+    let primary = &observed.failures[0];
+    assert_eq!(primary.rule, rule, "{}", observed.render());
+    assert_eq!(
+        primary.definition.0.name.as_str(),
+        definition,
+        "{}",
+        observed.render()
+    );
+    assert_eq!(primary.file, "case.hir");
+    assert!(
+        primary.line > 0 && primary.column > 0,
+        "{}",
+        observed.render()
+    );
+    assert!(primary.operation.is_none(), "{}", observed.render());
+}
+
+#[test]
+fn generated_requires_64_retains_false_contract_failure() {
+    on_compiler(|| {
+        let source = hirsel_conformance::native::generate::program(
+            64,
+            Some(hirsel_conformance::native::generate::Fault::Requires),
+        );
+        assert!(source.contains("small(v3 - v3 + 1000u64)"));
+        let (observed, status) = artifact::reference_status(&source, None).unwrap();
+        assert_reference_failure(&observed, status, "FACT-1", "small");
+        let failure = &observed.failures[0];
+        assert_eq!((failure.line, failure.column), (21, 12));
+        assert!(observed.output.ends_with(b"988\ndrop odd\n"));
+        assert!(!String::from_utf8_lossy(&observed.output).contains("after the failure"));
+        assert!(!String::from_utf8_lossy(&observed.output).contains("end"));
+    });
+}
+
+#[test]
+fn requires_reference_controls() {
+    on_compiler(|| {
+        let reduced = "fn small(a: u64) -> u64\n  requires a < 1000u64\n{ a + 1u64 }\npub fn main() -> Result[(), ()] {\n  let v3 = 988u64\n  let bad = small(v3 - v3 + 1000u64)\n  Ok(())\n}\n";
+        for source in [
+            reduced.to_string(),
+            reduced.replace("v3 - v3 + 1000u64", "1000u64"),
+        ] {
+            let (observed, status) = artifact::reference_status(&source, None).unwrap();
+            assert_reference_failure(&observed, status, "FACT-1", "small");
+            assert_eq!(
+                (observed.failures[0].line, observed.failures[0].column),
+                (2, 12)
+            );
+        }
+        let evaluating = reduced.replace("a < 1000u64", "1u64 / (a - a) < 1000u64");
+        let (observed, status) = artifact::reference_status(&evaluating, None).unwrap();
+        assert_reference_failure(&observed, status, "SEM-1", "small");
+        let success = reduced.replace("v3 - v3 + 1000u64", "999u64");
+        let (observed, status) = artifact::reference_status(&success, None).unwrap();
+        assert_eq!(observed.exit_code, Some(0));
+        assert_eq!(status, 0);
+        assert!(observed.failures.is_empty());
+        assert!(
+            artifact::reference_status(&reduced.replace("small(v3", "missing(v3"), None).is_err()
+        );
+    });
+}
+
 /// The larger generated window is reserved for the on-demand full gate.
 #[test]
 #[ignore = "full gate: generated program validity window"]
@@ -388,16 +457,48 @@ fn full_gate_generated_program_window_runs_by_the_reference() {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        for case in hirsel_conformance::native::generate::cases(seed, 64) {
-            let observed = artifact::reference(&case.source, None)
-                .unwrap_or_else(|| panic!("{} does not run:\n{}", case.id, case.source));
-            assert_eq!(
-                observed.exit_code,
-                Some(if case.id.contains("success-") { 0 } else { 2 }),
+        let cases = hirsel_conformance::native::generate::cases(seed, 64);
+        assert_eq!(cases.len(), 128); // 64 seeds, each with success and directed failure.
+        let mut successes = 0;
+        let mut failures = 0;
+        for case in cases {
+            let (observed, status) = artifact::reference_status(&case.source, None)
+                .unwrap_or_else(|e| panic!("{} does not run: {e}\n{}", case.id, case.source));
+            if case.id.contains("success-") {
+                assert_eq!(observed.exit_code, Some(0), "{}", case.id);
+                assert_eq!(status, 0, "{}", case.id);
+                assert!(observed.failures.is_empty(), "{}", case.id);
+                assert!(
+                    String::from_utf8_lossy(&observed.output).contains("end"),
+                    "{}",
+                    case.id
+                );
+                successes += 1;
+            } else {
+                let rule = if case.id.contains("requires-") {
+                    "FACT-1"
+                } else if case.id.contains("index-") {
+                    "MEM-14"
+                } else {
+                    "SEM-1"
+                };
+                let definition = if rule == "FACT-1" { "small" } else { "main" };
+                assert_reference_failure(&observed, status, rule, definition);
+                let output = String::from_utf8_lossy(&observed.output);
+                assert!(
+                    !output.contains("after the failure") && !output.contains("end"),
+                    "{}",
+                    case.id
+                );
+                failures += 1;
+            }
+            assert!(
+                String::from_utf8_lossy(&observed.output).contains("drop "),
                 "{}",
                 case.id
             );
         }
+        assert_eq!((successes, failures), (64, 64));
     });
 }
 

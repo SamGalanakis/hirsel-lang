@@ -3,7 +3,6 @@
 # id: a test target (hirsel-rt-test-it-shard-2), a binary and case (hirsel-rt-test-it::replay::kill_order)
 # or a corpus case (conformance/MEM/MEM-7-x-run.hir). A lane that meets a red it did not cause adds a row
 # itself and pushes it straight to main; the lane that fixes a red removes its row.
-hirsel-conformance-test-it::native_gate::full_gate_generated_program_window_runs_by_the_reference	generated/requires-64 exits None where 2 is expected; red at 377f9341 under --include-ignored; found by testsmash round 3 (RB)	unassigned (reported to the orchestrator)	2026-10-20
 conformance/SEM/SEM-3-zstd-dictionary-run.hir::heap	Dictionary checked-heap failure campaign exceeds unchanged 600s pool timeout (576820ms CPU,600185ms wall,1853044KiB peak); owner approved one-cell exception in reply531811; native diagnostic/default/system17attempts pass	zstd-perf	2026-10-20
 hirsel-authority-unittest::corpus::real_phase_corpus_ratchet	PROV-1-field-index-container-ok line 21 unexpectedly rejects on pristine post-cutover 69412fd9; historical C4 residual report also records it; compile-cliffs baseline 27 pass/1 fail	checker-precision	2026-10-21
 conformance/DET/DET-1-std-store-crash-boundaries-run.hir	CAP-1 at line 55: call authority exceeds the declared uses restriction; identical diagnostic on pristine 69412fd9 and interp-fast	unassigned (checker cutover)	2026-10-21
