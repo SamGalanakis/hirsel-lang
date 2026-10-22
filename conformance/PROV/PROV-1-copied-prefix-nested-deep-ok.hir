@@ -1,0 +1,36 @@
+// rule: PROV-1
+// expect: accept
+type Inner {
+  n: u64,
+  other: u64,
+}
+
+type R {
+  a: Inner,
+  b: u64,
+}
+
+fn make(r: R) -> Option[u8 of r.a.other] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r.a.other]) {}
+
+fn make_i(r: Inner) -> Option[u8 of r.other] {
+  None
+}
+
+fn inspect_i(r: Inner, p: Option[u8 of r.other]) {}
+
+type Outer {
+  inner: R,
+}
+
+fn probe(take x: Outer) {
+  let mut r = copy x
+  r.inner.a.n = 3
+  let s = copy r.inner
+  let t = copy s.a
+  let q = make_i(t)
+  inspect_i(t, q)
+}

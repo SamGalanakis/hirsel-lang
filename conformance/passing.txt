@@ -4406,8 +4406,12 @@ conformance/PROV/PROV-1-copied-prefix-if-run.hir
 conformance/PROV/PROV-1-copied-prefix-index-value-ok.hir
 conformance/PROV/PROV-1-copied-prefix-indexed-run.hir
 conformance/PROV/PROV-1-copied-prefix-match-run.hir
+conformance/PROV/PROV-1-copied-prefix-nested-copy-ok.hir
+conformance/PROV/PROV-1-copied-prefix-nested-deep-ok.hir
+conformance/PROV/PROV-1-copied-prefix-nested-field-ok.hir
 conformance/PROV/PROV-1-copied-prefix-nested-loop-ok.hir
 conformance/PROV/PROV-1-copied-prefix-nested-ok.hir
+conformance/PROV/PROV-1-copied-prefix-nested-record-ok.hir
 conformance/PROV/PROV-1-copied-prefix-range-run.hir
 conformance/PROV/PROV-1-copied-prefix-repeated-bad.hir
 conformance/PROV/PROV-1-copied-prefix-second-field-ok.hir

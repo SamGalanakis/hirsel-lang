@@ -365,8 +365,11 @@ impl<'a> Checker<'a> {
                     SourceProjectionKind::Index(_) => None,
                 })
                 .collect();
-            if !prefix.is_empty() {
-                prefixes.insert(prefix);
+            // A deep write may be the only direct use of an intermediate
+            // owner. Its copied subrecords still need callable selectors
+            // relative to each parent, e.g. inner.a.other beside inner.a.n.
+            for end in 1..=prefix.len() {
+                prefixes.insert(prefix[..end].to_vec());
             }
         }
         let mut branded_paths = selectors.clone();

@@ -147,18 +147,24 @@ impl DefinitionInputs {
             }
         }
         let mut origin_selectors = std::collections::BTreeSet::new();
+        // A copied projection receives identities relative to that value.
+        // For a brand on x.a.other, copying x.a must retain the `other`
+        // selector as well as the enclosing `a.other` path. Direct callee
+        // headers need not occur in the definition's emitted type closure.
+        let mut select = |origin: &hirsel_types::Origin| {
+            let fields: Vec<_> = origin.fields.iter().copied().collect();
+            for start in 0..fields.len() {
+                origin_selectors.insert(fields[start..].to_vec());
+            }
+        };
         for row in definition.types.iter().map(|&id| t.row(id)) {
             work::count(Counter::ValidateDefinitionInputRows);
             for origin in &row.brand.alternatives {
-                if !origin.fields.is_empty() {
-                    origin_selectors.insert(origin.fields.iter().copied().collect());
-                }
+                select(origin);
             }
             for reach in row.modes.relation.reaches() {
                 if let hirsel_types::Reach::Place(origin) = reach {
-                    if !origin.fields.is_empty() {
-                        origin_selectors.insert(origin.fields.iter().copied().collect());
-                    }
+                    select(origin);
                 }
             }
         }

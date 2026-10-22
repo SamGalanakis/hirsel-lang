@@ -1371,3 +1371,153 @@ fn nested_loop_origins_remain_live_until_their_own_iteration_or_explicit_end() {
         }
     });
 }
+
+#[test]
+fn nested_copied_prefix_brands_agree_with_independent_validation() {
+    with_compiler_stack(|| {
+        let prelude = r#"
+type Inner { n: u64, other: u64 }
+type R { a: Inner, b: u64 }
+fn make(r: R) -> Option[u8 of r.a.other] { None }
+fn inspect(r: R, p: Option[u8 of r.a.other]) {}
+fn make_i(r: Inner) -> Option[u8 of r.other] { None }
+fn inspect_i(r: Inner, p: Option[u8 of r.other]) {}
+"#;
+        for witness in [
+            "let q = make(r); inspect(r, q)",
+            "let q = make_i(r.a); inspect_i(r.a, q)",
+            "let s = copy r.a; let q = make_i(s); inspect_i(s, q)",
+        ] {
+            let source = format!(
+                "{prelude}\nfn probe(take x: R) {{ let mut r = copy x; r.a.n = 3; {witness} }}\nfn main() {{}}"
+            );
+            let (probe, signatures) = lowered(&source, "probe");
+            assert_eq!(kinds(&probe, &signatures), [], "{witness}");
+        }
+    });
+}
+
+#[test]
+fn nested_copied_prefix_brands_reject_forged_roots_and_siblings() {
+    with_compiler_stack(|| {
+        for argument in ["r.a", "s"] {
+            let source = format!(
+                r#"
+type Inner {{ n: u64, other: u64 }}
+type R {{ a: Inner, b: Inner }}
+fn make_i(r: Inner) -> Option[u8 of r.other] {{ None }}
+fn inspect_i(r: Inner, p: Option[u8 of r.other]) {{}}
+fn probe(take x: R, y: R) {{
+  let mut r = copy x
+  r.a.n = 3
+  let s = copy r.a
+  let q = make_i({argument})
+  inspect_i({argument}, q)
+}}
+fn main() {{}}
+"#
+            );
+            let (probe, signatures) = lowered(&source, "probe");
+            assert_eq!(kinds(&probe, &signatures), []);
+            let body = &probe.bodies[0];
+            let token = body
+                .blocks
+                .iter()
+                .find_map(|b| match &b.terminator {
+                    hirsel_tir::Terminator::Call {
+                        callee: hirsel_tir::Callee::Definition { path, .. },
+                        returns: Some(ret),
+                        ..
+                    } if path.0.name.as_str() == "make_i" => {
+                        Some(body.places[ret.destination.0 as usize].ty)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let mut origins = vec![];
+            hirsel_types::visit_type_origins(types(), token, |o, _| {
+                origins.push(o.clone());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(origins.len(), 1);
+            let original = &origins[0];
+            assert_eq!(
+                original.fields.iter().copied().collect::<Vec<_>>(),
+                [hirsel_types::FieldId(0), hirsel_types::FieldId(1)]
+            );
+            let owner = body
+                .places
+                .iter()
+                .find(|p| {
+                    p.root == body.parameters[0] && p.projection.is_empty() && p.binding.is_some()
+                })
+                .unwrap()
+                .binding
+                .as_ref()
+                .unwrap();
+            assert_eq!(original.root, owner.root);
+            let foreign = body
+                .places
+                .iter()
+                .find(|p| {
+                    p.root == body.parameters[1] && p.projection.is_empty() && p.binding.is_some()
+                })
+                .unwrap()
+                .binding
+                .as_ref()
+                .unwrap();
+            for wrong_root in [true, false] {
+                let mut replacement = original.clone();
+                if wrong_root {
+                    replacement.root = foreign.root.clone();
+                } else {
+                    replacement.fields[0] = hirsel_types::FieldId(1);
+                }
+                assert_ne!(&replacement, original);
+                let rewrite = |ty| {
+                    hirsel_types::map_brand_origins(types(), ty, |o, _| {
+                        Ok(if o == original {
+                            replacement.clone()
+                        } else {
+                            o.clone()
+                        })
+                    })
+                    .unwrap()
+                };
+                let mut forged = probe.clone();
+                for body in &mut forged.bodies {
+                    for local in &mut body.locals {
+                        local.ty = rewrite(local.ty);
+                    }
+                    for place in &mut body.places {
+                        place.ty = rewrite(place.ty);
+                    }
+                }
+                let violations = kinds(&forged, &signatures);
+                assert_eq!(
+                    violations,
+                    [
+                        ViolationKind::TypeMismatch {
+                            entity: "call result"
+                        },
+                        ViolationKind::TypeMismatch {
+                            entity: "call argument"
+                        }
+                    ],
+                    "{argument}, wrong_root={wrong_root}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn nested_copied_prefix_brands_deep_copies_agree() {
+    with_compiler_stack(|| {
+        let source =
+            include_str!("../../../../conformance/PROV/PROV-1-copied-prefix-nested-deep-ok.hir");
+        let (probe, signatures) = lowered(source, "probe");
+        assert_eq!(kinds(&probe, &signatures), []);
+    });
+}

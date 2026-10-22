@@ -1994,3 +1994,69 @@ fn generated_body_debug_preserves_nested_body_sites() {
         }
     });
 }
+
+#[test]
+fn nested_copied_prefix_brands_preserve_ownership_on_h_llvm_and_cranelift() {
+    let source = r#"
+type Inner { n: u64, other: String }
+type R { a: Inner, b: String }
+fn make_i(r: Inner) -> Option[u8 of r.other] { None }
+fn inspect_i(r: Inner, p: Option[u8 of r.other]) {}
+fn probe(take x: R) {
+  let mut r = copy x
+  r.a.n = 3
+  let q = make_i(r.a)
+  inspect_i(r.a, q)
+  let s = copy r.a
+  let qs = make_i(s)
+  inspect_i(s, qs)
+  failure.check(x.a.n == 1 && r.a.n == 3 && s.other == x.a.other, TextInvariant())
+  failure.check(r.b == x.b, TextInvariant())
+}
+pub fn main() -> Result[(), ()] {
+  probe(R(a: Inner(n: 1, other: "preserved"), b: "sibling"))
+  Ok(())
+}
+"#;
+    let mut configurations = smoke_matrix();
+    configurations.truncate(2);
+    configurations[0].engine = Engine::Heap { campaign: false };
+    configurations.push(Configuration {
+        options: configurations[0].options.clone(),
+        engine: Engine::Cranelift {
+            partition: Partition::Whole,
+            runtime: hirsel_driver::native::Runtime::Diagnostic,
+        },
+    });
+    assert_eq!(configurations.len(), 3);
+    with_compiler_stack(|| {
+        let program = checked(source);
+        assert_eq!(
+            program.reference.exit_code,
+            Some(0),
+            "{:?}",
+            program.reference
+        );
+        assert!(
+            program.reference.failures.is_empty(),
+            "{:?}",
+            program.reference
+        );
+        let outcomes = differential(
+            &program.validated,
+            &program.entry,
+            &program.reference,
+            &configurations,
+            &toolchain(&configurations),
+            &scratch("nested-copied-prefix-brands"),
+        );
+        assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in outcomes {
+            eprintln!("nested copied prefix: {configuration}: {outcome:?}");
+            assert!(
+                matches!(outcome, Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+        }
+    });
+}
