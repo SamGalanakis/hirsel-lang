@@ -18,7 +18,7 @@ pub(crate) struct FrontProducts {
 }
 /// The body facts the package's dead-error-arm lint consumes, independently
 /// of the H body that produced them.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DeadArmUse {
     pub(crate) errors: std::collections::BTreeSet<DefPath>,
     pub(crate) constructed: std::collections::BTreeSet<(DefPath, u32)>,

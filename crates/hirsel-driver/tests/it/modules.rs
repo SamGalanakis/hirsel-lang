@@ -144,3 +144,4 @@ mod sealed_regions_33;
 mod ahead_scalar;
 mod ahead_native;
 mod arena_placement_capture_33;
+mod ca_store_19;
