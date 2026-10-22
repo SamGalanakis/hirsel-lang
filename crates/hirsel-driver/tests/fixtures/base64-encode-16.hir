@@ -1,0 +1,35 @@
+// Alias and UTF-8 controls retained from the Base64 attribution study.
+pub fn main() -> Result[(), ()] {
+  let data = b"abcdefghijklmnopqrstuvwxyz0123456789"
+  let alias = copy data
+  let encoded = std@1/base64.encode(data, Standard(), Required())
+  let kept = copy encoded
+  let another = std@1/base64.encode(b"f", Standard(), Required())
+  failure.check(
+    data == alias && data == b"abcdefghijklmnopqrstuvwxyz0123456789",
+    TextInvariant()
+  )
+  failure.check(
+    kept == "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU2Nzg5" && another == "Zg==",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode(kept, Standard(), Required()) == Ok(alias),
+    TextInvariant()
+  )
+  failure.check(
+    match string.from_bytes(b"\xff") {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match string.from_bytes(b"\xc3") {
+      Error(_) => true,
+      Ok(_) => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}
