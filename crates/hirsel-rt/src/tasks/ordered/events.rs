@@ -344,6 +344,7 @@ pub(super) struct Log {
     next_subevent: BTreeMap<(Vec<u32>, u64), u32>,
     completed: BTreeSet<(Vec<u32>, u64)>,
     pub host_handles: BTreeMap<u64, HostHandleId>,
+    pub host_bindings: BTreeMap<HostHandleId, host_keys::Creation>,
     pub host_resources: host_keys::Resources,
     pub host_key_observations:
         BTreeMap<(Vec<u32>, u64), Option<Vec<(host_keys::Resource, crate::io_keys::Mode)>>>,

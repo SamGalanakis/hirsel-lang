@@ -5,6 +5,9 @@ use super::host_values::HostHandleId;
 use crate::io_keys::{Key, KeySet, Kind, Mode};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+mod discovery;
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(in crate::tasks::ordered) enum Resource {
     Namespace,
@@ -20,6 +23,92 @@ pub(in crate::tasks::ordered) enum ResourceKind {
     Sink { file_backed: bool },
     Other,
     Half { stream: Resource },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::tasks::ordered) struct Creation {
+    pub handle: HostHandleId,
+    pub resource: Resource,
+    pub kind: ResourceKind,
+}
+
+impl super::Log {
+    /// The caller supplies a completed discovery snapshot, so no adapter lock,
+    /// home bridge or saved context is borrowed while this table is updated.
+    /// Validate all initialized fields before publishing any new identities.
+    pub(in crate::tasks::ordered) fn host_created(
+        &mut self,
+        operation: crate::ordered::footprint::ObjectId,
+        result: &Result<crate::io::Completion, crate::io::AdapterError>,
+        discovered: &BTreeMap<u64, (Key, Kind)>,
+    ) -> Result<Vec<Creation>, &'static str> {
+        let mut result = result.clone();
+        crate::io_observation::capture(&mut result).map_err(|_| "invalid created host mapping")?;
+        let fields = crate::io_observation::fields(&mut result)?;
+        let mut resources = BTreeMap::new();
+        let mut rows = Vec::new();
+        let mut words = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        for (field, word) in fields.into_iter().flatten().enumerate() {
+            if !words.insert(*word) {
+                return Err("duplicate host result handle");
+            }
+            let (key, kind) = *discovered
+                .get(word)
+                .ok_or("missing created host resource")?;
+            let handle = self
+                .host_handles
+                .get(word)
+                .cloned()
+                .unwrap_or_else(|| HostHandleId {
+                    operation: operation.clone(),
+                    field: field as u32,
+                });
+            if !identities.insert(handle.clone())
+                || self
+                    .host_handles
+                    .iter()
+                    .any(|(prior, id)| prior != word && id == &handle)
+            {
+                return Err("host handle changed identity");
+            }
+            let resource = self
+                .host_resources
+                .resource(key)
+                .ok()
+                .or_else(|| resources.get(&key).cloned())
+                .unwrap_or_else(|| Resource::Created(handle.clone()));
+            resources.insert(key, resource.clone());
+            let kind = match kind {
+                Kind::File => ResourceKind::File,
+                Kind::Sink { file_backed } => ResourceKind::Sink { file_backed },
+                Kind::Other => ResourceKind::Other,
+                Kind::Half { stream } => ResourceKind::Half {
+                    stream: self.host_resources.resource(stream)?,
+                },
+            };
+            let row = Creation {
+                handle,
+                resource,
+                kind,
+            };
+            if self
+                .host_bindings
+                .get(&row.handle)
+                .is_some_and(|prior| prior != &row)
+            {
+                return Err("host handle changed resource");
+            }
+            rows.push((*word, row));
+        }
+        self.host_resources
+            .bind(&resources.into_iter().collect::<Vec<_>>())?;
+        for (word, row) in &rows {
+            self.host_handles.insert(*word, row.handle.clone());
+            self.host_bindings.insert(row.handle.clone(), row.clone());
+        }
+        Ok(rows.into_iter().map(|(_, row)| row).collect())
+    }
 }
 
 #[derive(Default)]
