@@ -77,6 +77,27 @@ Adaptations:
   restrictions, rather than permitting names unsuitable for its usage display.
   Usage retains its existing explicit alias presentation.
 
+### Optional interspersed scan
+
+`cli.parse_interspersed` adapts clap's explicit trailing-values state from
+`clap_builder/src/parser/parser.rs:78-170` at
+`ccc89b83875474399e9d9d70841163f6319d1a41` (MIT, Copyright (c) Individual
+contributors). A shared scanner walks the original argv; a private positional-stop
+policy preserves `cli.parse`'s Go behavior. Only standalone `--` disables scanning
+in the new entrypoint; value consumption takes precedence over the terminator.
+
+`crates/hirsel-driver/tests/fixtures/cli-interspersed-11/vectors.hir` ports
+`tests/builder/positionals.rs:5-19` (`only_pos_follow`, terminator) and `:43-75`
+(`positional`, before/after option vectors). The pinned `:5-19` range is a
+terminator vector, rather than a before-positional vector. Adaptations omit
+argv[0], use immutable Hirsel specs, and check repeated text values and ordered
+positionals instead of clap matches. Single/double-dash complete names, aliases,
+Go boolean spellings and dash-prefixed values retain existing Hirsel rules.
+Clap clusters, derive, subcommands, inference and configurable positional grammar
+are deliberately omitted. Scalar conversion stays with the caller.
+`cli.error_message` retains its existing stop-policy validation and therefore
+renders original-index fallback text for errors after positionals.
+
 ## gRPC
 
 `interop/main.hir` ports all five missing non-auth cases. The server returns

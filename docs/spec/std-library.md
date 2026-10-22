@@ -2370,21 +2370,39 @@ UnexpectedValue(u64) | InvalidSpec`; indices identify arguments, starting at zer
 
 ```text
 fn cli.parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}
+fn cli.parse_interspersed(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}
 fn cli.usage(program: String, specs: List[Flag]) -> String uses {}
 fn cli.error_message(args: List[String], specs: List[Flag], error: ParseError) -> unique String uses {}
 ```
 
 Specs require nonempty long names without a leading dash, `=`, ASCII control,
 DEL or space, and unique names/short options. A short option is one printable
-ASCII byte other than dash or `=`. `parse` rejects invalid specs before input.
+ASCII byte other than dash or `=`. Both parsers reject invalid specs before input.
 Long flags accept `--name=value` or `--name value`; shorts accept `-x`,
 `-x=value` or `-x value`, without bundling. A value flag consumes its next token
 even if that token starts with a dash or is `--`. Switches accept the boolean
 spellings `true`, `false`, `1`, `0`, `t`, `f`, `T`, `F`, `TRUE`, `FALSE`, `True`,
 `False`, and store `true` when no explicit value is supplied. Repeats retain
 occurrence order. Unknown flags fail; a lone dash is positional. The first positional
-argument ends option parsing;
-a standalone `--` ends option parsing and is omitted from the result.
+argument ends option parsing in `parse`. `parse_interspersed` continues recognizing
+flags after positionals, preserving positional order and each flag's repeated-value
+order. Both accept single- or double-dash complete names and short aliases, with
+no new grammar: `--to2` is an unknown name unless `to2` is declared.
+While option parsing is active, a standalone `--` ends it and is omitted from the result; all remaining
+tokens are opaque positionals, including further `--` tokens. A `--` consumed as
+an option's value does not terminate parsing. Error indices always refer to the
+original argument list, including positionals and consumed values.
+
+```hirsel
+let specs: List[std@1/cli.Flag] = [
+  std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "target version")
+]
+let Ok(parsed) = std@1/cli.parse_interspersed(["FILE", "--to", "2"], specs) else {
+  return Error(())
+}
+// parsed.positional == ["FILE"]; map.get(parsed.flags, "to") == Some(["2"])
+// Convert the retained text separately with std@1/u64.parse, as needed.
+```
 
 `usage` requires valid specs (otherwise SEM-3 failure), emits a Usage line and
 one line per spec in declaration order, and appends LF. Applications collect
@@ -2399,6 +2417,9 @@ escaped; bytes outside printable ASCII use lowercase `\xhh`, including each
 UTF-8 byte of non-ASCII text. No argument bytes can become terminal controls.
 The renderer checks the error against the supplied snapshot using `parse` on
 a copy, preserving positional stopping, `--`, aliases and consumed values.
+For `parse_interspersed` errors after a positional, this existing renderer returns
+fallback text containing the original index, token and reason; it does not revalidate
+with the interspersed policy.
 Stale or forged errors return `parse error context unavailable` with the index,
 reason and token when present. Out-of-range indices are never dereferenced.
 `InvalidSpec` returns fixed text without selecting an ambiguous spec. The helper

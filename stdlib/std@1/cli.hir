@@ -1,5 +1,6 @@
 // Go src/flag/flag.go:1096-1187 FlagSet.parseOne, ebe2feef (BSD-3-Clause).
-// Both dash spellings name a flag; stop at the first positional or --.
+// Both dash spellings name a flag; parse stops at the first positional or --.
+// parse_interspersed keeps scanning positionals until a standalone --.
 // Immutable specs, short-name aliases and ordered text values replace mutable
 // typed flag storage; scalar conversion is the caller's job.
 // See docs/prior-art-web-small.md for every adaptation and imported vector.
@@ -75,7 +76,27 @@ fn valid_specs(specs: List[Flag]) -> bool uses {} {
   true
 }
 
+/// Parse flags until the first positional argument or standalone --.
 pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {} {
+  parse_with_policy(take args, specs, true)
+}
+
+/// Parse flags before and after positionals until a standalone --.
+pub fn parse_interspersed(take args: List[String], specs: List[Flag]) -> Result[
+  Parsed,
+  ParseError
+] uses {} {
+  parse_with_policy(take args, specs, false)
+}
+
+// Clap ccc89b83, clap_builder/src/parser/parser.rs:78-170 (MIT): explicit
+// trailing-values state. Keep the original argv walk and Hirsel flag grammar;
+// only the positional-stop policy differs. See docs/prior-art-web-small.md.
+fn parse_with_policy(
+  take args: List[String],
+  specs: List[Flag],
+  stop_at_positional: bool
+) -> Result[Parsed, ParseError] uses {} {
   if !valid_specs(specs) {
     return Error(InvalidSpec())
   }
@@ -162,7 +183,9 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
         }
       )
     } else {
-      options = false
+      if stop_at_positional {
+        options = false
+      }
       core@1/list.push(mut positional, copy token)
     }
     index += 1

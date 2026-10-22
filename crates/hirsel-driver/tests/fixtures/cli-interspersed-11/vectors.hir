@@ -1,0 +1,94 @@
+// Clap ccc89b83, tests/builder/positionals.rs:5-19,43-75 (MIT).
+// Drop argv[0]; immutable specs and ordered text values retain Hirsel grammar.
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "target version"),
+    std@1/cli.Flag(name: "flag", short: Some(b'f'), kind: Switch(), help: "some flag")
+  ]
+}
+
+fn check(
+  args: List[String],
+  positional: List[String],
+  to: List[String],
+  flag: List[String]
+) {
+  let Ok(p) = std@1/cli.parse_interspersed(unique args, specs()) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(p.positional == positional, TextInvariant())
+  let mut count: u64 = 0
+  if list.len(to) > 0 {
+    count += 1
+    failure.check(map.get(p.flags, "to") == Some(to), TextInvariant())
+  } else {
+    failure.check(map.get(p.flags, "to") == None(), TextInvariant())
+  }
+  if list.len(flag) > 0 {
+    count += 1
+    failure.check(map.get(p.flags, "flag") == Some(flag), TextInvariant())
+  } else {
+    failure.check(map.get(p.flags, "flag") == None(), TextInvariant())
+  }
+  failure.check(map.len(p.flags) == count, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  // Upstream positional(), before and after; only_pos_follow() terminator.
+  check(["-f", "test"], ["test"], [], ["true"])
+  check(["test", "--flag"], ["test"], [], ["true"])
+  check(["--", "-f"], ["-f"], [], [])
+  check(["FILE", "--to", "2"], ["FILE"], ["2"], [])
+  check(["--to=2", "FILE"], ["FILE"], ["2"], [])
+  check(["one", "--to", "2", "two", "-f"], ["one", "two"], ["2"], ["true"])
+  check(
+    ["one", "-to=1", "two", "--t", "2", "-t=3", "--to="],
+    ["one", "two"],
+    ["1", "2", "3", ""],
+    []
+  )
+  check(
+    ["one", "--flag=false", "two", "-f", "-flag=0"],
+    ["one", "two"],
+    [],
+    ["false", "true", "0"]
+  )
+  check(
+    ["FILE", "--", "-dash", "--to", "2", "--", "-"],
+    ["FILE", "-dash", "--to", "2", "--", "-"],
+    [],
+    []
+  )
+  check(["-", "--to", "2", "", "-f"], ["-", ""], ["2"], ["true"])
+  check(["", "--to", "2"], [""], ["2"], [])
+  check(["FILE", "--to", "-2"], ["FILE"], ["-2"], [])
+  check(["FILE", "--to", "--", "-f", "after"], ["FILE", "after"], ["--"], ["true"])
+  check(["FILE", "--to", "--flag=bad"], ["FILE"], ["--flag=bad"], [])
+  check(["FILE", "--flag", "false"], ["FILE", "false"], [], ["true"])
+  check(["FILE", "--to", ""], ["FILE"], [""], [])
+  check(["--"], [], [], [])
+  check([], [], [], [])
+  // Numeric conversion stays explicit, including a dash-prefixed value.
+  let Ok(p) = std@1/cli.parse_interspersed(["FILE", "--to", "-2"], specs()) else {
+    return Error(())
+  }
+  let Some(values) = map.get(p.flags, "to") else {
+    return Error(())
+  }
+  failure.check(i64.parse(values[0]) == Ok(-2), TextInvariant())
+  // A glued value is accepted only when it is the declared complete name.
+  let declared: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "to2", short: None(), kind: Switch(), help: "")
+  ]
+  let Ok(declared_parsed) = std@1/cli.parse_interspersed(["FILE", "--to2"], declared) else {
+    return Error(())
+  }
+  failure.check(declared_parsed.positional == ["FILE"], TextInvariant())
+  failure.check(map.len(declared_parsed.flags) == 1, TextInvariant())
+  failure.check(
+    map.get(declared_parsed.flags, "to2") == Some(["true"]),
+    TextInvariant()
+  )
+  Ok(())
+}

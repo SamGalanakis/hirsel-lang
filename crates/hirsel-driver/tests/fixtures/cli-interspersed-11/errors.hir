@@ -1,0 +1,130 @@
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: ""),
+    std@1/cli.Flag(name: "flag", short: Some(b'f'), kind: Switch(), help: "")
+  ]
+}
+
+fn error(args: List[String], expected: std@1/cli.ParseError, message: String) {
+  match std@1/cli.parse_interspersed(unique args, specs()) {
+    Error(actual) => failure.check(actual == expected, TextInvariant()),
+    Ok(_) => failure.check(false, TextInvariant()),
+  }
+  // Pass the original snapshot: indices must never refer to a reordered argv.
+  failure.check(
+    std@1/cli.error_message(args, specs(), expected) == message,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  error(
+    ["FILE", "--to"],
+    MissingValue(1),
+    "argument 1 \"--to\": parse error context unavailable (a value is required)"
+  )
+  error(
+    ["one", "--to", "2", "two", "-t"],
+    MissingValue(4),
+    "argument 4 \"-t\": parse error context unavailable (a value is required)"
+  )
+  error(
+    ["FILE", "--to2"],
+    UnknownFlag(1),
+    "argument 1 \"--to2\": parse error context unavailable (unexpected argument found)"
+  )
+  error(
+    ["FILE", "--unknown"],
+    UnknownFlag(1),
+    "argument 1 \"--unknown\": parse error context unavailable (unexpected argument found)"
+  )
+  error(
+    ["one", "--to", "2", "two", "-tf"],
+    UnknownFlag(4),
+    "argument 4 \"-tf\": parse error context unavailable (unexpected argument found)"
+  )
+  error(
+    ["FILE", "--flag=bad"],
+    UnexpectedValue(1),
+    "argument 1 \"--flag=bad\": parse error context unavailable (invalid value for an argument)"
+  )
+  error(
+    ["one", "-t", "--", "two", "-f="],
+    UnexpectedValue(4),
+    "argument 4 \"-f=\": parse error context unavailable (invalid value for an argument)"
+  )
+  error(
+    ["--to"],
+    MissingValue(0),
+    "argument 0 \"--to\": a value is required for \"--to <value>\" but none was supplied"
+  )
+  error(
+    ["--unknown", "FILE"],
+    UnknownFlag(0),
+    "argument 0: unexpected argument \"--unknown\" found"
+  )
+  error(
+    ["-f=bad", "FILE"],
+    UnexpectedValue(0),
+    "argument 0 \"-f=bad\": invalid value \"bad\" for \"--flag\" [possible values: true, false, 1, 0, t, f, T, F, TRUE, FALSE, True, False]"
+  )
+  let invalid_names: List[String] = ["", "-to", "to=", "two words", "to\n", "to\x7f"]
+  for name in invalid_names {
+    let invalid: List[std@1/cli.Flag] = [
+      std@1/cli.Flag(name: copy name, short: None(), kind: Value(), help: "")
+    ]
+    match std@1/cli.parse_interspersed(["FILE", "--"], invalid) {
+      Error(InvalidSpec()) => (),
+      _ => failure.check(false, TextInvariant()),
+    }
+    failure.check(
+      std@1/cli.error_message(["FILE"], invalid, InvalidSpec()) == "invalid flag specification (names and aliases must be valid and unique)",
+      TextInvariant()
+    )
+  }
+  let collision: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "t", short: None(), kind: Switch(), help: ""),
+    std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "")
+  ]
+  match std@1/cli.parse_interspersed([], collision) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let bad_alias: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "to", short: Some(b'-'), kind: Value(), help: "")
+  ]
+  match std@1/cli.parse_interspersed([], bad_alias) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  // All existing switch conversions remain available after positionals.
+  let booleans: List[String] = [
+    "true",
+    "false",
+    "1",
+    "0",
+    "t",
+    "f",
+    "T",
+    "F",
+    "TRUE",
+    "FALSE",
+    "True",
+    "False"
+  ]
+  for value in booleans {
+    let mut token: List[u8] = []
+    text.append(mut token, "--flag=")
+    text.append(mut token, value)
+    let Ok(p) = std@1/cli.parse_interspersed(
+      ["FILE", text.finish_valid(take token)],
+      specs()
+    ) else {
+      return Error(())
+    }
+    failure.check(p.positional == ["FILE"], TextInvariant())
+    failure.check(map.len(p.flags) == 1, TextInvariant())
+    failure.check(map.get(p.flags, "flag") == Some([value]), TextInvariant())
+  }
+  Ok(())
+}

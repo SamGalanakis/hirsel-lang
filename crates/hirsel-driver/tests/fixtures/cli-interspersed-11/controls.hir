@@ -1,0 +1,58 @@
+fn specs() -> List[std@1/cli.Flag] {
+  [std@1/cli.Flag(name: "to", short: Some(b't'), kind: Value(), help: "target version")]
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let snapshots: List[List[String]] = [
+    ["FILE", "--to", "2"],
+    ["FILE", "--to"],
+    ["FILE", "--unknown"],
+    ["FILE", "--", "--to", "2"],
+    ["-", "--to", "2"],
+    ["", "--to", "2"]
+  ]
+  for args in snapshots {
+    let Ok(old) = std@1/cli.parse(unique args, specs()) else {
+      return Error(())
+    }
+    failure.check(old.positional == args, TextInvariant())
+    failure.check(map.len(old.flags) == 0, TextInvariant())
+  }
+  let Ok(new) = std@1/cli.parse_interspersed(["FILE", "--to", "2"], specs()) else {
+    return Error(())
+  }
+  failure.check(new.positional == ["FILE"], TextInvariant())
+  failure.check(map.len(new.flags) == 1, TextInvariant())
+  failure.check(map.get(new.flags, "to") == Some(["2"]), TextInvariant())
+  let same: List[List[String]] = [
+    [],
+    ["--"],
+    ["--", "--to", "2"],
+    ["--to=2", "FILE"],
+    ["-t", "--", "FILE"],
+    ["--to", "-2", "FILE"],
+    ["--to"],
+    ["--unknown"]
+  ]
+  for args in same {
+    failure.check(
+      std@1/cli.parse(unique args, specs()) == std@1/cli.parse_interspersed(
+        unique args,
+        specs()
+      ),
+      TextInvariant()
+    )
+  }
+  // Both parsers validate specs even when argv is empty or already positional.
+  let invalid: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "", short: None(), kind: Value(), help: "")
+  ]
+  failure.check(
+    std@1/cli.parse(["FILE"], invalid) == std@1/cli.parse_interspersed(
+      ["FILE"],
+      invalid
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}
