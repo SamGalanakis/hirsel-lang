@@ -160,6 +160,14 @@ pub(super) enum CanonicalOutcome {
     BulkCanceling {
         members: Vec<ObjectId>,
     },
+    Awaiting {
+        members: Vec<(u64, ObjectId)>,
+    },
+    Selected {
+        index: Option<u64>,
+        member: Option<ObjectId>,
+        rank: Option<u64>,
+    },
     Closed,
     BulkDetaching {
         members: Vec<ObjectId>,
@@ -247,6 +255,12 @@ struct CancelAllEvidence {
     closed: bool,
 }
 
+struct AwaitAnyEvidence {
+    scope: ObjectId,
+    set: ObjectId,
+    members: Vec<(u64, ObjectId)>,
+}
+
 struct ScopeExitEvidence {
     scope: ObjectId,
     members: Vec<ObjectId>,
@@ -272,6 +286,7 @@ pub(super) struct Log {
     bulk_detaches: BTreeMap<Vec<u32>, BulkDetachEvidence>,
     current_retirement: u64,
     cancel_all: BTreeMap<Vec<u32>, CancelAllEvidence>,
+    awaiting: BTreeMap<Vec<u32>, AwaitAnyEvidence>,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -392,6 +407,7 @@ impl Log {
             && self.scope_exits.is_empty()
             && self.bulk_detaches.is_empty()
             && self.cancel_all.is_empty()
+            && self.awaiting.is_empty()
         {
             Ok(&self.canonical)
         } else {
@@ -1317,6 +1333,66 @@ pub(super) fn complete_join(
     }
 }
 
+pub(super) fn prepare_await_any(ctx: *mut TaskCtx, scope_word: u64, set_word: u64) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let owner = unsafe { (*ctx).task_id };
+    let path = s.task(owner).path.clone();
+    let scope = s.scope_handle(scope_word);
+    let set = s.set_handle(set_word, scope);
+    let words = s.set(set).members.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let evidence = log
+        .scopes
+        .get(&scope_word)
+        .cloned()
+        .zip(log.sets.get(&set_word).cloned())
+        .and_then(|(scope, set)| {
+            let members = words
+                .iter()
+                .enumerate()
+                .filter_map(|(index, word)| word.map(|word| (index, word)))
+                .map(|(index, word)| log.tasks.get(&word).cloned().map(|id| (index as u64, id)))
+                .collect::<Option<Vec<_>>>()?;
+            Some(AwaitAnyEvidence {
+                scope,
+                set,
+                members,
+            })
+        });
+    if let Some(evidence) = evidence {
+        assert!(log.awaiting.insert(path, evidence).is_none());
+    }
+}
+
+fn await_any_subevents(log: &Log, path: &[u32], initial: bool) -> Option<Subevents> {
+    let pending = log.awaiting.get(path)?;
+    let mut events = vec![(
+        CanonicalItem::Object(pending.set.clone()),
+        if initial {
+            CanonicalOutcome::Awaiting {
+                members: pending.members.clone(),
+            }
+        } else {
+            CanonicalOutcome::Unit
+        },
+    )];
+    if initial {
+        events.extend(
+            pending
+                .members
+                .iter()
+                .map(|(_, child)| (CanonicalItem::Object(child.clone()), CanonicalOutcome::Unit)),
+        );
+    }
+    Some(events)
+}
+
 /// Fix the chosen member and its actual completion rank in the owner's
 /// return window. Neither a later completion nor row recycling may rewrite
 /// this observation. Native table words stay inside the lookup maps.
@@ -1345,7 +1421,70 @@ pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option
         member: selected.map(|(word, _)| log.tasks[&word].clone()),
         rank: selected.map(|(_, rank)| rank),
     };
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let OwnerOutcome::AwaitAny { member, rank, .. } = &outcome else {
+        unreachable!()
+    };
+    let member = member.clone();
+    let rank = *rank;
     complete_owner(ctx, "task.await_any", || outcome);
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path] - 1;
+    if let Some(pending) = log.awaiting.remove(&path) {
+        let mut events = vec![(
+            CanonicalItem::Object(pending.set.clone()),
+            CanonicalOutcome::Selected {
+                index,
+                member: member.clone(),
+                rank,
+            },
+        )];
+        if let Some(child) = member {
+            assert!(
+                pending
+                    .members
+                    .iter()
+                    .any(|(slot, id)| Some(*slot) == index && id == &child)
+            );
+            events.push((
+                CanonicalItem::Object(child),
+                CanonicalOutcome::Alias(pending.set),
+            ));
+            events.push((
+                CanonicalItem::CompletionRank(pending.scope),
+                CanonicalOutcome::Scalar(
+                    rank.expect("selected member rank").to_le_bytes().to_vec(),
+                ),
+            ));
+        }
+        let boundary = Boundary {
+            task: path,
+            ordinal,
+            op: None,
+            transition: Transition::Keep,
+            retirement,
+            before,
+            credit: 0,
+            native_outcome: None,
+        };
+        log.subevents(&boundary, "task.await_any", events);
+    } else {
+        log.unsupported.push(Unsupported {
+            task: path,
+            ordinal,
+            op: Some("task.await_any"),
+        });
+    }
 }
 
 /// The bounded end effect has already fixed result readiness and rank. A
@@ -1496,6 +1635,9 @@ pub(super) fn record(
                 Command::Head {
                     name: "task.scope_exit",
                 } => return scope_exit_subevents(log, &path, true),
+                Command::Head {
+                    name: "task.await_any",
+                } => return await_any_subevents(log, &path, true),
                 Command::Head { name: "task.join" } => return join_subevents(log, &path),
                 Command::Head { name: "task.end" } => {
                     return end_subevents(
@@ -1651,6 +1793,9 @@ pub(super) fn record(
                 unreachable!()
             };
             let log = driver.events.as_ref()?;
+            if log.last_ops.get(&path) == Some(&"task.await_any") {
+                return await_any_subevents(log, &path, false);
+            }
             if log.last_ops.get(&path) == Some(&"task.scope_exit") {
                 return scope_exit_subevents(log, &path, false);
             }
@@ -1880,12 +2025,12 @@ mod tests {
         };
         let layouts = [&environment as *const crate::Layout];
         let mut reference = None;
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for reorder in [
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
             ] {
-                let output = Arc::new(Mutex::new(Vec::new()));
+                let output = Arc::new(Mutex::new((Vec::new(), Vec::new())));
                 let seen = output.clone();
                 let mut run = crate::host::BodyRun::new(width, true);
                 run.config.layouts = layouts.as_ptr();
@@ -2025,7 +2170,112 @@ mod tests {
                             2,
                             "retries add no operation ordinal"
                         );
-                        *seen.lock().unwrap() = completions.clone();
+                        // The same held child is immediately ready on the
+                        // next await. This adds an op, but no saved park.
+                        assert_eq!(
+                            hirsel_rt_v2_task_await_any(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut answer,
+                                &scope,
+                                &set
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!((answer.tag, answer.index), (1, 0));
+                        answer.tag = 0;
+                        answer.index = 99;
+                        assert_eq!((answer.tag, answer.index), (0, 99));
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let rows: Vec<_> = log
+                            .canonical
+                            .iter()
+                            .filter(|row| row.op == "task.await_any")
+                            .cloned()
+                            .collect();
+                        assert_eq!(rows.len(), 13);
+                        assert!(log.awaiting.is_empty());
+                        assert!(
+                            log.unsupported
+                                .iter()
+                                .all(|row| row.op != Some("task.await_any"))
+                        );
+                        let child_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 3,
+                        };
+                        let set_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 1,
+                        };
+                        for (ordinal, expected) in [(2, 2), (5, 6), (6, 5)] {
+                            let group: Vec<_> =
+                                rows.iter().filter(|row| row.ordinal == ordinal).collect();
+                            assert_eq!(group.len(), expected);
+                            for (subevent, row) in group.iter().enumerate() {
+                                assert!(row.task.is_empty());
+                                assert_eq!(row.subevent as usize, subevent);
+                            }
+                            assert_eq!(group[0].transition, Transition::Yield);
+                            assert_eq!(
+                                group[0].outcome,
+                                CanonicalOutcome::Awaiting {
+                                    members: if ordinal == 2 {
+                                        Vec::new()
+                                    } else {
+                                        vec![(0, child_id.clone())]
+                                    },
+                                }
+                            );
+                            let selected = group
+                                .iter()
+                                .find(|row| {
+                                    matches!(row.outcome, CanonicalOutcome::Selected { .. })
+                                })
+                                .unwrap();
+                            assert_eq!(selected.item, CanonicalItem::Object(set_id.clone()));
+                            assert_eq!(selected.transition, Transition::Keep);
+                            assert_eq!(
+                                selected.outcome,
+                                if ordinal == 2 {
+                                    CanonicalOutcome::Selected {
+                                        index: None,
+                                        member: None,
+                                        rank: None,
+                                    }
+                                } else {
+                                    CanonicalOutcome::Selected {
+                                        index: Some(0),
+                                        member: Some(child_id.clone()),
+                                        rank: Some(0),
+                                    }
+                                }
+                            );
+                            assert_eq!(
+                                group
+                                    .iter()
+                                    .filter(|row| row.transition == Transition::Park)
+                                    .count(),
+                                usize::from(ordinal == 5)
+                            );
+                            if ordinal != 2 {
+                                assert_eq!(
+                                    group.last().unwrap().item,
+                                    CanonicalItem::CompletionRank(ObjectId {
+                                        creator: vec![],
+                                        ordinal: 0
+                                    })
+                                );
+                                assert_eq!(
+                                    group.last().unwrap().outcome,
+                                    CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec())
+                                );
+                            }
+                        }
+                        assert_eq!(log.owner_completions.len(), 3);
+                        *seen.lock().unwrap() = (log.owner_completions.clone(), rows);
                         assert_eq!(
                             crate::finalize::hirsel_rt_v2_close_handle(ctx, set, 0, 0),
                             crate::STATUS_OK

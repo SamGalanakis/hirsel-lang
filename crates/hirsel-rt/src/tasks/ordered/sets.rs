@@ -176,6 +176,8 @@ pub(crate) unsafe fn await_any(
     caller_site: u64,
 ) -> Stopped<u8> {
     let set_word = unsafe { set.read() };
+    engine::at_head(ctx)?;
+    super::events::prepare_await_any(ctx, unsafe { scope.read() }, set_word);
     let ((set, waiting, must_wait), progress) = engine::head_effect(ctx, "task.await_any", || {
         let s = scheduler(ctx);
         let scope = s.scope_handle(unsafe { scope.read() });
