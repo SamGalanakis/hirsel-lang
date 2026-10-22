@@ -188,6 +188,10 @@ N fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
 fn copy_to[T: copyable](a: Arena, x: T) -> T in a
 fn shared.freeze[T: inert](take x: unique T) -> Shared[T]
 fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]
+// The callback borrows the frozen payload only for this call. Return plain values,
+// deep unique copies or copied nested Shared roots. For mutation consume a root
+// with thaw and handle both Ok(unique value) and Error(still-frozen root).
+// See MEM-11 for checked read/copy/thaw examples; opaque visibility is unchanged.
 N fn shared.with[T, R](s: Shared[T], body: fn(v: T) -> R) -> R
 fn slots.empty[T]() -> Slots[T]
 @preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
