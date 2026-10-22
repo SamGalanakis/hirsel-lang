@@ -433,19 +433,6 @@ pub(crate) unsafe fn replay_request(
                 host.positions.clear();
                 let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
                 let result = token.host_result(envelope)?;
-                if !matches!(
-                    &result,
-                    Err(_)
-                        | Ok(Completion::Unit(_)
-                            | Completion::Size(_)
-                            | Completion::Bytes(_)
-                            | Completion::Wait(_)
-                            | Completion::Handle(_))
-                ) {
-                    return Err(Stop::Diverged(
-                        "host result requires unsupported logical handle mapping".into(),
-                    ));
-                }
                 host.observed = Some(result);
                 Ok::<_, Stop>(())
             })??;

@@ -45,29 +45,17 @@ pub(in crate::tasks::free) fn encode(
     pending: &mut Pending,
     result: &Result<Completion, AdapterError>,
 ) -> Stopped<()> {
-    if !matches!(
-        result,
-        Err(_)
-            | Ok(Completion::Unit(_)
-                | Completion::Size(_)
-                | Completion::Bytes(_)
-                | Completion::Wait(_)
-                | Completion::Handle(_))
-    ) {
-        return Err(Stop::Refused(
-            "host result needs an unsupported logical handle codec".into(),
-        ));
-    }
     let mut canonical = result.clone();
-    let created = if let Ok(Completion::Handle(Ok(word))) = &mut canonical {
-        let created = pending.created.clone().ok_or_else(|| {
-            Stop::Diverged("host handle creation needs a declared resource".into())
-        })?;
-        *word = 0;
-        Some(created)
-    } else {
-        None
-    };
+    let created =
+        if let Some(word) = handle(&mut canonical).map_err(|error| Stop::Refused(error.into()))? {
+            let created = pending.created.clone().ok_or_else(|| {
+                Stop::Diverged("host handle creation needs a declared resource".into())
+            })?;
+            *word = 0;
+            Some(created)
+        } else {
+            None
+        };
     pending.encoded.clear();
     Envelope {
         result: canonical,
@@ -75,6 +63,40 @@ pub(in crate::tasks::free) fn encode(
     }
     .encode(&mut pending.encoded);
     Ok(())
+}
+
+/// The initialized handle field in an admitted result. Keep this exhaustive
+/// allow-list common to recording and replay: unsupported results must never
+/// leak a host word just because they lack creation metadata.
+pub(super) fn handle(
+    result: &mut Result<Completion, AdapterError>,
+) -> Result<Option<&mut u64>, &'static str> {
+    match result {
+        Ok(
+            Completion::Handle(Ok(word))
+            | Completion::ClockGrant(Ok(word))
+            | Completion::OptionalFile(Some(word))
+            | Completion::NetHandle(Ok(word))
+            | Completion::Spawned(Ok(word)),
+        )
+        | Ok(Completion::Listened(Ok((word, _))) | Completion::Accepted(Ok((word, _))))
+        | Ok(Completion::Span { handle: word, .. }) => Ok(Some(word)),
+        Err(_)
+        | Ok(
+            Completion::Unit(_)
+            | Completion::Size(_)
+            | Completion::Bytes(_)
+            | Completion::Wait(_)
+            | Completion::Handle(Err(_))
+            | Completion::ClockGrant(Err(_))
+            | Completion::OptionalFile(None)
+            | Completion::NetHandle(Err(_))
+            | Completion::Listened(Err(_))
+            | Completion::Accepted(Err(_))
+            | Completion::Spawned(Err(_)),
+        ) => Ok(None),
+        _ => Err("host result needs an unsupported logical handle codec"),
+    }
 }
 
 #[derive(Default)]
@@ -89,10 +111,9 @@ impl Handles {
         envelope: Envelope,
     ) -> Stopped<Result<Completion, AdapterError>> {
         let mut result = envelope.result;
-        match (&mut result, envelope.created) {
-            (Ok(Completion::Handle(Ok(word))), Some(created))
-                if *word == 0 && created.ordinal != 0 =>
-            {
+        let word = handle(&mut result).map_err(|error| Stop::Diverged(error.into()))?;
+        match (word, envelope.created) {
+            (Some(word), Some(created)) if *word == 0 && created.ordinal != 0 => {
                 let identity = (created.path.clone(), created.ordinal);
                 let local = if let Some(&local) = self.identities.get(&identity) {
                     if self.words[&local] != created {
@@ -111,7 +132,7 @@ impl Handles {
                 };
                 *word = local;
             }
-            (Ok(Completion::Handle(Ok(_))), _) | (_, Some(_)) => {
+            (Some(_), _) | (_, Some(_)) => {
                 return Err(Stop::Diverged("invalid logical host creation".into()));
             }
             (_, None) => {}
@@ -145,6 +166,74 @@ mod tests {
         };
         word
     }
+    #[test]
+    fn absent_and_failed_creations_never_allocate_a_replay_identity() {
+        let failures = [
+            Completion::Handle(Err(crate::io::IoError::NotFound)),
+            Completion::ClockGrant(Err(())),
+            Completion::OptionalFile(None),
+            Completion::NetHandle(Err(crate::net::NetError::NotGranted)),
+            Completion::Listened(Err(crate::net::NetError::NotGranted)),
+            Completion::Accepted(Err(crate::net::NetError::NotGranted)),
+            Completion::Spawned(Err(hirsel_run_schema::ProcessFailure::NotGranted)),
+        ];
+        let mut handles = Handles::default();
+        for completion in failures {
+            assert!(handle(&mut Ok(completion.clone())).unwrap().is_none());
+            let mut bytes = Vec::new();
+            Envelope {
+                result: Ok(completion.clone()),
+                created: None,
+            }
+            .encode(&mut bytes);
+            let decoded = crate::tape_wire::decode(&bytes).unwrap();
+            assert_eq!(handles.substitute(decoded).unwrap(), Ok(completion.clone()));
+            assert!(
+                handles
+                    .substitute(Envelope {
+                        result: Ok(completion),
+                        created: envelope(&[], 1, 17).created
+                    })
+                    .is_err()
+            );
+        }
+        assert_eq!(handles.next, 0);
+        assert!(handles.words.is_empty());
+    }
+
+    #[test]
+    fn unsupported_handle_shapes_and_noncanonical_words_refuse() {
+        let mut handles = Handles::default();
+        for shape in 0..8 {
+            let result = Ok(super::super::tests::created_completion(shape, 99));
+            assert!(
+                handles
+                    .substitute(Envelope {
+                        result: result.clone(),
+                        created: None
+                    })
+                    .is_err()
+            );
+            assert!(
+                handles
+                    .substitute(Envelope {
+                        result,
+                        created: envelope(&[], 1, 17).created
+                    })
+                    .is_err()
+            );
+        }
+        assert!(
+            handles
+                .substitute(Envelope {
+                    result: Ok(Completion::Halves(Ok((99, 100)))),
+                    created: None
+                })
+                .is_err()
+        );
+        assert!(handles.words.is_empty());
+    }
+
     #[test]
     fn creator_qualification_aliases_and_observation_completion_reuse() {
         let mut handles = Handles::default();

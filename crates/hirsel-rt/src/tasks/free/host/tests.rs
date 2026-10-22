@@ -1097,6 +1097,25 @@ fn replay_epoch_tape(bytes: &[u8], expected: &hirsel_free::projection::Projectio
     }
 }
 
+pub(super) fn created_completion(shape: usize, word: u64) -> Completion {
+    let address = crate::net::SocketAddr::of("127.0.0.1:4321".parse().unwrap());
+    match shape {
+        0 => Completion::Handle(Ok(word)),
+        1 => Completion::ClockGrant(Ok(word)),
+        2 => Completion::OptionalFile(Some(word)),
+        3 => Completion::NetHandle(Ok(word)),
+        4 => Completion::Listened(Ok((word, address))),
+        5 => Completion::Accepted(Ok((word, address))),
+        6 => Completion::Spawned(Ok(word)),
+        7 => Completion::Span {
+            handle: word,
+            trace: [0x42; 16],
+            span: [0x24; 8],
+        },
+        _ => unreachable!(),
+    }
+}
+
 #[test]
 fn native_host_created_handles_persist_creator_and_resource_without_host_words() {
     const WORDS: [u64; 3] = [
@@ -1104,7 +1123,7 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
         0x2f23_4567_89ab_cdef,
         0x3f23_4567_89ab_cdef,
     ];
-    for durable in [false, true] {
+    for (shape, durable) in (0..8).flat_map(|shape| [false, true].map(|durable| (shape, durable))) {
         let recording =
             super::super::record::Recording::new(b"native logical host handles", durable);
         let install = recording.clone();
@@ -1130,11 +1149,11 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                         ),
                     );
                     assert!(crate::stop::check(ctx, claim(ctx)));
-                    crate::stop::check(ctx, invoke(ctx, |_| Completion::Handle(Ok(word))));
+                    crate::stop::check(ctx, invoke(ctx, |_| created_completion(shape, word)));
                     crate::stop::check(ctx, ended(ctx));
                     assert_eq!(
                         crate::stop::check(ctx, complete(ctx)),
-                        Completion::Handle(Ok(word))
+                        created_completion(shape, word)
                     );
                     crate::stop::check(
                         ctx,
@@ -1214,9 +1233,9 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                                 KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
                             ),
                         );
-                        let Ok(Completion::Handle(Ok(local))) = completion else {
-                            panic!("a replay handle")
-                        };
+                        let mut completion = completion;
+                        let local = *handles::handle(&mut completion).unwrap().unwrap();
+                        assert_eq!(completion, Ok(created_completion(shape, local)));
                         assert!(!WORDS.contains(&local));
                         let resource = crate::stop::check(ctx, replay_created_key(ctx, local));
                         assert_eq!(resource.0, if index < 2 { 17 } else { 18 });
