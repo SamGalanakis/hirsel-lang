@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1999 exported definitions; 831 variants.
+2018 exported definitions; 843 variants.
 
 ## Types and roots
 
@@ -2207,6 +2207,14 @@ Variant of base64.DecodeError.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fbase64_2fDecoder"></a>
+
+- `pub opaque type base64.Decoder: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fbase64_2fEncoder"></a>
+
+- `pub opaque type base64.Encoder: copyable + inert + noalloc_drop uses {}`
+
 <a id="def-std_401_2fbase64_2fPadding"></a>
 
 - `@serializable pub type base64.Padding = Required | Omitted`
@@ -2223,17 +2231,73 @@ Variant of base64.Padding.
 
 Variant of base64.Padding.
 
+<a id="def-std_401_2fbase64_2fStreamError"></a>
+
+- `@serializable pub type base64.StreamError = Closed | Decode(DecodeError)`
+
+References: [`std@1/base64/DecodeError`](#def-std_401_2fbase64_2fDecodeError)
+
+<a id="def-std_401_2fbase64_2fStreamError_23Closed"></a>
+
+- `Closed -> base64.StreamError`
+
+Variant of base64.StreamError.
+
+<a id="def-std_401_2fbase64_2fStreamError_23Decode"></a>
+
+- `Decode(DecodeError) -> base64.StreamError`
+
+Variant of base64.StreamError.
+
+References: [`std@1/base64/DecodeError`](#def-std_401_2fbase64_2fDecodeError)
+
 <a id="def-std_401_2fbase64_2fdecode"></a>
 
 - `pub fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[ unique Bytes, DecodeError ] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/base64/Alphabet`](#def-std_401_2fbase64_2fAlphabet), [`std@1/base64/DecodeError`](#def-std_401_2fbase64_2fDecodeError), [`std@1/base64/Padding`](#def-std_401_2fbase64_2fPadding)
 
+<a id="def-std_401_2fbase64_2fdecode_5ffeed"></a>
+
+- `pub fn base64.decode_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, StreamError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/base64/Decoder`](#def-std_401_2fbase64_2fDecoder), [`std@1/base64/StreamError`](#def-std_401_2fbase64_2fStreamError)
+
+<a id="def-std_401_2fbase64_2fdecode_5ffinish"></a>
+
+- `pub fn base64.decode_finish(mut state: Decoder) -> Result[unique Bytes, StreamError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/base64/Decoder`](#def-std_401_2fbase64_2fDecoder), [`std@1/base64/StreamError`](#def-std_401_2fbase64_2fStreamError)
+
+<a id="def-std_401_2fbase64_2fdecoder"></a>
+
+- `@noalloc pub fn base64.decoder(alphabet: Alphabet, padding: Padding) -> Decoder uses {}`
+
+References: [`std@1/base64/Alphabet`](#def-std_401_2fbase64_2fAlphabet), [`std@1/base64/Decoder`](#def-std_401_2fbase64_2fDecoder), [`std@1/base64/Padding`](#def-std_401_2fbase64_2fPadding)
+
 <a id="def-std_401_2fbase64_2fencode"></a>
 
 - `pub fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString), [`std@1/base64/Alphabet`](#def-std_401_2fbase64_2fAlphabet), [`std@1/base64/Padding`](#def-std_401_2fbase64_2fPadding)
+
+<a id="def-std_401_2fbase64_2fencode_5ffeed"></a>
+
+- `pub fn base64.encode_feed(mut state: Encoder, data: Bytes) -> Result[ unique String, StreamError ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/base64/Encoder`](#def-std_401_2fbase64_2fEncoder), [`std@1/base64/StreamError`](#def-std_401_2fbase64_2fStreamError)
+
+<a id="def-std_401_2fbase64_2fencode_5ffinish"></a>
+
+- `pub fn base64.encode_finish(mut state: Encoder) -> Result[unique String, StreamError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/base64/Encoder`](#def-std_401_2fbase64_2fEncoder), [`std@1/base64/StreamError`](#def-std_401_2fbase64_2fStreamError)
+
+<a id="def-std_401_2fbase64_2fencoder"></a>
+
+- `@noalloc pub fn base64.encoder(alphabet: Alphabet, padding: Padding) -> Encoder uses {}`
+
+References: [`std@1/base64/Alphabet`](#def-std_401_2fbase64_2fAlphabet), [`std@1/base64/Encoder`](#def-std_401_2fbase64_2fEncoder), [`std@1/base64/Padding`](#def-std_401_2fbase64_2fPadding)
 
 
 ## bigint
@@ -2678,7 +2742,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fblake2b_2fhash"></a>
 
-- `pub fn blake2b.hash() -> std@1/digest.Hash[State, 64] uses {}`
+- `pub const blake2b.hash: std@1/digest.Hash[State, 64]`
 
 References: [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
@@ -2727,7 +2791,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fblake2s_2fhash"></a>
 
-- `pub fn blake2s.hash() -> std@1/digest.Hash[State, 32] uses {}`
+- `pub const blake2s.hash: std@1/digest.Hash[State, 32]`
 
 References: [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
@@ -3222,6 +3286,15 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 - `@serializable pub type cli.Parsed { flags: Map[String, List[String]], positional: List[String], }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fcli_2ferror_5fmessage"></a>
+
+- `pub fn cli.error_message(args: List[String], specs: List[Flag], error: ParseError) -> unique String uses {}`
+
+Render an error against the original argument snapshot, without I/O or LF.
+Stale or forged errors get bounded fallback text instead of invented context.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/cli/Flag`](#def-std_401_2fcli_2fFlag), [`std@1/cli/ParseError`](#def-std_401_2fcli_2fParseError)
 
 <a id="def-std_401_2fcli_2fparse"></a>
 
@@ -11797,7 +11870,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha1_2fhash"></a>
 
-- `pub fn sha1.hash() -> std@1/digest.Hash[State, 20] uses {}`
+- `pub const sha1.hash: std@1/digest.Hash[State, 20]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
 
@@ -11840,7 +11913,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha224_2fhash"></a>
 
-- `pub fn sha224.hash() -> std@1/digest.Hash[State, 28] uses {}`
+- `pub const sha224.hash: std@1/digest.Hash[State, 28]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
 
@@ -11883,7 +11956,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha256_2fhash"></a>
 
-- `pub fn sha256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+- `pub const sha256.hash: std@1/digest.Hash[State, 32]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha256/State`](#def-std_401_2fsha256_2fState)
 
@@ -11926,7 +11999,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha384_2fhash"></a>
 
-- `pub fn sha384.hash() -> std@1/digest.Hash[State, 48] uses {}`
+- `pub const sha384.hash: std@1/digest.Hash[State, 48]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
 
@@ -11969,7 +12042,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha3_5f224_2fhash"></a>
 
-- `pub fn sha3_224.hash() -> std@1/digest.Hash[State, 28] uses {}`
+- `pub const sha3_224.hash: std@1/digest.Hash[State, 28]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_224/State`](#def-std_401_2fsha3_5f224_2fState)
 
@@ -12012,7 +12085,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha3_5f256_2fhash"></a>
 
-- `pub fn sha3_256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+- `pub const sha3_256.hash: std@1/digest.Hash[State, 32]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_256/State`](#def-std_401_2fsha3_5f256_2fState)
 
@@ -12055,7 +12128,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha3_5f384_2fhash"></a>
 
-- `pub fn sha3_384.hash() -> std@1/digest.Hash[State, 48] uses {}`
+- `pub const sha3_384.hash: std@1/digest.Hash[State, 48]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_384/State`](#def-std_401_2fsha3_5f384_2fState)
 
@@ -12098,7 +12171,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha3_5f512_2fhash"></a>
 
-- `pub fn sha3_512.hash() -> std@1/digest.Hash[State, 64] uses {}`
+- `pub const sha3_512.hash: std@1/digest.Hash[State, 64]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_512/State`](#def-std_401_2fsha3_5f512_2fState)
 
@@ -12141,7 +12214,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha512_2fhash"></a>
 
-- `pub fn sha512.hash() -> std@1/digest.Hash[State, 64] uses {}`
+- `pub const sha512.hash: std@1/digest.Hash[State, 64]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
 
@@ -12184,7 +12257,7 @@ References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_4
 
 <a id="def-std_401_2fsha512_5f256_2fhash"></a>
 
-- `pub fn sha512_256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+- `pub const sha512_256.hash: std@1/digest.Hash[State, 32]`
 
 References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
 
@@ -16651,11 +16724,123 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-st
 
 ## utf8
 
+<a id="def-std_401_2futf8_2fDecoder"></a>
+
+- `pub opaque type utf8.Decoder: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2futf8_2fPolicy"></a>
+
+- `@serializable pub type utf8.Policy = Strict | Lossy`
+
+<a id="def-std_401_2futf8_2fPolicy_23Lossy"></a>
+
+- `Lossy -> utf8.Policy`
+
+Variant of utf8.Policy.
+
+<a id="def-std_401_2futf8_2fPolicy_23Strict"></a>
+
+- `Strict -> utf8.Policy`
+
+Variant of utf8.Policy.
+
+<a id="def-std_401_2futf8_2fStreamError"></a>
+
+- `@serializable pub type utf8.StreamError = InvalidSequence(u64) | IncompleteSequence(u64) | OffsetOverflow | AlreadyFinished | DecoderFailed`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2futf8_2fStreamError_23AlreadyFinished"></a>
+
+- `AlreadyFinished -> utf8.StreamError`
+
+Variant of utf8.StreamError.
+
+<a id="def-std_401_2futf8_2fStreamError_23DecoderFailed"></a>
+
+- `DecoderFailed -> utf8.StreamError`
+
+Variant of utf8.StreamError.
+
+<a id="def-std_401_2futf8_2fStreamError_23IncompleteSequence"></a>
+
+- `IncompleteSequence(u64) -> utf8.StreamError`
+
+Variant of utf8.StreamError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2futf8_2fStreamError_23InvalidSequence"></a>
+
+- `InvalidSequence(u64) -> utf8.StreamError`
+
+Variant of utf8.StreamError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2futf8_2fStreamError_23OffsetOverflow"></a>
+
+- `OffsetOverflow -> utf8.StreamError`
+
+Variant of utf8.StreamError.
+
+<a id="def-std_401_2futf8_2fStreamStatus"></a>
+
+- `@serializable pub type utf8.StreamStatus = Active | Finished | Failed`
+
+<a id="def-std_401_2futf8_2fStreamStatus_23Active"></a>
+
+- `Active -> utf8.StreamStatus`
+
+Variant of utf8.StreamStatus.
+
+<a id="def-std_401_2futf8_2fStreamStatus_23Failed"></a>
+
+- `Failed -> utf8.StreamStatus`
+
+Variant of utf8.StreamStatus.
+
+<a id="def-std_401_2futf8_2fStreamStatus_23Finished"></a>
+
+- `Finished -> utf8.StreamStatus`
+
+Variant of utf8.StreamStatus.
+
 <a id="def-std_401_2futf8_2fdecode_5flossy"></a>
 
 - `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2futf8_2fdecoder"></a>
+
+- `@noalloc pub fn utf8.decoder(policy: Policy) -> Decoder uses {}`
+
+References: [`std@1/utf8/Decoder`](#def-std_401_2futf8_2fDecoder), [`std@1/utf8/Policy`](#def-std_401_2futf8_2fPolicy)
+
+<a id="def-std_401_2futf8_2ffeed"></a>
+
+- `pub fn utf8.feed(mut d: Decoder, chunk: Bytes, eof: bool) -> Result[String, StreamError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/utf8/Decoder`](#def-std_401_2futf8_2fDecoder), [`std@1/utf8/StreamError`](#def-std_401_2futf8_2fStreamError)
+
+<a id="def-std_401_2futf8_2foffset"></a>
+
+- `@noalloc pub fn utf8.offset(d: Decoder) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/utf8/Decoder`](#def-std_401_2futf8_2fDecoder)
+
+<a id="def-std_401_2futf8_2fpending_5fbytes"></a>
+
+- `@noalloc pub fn utf8.pending_bytes(d: Decoder) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/utf8/Decoder`](#def-std_401_2futf8_2fDecoder)
+
+<a id="def-std_401_2futf8_2fstatus"></a>
+
+- `@noalloc pub fn utf8.status(d: Decoder) -> StreamStatus uses {}`
+
+References: [`std@1/utf8/Decoder`](#def-std_401_2futf8_2fDecoder), [`std@1/utf8/StreamStatus`](#def-std_401_2futf8_2fStreamStatus)
 
 
 ## uuid
