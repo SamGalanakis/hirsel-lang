@@ -1,0 +1,23 @@
+// Rust alloctests/tests/sort/tests.rs:599-638: counted values and occurrence order.
+type Tagged { key: String, id: u64 }
+
+@noalloc
+fn compare(a: Tagged, b: Tagged) -> i32 uses {} {
+  string.compare(a.key, b.key)
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut input: List[Tagged] = []
+  for i in 0u64..129u64 {
+    list.push(mut input, Tagged(key: f"{(i * 37 + 13) % 17}", id: i))
+  }
+  let mut xs = unique take input
+  list.sort_stable_fast(mut xs, compare)
+  for i in 1u64..129u64 {
+    failure.check(string.compare(xs[i - 1].key, xs[i].key) <= 0, Bounds())
+    if xs[i - 1].key == xs[i].key {
+      failure.check(xs[i - 1].id < xs[i].id, Bounds())
+    }
+  }
+  Ok(())
+}

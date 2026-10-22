@@ -1,0 +1,355 @@
+// Rust f6c1107f8be13e48465e12c0fd26e6a39fe18e4f, core/src/slice/sort:
+// stable/quicksort.rs:19-244, drift.rs:22-310, merge.rs:10-70,
+// shared/pivot.rs:17-117, shared/smallsort.rs:606-676 (MIT).
+// Initialized, copied elements replace Rust's MaybeUninit pointer scratch.
+
+/// Stable driftsort for plain elements, with direct comparisons and O(n)
+/// scratch. Choose this for plain T; sort_stable_fast also accepts move-only
+/// and counted copyable elements by sorting indices. Choose sort_stable for its @noalloc guarantee.
+pub fn sort_stable_plain[T: plain](mut xs: unique List[T],
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let n = core@1/list.len(xs)
+  if n <= 20 {
+    if n > 1 { copy_insert(mut xs, 0, 1, n, by) }
+    return
+  }
+  // No source sizeof(T): keep the existing one-million-element scratch cap.
+  let full_capacity = min_size(n, 1000000)
+  let half_capacity = if full_capacity < n - n / 2 { n - n / 2 } else { full_capacity }
+  let capacity = if half_capacity < 48 { 48u64 } else { half_capacity }
+  let mut scratch: List[T] = []
+  core@1/list.reserve(mut scratch, capacity)
+  for _ in 0u64..capacity { core@1/list.push(mut scratch, xs[0]) }
+  let mut buf = unique take scratch
+  copy_sort(mut xs, mut buf, 0, n, n <= 64, by)
+}
+
+fn copy_insert[T: plain](mut p: unique List[T], begin: u64, sorted_end: u64, end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let mut i = sorted_end
+  while i < end {
+    let value = p[i]
+    let mut j = i
+    while j > begin && by(value, p[j - 1]) < 0 {
+      j -= 1
+    }
+    let mut out = i
+    while out > j {
+      p[out] = p[out - 1]
+      out -= 1
+    }
+    p[j] = take value
+    i += 1
+  }
+}
+
+// shared/pivot.rs median3 and adaptive recursive pseudomedian, unchanged order.
+fn copy_median[T: plain](p: List[T], a: u64, b: u64, c: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  let x = by(p[a], p[b]) < 0
+  let y = by(p[a], p[c]) < 0
+  if x == y {
+    let z = by(p[b], p[c]) < 0
+    if z != x { c } else { b }
+  } else { a }
+}
+
+fn copy_median_rec[T: plain](p: List[T], a: u64, b: u64, c: u64, n: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  if n >= 8 {
+    let k = n / 8
+    let aa = copy_median_rec(p, a, a + k * 4, a + k * 7, k, by)
+    let bb = copy_median_rec(p, b, b + k * 4, b + k * 7, k, by)
+    let cc = copy_median_rec(p, c, c + k * 4, c + k * 7, k, by)
+    copy_median(p, aa, bb, cc, by)
+  } else {
+    copy_median(p, a, b, c, by)
+  }
+}
+
+// stable_partition writes the left side forward and the right side backward.
+// The pivot is not compared with itself; it joins the requested partition.
+fn copy_partition[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, pivot_at: u64, equal: bool,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  // A single range guard exposes the in-bounds scan to LLVM. The cursor
+  // arithmetic is wrapping only where 0 <= left <= scanned <= n proves that
+  // the mathematical result fits u64; destination accesses stay checked.
+  failure.check(begin <= pivot_at && pivot_at < end && end <= core@1/list.len(p), Bounds())
+  let n = end - begin
+  failure.check(n <= core@1/list.len(buf), Bounds())
+  let pivot = p[pivot_at]
+  let mut left: u64 = 0
+  let mut at = begin
+  let mut stop = pivot_at
+  while true {
+    // Rust partitions the ranges on either side of the pivot separately.
+    // The explicit length bound gives this scan the same proof as a list walk.
+    while at < stop && at < core@1/list.len(p) {
+      let value = p[at]
+      let goes_left = if equal { by(pivot, value) >= 0 } else { by(value, pivot) < 0 }
+      let rev_at = core@1/int.wrapping_sub(core@1/int.wrapping_sub(end, 1u64), at)
+      let base = if goes_left { 0u64 } else { rev_at }
+      buf[core@1/int.wrapping_add(base, left)] = value
+      left = core@1/int.wrapping_add(left, if goes_left { 1u64 } else { 0u64 })
+      at += 1
+    }
+    if stop == end { break }
+    let rev_at = core@1/int.wrapping_sub(core@1/int.wrapping_sub(end, 1u64), pivot_at)
+    let base = if equal { 0u64 } else { rev_at }
+    buf[core@1/int.wrapping_add(base, left)] = pivot
+    left = core@1/int.wrapping_add(left, if equal { 1u64 } else { 0u64 })
+    at = pivot_at + 1
+    stop = end
+  }
+  for i in 0u64..left {
+    p[core@1/int.wrapping_add(begin, i)] = buf[i]
+  }
+  for i in left..n {
+    p[core@1/int.wrapping_add(begin, i)] = buf[core@1/int.wrapping_sub(core@1/int.wrapping_sub(n, 1u64), i - left)]
+  }
+  core@1/int.wrapping_add(begin, left)
+}
+
+fn copy_quick[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, budget: u64, take ancestor: Option[T],
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let mut lo = begin
+  let mut hi = end
+  let mut limit = budget
+  let mut parent = take ancestor
+  while hi - lo > 32 {
+    if limit == 0 {
+      copy_sort(mut p, mut buf, lo, hi, true, by)
+      return
+    }
+    limit -= 1
+    let k = (hi - lo) / 8
+    let pivot_at = if hi - lo < 64 {
+      copy_median(p, lo, lo + k * 4, lo + k * 7, by)
+    } else {
+      copy_median_rec(p, lo, lo + k * 4, lo + k * 7, k, by)
+    }
+    let pivot = p[pivot_at]
+    let equal = match parent {
+      Some(a) => by(a, pivot) >= 0,
+      None() => false,
+    }
+    let mid = if equal { lo } else {
+      copy_partition(mut p, mut buf, lo, hi, pivot_at, false, by)
+    }
+    if mid == lo {
+      // An empty less-than partition has left p unchanged, including pivot_at.
+      lo = copy_partition(mut p, mut buf, lo, hi, pivot_at, true, by)
+      parent = None()
+    } else {
+      copy_quick(mut p, mut buf, mid, hi, limit, Some(pivot), by)
+      hi = mid
+    }
+  }
+  if hi > lo + 1 {
+    copy_small(mut p, mut buf, lo, hi, by)
+  }
+}
+
+fn copy_quicksort[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let limit = 2u64 * (63u64 - core@1/int.leading_zeros((end - begin) | 1u64))
+  copy_quick(mut p, mut buf, begin, end, limit, None(), by)
+}
+
+// merge.rs: copy the shorter run, merge forward or backward, favoring the
+// left run on equality. Scratch contains initialized copies of T.
+fn copy_merge[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, mid: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  if mid == begin || mid == end { return }
+  if mid - begin <= end - mid {
+    for i in begin..mid { buf[i - begin] = p[i] }
+    let mut a: u64 = 0
+    let mut b = mid
+    let mut out = begin
+    while a < mid - begin && b < end {
+      if by(p[b], buf[a]) < 0 {
+        p[out] = p[b]
+        b += 1
+      } else {
+        p[out] = buf[a]
+        a += 1
+      }
+      out += 1
+    }
+    while a < mid - begin {
+      p[out] = buf[a]
+      a += 1
+      out += 1
+    }
+  } else {
+    for i in mid..end { buf[i - mid] = p[i] }
+    let mut a = mid
+    let mut b = end - mid
+    let mut out = end
+    while a > begin && b > 0 {
+      out -= 1
+      if by(buf[b - 1], p[a - 1]) < 0 {
+        a -= 1
+        p[out] = p[a]
+      } else {
+        b -= 1
+        p[out] = buf[b]
+      }
+    }
+    while b > 0 {
+      out -= 1
+      b -= 1
+      p[out] = buf[b]
+    }
+  }
+}
+
+type CopyRun { len: u64, sorted: bool }
+
+fn copy_create_run[T: plain](mut p: unique List[T], mut buf: unique List[T], begin: u64, end: u64,
+  copy_threshold: u64, eager: bool, by: @noalloc fn(T, T) -> i32 uses {}) -> CopyRun uses {} {
+  if end - begin >= copy_threshold && end - begin > 1 {
+    let descending = by(p[begin + 1], p[begin]) < 0
+    let mut at = begin + 2
+    while at < end {
+      let less = by(p[at], p[at - 1]) < 0
+      if less != descending { break }
+      at += 1
+    }
+    if at - begin >= copy_threshold {
+      if descending { copy_reverse(mut p, begin, at) }
+      return CopyRun(len: at - begin, sorted: true)
+    }
+  }
+  let len = min_size(end - begin, if eager { 32u64 } else { copy_threshold })
+  if eager { copy_small(mut p, mut buf, begin, begin + len, by) }
+  CopyRun(len: len, sorted: eager)
+}
+
+fn copy_logical_merge[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, left: CopyRun, right: CopyRun,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> CopyRun uses {} {
+  let n = end - begin
+  if n > core@1/list.len(buf) || left.sorted || right.sorted {
+    let mid = begin + left.len
+    if !left.sorted { copy_quicksort(mut p, mut buf, begin, mid, by) }
+    if !right.sorted { copy_quicksort(mut p, mut buf, mid, end, by) }
+    copy_merge(mut p, mut buf, begin, mid, end, by)
+    CopyRun(len: n, sorted: true)
+  } else {
+    CopyRun(len: n, sorted: false)
+  }
+}
+
+// drift.rs powersort stack and lazy logical runs. Desired depths increase,
+// so 66 slots suffice for every addressable list. No heap stack allocations.
+fn copy_sort[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, eager: bool,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let n = end - begin
+  if n < 2 { return }
+  let numerator = 1u64 << 62u64
+  let scale = numerator / n + if numerator % n == 0 { 0u64 } else { 1u64 }
+  let copy_threshold = if n <= 4096 { min_size(n - n / 2, 64) } else {
+    let log = 63u64 - core@1/int.leading_zeros(n | 1u64)
+    let shift = (log + 1) / 2
+    ((1u64 << shift) + (n >> shift)) / 2
+  }
+  let mut lengths: Inline[u64, 66] = [0u64; 66]
+  let mut sorted: Inline[bool, 66] = [false; 66]
+  let mut depths: Inline[u64, 66] = [0u64; 66]
+  let mut count: u64 = 0
+  let mut scan: u64 = 0
+  let mut prev = CopyRun(len: 0, sorted: true)
+  while true {
+    let next = if scan < n {
+      copy_create_run(mut p, mut buf, begin + scan, end, copy_threshold, eager, by)
+    } else { CopyRun(len: 0, sorted: true) }
+    let depth = if scan < n {
+      let x = (scan - prev.len + scan) * scale
+      let y = (scan + scan + next.len) * scale
+      core@1/int.leading_zeros(x ^ y)
+    } else { 0u64 }
+    while count > 1 && depths[count - 1] >= depth {
+      let left = CopyRun(len: lengths[count - 1], sorted: sorted[count - 1])
+      prev = copy_logical_merge(mut p, mut buf,
+        begin + scan - left.len - prev.len, begin + scan, left, prev, by)
+      count -= 1
+    }
+    lengths[count] = prev.len
+    sorted[count] = prev.sorted
+    depths[count] = depth
+    count += 1
+    if scan >= n { break }
+    scan += next.len
+    prev = next
+  }
+  if !prev.sorted { copy_quicksort(mut p, mut buf, begin, end, by) }
+}
+
+// shared/smallsort.rs:606-655: five comparisons, preserving equal-key order.
+fn copy_sort4[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let c1 = by(p[begin + 1], p[begin]) < 0
+  let c2 = by(p[begin + 3], p[begin + 2]) < 0
+  let a = begin + if c1 { 1u64 } else { 0u64 }
+  let b = begin + if c1 { 0u64 } else { 1u64 }
+  let c = begin + if c2 { 3u64 } else { 2u64 }
+  let d = begin + if c2 { 2u64 } else { 3u64 }
+  let c3 = by(p[c], p[a]) < 0
+  let c4 = by(p[d], p[b]) < 0
+  let min_at = if c3 { c } else { a }
+  let maximum = if c4 { b } else { d }
+  let unknown_left = if c3 { a } else if c4 { c } else { b }
+  let unknown_right = if c4 { d } else if c3 { b } else { c }
+  let c5 = by(p[unknown_right], p[unknown_left]) < 0
+  let lo = if c5 { unknown_right } else { unknown_left }
+  let hi = if c5 { unknown_left } else { unknown_right }
+  buf[0] = p[min_at]
+  buf[1] = p[lo]
+  buf[2] = p[hi]
+  buf[3] = p[maximum]
+  for i in 0u64..4u64 { p[begin + i] = buf[i] }
+}
+
+// sort8_stable: two stable sort4 networks followed by a stable merge.
+fn copy_sort8[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  copy_sort4(mut p, mut buf, begin, by)
+  copy_sort4(mut p, mut buf, begin + 4, by)
+  copy_merge(mut p, mut buf, begin, begin + 4, begin + 8, by)
+}
+
+// shared/smallsort.rs:226-291: seed both halves, extend by insertion, merge.
+fn copy_small[T: plain](mut p: unique List[T], mut buf: unique List[T],
+  begin: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let n = end - begin
+  if n < 2 { return }
+  let mid = begin + n / 2
+  let seed = if n >= 16 {
+    copy_sort8(mut p, mut buf, begin, by)
+    copy_sort8(mut p, mut buf, mid, by)
+    8u64
+  } else if n >= 8 {
+    copy_sort4(mut p, mut buf, begin, by)
+    copy_sort4(mut p, mut buf, mid, by)
+    4u64
+  } else { 1u64 }
+  copy_insert(mut p, begin, begin + seed, mid, by)
+  copy_insert(mut p, mid, mid + seed, end, by)
+  copy_merge(mut p, mut buf, begin, mid, end, by)
+}
+
+fn copy_reverse[T: plain](mut p: unique List[T], begin: u64, end: u64) -> () uses {} {
+  let mut lo = begin
+  let mut hi = end
+  while lo < hi {
+    hi -= 1
+    let value = p[lo]
+    p[lo] = p[hi]
+    p[hi] = take value
+    lo += 1
+  }
+}

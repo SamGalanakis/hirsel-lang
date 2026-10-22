@@ -31,7 +31,7 @@ fn check(name: &str) {
         )
         .unwrap();
         let outcome = reference.outcome.as_ref().unwrap();
-        if name == "owned-fail" {
+        if name.ends_with("-fail") {
             assert!(
                 matches!(outcome, RunOutcome::Failed { primary, .. }
                 if primary.rule.as_str() == "MEM-14" && primary.site.line == 6),
@@ -111,6 +111,21 @@ fn rust_stability_and_patterns() {
     check("vectors");
 }
 #[test]
+fn direct_copy_stability_and_patterns() {
+    check("copy-vectors");
+}
+
+#[test]
+fn counted_elements_keep_index_path() {
+    check("copy-counted");
+}
+
+#[test]
+fn direct_comparator_failure() {
+    check("copy-fail");
+}
+
+#[test]
 fn move_only_ownership() {
     check("owned");
 }
@@ -121,11 +136,20 @@ fn comparator_failure_order_and_ownership() {
 
 #[test]
 fn scratch_policy_above_full_allocation_limit() {
+    large_scratch("vectors");
+}
+
+#[test]
+fn plain_scratch_policy_above_full_allocation_limit() {
+    large_scratch("copy-vectors");
+}
+
+fn large_scratch(name: &str) {
     // Rust's 1_100_000-element length vector crosses the 8MB index scratch cap.
     // This explicit native harness avoids exceeding corpus/interpreter fuel.
     with_compiler_stack(|| {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/list_sort/drift-vectors.hir");
+            .join(format!("tests/fixtures/list_sort/drift-{name}.hir"));
         let source = std::fs::read_to_string(&path).unwrap();
         let prefix = source.split("pub fn main()").next().unwrap();
         let source = format!(
@@ -165,7 +189,7 @@ fn scratch_policy_above_full_allocation_limit() {
             failures: vec![],
             roots: vec![],
         };
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("drift-large");
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("drift-large-{name}"));
         let tools = native::Toolchain::for_matrix(&dir.join("runtime"), &configs).unwrap();
         for (config, result) in
             native::differential(&validated, &loaded.entry, &expected, &configs, &tools, &dir)

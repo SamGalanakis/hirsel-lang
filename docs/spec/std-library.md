@@ -1447,7 +1447,9 @@ unstable pattern-defeating quicksort with a heapsort fallback, `O(n log n)`, by 
 noalloc comparator), `sort_stable` (in place, stable block merge sort, preserving input
 order among equal elements, `O(n log n)` time and `O(1)` auxiliary space without
 allocation), `sort_stable_fast` (stable driftsort with bounded `O(n)` heap scratch,
-for throughput when allocation is allowed, including move-only elements),
+for counted or move-only elements when allocation is allowed, sorting indices before moving owners),
+`sort_stable_plain[T: plain]` (stable driftsort with direct element comparisons and
+`O(n)` heap scratch; choose this for plain elements to avoid index indirection),
 `binary_search` (the first equal element
 of input sorted by the same comparator), `find`, `map`, `filter`, `fold`, `all`, `any`,
 `partition`, `concat` and `dedup` (removing consecutive equal elements). `std@1/string`

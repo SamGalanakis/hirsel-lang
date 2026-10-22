@@ -1301,6 +1301,12 @@
       "module": [
         "ascii85"
       ]
+    },
+    {
+      "path": "list_copy.hir",
+      "module": [
+        "list"
+      ]
     }
   ],
   "dependencies": []

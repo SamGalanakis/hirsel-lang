@@ -4,7 +4,8 @@
 // Sort indices, then apply cycles by swaps: generic owners are never copied
 // into scratch, and a failed comparison leaves every owner in the input.
 
-/// Stable driftsort with bounded O(n) scratch. Choose this for throughput;
+/// Stable driftsort with bounded O(n) scratch, including move-only owners.
+/// Choose sort_stable_plain for plain elements without index indirection;
 /// choose sort_stable for its @noalloc guarantee. Equal keys retain order.
 /// Above 20 elements, comparisons finish before elements move. Smaller inputs
 /// use stable insertion by swaps; comparator failures propagate immediately.

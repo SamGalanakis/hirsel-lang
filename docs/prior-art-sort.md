@@ -176,3 +176,51 @@ Deviations from Rust:
   comparator failure sites. Observable interior mutation of a borrowed T is
   unavailable in Hirsel's comparator contract. Tests compare interpreter, heap
   evaluator, LLVM and Cranelift, including terminal failure and cleanup.
+
+### Plain element driftsort
+
+`list.sort_stable_plain[T: plain]`, implemented in `list_copy.hir`, keeps the
+same Rust revision, powersort runs, bounded quicksort fallback, recursive
+pseudomedian and stable shorter-run merge. It compares and partitions elements
+directly. `sort_stable_fast[T]` remains the index-based choice for counted or
+move-only elements; source generics have no bound-based dispatch.
+
+The partition follows `stable/quicksort.rs:92–244`: scan before the pivot,
+place the pivot without comparing it with itself, then scan the remainder.
+Each destination is `num_left + select(goes_left, 0, end - 1 - scan)` and the
+left cursor advances by the comparison's boolean value. A bounded `while`
+scan includes the input length in its condition, so LLVM can combine the
+upper bounds and omit a separate input projection failure inside the loop.
+Scratch destination checks and checked copy-back accesses remain. Wrapping
+cursor arithmetic is used only where `left <= scanned <= length` proves the
+mathematical result fits; list accesses remain checked.
+
+Small ranges follow `shared/smallsort.rs:226–291,606–676`: a stable sort4
+uses five comparisons, sort8 sorts two groups of four and merges them, and
+both halves are extended by insertion before their final merge. The entry
+insertion threshold is 20 and the quicksort small-sort threshold is 32.
+
+Deviations from Rust for this path:
+
+- The bound is `plain`, rather than Rust's `Freeze` specialization. Counted
+  copyable values can still carry scoped loans, so copying those values
+  through scratch is not licensed by this implementation's header. There are
+  no deep copies, retained counts, interior-mutability cases or owner guards
+  in the plain path.
+- Scratch is an initialized `List[T]`, initially filled with the first element,
+  rather than `MaybeUninit<T>`. The existing one-million-element cap replaces
+  Rust's type-size-dependent 8 MB cap because source has no `sizeof(T)`.
+  Capacity still covers at least half the input and 48 small-sort slots.
+- The scalar source scan replaces Rust's size-dependent four-element manual
+  unroll. Likewise sort8 seeds are used for every plain type at length 16,
+  rather than selecting sort4 for elements wider than 16 bytes.
+- Sort8 and the final small-sort merge reuse the checked shorter-run merge,
+  instead of Rust's raw-pointer bidirectional merge. Small runs are sorted in
+  place instead of ping-ponging between uninitialized buffers.
+- Insertion finds the destination before shifting. Thus a comparator failure
+  cannot interrupt a partially shifted insertion. Other failures propagate
+  through ordinary fail-stop cleanup; no user unwind guard is introduced.
+
+The driver adds plain length/distribution vectors, counted-string index-path
+controls and a direct comparator-failure case. Both allocation policies also
+run all eight distributions at 1,100,000 elements in native parity checks.
