@@ -1,0 +1,69 @@
+fn cap(requested: u64, maximum: u64) -> () uses {} {
+  match union_find.new(requested, maximum) {
+    Ok(_) => failure.check(false, Bounds()),
+    Error(error) => failure.check(error == NodeLimit(requested, maximum), Bounds()),
+  }
+}
+
+fn owned_snapshot() -> Result[List[u64], union_find.Error] uses {} {
+  let mut temporary = union_find.new(2, 2)?
+  let _ = union_find.union(mut temporary, 1, 0)?
+  Ok(union_find.snapshot(mut temporary))
+}
+
+pub fn main() -> Result[(), union_find.Error] {
+  cap(1, 0)
+  cap(9, 8)
+  // Must reject before any attempted enormous allocation/iteration.
+  cap(18446744073709551615u64, 8)
+  let mut empty = union_find.new(0, 0)?
+  failure.check(union_find.count(empty) == 0, Bounds())
+  failure.check(union_find.snapshot(mut empty) == [], Bounds())
+  failure.check(union_find.find(mut empty, 0) == Error(InvalidId(0, 0)), Bounds())
+  let mut one = union_find.new(1, 1)?
+  failure.check(union_find.union(mut one, 0, 0)? == 0, Bounds())
+  failure.check(union_find.count(one) == 1, Bounds())
+  failure.check(union_find.snapshot(mut one) == [0u64], Bounds())
+  let mut forest = union_find.new(8, 8)?
+  let _ = union_find.union(mut forest, 0, 1)?
+  let _ = union_find.union(mut forest, 2, 3)?
+  let _ = union_find.union(mut forest, 0, 2)?
+  let mut alias = copy forest
+  let saved = union_find.snapshot(mut forest)
+  let invalid_ids: List[u64] = [8u64, 18446744073709551615u64]
+  for invalid in invalid_ids {
+    failure.check(
+      union_find.find(mut forest, invalid) == Error(InvalidId(invalid, 8)),
+      Bounds()
+    )
+    failure.check(
+      union_find.union(mut forest, 3, invalid) == Error(InvalidId(invalid, 8)),
+      Bounds()
+    )
+    failure.check(
+      union_find.union(mut forest, invalid, 3) == Error(InvalidId(invalid, 8)),
+      Bounds()
+    )
+    failure.check(
+      union_find.same(mut forest, 3, invalid) == Error(InvalidId(invalid, 8)),
+      Bounds()
+    )
+    failure.check(
+      union_find.same(mut forest, invalid, 3) == Error(InvalidId(invalid, 8)),
+      Bounds()
+    )
+    failure.check(union_find.snapshot(mut forest) == saved, Bounds())
+    failure.check(union_find.snapshot(mut alias) == saved, Bounds())
+    failure.check(
+      union_find.count(forest) == 5 && union_find.count(alias) == 5,
+      Bounds()
+    )
+  }
+  let _ = union_find.union(mut forest, 4, 5)?
+  failure.check(!union_find.same(mut alias, 4, 5)?, Bounds())
+  let _ = union_find.union(mut alias, 6, 7)?
+  failure.check(!union_find.same(mut forest, 6, 7)?, Bounds())
+  failure.check(saved == [0u64, 0u64, 0u64, 0u64, 4u64, 5u64, 6u64, 7u64], Bounds())
+  failure.check(owned_snapshot()? == [1u64, 1u64], Bounds())
+  Ok(())
+}

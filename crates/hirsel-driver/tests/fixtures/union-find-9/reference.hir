@@ -1,0 +1,31 @@
+// rustc union_find/tests.rs:1-32, plus reversed ties and rank preference.
+pub fn main() -> Result[(), union_find.Error] {
+  let mut sets = union_find.new(10, 10)?
+  for i in 0u64..10u64 {
+    failure.check(union_find.find(mut sets, i)? == i, Bounds())
+  }
+  let first = union_find.union(mut sets, 3, 7)?
+  let second = union_find.union(mut sets, 4, 2)?
+  failure.check(first == 3 && second == 4, Bounds())
+  failure.check(union_find.same(mut sets, 7, 3)?, Bounds())
+  failure.check(union_find.same(mut sets, 2, 4)?, Bounds())
+  failure.check(!union_find.same(mut sets, 3, 4)?, Bounds())
+  let joined = union_find.union(mut sets, 7, 4)?
+  failure.check(joined == 3, Bounds())
+  failure.check(union_find.same(mut sets, 7, 3)?, Bounds())
+  failure.check(union_find.same(mut sets, 2, 4)?, Bounds())
+  failure.check(union_find.same(mut sets, 3, 4)?, Bounds())
+  let isolated: List[u64] = [0u64, 1u64, 5u64, 6u64, 8u64, 9u64]
+  for i in isolated {
+    failure.check(union_find.find(mut sets, i)? == i, Bounds())
+  }
+  failure.check(union_find.count(sets) == 7, Bounds())
+  let mut reversed = union_find.new(4, 4)?
+  failure.check(union_find.union(mut reversed, 3, 2)? == 3, Bounds())
+  // Smaller rank loses even when supplied first.
+  failure.check(union_find.union(mut reversed, 0, 2)? == 3, Bounds())
+  failure.check(union_find.union(mut reversed, 2, 3)? == 3, Bounds())
+  failure.check(union_find.union(mut reversed, 3, 3)? == 3, Bounds())
+  failure.check(union_find.count(reversed) == 2, Bounds())
+  Ok(())
+}

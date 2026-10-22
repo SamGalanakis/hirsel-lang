@@ -1,0 +1,99 @@
+// Port of rust-lang/rust 15c10447a46529b68e38c7f138aeb95240e4d7d6,
+// compiler/rustc_data_structures/src/union_find.rs:28-95 (MIT, Rust).
+// See docs/union-find.md and third-party/NOTICES.md for adaptations.
+pub opaque type Forest: copyable + inert + noalloc_drop uses {} {
+  parents: List[u64],
+  ranks: List[u64],
+  components: u64,
+}
+
+/// Requested nodes and cap, or invalid ID and domain length.
+pub type Error = NodeLimit(u64, u64) | InvalidId(u64, u64)
+
+/// Creates singleton sets for IDs in [0, count); checks the cap before allocating.
+pub fn new(nodes: u64, max_nodes: u64) -> Result[Forest, Error] uses {} {
+  if nodes > max_nodes {
+    return Error(NodeLimit(nodes, max_nodes))
+  }
+  let mut parents: List[u64] = []
+  let mut ranks: List[u64] = []
+  for id in 0u64..nodes {
+    core@1/list.push(mut parents, id)
+    core@1/list.push(mut ranks, 0u64)
+  }
+  Ok(Forest(parents: take parents, ranks: take ranks, components: nodes))
+}
+
+@noalloc
+fn check_id(forest: Forest, id: u64) -> Result[(), Error] uses {} {
+  let size = core@1/list.len(forest.parents)
+  if id >= size {
+    Error(InvalidId(id, size))
+  } else {
+    Ok(())
+  }
+}
+
+// rustc updates each visited parent to its grandparent, then advances to parent.
+fn root(mut forest: Forest, id: u64) -> u64 uses {} {
+  let mut current = id
+  while forest.parents[current] != current {
+    let parent = forest.parents[current]
+    let grandparent = forest.parents[parent]
+    forest.parents[current] = grandparent
+    current = parent
+  }
+  current
+}
+
+/// Returns an opaque representative; compresses paths with normal COW semantics.
+pub fn find(mut forest: Forest, id: u64) -> Result[u64, Error] uses {} {
+  check_id(forest, id)?
+  Ok(root(mut forest, id))
+}
+
+/// Returns the merged representative. Equal ranks prefer the first root.
+/// Both IDs are checked before either path is compressed.
+pub fn union(mut forest: Forest, a: u64, b: u64) -> Result[u64, Error] uses {} {
+  check_id(forest, a)?
+  check_id(forest, b)?
+  let mut first = root(mut forest, a)
+  let mut second = root(mut forest, b)
+  if first == second {
+    return Ok(first)
+  }
+  if forest.ranks[first] < forest.ranks[second] {
+    let saved = first
+    first = second
+    second = saved
+  } else if forest.ranks[first] == forest.ranks[second] {
+    forest.ranks[first] += 1
+  }
+  forest.parents[second] = first
+  forest.components -= 1
+  Ok(first)
+}
+
+/// Checks both endpoints before compression, just like union.
+pub fn same(mut forest: Forest, a: u64, b: u64) -> Result[bool, Error] uses {} {
+  check_id(forest, a)?
+  check_id(forest, b)?
+  let first = root(mut forest, a)
+  let second = root(mut forest, b)
+  Ok(first == second)
+}
+
+/// Number of disjoint components, including isolated IDs.
+@noalloc
+pub fn count(forest: Forest) -> u64 uses {} {
+  forest.components
+}
+
+/// Owned ID-to-root snapshot, independent of later forest mutations.
+pub fn snapshot(mut forest: Forest) -> unique List[u64] uses {} {
+  let mut roots: unique List[u64] = []
+  for id in 0u64..core@1/list.len(forest.parents) {
+    core@1/list.push(mut roots, root(mut forest, id))
+  }
+  take roots
+}

@@ -60,3 +60,4 @@ mod jaro_similarity_10;
 mod varint_7;
 mod toposort_8;
 mod json_pointer_8;
+mod union_find_9;

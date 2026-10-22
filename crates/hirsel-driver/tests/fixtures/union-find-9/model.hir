@@ -1,0 +1,95 @@
+// Adjacency matrix and breadth-first reachability: no union-find model.
+fn reachable(edges: List[bool], n: u64, start: u64) -> List[bool] uses {} {
+  let mut seen: List[bool] = []
+  for i in 0u64..n {
+    list.push(mut seen, i == start)
+  }
+  let mut queue: List[u64] = [start]
+  let mut head = 0u64
+  while head < list.len(queue) {
+    let a = queue[head]
+    head += 1
+    for b in 0u64..n {
+      if !seen[b] && edges[a * n + b] {
+        seen[b] = true
+        list.push(mut queue, b)
+      }
+    }
+  }
+  take seen
+}
+
+fn verify(mut forest: union_find.Forest, edges: List[bool], n: u64) -> Result[
+  (),
+  union_find.Error
+] uses {} {
+  let roots = union_find.snapshot(mut forest)
+  failure.check(list.len(roots) == n, Bounds())
+  let mut components = 0u64
+  for a in 0u64..n {
+    failure.check(roots[a] < n && roots[roots[a]] == roots[a], Bounds())
+    let seen = reachable(edges, n, a)
+    let mut first = true
+    for b in 0u64..n {
+      failure.check((roots[a] == roots[b]) == seen[b], Bounds())
+      failure.check(union_find.same(mut forest, a, b)? == seen[b], Bounds())
+      if b < a && seen[b] {
+        first = false
+      }
+    }
+    if first {
+      components += 1
+    }
+  }
+  failure.check(union_find.count(forest) == components, Bounds())
+  Ok(())
+}
+
+pub fn main() -> Result[(), union_find.Error] {
+  for n in 0u64..9u64 {
+    let seeds: List[u64] = [1u64, 17u64, 937u64]
+    for seed in seeds {
+      let mut forest = union_find.new(n, 8)?
+      let mut edges: List[bool] = []
+      for _ in 0u64..n * n {
+        list.push(mut edges, false)
+      }
+      verify(mut forest, edges, n)?
+      let mut state = seed
+      for step in 0u64..24u64 {
+        state = (state * 1664525 + 1013904223) % 4294967296
+        let a = state / 65536 % (n + 1)
+        state = (state * 1664525 + 1013904223) % 4294967296
+        let b = state / 65536 % (n + 1)
+        let prior_count = union_find.count(forest)
+        if a == n {
+          failure.check(
+            union_find.union(mut forest, a, b) == Error(InvalidId(a, n)),
+            Bounds()
+          )
+          failure.check(union_find.count(forest) == prior_count, Bounds())
+        } else if b == n {
+          failure.check(
+            union_find.union(mut forest, a, b) == Error(InvalidId(b, n)),
+            Bounds()
+          )
+          failure.check(union_find.count(forest) == prior_count, Bounds())
+        } else {
+          let seen = reachable(edges, n, a)
+          let representative = union_find.union(mut forest, a, b)?
+          failure.check(representative < n, Bounds())
+          let decrement = if seen[b] {
+            0u64
+          } else {
+            1u64
+          }
+          failure.check(union_find.count(forest) == prior_count - decrement, Bounds())
+          edges[a * n + b] = true
+          edges[b * n + a] = true
+        }
+        verify(mut forest, edges, n)?
+      }
+    }
+  }
+  Ok(())
+}

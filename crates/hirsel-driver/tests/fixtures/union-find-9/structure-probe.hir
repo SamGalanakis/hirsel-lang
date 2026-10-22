@@ -1,0 +1,44 @@
+// Test-only module alongside the actual source, without exposing std internals.
+pub fn audit(forest: Forest) -> () uses {} {
+  let n = core@1/list.len(forest.parents)
+  failure.check(core@1/list.len(forest.ranks) == n, Bounds())
+  let mut roots = 0u64
+  for id in 0u64..n {
+    let mut current = id
+    let mut visits = 0u64
+    while forest.parents[current] != current {
+      let parent = forest.parents[current]
+      failure.check(parent < n, Bounds())
+      failure.check(forest.ranks[current] < forest.ranks[parent], Bounds())
+      visits += 1
+      failure.check(visits < n, Bounds())
+      current = parent
+    }
+    // A rank-r root contains at least 2^r nodes. Check its actual membership.
+    if current == id {
+      roots += 1
+      let mut members = 0u64
+      for other in 0u64..n {
+        let mut cursor = other
+        for _ in 0u64..n {
+          cursor = forest.parents[cursor]
+        }
+        if cursor == id {
+          members += 1
+        }
+      }
+      failure.check(forest.ranks[id] < 64, Bounds())
+      failure.check(1u64 << forest.ranks[id] <= members, Bounds())
+    }
+    failure.check(visits <= forest.ranks[current], Bounds())
+  }
+  failure.check(roots == forest.components, Bounds())
+}
+
+pub fn parent_snapshot(forest: Forest) -> unique List[u64] uses {} {
+  unique forest.parents
+}
+
+pub fn rank_snapshot(forest: Forest) -> unique List[u64] uses {} {
+  unique forest.ranks
+}

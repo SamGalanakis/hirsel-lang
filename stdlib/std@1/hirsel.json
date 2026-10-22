@@ -1289,6 +1289,12 @@
       "module": [
         "json_pointer"
       ]
+    },
+    {
+      "path": "union_find.hir",
+      "module": [
+        "union_find"
+      ]
     }
   ],
   "dependencies": []

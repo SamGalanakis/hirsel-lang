@@ -1,0 +1,56 @@
+pub fn main() -> Result[(), probe.Error] {
+  let mut forest = probe.new(16, 16)?
+  let mut width = 1u64
+  while width < 16 {
+    let mut base = 0u64
+    while base < 16 {
+      let _ = probe.union(mut forest, base, base + width)?
+      probe.audit(forest)
+      base += width * 2
+    }
+    width *= 2
+  }
+  let mut alias = copy forest
+  let parents = probe.parent_snapshot(forest)
+  let ranks = probe.rank_snapshot(forest)
+  failure.check(parents[15] == 14 && parents[14] == 12, Bounds())
+  failure.check(probe.union(mut forest, 15, 16) == Error(InvalidId(16, 16)), Bounds())
+  failure.check(probe.same(mut forest, 15, 16) == Error(InvalidId(16, 16)), Bounds())
+  failure.check(probe.union(mut forest, 16, 15) == Error(InvalidId(16, 16)), Bounds())
+  failure.check(probe.same(mut forest, 16, 15) == Error(InvalidId(16, 16)), Bounds())
+  failure.check(
+    probe.parent_snapshot(forest) == parents && probe.parent_snapshot(alias) == parents,
+    Bounds()
+  )
+  failure.check(
+    probe.rank_snapshot(forest) == ranks && probe.rank_snapshot(alias) == ranks,
+    Bounds()
+  )
+  failure.check(probe.find(mut forest, 15)? == 0, Bounds())
+  // Match rustc's advance-to-old-parent compression, including intermediate nodes.
+  let compressed = probe.parent_snapshot(forest)
+  failure.check(
+    compressed[15] == 12 && compressed[14] == 8 && compressed[12] == 0,
+    Bounds()
+  )
+  failure.check(probe.parent_snapshot(alias) == parents, Bounds())
+  let saved = probe.snapshot(mut forest)
+  let _ = probe.find(mut alias, 15)?
+  failure.check(saved == probe.snapshot(mut alias), Bounds())
+  probe.audit(forest)
+  probe.audit(alias)
+  let seeds: List[u64] = [1u64, 17u64, 937u64]
+  for seed in seeds {
+    let mut small = probe.new(8, 8)?
+    let mut state = seed
+    for _ in 0u64..48u64 {
+      state = (state * 1664525 + 1013904223) % 4294967296
+      let a = state / 65536 % 8
+      state = (state * 1664525 + 1013904223) % 4294967296
+      let b = state / 65536 % 8
+      let _ = probe.union(mut small, a, b)?
+      probe.audit(small)
+    }
+  }
+  Ok(())
+}

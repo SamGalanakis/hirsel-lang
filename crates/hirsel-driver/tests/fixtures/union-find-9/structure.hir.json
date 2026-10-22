@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "union_find_9_structure",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "structure.hir",
+      "module": []
+    },
+    {
+      "path": "../../../../../stdlib/std@1/union_find.hir",
+      "module": [
+        "probe"
+      ]
+    },
+    {
+      "path": "structure-probe.hir",
+      "module": [
+        "probe"
+      ]
+    }
+  ],
+  "dependencies": []
+}
