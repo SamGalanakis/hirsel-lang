@@ -107,6 +107,21 @@ beside its accepted repair (the complete graph above):
 | Declare the three types and only `outer_schema_decode`. | Also declare `service_schema_decode` and `retry_schema_decode` with the headers above. |
 | Declare the three types and only `outer_schema_encode`. | Also declare `service_schema_encode` and `retry_schema_encode` with the headers above. |
 
+Generated nested-hook errors also label the application field's type, for
+example `Outer.service`, with the required callable contract:
+
+```hirsel
+fn service_schema_decode(value: json.Value, mut check: schema.CheckState) -> Result[unique Service, schema.SchemaError] uses {}
+fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[unique json.Value, schema.SchemaError] uses {}
+```
+
+The label uses fully qualified names, includes variant payload labels (or their
+zero-based position), and follows container elements back to their application
+field. Text and JSON diagnostics carry the same label and source location.
+Wrong hook types retain their ordinary type or generic diagnostic, enriched with
+this context. Hooks are still explicit; the contract is guidance, not an
+additional signature restriction or a generated repair.
+
 Both missing-hook fixtures reject under [LANG-4](spec/language.md#lang-4-names),
 at the unresolved hook name in the generated outer body, with a secondary
 span on the original `comptime derive.schema_decode(...)` or
@@ -203,6 +218,17 @@ With the checkout prepared for Buck2:
 
 Require five selected tests: two missing-hook rejections and three accepted
 executions (roundtrip/ownership, strict wire, and limits in both directions).
+The nested-hook diagnostic matrix is checked separately:
+
+```sh
+.buck2/bin/buck2 test //:hirsel-driver-test-it-shard-1 -- --test-arg=schema_hook_diagnostics_17
+.buck2/bin/buck2 test //:hirsel-cli-test-cli-shard-1 -- --test-arg=schema_hook_diagnostics_17
+```
+
+Require ten driver tests and three CLI tests, including missing and ill-typed
+hooks, record/variant nesting, cross-package hooks, UTF-8 locations and manual
+repairs executed on both native backends.
+
 Zero selected tests is a failure. The four CLI commands above additionally
 check the complete entry through the interpreter, LLVM and Cranelift.
 
@@ -221,3 +247,11 @@ hooks instead of Rust traits, and keeps Hirsel's strict unknown/duplicate-key
 policy and typed issue paths. Unicode, ownership and shared-budget checks
 extend those vectors. There is no application migration business logic in this
 recipe and no change to derive or schema policy.
+
+The field-attributed diagnostic structure and incorrect-converter vectors follow
+Serde's [`internals/check.rs:29–53`](https://github.com/serde-rs/serde/blob/0db9b3b504bcb0a7fa9cf001429869519afd3e9a/serde_derive/src/internals/check.rs#L29)
+and [`incorrect_type_struct.rs:1–15`](https://github.com/serde-rs/serde/blob/0db9b3b504bcb0a7fa9cf001429869519afd3e9a/test_suite/tests/ui/default-attribute/incorrect_type_struct.rs#L1)
+(MIT OR Apache-2.0). No implementation text is copied. Hirsel retains its
+explicit hooks, ordinary failure ordering, ownership and authority checking;
+diagnostic comments only link generated call errors to existing source spans.
+No runtime or replay representation changes.

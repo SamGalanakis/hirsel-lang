@@ -3,6 +3,38 @@
 use hirsel_diag::{Diagnostic, Obligation, Severity};
 use hirsel_span::SourceMap;
 
+/// Read a std schema converter's explanatory comments only when the primary
+/// is within its following single-line adapter. These are diagnostic hints,
+/// never semantic metadata; malformed or absent comments add nothing.
+pub(crate) fn schema_hook_context(
+    text: &str,
+    start: usize,
+    end: usize,
+) -> Option<(&str, &str, &str)> {
+    let mut lines = text.split_inclusive('\n');
+    let mut offset = 0usize;
+    while let Some(line) = lines.next() {
+        offset += line.len();
+        let Some(context) = line.strip_prefix("// schema-hook ").map(str::trim) else {
+            continue;
+        };
+        let contract = lines.next()?;
+        offset += contract.len();
+        let Some(contract) = contract.strip_prefix("// schema-contract ").map(str::trim) else {
+            continue;
+        };
+        let converter = lines.next()?;
+        let converter_start = offset;
+        offset += converter.len();
+        if start < converter_start || end > offset {
+            continue;
+        }
+        let (parent, member) = context.split_once('\t')?;
+        return Some((parent, member, contract));
+    }
+    None
+}
+
 fn stage(d: &Diagnostic) -> u8 {
     let rule = d.rule.as_str();
     let has = |wanted: fn(&Obligation) -> bool| d.obligations.iter().any(wanted);

@@ -94,3 +94,4 @@ mod cursor_diagnostics_16;
 mod exit_code_16;
 mod mutable_pattern_diagnostics_17;
 mod arena_effect_charge_17;
+mod schema_hook_diagnostics_17;

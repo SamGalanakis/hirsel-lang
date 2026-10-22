@@ -188,10 +188,14 @@ fn schema_callable(name: String) -> bool uses {} {
 
 // Emit a complete local converter. Structural child converters are ordinary
 // pure source functions, passing the same mutable state, with owned results.
-fn schema_converter(mut w: Writer, ty: String, p: schema.Policy, encode: bool) -> Result[
-  String,
-  String
-] uses {} {
+fn schema_converter(
+  mut w: Writer,
+  ty: String,
+  p: schema.Policy,
+  encode: bool,
+  parent: String,
+  member: String
+) -> Result[String, String] uses {} {
   let mut named: Option[String] = None
   for leaf in p.leaves {
     if leaf.ty == ty {
@@ -230,6 +234,11 @@ fn schema_converter(mut w: Writer, ty: String, p: schema.Policy, encode: bool) -
   let argument_name = fresh(mut w, "input")
   let state_name = fresh(mut w, "state")
   if let Some(callee) = named {
+    // Diagnostic-only breadcrumbs: ordinary checking still owns every call.
+    put(
+      mut w,
+      f"// schema-hook {parent}\t{member}\n// schema-contract fn {callee}(value: {input}, mut check: std@1/schema.CheckState) -> core@1/Result[unique {output}, std@1/schema.SchemaError] uses {{}}\n"
+    )
     put(
       mut w,
       f"let {name} = fn({argument_name}: {input}, mut {state_name}: std@1/schema.CheckState) -> core@1/Result[{output}, std@1/schema.SchemaError] uses {{}} {{ match {callee}({argument_name}, mut {state_name}) {{ Ok(converted) => Ok(take converted), Error(rejected) => Error(take rejected) }} }}\n"
@@ -240,15 +249,24 @@ fn schema_converter(mut w: Writer, ty: String, p: schema.Policy, encode: bool) -
   let mut children: List[String] = []
   if let Some(inner) = argument(ty, "core@1/Option") {
     nested_option(ty, inner)?
-    list.push(mut children, schema_converter(mut w, inner, p, encode)?)
+    list.push(mut children, schema_converter(mut w, inner, p, encode, parent, member)?)
   } else if let Some(inner) = argument(ty, "List") {
-    list.push(mut children, schema_converter(mut w, inner, p, encode)?)
+    list.push(mut children, schema_converter(mut w, inner, p, encode, parent, member)?)
   } else if let Some(pair) = parameters(ty, "Map") {
-    list.push(mut children, schema_converter(mut w, pair[0], p, encode)?)
-    list.push(mut children, schema_converter(mut w, pair[1], p, encode)?)
+    list.push(
+      mut children,
+      schema_converter(mut w, pair[0], p, encode, parent, member)?
+    )
+    list.push(
+      mut children,
+      schema_converter(mut w, pair[1], p, encode, parent, member)?
+    )
   } else if let Some(parts) = tuple(ty) {
     for component in parts {
-      list.push(mut children, schema_converter(mut w, component, p, encode)?)
+      list.push(
+        mut children,
+        schema_converter(mut w, component, p, encode, parent, member)?
+      )
     }
   }
   put(
@@ -439,7 +457,10 @@ fn schema_record(
 ) -> Result[(), String] uses {} {
   let mut children: List[String] = []
   for field in fields {
-    list.push(mut children, schema_converter(mut w, field.ty, p, encode)?)
+    list.push(
+      mut children,
+      schema_converter(mut w, field.ty, p, encode, info.name, field.name)?
+    )
   }
   if encode {
     put(mut w, "let mut fields: Map[String, std@1/json.Value] = core@1/map.empty()\n")
@@ -561,8 +582,24 @@ fn schema_choice(
   let mut children: List[List[String]] = []
   for variant in variants {
     let mut row: List[String] = []
+    let mut index = 0u64
     for payload in variant.payload {
-      list.push(mut row, schema_converter(mut w, payload.ty, p, encode)?)
+      let label = match payload.label {
+        Some(label) => label,
+        None => f"{index}",
+      }
+      list.push(
+        mut row,
+        schema_converter(
+          mut w,
+          payload.ty,
+          p,
+          encode,
+          info.name,
+          f"{variant.name}.{label}"
+        )?
+      )
+      index += 1
     }
     list.push(mut children, take row)
   }

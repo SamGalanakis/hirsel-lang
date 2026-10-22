@@ -1454,7 +1454,7 @@ impl QueryEngine {
         for path in representations {
             self.read_implementation(&path);
         }
-        entry.result()
+        self.label_generated_result(entry.result())
     }
     fn check_query(
         &mut self,
