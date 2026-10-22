@@ -28,6 +28,7 @@ struct UniqueStep {
     already_aliased: bool,
     losses: Vec<(Span, String)>,
     repairs: Vec<Repair>,
+    items: Vec<Fact<Cause>>,
 }
 /// An explanation whose remaining sites need the trace.
 pub(super) struct Pending {
@@ -218,6 +219,7 @@ impl Checker<'_, '_> {
                                 source
                             };
                             step.losses.push((self.span_of(site), format!("the `{parameter}` input may share counted storage; this call therefore does not hand `{name}` back deeply unique")));
+                            self.iteration_item(before, source, &mut step);
                         }
                     }
                 }
@@ -253,6 +255,103 @@ impl Checker<'_, '_> {
             _ => {}
         }
         step
+    }
+
+    /// Add context to an existing loss, never infer an element promise from
+    /// the collection's root or its source marker. Only indexed sequences have
+    /// this contract; associated cursors supply their own checked item rows.
+    fn iteration_item(&self, state: &State, mut source: ExprId, step: &mut UniqueStep) {
+        while let ExprKind::Unary {
+            op: UnaryOp::Copy | UnaryOp::Take,
+            value,
+        } = self.tree.expressions[source.0 as usize].kind
+        {
+            source = value;
+        }
+        let Some(place) = place(self.body, source, self.source_rows) else {
+            return;
+        };
+        if !place.projections.is_empty() {
+            return;
+        }
+        let binding = &self.body.bindings[place.binding];
+        let NameSite::Pattern(pattern) = binding.site else {
+            return;
+        };
+        let item_span = self.tree.patterns[pattern.0 as usize].origin.span;
+        let Some(loop_source) = self.tree.statements.iter().find_map(|s| {
+            let hirsel_syntax::StmtKind::For {
+                pattern, source, ..
+            } = s.kind
+            else {
+                return None;
+            };
+            let span = self.tree.patterns[pattern.0 as usize].origin.span;
+            (span.start <= item_span.start && span.end >= item_span.end).then_some(source)
+        }) else {
+            return;
+        };
+        if !self
+            .ty(loop_source)
+            .and_then(|t| self.t.get(t))
+            .is_some_and(|t| {
+                matches!(
+                    t.kind,
+                    TypeKind::Builtin {
+                        kind: BuiltinType::List | BuiltinType::Array,
+                        ..
+                    }
+                )
+            })
+        {
+            return;
+        }
+        let (item, _) = self.binding_site(place.binding);
+        let declared = self.t.get(binding.ty).unwrap();
+        let current = &state.slots[place.binding].value;
+        let mode = |u| {
+            if u == Uniqueness::Unique {
+                "unique"
+            } else {
+                "not proved unique"
+            }
+        };
+        let description = format!(
+            "loop item `{item}` has declared item uniqueness: {}; current item uniqueness at this input: {}. The item contract is separate from the sequence's root uniqueness",
+            mode(declared.modes.uniqueness),
+            mode(current.modes.uniqueness)
+        );
+        step.items.push(Fact::new(
+            Cause::IterationItem,
+            item_span,
+            &[&item, &description],
+        ));
+        let access = match self.tree.expressions[loop_source.0 as usize].kind {
+            ExprKind::Unary {
+                op: UnaryOp::Take, ..
+            } => "`take` consumes the sequence; it does not prove arbitrary nested elements unique",
+            ExprKind::Unary {
+                op: UnaryOp::Mut, ..
+            } => {
+                "`mut` iterates element places with checked mutable access; it does not strengthen their declared uniqueness"
+            }
+            _ => "this source is borrowed; its items use the checked borrowed element contract",
+        };
+        step.items.push(Fact::new(
+            Cause::IterationItem,
+            self.span_of(loop_source),
+            &[&item, access],
+        ));
+        // Deliberately narrow: a closed String/Bytes/scalar/List tree has no
+        // hidden resource, generic contract, callable capture or placement.
+        let noalloc = self
+            .graph_callable()
+            .is_some_and(|(f, _)| f.allocation == hirsel_types::Allocation::NoAlloc);
+        let independent_copy = !noalloc && self.independent_capture_copy(current, binding.ty);
+        step.repairs.push(Repair::IterationItem {
+            item,
+            independent_copy,
+        });
     }
 
     fn helper_unique_repair(&self, callee: ExprId, ordinal: usize) -> Option<Repair> {
@@ -334,6 +433,7 @@ impl Checker<'_, '_> {
         let mut seen = BTreeSet::new();
         let mut losses = vec![];
         let mut repairs = vec![];
+        let mut items = vec![];
         let mut looped = false;
         let mut uncertain = false;
         let mut joined = false;
@@ -350,6 +450,7 @@ impl Checker<'_, '_> {
                 uncertain |= step.already_aliased;
                 losses.extend(step.losses.iter().cloned());
                 repairs.extend(step.repairs.iter().cloned());
+                items.extend(step.items.iter().cloned());
                 if !step.already_aliased {
                     continue;
                 }
@@ -365,13 +466,15 @@ impl Checker<'_, '_> {
         // other share on the path. Keep every loss label, but do not present
         // this recipe as a repair for mixed or uncertain causes.
         if merged {
-            repairs.clear();
+            repairs.retain(|r| matches!(r, Repair::IterationItem { .. }));
         }
-        let mut facts: Vec<_> = losses
+        items.sort_by_key(|f| (f.span.start, f.span.end, f.names.clone()));
+        items.dedup();
+        let mut facts: Vec<_> = items
             .into_iter()
-            .map(|(span, description)| {
+            .chain(losses.into_iter().map(|(span, description)| {
                 Fact::new(Cause::UniquenessLoss, span, &[&name, &description])
-            })
+            }))
             .collect();
         if merged {
             let description = if looped {
@@ -679,7 +782,8 @@ impl Checker<'_, '_> {
         }
     }
     /// Diagnostic-only evidence, deliberately limited to concrete counted
-    /// sequences. Generic, resource and callable values need conditional help.
+    /// sequences for captures and loop inputs. Generic, resource and callable
+    /// values need conditional help.
     fn independent_capture_copy(&self, value: &Value, ty: TypeId) -> bool {
         if value.unplaced()
             || value.content.summary().scopes().next().is_some()

@@ -310,8 +310,16 @@ pub fn main() -> Result[(), ()] {
   let saved = copy plain
   plain = unique plain
   if map.remove(mut plain,1) != Some(7) || map.get(saved,1) != Some(7) { return Error(()) }
+  let source: List[List[String]] = [[f"a"], [f"b", f"c"]]
+  let mut rows: unique List[List[String]] = []
+  for line in source { list.push(mut rows, unique line) }
+  list.push(mut rows[0], f"independent")
+  if list.len(rows) != 2 { return Error(()) }
+  if list.len(source[0]) != 1 || list.len(rows[0]) != 2 { return Error(()) }
+  consume_rows(take rows)
   Ok(())
 }
+fn consume_rows(take rows: unique List[List[String]]) {}
 "#;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("main.hir");
@@ -373,5 +381,175 @@ pub fn main() -> Result[(), ()] {
                 "{configuration}: {outcome:?}"
             );
         }
+    });
+}
+
+// Owned-versus-borrowed and empty/multiple vectors follow Rust alloc vec
+// into_iter.rs:265-300 and alloctests/tests/vec.rs:1040-1070 at
+// f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. Hirsel item modes remain
+// independent of the source marker (unlike importing Rust's ownership rule).
+fn loop_rows(marker: &str, elements: &str, append: &str, values: &str) -> String {
+    format!(
+        "fn need(take xs: unique List[String]) {{}}\nfn probe() {{ let mut source: List[{elements}] = {values}; let mut out: unique List[String] = []; for line in {marker}source {{ list.push(mut out, {append}) }} need(take out) }}"
+    )
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_loop_item_contract_20() {
+    with_compiler_stack(|| {
+        for (marker, access, source_site) in [
+            ("", "source is borrowed", "source"),
+            ("take ", "consumes the sequence", "take source"),
+            ("mut ", "element places", "mut source"),
+        ] {
+            for values in ["[]", "[f\"a\"]", "[f\"a\", f\"b\", f\"c\"]"] {
+                let source = loop_rows(marker, "String", "copy line", values);
+                rejected(
+                    &source,
+                    "MODE-2",
+                    "need(take out)",
+                    &["copy line", "line", source_site],
+                    "not proved deeply unique",
+                );
+                let output = checked(&source);
+                let d = &output.diagnostics[0];
+                assert!(
+                    d.secondary
+                        .iter()
+                        .any(|l| output.sources.slice(l.span) == Some("line")
+                            && l.message
+                                .contains("declared item uniqueness: not proved unique")
+                            && l.message.contains(
+                                "current item uniqueness at this input: not proved unique"
+                            )),
+                    "{d:?}"
+                );
+                assert!(
+                    d.secondary
+                        .iter()
+                        .any(|l| output.sources.slice(l.span) == Some(source_site)
+                            && l.message.contains(access)),
+                    "{d:?}"
+                );
+                assert!(
+                    d.notes
+                        .iter()
+                        .any(|n| n.contains("use `unique line`") && n.contains("per item")),
+                    "{d:?}"
+                );
+                assert!(d.notes.iter().all(|n| !n.contains("@preserves_unique")));
+                let repaired = loop_rows(marker, "String", "unique line", values);
+                let output = checked(&repaired);
+                assert!(
+                    output.diagnostics.is_empty(),
+                    "{repaired}: {:?}",
+                    output.diagnostics
+                );
+            }
+        }
+        // Consuming a unique root still uses the declared nested item row.
+        let owned = loop_rows("take ", "String", "take line", "[f\"a\"]")
+            .replace("source: List", "source: unique List");
+        rejected(
+            &owned,
+            "MODE-2",
+            "need(take out)",
+            &["take line", "line", "take source"],
+            "not proved deeply unique",
+        );
+        let output = checked(&owned.replace(
+            "list.push(mut out, take line)",
+            "list.push(mut out, unique line)",
+        ));
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        // The original literal witness retains its exact primary and causes.
+        let incident = include_str!("../../../../examples/wc2/repros/incident-9.hir");
+        rejected(
+            incident,
+            "MODE-2",
+            "need(take out)",
+            &["copy line", "line", "source"],
+            "not proved deeply unique",
+        );
+        // The item storage promise is stronger even when the root is plain.
+        let source = loop_rows("take ", "unique String", "take line", "[f\"a\", f\"b\"]");
+        let output = checked(&source);
+        assert!(
+            output.diagnostics.is_empty(),
+            "{source}: {:?}",
+            output.diagnostics
+        );
+        let copied = loop_rows("take ", "unique String", "copy line", "[f\"a\", f\"b\"]");
+        let output = checked(&copied);
+        let d = &output.diagnostics[0];
+        assert_eq!(d.rule.as_str(), "MODE-2", "{d:?}");
+        assert!(
+            d.secondary
+                .iter()
+                .any(|l| l.message.contains("declared item uniqueness: unique")
+                    && l.message
+                        .contains("current item uniqueness at this input: not proved unique")),
+            "{d:?}"
+        );
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_loop_item_conditional_repairs_20() {
+    with_compiler_stack(|| {
+        let generic = "fn need[T](take xs: unique List[T]) {}\nfn probe[T: copyable](take source: List[T]) { let mut out: unique List[T] = []; for line in take source { list.push(mut out,copy line) } need(take out) }";
+        let resource = "resource type Row { text: String } drop(x) {}\nfn need(take xs: unique List[Row]) {}\nfn probe(take source: List[Row]) { let mut out: unique List[Row] = []; for line in take source { list.push(mut out,take line) } need(take out) }";
+        let arena = "fn need(a: Arena, take xs: unique List[String] in a) {}\nfn probe(a: Arena, take source: List[String] in a) { let mut out: unique List[String] in a = []; for line in take source { list.push(mut out,copy line) } need(a,take out) }";
+        let noalloc = "@noalloc\nfn probe(take source: List[String]) { let mut out: unique List[String] = []; for line in take source { list.push(mut out,copy line) } need(take out) }\n@noalloc\nfn need(take xs: unique List[String]) {}";
+        for source in [generic, resource, arena, noalloc] {
+            let output = checked(source);
+            assert_eq!(
+                output.diagnostics[0].rule.as_str(),
+                if source == arena {
+                    "PROV-4"
+                } else if source == noalloc {
+                    "MEM-5"
+                } else {
+                    "MODE-2"
+                }
+            );
+            let d = output
+                .diagnostics
+                .iter()
+                .find(|d| d.rule.as_str() == "MODE-2")
+                .unwrap_or_else(|| panic!("{source}: {:?}", output.diagnostics));
+            assert_eq!(
+                output.sources.slice(d.primary),
+                Some(if source == arena {
+                    "need(a,take out)"
+                } else {
+                    "need(take out)"
+                }),
+                "{d:?}"
+            );
+            assert!(
+                d.notes
+                    .iter()
+                    .any(|n| n.contains("only if its element contract permits it")
+                        && n.contains("arena bounds remain")
+                        && n.contains("@noalloc")),
+                "{d:?}"
+            );
+            assert!(
+                d.notes.iter().all(|n| !n.contains("use `unique line`")),
+                "{d:?}"
+            );
+        }
+        // A resource must never receive a concrete deep-copy recipe.
+        let invalid = resource.replace("take line", "unique line");
+        let output = checked(&invalid);
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str() == "OWN-5"),
+            "{:?}",
+            output.diagnostics
+        );
     });
 }

@@ -107,6 +107,7 @@ pub enum Cause {
     Sendable,
     UniquenessLoss,
     UniquenessMerge,
+    IterationItem,
 }
 impl Cause {
     /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
@@ -126,7 +127,7 @@ impl Cause {
             Branded | BrandForgotten => "brand",
             Unbranded => "brand erased",
             IdentityEnded => "identity ended",
-            Lent | ArgumentLoan | Iterated | MutLend => "loan on place",
+            IterationItem | Lent | ArgumentLoan | Iterated | MutLend => "loan on place",
             Aliased | UniquenessLoss | UniquenessMerge => "share or copy that ended uniqueness",
             Placed | ScopedPlacement => "arena placement",
             Temporary => "temporary",
@@ -244,6 +245,7 @@ impl Cause {
                 "`{0}` is not proved unique",
                 "`{0}` may share counted storage; its current contract does not prove uniqueness",
             ),
+            IterationItem => ("loop item `{0}` supplies this input", "{1}"),
             UniquenessLoss => ("`{0}` lost its deep uniqueness", "{1}"),
             UniquenessMerge => ("`{0}` is not proved deeply unique on every path", "{1}"),
             Noncopyable => (
@@ -692,6 +694,12 @@ impl<K> Fact<K> {
 /// the checker accepts for that cause and requirement are listed.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Repair {
+    /// Checked per-item extraction, or conditional guidance when a concrete
+    /// independent copy is not established by the diagnostic producer.
+    IterationItem {
+        item: String,
+        independent_copy: bool,
+    },
     /// A declaration edit, conditional on the existing body contract check.
     PreserveUnique {
         helper: String,
@@ -735,6 +743,18 @@ pub enum Repair {
 impl Repair {
     fn text(&self) -> String {
         match self {
+            Repair::IterationItem {
+                item,
+                independent_copy: true,
+            } => format!(
+                "use `unique {item}` for this append input (deep copy per item: may allocate and costs O(item size)); this copies the item instead of the complete accumulator"
+            ),
+            Repair::IterationItem {
+                item,
+                independent_copy: false,
+            } => format!(
+                "supply an independently unique `{item}` only if its element contract permits it; a per-item deep copy requires concrete copyable data, permitted allocation and compatible placement. Generic or resource elements need a checked ownership contract; arena bounds remain and allocating copies are unavailable under `@noalloc`"
+            ),
             Repair::PreserveUnique { helper, parameter } => format!(
                 "declare `@preserves_unique({parameter})` on `{helper}` only if its body checks the contract: the selected parameter must stay deeply unique at every exit, including failure handback; other non-plain `take` inputs must also be unique at this call (no cost; checked signature promise, never inferred from the body)"
             ),
@@ -966,7 +986,7 @@ impl Repair {
             | Repair::PlaceParameter { .. }
             | Repair::PlaceResult { .. }
             | Repair::HeapParameter(_) => 1,
-            Repair::DeepCopy(_) | Repair::UniqueResult { .. } => 2,
+            Repair::DeepCopy(_) | Repair::UniqueResult { .. } | Repair::IterationItem { .. } => 2,
             Repair::TakeChangesMeaning(_) | Repair::KeepCaptureLocal(_) => 3,
         }
     }
@@ -1358,9 +1378,10 @@ mod tests {
             Sendable,
             UniquenessLoss,
             UniquenessMerge,
+            IterationItem,
         ];
         let seen: std::collections::BTreeSet<_> = kinds.iter().map(|kind| *kind as usize).collect();
-        assert_eq!(seen, (0..=UniquenessMerge as usize).collect());
+        assert_eq!(seen, (0..=IterationItem as usize).collect());
         let (provided, _) = spec_table();
         for kind in kinds {
             assert!(
