@@ -701,6 +701,7 @@ impl Builder<'_, '_> {
         let mut held = vec![];
         if let Some((parameters, environment, access)) = self.call_retention.get(&destination.0) {
             let fields = self.call_field_loans.get(&destination.0);
+            let composed = self.call_composed_arguments.get(&destination.0);
             for argument in arguments {
                 if parameters.contains(&argument.parameter.0) {
                     // A field-related result holds the field loan (#77).
@@ -709,7 +710,13 @@ impl Builder<'_, '_> {
                         place: *place,
                         usage: UseKind::Borrow,
                     });
-                    held.extend(self.handed(content, operand.as_ref().unwrap_or(&argument.value)));
+                    // Relations compose through the pre-invocation view. The
+                    // call's new carrier loan is only needed for the call.
+                    let source = composed.and_then(|c| c.get(&argument.parameter.0));
+                    held.extend(self.handed(
+                        content,
+                        operand.as_ref().or(source).unwrap_or(&argument.value),
+                    ));
                 }
             }
             if let (true, Callee::Indirect { value, .. }) = (environment, callee) {

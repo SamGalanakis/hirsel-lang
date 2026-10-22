@@ -501,3 +501,176 @@ fn compose_13_checked_interpreter_retains_underlying_bounds() {
         });
     }
 }
+
+const MUT_ALIAS: &str = r#"
+type Value = Leaf() | Object(Map[String,Value])
+fn descend(value: Value) -> Option[Value] in value uses {} {
+  match value {
+    Object(members) => {
+      let Some(child) = core@1/map.get(members, "key") else {
+        return None()
+      }
+      descend(child)
+    },
+    _ => {
+      let mut target = value
+      Some(copy target)
+    },
+  }
+}
+
+pub fn main()->Result[(),u64] {let v:Value=Leaf(); let _=descend(v); Ok(())}
+"#;
+const MUT_ALIAS_BRANCHES: &str =
+    include_str!("../../../../conformance/MODE/MODE-1-borrow-cursor-compose-mut-alias-run.hir");
+const MUT_ALIAS_SOURCE_BAD: &str = include_str!(
+    "../../../../conformance/MODE/MODE-1-borrow-cursor-compose-mut-alias-source-bad.hir"
+);
+
+#[test]
+fn compose_14_mutable_alias_related_result() {
+    for source in [
+        MUT_ALIAS.to_string(),
+        MUT_ALIAS.replace("let mut target", "let target"),
+        MUT_ALIAS.replace(
+            "let mut target = value",
+            "let mut target = value; target = value",
+        ),
+        MUT_ALIAS_BRANCHES.into(),
+        MUT_ALIAS.replace(
+            "let Some(child) = core@1/map.get(members, \"key\") else {\n        return None()\n      }\n      descend(child)",
+            "descend(value)",
+        ),
+    ] {
+        lower_valid(&source);
+    }
+}
+
+#[test]
+fn compose_14_mutable_alias_source_and_write_controls() {
+    let error = try_compile(MUT_ALIAS_SOURCE_BAD)
+        .err()
+        .expect("source mutated while alias is live");
+    assert!(error.contains("MODE-1"), "{error}");
+    let error = try_compile(
+        r#"
+fn f(a: List[u64]) -> u64 {
+    let mut target = a
+    list.push(mut target, 1)
+    list.len(target)
+}
+pub fn main() -> () { let _ = f([0]); }
+"#,
+    )
+    .expect_err("mutable view binding granted referent write permission");
+    assert!(error.contains("LANG-15"), "{error}");
+}
+
+#[test]
+fn compose_14_mutable_alias_independent_v_controls() {
+    use hirsel_tir::*;
+    use hirsel_validate::ViolationKind;
+    let program = compile(MUT_ALIAS);
+    let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
+    for (path, signature) in &program.signatures {
+        signatures.insert(path.clone(), (**signature).clone());
+    }
+    let original = program
+        .definitions
+        .iter()
+        .find(|(p, _)| p.0.name == "descend")
+        .unwrap()
+        .1;
+    let validate =
+        |d: &Definition| hirsel_validate::validate(d, &program.types, &signatures, &mut vec![]);
+    let mut detached = (**original).clone();
+    detached.bodies[0].borrow_cursors.clear();
+    assert!(validate(&detached).violations.is_empty());
+    for expire_storage in [false, true] {
+        let mut definition = (**original).clone();
+        let body = &mut definition.bodies[0];
+        let initializer = body.borrow_cursors[0].initializer;
+        let Rvalue::Use(source) = &body.rvalues[initializer.0 as usize] else {
+            panic!("expected borrowed cursor initializer")
+        };
+        let source = &body.places[source.place.0 as usize];
+        let loan = source.loan.unwrap();
+        let source_scope = body.locals[source.root.0 as usize].scope;
+        let (block, index) = body.blocks.iter().enumerate().find_map(|(b, block)| {
+            block.instructions.iter().enumerate().find_map(|(i, instruction)| {
+                matches!(instruction.kind, InstructionKind::Assign { value, .. } if value == initializer)
+                    .then_some((b, i))
+            })
+        }).unwrap();
+        let exemplar = body.blocks[block].instructions[index].clone();
+        body.blocks[block].instructions.insert(
+            index + 1,
+            Instruction {
+                kind: if expire_storage {
+                    InstructionKind::EndScope(source_scope)
+                } else {
+                    InstructionKind::EndLoan {
+                        loan,
+                        if_active: false,
+                    }
+                },
+                ..exemplar
+            },
+        );
+        let verdict = validate(&definition);
+        assert!(
+            verdict.violations.iter().any(|v| if expire_storage {
+                matches!(v.kind, ViolationKind::LoanOutlivesSource { loan: id, .. } if id == loan)
+            } else {
+                matches!(v.kind, ViolationKind::ExpiredLoan { loan: id, .. } if id == loan)
+            }),
+            "expire_storage={expire_storage}: {verdict:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "native: mutable alias interpreter, heap, LLVM and Cranelift parity"]
+fn compose_14_mutable_alias_native_parity() {
+    native_parity(&[
+        ("mut-alias-minimal", MUT_ALIAS),
+        ("mut-alias-branches", MUT_ALIAS_BRANCHES),
+    ]);
+}
+
+#[test]
+fn compose_14_mutable_alias_checked_interpreter() {
+    use hirsel_engine::*;
+    for source in [MUT_ALIAS, MUT_ALIAS_BRANCHES] {
+        with_compiler_stack(|| {
+            let mut engine =
+                QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
+            let file = engine
+                .sources
+                .add("mutable-alias.hir", source.into())
+                .unwrap();
+            let context = default_context();
+            let checked = check_progress(&mut engine, file, &context).unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let execution = run_observed_checked(
+                &mut engine,
+                &RunConfiguration {
+                    entry: entry_path(&context),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            let observation = execution
+                .observation
+                .as_ref()
+                .unwrap_or_else(|| panic!("{execution:?}"));
+            assert_eq!(
+                hirsel_driver::native::Observation::of_reference(observation).exit_code,
+                Some(0),
+                "{execution:?}"
+            );
+        });
+    }
+}

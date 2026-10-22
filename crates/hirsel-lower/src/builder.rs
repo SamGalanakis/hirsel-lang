@@ -75,6 +75,10 @@ pub(super) struct Builder<'a, 'b> {
     /// destination place and parameter: the access through the read loan on
     /// that field place, which the result holds instead of the argument (#77).
     pub call_field_loans: BTreeMap<u32, BTreeMap<u32, PlaceId>>,
+    /// Composed arguments before invocation access is added, by result and
+    /// parameter. Last-use replay must retain the same source permissions as
+    /// construction, without introducing a loan on the local carrier (MODE-1).
+    pub call_composed_arguments: BTreeMap<u32, BTreeMap<u32, Operand>>,
     /// Roots whose type has user-visible destruction, with every loan their
     /// content may hold: their cleanup drops end those loans after them.
     pub destroyed_holders: BTreeMap<u32, BTreeSet<u32>>,
@@ -158,6 +162,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             loan_sources: vec![],
             call_retention: BTreeMap::new(),
             call_field_loans: BTreeMap::new(),
+            call_composed_arguments: BTreeMap::new(),
             destroyed_holders: BTreeMap::new(),
             borrowed_cursor_types: std::collections::HashSet::new(),
             keeping: false,

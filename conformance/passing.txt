@@ -2831,6 +2831,8 @@ conformance/MODE/MODE-1-borrow-cursor-block-ok.hir
 conformance/MODE/MODE-1-borrow-cursor-compose-foreign-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-compose-join-run.hir
 conformance/MODE/MODE-1-borrow-cursor-compose-loop-run.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-mut-alias-run.hir
+conformance/MODE/MODE-1-borrow-cursor-compose-mut-alias-source-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-compose-object-run.hir
 conformance/MODE/MODE-1-borrow-cursor-compose-owned-bad.hir
 conformance/MODE/MODE-1-borrow-cursor-field-bad.hir

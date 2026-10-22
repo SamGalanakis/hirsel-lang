@@ -1,0 +1,31 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 23
+// twin: MODE/MODE-1-borrow-cursor-compose-mut-alias-run.hir
+type Value = Leaf | Object(Map[String, Value])
+
+fn descend(value: Value) -> Option[Value] in value uses {} {
+  match value {
+    Object(members) => {
+      let Some(child) = core@1/map.get(members, "key") else {
+        return None()
+      }
+      descend(child)
+    },
+    _ => {
+      let mut target = value
+      Some(copy target)
+    },
+  }
+}
+
+fn mutate(mut value: Value) -> Option[Value] in value {
+  let mut target = value
+  value = Leaf()
+  descend(target)
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut value: Value = Leaf()
+  let _ = mutate(mut value)
+  Ok(())
+}

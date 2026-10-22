@@ -1184,6 +1184,7 @@ impl Builder<'_, '_> {
             _ => None,
         };
         let mut field_loans = std::collections::BTreeMap::new();
+        let mut composed_arguments = std::collections::BTreeMap::new();
         let keeps = |parameter: u32| {
             retained.as_ref().is_none_or(|selected| {
                 selected.contains(&hirsel_types::ParameterRef::bound(ParamId(parameter)))
@@ -1264,16 +1265,19 @@ impl Builder<'_, '_> {
             } else {
                 self.transport(value, storage, at)
             };
-            // Preserve an existing source access through an immutable alias.
+            // Preserve an existing source access through a borrowed alias.
             // A composed result needs that permission as well as installed
             // content loans, but not the invocation's new loan on its carrier.
             let mut source_dependencies = vec![];
+            let mut source_operand = None;
             if constructor.is_none() {
                 value.usage = consumer.unwrap_or(value.usage);
-                source_dependencies = self.operand_loans(&Operand {
+                let operand = Operand {
                     place: value.place,
                     usage: value.usage,
-                });
+                };
+                source_dependencies = self.operand_loans(&operand);
+                source_operand = Some(operand);
                 // A `mut` argument names a place: its exclusive loan begins
                 // when the callee is entered, so later arguments may still
                 // read the storage (spec #66).
@@ -1295,6 +1299,9 @@ impl Builder<'_, '_> {
             let composed = field.is_none()
                 && value.usage == UseKind::Borrow
                 && self.input.ownership.composed_arguments.contains(&a.value);
+            if composed {
+                composed_arguments.insert(ordinal, source_operand.unwrap());
+            }
             argument_dependencies.push((
                 ordinal,
                 if composed {
@@ -1500,6 +1507,10 @@ impl Builder<'_, '_> {
         self.state.live.insert(self.root(destination).0);
         if !field_loans.is_empty() {
             self.call_field_loans.insert(destination.0, field_loans);
+        }
+        if !composed_arguments.is_empty() {
+            self.call_composed_arguments
+                .insert(destination.0, composed_arguments);
         }
         // End evaluation loans that the declared result does not retain.
         self.call_retention.insert(

@@ -1,0 +1,30 @@
+// rule: MODE-1
+// expect: run
+type Value = Leaf | Object(Map[String, Value])
+
+fn descend(value: Value) -> Option[Value] in value uses {} {
+  match value {
+    Object(members) => {
+      let Some(child) = core@1/map.get(members, "key") else {
+        return None()
+      }
+      descend(child)
+    },
+    _ => {
+      let mut target = value
+      Some(copy target)
+    },
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut members: Map[String, Value] = map.empty()
+  map.insert(mut members, "key", Leaf())
+  let object = Object(take members)
+  let leaf = descend(Leaf())
+  let child = descend(object)
+  match (leaf, child) {
+    (Some(Leaf()), Some(Leaf())) => Ok(()),
+    _ => Error(1),
+  }
+}
