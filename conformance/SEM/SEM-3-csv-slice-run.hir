@@ -1,0 +1,115 @@
+// rule: SEM-3
+// expect: run
+// csv-core reader.rs:1495-1580 field/record boundary vectors; strict Go
+// quote errors and CR normalization remain the std.csv dialect.
+fn parse(text: String, config: std@1/csv.Config) -> Result[
+  List[List[String]],
+  std@1/csv.CsvError
+] {
+  let mut cursor = std@1/csv.slice_reader(text, config)?
+  let mut rows: List[List[String]] = []
+  while true {
+    if !std@1/csv.next_record(mut cursor)? {
+      break
+    }
+    let mut row: List[String] = []
+    for i in 0u64..std@1/csv.field_count(cursor) {
+      let Some(value) = std@1/csv.get_field(cursor, i) else {
+        failure.check(false, TextInvariant())
+        return Ok([])
+      }
+      list.push(mut row, unique value)
+    }
+    failure.check(
+      std@1/csv.get_field(cursor, std@1/csv.field_count(cursor)) == None(),
+      TextInvariant()
+    )
+    list.push(mut rows, take row)
+  }
+  failure.check(std@1/csv.next_record(mut cursor) == Ok(false), TextInvariant())
+  Ok(take rows)
+}
+
+fn check(text: String, expected: List[List[String]]) {
+  let config = std@1/csv.default_config()
+  failure.check(parse(text, config) == Ok(expected), TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", [])
+  check("\n\n\r\n", [])
+  check("a", [["a"]])
+  check("a,b,c", [["a", "b", "c"]])
+  check("a,b,", [["a", "b", ""]])
+  check("a,b,\n", [["a", "b", ""]])
+  check("a,b,\r\n", [["a", "b", ""]])
+  check("a,b,\r", [["a", "b", ""]])
+  check("\n\na,b\n\n\nx,y\n\n\nm,n\n", [["a", "b"], ["x", "y"], ["m", "n"]])
+  check(
+    "\r\n\r\na,b\r\n\r\n\r\nx,y\r\n\r\n\r\nm,n\r\n",
+    [["a", "b"], ["x", "y"], ["m", "n"]]
+  )
+  check("\"\"", [[""]])
+  check("\"\"\n", [[""]])
+  check("\" a \"", [[" a "]])
+  check("\"a,b\",c\n\"a\"\"b\",\"é\nü\"\r\n", [["a,b", "c"], ["a\"b", "é\nü"]])
+  check("\"a\r\nb\",\"x\"\"y\"\n", [["a\nb", "x\"y"]])
+  check("\"a\"\"b\"\"c\",\"x\r\n\r\ny\",\"z\"\"z\"", [["a\"b\"c", "x\n\ny", "z\"z"]])
+  check("a\rb,c\r", [["a\rb", "c"]])
+  check("\"a\rb\"", [["a\rb"]])
+  check("\r", [])
+  check("\r\r", [["\r"]])
+  check("\u{feff}a,b", [["\u{feff}a", "b"]])
+  let mut config = std@1/csv.default_config()
+  let cases1: List[String] = [
+    "a\"b",
+    "\"a\"x",
+    "\"a",
+    "a,\"b\nc\"d,e",
+    "a,b\n\"d\n\n,e",
+    "\"a\r\nb"
+  ]
+  for text in cases1 {
+    failure.check(
+      parse(text, config) == std@1/csv.parse(copy text, config),
+      TextInvariant()
+    )
+  }
+  for limit in 0u64..8u64 {
+    config.max_record_bytes = limit
+    let cases2: List[String] = [
+      "a,b\n",
+      "\r\n",
+      "abc\r\n",
+      "\"abc",
+      "a,",
+      "\"a\r\nb\"",
+      "\"a\"\"b\"",
+      "\r\r",
+      "\"\r"
+    ]
+    for text in cases2 {
+      failure.check(
+        parse(text, config) == std@1/csv.parse(copy text, config),
+        TextInvariant()
+      )
+    }
+  }
+  config = std@1/csv.default_config()
+  config.fields_per_record = Some(2)
+  let cases3: List[String] = ["a,b\nx", "a,b\n\n\nx,y,z", ",\n", "", "\"\""]
+  for text in cases3 {
+    failure.check(
+      parse(text, config) == std@1/csv.parse(copy text, config),
+      TextInvariant()
+    )
+  }
+  config.delimiter = b';'
+  failure.check(parse("a;\"b;c\"\n", config) == Ok([["a", "b;c"]]), TextInvariant())
+  let cases4: List[u8] = [0u8, 128u8, b'"', b'\n', b'\r']
+  for delimiter in cases4 {
+    config.delimiter = delimiter
+    failure.check(results.is_error(std@1/csv.slice_reader("", config)), TextInvariant())
+  }
+  Ok(())
+}

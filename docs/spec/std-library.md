@@ -2248,6 +2248,10 @@ fn csv.feed(mut reader: Reader, chunk: Bytes, eof: bool) -> Result[List[List[Str
 fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}
 fn csv.read_record[S,E](mut reader: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E]) -> Result[Option[List[String]], ReadError[E]]
 fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[(), CsvError] uses {}
+fn csv.slice_reader(text: String, config: Config) -> Result[SliceReader, CsvError] in text uses {}
+fn csv.next_record(mut reader: SliceReader) -> Result[bool, CsvError] uses {}
+fn csv.field_count(reader: SliceReader) -> u64 uses {}
+fn csv.get_field(reader: SliceReader, index: u64) -> Option[String] in reader uses {}
 ```
 
 Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect
@@ -2272,6 +2276,16 @@ cross chunks, but every completed field must validate. Header uniqueness is
 application policy. Errors are terminal; later calls report Syntax at the current
 input position. Go's partial-record/recovery APIs, Comment, LazyQuotes,
 TrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API.
+
+`slice_reader` borrows a complete UTF-8 input and applies the same strict dialect,
+width, normalized record limit and first-error positions. `next_record` returns
+true for one record and false at EOF; errors are terminal. `field_count` and
+`get_field` inspect the current record, returning zero/None after an error or EOF.
+Release field views before advancing again. Unchanged fields borrow the input;
+doubled quotes and normalized CRLF share one decoded buffer per record, and
+field spans reuse their capacity. No input copy, field allocation or completed-row
+queue is needed. As with the incremental reader, input size is caller-controlled
+and each individual record remains bounded by `max_record_bytes`.
 
 The writer follows Go `fieldNeedsQuotes`: quote fields containing delimiter,
 quote, CR or LF, fields beginning with Unicode whitespace and the PostgreSQL

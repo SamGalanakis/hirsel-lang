@@ -476,3 +476,313 @@ pub fn fold_scoped[S, A, E](
   }
   Ok(take accumulator)
 }
+
+// csv-core 0.1.13 src/reader.rs:622-700 (read_record_dfa), :980-1068
+// (transition_nfa), :1254-1272 (scan_and_copy), MIT/Unlicense.
+// Borrow unchanged fields; decode doubled quotes/CRLF into one record buffer.
+// The four reachable states are StartField, InField, InQuotedField and
+// InDoubleEscapedQuote. Keep Go's strict quotes, CRLF normalization, positions
+// and record limits. Unlike csv-core, UTF-8 input is already validated and the
+// growable output/field buffers are owned here rather than supplied by callers.
+type SliceField {
+  start: u64,
+  end: u64,
+  decoded: bool,
+}
+
+/// A borrowed input cursor with reusable field spans and one escape buffer per record.
+pub opaque type SliceReader: copyable + inert + noalloc_drop uses {} {
+  text: String,
+  config: Config,
+  pos: u64,
+  line: u64,
+  column: u64,
+  record_start: u64,
+  failed: bool,
+  fields: List[SliceField],
+  count: u64,
+  decoded: String,
+}
+
+/// Borrow UTF-8 input. Each next_record replaces the current record's views.
+pub fn slice_reader(text: String, config: Config) -> Result[SliceReader, CsvError] in text uses {} {
+  if !delimiter_valid(config.delimiter) {
+    return Error(InvalidDelimiter())
+  }
+  Ok(
+    SliceReader(
+      text: text,
+      config: config,
+      pos: 0,
+      line: 1,
+      column: 1,
+      record_start: 1,
+      failed: false,
+      fields: [],
+      count: 0,
+      decoded: ""
+    )
+  )
+}
+
+fn slice_field(
+  mut spans: List[SliceField],
+  mut count: u64,
+  start: u64,
+  stop: u64,
+  decoded: bool
+) -> () uses {} {
+  let field = SliceField(start: start, end: stop, decoded: decoded)
+  if count < core@1/list.len(spans) {
+    spans[count] = field
+  } else {
+    core@1/list.push(mut spans, field)
+  }
+  count += 1
+}
+
+fn slice_width(r: SliceReader) -> Result[bool, CsvError] uses {} {
+  if let Some(width) = r.config.fields_per_record {
+    if r.count != width {
+      return Error(
+        UnequalFields(
+          Position(start_line: r.record_start, line: r.record_start, column: 1)
+        )
+      )
+    }
+  }
+  Ok(true)
+}
+
+fn slice_position(r: SliceReader) -> Position uses {} {
+  Position(start_line: r.record_start, line: r.line, column: r.column)
+}
+
+// One pass over input, with csv-core's ordinary-byte scan fast path. Only
+// fields containing an escaped quote or normalized CR require output copies.
+fn slice_record(mut r: SliceReader) -> Result[bool, CsvError] uses {} {
+  let data = core@1/string.as_bytes(r.text)
+  let length = core@1/bytes.len(data)
+  let delimiter = r.config.delimiter
+  let mut mode: u8 = 0
+  let mut record_bytes: u64 = 0
+  let mut start = r.pos
+  let mut segment = start
+  let mut close = start
+  let mut output: List[u8] = []
+  let mut decoded_start: u64 = 0
+  let mut end_line = r.line
+  let mut end_column = r.column
+  let mut decoded = false
+  let mut quote_line = r.line
+  let mut quote_column = r.column
+  r.record_start = r.line
+  while r.pos < length {
+    let at = r.pos
+    let byte = data[at]
+    let line = r.line
+    let column = r.column
+    // readLine discards CR before LF/EOF in every state. Count only normalized
+    // record bytes, and retain the last normalized byte's EOF error position.
+    if byte == b'\r' && (at + 1 == length || data[at + 1] == b'\n') {
+      if mode != 3 {
+        core@1/bytes.append(mut output, core@1/bytes.slice(data, segment, at))
+        decoded = true
+        segment = at + 1
+      }
+      r.pos += 1
+      r.column += 1
+      continue
+    }
+    if byte == b'\n' && mode != 2 {
+      r.pos += 1
+      r.line += 1
+      r.column = 1
+      if record_bytes == 0 {
+        start = r.pos
+        segment = start
+        r.record_start = r.line
+        decoded = false
+        continue
+      }
+      let stop = if mode == 3 {
+        close
+      } else {
+        at
+      }
+      if decoded {
+        core@1/bytes.append(mut output, core@1/bytes.slice(data, segment, stop))
+        slice_field(
+          mut r.fields,
+          mut r.count,
+          decoded_start,
+          core@1/list.len(output),
+          true
+        )
+      } else {
+        slice_field(mut r.fields, mut r.count, start, stop, false)
+      }
+      r.decoded = text.finish_valid(take output)
+      return slice_width(r)
+    }
+    // csv-core's class scan: ordinary bytes cannot change the state. Account
+    // for a whole run before returning to the delimiter/quote/CR/LF DFA.
+    if byte != delimiter && byte != b'"' && byte != b'\r' && byte != b'\n' && mode != 3 {
+      let mut stop = at + 1
+      while stop < length && data[stop] != delimiter && data[stop] != b'"' && data[stop] != b'\r' && data[stop] != b'\n' {
+        stop += 1
+      }
+      let count = stop - at
+      if count > r.config.max_record_bytes - record_bytes {
+        return Error(RecordTooLarge())
+      }
+      record_bytes += count
+      r.pos = stop
+      r.column += count
+      end_line = r.line
+      end_column = r.column
+      if mode == 0 {
+        mode = 1
+      }
+      continue
+    }
+    if record_bytes == r.config.max_record_bytes {
+      return Error(RecordTooLarge())
+    }
+    end_line = line
+    end_column = if byte == b'\n' && at > 0 && data[at - 1] == b'\r' {
+      column
+    } else {
+      column + 1
+    }
+    record_bytes += 1
+    r.pos += 1
+    if byte == b'\n' {
+      r.line += 1
+      r.column = 1
+    } else {
+      r.column += 1
+    }
+    if mode == 2 {
+      if byte == b'"' {
+        mode = 3
+        close = at
+        quote_line = line
+        quote_column = column
+      }
+    } else if mode == 3 && byte == b'"' {
+      // Copy through the first quote; discard its doubled partner.
+      core@1/bytes.append(mut output, core@1/bytes.slice(data, segment, at))
+      segment = at + 1
+      decoded = true
+      mode = 2
+    } else if byte == delimiter {
+      let stop = if mode == 3 {
+        close
+      } else {
+        at
+      }
+      if decoded {
+        core@1/bytes.append(mut output, core@1/bytes.slice(data, segment, stop))
+        slice_field(
+          mut r.fields,
+          mut r.count,
+          decoded_start,
+          core@1/list.len(output),
+          true
+        )
+      } else {
+        slice_field(mut r.fields, mut r.count, start, stop, false)
+      }
+      mode = 0
+      start = r.pos
+      segment = start
+      decoded_start = core@1/list.len(output)
+      decoded = false
+    } else if mode == 3 {
+      return Error(
+        Syntax(
+          Position(start_line: r.record_start, line: quote_line, column: quote_column)
+        )
+      )
+    } else if byte == b'"' {
+      if mode != 0 {
+        return Error(
+          Syntax(Position(start_line: r.record_start, line: line, column: column))
+        )
+      }
+      mode = 2
+      start = r.pos
+      segment = start
+    } else {
+      mode = 1
+    }
+  }
+  if mode == 2 {
+    // An EOF CR is discarded, including from the syntax position, as in end.
+    return Error(
+      Syntax(Position(start_line: r.record_start, line: end_line, column: end_column))
+    )
+  }
+  if record_bytes == 0 {
+    return Ok(false)
+  }
+  let stop = if mode == 3 {
+    close
+  } else {
+    length
+  }
+  if decoded {
+    core@1/bytes.append(mut output, core@1/bytes.slice(data, segment, stop))
+    slice_field(mut r.fields, mut r.count, decoded_start, core@1/list.len(output), true)
+  } else {
+    slice_field(mut r.fields, mut r.count, start, stop, false)
+  }
+  r.decoded = text.finish_valid(take output)
+  slice_width(r)
+}
+
+/// Advance one record; false means EOF. Errors are terminal. Release field
+/// views before advancing again; the field-span storage is reused.
+pub fn next_record(mut r: SliceReader) -> Result[bool, CsvError] uses {} {
+  if r.failed {
+    return Error(Syntax(slice_position(r)))
+  }
+  r.count = 0
+  r.failed = true
+  let record = slice_record(mut r)?
+  r.failed = false
+  Ok(record)
+}
+
+pub fn field_count(r: SliceReader) -> u64 uses {} {
+  if r.failed {
+    0
+  } else {
+    r.count
+  }
+}
+
+/// Borrow a decoded UTF-8 field from the current record.
+pub fn get_field(r: SliceReader, index: u64) -> Option[String] in r uses {} {
+  if r.failed || index >= r.count {
+    return None()
+  }
+  let span = r.fields[index]
+  if span.decoded {
+    slice_text(r.decoded, span.start, span.end)
+  } else {
+    slice_text(r.text, span.start, span.end)
+  }
+}
+
+@noalloc
+fn slice_text(source: String, start: u64, stop: u64) -> Option[String] in source uses {} {
+  let Some(first) = core@1/string.position(source, start) else {
+    return None()
+  }
+  let Some(last) = core@1/string.position(source, stop) else {
+    return None()
+  }
+  Some(core@1/string.slice(source, first, last))
+}

@@ -62,3 +62,4 @@ mod toposort_8;
 mod json_pointer_8;
 mod union_find_9;
 mod ascii85_9;
+mod stdlib_csv_slice;

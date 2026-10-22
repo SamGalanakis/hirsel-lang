@@ -1,7 +1,7 @@
 // langarena: CSV::Parse
 // LangArena 3c9f84d rust/src/benchmarks/csv_parse.rs:37-142.
-// Uses std's strict quoted CSV parser instead of simd_csv
-// Same dialect and rows.
+// Uses std's borrowed record cursor in place of simd_csv's ZeroCopyReader.
+// Same dialect, row-at-a-time consumption, and points vector.
 type Point {
   x: f64,
   y: f64,
@@ -27,16 +27,38 @@ fn number(value: String) -> f64 {
   parsed
 }
 
-fn step(mut s: State, iteration: u64) {
-  let Ok(rows) = std@1/csv.parse(unique s.source, std@1/csv.default_config()) else {
+fn coordinate(cursor: std@1/csv.SliceReader, index: u64) -> f64 {
+  let Some(value) = std@1/csv.get_field(cursor, index) else {
     check(false)
-    return
+    return 0.0
+  }
+  number(value)
+}
+
+fn step(mut s: State, iteration: u64) {
+  let mut cursor = match std@1/csv.slice_reader(s.source, std@1/csv.default_config()) {
+    Ok(cursor) => take cursor,
+    Error(_) => {
+      check(false)
+      return
+    },
   }
   let mut points: List[Point] = []
-  for row in rows {
+  while true {
+    let Ok(more) = std@1/csv.next_record(mut cursor) else {
+      check(false)
+      return
+    }
+    if !more {
+      break
+    }
     list.push(
       mut points,
-      Point(x: number(row[1]), y: number(row[5]), z: number(row[3]))
+      Point(
+        x: coordinate(cursor, 1),
+        y: coordinate(cursor, 5),
+        z: coordinate(cursor, 3)
+      )
     )
   }
   if list.len(points) == 0 {
