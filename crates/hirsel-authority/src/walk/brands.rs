@@ -603,9 +603,85 @@ impl Checker<'_> {
                 Relation::environment().union(&self.placement(&row.modes.relation));
             result = self.intern(row);
         }
-        if let Some(span) = ids.iter().find_map(|id| self.invalid.get(id)).copied() {
-            self.invalid.insert(result, span);
+        if let Some(source) = ids.iter().find(|id| self.invalid.contains_key(id)) {
+            result = self.carry_expiry(*source, result);
+        } else if self.invalid.contains_key(&result) {
+            // Every continuing input is live. Interning their common spelling
+            // must not select an expired occurrence from before owner renewal.
+            let row = self.t.get(result).unwrap().clone();
+            result = self.t.intern_graph(1, |_| vec![row])[0];
+            self.rows.note(self.t, result);
         }
+        result
+    }
+    /// Renew only evidence explicitly promised by this producer's header.
+    /// Generic actuals and argument-brand selectors transport old evidence.
+    pub(super) fn renew_result_brands(&mut self, declared: TypeId, result: TypeId) -> TypeId {
+        if self.invalid.is_empty() {
+            return result;
+        }
+        let mut pending = vec![(declared, result, 0)];
+        let mut seen = std::collections::HashSet::new();
+        let mut renewed = std::collections::HashSet::new();
+        while let Some((declared, actual, depth)) = pending.pop() {
+            if !seen.insert((declared, actual, depth)) {
+                continue;
+            }
+            let row = self.t.get(declared).unwrap();
+            if row.brand.alternatives.iter().any(|origin| {
+                matches!(origin.root, OriginRoot::Parameter(ParameterRef::Bound { depth: d, .. }) if d >= depth)
+            }) && self.invalid.contains_key(&actual) {
+                renewed.insert(actual);
+            }
+            // A substituted type parameter is transported evidence, not a
+            // recursively declared producer contract.
+            if matches!(row.kind, TypeKind::Parameter(_)) {
+                continue;
+            }
+            pending.extend(
+                row.kind
+                    .graph_edges()
+                    .into_iter()
+                    .zip(self.t.get(actual).unwrap().kind.graph_edges())
+                    .map(|(declared, actual)| {
+                        (
+                            declared.ty,
+                            actual.ty,
+                            depth + declared.role.parameter_binders(),
+                        )
+                    }),
+            );
+        }
+        if renewed.is_empty() {
+            return result;
+        }
+        // The live producer receives a new occurrence graph. Old bindings,
+        // branch snapshots and loop-carried values keep their expired rows.
+        let snapshots = super::super::identities::snapshot_types(self.t, [result], &renewed);
+        for (old, new) in &snapshots {
+            // Only explicitly produced evidence is renewed. An enclosing row
+            // can independently carry expiry transported from an argument.
+            if !renewed.contains(old)
+                && let Some(span) = self.invalid.get(old).copied()
+            {
+                self.invalid.insert(*new, span);
+            }
+            self.rows.note(self.t, *new);
+        }
+        snapshots.get(&result).copied().unwrap_or(result)
+    }
+    /// Copy an expired occurrence without poisoning an equal live type row.
+    pub(super) fn carry_expiry(&mut self, source: TypeId, result: TypeId) -> TypeId {
+        let Some(span) = self.invalid.get(&source).copied() else {
+            return result;
+        };
+        if result == source || self.invalid.get(&result) == Some(&span) {
+            return result;
+        }
+        let row = self.t.get(result).unwrap().clone();
+        let result = self.t.intern_graph(1, |_| vec![row])[0];
+        self.rows.note(self.t, result);
+        self.invalid.insert(result, span);
         result
     }
     /// Agreeing aliases survive; a divergent binding starts a fresh join identity.

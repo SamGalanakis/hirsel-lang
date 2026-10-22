@@ -126,3 +126,50 @@ impl Identities {
             .collect()
     }
 }
+
+/// Snapshot selected occurrence rows and their containing graph. Equal type
+/// spellings can describe evidence produced before and after owner renewal;
+/// expiry belongs to the former occurrence, not to the interner's spelling.
+pub(super) fn snapshot_types(
+    types: &hirsel_types::TypeInterner,
+    roots: impl IntoIterator<Item = hirsel_types::TypeId>,
+    selected: &std::collections::HashSet<hirsel_types::TypeId>,
+) -> std::collections::HashMap<hirsel_types::TypeId, hirsel_types::TypeId> {
+    let mut pending: Vec<_> = roots.into_iter().collect();
+    let mut parents: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for edge in types.get(id).unwrap().kind.graph_edges() {
+            parents.entry(edge.ty).or_default().push(id);
+            pending.push(edge.ty);
+        }
+    }
+    let mut copied = std::collections::HashSet::new();
+    let mut pending: Vec<_> = selected.intersection(&seen).copied().collect();
+    while let Some(id) = pending.pop() {
+        if copied.insert(id) {
+            pending.extend(parents.get(&id).into_iter().flatten());
+        }
+    }
+    if copied.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let old: Vec<_> = copied.into_iter().collect();
+    let indices: std::collections::HashMap<_, _> =
+        old.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let new = types.intern_graph(old.len(), |new| {
+        old.iter()
+            .map(|id| {
+                let mut row = types.get(*id).unwrap().clone();
+                row.kind = row
+                    .kind
+                    .map_edges(|child| indices.get(&child).map_or(child, |i| new[*i]));
+                row
+            })
+            .collect()
+    });
+    old.into_iter().zip(new).collect()
+}

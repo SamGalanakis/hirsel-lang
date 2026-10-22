@@ -107,15 +107,9 @@ impl Checker<'_> {
     }
     pub(super) fn copy_value_type(&mut self, e: ExprId, value: ExprId) {
         if let (Some(_), Some(src)) = (self.ty(e), self.ty(value)) {
-            // A value marker preserves the complete occurrence graph, including
-            // origins substituted into nominal arguments and aggregate payloads.
-            let ty = self.t.get(src).unwrap().clone();
-            let t = self.intern(ty);
-
-            if let Some(stale) = self.invalid.get(&src).copied() {
-                self.invalid.insert(t, stale);
-            }
-            self.set_ty(e, t);
+            // Transport the occurrence as well as its type spelling: interning
+            // an equal row can select the renewed owner's live incarnation.
+            self.set_ty(e, src);
         }
     }
     pub(super) fn join_bindings(&mut self, before: &BindingTypes, branch: &BindingTypes) {
@@ -192,11 +186,8 @@ impl Checker<'_> {
         ty.allocation_target = a.allocation_target;
         // MEM-5: a cleanup summary travels with the value it describes.
         ty.drop_allocation = a.drop_allocation.clone();
-        let refined = self.intern(ty);
-
-        if let Some(stale) = self.invalid.get(&actual).copied() {
-            self.invalid.insert(refined, stale);
-        }
+        let refined = if ty == a { actual } else { self.intern(ty) };
+        let refined = self.carry_expiry(actual, refined);
         if let Some(row) = self.pattern_row_mut(pattern) {
             row.ty = refined;
         }

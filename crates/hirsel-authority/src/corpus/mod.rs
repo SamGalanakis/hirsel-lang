@@ -744,3 +744,43 @@ fn pipeline(dir: Dir, take file: File of dir) -> () uses {dir, file} {
     assert_eq!(rules, vec!["CAP-2"]);
     assert!(out.failure.is_none(), "{:?}", out.failure);
 }
+
+#[test]
+fn indexed_container_renewal_keeps_old_brands_expired() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/PROV");
+    for name in [
+        "PROV-1-index-container-ok.hir",
+        "PROV-1-field-index-container-ok.hir",
+        "PROV-1-for-mut-container-ok.hir",
+        "PROV-1-refreshed-owner-loop-ok.hir",
+    ] {
+        let source = std::fs::read_to_string(root.join(name)).unwrap();
+        let (_, out) = check_source(&source);
+        super::test_support::clean(&out);
+        let stale = if name.contains("refreshed-owner-loop") {
+            source.replace("    touch(mut r)", "    touch(mut r)\n    let fresh = make(r)\n    inspect(r, fresh)\n    inspect(r, p)")
+        } else {
+            source.replace(
+                "  inspect(r, fresh)",
+                "  inspect(r, fresh)\n  inspect(r, p)",
+            )
+        };
+        let (_, out) = check_source(&stale);
+        super::test_support::rejected(&out, "PROV-1");
+    }
+}
+
+#[test]
+fn renewed_container_evidence_survives_copy_and_continuing_joins() {
+    for expression in [
+        "copy fresh",
+        "if true { fresh } else { make(r) }",
+        "if true { return } else { fresh }",
+    ] {
+        let source = format!(
+            "fn make(r:List[u64])->Option[u8 of r]{{None}}\nfn inspect(r:List[u64],p:Option[u8 of r]){{}}\nfn probe(take r0:List[u64]){{let mut r=r0;let old=make(r);r[0]=3u64;let fresh=make(r);let selected={expression};inspect(r,selected)}}"
+        );
+        let (_, out) = check_source(&source);
+        super::test_support::clean(&out);
+    }
+}

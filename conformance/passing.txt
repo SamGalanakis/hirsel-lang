@@ -4516,6 +4516,7 @@ conformance/PROV/PROV-1-reassign-ends-brand-bad.hir
 conformance/PROV/PROV-1-reassign-ends-brand-ok.hir
 conformance/PROV/PROV-1-record-held-owner-take-bad.hir
 conformance/PROV/PROV-1-record-held-owner-take-run.hir
+conformance/PROV/PROV-1-refreshed-owner-loop-bad.hir
 conformance/PROV/PROV-1-refreshed-owner-loop-ok.hir
 conformance/PROV/PROV-1-regex-all-5-position-bad.hir
 conformance/PROV/PROV-1-regex-all-5-position-ok.hir

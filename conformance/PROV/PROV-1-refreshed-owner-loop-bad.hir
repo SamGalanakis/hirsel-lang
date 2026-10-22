@@ -1,0 +1,31 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 29
+// twin: PROV/PROV-1-refreshed-owner-loop-ok.hir
+type Rec {
+  n: u64,
+  name: String,
+}
+
+fn make(r: Rec) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: Rec, p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn touch(mut r: Rec) -> () {
+  r.n = 3u64
+}
+
+fn probe(take r0: Rec) -> () {
+  let mut r = r0
+  for i in 0u8..2u8 {
+    let p = make(r)
+    inspect(r, p)
+    touch(mut r)
+    let fresh = make(r)
+    inspect(r, fresh)
+    inspect(r, p)
+  }
+}

@@ -24,7 +24,11 @@ fn lowered(source: &str, name: &str) -> (hirsel_tir::Definition, Signatures) {
     let file = engine.sources.add("agreement.hir", source.into()).unwrap();
     let result = check_progress(&mut engine, file, &default_context())
         .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.is_empty(),
+        "{source}\n{:?}",
+        result.diagnostics
+    );
     let input = engine.export_native_input().unwrap();
     let mut path = entry_path(&default_context());
     path.0.name = name.into();
@@ -137,6 +141,133 @@ fn an_indexed_write_detaches_a_copied_containers_identity() {
 }
 
 #[test]
+fn renewed_container_brands_agree_with_independent_validation() {
+    with_compiler_stack(|| {
+        // Keep the exact current-main accepted vectors, not only reduced
+        // versions of their mutation patterns, under independent V as well.
+        for source in [
+            include_str!("../../../../conformance/PROV/PROV-1-index-container-ok.hir"),
+            include_str!("../../../../conformance/PROV/PROV-1-field-index-container-ok.hir"),
+            include_str!("../../../../conformance/PROV/PROV-1-for-mut-container-ok.hir"),
+            include_str!("../../../../conformance/PROV/PROV-1-refreshed-owner-loop-ok.hir"),
+        ] {
+            let source = format!("{source}\nfn main() {{}}");
+            let (probe, signatures) = lowered(&source, "probe");
+            assert_eq!(kinds(&probe, &signatures), [], "{source}");
+        }
+        // Each original regression gets the same stale, wrong-owner,
+        // replacement and copied-owner controls. Loop cases replay the whole
+        // sequence so a fresh result must survive the next header judgment.
+        for (owner, mutation, replacement, looped) in [
+            ("List[u64]", "r[0] = 3u64", "[0u64]", false),
+            ("R", "r.xs[0] = 3u64", "R(xs: [0u64], other: 0u64)", false),
+            ("List[u64]", "for x in mut r { x = 3u64 }", "[0u64]", false),
+            ("R", "touch(mut r)", "R(xs: [0u64], other: 0u64)", true),
+        ] {
+            let header = format!(
+                "type R {{ xs: List[u64], other: u64 }}\nfn make(r: {owner}) -> Option[u8 of r] {{ None }}\nfn inspect(r: {owner}, p: Option[u8 of r]) {{}}\nfn touch(mut r: R) {{ r.xs[0] = 3u64 }}\nfn relay[T](take p: T) -> T {{ take p }}"
+            );
+            for (receipt, extra, use_value, accepted) in [
+                ("r0", "", "inspect(r, fresh)", true),
+                ("r0", "", "inspect(r, old)", false),
+                ("r0", "", "inspect(other, fresh)", false),
+                ("r0", "replace", "inspect(r, fresh)", false),
+                ("r0", "again", "inspect(r, newest)", true),
+                ("r0", "again", "inspect(r, fresh)", false),
+                ("r0", "", "inspect(r, relay(take old))", false),
+                ("copy r0", "", "inspect(r, fresh)", true),
+                ("copy r0", "", "inspect(r, old)", false),
+                ("copy r0", "", "inspect(r0, original)", true),
+                ("copy r0", "", "inspect(r0, fresh)", false),
+            ] {
+                let extra = match extra {
+                    "replace" => format!("r = {replacement};"),
+                    "again" => format!("{mutation}; let newest = make(r);"),
+                    _ => String::new(),
+                };
+                let body = format!(
+                    "let old = make(r); {mutation}; let fresh = make(r); {extra} {use_value}"
+                );
+                let body = if looped {
+                    format!("for i in 0u8..2u8 {{ {body} }}")
+                } else {
+                    body
+                };
+                let source = format!(
+                    "{header}\nfn probe(take r0: {owner}, other: {owner}) {{ let original = make(r0); let mut r = {receipt}; {body} }}\nfn main() {{}}"
+                );
+                if accepted {
+                    let (probe, signatures) = lowered(&source, "probe");
+                    assert_eq!(kinds(&probe, &signatures), [], "{source}");
+                } else {
+                    let mut engine = new_engine();
+                    let file = engine.sources.add("renewal.hir", source.clone()).unwrap();
+                    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+                    assert!(
+                        output
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.rule.as_str() == "PROV-1"),
+                        "{source}: {:?}",
+                        output.diagnostics,
+                    );
+                }
+            }
+        }
+        // An indexed write renews the container and its ancestors, preserving
+        // the identity of its untouched sibling field.
+        for (argument, accepted) in [("same", true), ("whole", false)] {
+            let source = format!(
+                "type R {{ xs: List[u64], other: u64 }}\nfn sibling(r: R) -> Option[u8 of r.other] {{ None }}\nfn brand(r: R) -> Option[u8 of r] {{ None }}\nfn inspect(r: R, p: Option[u8 of r.other]) {{}}\nfn probe(take r0: R) {{ let mut r = r0; let same = sibling(r); r.xs[0] = 3u64; let whole = brand(r); inspect(r, {argument}) }}\nfn main() {{}}"
+            );
+            if accepted {
+                let (probe, signatures) = lowered(&source, "probe");
+                assert_eq!(kinds(&probe, &signatures), []);
+            } else {
+                let mut engine = new_engine();
+                let file = engine.sources.add("sibling.hir", source).unwrap();
+                let output = check_progress(&mut engine, file, &default_context()).unwrap();
+                assert!(
+                    output
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.rule.as_str() == "PROV-1")
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn renewed_container_brands_survive_continuing_joins() {
+    with_compiler_stack(|| {
+        for expression in [
+            "copy fresh",
+            "if true { fresh } else { make(r) }",
+            "if true { return } else { fresh }",
+        ] {
+            let source = format!(
+                "fn make(r:List[u64])->Option[u8 of r]{{None}}\nfn inspect(r:List[u64],p:Option[u8 of r]){{}}\nfn probe(take r0:List[u64]){{let mut r=r0;let old=make(r);r[0]=3u64;let fresh=make(r);let selected={expression};inspect(r,selected)}}\nfn main(){{}}"
+            );
+            let (probe, signatures) = lowered(&source, "probe");
+            assert_eq!(kinds(&probe, &signatures), [], "{source}");
+            let stale = source.replace("inspect(r,selected)", "inspect(r,old)");
+            let mut engine = new_engine();
+            let file = engine.sources.add("stale-join.hir", stale.clone()).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.rule.as_str() == "PROV-1"),
+                "{stale}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
+
+#[test]
 fn forged_container_brands_after_an_indexed_write_are_rejected() {
     with_compiler_stack(|| {
         let header = "type R { n: u64 }\nfn make(r: List[R]) -> Option[u8 of r] { None }\nfn inspect(r: List[R], p: Option[u8 of r]) {}";
@@ -148,7 +279,8 @@ fn forged_container_brands_after_an_indexed_write_are_rejected() {
             // when the independent indexed-write rule is removed.
             let adapters = compiler_adapters();
             let lower = adapters.lowering.clone().unwrap();
-            let mut engine = QueryEngine::new(default_environment(), adapters);
+            let mut engine =
+                QueryEngine::new(default_environment(), adapters).with_types(types().clone());
             let file = engine.sources.add("forged.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             let probe = parsed

@@ -1549,6 +1549,7 @@ impl Checker<'_> {
         );
         let result = declared_receipt_evidence(self.t, result).expect("declared call result");
         let result = self.mut_content_placement(result, &f, &ordered);
+        let result = self.renew_result_brands(declared_result, result);
         self.set_ty(e, result);
         if obligation_valid && task_obligation(self.t, result) {
             self.pending_tasks.insert(e, span);
