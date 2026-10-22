@@ -3466,15 +3466,18 @@ example in `conformance/SEM/SEM-3-regex-all-5-extract-run.hir` demonstrates both
 arena-local source lifetime and checked extraction:
 
 ```hirsel
-let spans = match regex.find_all(re, text, 64, 100000) {
-  Ok(spans) => take spans,
-  Error(_) => return Error(()),
-}
-let mut tokens: List[String] = []
-for span in spans {
-  let Some(start) = string.position(text, span.start) else { return Error(()) }
-  let Some(end) = string.position(text, span.end) else { return Error(()) }
-  list.push(mut tokens, unique string.slice(text, start, end))
+fn extract_tokens(re: regex.Regex, text: String) -> Result[List[String], ()] {
+  let spans = match regex.find_all(re, text, 64, 100000) {
+    Ok(spans) => take spans,
+    Error(_) => return Error(()),
+  }
+  let mut tokens: List[String] = []
+  for span in spans {
+    let Some(start) = string.position(text, span.start) else { return Error(()) }
+    let Some(end) = string.position(text, span.end) else { return Error(()) }
+    list.push(mut tokens, unique string.slice(text, start, end))
+  }
+  Ok(take tokens)
 }
 ```
 
