@@ -15,6 +15,11 @@ pub enum BuildProfile {
     Debug,
 }
 impl BuildProfile {
+    fn options(self, target: TargetSpec) -> Options {
+        let mut options = Options::new(target);
+        options.scoped_specialization = matches!(self, Self::Release | Self::ReleaseLto);
+        options
+    }
     fn opt(self) -> OptLevel {
         match self {
             Self::Default | Self::Release | Self::ReleaseLto => OptLevel::Default,
@@ -164,7 +169,7 @@ pub fn build_path_native_backend_with_validation(
             }
         };
         Ok((|| {
-            let mut options = Options::new(target.clone());
+            let mut options = profile.options(target.clone());
             options.validation = validation;
             let proofs = evidence
                 .map(|e| super::Proofs::assess(engine, &loaded.entry, &validated, e))
@@ -249,5 +254,49 @@ mod scratch_tests {
         });
         assert!(panic.is_err());
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)]
+mod scoped_consumer_9_tests {
+    use super::*;
+    use hirsel_engine::DefinitionQueries;
+    #[test]
+    fn profile_switch_keeps_debug_heap_and_release_zero_environment() {
+        hirsel_engine::with_compiler_stack(|| {
+            let source = "fn invoke(f:fn()->u64 uses {})->u64 uses {f}{f()}\npub fn main()->Result[(),u64]{let n=3u64;Error(invoke(fn()->u64 uses {}{n}))}";
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let file = engine
+                .sources
+                .add("scoped-profile.hir", source.into())
+                .unwrap();
+            let checked =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let raw = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(raw).unwrap();
+            let entry = hirsel_engine::entry_path(&hirsel_engine::default_context());
+            let sites = super::super::Sites::new(input.snapshot());
+            for profile in [
+                BuildProfile::Debug,
+                BuildProfile::Default,
+                BuildProfile::Release,
+                BuildProfile::ReleaseLto,
+            ] {
+                let options = profile.options(TargetSpec::x86_64_unknown_linux_gnu());
+                let release = matches!(profile, BuildProfile::Release | BuildProfile::ReleaseLto);
+                let ready = super::super::build(&input, &options).unwrap();
+                let run = super::super::run_heap(&ready, &entry, &sites).unwrap();
+                assert!(run.observation.failures.is_empty());
+                assert_eq!(run.observation.exit_code, Some(1));
+                assert_eq!(run.counters.allocations, u64::from(!release), "{profile:?}");
+                assert_eq!(run.counters.frees, u64::from(!release), "{profile:?}");
+                assert_eq!(run.counters.releases, u64::from(!release), "{profile:?}");
+            }
+        });
     }
 }

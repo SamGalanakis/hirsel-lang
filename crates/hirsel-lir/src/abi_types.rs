@@ -1,4 +1,4 @@
-//! The Hirsel cross-unit ABI v4 schema (Target and ABI).
+//! The Hirsel cross-unit ABI v5 schema (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type and its
 //! layouts (`abi.rs`); both emitters and the heap executor consume it.
@@ -126,6 +126,18 @@ pub struct ParameterPath {
 }
 snapshot_struct!(ParameterPath { parameter, fields });
 
+/// Independently checked entry signature of callable content selected in a parameter.
+/// This is a claim, never code-target or captured-data identity.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct ScopedEntry {
+    pub parameter: ParameterPath,
+    pub identity: ContentHash,
+}
+snapshot_struct!(ScopedEntry {
+    parameter,
+    identity
+});
+
 /// Physical order: context, [environment], [caller and operation sites],
 /// [caller destination], [result output pointer], then declared parameters.
 /// Both native backends return a typed scalar as (value, u8 status) in
@@ -159,6 +171,7 @@ pub struct FnAbi {
     pub nonretaining_captures: Vec<ParameterPath>,
     /// Binds the complete selector lists; independent validation recomputes it.
     pub scoped_contract: ContentHash,
+    pub scoped_entries: Vec<ScopedEntry>,
 }
 
 snapshot_enum!(PhysicalType {
@@ -221,7 +234,8 @@ snapshot_struct!(FnAbi {
     version,
     nonretaining,
     nonretaining_captures,
-    scoped_contract
+    scoped_contract,
+    scoped_entries
 });
 impl hirsel_codec::Snapshot for FnAbiId {
     fn write(&self, w: &mut hirsel_codec::Writer) {

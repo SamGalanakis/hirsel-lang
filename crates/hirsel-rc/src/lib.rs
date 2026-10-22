@@ -21,6 +21,7 @@ pub mod placement;
 pub mod ready;
 pub mod reuse;
 pub mod reuse_stores;
+mod scoped_consumer_9;
 pub mod spare_push;
 mod spawn;
 pub mod specialize_drop;

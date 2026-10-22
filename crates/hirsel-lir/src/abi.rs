@@ -198,3 +198,38 @@ pub fn foreign_nonnull_offsets(table: &crate::LayoutTable, layout: LayoutId) -> 
     visit(table, layout, 0, &mut offsets);
     offsets
 }
+
+/// Invocation identity, independent of local ABI/layout ordinals, closure data,
+/// symbol names, capture storage and caller-site decoration. Bodies are checked
+/// under these symbolic parameter contracts; complete C authenticates actuals.
+pub fn scoped_entry_identity(abi: &FnAbi, layouts: &crate::LayoutTable) -> ContentHash {
+    scoped_entry_identity_with_keys(abi, &crate::layout_keys::LayoutKeys::new(layouts))
+}
+
+pub(crate) fn scoped_entry_identity_with_keys(
+    abi: &FnAbi,
+    keys: &crate::layout_keys::LayoutKeys,
+) -> ContentHash {
+    let parameters: Vec<_> = abi
+        .parameters
+        .iter()
+        .map(|p| ((p.convention, p.passing), keys.key(p.layout)))
+        .collect();
+    let result = abi
+        .result
+        .as_ref()
+        .map(|r| (keys.key(r.layout), r.borrowed_parameters.clone()));
+    let signature = snapshot::digest("scoped-entry-signature-v1", &(parameters, result));
+    let contracts = snapshot::digest(
+        "scoped-entry-contracts-v1",
+        &(abi.nonretaining.clone(), abi.scoped_entries.clone()),
+    );
+    ContentHash::of_parts(
+        "hirsel.scoped-entry.v1",
+        [
+            signature.0.as_slice(),
+            contracts.0.as_slice(),
+            &[abi.multiplicity as u8, u8::from(abi.diverges)],
+        ],
+    )
+}

@@ -55,7 +55,7 @@ mod scoped_transport;
 mod structure;
 mod tokens;
 pub use scoped_transport::{
-    check_calls as check_scoped_calls, check_heap_links as check_scoped_links,
+    ScopedQualification, check_calls as check_scoped_calls, check_heap_links as check_scoped_links,
     qualify as qualify_scoped_transport,
 };
 

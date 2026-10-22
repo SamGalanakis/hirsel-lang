@@ -367,6 +367,7 @@ conformance/CLO/CLO-1-return-local-capture-unique-bad.hir
 conformance/CLO/CLO-1-return-scoped-parameter-bad.hir
 conformance/CLO/CLO-1-return-scoped-parameter-ok.hir
 conformance/CLO/CLO-1-scoped-capture-element-read.hir
+conformance/CLO/CLO-1-scoped-consumer-9-nested-run.hir
 conformance/CLO/CLO-1-store-scoped-parameter-bad.hir
 conformance/CLO/CLO-1-store-scoped-parameter-ok.hir
 conformance/CLO/CLO-1-written-recursive-retention-bad.hir

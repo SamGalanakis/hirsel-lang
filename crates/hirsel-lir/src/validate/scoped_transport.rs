@@ -621,7 +621,8 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
 /// Link every contract claim to the actual physical definition, including
 /// recursive groups. Callers must also run per-unit C on every member.
 pub fn check_calls<S>(units: &[LirUnit<S>], layouts: &crate::LayoutTable) -> Result<(), String> {
-    check_links(units, layouts, true)
+    let identities = entry_identities(layouts);
+    check_links(units, layouts, Some(&identities))
 }
 /// Link consistency for ordinary heap code. Missing bodies supply no scoped
 /// proof, but retain existing foreign/bodyless acceptance. Qualification uses
@@ -630,13 +631,14 @@ pub fn check_heap_links<S>(
     units: &[LirUnit<S>],
     layouts: &crate::LayoutTable,
 ) -> Result<(), String> {
-    check_links(units, layouts, false)
+    check_links(units, layouts, None)
 }
 fn check_links<S>(
     units: &[LirUnit<S>],
     layouts: &crate::LayoutTable,
-    require_bodies: bool,
+    identities: Option<&[hirsel_syntax::ContentHash]>,
 ) -> Result<(), String> {
+    let require_bodies = identities.is_some();
     let targets: BTreeMap<_, _> = units
         .iter()
         .map(|u| ((&u.header.definition, u.header.instance), u))
@@ -671,7 +673,9 @@ fn check_links<S>(
                 .and_then(|i| targets.get(&(&symbol.definition, i)));
             let Some(target) = target else {
                 if !require_bodies
-                    || abi.nonretaining.is_empty() && abi.nonretaining_captures.is_empty()
+                    || abi.nonretaining.is_empty()
+                        && abi.nonretaining_captures.is_empty()
+                        && abi.scoped_entries.is_empty()
                 {
                     continue;
                 }
@@ -681,9 +685,12 @@ fn check_links<S>(
                 .fn_abis
                 .get(target.header.abi.0 as usize)
                 .ok_or("scoped target ABI absent")?;
-            if abi.nonretaining != actual.nonretaining
+            if identities
+                .is_some_and(|ids| ids[claimed.0 as usize] != ids[target.header.abi.0 as usize])
+                || abi.nonretaining != actual.nonretaining
                 || abi.nonretaining_captures != actual.nonretaining_captures
                 || abi.scoped_contract != actual.scoped_contract
+                || abi.scoped_entries != actual.scoped_entries
             {
                 return Err(format!(
                     "call to {} mismatches scoped body contract",
@@ -697,34 +704,319 @@ fn check_links<S>(
 
 /// Check a complete physical module for future scoped-proof consumers.
 ///
-/// Per-unit C validates symbolic contracts, but cannot authenticate an unknown
-/// indirect entry's nested callable signature from its two-word layout. Until
-/// that evidence is represented, such a boundary remains heap-backed and does
-/// not qualify. This is deliberately separate from ordinary source/native
-/// acceptance: unsupported proof must not become a language restriction.
-/// No placement or code-generation path consumes this result in stage 1.
-pub fn qualify<S: Stage>(units: &[LirUnit<S>], inputs: &super::Inputs<'_>) -> Result<(), String> {
-    let context = super::ValidationContext::new(inputs);
-    for unit in units {
-        let violations = super::check_with_context(unit, inputs, &context, true);
-        if !violations.is_empty() {
-            return Err(format!(
-                "{} fails C: {violations:?}",
-                unit.header.definition.0.name
-            ));
+/// Per-unit C validates symbolic nonretention. Complete C also reconstructs
+/// nested callable entry identities and checks every higher-order actual and
+/// indirect invocation. Missing identity, unknown data flow and unrepresented
+/// hidden capture contracts refuse proof while preserving ordinary heap code.
+/// Every scoped specialization must rerun this check after transformation.
+fn entry_identities(table: &crate::LayoutTable) -> Vec<hirsel_syntax::ContentHash> {
+    let keys = crate::LayoutKeys::new(table);
+    // Derive each ABI signature once, shared by all callers and bodies.
+    table
+        .fn_abis
+        .iter()
+        .map(|a| crate::abi::scoped_entry_identity_with_keys(a, &keys))
+        .collect()
+}
+
+/// Strict per-body proofs retained only inside one compiler invocation. An entry
+/// signature alone never identifies a checked body: bind its exact bytes and
+/// reached declaration/layout rows too. Linked actuals are always checked fresh.
+pub struct ScopedQualification<'a> {
+    target: &'a crate::TargetSpec,
+    manifest: &'a hirsel_core_contract::Manifest,
+    operations: &'a (dyn crate::operation::OperationDeclarations + Sync),
+    discharge: Option<&'a crate::discharge::Discharge>,
+    checked: BTreeSet<(
+        hirsel_syntax::ContentHash,
+        hirsel_syntax::ContentHash,
+        hirsel_syntax::ContentHash,
+    )>,
+}
+impl<'a> ScopedQualification<'a> {
+    pub fn new(
+        target: &'a crate::TargetSpec,
+        manifest: &'a hirsel_core_contract::Manifest,
+        operations: &'a (dyn crate::operation::OperationDeclarations + Sync),
+        discharge: Option<&'a crate::discharge::Discharge>,
+    ) -> Self {
+        Self {
+            target,
+            manifest,
+            operations,
+            discharge,
+            checked: BTreeSet::new(),
         }
     }
-    check_calls(units, inputs.layouts)?;
-    for unit in units {
-        for call in &unit.tables.calls {
-            let abi = &inputs.layouts.fn_abis[call.abi.0 as usize];
-            if matches!(call.callee, Callee::Indirect(_))
-                && (!abi.nonretaining.is_empty() || !abi.nonretaining_captures.is_empty())
-            {
+    pub fn qualify<S: Stage>(
+        &mut self,
+        units: &[LirUnit<S>],
+        layouts: &crate::LayoutTable,
+    ) -> Result<(), String> {
+        let inputs = super::Inputs {
+            target: self.target,
+            layouts,
+            manifest: self.manifest,
+            operations: self.operations,
+            discharge: self.discharge,
+            memo: Default::default(),
+        };
+        let context = super::ValidationContext::new(&inputs);
+        context
+            .preflight()
+            .map_err(|e| format!("scoped table fails C: {e:?}"))?;
+        let identities = entry_identities(layouts);
+        for unit in units {
+            unit.check_identity(layouts)
+                .map_err(|e| format!("scoped body schema: {e:?}"))?;
+            // Opaque operation providers/discharge state are not memoized. The
+            // ordinary full checker still authenticates every such body.
+            let cacheable = unit.tables.operations.is_empty() && inputs.discharge.is_none();
+            let key = if cacheable {
+                let entry = *identities
+                    .get(unit.header.abi.0 as usize)
+                    .ok_or("scoped body ABI absent")?;
+                let reached =
+                    super::UnitInputs::from(&inputs).digest_with_index(unit, context.index())?;
+                Some((entry, unit.digest(), reached))
+            } else {
+                None
+            };
+            if key.as_ref().is_some_and(|k| self.checked.contains(k)) {
+                continue;
+            }
+            let violations = super::check_with_context(unit, &inputs, &context, true);
+            if !violations.is_empty() {
                 return Err(format!(
-                    "{}: indirect scoped entry contract is unavailable",
+                    "{} fails C: {violations:?}",
                     unit.header.definition.0.name
                 ));
+            }
+            if let Some(key) = key {
+                self.checked.insert(key);
+            }
+        }
+        check_links(units, layouts, Some(&identities))?;
+        check_entries(units, layouts, &identities)
+    }
+}
+
+pub fn qualify<S: Stage>(units: &[LirUnit<S>], inputs: &super::Inputs<'_>) -> Result<(), String> {
+    ScopedQualification::new(
+        inputs.target,
+        inputs.manifest,
+        inputs.operations,
+        inputs.discharge,
+    )
+    .qualify(units, inputs.layouts)
+}
+
+/// Reconstruct entry signatures separately from optimizer code discovery. Unknown
+/// storage or an unobserved predecessor poisons the answer. Equal signatures do
+/// not identify capture data and never authorize an environment rewrite.
+fn check_entries<S: Stage>(
+    units: &[LirUnit<S>],
+    table: &crate::LayoutTable,
+    identities: &[hirsel_syntax::ContentHash],
+) -> Result<(), String> {
+    use hirsel_syntax::ContentHash;
+    let bodies: BTreeMap<_, _> = units
+        .iter()
+        .map(|u| ((&u.header.definition, u.header.instance), u))
+        .collect();
+    #[derive(Clone, Default, PartialEq, Eq)]
+    struct Entries {
+        known: BTreeSet<ContentHash>,
+        unknown: bool,
+    }
+    impl Entries {
+        fn join(&mut self, other: &Self) -> bool {
+            let before = self.clone();
+            self.known.extend(&other.known);
+            self.unknown |= other.unknown;
+            *self != before
+        }
+        fn matches(&self, wanted: ContentHash) -> bool {
+            !self.unknown && self.known == BTreeSet::from([wanted])
+        }
+    }
+    for u in units {
+        let own = &table.fn_abis[u.header.abi.0 as usize];
+        // Most units have no callable-parameter entry obligation. No entry SSA
+        // reconstruction is needed unless a nested actual or contracted indirect
+        // invocation is checked. Ordinary full C above still checks the body.
+        if own.scoped_entries.is_empty()
+            && !u.tables.calls.iter().any(|c| {
+                let abi = &table.fn_abis[c.abi.0 as usize];
+                !abi.scoped_entries.is_empty()
+                    || matches!(c.callee, Callee::Indirect(_))
+                        && (!abi.nonretaining.is_empty() || !abi.nonretaining_captures.is_empty())
+            })
+        {
+            continue;
+        }
+        let mut rows = vec![Entries::default(); u.values.len()];
+        let mut inputs = vec![Vec::new(); u.values.len()];
+        for &p in &u.parameters {
+            rows[p.index()].unknown = true;
+        }
+        for entry in &own.scoped_entries {
+            if !entry.parameter.fields.is_empty() {
+                return Err("unsupported nested entry selector".into());
+            }
+            let Some(&p) = u.parameters.get(entry.parameter.parameter as usize) else {
+                return Err("nested entry parameter absent".into());
+            };
+            rows[p.index()] = Entries {
+                known: BTreeSet::from([entry.identity]),
+                unknown: false,
+            };
+        }
+        // Mutably exposed slots never supply an entry identity.
+        fn whole<S>(u: &LirUnit<S>, a: AddressId) -> Option<SlotId> {
+            let a = &u.addresses[a.index()];
+            if a.projection.len != 0 {
+                return None;
+            }
+            match a.base {
+                AddressBase::Slot(s) => Some(s),
+                AddressBase::Address(a) => whole(u, a),
+                _ => None,
+            }
+        }
+        let mutable: BTreeSet<_> = u
+            .tables
+            .loans
+            .iter()
+            .filter(|l| l.mutable)
+            .filter_map(|l| whole(u, l.address))
+            .collect();
+        let safe = |a| whole(u, a).is_some_and(|s| !mutable.contains(&s));
+        for edge in &u.tables.edges {
+            for (&p, &a) in u.blocks[edge.target.index()]
+                .parameters
+                .get(&u.pools.values)
+                .unwrap_or(&[])
+                .iter()
+                .zip(edge.arguments.get(&u.pools.values).unwrap_or(&[]))
+            {
+                inputs[p.index()].push(a);
+            }
+        }
+        for inst in &u.instructions {
+            let flow = match *inst {
+                Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                }
+                | Inst::Copy {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                } if safe(address) => Some((result, reaching)),
+                Inst::Store {
+                    address,
+                    value,
+                    version,
+                }
+                | Inst::Replace {
+                    address,
+                    value,
+                    version,
+                    ..
+                } if safe(address) => Some((version, value)),
+                Inst::Weaken { result, value } => Some((result, value)),
+                _ => None,
+            };
+            if let Some((a, b)) = flow {
+                inputs[a.index()].push(b);
+                continue;
+            }
+            let entry = match *inst {
+                Inst::FunctionRef { result, symbol } => Some((result, symbol, None)),
+                Inst::Closure {
+                    result, closure, ..
+                } => u.tables.closures[closure.index()]
+                    .code
+                    .map(|c| (result, c.symbol, Some(c.abi))),
+                _ => None,
+            };
+            if let Some((v, s, claimed)) = entry {
+                let symbol = &u.tables.symbols[s.index()];
+                if let Some(body) = symbol
+                    .instance
+                    .and_then(|i| bodies.get(&(&symbol.definition, i)))
+                {
+                    let actual_identity = identities[body.header.abi.0 as usize];
+                    if claimed.is_some_and(|a| identities[a.0 as usize] != actual_identity) {
+                        return Err("closure nested entry identity mismatch".into());
+                    }
+                    rows[v.index()].known.insert(actual_identity);
+                } else {
+                    rows[v.index()].unknown = true;
+                }
+            } else {
+                for d in inst.defs() {
+                    rows[d.index()].unknown = true;
+                }
+            }
+        }
+        for (i, row) in rows.iter_mut().enumerate() {
+            if inputs[i].is_empty() && row.known.is_empty() {
+                row.unknown = true;
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (i, args) in inputs.iter().enumerate() {
+                for a in args {
+                    let other = rows[a.index()].clone();
+                    changed |= rows[i].join(&other);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for call in &u.tables.calls {
+            let abi = &table.fn_abis[call.abi.0 as usize];
+            if let Callee::Indirect(v) = call.callee {
+                // Parameter entry identity cannot authenticate hidden capture
+                // selectors on an unknown environment.
+                if !abi.nonretaining_captures.is_empty() {
+                    return Err("indirect scoped capture contract is unavailable".into());
+                }
+                if (!abi.nonretaining.is_empty()
+                    || !abi.nonretaining_captures.is_empty()
+                    || !abi.scoped_entries.is_empty())
+                    && !rows[v.index()].matches(identities[call.abi.0 as usize])
+                {
+                    return Err(format!(
+                        "{}: indirect scoped entry contract is unavailable or mismatched",
+                        u.header.definition.0.name
+                    ));
+                }
+            }
+            for entry in &abi.scoped_entries {
+                if !entry.parameter.fields.is_empty() {
+                    return Err("unsupported nested call selector".into());
+                }
+                let actual = call
+                    .arguments
+                    .get(&u.pools.call_arguments)
+                    .unwrap_or(&[])
+                    .iter()
+                    .find(|a| a.parameter == entry.parameter.parameter);
+                if !matches!(actual.map(|a|a.value), Some(ArgumentValue::Value(v)) if rows[v.index()].matches(entry.identity))
+                {
+                    return Err(format!(
+                        "{}: nested callable entry identity is unavailable or mismatched",
+                        u.header.definition.0.name
+                    ));
+                }
             }
         }
     }

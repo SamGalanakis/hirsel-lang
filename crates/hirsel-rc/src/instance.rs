@@ -602,6 +602,11 @@ pub fn expand(
     program: &Program,
     layouts: &mut LayoutBuilder<'_>,
 ) -> Result<Instances, InstanceError> {
+    // Explicit scoped capture specialization erases only dead callable carriers
+    // to Unit; reserve its ordinary layout before the table is sealed.
+    layouts
+        .layout(&program.types, program.types.intern(Type::unit()))
+        .map_err(|e| InstanceError::Layout(DefPath::core("Unit"), e))?;
     let mut by_owner: BTreeMap<&DefPath, Vec<&Requirement>> = BTreeMap::new();
     for requirement in &program.requirements {
         by_owner

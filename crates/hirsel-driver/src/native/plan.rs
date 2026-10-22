@@ -599,6 +599,7 @@ fn check(
                         if abi.nonretaining != actual.nonretaining
                             || abi.nonretaining_captures != actual.nonretaining_captures
                             || abi.scoped_contract != actual.scoped_contract
+                            || abi.scoped_entries != actual.scoped_entries
                         {
                             return Err(failed("call forges its scoped body contract"));
                         }
@@ -682,6 +683,7 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
         elide,
         reuse,
         flat_walk,
+        scoped_specialization,
         discharge,
         objects,
     } = options;
@@ -725,6 +727,7 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
             elide,
             reuse,
             flat_walk,
+            scoped_specialization,
             false, /* measurement */
             hirsel_rc::closure_calls::MAX_PER_FUNCTION,
             hirsel_rc::closure_calls::MAX_SPECIALIZATIONS,
@@ -1198,6 +1201,12 @@ mod tests {
             }
             let mut changed = options.clone();
             changed.flat_walk = !changed.flat_walk;
+            assert_ne!(
+                Some(&base),
+                input_manifest(input.snapshot(), &changed).as_ref()
+            );
+            let mut changed = options.clone();
+            changed.scoped_specialization = !changed.scoped_specialization;
             assert_ne!(
                 Some(&base),
                 input_manifest(input.snapshot(), &changed).as_ref()

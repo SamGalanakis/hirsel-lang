@@ -44,6 +44,8 @@ pub struct Options {
     pub reuse: bool,
     /// Walk variable flat sequences linearly instead of rescanning prefixes.
     pub flat_walk: bool,
+    /// Explicit capture specialization; production enables it for release builds.
+    pub scoped_specialization: bool,
     /// PS-13 checks accepted evidence licenses removing (`--proofs`).
     pub discharge: Discharge,
     /// Emit each unit's object during the build through an object store
@@ -62,6 +64,7 @@ impl Options {
             elide: true,
             reuse: true,
             flat_walk: true,
+            scoped_specialization: true,
             discharge: Discharge::default(),
             objects: None,
         }
@@ -576,6 +579,10 @@ pub fn build_program(
         }
         None => &mut none,
     };
+    let mut scoped = super::import_cache::Scoped {
+        inner: cache,
+        enabled: options.scoped_specialization,
+    };
     let mut lowered = hirsel_rc::import::lower_cached(
         program,
         target,
@@ -583,7 +590,7 @@ pub fn build_program(
             enabled: options.flat_walk,
         },
         &options.discharge,
-        cache,
+        &mut scoped,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     let discharged = timed(Phase::LirValidate, || {

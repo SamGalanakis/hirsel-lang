@@ -184,6 +184,20 @@ pub struct Specializations {
     pub inline: BTreeSet<ContentHash>,
 }
 
+pub fn specialize_scoped(
+    lowered: &mut Lowered,
+    program: &crate::instance::Program,
+    target: &hirsel_lir::TargetSpec,
+    scoped: bool,
+) -> Specializations {
+    let mut result = specialize(lowered);
+    if scoped {
+        crate::scoped_consumer_9::specialize(lowered, program, target, &mut result);
+    }
+    result
+}
+
+/// Existing code-target specialization without scoped capture elimination.
 pub fn specialize(lowered: &mut Lowered) -> Specializations {
     let originals = lowered.units.clone();
     let op_free = crate::spawn::op_free(&originals, &lowered.table);

@@ -32,3 +32,4 @@ mod rc_spare_push;
 mod rc_statics;
 mod rc_scoped_transport;
 mod rc_bytes_replace_range;
+mod scoped_consumer_9;

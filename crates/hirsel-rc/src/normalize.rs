@@ -387,6 +387,10 @@ pub fn permute_parameters(
         path.parameter = new_of[path.parameter as usize];
     }
     abi.nonretaining.sort();
+    for entry in &mut abi.scoped_entries {
+        entry.parameter.parameter = new_of[entry.parameter.parameter as usize];
+    }
+    abi.scoped_entries.sort();
     abi.scoped_contract =
         hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures);
     let order_bytes: Vec<u8> = order.iter().flat_map(|o| o.to_le_bytes()).collect();

@@ -1,0 +1,25 @@
+// rule: CLO-1
+// expect: run
+fn invoke(f: fn() -> u64 uses {}) -> u64 uses {f} {
+  f()
+}
+
+fn value(n: u64) -> u64 {
+  invoke(
+    fn() -> u64 uses {} {
+      invoke(
+        fn() -> u64 uses {} {
+          n
+        }
+      )
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), u64] {
+  if value(3u64) == 3u64 {
+    Ok(())
+  } else {
+    Error(1u64)
+  }
+}

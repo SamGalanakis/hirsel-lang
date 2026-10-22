@@ -225,6 +225,9 @@ fn run(
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut options = Options::new(target.clone());
     options.validation = validation;
+    // Interactive native runs keep the ordinary heap lowering; standalone
+    // --release selects the more expensive scoped proof/specialization pass.
+    options.scoped_specialization = false;
     if let Some(proofs) = proofs {
         options.discharge = proofs.discharge.clone();
     }

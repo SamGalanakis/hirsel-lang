@@ -1016,6 +1016,7 @@ mod tests {
             nonretaining: Vec::new(),
             nonretaining_captures: Vec::new(),
             scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
+            scoped_entries: Vec::new(),
             key: FnAbiKey {
                 callable: ContentHash::of_bytes(b"root"),
                 abi_version: 1,

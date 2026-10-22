@@ -193,6 +193,11 @@ pub struct CachedImport {
 /// Where `lower_cached` looks for an instance's import before importing it, and keeps
 /// the imports it makes.
 pub trait ImportCache {
+    /// Matrix control: retain the checked heap baseline for scoped consumers.
+    fn scoped_specialization(&self) -> bool {
+        true
+    }
+
     /// Whether the cache keeps anything: without one, imports are not erased for it.
     fn enabled(&self) -> bool {
         true
@@ -450,7 +455,12 @@ pub fn lower_cached(
         discharged,
         native_discharge,
     };
-    let specialized = crate::closure_calls::specialize(&mut lowered);
+    let specialized = crate::closure_calls::specialize_scoped(
+        &mut lowered,
+        program,
+        target,
+        cache.scoped_specialization(),
+    );
     lowered.unit_origins = specialized.origins;
     lowered.inline_instances = specialized.inline;
     crate::arena_credit::summarize(&mut lowered.units, &mut lowered.table);

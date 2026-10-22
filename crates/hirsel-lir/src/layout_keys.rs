@@ -217,7 +217,7 @@ impl LayoutKeys {
         }
         let text = hirsel_codec::to_text(&erased);
         ContentHash::of_parts(
-            "hirsel.fn-abi.v1",
+            "hirsel.fn-abi.v2",
             std::iter::once(text.as_bytes()).chain(references.iter().map(|k| &k.0.0[..])),
         )
     }

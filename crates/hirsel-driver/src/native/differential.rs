@@ -142,6 +142,7 @@ fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Opti
         elide,
         reuse,
         flat_walk: true,
+        scoped_specialization: true,
         discharge: Default::default(),
         objects: None,
     }
@@ -355,6 +356,7 @@ fn same_options(a: &Options, b: &Options) -> bool {
         && a.elide == b.elide
         && a.reuse == b.reuse
         && a.flat_walk == b.flat_walk
+        && a.scoped_specialization == b.scoped_specialization
 }
 
 /// Deterministic providers selected explicitly by a semantic fixture, never a host grant.

@@ -1705,6 +1705,22 @@ impl<'a> Validator<'a> {
                 "invalid scoped nonretaining contract",
             );
         }
+        if !abi
+            .scoped_entries
+            .windows(2)
+            .all(|w| w[0].parameter < w[1].parameter)
+            || abi.scoped_entries.iter().any(|e| {
+                abi.parameters
+                    .get(e.parameter.parameter as usize)
+                    .is_none_or(|p| !self.scoped_path(p.layout, &e.parameter.fields))
+            })
+        {
+            self.fail(
+                s.clone(),
+                Obligation::Abi,
+                "invalid nested scoped entry selector",
+            );
+        }
         let foreign = abi.shape == CallableShape::Foreign;
         if abi.context == foreign {
             self.fail(

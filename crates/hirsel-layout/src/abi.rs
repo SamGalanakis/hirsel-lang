@@ -1,4 +1,4 @@
-//! Hirsel cross-unit ABI v4 derivation (Target and ABI).
+//! Hirsel cross-unit ABI v5 derivation (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type. Its
 //! passing classes read only the declared parameter convention and the
@@ -101,7 +101,28 @@ impl<'o> LayoutBuilder<'o> {
                 fields: Vec::new(),
             })
             .collect();
+        let mut scoped_entries = Vec::new();
+        for (ordinal, parameter) in function.parameters.iter().enumerate() {
+            if matches!(types.get(parameter.ty).map(|r| &r.kind), Some(TypeKind::Function(f)) if f.generics.is_empty() && f.foreign.is_none())
+            {
+                let nested = self.fn_abi(types, parameter.ty, CallableShape::Closure)?;
+                scoped_entries.push(ScopedEntry {
+                    parameter: ParameterPath {
+                        parameter: ordinal as u32,
+                        fields: Vec::new(),
+                    },
+                    identity: hirsel_lir::abi::scoped_entry_identity(
+                        &self.table().fn_abis[nested.0 as usize],
+                        self.table(),
+                    ),
+                });
+            }
+        }
         let scoped_contract = hirsel_lir::abi::scoped_contract_digest(&nonretaining, &[]);
+        atom(
+            &mut key,
+            &hirsel_lir::snapshot::digest("scoped-entries-v1", &scoped_entries).0,
+        );
         atom(&mut key, &scoped_contract.0);
         let callable_key = ContentHash::of_parts("hirsel.fn-abi-key.v1", [key.as_slice()]);
         if let Some(&id) = self.abi_memo.get(&(callable_key, shape)) {
@@ -183,6 +204,7 @@ impl<'o> LayoutBuilder<'o> {
             nonretaining,
             nonretaining_captures: Vec::new(),
             scoped_contract,
+            scoped_entries,
             key: FnAbiKey {
                 callable: callable_key,
                 abi_version: hirsel_lir::ABI_VERSION,

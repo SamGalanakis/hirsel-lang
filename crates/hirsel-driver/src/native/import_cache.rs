@@ -14,6 +14,32 @@ use hirsel_types::{TypeInterner, TypeKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// Profile policy wraps both cached imports and the no-cache path. Import
+/// fragments precede specialization, so their reusable content stays unchanged.
+pub(super) struct Scoped<'a> {
+    pub inner: &'a mut dyn ImportCache,
+    pub enabled: bool,
+}
+impl ImportCache for Scoped<'_> {
+    fn scoped_specialization(&self) -> bool {
+        self.enabled && self.inner.scoped_specialization()
+    }
+    fn enabled(&self) -> bool {
+        self.inner.enabled()
+    }
+    fn get(
+        &mut self,
+        program: &Program,
+        instances: &Instances,
+        id: InstanceId,
+    ) -> Option<CachedImport> {
+        self.inner.get(program, instances, id)
+    }
+    fn put(&mut self, id: InstanceId, import: Result<CachedImport, String>) {
+        self.inner.put(id, import);
+    }
+}
+
 pub(crate) struct Imports<'a> {
     store: &'a dyn ObjectStore,
     target: &'a TargetSpec,

@@ -86,3 +86,11 @@ Ordinary native linking checks contract consistency whenever a body is present.
 Absent foreign/bodyless entries keep existing heap acceptance and grant no proof;
 complete scoped qualification requires every contracted body. This distinction
 also applies to unknown indirect entries and generic Borrow forwarding.
+
+## Stage 2 implementation status
+
+Compiler ABI 5, LIR 51 and validator 16 add `FnAbi.scoped_entries` for whole callable parameter selectors and content-named invocation identities. The FnAbi cache digest is v2. TIR/export 9 and runtime ABI 38 remain unchanged. Complete C independently reconstructs nested identities from symbolic declaration parameters, actual linked FunctionRef/ClosureCode and SSA storage/CFG unions, verifies higher-order actuals, and rejects missing/forged/mismatched evidence. Source V checks nested declaration selector correspondence independently. Hidden capture-entry and projected/dynamic evidence remain unsupported strict-proof cases with ordinary heap acceptance.
+
+`scoped_consumer_9` consumes strict V and complete linked C before bounded direct capture specialization and reruns complete C on every proposed site. It passes ordered ordinary arguments then explicit borrowed captures and erases only dead callable carriers to ordinary Unit IR, retaining source loans and captured-owner cleanup. Unsupported use, ambiguous captured data, unrepresented result relations or budget saturation discard the whole site transaction. Owning/once environments remain heap-backed. See [scoped-consumer-9.md](../scoped-consumer-9.md) for exact scope and reference adaptations. This direct subset supersedes the stage-1 cost limitation above; no frame placement or full CLO-1 claim follows.
+
+Production stage-2 elimination is enabled only by explicit release/LTO builds; debug/default builds and interactive native runs keep the heap path. Independent proof reconstruction remains expensive on large packages. Per-compile strict-body memoization binds exact body/input content as well as entry identity, and complete linked checks still rerun for each proposed transaction.

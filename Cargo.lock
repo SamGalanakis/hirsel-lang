@@ -981,6 +981,7 @@ dependencies = [
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
+ "hirsel-validate",
  "serde",
 ]
 

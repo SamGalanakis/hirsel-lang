@@ -98,6 +98,34 @@ fn write(body: &Body, rows: &mut State, destination: PlaceId, input: &Paths) {
     }
     put(body, rows, destination, input);
 }
+/// Source counterpart of nested entry selectors. Reconstruct from declared
+/// callable parameter types, independently of physical ABI metadata and code
+/// discovery. Generic/erased source evidence never invents a nested contract.
+fn entry_contracts(t: &TypeInterner, ty: hirsel_types::TypeId) -> Option<Vec<Vec<u32>>> {
+    let mut pending = vec![(ty, Vec::new())];
+    let mut out = Vec::new();
+    while let Some((ty, path)) = pending.pop() {
+        let TypeKind::Function(f) = &t.get(ty)?.kind else {
+            return None;
+        };
+        if !f.generics.is_empty() {
+            return None;
+        }
+        for (ordinal, p) in f.parameters.iter().enumerate() {
+            if matches!(t.get(p.ty).map(|r| &r.kind), Some(TypeKind::Function(_))) {
+                let mut child = path.clone();
+                child.push(ordinal as u32);
+                if p.passing != PassingMode::Take {
+                    out.push(child.clone());
+                }
+                pending.push((p.ty, child));
+            }
+        }
+    }
+    out.sort();
+    Some(out)
+}
+
 pub(super) fn check(
     definition: &Definition,
     t: &TypeInterner,
@@ -475,6 +503,16 @@ pub(super) fn check(
                             });
                         if !allowed {
                             error(&mut errors, None, "scoped may-retain source call");
+                        }
+                        if allowed {
+                            let expected =
+                                function.as_ref().unwrap().parameters[a.parameter.0 as usize].ty;
+                            let actual = body.places[a.value.place.0 as usize].ty;
+                            if entry_contracts(t, expected).is_none()
+                                || entry_contracts(t, expected) != entry_contracts(t, actual)
+                            {
+                                error(&mut errors, None, "scoped nested source entry contract");
+                            }
                         }
                     }
                 }

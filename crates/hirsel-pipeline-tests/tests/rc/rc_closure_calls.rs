@@ -23,7 +23,7 @@ fn a_literal_through_local_storage_calls_its_body_directly() {
 
 #[test]
 fn known_arguments_specialize_an_erased_apply() {
-    let (_, lowered) = lower_valid(
+    let (_, lowered) = crate::scoped_consumer_9::lower_disabled(
         "fn apply(x:u64, f:fn(u64)->u64 uses {})->u64 uses {f} {f(x)}\nfn main()->u64 {let a=3u64;let b=2u64;let add=fn(x:u64)->u64 uses {} {x+a};let mul=fn(x:u64)->u64 uses {} {x*b};apply(apply(4u64,add),mul)}",
     );
     let main = lowered

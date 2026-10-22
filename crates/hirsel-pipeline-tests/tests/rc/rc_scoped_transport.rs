@@ -6,7 +6,7 @@ fn heap(source: &str) -> hirsel_heapcheck::Run {
     heap_baseline(source, true)
 }
 fn heap_baseline(source: &str, qualify: bool) -> hirsel_heapcheck::Run {
-    let (program, lowered) = lower_valid(source);
+    let (program, lowered) = crate::scoped_consumer_9::lower_disabled(source);
     let rows = manifest(&program);
     let target = target();
     let inputs = Inputs {
