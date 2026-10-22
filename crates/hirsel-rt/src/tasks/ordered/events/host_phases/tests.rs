@@ -275,3 +275,235 @@ fn home_wait_identity_requires_a_saved_valid_phase_without_completion() {
         "completed effect cannot be certified as a blocked wait"
     );
 }
+
+fn grant(log: &mut Log, ordinal: u64, request: Request, result: Result<Completion, AdapterError>) {
+    let mut fixture = pending(Err(AdapterError::Blocked));
+    let old = (vec![1], 0);
+    let key = (vec![1], ordinal);
+    let mut entry = fixture.host_entries.remove(&old).unwrap();
+    entry.ordinal = ordinal;
+    log.host_entries.insert(key.clone(), entry);
+    log.home_requests.insert(key.clone());
+    let request = host_requests::project(&request, |word| {
+        if word == 1 {
+            Some(HostAuthority::RootIo)
+        } else {
+            log.host_handles
+                .get(&word)
+                .cloned()
+                .map(HostAuthority::Created)
+        }
+    })
+    .unwrap();
+    log.host_requests.insert(key.clone(), Some(request));
+    log.host_key_observations.insert(
+        key.clone(),
+        Some(vec![(host_keys::Resource::Coupled, Mode::Exclusive)]),
+    );
+    log.discover_home(&key, &result).unwrap();
+    let observation =
+        host_values::project(&result, |word| log.host_handles.get(&word).cloned()).ok();
+    log.host_initials.insert(
+        key,
+        HostCompletion {
+            task: vec![1],
+            ordinal,
+            op: "host.request",
+            result,
+            observation,
+        },
+    );
+    log.start_home(&[1], ordinal);
+}
+fn finish_grant(log: &mut Log, ordinal: u64) {
+    let key = (vec![1], ordinal);
+    let done = log.host_initials[&key].clone();
+    log.return_home(&key, &done, 1, empty());
+    let events = log.continue_home(&key, &Next::Yield).unwrap();
+    log.subevents(
+        &Boundary {
+            task: vec![1],
+            ordinal,
+            op: None,
+            transition: Transition::Yield,
+            retirement: 1,
+            before: empty(),
+            credit: 0,
+            native_outcome: None,
+        },
+        "host.request",
+        events,
+    );
+}
+
+#[test]
+fn home_grants_preserve_repeated_aliases_and_split_field_parent_metadata() {
+    let mut log = Log::default();
+    grant(
+        &mut log,
+        0,
+        Request::MonotonicClock { io: 1 },
+        Ok(Completion::ClockGrant(Ok(88))),
+    );
+    assert!(
+        log.canonical().is_err(),
+        "creation needs its owner continuation"
+    );
+    finish_grant(&mut log, 0);
+    let parent = log.host_handles[&88].clone();
+    assert_eq!(parent.operation.ordinal, 0);
+    grant(
+        &mut log,
+        1,
+        Request::MonotonicClock { io: 1 },
+        Ok(Completion::ClockGrant(Ok(88))),
+    );
+    finish_grant(&mut log, 1);
+    assert_eq!(log.host_handles[&88], parent);
+    assert_eq!(log.versions[&CanonicalItem::HostHandle(parent)], 2);
+    for ordinal in [2, 3] {
+        grant(
+            &mut log,
+            ordinal,
+            Request::NetSplit {
+                net: 88,
+                stream: 88,
+            },
+            Ok(Completion::Halves(Ok((90, 91)))),
+        );
+        assert!(log.canonical().is_err());
+        finish_grant(&mut log, ordinal);
+        for (field, word) in [(0, 90), (1, 91)] {
+            let handle = &log.host_handles[&word];
+            assert_eq!((handle.operation.ordinal, handle.field), (2, field));
+            assert_eq!(
+                log.host_bindings[handle].resource,
+                host_keys::Resource::Coupled
+            );
+            assert_eq!(
+                log.host_bindings[handle].kind,
+                host_keys::ResourceKind::Half {
+                    stream: host_keys::Resource::Coupled
+                }
+            );
+            assert_eq!(
+                log.versions[&CanonicalItem::HostHandle(handle.clone())],
+                ordinal - 1
+            );
+        }
+    }
+    let events = log.canonical().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.outcome, CanonicalOutcome::HostCreated(_)))
+            .count(),
+        3
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.outcome, CanonicalOutcome::HostAlias(_)))
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn home_discovery_errors_permanently_refuse_export_despite_stale_rows_or_known_handles() {
+    for cause in 0..4 {
+        let mut log = pending(Err(AdapterError::Blocked));
+        let key = (vec![1], 0);
+        let result = Ok(Completion::ClockGrant(Ok(88)));
+        match cause {
+            0 | 1 => {
+                let key = if cause == 0 {
+                    crate::io_keys::Key(17)
+                } else {
+                    crate::io_keys::COUPLED
+                };
+                let kind = if cause == 0 {
+                    crate::io_keys::Kind::Other
+                } else {
+                    crate::io_keys::Kind::Sink { file_backed: false }
+                };
+                let rows = log
+                    .host_created(
+                        ObjectId {
+                            creator: vec![2],
+                            ordinal: 7,
+                        },
+                        &result,
+                        &BTreeMap::from([(88, (key, kind))]),
+                    )
+                    .unwrap();
+                // An old creation row cannot rescue a conflicting resource/kind.
+                log.host_creations.insert((vec![1], 0), rows);
+            }
+            2 => {
+                log.host_requests.insert(key.clone(), None);
+            }
+            3 => {}
+            _ => unreachable!(),
+        }
+        let invalid = if cause == 3 {
+            Ok(Completion::Halves(Ok((88, 88))))
+        } else {
+            result.clone()
+        };
+        assert!(log.discover_home(&key, &invalid).is_err());
+        assert!(log.invalid_home.contains(&key));
+        assert!(!log.host_creations.contains_key(&key));
+        let observation =
+            host_values::project(&result, |word| log.host_handles.get(&word).cloned()).ok();
+        log.host_initials.get_mut(&key).unwrap().observation = observation;
+        log.start_home(&[1], 0);
+        assert!(log.canonical().is_err());
+        // Even synthetic terminal closure cannot bypass invalid discovery.
+        log.closed_blocked = true;
+        log.host_entries.clear();
+        assert!(log.jsonl().is_err());
+    }
+}
+
+#[test]
+fn home_split_rejects_missing_or_conflicting_parent_resource_before_installing_halves() {
+    for known in [false, true] {
+        let mut log = pending(Err(AdapterError::Blocked));
+        let parent = HostHandleId {
+            operation: ObjectId {
+                creator: vec![2],
+                ordinal: 7,
+            },
+            field: 0,
+        };
+        if known {
+            log.host_bindings.insert(
+                parent.clone(),
+                host_keys::Creation {
+                    handle: parent.clone(),
+                    resource: host_keys::Resource::Created(parent.clone()),
+                    kind: host_keys::ResourceKind::Other,
+                },
+            );
+        }
+        let request = host_requests::project(
+            &Request::NetSplit {
+                net: 99,
+                stream: 99,
+            },
+            |_| Some(HostAuthority::Created(parent.clone())),
+        )
+        .unwrap();
+        let key = (vec![1], 0);
+        log.host_requests.insert(key.clone(), Some(request));
+        assert!(
+            log.discover_home(&key, &Ok(Completion::Halves(Ok((90, 91)))))
+                .is_err()
+        );
+        assert!(!log.host_handles.contains_key(&90));
+        assert!(!log.host_handles.contains_key(&91));
+        assert!(log.invalid_home.contains(&key));
+        assert!(log.jsonl().is_err());
+    }
+}

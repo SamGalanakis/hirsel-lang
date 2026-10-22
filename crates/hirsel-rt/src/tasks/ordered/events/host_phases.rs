@@ -28,6 +28,123 @@ pub(crate) fn request_keys(ctx: *mut TaskCtx) {
 }
 
 impl Log {
+    /// Home adapters declare no worker key graph: all their attempts use the
+    /// existing conservative coupled domain. Names are still field-qualified;
+    /// no native handle word enters the canonical result.
+    pub(super) fn discover_home(
+        &mut self,
+        key: &(Vec<u32>, u64),
+        result: &Result<crate::io::Completion, AdapterError>,
+    ) -> Result<(), &'static str> {
+        if !self.home_requests.contains(key) {
+            return Ok(());
+        }
+        let result = self.discover_home_fields(key, result);
+        if result.is_err() {
+            self.invalid_home.insert(key.clone());
+            self.host_creations.remove(key);
+            if let Some(phase) = self.home_phases.get_mut(key) {
+                phase.valid = false;
+            }
+        }
+        result
+    }
+
+    fn discover_home_fields(
+        &mut self,
+        key: &(Vec<u32>, u64),
+        result: &Result<crate::io::Completion, AdapterError>,
+    ) -> Result<(), &'static str> {
+        if matches!(result, Err(AdapterError::InvalidHandle(_))) {
+            return Ok(());
+        }
+        let request = self
+            .host_requests
+            .get(key)
+            .and_then(Option::as_ref)
+            .ok_or("unknown home request authority")?;
+        let decoded = crate::tape_wire::decode::<Request>(&request.payload)
+            .map_err(|_| "invalid home request observation")?;
+        if matches!(decoded, Request::NetSplit { .. }) {
+            let parent = request
+                .authorities
+                .get(1)
+                .and_then(|authority| match authority {
+                    HostAuthority::Created(handle) => self.host_bindings.get(handle),
+                    _ => None,
+                })
+                .ok_or("missing home split parent metadata")?;
+            if parent.resource != host_keys::Resource::Coupled {
+                return Err("home split parent has conflicting declared resource");
+            }
+        }
+        let request = decoded;
+        let mut image = result.clone();
+        crate::io_observation::capture(&mut image).map_err(|_| "invalid home result mapping")?;
+        let fields = crate::io_observation::fields(&mut image)?;
+        let mut discovered = BTreeMap::new();
+        for word in fields.into_iter().flatten() {
+            let kind = match self
+                .host_handles
+                .get(word)
+                .and_then(|handle| self.host_bindings.get(handle))
+            {
+                Some(row) if row.resource != host_keys::Resource::Coupled => {
+                    return Err("home handle has conflicting declared resource");
+                }
+                Some(row) => match row.kind {
+                    host_keys::ResourceKind::Half { .. } => crate::io_keys::Kind::Half {
+                        stream: crate::io_keys::COUPLED,
+                    },
+                    host_keys::ResourceKind::Other => crate::io_keys::Kind::Other,
+                    _ => return Err("home handle has conflicting resource kind"),
+                },
+                None if matches!(request, Request::NetSplit { .. }) => crate::io_keys::Kind::Half {
+                    stream: crate::io_keys::COUPLED,
+                },
+                None => crate::io_keys::Kind::Other,
+            };
+            discovered.insert(*word, (crate::io_keys::COUPLED, kind));
+        }
+        let rows = self.host_created(
+            ObjectId {
+                creator: key.0.clone(),
+                ordinal: key.1,
+            },
+            result,
+            &discovered,
+        )?;
+        self.host_creations.insert(key.clone(), rows);
+        Ok(())
+    }
+
+    fn home_created_events(
+        &self,
+        key: &(Vec<u32>, u64),
+        result: &host_values::HostValue,
+    ) -> Option<Subevents> {
+        if result.handles.is_empty() {
+            return Some(Vec::new());
+        }
+        let rows = self.host_creations.get(key)?;
+        if rows.iter().map(|row| &row.handle).ne(result.handles.iter()) {
+            return None;
+        }
+        Some(
+            rows.iter()
+                .map(|row| {
+                    let item = CanonicalItem::HostHandle(row.handle.clone());
+                    let outcome = if self.versions.contains_key(&item) {
+                        CanonicalOutcome::HostAlias(row.clone())
+                    } else {
+                        CanonicalOutcome::HostCreated(row.clone())
+                    };
+                    (item, outcome)
+                })
+                .collect(),
+        )
+    }
+
     /// Quiescence already owns Scheduler and saved rows. Native request tokens
     /// contribute no identity; only a valid phase with no result can block.
     pub(super) fn home_wait(&self, path: &[u32]) -> Option<(&'static str, ObjectId)> {
@@ -51,7 +168,7 @@ impl Log {
 
     pub(super) fn start_home(&mut self, path: &[u32], ordinal: u64) {
         let key = (path.to_vec(), ordinal);
-        if !self.home_requests.contains(&key) {
+        if !self.home_requests.contains(&key) || self.invalid_home.contains(&key) {
             return;
         }
         let Some(entry) = self.host_entries.get(&key).cloned() else {
@@ -74,11 +191,10 @@ impl Log {
         let Some(initial) = self.host_initials.get(&key) else {
             return;
         };
-        let Some(result) = initial
-            .observation
-            .clone()
-            .filter(|result| result.handles.is_empty())
-        else {
+        let Some(result) = initial.observation.clone() else {
+            return;
+        };
+        let Some(created) = self.home_created_events(&key, &result) else {
             return;
         };
         if self.host_key_observations.get(&key)
@@ -102,6 +218,7 @@ impl Log {
             ),
         ];
         if done {
+            events.extend(created);
             events.push((operation, CanonicalOutcome::HostResult(result.clone())));
         }
         self.subevents(&entry, entry.op.unwrap(), events);
@@ -154,15 +271,19 @@ impl Log {
         attempt: &HostPollCompletion,
         before: Stretch,
     ) {
+        let created = attempt
+            .completion
+            .observation
+            .as_ref()
+            .and_then(|result| self.home_created_events(key, result));
         let Some(phase) = self.home_phases.get_mut(key) else {
             return;
         };
-        let Some(result) = attempt
-            .completion
-            .observation
-            .clone()
-            .filter(|result| result.handles.is_empty())
-        else {
+        let Some(created) = created else {
+            phase.valid = false;
+            return;
+        };
+        let Some(result) = attempt.completion.observation.clone() else {
             phase.valid = false;
             return;
         };
@@ -189,6 +310,7 @@ impl Log {
             },
         )];
         if done {
+            events.extend(created);
             events.push((
                 CanonicalItem::HostOperation(ObjectId {
                     creator: key.0.clone(),

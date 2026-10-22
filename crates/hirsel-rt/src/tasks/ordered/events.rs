@@ -372,6 +372,7 @@ pub(super) struct Log {
     host_entries: BTreeMap<(Vec<u32>, u64), Boundary>,
     home_phases: BTreeMap<(Vec<u32>, u64), host_phases::Phase>,
     home_requests: BTreeSet<(Vec<u32>, u64)>,
+    invalid_home: BTreeSet<(Vec<u32>, u64)>,
     host_certified: BTreeSet<(Vec<u32>, u64)>,
     host_outputs: BTreeMap<(Vec<u32>, u64), Result<Option<Vec<u8>>, &'static str>>,
     host_creations: BTreeMap<(Vec<u32>, u64), Vec<host_keys::Creation>>,
@@ -834,6 +835,14 @@ pub(crate) fn record_host_initial(
         unreachable!()
     };
     let result = owned_host_result(result);
+    let ordinal = driver.events.as_ref().unwrap().ordinals[&path]
+        .checked_sub(1)
+        .expect("first attempt follows entry");
+    let _ = driver
+        .events
+        .as_mut()
+        .unwrap()
+        .discover_home(&(path.clone(), ordinal), &result);
     let observation = host_values::project(&result, |word| host_identity(driver, word)).ok();
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals[&path]
@@ -870,6 +879,14 @@ pub(crate) fn record_host_attempt(
         unreachable!()
     };
     let retirement = driver.frontier.as_ref().unwrap().retired();
+    let ordinal = driver.events.as_ref().unwrap().ordinals[&path]
+        .checked_sub(1)
+        .expect("retry follows entry");
+    let _ = driver
+        .events
+        .as_mut()
+        .unwrap()
+        .discover_home(&(path.clone(), ordinal), result);
     let observation = host_values::project(result, |word| host_identity(driver, word)).ok();
     let log = driver.events.as_mut().expect("poll evidence enabled");
     let ordinal = log.ordinals[&path]
@@ -941,6 +958,7 @@ impl Log {
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
         if self.unsupported.is_empty()
+            && self.invalid_home.is_empty()
             && self.host_entries.is_empty()
             && (self.closed_blocked || self.home_phases.is_empty())
             && self.host_certified.is_empty()

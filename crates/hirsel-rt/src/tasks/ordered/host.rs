@@ -419,6 +419,155 @@ mod tests {
         }
     }
 
+    struct GrantClock {
+        base: u64,
+        next: u64,
+        now: u64,
+    }
+    impl Adapter for GrantClock {
+        fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+            if let Request::SleepUntil { clock, .. } = request
+                && (*clock < self.base || *clock >= self.base + self.next)
+            {
+                return Err(AdapterError::InvalidHandle(*clock));
+            }
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            match request {
+                Request::MonotonicClock { io: 1 } => {
+                    let handle = self.base + self.next;
+                    self.next += 1;
+                    Ok(Completion::ClockGrant(Ok(handle)))
+                }
+                Request::SleepUntil { deadline, .. } if deadline > self.now => {
+                    Err(AdapterError::Blocked)
+                }
+                Request::SleepUntil { .. } => Ok(Completion::Wait(Ok(()))),
+                Request::Close { .. } => Ok(Completion::Unit(Ok(()))),
+                request => panic!("unexpected {request:?}"),
+            }
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            Ok(if self.now == 0 {
+                Ready::Tokens(vec![])
+            } else {
+                Ready::Every
+            })
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            self.now = 100;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn normal_home_clock_grants_supply_creator_field_provenance_for_saved_waits() {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.adapter = Some(Box::new(GrantClock {
+                    base: 1000 + 10 * u64::from(width),
+                    next: 0,
+                    now: 0,
+                }));
+                unsafe { run.use_physical_dispatch() };
+                let (outcome, trace) = run.run_traced(
+                    move |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        engine::enable(ctx, policy);
+                        super::super::events::enable(ctx);
+                        super::super::events::initial_host(ctx, Some(1), None);
+                    },
+                    |ctx| unsafe {
+                        let mut clocks = [crate::io::ClockResult {
+                            tag: 99,
+                            padding: 99,
+                            value: 0,
+                        }; 2];
+                        for clock in &mut clocks {
+                            assert_eq!(
+                                crate::io::hirsel_rt_v2_io_monotonic_clock(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    clock,
+                                    &1
+                                ),
+                                STATUS_OK
+                            );
+                            assert_eq!((clock.tag, clock.padding), (0, 0));
+                        }
+                        assert_ne!(clocks[0].value, clocks[1].value);
+                        let mut slept = std::mem::MaybeUninit::<UnitResult>::uninit();
+                        assert_eq!(
+                            crate::io::hirsel_rt_v2_clock_sleep_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                slept.as_mut_ptr(),
+                                &clocks[0].value,
+                                &100
+                            ),
+                            STATUS_OK
+                        );
+                        assert_eq!(slept.assume_init().tag, 0);
+                        assert_eq!(
+                            crate::host_waits::issue(
+                                ctx,
+                                Request::Close {
+                                    handle: clocks[0].value
+                                }
+                            )
+                            .unwrap(),
+                            (Ok(Completion::Unit(Ok(()))), false)
+                        );
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        let a = &log.host_handles[&clocks[0].value];
+                        let b = &log.host_handles[&clocks[1].value];
+                        assert_eq!(a.operation.ordinal, 0);
+                        assert_eq!(b.operation.ordinal, 1);
+                        assert_eq!((a.field, b.field), (0, 0));
+                        assert_ne!(a, b);
+                        assert_eq!(log.host_bindings[a].resource, log.host_bindings[b].resource);
+                        assert_eq!(
+                            log.host_requests[&(vec![], 2)]
+                                .as_ref()
+                                .unwrap()
+                                .authorities,
+                            [super::super::events::HostAuthority::Created(a.clone())]
+                        );
+                        assert!(log.canonical().is_ok());
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let trace = trace.expect("normal grants and waits have complete provenance");
+                let rows: Vec<serde_json::Value> = std::str::from_utf8(trace.bytes())
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(
+                    rows.iter()
+                        .filter(|row| row["outcome"]["kind"] == "host_created")
+                        .count(),
+                    2
+                );
+                assert_eq!(rows.last().unwrap()["outcome"]["kind"], "root_end");
+                if let Some(reference) = &reference {
+                    assert_eq!(trace.bytes(), reference);
+                } else {
+                    reference = Some(trace.bytes().to_vec());
+                }
+            }
+        }
+    }
+
     struct NeverHost;
     impl Adapter for NeverHost {
         fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
