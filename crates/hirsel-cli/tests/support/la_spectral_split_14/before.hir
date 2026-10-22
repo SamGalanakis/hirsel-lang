@@ -1,0 +1,27 @@
+// Before split; upstream attribution and MIT license in LICENSE.
+fn a(i: u64, j: u64) -> f64 {
+  let ij: f64 = float.from_int(i + j)
+  let fi: f64 = float.from_int(i)
+  1.0 / (ij * (ij + 1.0) / 2.0 + fi + 1.0)
+}
+
+fn multiply(u: List[f64], transpose: bool) -> List[f64] {
+  let n = list.len(u)
+  let mut value_out: List[f64] = []
+  for i in 0u64..n {
+    let mut total: f64 = 0.0
+    for j in 0u64..n {
+      total += if transpose {
+        a(j, i)
+      } else {
+        a(i, j)
+      } * u[j]
+    }
+    list.push(mut value_out, total)
+  }
+  take value_out
+}
+
+fn ata(u: List[f64]) -> List[f64] {
+  multiply(multiply(u, false), true)
+}

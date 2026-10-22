@@ -125,17 +125,28 @@ fn a(i: u64, j: u64) -> f64 {
   1.0 / (ij * (ij + 1.0) / 2.0 + fi + 1.0)
 }
 
-fn multiply(u: List[f64], transpose: bool) -> List[f64] {
+// Separate forward/transposed bodies follow upstream spectralnorm.rs:26-63.
+// Preserve checked a(), reduction order and fresh empty-list/push construction.
+fn multiply(u: List[f64]) -> List[f64] {
   let n = list.len(u)
   let mut value_out: List[f64] = []
   for i in 0u64..n {
     let mut total: f64 = 0.0
     for j in 0u64..n {
-      total += if transpose {
-        a(j, i)
-      } else {
-        a(i, j)
-      } * u[j]
+      total += a(i, j) * u[j]
+    }
+    list.push(mut value_out, total)
+  }
+  take value_out
+}
+
+fn multiply_transposed(u: List[f64]) -> List[f64] {
+  let n = list.len(u)
+  let mut value_out: List[f64] = []
+  for i in 0u64..n {
+    let mut total: f64 = 0.0
+    for j in 0u64..n {
+      total += a(j, i) * u[j]
     }
     list.push(mut value_out, total)
   }
@@ -143,7 +154,7 @@ fn multiply(u: List[f64], transpose: bool) -> List[f64] {
 }
 
 fn ata(u: List[f64]) -> List[f64] {
-  multiply(multiply(u, false), true)
+  multiply_transposed(multiply(u))
 }
 
 type Planet {

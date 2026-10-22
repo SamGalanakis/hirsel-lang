@@ -1,0 +1,5 @@
+fn word(mut data: List[u8], value: u64) {
+  for i in 0u64..8u64 {
+    list.push(mut data, int.narrow((value >> (i * 8u64)) & 255u64))
+  }
+}
