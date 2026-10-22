@@ -52,7 +52,7 @@ was recorded (10.3–53.0% across participants), so no wall/cycle speedup is
 inferred from its unlocked observations.
 
 The brief's stock compare.py control also ran on **CPU18**, with its own
-`/tmp/hirsel-micro-cpu18.lock`, ten interleaved rounds, seed **20261021**,
+`/workspace/tmp/hirsel-micro-cpu18.lock` (this invocation's TMPDIR), ten interleaved rounds, seed **20261021**,
 using the restored unchanged evaluator. All **20/20 full checksums passed**;
 all five counters had **100% running coverage**. Source/runtime/binary identities
 were verified by the runner, whose final status is complete.
