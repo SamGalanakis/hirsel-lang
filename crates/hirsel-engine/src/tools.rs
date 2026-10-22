@@ -103,7 +103,7 @@ pub fn default_context() -> FileContext {
 }
 /// The spec's parts under docs/spec, by file name, which the spec hash covers.
 /// The conformance spec_links test checks that they are the whole directory.
-pub const SPEC_PARTS: [(&str, &[u8]); 25] = [
+pub const SPEC_PARTS: [(&str, &[u8]); 26] = [
     ("brands.md", include_bytes!("../../../docs/spec/brands.md")),
     (
         "capabilities.md",
@@ -189,6 +189,10 @@ pub const SPEC_PARTS: [(&str, &[u8]); 25] = [
         include_bytes!("../../../docs/spec/storage.md"),
     ),
     ("syntax.md", include_bytes!("../../../docs/spec/syntax.md")),
+    (
+        "utf8-streaming.md",
+        include_bytes!("../../../docs/spec/utf8-streaming.md"),
+    ),
 ];
 pub fn default_environment() -> QueryEnvironment {
     QueryEnvironment {
