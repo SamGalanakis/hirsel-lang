@@ -35,7 +35,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   for i in 0u64..arg.len(args) {
     list.push(mut argv, arg.text(args, i)?)
   }
-  let flags: List[cli.Flag] = [
+  let flags = [
     cli.Flag(name: "help", short: Some(b'h'), kind: Switch, help: "Print help")
   ]
   let Ok(parsed) = cli.parse(take argv, flags) else {

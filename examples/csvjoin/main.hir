@@ -170,13 +170,32 @@ fn limit(flags: Map[String, List[String]], name: String, ceiling: u64) -> Result
   Ok(value)
 }
 
+// Append in encounter order without removing a present key. The callback borrows
+// row; unique supplies the global owned row required by list.push.
+fn index_row(
+  mut index: Map[String, List[List[String]]],
+  row: List[String],
+  key_index: u64
+) {
+  let key = row[key_index]
+  if !map.update_value(
+    mut index,
+    key,
+    fn(mut rows: List[List[String]]) -> () uses {} {
+      list.push(mut rows, unique row)
+    }
+  ) {
+    map.insert(mut index, unique key, [unique row])
+  }
+}
+
 fn run(rt: Io, args: Args) -> Result[(), AppError] {
   let mut argv: List[String] = []
   for i in 0u64..arg.len(args) {
     list.push(mut argv, arg.text(args, i)?)
   }
   let mut specs: List[cli.Flag] = []
-  let flag_names: List[String] = [
+  let flag_names = [
     "left-key",
     "right-key",
     "mode",
@@ -249,7 +268,7 @@ fn run(rt: Io, args: Args) -> Result[(), AppError] {
     Error(error) => return Error(Csv("right", 1, 0, error)),
   }
   let (right_names, right_index) = header(mut right_reader, mut right, right_key)?
-  let mut index: unique Map[String, List[List[String]]] = unique map.empty()
+  let mut index: Map[String, List[List[String]]] = map.empty()
   let mut right_rows: u64 = 0
   while true {
     let Some(row) = next(mut right_reader, mut right)? else {
@@ -259,13 +278,7 @@ fn run(rt: Io, args: Args) -> Result[(), AppError] {
     if right_rows == limits.right_rows {
       return Error(Limit("right-rows", "right", right.row, right.offset))
     }
-    let key = unique row[right_index]
-    let mut matches: unique List[List[String]] = match take map.remove(mut index, key) {
-      Some(rows) => take rows,
-      None() => [],
-    }
-    list.push(mut matches, unique row)
-    map.insert(mut index, take key, take matches)
+    index_row(mut index, row, right_index)
     right_rows += 1
   }
   let mut left = Source(

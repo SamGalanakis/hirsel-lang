@@ -156,8 +156,8 @@ function bodies are [CT-5](compile-time.md#ct-5-generation), and conditional let
   test sublanguage.
 - Pipe operators, methods as chaining, an implicit `it`, and `using`-style field import.
 - Textual macro expansion, type classes, implicit conversions (beyond LANG-8's `?` arm injection), exceptions, universal
-  equality and literal defaulting; compile-time reflection on function bodies or source
-  text. No part of a signature is inferred from an implementation body.
+  equality and literal defaulting beyond [LANG-2’s nonempty List rule](language.md#lang-2-prefix-law);
+  compile-time reflection on function bodies or source text. No part of a signature is inferred from an implementation body.
 - Local recursion, polymorphic recursion, closure-owned mutable state, capture of
   `let mut` names or borrowed parameters by escaping closures, borrowing counted data into
   child tasks, partially unique values (`aliased` fields), list handles, and facts over

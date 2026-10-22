@@ -64,7 +64,10 @@ fn tabfold_10_end_to_end() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("6 records; 18 replays"), "{stdout}");
+    assert!(
+        stdout.contains("339 exact observations; 6 records; 18 replays"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("builds={'llvm': 1, 'cranelift': 1}"),
         "{stdout}"

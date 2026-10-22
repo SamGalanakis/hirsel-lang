@@ -11,7 +11,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   for i in 0u64..arg.len(args) {
     list.push(mut argv, arg.text(args, i)?)
   }
-  let flags: List[cli.Flag] = [
+  let flags = [
     cli.Flag(name: "jobs", short: None(), kind: Value, help: "Workers (1..4)")
   ]
   let parsed = cli.parse_interspersed(take argv, flags) ? Flags
