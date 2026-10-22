@@ -294,6 +294,24 @@ impl std::ops::DerefMut for Value {
     }
 }
 impl Value {
+    fn join(&mut self, other: &Self) {
+        // Rust a7c37f9f library/alloc/src/rcs/rc.rs:2782-2794 checks retained
+        // identity before inspecting a payload. Do it before make_mut too:
+        // unchanged branch values need neither a payload copy nor a row walk.
+        // A first join can still install the uniqueness witness or normalize
+        // parked-share bookkeeping; those cases use the original operation.
+        if std::rc::Rc::ptr_eq(&self.0, &other.0)
+            && (self.modes.uniqueness != Uniqueness::Aliased
+                || self.uniqueness_site.is_some()
+                || self.site.is_none())
+            && (!self.borrow_only || self.modes.uniqueness != Uniqueness::Unique)
+            && (self.borrow_only || self.parked.is_empty())
+        {
+            work::count(Counter::OwnershipValueJoins);
+            return;
+        }
+        std::ops::DerefMut::deref_mut(self).join(other);
+    }
     fn new(modes: Modes) -> Self {
         Self(std::rc::Rc::new(ValueData {
             envelope: None,
@@ -8032,6 +8050,77 @@ fn annotation_modes(
 #[cfg(test)]
 mod loan_tests {
     use super::*;
+
+    #[test]
+    fn retained_value_joins_match_the_original_witness_and_bookkeeping_rules() {
+        // Exercise the non-idempotent first-join bookkeeping as well as
+        // settled values. The reference deliberately enters make_mut first.
+        let mut retained = 0;
+        for bits in 0..256 {
+            let mut value = Value::new(Modes::global());
+            value.modes.uniqueness = if bits & 1 == 0 {
+                Uniqueness::Unique
+            } else {
+                Uniqueness::Aliased
+            };
+            value.site = (bits & 2 != 0).then_some(ExprId(7));
+            value.uniqueness_site = (bits & 4 != 0).then_some(ExprId(3));
+            value.borrow_only = bits & 8 != 0;
+            if bits & 16 != 0 {
+                value.parked = Arc::new(BTreeSet::from([ExprId(9)]));
+            }
+            value.envelope = (bits & 32 != 0).then(|| BTreeSet::from([1, 3]));
+            value.part_of = (bits & 64 != 0).then(|| (2, BTreeSet::from([4, 5])));
+            value.set_alias(Some((1, Site::Expression(ExprId(8)))));
+            value.read_within(2, &[0, 1], Site::Binding(3));
+            value.bound_by(4, Site::Frame);
+            if bits & 128 != 0 {
+                let loans = value.content.whole.clone();
+                value.install_content(vec![(vec![Projection::Field(1)], loans)]);
+                value
+                    .shared_parts
+                    .insert(vec![Projection::Field(0)], ExprId(6));
+            }
+            let original = value.clone();
+            let mut reference = value.clone();
+            std::ops::DerefMut::deref_mut(&mut reference).join(&original);
+            value.join(&original);
+            assert_eq!(value, reference, "bits {bits}");
+            retained += usize::from(std::rc::Rc::ptr_eq(&value.0, &original.0));
+            // Distinct payloads must still enter the ordinary merge and
+            // select the earliest witness, even when their summaries match.
+            let mut different = original.clone();
+            different.read_within(2, &[0, 2], Site::Binding(1));
+            let mut expected = original.clone();
+            std::ops::DerefMut::deref_mut(&mut expected).join(&different);
+            let mut actual = original.clone();
+            actual.join(&different);
+            assert_eq!(actual, expected, "different bits {bits}");
+        }
+        assert!(retained > 0);
+    }
+
+    #[test]
+    fn unchanged_value_joins_retain_payload_allocations_across_branch_snapshots() {
+        let mut original = Value::new(Modes::global());
+        original.envelope = Some(BTreeSet::from([1, 2, 3]));
+        original.part_of = Some((1, BTreeSet::from([2, 3])));
+        original.bound_by(2, Site::Frame);
+        original.read_within(1, &[2, 3], Site::Binding(4));
+        let mut before = 0;
+        let mut after = 0;
+        for _ in 0..128 {
+            let mut reference = original.clone();
+            std::ops::DerefMut::deref_mut(&mut reference).join(&original);
+            before += usize::from(!std::rc::Rc::ptr_eq(&reference.0, &original.0));
+            let mut value = original.clone();
+            value.join(&original);
+            after += usize::from(!std::rc::Rc::ptr_eq(&value.0, &original.0));
+            assert_eq!(value, reference);
+        }
+        assert_eq!((before, after), (128, 0));
+        eprintln!("unchanged branch joins: payload allocations {before} -> {after}");
+    }
 
     #[test]
     fn successor_forwarding_moves_last_new_state_and_keeps_original_joins() {

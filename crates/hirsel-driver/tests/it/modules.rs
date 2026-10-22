@@ -74,6 +74,7 @@ mod runtime;
 mod scalar_return_ir;
 mod seals;
 mod semantic;
+mod modes_flow;
 mod signature_input;
 mod source_profile;
 mod spawn_fast;
