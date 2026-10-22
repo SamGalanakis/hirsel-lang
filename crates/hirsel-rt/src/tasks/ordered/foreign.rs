@@ -41,21 +41,36 @@ pub(crate) fn gate_enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<boo
         .extern_metrics
         .as_ref()
         .map(|_| std::time::Instant::now());
-    let (_, progress) = engine::head_effect(ctx, "gate.enter", || {
-        let s = scheduler(ctx);
-        let me = s.current;
-        let row = s.gate(gate);
-        if row.owner.is_none() {
-            row.owner = Some(me);
-            row.depth = 1;
-            row.version += 1;
-            ((), Next::Keep)
-        } else {
-            s.task(me).wait_site = site;
-            s.park(Wait::Gate { gate });
-            ((), Next::Park)
-        }
-    })?;
+    let (_, progress) = engine::head_canonical(
+        ctx,
+        "gate.enter",
+        || {
+            let s = scheduler(ctx);
+            let me = s.current;
+            let row = s.gate(gate);
+            if row.owner.is_none() {
+                row.owner = Some(me);
+                row.depth = 1;
+                row.version += 1;
+                (true, Next::Keep)
+            } else {
+                s.task(me).wait_site = site;
+                s.park(Wait::Gate { gate });
+                (false, Next::Park)
+            }
+        },
+        |acquired| {
+            super::events::gate_event(
+                ctx,
+                gate,
+                if *acquired {
+                    super::events::CanonicalOutcome::GateAcquired
+                } else {
+                    super::events::CanonicalOutcome::GateWaiting
+                },
+            )
+        },
+    )?;
     if progress == Progress::Poll {
         engine::save_boundary(ctx, progress)?;
     }
@@ -84,7 +99,9 @@ pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Stopp
         ((), Next::Keep)
     };
     if outermost {
-        engine::head_effect(ctx, "gate.leave", effect)?;
+        engine::head_canonical(ctx, "gate.leave", effect, |_| {
+            super::events::gate_event(ctx, gate, super::events::CanonicalOutcome::GateReleased)
+        })?;
     } else {
         effect();
     }

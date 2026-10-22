@@ -80,6 +80,7 @@ unsafe fn poll(s: &mut Scheduler, task: u32, pool_available: Option<bool>) -> Op
                 row.owner = Some(task);
                 row.depth = 1;
                 row.version += 1;
+                ordered::events::record_gate_poll(s, task, gate);
                 true
             } else {
                 false

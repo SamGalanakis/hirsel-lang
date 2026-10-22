@@ -175,6 +175,9 @@ pub(super) enum CanonicalOutcome {
         kind: u64,
         leftovers: Vec<Vec<u8>>,
     },
+    GateWaiting,
+    GateAcquired,
+    GateReleased,
     Receiving,
     Received {
         status: u32,
@@ -303,6 +306,8 @@ pub(super) struct Log {
     pub receive_polls: Vec<ReceivePollCompletion>,
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
     receiving: BTreeSet<Vec<u32>>,
+    gate_waiting: BTreeMap<Vec<u32>, (u32, u64)>,
+    gates: BTreeMap<u32, ObjectId>,
     receive_entries: BTreeMap<Vec<u32>, Option<Subevents>>,
     receive_results: BTreeMap<(Vec<u32>, u64), (u32, Option<Vec<u8>>)>,
     joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
@@ -335,6 +340,92 @@ pub(crate) fn owned_host_result(
         )),
         value => value.clone(),
     }
+}
+
+/// First outer entry mints the gate's creator identity at retirement. Native
+/// package indices are retained only as lookup keys, never canonical values.
+pub(super) fn gate_event(
+    ctx: *mut TaskCtx,
+    gate: u32,
+    outcome: CanonicalOutcome,
+) -> Option<Subevents> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return None;
+    }
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals.get(&path).copied().unwrap_or(0);
+    let mut events = Vec::new();
+    let object = log
+        .gates
+        .entry(gate)
+        .or_insert_with(|| {
+            assert!(
+                !matches!(outcome, CanonicalOutcome::GateReleased),
+                "gate entry precedes leave"
+            );
+            let object = ObjectId {
+                creator: path.clone(),
+                ordinal,
+            };
+            events.push((
+                CanonicalItem::Object(object.clone()),
+                CanonicalOutcome::Created(object.clone()),
+            ));
+            object
+        })
+        .clone();
+    if matches!(outcome, CanonicalOutcome::GateWaiting) {
+        assert!(log.gate_waiting.insert(path, (gate, ordinal)).is_none());
+    }
+    events.push((CanonicalItem::Object(object), outcome));
+    Some(events)
+}
+
+/// The successful readiness acquisition is part of the waiting entry's
+/// original ordinal and is published before unpark, without a parked ctx.
+pub(crate) fn record_gate_poll(s: &mut super::super::Scheduler, task: u32, gate: u32) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.tasks[task as usize].as_ref().unwrap().path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let (expected, ordinal) = log
+        .gate_waiting
+        .remove(&path)
+        .expect("gate entry before poll");
+    assert_eq!(expected, gate);
+    let boundary = Boundary {
+        task: path,
+        ordinal,
+        op: None,
+        transition: Transition::Keep,
+        retirement,
+        before,
+        credit: 0,
+        native_outcome: None,
+    };
+    log.subevents(
+        &boundary,
+        "gate.enter",
+        vec![(
+            CanonicalItem::Object(log.gates[&gate].clone()),
+            CanonicalOutcome::GateAcquired,
+        )],
+    );
 }
 
 /// Caller owns the scheduler role. This lookup cannot allocate, bridge or
@@ -433,6 +524,7 @@ impl Log {
             && self.cancel_all.is_empty()
             && self.awaiting.is_empty()
             && self.receiving.is_empty()
+            && self.gate_waiting.is_empty()
         {
             Ok(&self.canonical)
         } else {
@@ -4138,6 +4230,209 @@ mod tests {
                         } else {
                             reference = Some(rows);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn gate_trace_child(
+        ctx: *mut TaskCtx,
+        environment: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        unsafe {
+            let gate = crate::alloc::payload(environment).cast::<u64>().read() as u32;
+            {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                assert!(super::super::foreign::gate_enter(ctx, gate, 0).unwrap());
+                assert!(!super::super::foreign::gate_enter(ctx, gate, 0).unwrap());
+                super::super::foreign::gate_leave(ctx, gate, false).unwrap();
+                super::super::foreign::gate_leave(ctx, gate, true).unwrap();
+            }
+            let mut result = [1u64, 9];
+            crate::tasks::hirsel_rt_v2_task_finish(
+                ctx,
+                result.as_mut_ptr().cast(),
+                [0u64; 2].as_ptr().cast(),
+                16,
+                3,
+            )
+        }
+    }
+
+    #[test]
+    fn gate_events_keep_saved_acquisition_in_the_enter_ordinal_and_hide_nested_reentry() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let result = crate::Layout {
+            size: 16,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &result];
+        for contended in [false, true] {
+            let mut reference = None;
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = layouts.as_ptr();
+                    run.config.layout_count = 2;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            enable(ctx);
+                            install_value(ctx, 3, received_integer_program());
+                        },
+                        move |ctx| unsafe {
+                            let gate = 7 + width;
+                            let mut scope = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut scope,
+                                    &0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            if contended {
+                                let _role = role::Guard::new(ctx);
+                                assert!(super::super::foreign::gate_enter(ctx, gate, 0).unwrap());
+                            }
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                8,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env)
+                                .cast::<u64>()
+                                .write(u64::from(gate));
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    gate_trace_child,
+                                    env,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            if contended {
+                                let _role = role::Guard::new(ctx);
+                                // Spawn is deferrable: inspect only after this
+                                // parent regains head behind the child's park.
+                                super::super::engine::at_head(ctx).unwrap();
+                                let s = scheduler(ctx);
+                                assert!(matches!(
+                                    s.task(child as u32).wait,
+                                    Some(Wait::Gate { gate: waiting }) if waiting == gate
+                                ));
+                                assert!(readiness::saved(s, child as u32));
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                assert!(
+                                    log.canonical().is_err(),
+                                    "a pending gate cannot certify a complete prefix"
+                                );
+                                assert_eq!(log.gate_waiting.len(), 1);
+                                super::super::foreign::gate_leave(ctx, gate, true).unwrap();
+                            }
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                                crate::STATUS_OK
+                            );
+                            let _role = role::Guard::new(ctx);
+                            let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                            assert!(log.gate_waiting.is_empty());
+                            let rows: Vec<_> = log
+                                .canonical()
+                                .unwrap()
+                                .iter()
+                                .filter(|row| {
+                                    row.item == CanonicalItem::Object(log.gates[&gate].clone())
+                                })
+                                .collect();
+                            assert_eq!(rows.len(), if contended { 6 } else { 3 });
+                            for (index, row) in rows.iter().enumerate() {
+                                assert_eq!(row.version, index as u64 + 1);
+                            }
+                            assert!(matches!(rows[0].outcome, CanonicalOutcome::Created(_)));
+                            assert_eq!(
+                                log.gates[&gate],
+                                ObjectId {
+                                    creator: if contended { vec![] } else { vec![0] },
+                                    ordinal: if contended { 1 } else { 0 },
+                                }
+                            );
+                            let child_rows: Vec<_> = rows
+                                .iter()
+                                .filter(|row| {
+                                    row.task == [0]
+                                        && !matches!(row.outcome, CanonicalOutcome::Created(_))
+                                })
+                                .collect();
+                            assert_eq!(child_rows.len(), if contended { 3 } else { 2 });
+                            if contended {
+                                assert_eq!(child_rows[0].outcome, CanonicalOutcome::GateWaiting);
+                                assert_eq!(child_rows[0].transition, Transition::Park);
+                                assert_eq!(child_rows[1].outcome, CanonicalOutcome::GateAcquired);
+                                assert_eq!(child_rows[1].transition, Transition::Keep);
+                                assert_eq!((child_rows[0].ordinal, child_rows[1].ordinal), (0, 0));
+                                assert_eq!(
+                                    (child_rows[0].subevent, child_rows[1].subevent),
+                                    (0, 1)
+                                );
+                                assert!(child_rows[0].retirement < child_rows[1].retirement);
+                            } else {
+                                assert_eq!(child_rows[0].outcome, CanonicalOutcome::GateAcquired);
+                            }
+                            let last = child_rows.last().unwrap();
+                            assert_eq!(last.op, "gate.leave");
+                            assert_eq!(last.ordinal, 1);
+                            assert_eq!(last.outcome, CanonicalOutcome::GateReleased);
+                            assert_eq!(last.transition, Transition::Keep);
+                            *seen.lock().unwrap() = log.canonical.clone();
+                            crate::STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let rows = output.lock().unwrap().clone();
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
                     }
                 }
             }
