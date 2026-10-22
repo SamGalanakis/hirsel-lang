@@ -1129,6 +1129,15 @@ fn created_kind(shape: usize) -> crate::io_keys::Kind {
 
 #[test]
 fn native_host_created_handles_persist_creator_and_resource_without_host_words() {
+    created_handles(false);
+}
+
+#[test]
+fn native_discovered_host_handles_persist_registered_metadata_without_host_words() {
+    created_handles(true);
+}
+
+fn created_handles(discovered: bool) {
     const WORDS: [u64; 3] = [
         0x1f23_4567_89ab_cdef,
         0x2f23_4567_89ab_cdef,
@@ -1151,21 +1160,41 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                 for (index, word) in WORDS.into_iter().enumerate() {
                     let resource = crate::io_keys::Key(if index < 2 { 17 } else { 18 });
                     let resources = [(resource, created_kind(shape)); 2];
+                    let request = if shape == 8 {
+                        Request::NetSplit { net: 1, stream: 2 }
+                    } else {
+                        Request::Stdout { io: 1 }
+                    };
+                    let keys = KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]);
                     crate::stop::check(
                         ctx,
-                        prepare_typed_creations(
-                            ctx,
-                            if shape == 8 {
-                                Request::NetSplit { net: 1, stream: 2 }
-                            } else {
-                                Request::Stdout { io: 1 }
-                            },
-                            KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
-                            &resources[..if shape == 8 { 2 } else { 1 }],
-                        ),
+                        if discovered {
+                            prepare_with_keys(ctx, request, keys)
+                        } else {
+                            prepare_typed_creations(
+                                ctx,
+                                request,
+                                keys,
+                                &resources[..if shape == 8 { 2 } else { 1 }],
+                            )
+                        },
                     );
                     assert!(crate::stop::check(ctx, claim(ctx)));
-                    crate::stop::check(ctx, invoke(ctx, |_| created_completion(shape, word)));
+                    if discovered {
+                        crate::stop::check(
+                            ctx,
+                            invoke_discovered(
+                                ctx,
+                                |_| Ok(created_completion(shape, word)),
+                                |handle| {
+                                    assert!(handle == word || (shape == 8 && handle == word + 1));
+                                    Some((resource, created_kind(shape)))
+                                },
+                            ),
+                        );
+                    } else {
+                        crate::stop::check(ctx, invoke(ctx, |_| created_completion(shape, word)));
+                    }
                     crate::stop::check(ctx, ended(ctx));
                     assert_eq!(
                         crate::stop::check(ctx, complete(ctx)),
@@ -1316,6 +1345,60 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                 "{outcome:?}"
             );
             assert_eq!(replay.finish().unwrap(), expected);
+        }
+    }
+}
+
+#[test]
+fn missing_discovered_metadata_retains_completion_without_advancing_creators_or_ended() {
+    for width in [1, 8] {
+        for missing in [0, 1] {
+            let recording = super::super::record::Recording::new(b"missing host metadata", false);
+            let install = recording.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    crate::stop::check(ctx, prepare(ctx, Request::NetSplit { net: 1, stream: 2 }));
+                    assert!(crate::stop::check(ctx, claim(ctx)));
+                    let result = invoke_discovered(
+                        ctx,
+                        |_| Ok(Completion::Halves(Ok((71, 72)))),
+                        |word| {
+                            (word != 71 + missing).then_some((
+                                crate::io_keys::Key(17),
+                                crate::io_keys::Kind::Half {
+                                    stream: crate::io_keys::Key(18),
+                                },
+                            ))
+                        },
+                    );
+                    assert!(matches!(result, Err(Stop::Refused(_))));
+                    let pending = (*ctx).pending_host.as_ref().unwrap();
+                    assert_eq!(
+                        pending.completion,
+                        Some(Ok(Completion::Halves(Ok((71, 72)))))
+                    );
+                    assert!(pending.created.is_empty());
+                    assert!(pending.encoded.is_empty());
+                    assert_eq!(
+                        super::super::record::reserve_host_handle(ctx),
+                        1,
+                        "validate every field before reserving any ordinal"
+                    );
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            let (cut, sweep) = recording.recorder.stop("refused", None).unwrap().unwrap();
+            assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Claimed));
+            assert_eq!(sweep.in_doubt, [1]);
         }
     }
 }

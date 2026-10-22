@@ -340,9 +340,48 @@ pub(crate) unsafe fn invoke_concurrent(
     unsafe { invoke_result(ctx, |request| adapter.call(request.clone())) }
 }
 
+/// Discover every initialized handle after the bounded effect. The adapter
+/// returns registered metadata, never a key inferred from the host word.
+/// # Safety
+/// As for invoke; identity is a bounded, read-only adapter lookup. No adapter
+/// reference or scheduler role may survive into a readiness wait.
+pub(crate) unsafe fn invoke_discovered(
+    ctx: *mut TaskCtx,
+    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+    identity: impl Fn(u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)>,
+) -> Stopped<()> {
+    unsafe {
+        invoke_resolved(ctx, call, |completion| {
+            handles::capture(completion)?;
+            let fields =
+                handles::fields(completion).map_err(|error| Stop::Refused(error.into()))?;
+            let resources = fields
+                .into_iter()
+                .flatten()
+                .map(|word| {
+                    identity(*word).ok_or_else(|| {
+                        Stop::Refused("created host handle has no registered resource".into())
+                    })
+                })
+                .collect::<Stopped<Vec<_>>>()?;
+            Ok(Some(resources))
+        })
+    }
+}
+
 unsafe fn invoke_result(
     ctx: *mut TaskCtx,
     call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+) -> Stopped<()> {
+    unsafe { invoke_resolved(ctx, call, |_| Ok(None)) }
+}
+
+type Resources = Vec<(crate::io_keys::Key, crate::io_keys::Kind)>;
+
+unsafe fn invoke_resolved(
+    ctx: *mut TaskCtx,
+    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+    resolve: impl FnOnce(&mut Result<Completion, AdapterError>) -> Stopped<Option<Resources>>,
 ) -> Stopped<()> {
     crate::stop::observe(ctx)?;
     let pending = unsafe { (*ctx).pending_host.as_deref().unwrap() } as *const Pending;
@@ -357,12 +396,45 @@ unsafe fn invoke_result(
             .expect("an active host transition")
             .ready()
     });
-    let mut completion = {
-        // No role, section, writer or session lock crosses the host call.
+    let (mut completion, resources) = {
+        // No role, section, writer or session lock crosses either adapter call.
         let _segment = unsafe { role::Segment::new(ctx) };
-        call(unsafe { (*pending).request.buffers() })
+        let mut completion = call(unsafe { (*pending).request.buffers() });
+        let resources = resolve(&mut completion);
+        (completion, resources)
     };
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
+    // Keep a refused discovery's result task-owned for stop/quarantine cleanup.
+    let resources = match resources {
+        Ok(resources) => resources,
+        Err(stop) => {
+            pending.completion = Some(completion);
+            return Err(stop);
+        }
+    };
+    if let Some(resources) = resources {
+        if pending.created.is_empty() {
+            pending.created = resources
+                .into_iter()
+                .map(|(resource, kind)| Created {
+                    path: pending.path.clone(),
+                    ordinal: super::record::reserve_host_handle(ctx),
+                    resource: resource.0,
+                    kind,
+                })
+                .collect();
+        } else if pending
+            .created
+            .iter()
+            .map(|created| (crate::io_keys::Key(created.resource), created.kind))
+            .ne(resources)
+        {
+            pending.completion = Some(completion);
+            return Err(Stop::Refused(
+                "created host resource differs from prepared metadata".into(),
+            ));
+        }
+    }
     let encoded = handles::encode(pending, &mut completion);
     pending.completion = Some(completion);
     encoded

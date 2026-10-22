@@ -102,7 +102,7 @@ pub(in crate::tasks::free) fn encode(
 /// A recorded mapping lends owned bytes to both the live caller and replay.
 /// Capture while the adapter still owns its mapping, before Ended can publish
 /// or another request can close it. Reuse MapView's established byte codec.
-fn capture(result: &mut Result<Completion, AdapterError>) -> Stopped<()> {
+pub(super) fn capture(result: &mut Result<Completion, AdapterError>) -> Stopped<()> {
     if let Ok(Completion::View(view)) = result {
         if let Some(bytes) = &view.bytes {
             if view.length != bytes.len() as u64 {
