@@ -1275,6 +1275,7 @@ fn import_mapped(
     for inst in body.blocks.iter().flat_map(|b| &b.instructions) {
         if let tir::InstructionKind::BeginLoan { id, place, .. } = inst.kind
             && im.slices.locals[body.places[place.0 as usize].root.0 as usize]
+            && !im.slices.sources.values().any(|slice| slice.loan == id)
         {
             im.elided_loans.insert(id);
         }

@@ -381,6 +381,14 @@ impl Importer<'_> {
                 self.loan_map.push(LoanId(u32::MAX));
                 continue;
             };
+            // A transient slice forwards the consumer's read loan onto its
+            // stable String owner instead of borrowing an owning Bytes slot.
+            let place = self
+                .slices
+                .sources
+                .values()
+                .find(|slice| slice.loan.0 == l)
+                .map_or(place, |slice| slice.source);
             if self.elided_place(place) || self.elided_loan(tir::LoanId(l)) {
                 self.loan_map.push(LoanId(u32::MAX));
                 continue;

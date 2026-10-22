@@ -718,19 +718,15 @@ impl Importer<'_> {
             if !seen.insert(root) {
                 continue;
             }
-            // Transient byte slices are call-produced views. Their existing
-            // specialization forwards the checked String input's real loan;
-            // there is no Assign at the producer for this walk to follow.
-            for (&block, &source) in &self.slices.sources {
+            // A transient slice carries its append consumer's loan on the
+            // stable owner, begun at the slice rather than at append entry.
+            for (&block, slice) in &self.slices.sources {
                 if let tir::Terminator::Call {
                     returns: Some(ret), ..
                 } = &self.body.blocks[block.0 as usize].terminator
                     && self.body.places[ret.destination.0 as usize].root.0 as usize == root
                 {
-                    if let Some(loan) = self.body.places[source.0 as usize].loan {
-                        loans.insert(self.loan(loan)?);
-                    }
-                    pending.push(self.body.places[source.0 as usize].root.0 as usize);
+                    loans.insert(self.loan(slice.loan)?);
                 }
             }
             for source in &assignments[root] {

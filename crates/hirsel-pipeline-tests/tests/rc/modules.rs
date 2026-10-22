@@ -52,3 +52,4 @@ mod isolate_bytes_leak_17;
 mod map_update_value_17;
 mod native_caller_placement_18;
 mod native_nested_loan_18;
+mod native_byte_view_18;

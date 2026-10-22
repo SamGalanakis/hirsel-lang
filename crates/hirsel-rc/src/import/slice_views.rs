@@ -3,9 +3,15 @@
 use super::*;
 use hirsel_types::{Primitive, TypeKind};
 
+#[derive(Clone, Copy)]
+pub(super) struct Slice {
+    pub source: tir::PlaceId,
+    pub loan: tir::LoanId,
+}
+
 #[derive(Default)]
 pub(super) struct Slices {
-    pub sources: HashMap<tir::BlockId, tir::PlaceId>,
+    pub sources: HashMap<tir::BlockId, Slice>,
     pub locals: Vec<bool>,
 }
 
@@ -50,7 +56,7 @@ pub(super) fn discover(
     }
     let mut invalid = vec![false; n];
     let mut producers: Vec<Vec<(tir::BlockId, tir::PlaceId)>> = vec![Vec::new(); n];
-    let mut consumed = vec![0; n];
+    let mut consumed: Vec<Vec<tir::LoanId>> = vec![Vec::new(); n];
     let mut defined = vec![0; n];
     for (b, block) in body.blocks.iter().enumerate() {
         for i in &block.instructions {
@@ -124,7 +130,11 @@ pub(super) fn discover(
                         && a.value.usage == UseKind::Borrow
                         && whole(a.value.place)
                     {
-                        consumed[group] += 1;
+                        if let Some(loan) = body.places[a.value.place.0 as usize].loan {
+                            consumed[group].push(loan);
+                        } else {
+                            invalid[group] = true;
+                        }
                     } else {
                         invalid[group] = true;
                     }
@@ -160,7 +170,10 @@ pub(super) fn discover(
         let &[(block, mut source)] = producers[group].as_slice() else {
             continue;
         };
-        if invalid[group] || consumed[group] != 1 {
+        let &[loan] = consumed[group].as_slice() else {
+            continue;
+        };
+        if invalid[group] {
             continue;
         }
         // byte_views already proved the as_bytes owner's stability and nesting.
@@ -187,9 +200,9 @@ pub(super) fn discover(
         {
             continue;
         }
-        // Keep the original as_bytes operand's loan, which the checked TIR
-        // carries with data. byte_views resolves its storage to the held String,
-        // but its storage alias alone need not carry that outer loan id.
+        // Resolve the stable owner through the original as_bytes operand.
+        // Its call-only loan can already have ended: the slice instead uses
+        // the consumer's loan, begun at slice creation and ended after append.
         let source = body.blocks.iter().find_map(|b| {
             let tir::Terminator::Call {
                 callee: tir::Callee::Definition { path, .. },
@@ -209,7 +222,7 @@ pub(super) fn discover(
             .then_some(input.value.place)
         });
         let Some(source) = source else { continue };
-        out.sources.insert(block, source);
+        out.sources.insert(block, Slice { source, loan });
         for l in 0..n {
             if parent[l] == group {
                 out.locals[l] = true;
@@ -224,12 +237,23 @@ impl Importer<'_> {
         &mut self,
         arguments: &[tir::CallArgument],
         ret: tir::CallReturn,
-        source: tir::PlaceId,
+        slice: Slice,
     ) -> R<()> {
-        let value = self.operand(&tir::Operand {
-            place: source,
-            usage: UseKind::Borrow,
-        })?;
+        let source = self.place(slice.source)?;
+        let address = self.address(&source)?;
+        let loan = self.loan(slice.loan)?;
+        let active = self.state.loans[loan.index()];
+        self.push(Inst::BeginLoan {
+            loan,
+            address,
+            mutable: false,
+            if_inactive: active == Tri::Maybe,
+        });
+        self.state.loans[loan.index()] = Tri::Yes;
+        // TIR begins this loan at append's entry. Until then, an early
+        // slice failure must also end it before releasing the source owner.
+        self.failure.before.insert(0, Action::EndLoan { loan });
+        let value = self.operand_at(UseKind::Borrow, &source, address, Some(slice.loan))?;
         let argument = |n| {
             arguments
                 .iter()
@@ -257,6 +281,7 @@ impl Importer<'_> {
         let l = self.body.places[ret.destination.0 as usize].root.0 as usize;
         self.views[l] = Some(result);
         self.state.views[l] = Tri::Yes;
+        self.failure.before.remove(0);
         let edge = self.enter(ret.next);
         self.terminate(Terminator::Jump(edge));
         Ok(())
