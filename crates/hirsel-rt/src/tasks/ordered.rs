@@ -562,6 +562,7 @@ impl Backend<Command> for Objects<'_> {
                             crate::fault("the cause of a mutex that is not dead")
                         });
                     let mut outcome = Outcome::image(0, Vec::new());
+                    outcome.canonical = events::mutex_failures(self.ctx, s, *word, &chain);
                     outcome.chain = chain;
                     (outcome, Next::Keep)
                 }

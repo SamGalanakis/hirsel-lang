@@ -168,6 +168,7 @@ pub(super) enum CanonicalOutcome {
         member: Option<ObjectId>,
         rank: Option<u64>,
     },
+    Failures(Vec<(hirsel_run_schema::Failure, Vec<u32>)>),
     Released {
         kind: u64,
         leftovers: Vec<Vec<u8>>,
@@ -787,6 +788,38 @@ pub(super) unsafe fn complete_receive(
             op: Some("channel.receive"),
         });
     }
+}
+
+/// Normalize the chain fixed by this mutex effect, before the owner can
+/// resume, clear its failure state or recycle any native storage.
+/// # Safety
+/// The caller owns the scheduler role and immutable run failure metadata.
+pub(super) unsafe fn mutex_failures(
+    ctx: *mut TaskCtx,
+    s: &super::super::Scheduler,
+    word: u64,
+    chain: &[crate::failure::Chained],
+) -> Option<Subevents> {
+    let Logical::Ordered(driver) = &s.logical else {
+        return None;
+    };
+    driver.events.as_ref()?;
+    let item = CanonicalItem::Object(
+        driver
+            .objects
+            .identity(crate::ordered::objects::Kind::Mutex, word)?
+            .clone(),
+    );
+    let failures = if chain.is_empty() {
+        Vec::new()
+    } else {
+        let table = unsafe { (*ctx).run_ref().failure_table }?;
+        chain
+            .iter()
+            .map(|(record, path)| (table.failure(record), path.clone()))
+            .collect()
+    };
+    Some(vec![(item, CanonicalOutcome::Failures(failures))])
 }
 
 /// Own FIFO leftover values before finalizers can overwrite or release them.
@@ -4783,6 +4816,211 @@ mod tests {
                         } else {
                             reference = Some(rows);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mutex_failure_events_own_ordered_chains_and_reject_missing_source_metadata() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let close = crate::Step {
+            kind: crate::STEP_CLOSE_HANDLE,
+            field: 0,
+            variant: 0,
+            span: 0,
+            offset: 0,
+            stride: 0,
+            count: 0,
+            count_offset: 0,
+            layout: std::ptr::null(),
+        };
+        let image = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let wrapper = crate::Layout {
+            size: 8,
+            flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
+            steps: &close,
+            step_count: 1,
+            field_count: 1,
+            ..image
+        };
+        let layouts = [&image as *const crate::Layout, &wrapper];
+        for known in [false, true] {
+            let mut reference = None;
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = layouts.as_ptr();
+                    run.config.layout_count = 2;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            enable(ctx);
+                            install_value(ctx, 2, received_integer_program());
+                            if known {
+                                static TABLE: [u8; 40] = {
+                                    let mut bytes = [0; 40];
+                                    bytes[0] = 1;
+                                    bytes[8] = 1;
+                                    bytes[16] = 17;
+                                    bytes[20] = 3;
+                                    bytes
+                                };
+                                (*ctx).run().failure_table =
+                                    crate::isolate::FailureTable::new(&TABLE);
+                            }
+                        },
+                        move |ctx| unsafe {
+                            let mut payload = [1u64, 77];
+                            let mut mutex = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_mutex_create(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut mutex,
+                                    payload.as_mut_ptr().cast(),
+                                    [0u64; 2].as_ptr().cast(),
+                                    2,
+                                    3
+                                ),
+                                crate::STATUS_OK
+                            );
+                            let mut status = 99;
+                            assert_eq!(
+                                hirsel_rt_v2_mutex_take(
+                                    ctx,
+                                    &mut status,
+                                    &mutex,
+                                    payload.as_mut_ptr().cast()
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!((status, payload), (0, [1, 77]));
+                            let record = crate::failure::FailureRecord {
+                                kind: 1,
+                                rule: hirsel_core_contract::RUNTIME_RULE_BASE,
+                                site: 1,
+                                operation_site: 1,
+                            };
+                            let chain = vec![(record, vec![4, 2]), (record, vec![])];
+                            (*ctx).failure.append_chain(chain.clone());
+                            assert_eq!(hirsel_rt_v2_mutex_kill(ctx, &mutex), crate::STATUS_OK);
+                            // The stored chain survives the original owner's reset. Each
+                            // cause reads that chain, rather than the caller's active state.
+                            (*ctx).failure.clear();
+                            for _ in 0..2 {
+                                assert_eq!(hirsel_rt_v2_mutex_cause(ctx, &mutex), crate::STATUS_OK);
+                            }
+                            assert_eq!((*ctx).failure.chain(&[]), [chain.clone(), chain].concat());
+                            (*ctx).failure.clear();
+                            {
+                                let _role = role::Guard::new(ctx);
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| matches!(row.op, "mutex.kill" | "mutex.cause"))
+                                    .cloned()
+                                    .collect();
+                                if known {
+                                    assert_eq!(rows.len(), 3);
+                                    let failure = hirsel_run_schema::Failure {
+                                        rule: hirsel_core_contract::RUNTIME_RULES[0].into(),
+                                        site: hirsel_run_schema::Site {
+                                            definition: String::new(),
+                                            file: String::new(),
+                                            line: 17,
+                                            column: 3,
+                                        },
+                                        operation: None,
+                                    };
+                                    for (index, row) in rows.iter().enumerate() {
+                                        assert_eq!(
+                                            row.item,
+                                            CanonicalItem::Object(ObjectId {
+                                                creator: vec![],
+                                                ordinal: 0,
+                                            })
+                                        );
+                                        assert_eq!(
+                                            row.outcome,
+                                            CanonicalOutcome::Failures(vec![
+                                                (failure.clone(), vec![4, 2]),
+                                                (failure.clone(), vec![]),
+                                            ])
+                                        );
+                                        assert_eq!(row.version, 3 + index as u64);
+                                        assert_eq!(row.ordinal, 2 + index as u64);
+                                        assert_eq!(row.subevent, 0);
+                                        assert_eq!(
+                                            row.transition,
+                                            if index == 0 {
+                                                Transition::Yield
+                                            } else {
+                                                Transition::Keep
+                                            }
+                                        );
+                                    }
+                                    assert!(log.canonical().is_ok());
+                                } else {
+                                    assert!(rows.is_empty());
+                                    assert!(log.canonical().is_err());
+                                    assert_eq!(
+                                        log.unsupported
+                                            .iter()
+                                            .filter(|row| matches!(
+                                                row.op,
+                                                Some("mutex.kill" | "mutex.cause")
+                                            ))
+                                            .count(),
+                                        3
+                                    );
+                                }
+                                *seen.lock().unwrap() = log.canonical.clone();
+                            }
+                            assert_eq!(
+                                crate::roots::hirsel_rt_v2_root_drop(
+                                    ctx,
+                                    mutex as *mut crate::Header,
+                                    0,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            crate::STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let rows = output.lock().unwrap().clone();
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
                     }
                 }
             }

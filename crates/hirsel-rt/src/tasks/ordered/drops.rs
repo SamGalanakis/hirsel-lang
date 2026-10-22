@@ -291,12 +291,19 @@ pub(crate) unsafe fn thaw(ctx: *mut TaskCtx, root: *mut Header, out: *mut u8) ->
 /// # Safety
 /// As for MutexKill; the failure chain belongs to this head task.
 pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<u8> {
-    let (_, progress) = engine::head_effect(ctx, "mutex.kill", || {
-        let path = current_path(ctx);
-        let chain = unsafe { (*ctx).failure.chain(&path) };
-        scheduler(ctx).sync.kill(word, chain);
-        ((), Next::Yield)
-    })?;
+    let (_, progress) = engine::head_canonical(
+        ctx,
+        "mutex.kill",
+        || {
+            let path = current_path(ctx);
+            let chain = unsafe { (*ctx).failure.chain(&path) };
+            let canonical =
+                unsafe { super::events::mutex_failures(ctx, scheduler(ctx), word, &chain) };
+            scheduler(ctx).sync.kill(word, chain);
+            (canonical, Next::Yield)
+        },
+        Clone::clone,
+    )?;
     engine::continue_at_head(ctx, progress)?;
     Ok(STATUS_OK)
 }
