@@ -8,9 +8,24 @@
     {
       "module": [],
       "path": "main.hir"
+    },
+    {
+      "module": [
+        "input_boundaries"
+      ],
+      "path": "input_boundaries.hir"
     }
   ],
-  "dependencies": [],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
   "entry": {
     "module": [],
     "name": "main"

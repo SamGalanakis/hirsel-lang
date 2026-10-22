@@ -176,3 +176,69 @@ consumption, relation and uniqueness rules replace Rust reference/lifetime and
 clone-on-write machinery. `[1, 2, 3]` and `"hello"` controls are retained; binding,
 UTF-8 and capability-domain cases come from the concrete Hirsel authoring
 failures, not a port of Rust policy.
+
+## Input boundaries
+
+The [executable boundary recipes](../examples/ownership-repairs/input_boundaries.hir)
+compose the missing dogfood9/10 repairs. `signed_field` accepts 1–20 UTF-8 bytes
+including at most one initial ASCII `+` or `-`, followed by one or more ASCII
+digits. It validates the entire field before stripping a plus. Whitespace,
+embedded/doubled signs, bare signs, non-ASCII digits, fractions and prefixes
+are `scalar.Invalid`; a valid bounded decimal outside i64 is `OutOfRange`.
+The byte cap is application policy: even zero spelled with 21 bytes is invalid.
+Negative minimum, positive maximum and signed zero are accepted. This extends
+[tabfold's validated plus adapter](../examples/tabfold/model.hir) to the full
+i64 range; tabfold retains its own narrower value bounds. The
+[strict std parser](../stdlib/std@1/i64.hir) still rejects a leading plus.
+
+`bytes_view` borrows with `in data`; `bytes_success` consumes a counted `Bytes`
+and explicitly returns `Ok(unique data)`. The independent rejected snippet is:
+
+```hirsel
+fn make_bytes(take data: Bytes) -> Result[unique Bytes, ()] {
+  Ok(take data)
+}
+```
+
+`hirsel check --json` rejects `Ok(take data)` with MODE-2. Repair that
+expression to `unique data`, as in the existing
+[record uniqueness recipe](#record-binding-and-literal-repairs). Taking counted
+bytes alone does not establish uniqueness; making a borrowed/shared input unique
+can copy O(payload size) and preserves placement. The runtime control releases a
+view at last use, then replaces a shared source while its unique result stays live.
+
+`input` composes Directory lookup, File open and a 64-byte bounded read. Its
+`directory_result`, `grant_result` and `file_result` seams preserve
+`Directory(FileError)`, `Grant(GrantError)`, `File(FileError)` and `Limit`.
+Reuse the [existing explicit error mappings](#record-binding-and-literal-repairs)
+and [typed List[cli.Flag] recipe](cli-errors.md); their definitions need no new
+variant here. Synthetic controls distinguish both domains' `NotGranted`, file
+`NotFound`, `FileFault(1)` and `FileFault(73)`. The codes are provider-defined:
+tabfold's observed path escape `FileFault(1)` is an observation, not a promise
+for all malformed paths. There is no `InvalidPath` arm.
+
+```sh
+hirsel test examples/ownership-repairs/hirsel.json
+hirsel test --native --backend llvm examples/ownership-repairs/hirsel.json
+hirsel test --native --backend cranelift examples/ownership-repairs/hirsel.json
+.buck2/bin/buck2 test //:hirsel-cli-test-cli-shard-1 -- --test-arg=authoring_input_recipes_13
+```
+
+Each package run selects three tests. The CLI filter selects three Rust tests:
+the package matrix, one isolated reject with its accepted constructor repair,
+and a composed I/O entry with success, missing file, read limit, denied Directory
+and denied Grant controls on H/LLVM/Cranelift. The I/O check builds once per
+native backend and reuses the executables. For launcher help and record-prefix
+ordering, use `hirsel run --help` and the shipped
+[native verification](native-verification.md) and [build/launch](building.md#build-and-launch-a-program)
+recipes. Native record prefixes precede grants; flags after the launch input
+belong to application Args. The dogfood9 inner-object binding collision remains
+the deliberate LANG-4 no-shadow rule; rename that binding. These dispositions
+require no compiler, std grammar, filesystem mapping or launcher change.
+
+Local authority: tabfold/model.hir:112–146, std i64.hir:34–42 and
+authoring.hir:30–42 at `8cd5f338c97f9afc2cadcf08fd49b724e91d3d21`.
+Adaptations are the explicit 20-byte wire cap, full i64 range, preserved
+Invalid/OutOfRange errors and Hirsel borrow/unique success modes. These are local
+Hirsel recipes, not an external implementation port; the Rust control-structure
+license and notices above remain applicable.

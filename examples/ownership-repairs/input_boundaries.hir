@@ -1,0 +1,175 @@
+// Application policy adapted from tabfold/model.hir:112–146 at 8cd5f338.
+// Validate the entire bounded field before removing exactly one leading plus.
+pub fn signed_field(field: String) -> Result[i64, scalar.ParseError] uses {} {
+  let digits = string.as_bytes(field)
+  let count = bytes.len(digits)
+  // Wire cap includes the optional sign; leading zeroes count toward the cap.
+  if count == 0 || count > 20 {
+    return Error(Invalid())
+  }
+  let signed = digits[0] == b'+' || digits[0] == b'-'
+  let mut index = if signed {
+    1u64
+  } else {
+    0u64
+  }
+  if index == count {
+    return Error(Invalid())
+  }
+  while index < count {
+    if digits[index] < b'0' || digits[index] > b'9' {
+      return Error(Invalid())
+    }
+    index += 1
+  }
+  if digits[0] != b'+' {
+    return i64.parse(field)
+  }
+  let mut normalized: List[u8] = []
+  for i in 1u64..count {
+    list.push(mut normalized, digits[i])
+  }
+  i64.parse(text.finish_valid(take normalized))
+}
+
+// A counted transfer can still share storage. Explicit unique constructs the
+// stronger success mode, just as authoring.migrate does for a record.
+pub fn bytes_view(data: Bytes) -> Bytes in data {
+  copy data
+}
+
+pub fn bytes_success(take data: Bytes) -> Result[unique Bytes, ()] {
+  Ok(unique data)
+}
+
+pub type InputError = Directory(FileError) | Grant(GrantError) | File(FileError) | Limit
+
+// Pure seams let callers test category preservation without relying on a host
+// path producing any particular provider-defined FileFault code.
+pub fn directory_result(take value: Result[Dir, FileError]) -> Result[Dir, InputError] {
+  Ok(take value ? Directory)
+}
+
+pub fn grant_result(take value: Result[Stdout, GrantError]) -> Result[
+  Stdout,
+  InputError
+] {
+  Ok(take value ? Grant)
+}
+
+pub fn file_result(take value: Result[unique Bytes, file.ReadBoundedError]) -> Result[
+  unique Bytes,
+  InputError
+] {
+  match take value {
+    Ok(data) => Ok(unique data),
+    Error(Limit()) => Error(Limit()),
+    Error(File(e)) => Error(File(e)),
+  }
+}
+
+// Directory lookup, file open and bounded read retain their distinct errors.
+// Acquiring stdout is left to the caller via grant_result.
+pub fn input(rt: Io, name: Path) -> Result[unique Bytes, InputError] {
+  let d = directory_result(io.dir(rt, path.of("data")))?
+  let mut f = file.open(d, name) ? File
+  file_result(file.read_all_bounded(d, mut f, 64))
+}
+
+@test
+fn signed_boundaries(t: Test) {
+  let cases: List[(String, i64)] = [
+    ("0", 0),
+    ("+0", 0),
+    ("-0", 0),
+    ("1", 1),
+    ("+1", 1),
+    ("-1", -1),
+    ("9223372036854775807", 9223372036854775807),
+    ("+9223372036854775807", 9223372036854775807),
+    ("-9223372036854775808", -9223372036854775808),
+    ("+0000000000000000000", 0)
+  ]
+  for (field, expected) in cases {
+    test.check(t, signed_field(field) == Ok(expected))
+  }
+  let overflows: List[String] = [
+    "9223372036854775808",
+    "+9223372036854775808",
+    "-9223372036854775809",
+    "99999999999999999999"
+  ]
+  for field in overflows {
+    test.check(t, signed_field(field) == Error(OutOfRange()))
+  }
+  let invalid: List[String] = [
+    "",
+    "+",
+    "-",
+    "++1",
+    "+-1",
+    "--1",
+    "-+1",
+    "1+1",
+    "1-1",
+    " 1",
+    "1 ",
+    "\t1",
+    "1\n",
+    "１",
+    "١",
+    "1.0",
+    "0x1",
+    "000000000000000000000",
+    "+00000000000000000000",
+    "9999999999999999999x"
+  ]
+  for field in invalid {
+    test.check(t, signed_field(field) == Error(Invalid()))
+  }
+  // This adapter's plus policy does not change the std parser's grammar.
+  test.check(t, i64.parse("+1") == Error(Invalid()))
+}
+
+@test
+fn bytes_modes(t: Test) -> Result[(), ()] {
+  let mut source = bytes.from_list([0u8, 255u8, 13u8, 10u8])
+  let viewed = bytes_view(source)
+  test.check(t, viewed == b"\0\xff\r\n") // Last borrowed use.
+  let owned = bytes_success(copy source)?
+  source = b"changed" // Unique result remains independent and live.
+  test.check(t, owned == b"\0\xff\r\n" && source == b"changed")
+  test.check(t, bytes_success(b"") == Ok(b""))
+  Ok(())
+}
+
+@test
+fn wrapper_categories(t: Test) {
+  test.check(
+    t,
+    match directory_result(Error(NotGranted())) {
+      Error(Directory(NotGranted())) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match directory_result(Error(FileFault(73))) {
+      Error(Directory(FileFault(code))) => code == 73,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match grant_result(Error(NotGranted())) {
+      Error(Grant(NotGranted())) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file_result(Error(File(NotGranted()))) == Error(File(NotGranted())))
+  test.check(t, file_result(Error(File(NotFound()))) == Error(File(NotFound())))
+  test.check(t, file_result(Error(File(FileFault(1)))) == Error(File(FileFault(1))))
+  test.check(t, file_result(Error(File(FileFault(73)))) == Error(File(FileFault(73))))
+  test.check(t, file_result(Error(Limit())) == Error(Limit()))
+  test.check(t, file_result(Ok(unique b"abc")) == Ok(b"abc"))
+}
