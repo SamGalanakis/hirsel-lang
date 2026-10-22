@@ -781,7 +781,15 @@ pub fn read_owned_text(mut cursor: Reader) -> Result[unique String, JsonError] u
 /// Compare a borrowed key against a field name quoted at compile time.
 pub fn text_is(value: TextView, expected: String) -> bool uses {} {
   match value {
-    Unescaped(raw) => raw == core@1/string.as_bytes(expected),
+    Unescaped(raw) => {
+      // Reject different lengths before materializing a view of the field name.
+      // Keep both operands borrowed for the decoded-key comparison.
+      if core@1/bytes.len(raw) != core@1/string.byte_len(expected) {
+        return false
+      }
+      let field = core@1/string.as_bytes(expected)
+      raw == field
+    },
     Escaped(decoded) => decoded == expected,
   }
 }
