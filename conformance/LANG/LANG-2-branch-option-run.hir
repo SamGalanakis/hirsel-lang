@@ -1,0 +1,58 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
+
+type Wrapped[T] = Wrap(T) | Empty
+
+fn select(c: bool) -> Option[String] {
+  let value = if c {
+    Some("raw.bin")
+  } else {
+    None()
+  }
+  take value
+}
+
+fn select_user(n: u8) -> Wrapped[String] {
+  let value = match n {
+    0 => Wrap("zero"),
+    1 => Wrap("one"),
+    _ => Empty(),
+  }
+  take value
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let first = match select(true) {
+    Some(s) => s == "raw.bin",
+    None => false,
+  }
+  let second = match select(false) {
+    Some(_) => false,
+    None => true,
+  }
+  let third = match select_user(0) {
+    Wrap(s) => s == "zero",
+    Empty => false,
+  }
+  let fourth = match select_user(1) {
+    Wrap(s) => s == "one",
+    Empty => false,
+  }
+  let fifth = match select_user(2) {
+    Wrap(_) => false,
+    Empty => true,
+  }
+  let output = io.stdout(rt) ? discard
+  out.print(
+    output,
+    if first && second && third && fourth && fifth {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? discard
+  Ok(())
+}
+
+fn discard[T](take error: T) -> () uses {} {}

@@ -1,0 +1,10 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 6
+// twin: LANG/LANG-2-branch-nullary-ok.hir
+fn probe(c: bool) {
+  let name = if c {
+    None()
+  } else {
+    Some("raw.bin")
+  }
+}

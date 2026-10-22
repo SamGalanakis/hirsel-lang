@@ -576,13 +576,18 @@ impl Checker<'_, '_> {
         }
         self.work
             .push(Work::AfterChild(After::CallArgument(call, index)));
-        self.expected_sites.insert(
-            arg,
-            (
-                self.span(self.calls[call].id),
-                const { RuleId::of("LANG-7") },
-            ),
-        );
+        let rule = if matches!(self.calls[call].target, CallTarget::Constructor(_))
+            && self
+                .expected_sites
+                .get(&self.calls[call].id)
+                .is_some_and(|(_, rule)| rule.as_str() == "LANG-2")
+        {
+            const { RuleId::of("LANG-2") }
+        } else {
+            const { RuleId::of("LANG-7") }
+        };
+        self.expected_sites
+            .insert(arg, (self.span(self.calls[call].id), rule));
         self.work.push(Work::Enter(arg, expected, frame));
         Ok(())
     }

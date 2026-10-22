@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: accept
+fn probe(c: bool) {
+  let name = if c {
+    Some("raw.bin")
+  } else {
+    None()
+  }
+}

@@ -385,3 +385,21 @@ fn variant_payloads_determine_arguments_without_later_text() {
         assert_eq!(ds[0].rule.as_str(), "LANG-2", "{source}: {ds:?}");
     }
 }
+
+#[test]
+fn branch_prefix_conflicts_cite_the_later_constructor() {
+    for source in [
+        "fn main(c:bool) { let unused = if c { Some(\"raw.bin\") } else { Some(1u8) } }",
+        "fn main(n:u8) { let unused = match n { 0 => return, 1 => Some(\"raw.bin\"), 2 => return, _ => Some(1u8) } }",
+        "type Wrap[T] = Wrapped(T) | Empty\nfn main(c:bool) { let n = 1u8\nlet unused = if c { Wrapped(\"raw.bin\") } else { Wrapped(n) } }",
+    ] {
+        let (ds, _, map) = support::check_source(source);
+        assert_eq!(ds.len(), 1, "{source}: {ds:?}");
+        assert_eq!(ds[0].rule.as_str(), "LANG-2", "{source}: {ds:?}");
+        let conflict = map.slice(ds[0].primary).unwrap();
+        assert!(
+            conflict == "Some(1u8)" || conflict == "Wrapped(n)",
+            "{conflict}"
+        );
+    }
+}

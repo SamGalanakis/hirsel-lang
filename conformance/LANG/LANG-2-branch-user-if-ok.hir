@@ -1,0 +1,11 @@
+// rule: LANG-2
+// expect: accept
+type Wrapped[T] = Wrap(T) | Empty
+
+fn probe(c: bool) {
+  let name = if c {
+    Wrap("raw.bin")
+  } else {
+    Empty()
+  }
+}

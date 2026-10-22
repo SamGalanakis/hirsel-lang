@@ -1,0 +1,13 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 11
+// twin: LANG/LANG-2-branch-user-if-ok.hir
+type Wrapped[T] = Wrap(T) | Empty
+
+fn probe(c: bool) {
+  let n = 1u8
+  let name = if c {
+    Wrap("raw.bin")
+  } else {
+    Wrap(n)
+  }
+}

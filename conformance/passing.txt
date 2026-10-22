@@ -1720,6 +1720,13 @@ conformance/LANG/LANG-2-bare-generic-empty-record-bad.hir
 conformance/LANG/LANG-2-bare-generic-record-bad.hir
 conformance/LANG/LANG-2-boolean-context-bad.hir
 conformance/LANG/LANG-2-boolean-context-ok.hir
+conformance/LANG/LANG-2-branch-nullary-bad.hir
+conformance/LANG/LANG-2-branch-nullary-ok.hir
+conformance/LANG/LANG-2-branch-option-if-bad.hir
+conformance/LANG/LANG-2-branch-option-if-ok.hir
+conformance/LANG/LANG-2-branch-option-match-bad.hir
+conformance/LANG/LANG-2-branch-option-match-ok.hir
+conformance/LANG/LANG-2-branch-option-run.hir
 conformance/LANG/LANG-2-branch-prefix-bool-match-ok.hir
 conformance/LANG/LANG-2-branch-prefix-bottom-match-bad.hir
 conformance/LANG/LANG-2-branch-prefix-explicit-if-ok.hir
@@ -1731,6 +1738,8 @@ conformance/LANG/LANG-2-branch-prefix-if-ok.hir
 conformance/LANG/LANG-2-branch-prefix-match-ok.hir
 conformance/LANG/LANG-2-branch-prefix-nested-if-ok.hir
 conformance/LANG/LANG-2-branch-prefix-run.hir
+conformance/LANG/LANG-2-branch-user-if-bad.hir
+conformance/LANG/LANG-2-branch-user-if-ok.hir
 conformance/LANG/LANG-2-byte-type-bad.hir
 conformance/LANG/LANG-2-byte-type-ok.hir
 conformance/LANG/LANG-2-character-type-bad.hir

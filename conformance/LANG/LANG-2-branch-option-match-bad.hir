@@ -1,0 +1,11 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 9
+// twin: LANG/LANG-2-branch-option-match-ok.hir
+fn probe(n: u8) {
+  let name = match n {
+    0 => return,
+    1 => Some("raw.bin"),
+    2 => return,
+    _ => Some(1u8),
+  }
+}

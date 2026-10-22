@@ -333,7 +333,7 @@ enum After {
     Assign(ast::StmtId, usize),
     AssignPlace(ast::StmtId, usize),
     Match(ast::ExprId, Option<TypeId>, usize),
-    MatchArm(ast::ExprId, usize, Option<TypeId>, usize),
+    MatchArm(ast::ExprId, usize, Option<TypeId>, usize, bool),
     IfThen(ast::ExprId, Option<TypeId>, usize),
     For(ast::StmtId, usize),
     LabelledTail(ast::ExprId, Option<TypeId>, usize),
@@ -1306,7 +1306,10 @@ impl Checker<'_, '_> {
             } => {
                 self.work.push(Work::Finish(id, expected, frame));
                 if let Some(t) = tail {
-                    if let Some(site) = self.expected_sites.get(&id).cloned() {
+                    if let Some(mut site) = self.expected_sites.get(&id).cloned() {
+                        if site.1.as_str() == "LANG-2" {
+                            site.0 = self.span(t);
+                        }
                         self.expected_sites.entry(t).or_insert(site);
                     }
                     self.work.push(Work::Enter(t, expected, frame));
@@ -1321,6 +1324,16 @@ impl Checker<'_, '_> {
                 else_branch,
             } => {
                 let bool_ty = self.primitive(Primitive::Bool);
+                if self
+                    .expected_sites
+                    .get(&id)
+                    .is_some_and(|(_, rule)| rule.as_str() == "LANG-2")
+                {
+                    for branch in std::iter::once(then_branch).chain(else_branch) {
+                        self.expected_sites
+                            .insert(branch, (self.span(branch), const { RuleId::of("LANG-2") }));
+                    }
+                }
                 let branch_expected = if else_branch.is_some() {
                     expected
                 } else {
@@ -2205,9 +2218,12 @@ impl Checker<'_, '_> {
                     0,
                     arm_expected,
                     frame,
+                    self.expected_sites
+                        .get(&id)
+                        .is_some_and(|(_, rule)| rule.as_str() == "LANG-2"),
                 )));
             }
-            After::MatchArm(id, index, expected, frame) => {
+            After::MatchArm(id, index, expected, frame, prefix) => {
                 let ast::ExprKind::Match { arms, .. } =
                     &self.input.syntax.tree.expressions[id.0 as usize].kind
                 else {
@@ -2226,7 +2242,12 @@ impl Checker<'_, '_> {
                         index + 1,
                         hint,
                         frame,
+                        prefix || (expected.is_none() && hint.is_some()),
                     )));
+                    if prefix || (expected.is_none() && hint.is_some()) {
+                        self.expected_sites
+                            .insert(body, (self.span(body), const { RuleId::of("LANG-2") }));
+                    }
                     self.work.push(Work::Enter(body, hint, frame));
                     if let Some(guard) = guard {
                         let bool_ty = self.primitive(Primitive::Bool);
@@ -2247,6 +2268,10 @@ impl Checker<'_, '_> {
                     let ty = self.value(then_branch);
                     (!self.invalid(ty) && !self.bottom(ty)).then_some(ty)
                 });
+                if expected.is_none() && hint.is_some() {
+                    self.expected_sites
+                        .insert(other, (self.span(other), const { RuleId::of("LANG-2") }));
+                }
                 self.work.push(Work::Enter(other, hint, frame));
             }
             After::For(id, frame) => {

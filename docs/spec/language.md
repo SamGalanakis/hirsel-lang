@@ -65,9 +65,28 @@ payloads constrain the selected constructor's declared parameters and result.
 Hirsel reuses its ordinary generic call inference and does not introduce full
 unification or payload-based overload selection.
 
-Without an expectation, the first valid, non-bottom branch of a conditional or match
-supplies the context for later branches in source order; later text never types an
-earlier literal. A call whose labels are invalid withholds only the contextual typing that
+Without an outer expectation, the first valid, non-bottom branch of an `if`/`else`
+or `match` supplies the expected type for branches to its right in source order.
+Returning or invalid branches provide no type. Later text never types an earlier
+literal or repairs an undetermined constructor. A later branch that conflicts with
+this prefix-derived type is LANG-2 at that branch's conflicting expression.
+
+```hirsel
+fn names(c: bool) {
+  let name = if c { Some("raw.bin") } else { None() } // Option[String]
+  let next = match c { true => Some("next"), false => None() }
+  // if c { Some("raw.bin") } else { Some(1u8) }    // LANG-2 at Some(1u8)
+  // if c { None() } else { Some("raw.bin") }       // LANG-2 at the first None()
+}
+```
+
+The branch context follows Rust's incremental `CoerceMany` idea
+([coercion.rs:1511](https://github.com/rust-lang/rust/blob/1a2c4797ef2570bd76ca5dee34449169bc7dc457/compiler/rustc_hir_typeck/src/coercion.rs#L1511)):
+keep an outer expectation or an already checked branch's type for subsequent arms.
+Swift also joins branch results and treats `Never` specially
+([CSGen.cpp:3507](https://github.com/swiftlang/swift/blob/bf3cf2cfb69ebb025b4ffce538fe3cde027d5246/lib/Sema/CSGen.cpp#L3507)).
+Hirsel adopts no least-upper-bound widening, fresh join variables, earlier-arm
+rechecking or whole-expression constraint solving: the prefix fixes one type. A call whose labels are invalid withholds only the contextual typing that
 depends on them; independently typed operands are still checked.
 
 Generic inference separates a root value's holder modes from a type contract supplied by

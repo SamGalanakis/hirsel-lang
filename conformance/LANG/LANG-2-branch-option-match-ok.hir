@@ -1,0 +1,10 @@
+// rule: LANG-2
+// expect: accept
+fn probe(n: u8) {
+  let name = match n {
+    0 => return,
+    1 => Some("raw.bin"),
+    2 => return,
+    _ => None(),
+  }
+}
