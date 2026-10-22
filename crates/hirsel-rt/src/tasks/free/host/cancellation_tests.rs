@@ -91,8 +91,56 @@ impl Drop for Home {
     }
 }
 
+struct Direct {
+    probe: Arc<Probe>,
+    mode: u8,
+}
+impl Direct {
+    fn check(&self) {
+        let run = self.probe.run.load(Ordering::Acquire);
+        assert!(!run.is_null());
+        drop(unsafe { role::IdleGuard::new(run) });
+    }
+}
+impl crate::io_concurrent::ConcurrentAdapter for Direct {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        self.check();
+        self.probe.preflight.fetch_add(1, Ordering::Release);
+        match self.mode {
+            2 => Err(AdapterError::Unsupported("preflight failure".into())),
+            4 => Ok(Some(Completion::ChildExit(Err(ProcessFailure::Fault(91))))),
+            _ => Ok(None),
+        }
+    }
+    fn call(&self, request: Request) -> Result<Completion, AdapterError> {
+        self.check();
+        if request == (Request::Close { handle: 18 }) {
+            self.probe.closes.fetch_add(1, Ordering::Release);
+            return Ok(Completion::Unit(Ok(())));
+        }
+        self.probe.effects.fetch_add(1, Ordering::Release);
+        match self.mode {
+            1 | 8 => Ok(Completion::Wait(Ok(()))),
+            6 => Ok(Completion::Handle(Err(crate::io::IoError::NotGranted))),
+            _ => panic!("canceled concurrent request issued its effect"),
+        }
+    }
+    fn cancellable(&self, _: u64) -> bool {
+        self.mode != 8
+    }
+}
+
 #[test]
 fn native_home_cancellation_entry_validates_before_effect_and_preserves_consumed_cleanup() {
+    cancellation_entries(false);
+}
+
+#[test]
+fn native_concurrent_cancellation_validates_before_effect_and_preserves_consumed_cleanup() {
+    cancellation_entries(true);
+}
+
+fn cancellation_entries(concurrent: bool) {
     for width in [1, 8] {
         for durable in [false, true] {
             for mode in 0..9 {
@@ -103,11 +151,17 @@ fn native_home_cancellation_entry_validates_before_effect_and_preserves_consumed
                 let observed = probe.clone();
                 let mut run = crate::host::BodyRun::new(width, false);
                 run.free = true;
-                run.adapter = Some(Box::new(Home {
-                    thread: std::thread::current().id(),
+                if !concurrent {
+                    run.adapter = Some(Box::new(Home {
+                        thread: std::thread::current().id(),
+                        probe: probe.clone(),
+                        mode,
+                    }));
+                }
+                let direct = Direct {
                     probe: probe.clone(),
                     mode,
-                }));
+                };
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
                     move |ctx| unsafe {
@@ -121,10 +175,18 @@ fn native_home_cancellation_entry_validates_before_effect_and_preserves_consumed
                         if mode == 1 {
                             (*ctx).shield = 1;
                         }
-                        let result = crate::stop::check(
-                            ctx,
-                            request_home(ctx, request(mode), KeySet::coupled()),
-                        );
+                        let result = if concurrent {
+                            crate::stop::check(ctx, prepare(ctx, request(mode)));
+                            assert!(crate::stop::check(ctx, claim(ctx)));
+                            crate::stop::check(ctx, invoke_concurrent(ctx, &direct));
+                            crate::stop::check(ctx, ended(ctx));
+                            crate::stop::check(ctx, complete_result(ctx))
+                        } else {
+                            crate::stop::check(
+                                ctx,
+                                request_home(ctx, request(mode), KeySet::coupled()),
+                            )
+                        };
                         assert_eq!(result, expected(mode));
                         (*ctx).shield = 0;
                         STATUS_OK

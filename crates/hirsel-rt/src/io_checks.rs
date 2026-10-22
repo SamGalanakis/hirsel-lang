@@ -254,6 +254,30 @@ pub fn cancel(
     Ok(Some(completion))
 }
 
+/// Apply the same validation precedence and consuming cleanup to a bounded
+/// concurrent request. The caller owns its stable token and retains the
+/// request/result until publication; no scheduler or adapter lock is retained.
+pub(crate) fn cancel_concurrent(
+    adapter: &dyn crate::io_concurrent::ConcurrentAdapter,
+    token: u64,
+    request: &R,
+    cause: u32,
+) -> Result<Option<C>, AdapterError> {
+    struct Borrowed<'a> {
+        adapter: &'a dyn crate::io_concurrent::ConcurrentAdapter,
+        token: u64,
+    }
+    impl Adapter for Borrowed<'_> {
+        fn preflight(&self, request: &R) -> Result<Option<C>, AdapterError> {
+            self.adapter.preflight(request)
+        }
+        fn call(&mut self, request: R) -> Result<C, AdapterError> {
+            self.adapter.call_at(self.token, request)
+        }
+    }
+    cancel(&mut Borrowed { adapter, token }, request, cause)
+}
+
 /// The existing cancellation-point classification and typed result, without
 /// an adapter borrow, argument validation, cleanup or host effect.
 pub(crate) fn cancellation_result(request: &R, cause: u32) -> Option<C> {

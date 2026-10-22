@@ -337,11 +337,21 @@ pub(crate) unsafe fn invoke_concurrent(
     ctx: *mut TaskCtx,
     adapter: &dyn crate::io_concurrent::ConcurrentAdapter,
 ) -> Stopped<()> {
-    let token = unsafe { (*ctx).pending_host.as_ref().unwrap().request.id };
+    let pending = unsafe { (*ctx).pending_host.as_ref().unwrap() };
+    let (token, cause) = (pending.request.id, pending.canceled);
     unsafe {
         invoke_discovered(
             ctx,
-            |request| adapter.call_at(token, request.clone()),
+            |request| {
+                if let Some(cause) = cause
+                    && adapter.cancellable(token)
+                    && let Some(completion) =
+                        crate::io_checks::cancel_concurrent(adapter, token, request, cause)?
+                {
+                    return Ok(completion);
+                }
+                adapter.call_at(token, request.clone())
+            },
             |handle| adapter.identity(handle),
         )
     }
