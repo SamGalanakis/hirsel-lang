@@ -29,91 +29,92 @@ pub struct ModuleInputs {
     pub manifest_revision: ContentHash,
 }
 
-/// One definition's declarations.
-#[derive(Clone, Debug)]
+/// One immutable declaration row. Images and their importing sessions share
+/// it; owned declaration sites are constructed only when a consumer asks.
+#[derive(Debug)]
 struct Row {
-    /// The first candidate's entry, as resolution indexes it.
-    entry: DefinitionEntry,
-    /// The last candidate's metadata (main's first-entry, last-metadata rule).
-    metadata: DefinitionMetadata,
-    sites: Arc<[DeclarationSite]>,
-    /// Each candidate's header hash, in occurrence order.
-    headers: Arc<[ContentHash]>,
-    /// `DeclarationCandidates(d)`.
-    candidates: ContentHash,
-    /// This row's part of the manifest identity hash.
-    identity: [u64; 4],
+    image: RowImage,
+    sites: OnceLock<Arc<[DeclarationSite]>>,
 }
-
+impl std::ops::Deref for Row {
+    type Target = RowImage;
+    fn deref(&self) -> &RowImage {
+        &self.image
+    }
+}
+impl Row {
+    fn entry(&self) -> DefinitionEntry {
+        DefinitionEntry {
+            definition: self.definition.path().clone(),
+            namespace: if self.types {
+                Namespace::Type
+            } else {
+                Namespace::Value
+            },
+            visibility: self.visibility,
+            span: self.span,
+        }
+    }
+    fn sites(&self) -> &Arc<[DeclarationSite]> {
+        hirsel_intern::timings::count_by(hirsel_intern::timings::Count::DeclarationSiteReads, 1);
+        self.sites.get_or_init(|| {
+            hirsel_intern::timings::count_by(
+                hirsel_intern::timings::Count::DeclarationSiteMaterializations,
+                self.site_spans.len() as u64,
+            );
+            self.site_spans
+                .iter()
+                .map(|&name_span| DeclarationSite {
+                    definition: self.definition.path().clone(),
+                    name_span,
+                })
+                .collect()
+        })
+    }
+}
 impl PartialEq for Row {
     fn eq(&self, other: &Self) -> bool {
-        fn site(s: &DeclarationSite) -> (&DefPath, Span) {
-            (&s.definition, s.name_span)
-        }
-        self.entry == other.entry
+        self.definition == other.definition
+            && self.types == other.types
+            && self.visibility == other.visibility
+            && self.span == other.span
             && (self.metadata.public, self.metadata.alias)
                 == (other.metadata.public, other.metadata.alias)
-            && self.sites.iter().map(site).eq(other.sites.iter().map(site))
+            && self.site_spans == other.site_spans
             && self.headers == other.headers
             && self.candidates == other.candidates
     }
 }
 
-/// A row as the std image holds it.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// The compact row as the std image holds it. A site names this row's
+/// definition, so only its span needs storage. The image's existing definition
+/// table owns the path; neither decoding nor session adoption rebuilds it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RowImage {
-    definition: DefPath,
+    definition: DefId,
     types: bool,
     visibility: Visibility,
     span: Span,
     metadata: DefinitionMetadata,
-    sites: Vec<DeclarationSite>,
+    site_spans: Vec<Span>,
     headers: Vec<ContentHash>,
     candidates: ContentHash,
     identity: [u64; 4],
 }
 impl RowImage {
     pub(crate) fn definition(&self) -> &DefPath {
-        &self.definition
+        self.definition.path()
     }
-    /// Each candidate's name site, in occurrence order.
-    pub(crate) fn sites(&self) -> &[DeclarationSite] {
-        &self.sites
-    }
-}
-impl From<&Row> for RowImage {
-    fn from(row: &Row) -> Self {
-        Self {
-            definition: row.entry.definition.clone(),
-            types: row.entry.namespace == Namespace::Type,
-            visibility: row.entry.visibility,
-            span: row.entry.span,
-            metadata: row.metadata.clone(),
-            sites: row.sites.to_vec(),
-            headers: row.headers.to_vec(),
-            candidates: row.candidates,
-            identity: row.identity,
-        }
+    /// Each candidate's name span, in occurrence order.
+    pub(crate) fn site_spans(&self) -> &[Span] {
+        &self.site_spans
     }
 }
 impl From<RowImage> for Row {
-    fn from(row: RowImage) -> Self {
+    fn from(image: RowImage) -> Self {
         Self {
-            entry: DefinitionEntry {
-                definition: row.definition,
-                namespace: if row.types {
-                    Namespace::Type
-                } else {
-                    Namespace::Value
-                },
-                visibility: row.visibility,
-                span: row.span,
-            },
-            metadata: row.metadata,
-            sites: row.sites.into(),
-            headers: row.headers.into(),
-            candidates: row.candidates,
-            identity: row.identity,
+            image,
+            sites: OnceLock::new(),
         }
     }
 }
@@ -130,7 +131,7 @@ struct FrozenRows {
     index: ManifestIndex,
     package_indexes: BTreeMap<PackageId, ManifestIndex>,
     metadata: Metadata,
-    sites: BTreeMap<DefPath, Arc<[DeclarationSite]>>,
+    sites: BTreeMap<DefId, Arc<Row>>,
 }
 impl Declarations {
     /// `package`'s resolution index.
@@ -157,8 +158,8 @@ impl Declarations {
     pub fn sites(&self, path: &DefPath) -> Arc<[DeclarationSite]> {
         self.rows
             .sites
-            .get(path)
-            .cloned()
+            .get(&DefId::intern(path))
+            .map(|row| row.sites().clone())
             .unwrap_or_else(|| Arc::from([]))
     }
 }
@@ -168,7 +169,7 @@ impl Declarations {
 pub struct DeclarationIndex {
     /// Changes to signature inputs, independent of source body revisions.
     revision: u64,
-    rows: BTreeMap<DefPath, Row>,
+    rows: BTreeMap<DefId, Arc<Row>>,
     files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
     anchors: HashMap<Anchor, FileId>,
     /// The FileIds listing items, by source path: each indexing of a
@@ -289,18 +290,28 @@ impl DeclarationIndex {
     }
     /// `path`'s row as the std image holds it.
     pub(crate) fn row_image(&self, path: &DefPath) -> Option<RowImage> {
-        self.rows.get(path).map(RowImage::from)
+        self.rows
+            .get(&DefId::intern(path))
+            .map(|row| row.image.clone())
     }
     /// Set `path`'s row from an image, whose items stand in sources not
     /// indexed here (`place_file` lists them once parsed).
     pub(crate) fn adopt_row(&mut self, path: &DefPath, row: impl Into<RowImage>) {
         let row: Row = Row::from(row.into());
-        self.replace_row(path, Some(row));
+        hirsel_intern::timings::count_by(hirsel_intern::timings::Count::ImageRowsDecoded, 1);
+        hirsel_intern::timings::count_by(
+            hirsel_intern::timings::Count::ImageDeclarationBytes,
+            (std::mem::size_of::<Row>()
+                + row.site_spans.capacity() * std::mem::size_of::<Span>()
+                + row.headers.capacity() * std::mem::size_of::<ContentHash>()) as u64,
+        );
+        self.replace_row(path, Some(Arc::new(row)));
     }
     /// Every row of `image`, added to this index.
     pub(crate) fn adopt_rows(&mut self, image: &DeclarationIndex) {
         for (path, row) in &image.rows {
-            self.replace_row(path, Some(row.clone()));
+            hirsel_intern::timings::count_by(hirsel_intern::timings::Count::ImageRowsAdopted, 1);
+            self.replace_row(path.path(), Some(row.clone()));
         }
     }
     /// List `file`'s items, which an image's rows already describe: a source
@@ -315,11 +326,13 @@ impl DeclarationIndex {
     }
     /// `path`'s declaration sites, in occurrence order.
     pub(crate) fn sites(&self, path: &DefPath) -> &[DeclarationSite] {
-        self.rows.get(path).map_or(&[], |row| &row.sites)
+        self.rows
+            .get(&DefId::intern(path))
+            .map_or(&[], |row| row.sites().as_ref())
     }
     /// The paths with rows.
     pub(crate) fn paths(&self) -> impl Iterator<Item = &DefPath> {
-        self.rows.keys()
+        self.rows.keys().map(|id| id.path())
     }
     /// Index every item afresh, except generated instances.
     pub(crate) fn rebuild(
@@ -409,7 +422,7 @@ impl DeclarationIndex {
                     }
                 ),
             };
-            let headers: Arc<[ContentHash]> =
+            let headers: Vec<ContentHash> =
                 candidates.iter().map(|c| header_hash(sources, c)).collect();
             let mut parts = vec![(candidates.len() as u64).to_le_bytes().to_vec()];
             for (candidate, header) in candidates.iter().zip(headers.iter()) {
@@ -426,25 +439,13 @@ impl DeclarationIndex {
                 ItemKind::Type { .. } => 3,
             };
             let public = first.visibility != Visibility::Private;
-            Row {
-                entry: DefinitionEntry {
-                    definition: first.definition.clone(),
-                    namespace: if matches!(first.kind, ItemKind::Type { .. }) {
-                        Namespace::Type
-                    } else {
-                        Namespace::Value
-                    },
-                    visibility: first.visibility,
-                    span: first.name_span,
-                },
+            Arc::new(Row::from(RowImage {
+                definition: DefId::intern(&first.definition),
+                types: matches!(first.kind, ItemKind::Type { .. }),
+                visibility: first.visibility,
+                span: first.name_span,
                 metadata,
-                sites: candidates
-                    .iter()
-                    .map(|c| DeclarationSite {
-                        definition: c.item.definition.clone(),
-                        name_span: c.item.name_span,
-                    })
-                    .collect(),
+                site_spans: candidates.iter().map(|c| c.item.name_span).collect(),
                 headers,
                 candidates: ContentHash::of_parts(
                     "hirsel.declaration-candidates.v1",
@@ -454,14 +455,14 @@ impl DeclarationIndex {
                     "hirsel.manifest.identity.v2",
                     [path.fingerprint().0.as_slice(), &[u8::from(public), kind]],
                 )),
-            }
+            }))
         });
         self.replace_row(path, row);
     }
-    fn replace_row(&mut self, path: &DefPath, row: Option<Row>) {
+    fn replace_row(&mut self, path: &DefPath, row: Option<Arc<Row>>) {
         let old = match &row {
-            Some(row) => self.rows.insert(path.clone(), row.clone()),
-            None => self.rows.remove(path),
+            Some(row) => self.rows.insert(DefId::intern(path), row.clone()),
+            None => self.rows.remove(&DefId::intern(path)),
         };
         if old == row {
             return;
@@ -511,11 +512,13 @@ impl DeclarationIndex {
     }
     /// `DeclarationCandidates(path)`, or None for a definition with no item.
     pub fn candidates(&self, path: &DefPath) -> Option<ContentHash> {
-        self.rows.get(path).map(|row| row.candidates)
+        self.rows
+            .get(&DefId::intern(path))
+            .map(|row| row.candidates)
     }
     /// The header hashes of `path`'s candidates, in occurrence order.
     pub fn headers(&self, path: &DefPath) -> Option<&[ContentHash]> {
-        self.rows.get(path).map(|row| &*row.headers)
+        self.rows.get(&DefId::intern(path)).map(|row| &*row.headers)
     }
     /// The frozen module input, built after a row or an input changed.
     pub fn frozen(&self) -> Arc<Declarations> {
@@ -560,8 +563,8 @@ impl DeclarationIndex {
             work::count(work::Counter::ModuleDeclarationRows);
             metadata
                 .definitions
-                .insert(path.clone(), row.metadata.clone());
-            entries.push(row.entry.clone());
+                .insert(path.path().clone(), row.metadata.clone());
+            entries.push(row.entry());
         }
         let registry = crate::registry::BuiltinRegistry::new();
         // Index core declarations alongside source metadata, so merged heads
@@ -634,12 +637,12 @@ impl DeclarationIndex {
             index,
             package_indexes,
             metadata,
-            sites: self
-                .rows
-                .iter()
-                .map(|(path, row)| (path.clone(), row.sites.clone()))
-                .collect(),
+            sites: self.rows.clone(),
         }
     }
 }
 use hirsel_intern::work;
+
+#[cfg(test)]
+#[path = "declarations_tests.rs"]
+mod tests;

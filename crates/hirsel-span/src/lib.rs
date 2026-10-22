@@ -76,6 +76,8 @@ pub enum AnchorCodec {
     Encode(BTreeMap<Anchor, u32>),
     /// The anchor of each number, from 1.
     Decode(Vec<Anchor>),
+    /// An immutable image's anchors, shared by all its entry decoders.
+    DecodeShared(std::sync::Arc<[Anchor]>),
 }
 thread_local! {
     static CODEC: std::cell::RefCell<Option<AnchorCodec>> =
@@ -122,6 +124,11 @@ impl<'de> serde::Deserialize<'de> for Span {
                 .copied()
                 .ok_or_else(|| serde::de::Error::custom("span anchor out of range")),
             Some(AnchorCodec::Decode(_)) => Ok(Anchor(0)),
+            Some(AnchorCodec::DecodeShared(anchors)) if number != 0 => anchors
+                .get(number as usize - 1)
+                .copied()
+                .ok_or_else(|| serde::de::Error::custom("span anchor out of range")),
+            Some(AnchorCodec::DecodeShared(_)) => Ok(Anchor(0)),
             _ => Ok(Anchor(number)),
         })?;
         Ok(Span { anchor, start, end })

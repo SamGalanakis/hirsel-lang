@@ -23,6 +23,7 @@ struct Inner {
     /// The anchor of each number from 1, with its source's manifest ordinal
     /// and its base there.
     anchors: Vec<(Anchor, u32, u32)>,
+    decode_anchors: Arc<[Anchor]>,
     base: Arc<TypeBase>,
 }
 
@@ -111,7 +112,7 @@ impl Image {
     fn new(bytes: Bytes) -> Result<Self, String> {
         let (key, sections) = directory(bytes.as_slice())?;
         let count = |kind: u32| sections.get(&kind).map_or(0, |s| s.0 as usize);
-        let anchors = match sections.get(&ANCHORS) {
+        let anchors: Vec<(Anchor, u32, u32)> = match sections.get(&ANCHORS) {
             Some((n, range)) => {
                 let body = &bytes.as_slice()[range.clone()];
                 (0..*n as usize)
@@ -132,7 +133,7 @@ impl Image {
         });
         let types: TypeTable = match tables.sections.get(&TYPES) {
             Some((rows, range)) => {
-                let table: TypeTable = with_tables(&tables, &[], 0, || {
+                let table: TypeTable = with_tables(&tables, &Arc::from([]), 0, || {
                     decode(&tables.bytes.as_slice()[range.clone()])
                 })?;
                 if table.len() != *rows as usize {
@@ -145,6 +146,7 @@ impl Image {
         Ok(Image(Arc::new(Inner {
             tables,
             key,
+            decode_anchors: anchors.iter().map(|a| a.0).collect(),
             anchors,
             base: types.into_base(),
         })))
@@ -219,6 +221,7 @@ impl Image {
     }
     /// Decode entry `ordinal` of keyed section `kind`.
     pub fn decode<T: DeserializeOwned>(&self, kind: u32, ordinal: usize) -> Result<T, String> {
+        hirsel_intern::timings::count_by(hirsel_intern::timings::Count::ImageDecodeAttempts, 1);
         let (_, range) = self.0.tables.entry(kind, ordinal)?;
         self.0.decode(range)
     }
@@ -239,7 +242,7 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
 
 impl Inner {
     fn decode<T: DeserializeOwned>(&self, range: std::ops::Range<usize>) -> Result<T, String> {
-        with_tables(&self.tables, &self.anchors, self.base.len(), || {
+        with_tables(&self.tables, &self.decode_anchors, self.base.len(), || {
             decode(&self.tables.bytes.as_slice()[range])
         })
     }
@@ -249,11 +252,11 @@ impl Inner {
 /// `TypeId`s as rows of a base of `rows` rows.
 fn with_tables<R>(
     tables: &Arc<Tables>,
-    anchors: &[(Anchor, u32, u32)],
+    anchors: &Arc<[Anchor]>,
     rows: usize,
     f: impl FnOnce() -> R,
 ) -> R {
-    let mut codec = AnchorCodec::Decode(anchors.iter().map(|a| a.0).collect());
+    let mut codec = AnchorCodec::DecodeShared(anchors.clone());
     hirsel_intern::persist::with_symbol_source(tables.clone(), || {
         hirsel_syntax::with_def_source(tables.clone(), || {
             hirsel_types::with_base_decoding(rows, || hirsel_span::with_anchor_codec(&mut codec, f))

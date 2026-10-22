@@ -189,13 +189,9 @@ impl QueryEngine {
             return Ok(());
         };
         let ordinals: BTreeSet<u32> = row
-            .sites()
+            .site_spans()
             .iter()
-            .filter_map(|site| {
-                image
-                    .place(site.name_span.anchor)
-                    .map(|(ordinal, _)| ordinal)
-            })
+            .filter_map(|site| image.place(site.anchor).map(|(ordinal, _)| ordinal))
             .collect();
         for ordinal in ordinals {
             self.materialize_file(ordinal)?;

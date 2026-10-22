@@ -258,11 +258,23 @@ pub enum Count {
     ClosureBodyScans,
     ArenaBodyScans,
     LateKeys,
+    /// Compact declaration rows decoded at image open.
+    ImageRowsDecoded,
+    /// Immutable declaration rows shared with an adopting engine.
+    ImageRowsAdopted,
+    /// Declaration-site requests, including retained results.
+    DeclarationSiteReads,
+    /// Declaration sites first materialized from compact spans.
+    DeclarationSiteMaterializations,
+    /// Compact image declaration row bytes, excluding interned paths.
+    ImageDeclarationBytes,
+    /// Keyed image entry decode attempts, successful or refused.
+    ImageDecodeAttempts,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 57] = [
+    pub const ALL: [Count; 63] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -320,10 +332,22 @@ impl Count {
         Count::ClosureBodyScans,
         Count::ArenaBodyScans,
         Count::LateKeys,
+        Count::ImageRowsDecoded,
+        Count::ImageRowsAdopted,
+        Count::DeclarationSiteReads,
+        Count::DeclarationSiteMaterializations,
+        Count::ImageDeclarationBytes,
+        Count::ImageDecodeAttempts,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
         match self {
+            Count::ImageRowsDecoded => "image declaration rows decoded",
+            Count::ImageRowsAdopted => "image declaration rows adopted",
+            Count::DeclarationSiteReads => "declaration site reads",
+            Count::DeclarationSiteMaterializations => "declaration sites materialized",
+            Count::ImageDeclarationBytes => "image declaration bytes",
+            Count::ImageDecodeAttempts => "image entry decode attempts",
             Count::ValueDecodes => "native Value decodes",
             Count::ValueDecodeBytes => "native Value decode bytes",
             Count::ValueRebinds => "native Value rebinds",

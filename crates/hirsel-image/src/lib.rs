@@ -54,7 +54,7 @@ pub use write::{Encode, ImageWriter, Written, encode_value, write_atomically};
 /// The first byte of every image.
 pub const MAGIC: [u8; 8] = *b"HIRSIMG1";
 /// The container's version; the key binds the products' own versions.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// The first kind a user section may have.
 pub const FIRST_KIND: u32 = 16;
 

@@ -389,3 +389,45 @@ fn an_image_over_a_based_interner_keeps_the_base_rows_and_their_ids() {
     let session = TypeInterner::new(Some(image.base()));
     assert_eq!(canonical(&session, &read), canonical(&types, &value));
 }
+
+#[test]
+fn shared_anchor_decoding_refuses_invalid_numbers_and_keeps_later_reads_exact() {
+    #[derive(Clone)]
+    struct RawSpan(u32);
+    impl Encode for RawSpan {
+        fn encode(&self, out: &mut Vec<u8>) -> Result<(), String> {
+            encode_value(&(self.0, 7u32, 9u32), out)
+        }
+    }
+    let t = TypeInterner::new(None);
+    let anchor = Anchor::fresh();
+    let mut writer = ImageWriter::new(key(), t);
+    writer.anchors([(anchor, 2, 31)]);
+    let ids: Vec<_> = ["absent", "present", "invalid"]
+        .map(|n| DefId::intern(&path(&[], n)))
+        .into();
+    for (&id, number) in ids.iter().zip([0, 1, 99]) {
+        writer.entry(RECORDS, id, Box::new(RawSpan(number)));
+    }
+    let image = Image::from_bytes(writer.finish().unwrap().bytes).unwrap();
+    let mapped = image.anchors()[0].0;
+    for _ in 0..2 {
+        assert!(image.entry::<Span>(RECORDS, ids[2]).is_err());
+        assert_eq!(
+            image.entry::<Span>(RECORDS, ids[1]).unwrap().unwrap(),
+            Span {
+                anchor: mapped,
+                start: 7,
+                end: 9
+            }
+        );
+        assert_eq!(
+            image
+                .entry::<Span>(RECORDS, ids[0])
+                .unwrap()
+                .unwrap()
+                .anchor,
+            Span::default().anchor
+        );
+    }
+}

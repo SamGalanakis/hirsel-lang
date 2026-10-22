@@ -203,8 +203,8 @@ impl StdImage {
             ],
         )
     }
-    /// Map the image at `p`. Its declaration rows and type rows decode now;
-    /// everything else when first read.
+    /// Map the image at `p`. Compact declaration rows and canonical type rows
+    /// decode now; owned declaration sites and checked products on first read.
     pub fn open(p: &Path) -> Result<Arc<Self>, String> {
         let image = Image::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
         Self::from_image(image).map_err(|e| format!("{}: {e}", p.display()))
@@ -217,10 +217,12 @@ impl StdImage {
         let meta: Meta = image.blob(META)?.ok_or("an image without its package")?;
         let snapshot = image.blob(SNAPSHOT)?.ok_or("an image without V receipts")?;
         let mut declarations = DeclarationIndex::default();
-        for ordinal in 0..image.entries(ROWS) {
+        for (ordinal, definition) in image.keys(ROWS)?.into_iter().enumerate() {
             let row: RowImage = image.decode(ROWS, ordinal)?;
-            let path = row.definition().clone();
-            declarations.adopt_row(&path, row);
+            if row.definition() != definition.path() {
+                return Err("a declaration row differs from its image index".into());
+            }
+            declarations.adopt_row(definition.path(), row);
         }
         let places: HashMap<_, _> = image
             .anchors()
