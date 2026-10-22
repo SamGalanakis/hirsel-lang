@@ -929,3 +929,6 @@ mod native_telemetry_tests;
 
 #[cfg(test)]
 mod native_process_tests;
+
+#[cfg(test)]
+mod native_process_abi_tests;

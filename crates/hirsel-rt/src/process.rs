@@ -1592,7 +1592,9 @@ const COMMAND_SIZE: usize = 48;
 unsafe fn command(ctx: *mut crate::TaskCtx, at: *const u8) -> Command {
     let env = unsafe { at.add(32).cast::<*mut crate::Header>().read() };
     Command {
-        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { at.cast::<u64>().read() }),
+        program: crate::paths::names(ctx)
+            .path_text(unsafe { at.cast::<u64>().read() })
+            .to_owned(),
         args: unsafe {
             list(at.add(8).cast::<*mut crate::Header>().read(), 24, |a| {
                 text(a)
@@ -1638,7 +1640,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    if !crate::tasks::free::host::native::enabled(ctx) {
+        unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    }
     let request = Request::ProcessRun {
         process: unsafe { process.read() },
         command: unsafe { command(ctx, cmd) },
@@ -1649,30 +1653,33 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::Process(outcome) = completion else {
-        crate::fault("process completion mismatch")
-    };
-    // Zero padding and the inactive arm; no pointer is made from error bits.
-    let mut result: ProcessResult = unsafe { std::mem::zeroed() };
-    match outcome {
-        ProcessOutcome::Output {
-            status,
-            stdout,
-            stderr,
-        } => {
-            (result.kind, result.code) = match status {
-                ExitStatus::Exited(code) => (0, code as u32),
-                ExitStatus::Signaled(signal) => (1, signal as u32),
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Process(outcome) = completion else {
+                crate::fault("process completion mismatch")
             };
-            result.stdout = unsafe { crate::text::allocate_bytes(ctx, &stdout) };
-            result.stderr = unsafe { crate::text::allocate_bytes(ctx, &stderr) };
-        }
-        ProcessOutcome::Error(failure) => {
-            result.tag = 1;
-            (result.kind, result.code) = failure_parts(failure);
-        }
-    }
-    unsafe { out.write(result) };
+            let mut result: ProcessResult = std::mem::zeroed();
+            match outcome {
+                ProcessOutcome::Output {
+                    status,
+                    stdout,
+                    stderr,
+                } => {
+                    (result.kind, result.code) = match *status {
+                        ExitStatus::Exited(code) => (0, code as u32),
+                        ExitStatus::Signaled(signal) => (1, signal as u32),
+                    };
+                    result.stdout = crate::text::allocate_bytes(ctx, stdout);
+                    result.stderr = crate::text::allocate_bytes(ctx, stderr);
+                }
+                ProcessOutcome::Error(failure) => {
+                    result.tag = 1;
+                    (result.kind, result.code) = failure_parts(failure.clone());
+                }
+            }
+            out.write(result);
+        })
+    };
     crate::STATUS_OK
 }
 
@@ -1707,7 +1714,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    if !crate::tasks::free::host::native::enabled(ctx) {
+        unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    }
     let request = Request::ProcessPipeline {
         process: unsafe { process.read() },
         stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },
@@ -1718,28 +1727,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
     let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::Pipeline(outcome) = completion else {
-        crate::fault("pipeline completion mismatch")
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::Pipeline(outcome) = completion else {
+                crate::fault("process completion mismatch")
+            };
+            let mut result: PipelineResult = std::mem::zeroed();
+            match outcome {
+                PipelineOutcome::Output {
+                    statuses,
+                    stdout,
+                    stderr,
+                } => {
+                    result.statuses = status_list(ctx, statuses) as u64;
+                    result.stdout = crate::text::allocate_bytes(ctx, stdout);
+                    result.stderr = crate::text::allocate_bytes(ctx, stderr);
+                }
+                PipelineOutcome::Error(failure) => {
+                    result.tag = 1;
+                    let (kind, code) = failure_parts(failure.clone());
+                    result.statuses = u64::from(kind) | u64::from(code) << 32;
+                }
+            }
+            out.write(result);
+        })
     };
-    // Zero padding and the inactive arm; no pointer is made from error bits.
-    let mut result: PipelineResult = unsafe { std::mem::zeroed() };
-    match outcome {
-        PipelineOutcome::Output {
-            statuses,
-            stdout,
-            stderr,
-        } => {
-            result.statuses = unsafe { status_list(ctx, &statuses) } as u64;
-            result.stdout = unsafe { crate::text::allocate_bytes(ctx, &stdout) };
-            result.stderr = unsafe { crate::text::allocate_bytes(ctx, &stderr) };
-        }
-        PipelineOutcome::Error(failure) => {
-            result.tag = 1;
-            let (kind, code) = failure_parts(failure);
-            result.statuses = u64::from(kind) | u64::from(code) << 32;
-        }
-    }
-    unsafe { out.write(result) };
     crate::STATUS_OK
 }
 
@@ -1878,7 +1890,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    if !crate::tasks::free::host::native::enabled(ctx) {
+        unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    }
     let request = Request::ProcessSpawn {
         process: unsafe { process.read() },
         command: unsafe { command(ctx, cmd) },
@@ -1961,15 +1975,24 @@ unsafe fn child_read(
         stream,
         max,
     };
-    let Ok(Completion::ChildBytes(value)) = (unsafe { crate::io::capability_call(ctx, request) })
-    else {
+    let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let value = value.map(|bytes| {
-        unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
-        bytes.len() as u64
-    });
-    unsafe { out.write(ChildWordResult::of(value)) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::ChildBytes(value) = completion else {
+                crate::fault("child read completion mismatch")
+            };
+            let value = match value {
+                Ok(bytes) => {
+                    crate::io::append_byte_list(ctx, buffer, bytes);
+                    Ok(bytes.len() as u64)
+                }
+                Err(error) => Err(error.clone()),
+            };
+            out.write(ChildWordResult::of(value));
+        })
+    };
     crate::STATUS_OK
 }
 
@@ -2085,7 +2108,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    if !crate::tasks::free::host::native::enabled(ctx) {
+        unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
+    }
     let request = Request::ProcessSpawnPipeline {
         process: unsafe { process.read() },
         stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },
@@ -2154,24 +2179,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group(
     };
     // Erasing the transferred word makes accidental reuse fail closed.
     unsafe { g.write(0) };
-    let Some(Completion::GroupExit(value)) =
-        (unsafe { crate::net_abi::call_recording(ctx, request) })
-    else {
+    let Some(completion) = (unsafe { crate::net_abi::call_recording(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    // Zero padding and the inactive arm; no pointer is made from error bits.
-    let mut result: GroupResult = unsafe { std::mem::zeroed() };
-    match value {
-        Ok(output) => {
-            result.statuses = unsafe { status_list(ctx, &output.statuses) } as u64;
-            result.stderr = unsafe { crate::text::allocate_bytes_list(ctx, &output.stderr) } as u64;
-        }
-        Err(failure) => {
-            result.tag = 1;
-            let (kind, code) = failure_parts(failure);
-            result.statuses = u64::from(kind) | u64::from(code) << 32;
-        }
-    }
-    unsafe { out.write(result) };
+    unsafe {
+        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+            let Completion::GroupExit(value) = completion else {
+                crate::fault("group completion mismatch")
+            };
+            let mut result: GroupResult = std::mem::zeroed();
+            match value {
+                Ok(output) => {
+                    result.statuses = status_list(ctx, &output.statuses) as u64;
+                    result.stderr = crate::text::allocate_bytes_list(ctx, &output.stderr) as u64;
+                }
+                Err(failure) => {
+                    result.tag = 1;
+                    let (kind, code) = failure_parts(failure.clone());
+                    result.statuses = u64::from(kind) | u64::from(code) << 32;
+                }
+            }
+            out.write(result);
+        })
+    };
     crate::STATUS_OK
 }
