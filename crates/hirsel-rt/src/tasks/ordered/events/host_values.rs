@@ -283,7 +283,10 @@ mod tests {
                         assert_eq!(log.host_requests.len(), 6);
                         for (index, (_, _, request)) in observed.iter().enumerate() {
                             let request = request.as_ref().expect("mapped request authority");
-                            assert_eq!(request.handles, [id(9 + index as u64)]);
+                            assert_eq!(
+                                request.authorities,
+                                [super::super::HostAuthority::Created(id(9 + index as u64))]
+                            );
                             assert_eq!(
                                 crate::tape_wire::decode::<Request>(&request.payload).unwrap(),
                                 Request::TestCheck {

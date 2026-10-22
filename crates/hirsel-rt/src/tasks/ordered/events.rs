@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod host_keys;
 mod host_requests;
+pub(super) use host_requests::HostAuthority;
 mod host_values;
 pub(super) use host_values::HostHandleId;
 
@@ -348,7 +349,8 @@ pub(super) struct Log {
     pub host_resources: host_keys::Resources,
     pub host_key_observations:
         BTreeMap<(Vec<u32>, u64), Option<Vec<(host_keys::Resource, crate::io_keys::Mode)>>>,
-    pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_values::HostValue>>,
+    pub host_roots: BTreeMap<u64, HostAuthority>,
+    pub host_requests: BTreeMap<(Vec<u32>, u64), Option<host_requests::HostRequestValue>>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
     host_polled: BTreeSet<(Vec<u32>, u64)>,
@@ -1328,6 +1330,33 @@ pub(super) fn value_subevent(
     value.map(|(item, payload)| vec![(item, CanonicalOutcome::Value { status, payload })])
 }
 
+/// Admission names the actual initial grants; numeric handle values carry no
+/// meaning. This creates no operations or initialized result-handle bindings.
+pub(crate) fn initial_host(ctx: *mut TaskCtx, io: Option<u64>, env: Option<u64>) {
+    let driver = super::engine::driver(ctx);
+    let Some(log) = driver.events.as_mut() else {
+        return;
+    };
+    assert!(
+        log.ordinals.is_empty(),
+        "initial authorities precede all operations"
+    );
+    assert!(
+        log.host_roots.is_empty(),
+        "initial authorities admitted once"
+    );
+    assert!(
+        io.is_none() || env.is_none() || io != env,
+        "root authority words must differ"
+    );
+    if let Some(io) = io {
+        log.host_roots.insert(io, HostAuthority::RootIo);
+    }
+    if let Some(env) = env {
+        log.host_roots.insert(env, HostAuthority::RootEnv);
+    }
+}
+
 /// Borrowed output bypasses the owned wait protocol. Copy only when evidence
 /// is enabled, while the caller still owns the exact visible byte slice.
 pub(crate) fn request_print(ctx: *mut TaskCtx, handle: u64, stderr: bool, bytes: &[u8]) {
@@ -1383,7 +1412,17 @@ pub(crate) fn request_host(ctx: *mut TaskCtx, request: &crate::io::Request) {
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
-    let observation = host_requests::project(request, |word| host_identity(driver, word)).ok();
+    let observation = host_requests::project(request, |word| {
+        driver
+            .events
+            .as_ref()
+            .unwrap()
+            .host_roots
+            .get(&word)
+            .cloned()
+            .or_else(|| host_identity(driver, word).map(HostAuthority::Created))
+    })
+    .ok();
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals[&path]
         .checked_sub(1)

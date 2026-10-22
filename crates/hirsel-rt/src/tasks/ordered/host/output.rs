@@ -128,14 +128,16 @@ fn borrowed_output_observations_own_visible_bytes_and_keep_each_result_ordinal()
                             .clone()
                             .unwrap();
                         assert_eq!(
-                            request.handles,
-                            [super::super::events::HostHandleId {
-                                operation: ObjectId {
-                                    creator: vec![],
-                                    ordinal: 77
-                                },
-                                field: 0,
-                            }]
+                            request.authorities,
+                            [super::super::events::HostAuthority::Created(
+                                super::super::events::HostHandleId {
+                                    operation: ObjectId {
+                                        creator: vec![],
+                                        ordinal: 77
+                                    },
+                                    field: 0,
+                                }
+                            )]
                         );
                         assert_eq!(
                             crate::tape_wire::decode::<Request>(&request.payload).unwrap(),

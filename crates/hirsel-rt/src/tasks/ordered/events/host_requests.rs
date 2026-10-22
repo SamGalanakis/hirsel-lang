@@ -1,17 +1,37 @@
 //! Initialized request projection. The field walk follows Request's variants
 //! and the existing tape codec, including handles nested in process arguments.
-use super::host_values::{HostHandleId, HostValue};
+use super::host_values::HostHandleId;
 use crate::io::Request;
 use crate::tape_wire::Wire;
 
+/// Initial authorities precede operations; never synthesize creator ordinals
+/// for them. Owner approval of proposal614011, design4.2.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::tasks::ordered) enum HostAuthority {
+    RootIo,
+    RootEnv,
+    Created(HostHandleId),
+}
+impl From<HostHandleId> for HostAuthority {
+    fn from(handle: HostHandleId) -> Self {
+        Self::Created(handle)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::tasks::ordered) struct HostRequestValue {
+    pub payload: Vec<u8>,
+    pub authorities: Vec<HostAuthority>,
+}
+
 pub(super) fn project(
     request: &Request,
-    mut identity: impl FnMut(u64) -> Option<HostHandleId>,
-) -> Result<HostValue, &'static str> {
+    mut identity: impl FnMut(u64) -> Option<HostAuthority>,
+) -> Result<HostRequestValue, &'static str> {
     let mut request = request.clone();
-    let mut handles = Vec::new();
+    let mut authorities = Vec::new();
     let mut on = |word: &mut u64| {
-        handles.push(identity(*word).ok_or("unmapped host request")?);
+        authorities.push(identity(*word).ok_or("unmapped host request")?);
         *word = 0;
         Ok::<_, &'static str>(())
     };
@@ -241,21 +261,102 @@ pub(super) fn project(
     }
     let mut payload = Vec::new();
     request.encode(&mut payload);
-    Ok(HostValue { payload, handles })
+    Ok(HostRequestValue {
+        payload,
+        authorities,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn identity(word: u64) -> Option<HostHandleId> {
-        Some(
-            crate::ordered::footprint::ObjectId {
+    #[test]
+    fn host_initial_authorities_are_explicit_and_never_invent_creator_ordinals() {
+        use crate::ordered::Policy;
+        use crate::tasks::ordered::{engine, events, host};
+        for width in [1, 8] {
+            let io = 0x1234_5678 + u64::from(width);
+            let env = io + 1;
+            let mut run = crate::host::BodyRun::new(width, true);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    events::enable(ctx);
+                    events::initial_host(ctx, Some(io), Some(env));
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert!(log.ordinals.is_empty());
+                    assert!(log.host_handles.is_empty());
+                    assert!(log.host_bindings.is_empty());
+                    assert!(log.canonical.is_empty());
+                },
+                move |ctx| unsafe {
+                    for (request, expected) in [
+                        (Request::Stdout { io }, Some(HostAuthority::RootIo)),
+                        (
+                            Request::EnvGet {
+                                env,
+                                name: "NAME".into(),
+                            },
+                            Some(HostAuthority::RootEnv),
+                        ),
+                        (Request::Stdout { io: 1 }, None),
+                        (
+                            Request::EnvGet {
+                                env: crate::io::ENV_HANDLE,
+                                name: "NAME".into(),
+                            },
+                            None,
+                        ),
+                    ] {
+                        host::begin(ctx, false).unwrap();
+                        events::request_host(ctx, &request);
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        let ordinal = log.ordinals[&Vec::new()] - 1;
+                        let projected = &log.host_requests[&(Vec::new(), ordinal)];
+                        if let Some(expected) = expected {
+                            let projected = projected.as_ref().unwrap();
+                            assert_eq!(projected.authorities, [expected]);
+                            assert!(
+                                project(
+                                    &crate::tape_wire::decode::<Request>(&projected.payload)
+                                        .unwrap(),
+                                    |_| None
+                                )
+                                .is_err(),
+                                "zeroed slots carry no implicit authority"
+                            );
+                        } else {
+                            assert!(projected.is_none(), "numeric root words are not admission");
+                        }
+                        host::finish(ctx, crate::ordered::Next::Keep).unwrap();
+                    }
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(
+                        log.host_requests
+                            .keys()
+                            .map(|(_, ordinal)| *ordinal)
+                            .collect::<Vec<_>>(),
+                        [0, 1, 2, 3]
+                    );
+                    assert!(log.host_handles.is_empty());
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+        }
+    }
+
+    fn identity(word: u64) -> Option<HostAuthority> {
+        Some(HostAuthority::Created(HostHandleId {
+            operation: crate::ordered::footprint::ObjectId {
                 creator: vec![1, 3],
                 ordinal: word % 16,
-            }
-            .into(),
-        )
+            },
+            field: 0,
+        }))
     }
 
     fn command(directory: Option<u64>) -> crate::process::Command {
@@ -339,9 +440,12 @@ mod tests {
             let a = project(&first, identity).unwrap();
             assert_eq!(a, project(&second, identity).unwrap());
             assert_eq!(
-                a.handles
+                a.authorities
                     .iter()
-                    .map(|handle| handle.operation.ordinal)
+                    .map(|authority| match authority {
+                        HostAuthority::Created(handle) => handle.operation.ordinal,
+                        _ => panic!("created test authority"),
+                    })
                     .collect::<Vec<_>>(),
                 ordinals
             );
@@ -350,11 +454,15 @@ mod tests {
             assert!(
                 project(&first, |word| {
                     visited += 1;
-                    (visited != a.handles.len()).then(|| identity(word).unwrap())
+                    (visited != a.authorities.len()).then(|| identity(word).unwrap())
                 })
                 .is_err()
             );
-            assert_eq!(visited, a.handles.len(), "all nested fields must resolve");
+            assert_eq!(
+                visited,
+                a.authorities.len(),
+                "all nested fields must resolve"
+            );
             let mut normalized = crate::tape_wire::decode::<Request>(&a.payload).unwrap();
             assert_eq!(
                 project(&normalized, |_| identity(0)).unwrap().payload,
@@ -459,7 +567,7 @@ mod tests {
         for (a, b) in requests(0x1234_0000).iter().zip(requests(0x9876_0000)) {
             let observed = project(a, identity).unwrap();
             assert_eq!(observed, project(&b, identity).unwrap());
-            assert!(!observed.handles.is_empty());
+            assert!(!observed.authorities.is_empty());
             assert!(project(a, |_| None).is_err());
             let decoded = crate::tape_wire::decode::<Request>(&observed.payload).unwrap();
             assert_eq!(

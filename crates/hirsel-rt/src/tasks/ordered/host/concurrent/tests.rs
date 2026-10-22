@@ -84,6 +84,11 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                     policy.reorder = reorder;
                     engine::enable(ctx, policy);
                     super::super::super::events::enable(ctx);
+                    super::super::super::events::initial_host(
+                        ctx,
+                        Some(1),
+                        Some(crate::io::ENV_HANDLE),
+                    );
                     install.run.store((*ctx).run_ptr(), Ordering::Release);
                 },
                 move |ctx| unsafe {
@@ -165,7 +170,10 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                         })
                         .collect();
                     assert_eq!(rows.len(), 6);
-                    assert!(rows[0].1.is_none(), "initial Io authority is not guessed");
+                    assert_eq!(
+                        rows[0].1.as_ref().unwrap().authorities,
+                        [super::super::super::events::HostAuthority::RootIo]
+                    );
                     assert!(rows.iter().skip(1).all(|row| row.1.is_some()));
                     assert!(rows.iter().all(|row| row.2.is_some()));
                     assert!(
