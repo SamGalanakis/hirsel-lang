@@ -670,6 +670,7 @@ pub type Trace = History<Event>;
 #[derive(Clone, Default)]
 pub(crate) struct Ledger {
     pub allocations: Snapshot<Arc<Allocation>>,
+    retired: Retired,
     paths: RefCell<Snapshot<Vec<ProjectionStep<u64>>>>,
     path_ids: RefCell<Map<Vec<ProjectionStep<u64>>, u32>>,
     pub resources: Snapshot<Resource>,
@@ -683,6 +684,43 @@ pub(crate) struct Ledger {
     pub trace: Trace,
     /// Every allocation whose count, lifetime, generation or cells may have changed.
     pub(crate) changed: Vec<AllocId>,
+}
+
+/// Sparse allocation IDs are never recycled. A hole below the ID high-water
+/// mark is retired generation-zero frame storage, with one bit distinguishing
+/// temporary storage. Keep this detection state indefinitely: an arbitrarily
+/// old handle must still produce its original lifetime diagnostic.
+#[derive(Clone)]
+struct Retired {
+    temporary: Snapshot<u64>,
+    frame: Arc<Allocation>,
+    temp: Arc<Allocation>,
+}
+
+impl Default for Retired {
+    fn default() -> Self {
+        let tombstone = |owner| {
+            Arc::new(Allocation {
+                generation: 0,
+                flat_boundaries: Default::default(),
+                owner,
+                layout: None,
+                size: 0,
+                capacity: 0,
+                align: 1,
+                state: AllocState::Dead,
+                count: None,
+                published: false,
+                extent: Extent::allocation(0),
+                audit_dirty: false,
+            })
+        };
+        Self {
+            temporary: Snapshot::default(),
+            frame: tombstone(Owner::Frame),
+            temp: tombstone(Owner::Temporary),
+        }
+    }
 }
 
 impl Ledger {
@@ -770,9 +808,30 @@ impl Ledger {
     }
 
     pub fn get(&self, id: AllocId) -> &Allocation {
-        &self.allocations[id.0 as usize]
+        self.lookup(id).expect("allocated ID")
+    }
+    fn lookup(&self, id: AllocId) -> Option<&Allocation> {
+        let index = id.0 as usize;
+        if let Some(a) = self.allocations.get(index) {
+            return Some(a);
+        }
+        if index >= self.allocations.len() {
+            return None;
+        }
+        let temporary = self.retired.temporary.get(index / 64).copied().unwrap_or(0);
+        Some(if temporary & (1 << (index % 64)) != 0 {
+            &self.retired.temp
+        } else {
+            &self.retired.frame
+        })
     }
     pub fn get_mut(&mut self, id: AllocId) -> &mut Allocation {
+        // A malformed command may revisit dead storage. Materialize only that
+        // tombstone rather than changing its diagnostic to "unknown allocation".
+        if self.allocations.get(id.0 as usize).is_none() {
+            let a = Arc::new(self.get(id).clone());
+            self.allocations.set(id.0 as usize, a);
+        }
         let allocation = Arc::make_mut(&mut self.allocations[id.0 as usize]);
         if !allocation.audit_dirty {
             allocation.audit_dirty = true;
@@ -782,9 +841,40 @@ impl Ledger {
         allocation
     }
 
+    /// Called only after the holder journal has been consumed. Physical audits
+    /// compare their own retained cells with the now absent storage; they do
+    /// not rely on either this retirement decision or the write journal.
+    pub(crate) fn retire_dead(&mut self, id: AllocId) -> bool {
+        let a = self.get(id);
+        if a.state != AllocState::Dead
+            || a.generation != 0
+            || a.count.is_some()
+            || !matches!(a.owner, Owner::Frame | Owner::Temporary)
+        {
+            return false;
+        }
+        if a.owner == Owner::Temporary {
+            let index = id.0 as usize;
+            let bits = self.retired.temporary.get(index / 64).copied().unwrap_or(0);
+            self.retired
+                .temporary
+                .set(index / 64, bits | (1 << (index % 64)));
+        }
+        assert!(
+            self.get(id)
+                .extent
+                .holder_edits
+                .as_ref()
+                .is_some_and(Vec::is_empty),
+            "retirement must follow holder journal consumption"
+        );
+        self.allocations.remove(id.0 as usize);
+        true
+    }
+
     /// The allocation a handle names, checked live at the handle's generation.
     pub fn check(&self, ptr: Ptr) -> Checked<&Allocation> {
-        let Some(a) = self.allocations.get(ptr.alloc.0 as usize) else {
+        let Some(a) = self.lookup(ptr.alloc) else {
             return fail(
                 V::ForgedPointer,
                 format!("handle to unknown allocation {:?}", ptr.alloc),
@@ -886,6 +976,101 @@ pub(crate) fn owner_name(owner: Owner) -> &'static str {
 #[cfg(test)]
 mod fork_tests {
     use super::*;
+    #[test]
+    fn retired_owner_bits_preserve_interleaved_ids_and_snapshot_isolation() {
+        let mut ledger = Ledger::default();
+        let pointers: Vec<_> = (0..257)
+            .map(|i| {
+                ledger.alloc(
+                    if i % 3 == 0 {
+                        Owner::Temporary
+                    } else {
+                        Owner::Frame
+                    },
+                    None,
+                    8,
+                    8,
+                    8,
+                    None,
+                )
+            })
+            .collect();
+        let original = ledger.clone();
+        for &p in pointers.iter().rev().step_by(2) {
+            ledger.free(p.alloc).unwrap();
+            let diagnostic = ledger.check(p).unwrap_err();
+            assert!(ledger.retire_dead(p.alloc));
+            assert_eq!(ledger.check(p).unwrap_err(), diagnostic);
+        }
+        for (i, &p) in pointers.iter().enumerate() {
+            assert_eq!(ledger.check(p).is_ok(), i % 2 == 1);
+            assert!(original.check(p).is_ok());
+        }
+        let retired = ledger.clone();
+        // Even malformed repeated free preserves the old zero-sized/dead state.
+        ledger.free(pointers[0].alloc).unwrap();
+        assert!(ledger.retire_dead(pointers[0].alloc));
+        assert_eq!(
+            ledger.check(pointers[0]).unwrap_err(),
+            retired.check(pointers[0]).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn retired_frame_and_statement_temporary_keep_exact_lifetime_diagnostics() {
+        for (owner, kind, message) in [
+            (
+                Owner::Frame,
+                V::FrameStorageEscape,
+                "access to AllocId(0), a slot of an exited frame",
+            ),
+            (
+                Owner::Temporary,
+                V::UseAfterFree,
+                "access to freed AllocId(0)",
+            ),
+        ] {
+            let mut ledger = Ledger::default();
+            let old = ledger.alloc(owner, None, 8, 8, 8, None);
+            let live_fork = ledger.clone();
+            ledger.free(old.alloc).unwrap();
+            // Ledger unit control: consume the empty holder journal as sync does.
+            ledger
+                .get_mut(old.alloc)
+                .extent
+                .holder_edits
+                .as_mut()
+                .unwrap()
+                .clear();
+            let dead_fork = ledger.clone();
+            assert!(ledger.retire_dead(old.alloc));
+            assert!(ledger.allocations.is_empty());
+            for _ in 0..1024 {
+                let next = ledger.alloc(owner, None, 8, 8, 8, None);
+                ledger.free(next.alloc).unwrap();
+                assert!(ledger.retire_dead(next.alloc));
+            }
+            let violation = ledger.check(old).unwrap_err();
+            assert_eq!(violation.kind, kind);
+            assert_eq!(violation.message, message);
+            assert_eq!(violation, dead_fork.check(old).unwrap_err());
+            assert!(live_fork.check(old).is_ok(), "retirement is fork-local");
+            let forged = Ptr {
+                alloc: AllocId(ledger.allocations.len() as u32),
+                ..old
+            };
+            assert_eq!(ledger.check(forged).unwrap_err().kind, V::ForgedPointer);
+            let stale = Ptr {
+                generation: 1,
+                ..old
+            };
+            assert_eq!(
+                ledger.check(stale).unwrap_err().message,
+                "handle to AllocId(0) generation 1 but its storage is generation 0 (reused)"
+            );
+        }
+    }
+
     #[test]
     fn logical_handle_snapshots_cover_the_full_u64_key_space() {
         let mut ledger = Ledger::default();

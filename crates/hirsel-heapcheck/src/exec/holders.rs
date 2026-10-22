@@ -74,11 +74,47 @@ pub(super) struct Holders {
 
 impl Holders {
     fn extend(&mut self, n: usize) {
-        while self.expected.len() < n {
-            self.expected.push(0);
-            self.incoming.push(Incoming::default());
-            self.headers.push(None);
+        self.expected.extend_len(n);
+        self.incoming.extend_len(n);
+    }
+
+    fn expected(&self, id: AllocId) -> i128 {
+        self.expected.get(id.0 as usize).copied().unwrap_or(0)
+    }
+
+    fn adjust(&mut self, id: AllocId, n: i128) {
+        let i = id.0 as usize;
+        let value = self.expected(id) + n;
+        if value == 0 {
+            self.expected.remove(i);
+        } else {
+            self.expected.set(i, value);
         }
+    }
+
+    fn remove_incoming(&mut self, target: AllocId, position: Position) {
+        let i = target.0 as usize;
+        if let Some(incoming) = self.incoming.get_mut(i) {
+            incoming.remove(&position);
+            if incoming.sources.is_empty() {
+                self.incoming.remove(i);
+            }
+        }
+    }
+
+    fn insert_incoming(&mut self, target: AllocId, position: Position, ptr: Ptr) {
+        let i = target.0 as usize;
+        if self.incoming.get(i).is_none() {
+            self.incoming.set(i, Incoming::default());
+        }
+        self.incoming[i].insert(position, ptr);
+    }
+
+    fn incoming_keys(&self, id: AllocId) -> impl Iterator<Item = Position> + '_ {
+        self.incoming
+            .get(id.0 as usize)
+            .into_iter()
+            .flat_map(Incoming::keys)
     }
 
     fn add(&mut self, ptr: Ptr, n: i128) {
@@ -86,7 +122,7 @@ impl Holders {
             return;
         }
         self.extend(ptr.alloc.0 as usize + 1);
-        self.expected[ptr.alloc.0 as usize] += n;
+        self.adjust(ptr.alloc, n);
         self.touched.insert(ptr.alloc);
     }
 
@@ -127,11 +163,11 @@ impl Holders {
                 let pos = (*id, edit.offset);
                 if let Some(old) = edit.old {
                     self.add(old, -1);
-                    self.incoming[old.alloc.0 as usize].remove(&pos);
+                    self.remove_incoming(old.alloc, pos);
                 }
                 if let Some(new) = edit.new {
                     self.add(new, 1);
-                    self.incoming[new.alloc.0 as usize].insert(pos, new);
+                    self.insert_incoming(new.alloc, pos, new);
                     candidates.insert(pos);
                 }
             }
@@ -142,9 +178,14 @@ impl Holders {
         for &id in &changed {
             let a = ledger.get(id);
             let header = (a.generation, a.state);
-            if self.headers[id.0 as usize] != Some(header) {
-                candidates.extend(self.incoming[id.0 as usize].keys());
-                self.headers[id.0 as usize] = Some(header);
+            if self.headers.get(id.0 as usize) != Some(&Some(header)) {
+                candidates.extend(self.incoming_keys(id));
+                self.headers.set(id.0 as usize, Some(header));
+            }
+        }
+        for &id in &changed {
+            if ledger.retire_dead(id) {
+                self.headers.remove(id.0 as usize);
             }
         }
         changed.clear();
@@ -191,7 +232,7 @@ impl Holders {
             {
                 self.count_comparisons += 1;
             }
-            let ideal = self.expected[id.0 as usize];
+            let ideal = self.expected(id);
             if let Some(n) = a.count.and_then(Count::holders)
                 && i128::from(n) != ideal
             {
@@ -391,7 +432,7 @@ impl Physical {
                         continue;
                     }
                     self.tally.add(*ptr, -1);
-                    self.tally.incoming[ptr.alloc.0 as usize].remove(&(id, offset));
+                    self.tally.remove_incoming(ptr.alloc, (id, offset));
                     index_cells.insert((ptr.alloc, (id, offset)));
                     cells.insert((id, offset));
                 }
@@ -408,7 +449,7 @@ impl Physical {
                         continue;
                     }
                     self.tally.add(*ptr, 1);
-                    self.tally.incoming[ptr.alloc.0 as usize].insert((id, offset), *ptr);
+                    self.tally.insert_incoming(ptr.alloc, (id, offset), *ptr);
                     index_cells.insert((ptr.alloc, (id, offset)));
                     cells.insert((id, offset));
                 }
@@ -418,7 +459,7 @@ impl Physical {
             let before = self.allocations.get(id.0 as usize);
             let after = ledger.get(id);
             if before.is_none_or(|a| (a.generation, a.state) != (after.generation, after.state)) {
-                cells.extend(self.tally.incoming[id.0 as usize].keys());
+                cells.extend(self.tally.incoming_keys(id));
             }
         }
         // Compare physical register snapshots, independently of credit-write
@@ -504,13 +545,13 @@ impl Physical {
         for (&id, &n) in &self.held {
             let delta = held.get(&id).copied().unwrap_or(0) - n;
             if delta != 0 {
-                self.tally.expected[id.0 as usize] += delta;
+                self.tally.adjust(id, delta);
                 targets.insert(id);
             }
         }
         for (&id, &n) in &held {
             if !self.held.contains_key(&id) && n != 0 {
-                self.tally.expected[id.0 as usize] += n;
+                self.tally.adjust(id, n);
                 targets.insert(id);
             }
         }
@@ -530,7 +571,7 @@ impl Physical {
         });
         for id in targets {
             let i = id.0 as usize;
-            if self.tally.expected.get(i) != actual.expected.get(i) {
+            if self.tally.expected(id) != actual.expected(id) {
                 self.bad_tallies.insert(id);
             } else {
                 self.bad_tallies.remove(&id);
@@ -542,7 +583,7 @@ impl Physical {
                 && !matches!(a.state, AllocState::Dead | AllocState::Raw(_))
                 && a.count
                     .and_then(Count::holders)
-                    .is_some_and(|n| i128::from(n) != self.tally.expected[i]);
+                    .is_some_and(|n| i128::from(n) != self.tally.expected(id));
             if mismatch {
                 self.bad_counts.insert(id);
             } else {
@@ -689,7 +730,7 @@ impl Physical {
                 V::CountMismatch,
                 format!(
                     "{id:?} has count {n} but {} holders",
-                    self.tally.expected[id.0 as usize]
+                    self.tally.expected(id)
                 ),
             );
         }
@@ -764,6 +805,123 @@ mod tests {
     use crate::program::NoOperations;
     use hirsel_lir::layout_types::TargetSpec;
     use hirsel_lir::stage::Ready;
+
+    #[test]
+    fn dead_frame_and_temporary_extents_are_retired_after_audit() {
+        let layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+        let (target, layouts) = layouts.finish();
+        let program = Program::<Ready> {
+            target,
+            layouts,
+            units: vec![],
+            statics: vec![],
+        };
+        let config = Config::default();
+        let mut ops = NoOperations;
+        let mut m = Machine::new(&program, &config, &mut ops);
+        let iterations = std::env::var("HIRSEL_RETIREMENT_ITERATIONS")
+            .ok()
+            .map(|n| n.parse::<u64>().unwrap())
+            .unwrap_or(4096);
+        for step in 1..=iterations {
+            for owner in [Owner::Frame, Owner::Temporary] {
+                let p = m.ledger.alloc(owner, None, 32, 32, 8, None);
+                m.ledger.free(p.alloc).unwrap();
+            }
+            m.steps = step;
+            m.check_counts().unwrap();
+        }
+        m.cross_check_holders().unwrap();
+        let retained = m.ledger.allocations.iter().count();
+        eprintln!(
+            "retirement: ids={} retained={retained} bytes={} tally={} incoming={} headers={}",
+            m.ledger.allocations.len(),
+            m.ledger
+                .allocations
+                .iter()
+                .map(|a| a.extent.len())
+                .sum::<u64>(),
+            m.holders.expected.iter().count(),
+            m.holders.incoming.iter().count(),
+            m.holders.headers.iter().count()
+        );
+        assert_eq!(
+            retained, 0,
+            "dead frame/temporary extents must not accumulate"
+        );
+        assert!(m.holders.expected.is_empty());
+        assert!(m.holders.incoming.is_empty());
+        assert!(m.holders.headers.is_empty());
+        assert!(m.physical.allocations.is_empty());
+        assert!(m.physical.references.allocations.is_empty());
+        m.audit().unwrap();
+        assert_eq!(m.ledger.counters.live_heap_bytes, 0);
+    }
+
+    #[test]
+    fn retirement_cannot_hide_an_unjournaled_holder_removal() {
+        for fixed in [false, true] {
+            let layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+            let (target, layouts) = layouts.finish();
+            let program = Program::<Ready> {
+                target,
+                layouts,
+                units: vec![],
+                statics: vec![],
+            };
+            let config = Config::default();
+            let mut ops = NoOperations;
+            let mut m = Machine::new(&program, &config, &mut ops);
+            let p = m
+                .ledger
+                .alloc(Owner::Heap, None, 8, 8, 8, Some(Count::Finite(1)));
+            let frame = m.ledger.alloc(Owner::Frame, None, 8, 8, 8, None);
+            m.ledger.get_mut(frame.alloc).extent.put_cell(
+                0,
+                8,
+                Cell::Data {
+                    ptr: p,
+                    counted: true,
+                    borrow: None,
+                },
+            );
+            m.steps = 1;
+            m.check_counts().unwrap();
+            if fixed {
+                m.ledger
+                    .get_mut(frame.alloc)
+                    .extent
+                    .take(0, 8, FREE_POISON, None);
+                m.set_root(
+                    0,
+                    Some(Held {
+                        val: Val::Ptr(p),
+                        credits: 1,
+                        borrow: None,
+                    }),
+                );
+            } else {
+                // Simulate a missed write hook before storage death. The fast
+                // tally still agrees with RC, but the physical proof must fail.
+                m.ledger.get_mut(frame.alloc).extent.cells.clear();
+            }
+            m.ledger.free(frame.alloc).unwrap();
+            m.steps = 3;
+            m.check_counts().unwrap();
+            assert!(m.ledger.allocations.get(frame.alloc.0 as usize).is_none());
+            m.steps = 4;
+            if fixed {
+                m.check_counts().unwrap();
+            } else {
+                let v = m.cross_check_holders().unwrap_err();
+                assert_eq!(v.kind, V::InternalAudit);
+                assert_eq!(
+                    v.message,
+                    "physical-holder tally disagrees with full recount at step 4"
+                );
+            }
+        }
+    }
 
     #[test]
     fn region_escape_order_and_borrowed_twins_share_dead_history() {

@@ -165,6 +165,29 @@ Invariants:
 - Allocation counters and the trace are instrumentation only; no check reads
   them.
 
+Dead generation-zero Frame/Temporary extents retire after their holder journals
+are consumed. Allocation IDs remain monotonic. Holes below the ID high-water
+mark denote dead frame storage; a sparse bitmap (one bit per ID) distinguishes
+dead temporaries, preserving the original lifetime and generation diagnostics
+indefinitely. Heap/region identities and reuse generations retain their ordinary
+records. Empty holder tallies, incoming indexes and retired headers have no
+materialized entries. The reference recount likewise stores only actual holders.
+Physical audits still derive changes from their own retained allocation and
+register snapshots, including the removal of an extent; they do not trust the
+retirement decision or consume the fast journal. Failure forks share both live
+storage and the immutable bitmap branches. Memory is proportional to live
+extents, outstanding audit proofs and detection/history state, rather than a
+full allocation record and byte extent for every ended frame or temporary.
+
+Prior art: Miri `2ca7ebf3834afb70e09c2e1946c1b500056312f7`,
+`src/provenance_gc.rs:229-260` separates live storage from retained provenance;
+`src/borrow_tracker/tree_borrows/tree.rs:732` discards unneeded tracker state.
+H retains compact lifetime provenance for every retired ID instead of tracing
+all executor roots. This preserves diagnostic identity without a reachability
+walk or an eviction window. Valgrind `2482dafd7c3533aaf2dd837ff0a5a09d1d576128`,
+`memcheck/mc_malloc_wrappers.c:102-169` provided the freed-queue comparison;
+its bounded detection window does not meet this executor's exact contract.
+
 Conventions the executor assumes (each is a reading of the frozen LIR schema; a
 producer that differs changes this crate or the producer):
 

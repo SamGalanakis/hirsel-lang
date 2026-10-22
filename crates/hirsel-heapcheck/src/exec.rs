@@ -2671,11 +2671,11 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     /// Ideal holders, recounted from every holder position, against each
     /// block's actual count.
-    fn recount_holders(&self, validate_cells: bool) -> Checked<Vec<u64>> {
+    fn recount_holders(&self, validate_cells: bool) -> Checked<BTreeMap<AllocId, u64>> {
         fork::scanned(self.ledger.allocations.len());
-        let mut holders = vec![0u64; self.ledger.allocations.len()];
-        let mut add = |ptr: Ptr, n: u64| holders[ptr.alloc.0 as usize] += n;
-        for (index, a) in self.ledger.allocations.iter().enumerate() {
+        let mut holders = BTreeMap::new();
+        let mut add = |ptr: Ptr, n: u64| *holders.entry(ptr.alloc).or_default() += n;
+        for (index, a) in self.ledger.allocations.indexed() {
             if a.state == AllocState::Dead {
                 continue;
             }
@@ -2733,11 +2733,11 @@ impl<'p, S: Stage> Machine<'p, S> {
     fn recount_counts(&self) -> Checked<()> {
         fork::scanned(self.ledger.allocations.len());
         let holders = self.recount_holders(true)?;
-        for (index, a) in self.ledger.allocations.iter().enumerate() {
+        for (index, a) in self.ledger.allocations.indexed() {
             if a.owner != Owner::Heap || matches!(a.state, AllocState::Dead | AllocState::Raw(_)) {
                 continue;
             }
-            let ideal = holders[index];
+            let ideal = holders.get(&AllocId(index as u32)).copied().unwrap_or(0);
             if let Some(n) = a.count.and_then(Count::holders)
                 && n != ideal
             {

@@ -38,6 +38,10 @@ impl<T, const LEVEL: u32> Snapshot<T, LEVEL> {
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
+    /// Advance the ID high-water mark without materializing default entries.
+    pub(crate) fn extend_len(&mut self, len: usize) {
+        self.len = self.len.max(len);
+    }
     pub fn get(&self, index: usize) -> Option<&T> {
         if LEVEL == 7 && u32::try_from(index).is_err() {
             return None;

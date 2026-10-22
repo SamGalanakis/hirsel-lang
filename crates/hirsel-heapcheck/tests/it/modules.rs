@@ -20,3 +20,4 @@ mod vectors;
 mod versions;
 mod borrow_cursor_8;
 mod borrowed_argument_15;
+mod retirement;
