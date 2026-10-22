@@ -252,10 +252,13 @@ pub(crate) unsafe fn request_home(
         return Err(Stop::Requested);
     }
     unsafe { ended(ctx) }?;
-    while matches!(
-        unsafe { &(*pending).completion },
-        Some(Err(AdapterError::Blocked))
-    ) {
+    loop {
+        if !matches!(
+            unsafe { &(*pending).completion },
+            Some(Err(AdapterError::Blocked))
+        ) {
+            break;
+        }
         assert!(
             unsafe { (*pending).positions.is_none() },
             "no key across readiness"
