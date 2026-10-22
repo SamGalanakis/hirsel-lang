@@ -623,7 +623,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn a_million_appends_have_logarithmic_allocations_and_linear_relocation() {
-    use hirsel_driver::native::*;
     let source = r#"pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let mut xs: List[u64] = []
   let mut i: u64 = 0
@@ -634,7 +633,78 @@ fn a_million_appends_have_logarithmic_allocations_and_linear_relocation() {
   if list.len(xs) == 1000000 && xs[999999] == 999999 { Ok(()) } else { Error(()) }
 }
 "#;
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("list-million");
+    list_counter_run(source, "list-million");
+}
+
+/// Keep the process status (including a Unix signal) and both streams even when
+/// the wrapper never reaches its counter report.
+fn list_counter_output(run: &std::process::Output) -> Result<&str, String> {
+    match std::str::from_utf8(&run.stdout) {
+        Ok(counts) if run.status.success() && counts.starts_with("list-counts ") => Ok(counts),
+        _ => Err(format!(
+            "status={}\nstdout={:?}\nstderr={:?}",
+            run.status,
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr),
+        )),
+    }
+}
+
+const LIST_COUNTER_WRAPPER: &str = r#"#include "hirsel_rt_v2.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+static uint64_t grows, relocated;
+hirsel_rt_v2_header* __real_hirsel_rt_v2_seq_grow(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
+hirsel_rt_v2_header* __wrap_hirsel_rt_v2_seq_grow(hirsel_rt_v2_ctx* ctx, hirsel_rt_v2_header* block, uint64_t size, uint64_t align, uint64_t capacity) {
+  ++grows;
+  relocated += hirsel_rt_v2_capacity(block);
+  return __real_hirsel_rt_v2_seq_grow(ctx, block, size, align, capacity);
+}
+/* Generated main calls this descriptor API, not the legacy launch API. */
+int32_t __wrap_hirsel_rt_v2_main(const hirsel_rt_v2_program_descriptor *program, int32_t argc, const char *const *argv) {
+  (void)argc;
+  (void)argv;
+  assert(program->abi_version == HIRSEL_RT_V2_ABI_VERSION);
+  assert(program->roots == 3); /* Io and Args, in the descriptor adapter's root order. */
+  assert(program->return_kind == 0 && program->result_size >= sizeof(uint32_t));
+  const hirsel_rt_v2_layout *const *layouts = program->layouts;
+  uint32_t layout_count = program->layout_count;
+  uint64_t result_size = program->result_size;
+  const hirsel_rt_v2_launch_config *launch = &program->config;
+  hirsel_rt_v2_config config = {.abi_version=HIRSEL_RT_V2_ABI_VERSION, .flags=HIRSEL_RT_V2_CONFIG_DIAGNOSTIC, .layouts=layouts, .layout_count=layout_count, .hash_seed=launch->hash_seed};
+  hirsel_rt_v2_ctx* ctx = NULL;
+  assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
+  void* result = calloc(1, result_size);
+  assert(result != NULL);
+  uint64_t roots[5] = {1, 2, 0, 0, 0};
+  fputs("list-counter entering\n", stderr);
+  fflush(stderr);
+  uint8_t status = program->entry(ctx, NULL, result, roots);
+  fprintf(stderr, "list-counter entry status=%u result=%u\n", status, *(uint32_t*)result);
+  assert(status == 0);
+  assert(*(uint32_t*)result == 0);
+  fputs("list-counter counters\n", stderr);
+  hirsel_rt_v2_stats stats;
+  hirsel_rt_v2_ctx_stats(ctx, &stats);
+  assert(grows > 0 && grows <= 24);
+  assert(stats.backing_allocations <= 40);
+  assert(relocated <= 32000000);
+  assert(stats.live_blocks == 0);
+  assert(stats.live_bytes == 0);
+  hirsel_rt_v2_audit audit;
+  hirsel_rt_v2_task_exit(ctx, &audit);
+  assert(audit.live_blocks == 0 && audit.active_regions == 0 && audit.retained_bytes == 0);
+  printf("list-counts %llu %llu %llu\n", (unsigned long long)grows, (unsigned long long)stats.backing_allocations, (unsigned long long)relocated);
+  free(result);
+  hirsel_rt_v2_ctx_destroy(ctx);
+  return 0;
+}
+"#;
+
+fn list_counter_run(source: &str, name: &str) -> Vec<u64> {
+    use hirsel_driver::native::*;
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let target = target();
     let toolchain = Toolchain::in_tree_diagnostic(&dir.join("runtime"), &[&target]).unwrap();
@@ -653,43 +723,12 @@ fn a_million_appends_have_logarithmic_allocations_and_linear_relocation() {
     )
     .unwrap();
     let wrapper = dir.join("count.c");
-    std::fs::write(&wrapper, r#"#include "hirsel_rt_v2.h"
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-static uint64_t grows, relocated;
-hirsel_rt_v2_header* __real_hirsel_rt_v2_seq_grow(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
-hirsel_rt_v2_header* __wrap_hirsel_rt_v2_seq_grow(hirsel_rt_v2_ctx* ctx, hirsel_rt_v2_header* block, uint64_t size, uint64_t align, uint64_t capacity) {
-  ++grows;
-  relocated += hirsel_rt_v2_capacity(block);
-  return __real_hirsel_rt_v2_seq_grow(ctx, block, size, align, capacity);
-}
-typedef uint8_t (*entry_fn)(hirsel_rt_v2_ctx*, uint8_t*, uint8_t*, const uint64_t*, const uint64_t*);
-int32_t __wrap_hirsel_rt_v2_launch(entry_fn entry, uint64_t result_size, const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count, const hirsel_rt_v2_launch_config *launch) {
-  hirsel_rt_v2_config config = {.abi_version=HIRSEL_RT_V2_ABI_VERSION, .flags=HIRSEL_RT_V2_CONFIG_DIAGNOSTIC, .layouts=layouts, .layout_count=layout_count, .hash_seed=launch->hash_seed};
-  hirsel_rt_v2_ctx* ctx = NULL;
-  assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
-  void* result = calloc(1, result_size);
-  uint64_t io = 1, args = 2;
-  assert(entry(ctx, NULL, result, &io, &args) == 0);
-  assert(*(uint32_t*)result == 0);
-  hirsel_rt_v2_stats stats;
-  hirsel_rt_v2_ctx_stats(ctx, &stats);
-  assert(grows > 0 && grows <= 24);
-  assert(stats.backing_allocations <= 40);
-  assert(relocated <= 32000000);
-  assert(stats.live_blocks == 0);
-  hirsel_rt_v2_audit audit;
-  hirsel_rt_v2_task_exit(ctx, &audit);
-  assert(audit.live_blocks == 0 && audit.active_regions == 0 && audit.retained_bytes == 0);
-  printf("list-counts %llu %llu %llu\n", (unsigned long long)grows, (unsigned long long)stats.backing_allocations, (unsigned long long)relocated);
-  free(result);
-  hirsel_rt_v2_ctx_destroy(ctx);
-  return 0;
-}
-"#).unwrap();
+    std::fs::write(&wrapper, LIST_COUNTER_WRAPPER).unwrap();
+    let mut grows = Vec::new();
     for opt in [OptLevel::None, OptLevel::Speed] {
-        let exe = link(&ready, &entry, opt, Partition::Whole, &toolchain, &dir).unwrap();
+        let opt_dir = dir.join(format!("{opt:?}"));
+        std::fs::create_dir_all(&opt_dir).unwrap();
+        let exe = link(&ready, &entry, opt, Partition::Whole, &toolchain, &opt_dir).unwrap();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hirsel-rt/include");
         let mut command = std::process::Command::new(&toolchain.clang);
         command
@@ -697,8 +736,8 @@ int32_t __wrap_hirsel_rt_v2_launch(entry_fn entry, uint64_t result_size, const h
             .arg("-DHIRSEL_RT_ENABLE_STATS")
             .arg("-I")
             .arg(root)
-            .arg(dir.join("main.o"));
-        let mut objects: Vec<_> = std::fs::read_dir(&dir)
+            .arg(opt_dir.join("main.o"));
+        let mut objects: Vec<_> = std::fs::read_dir(&opt_dir)
             .unwrap()
             .map(|e| e.unwrap().path())
             .filter(|p| {
@@ -715,7 +754,7 @@ int32_t __wrap_hirsel_rt_v2_launch(entry_fn entry, uint64_t result_size, const h
             .arg(toolchain.archive(&target.triple).unwrap())
             .args([
                 "-Wl,--wrap=hirsel_rt_v2_seq_grow",
-                "-Wl,--wrap=hirsel_rt_v2_launch",
+                "-Wl,--wrap=hirsel_rt_v2_main",
                 "-lgcc_s",
                 "-lutil",
                 "-lrt",
@@ -732,14 +771,144 @@ int32_t __wrap_hirsel_rt_v2_launch(entry_fn entry, uint64_t result_size, const h
             String::from_utf8_lossy(&linked.stderr)
         );
         let run = std::process::Command::new(&exe).output().unwrap();
-        assert!(
-            run.status.success(),
-            "{}",
-            String::from_utf8_lossy(&run.stderr)
-        );
-        let counts = String::from_utf8(run.stdout).unwrap();
-        assert!(counts.starts_with("list-counts "), "{counts}");
+        let counts = list_counter_output(&run).unwrap_or_else(|e| panic!("{name} {opt:?}: {e}"));
+        grows.push(counts.split_whitespace().nth(1).unwrap().parse().unwrap());
         eprintln!("{opt:?}: {counts}");
+    }
+    grows
+}
+
+#[test]
+#[ignore = "native: run by tools/check-native.sh"]
+fn list_counter_growth_boundaries() {
+    // Rust RawVec's exponential-growth control, using Hirsel's own boundaries.
+    // Independent-copy coverage stays in list_push_detaches_a_shared_list_and_leaves_the_copy_alone.
+    for (n, expected) in [(1, 1), (8, 2), (32, 4)] {
+        let source = format!(
+            r#"pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  let mut xs: List[u64] = []
+  let mut i: u64 = 0
+  while i < {n} {{
+    list.push(mut xs, i)
+    i += 1
+  }}
+  if list.len(xs) == {n} && xs[{last}] == {last} {{ Ok(()) }} else {{ Error(()) }}
+}}
+"#,
+            last = n - 1
+        );
+        assert_eq!(
+            list_counter_run(&source, &format!("list-growth-{n}")),
+            vec![expected; 2]
+        );
+    }
+}
+
+#[test]
+#[ignore = "native: run by tools/check-native.sh"]
+fn list_counter_wrapper_reports_entry_bounds_and_signals() {
+    use hirsel_driver::native::Toolchain;
+    use std::os::unix::process::ExitStatusExt;
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("list-counter-controls");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = target();
+    let toolchain = Toolchain::in_tree_diagnostic(&dir.join("runtime"), &[&target]).unwrap();
+    std::fs::write(dir.join("count.c"), LIST_COUNTER_WRAPPER).unwrap();
+    let driver = dir.join("control.c");
+    std::fs::write(&driver, r#"#include "count.c"
+#include <signal.h>
+static char mode;
+static uint8_t control_entry(hirsel_rt_v2_ctx *ctx, uint8_t *environment, uint8_t *result, uint64_t *roots) {
+  (void)ctx;
+  assert(environment == NULL && roots[0] == 1 && roots[1] == 2);
+  fputs("control stdout\n", stdout);
+  fflush(stdout);
+  fputs("control stderr\n", stderr);
+  fflush(stderr);
+  if (mode == 's') { raise(SIGTERM); abort(); }
+  if (mode == 'e') return 1;
+  if (mode == 'r') *(uint32_t*)result = 1;
+  if (mode == 'b') grows = 25;
+  return 0;
+}
+int main(int argc, const char *const *argv) {
+  assert(argc == 2);
+  mode = argv[1][0];
+  if (mode == 'm') return 0;
+  hirsel_rt_v2_program_descriptor program = {
+    .abi_version = HIRSEL_RT_V2_ABI_VERSION, .roots = 3,
+    .entry = control_entry, .result_size = sizeof(uint32_t)
+  };
+  return __wrap_hirsel_rt_v2_main(&program, argc, argv);
+}
+"#).unwrap();
+    let exe = dir.join("control");
+    let linked = std::process::Command::new(&toolchain.clang)
+        .arg(&driver)
+        .arg("-DHIRSEL_RT_ENABLE_STATS")
+        .arg("-I")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hirsel-rt/include"))
+        .arg(toolchain.archive(&target.triple).unwrap())
+        .args([
+            "-Wl,--wrap=hirsel_rt_v2_seq_grow",
+            "-lgcc_s",
+            "-lutil",
+            "-lrt",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+        ])
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
+    for (mode, reason) in [
+        ("entry", "status == 0"),
+        ("result", "*(uint32_t*)result == 0"),
+        ("bound", "grows > 0 && grows <= 24"),
+        ("signal", "list-counter entering"),
+        ("missing", "stdout=\"\""),
+    ] {
+        let run = std::process::Command::new(&exe).arg(mode).output().unwrap();
+        let diagnostic = list_counter_output(&run).unwrap_err();
+        if mode == "missing" {
+            assert!(run.status.success(), "{diagnostic}");
+            assert!(
+                diagnostic.contains("stdout=\"\"") && diagnostic.contains("stderr=\"\""),
+                "{diagnostic}"
+            );
+            eprintln!("{mode}: {diagnostic}");
+            continue;
+        }
+        assert!(run.status.signal().is_some(), "{mode}: {diagnostic}");
+        assert!(
+            diagnostic.contains(&run.status.to_string()),
+            "{mode}: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("control stdout"),
+            "{mode}: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("control stderr"),
+            "{mode}: {diagnostic}"
+        );
+        assert!(diagnostic.contains(reason), "{mode}: {diagnostic}");
+        if mode == "signal" {
+            assert_eq!(run.status.signal(), Some(15), "{diagnostic}"); // SIGTERM on Linux.
+            assert!(
+                !diagnostic.contains("list-counter counters"),
+                "{diagnostic}"
+            );
+        } else {
+            assert_eq!(
+                diagnostic.contains("list-counter counters"),
+                mode == "bound",
+                "{mode}: {diagnostic}"
+            );
+        }
+        eprintln!("{mode}: {diagnostic}");
     }
 }
 
