@@ -1,0 +1,26 @@
+// rule: LANG-15
+// expect: run
+// Physical pattern views retain the original parameter's storage.
+type Value = Leaf | Array(List[Value])
+
+fn probe(a: Value) -> bool uses {} {
+  let mut cursor = a
+  match cursor {
+    Array(xs) => {
+      cursor = xs[0u64]
+    },
+    _ => (),
+  }
+  match cursor {
+    Leaf() => true,
+    _ => false,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  if probe(Array([Leaf()])) {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

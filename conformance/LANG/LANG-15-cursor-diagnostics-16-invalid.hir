@@ -1,0 +1,31 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 15
+// twin: LANG/LANG-15-cursor-diagnostics-16-run.hir
+// A relation on an owned result does not supply a physical view.
+type Value = Leaf | Array(List[Value])
+
+fn owned(xs: List[Value]) -> Value in xs uses {} {
+  copy xs[0u64]
+}
+
+fn probe(a: Value) -> bool uses {} {
+  let mut cursor = a
+  match cursor {
+    Array(xs) => {
+      cursor = owned(xs)
+    },
+    _ => (),
+  }
+  match cursor {
+    Leaf() => true,
+    _ => false,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  if probe(Array([Leaf()])) {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

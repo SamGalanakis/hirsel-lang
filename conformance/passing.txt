@@ -1,4 +1,6 @@
 
+LANG/LANG-15-cursor-diagnostics-16-invalid.hir
+LANG/LANG-15-cursor-diagnostics-16-run.hir
 conformance/CAP/CAP-1-acquire-net-result-run.hir
 conformance/CAP/CAP-1-acquire-random-result-run.hir
 conformance/CAP/CAP-1-acquire-stdout-result-run.hir

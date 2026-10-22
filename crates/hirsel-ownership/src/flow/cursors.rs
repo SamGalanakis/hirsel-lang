@@ -442,19 +442,112 @@ impl Checker<'_, '_> {
             return true;
         }
         if !value.borrowed_only || value.usage != UseKind::Borrow || value.aliased().is_none() {
-            self.diagnostic(
-                const { RuleId::of("LANG-15") },
-                operation,
-                "a borrow cursor requires a read-only view, not an owned refill",
-            );
+            if self.emit {
+                let (name, declaration) = self.binding_site(place.binding);
+                let source = value.site.unwrap_or(rhs);
+                let mut labels = vec![
+                    hirsel_diag::Label {
+                        span: declaration,
+                        message: format!("`{name}` was declared as a read-only borrow cursor here"),
+                    },
+                    hirsel_diag::Label {
+                        span: self.span_of(source),
+                        message: "this expression produces an owned value, not a read-only view"
+                            .into(),
+                    },
+                ];
+                if let ExprKind::Call { callee, .. } = self.tree.expressions[source.0 as usize].kind
+                {
+                    let callee_name = self
+                        .spelled(callee)
+                        .unwrap_or_else(|| "this callable".into());
+                    labels.push(hirsel_diag::Label {
+                        span: self.cursor_result_site(callee),
+                        message: format!("`{callee_name}` returns an owned value; a result relation does not turn an owned return into a read-only view"),
+                    });
+                }
+                if let Some(diagnostic) = self.diagnostic(
+                    const { RuleId::of("LANG-15") },
+                    operation,
+                    "a borrow cursor requires a read-only view, not an owned refill",
+                ) {
+                    diagnostic.secondary = labels;
+                }
+            }
             return true;
         }
         if !value.cursor_views.within(&contract.cover) {
-            self.diagnostic(
-                const { RuleId::of("MODE-1") },
-                operation,
-                "this view is outside the cursor's fixed origin cover",
-            );
+            if self.emit {
+                let (name, declaration) = self.binding_site(place.binding);
+                let roots: BTreeSet<_> = contract
+                    .cover
+                    .anchors
+                    .iter()
+                    .map(|anchor| self.binding_site(anchor.root).0)
+                    .collect();
+                let mut labels = vec![hirsel_diag::Label {
+                    span: declaration,
+                    message: format!(
+                        "`{name}` fixes its origin cover here (rooted in {})",
+                        roots
+                            .into_iter()
+                            .map(|root| format!("`{root}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }];
+                let conflicts: BTreeSet<_> = value
+                    .cursor_views
+                    .anchors
+                    .iter()
+                    .filter(|anchor| {
+                        !Views {
+                            anchors: BTreeSet::from([(*anchor).clone()]),
+                            lineages: value.cursor_views.lineages.clone(),
+                        }
+                        .within(&contract.cover)
+                    })
+                    .map(|anchor| anchor.root)
+                    .collect();
+                let mut boundaries = BTreeSet::new();
+                for root in conflicts {
+                    let (origin, span) = self.binding_site(root);
+                    labels.push(hirsel_diag::Label {
+                        span,
+                        message: format!(
+                            "this incoming view of `{origin}` is outside `{name}`'s fixed cover"
+                        ),
+                    });
+                    if let Some(source) = self.cursor_pattern_source(root)
+                        && super::super::cfg::place(self.body, source, self.source_rows).is_none()
+                    {
+                        boundaries.insert(source);
+                    }
+                }
+                if labels.len() == 1 {
+                    labels.push(hirsel_diag::Label {
+                        span: self.span_of(rhs),
+                        message: "this incoming view requires an origin outside the fixed cover"
+                            .into(),
+                    });
+                }
+                for boundary in boundaries {
+                    labels.push(hirsel_diag::Label {
+                        span: self.span_of(boundary),
+                        message: "this computed value supplies a distinct storage origin; covering its inputs does not cover the temporary".into(),
+                    });
+                }
+                if let Some(diagnostic) = self.diagnostic(
+                    const { RuleId::of("MODE-1") },
+                    operation,
+                    "this view is outside the cursor's fixed origin cover",
+                ) {
+                    diagnostic.secondary = labels;
+                    // Override MODE-1's generic result-relation repair: it is
+                    // not a verified repair for a cursor's fixed cover.
+                    diagnostic.notes.push("help: The cursor's origin cover is fixed at its declaration; later assignments cannot enlarge it.".into());
+                }
+            }
             return true;
         }
         let mut required = self

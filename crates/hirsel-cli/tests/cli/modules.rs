@@ -39,3 +39,4 @@ mod la_spectral_split_14;
 mod httpcheck_15;
 mod csvjoin_15;
 mod archiveaudit_15;
+mod cursor_diagnostics_16;

@@ -90,3 +90,4 @@ mod native_import_envelope_11;
 mod store_authority_14;
 mod expired_whole_transfer;
 mod native_effects_frame_15;
+mod cursor_diagnostics_16;

@@ -2791,6 +2791,49 @@ impl Checker<'_, '_> {
             .push(Diagnostic::error(rule, site, message));
         self.diagnostics.last_mut()
     }
+    /// A result annotation in the current syntax, or the caller's callee
+    /// site when the declaration is in another item/module. Never interpret
+    /// an expression ID from another definition in this body's syntax.
+    fn cursor_result_site(&self, callee: ExprId) -> Span {
+        let owner = if matches!(
+            self.tree.expressions[callee.0 as usize].kind,
+            ExprKind::Closure { .. }
+        ) {
+            Some(NameSite::Expression(callee))
+        } else if self.callee_definition(callee) == Some(&self.syntax.item.definition) {
+            Some(NameSite::Item)
+        } else {
+            place(self.body, callee, self.source_rows)
+                .map(|place| self.body.bindings[place.binding].site)
+                .filter(|site| matches!(site, NameSite::Statement(_)))
+        };
+        owner
+            .filter(|owner| self.sites().signature(*owner).is_some())
+            .map_or_else(|| self.span_of(callee), |owner| self.sites().result(owner))
+    }
+    /// Recover a pattern binding's input using checked source rows. In
+    /// particular, a computed tuple's fields belong to the tuple temporary,
+    /// even when its input expressions were borrowed names.
+    fn cursor_pattern_source(&self, binding: usize) -> Option<ExprId> {
+        let NameSite::Pattern(target) = self.body.bindings[binding].site else {
+            return None;
+        };
+        for node in &self.graph.nodes {
+            let Op::Bind { pattern, value, .. } = &node.op else {
+                continue;
+            };
+            let mut pending = vec![*pattern];
+            while let Some(pattern) = pending.pop() {
+                if pattern == target {
+                    return Some(*value);
+                }
+                if let Some(&index) = self.pattern_indices.get(&pattern) {
+                    pending.extend(self.body.patterns[index].subpatterns());
+                }
+            }
+        }
+        None
+    }
     // Dead operations still need explicit protocol entries. They have no flow
     // judgment and must be removed before emitting executable instructions.
     fn unreachable_facts(&mut self, op: &Op) {
