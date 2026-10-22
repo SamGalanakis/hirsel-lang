@@ -9,6 +9,127 @@ use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
 const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
+const FMT_HELP: &str = "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic.";
+
+/// These tables describe the existing parsers below; help never loads inputs.
+fn command_help(topic: &str) -> Option<&'static str> {
+    Some(match topic {
+        "fmt" => FMT_HELP,
+        "check" => "usage: hirsel check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json>
+
+Check a source file or package without running its entry.
+  --json              Machine-readable diagnostics
+  --safe              Report whether the entry reaches extern C or Unsafe
+  --watch             Recheck after edits until interrupted
+  --verify-cache      Recompute cached results and compare
+  --verbose           Report dependency image selection
+  --timings[=json]    Report compiler timings on stderr
+  --mem-usage         Report compiler memory on stderr
+  -h, --help          Show this help before a source operand
+Example: hirsel check --json app/hirsel.json",
+        "build" => "usage: hirsel build [--release | --debug] [--lto] [--backend llvm|cranelift] [--target x86_64-linux|aarch64-linux] [--fuel] [--proofs <sidecar> [--trust <tool@version>]...] [--verify-cache] [--validate-stages] [--no-verify] <source|manifest.json> -o <exe>
+
+Build a standalone executable; launch authority is supplied when it runs.
+  -o <exe>            Required executable output path
+  --release           Optimized LLVM build with scoped specialization
+  --debug             Unoptimized build; defaults to Cranelift
+  --backend           Select llvm or cranelift; release requires LLVM
+  --lto               LLVM whole-module optimization; incompatible with --debug
+  --target            Target x86_64-linux (default) or aarch64-linux
+  --fuel              Instrument the executable for fuel accounting
+  --proofs <sidecar>   Load proof certificates; --trust adds trusted tool@version
+  --verify-cache      Recompute cached results and compare
+  --validate-stages   Validate native compilation stages and cache hits
+  --no-verify         Skip the second checker
+  --verbose           Report dependency image selection
+  --timings[=json]    Report compiler timings on stderr
+  --mem-usage         Report compiler memory on stderr
+  -h, --help          Show this help before a source operand
+Default build: optimized LLVM without scoped specialization.
+Example: hirsel build --release app/hirsel.json -o app
+Example: hirsel build --debug --backend llvm app.hir -o app-debug
+Standalone launch: ./app --hirsel-grants grants.json argument
+For recording, --hirsel-record comes before --hirsel-grants.
+See docs/native-verification.md#record-remove-host-access-replay for the recipe.",
+        "run" => "usage: hirsel run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] [--verify-cache] [--validate-stages] [--no-verify] [--json] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...]
+
+Run a source entry; the default engine is the interpreter.
+  --native            Compile and run natively (LLVM by default)
+  --backend           Select llvm or cranelift; requires --native
+  --proofs <sidecar>   Native proof certificates; --trust adds trusted tool@version
+  --simulation <json> Interpret a simulation; excludes native/live/replay launches
+  --grants <json>     Bind a grants template (file or inline JSON)
+  --run <json>        Use a bound run record and its Args snapshot
+  --record <tape>     Record a live --run or --grants launch
+  --revocations <json> Revoke grants during a live launch
+  --replay <tape>     Replay recorded effects without live grants
+  --max-steps         Interpreter budget: unsigned integer or unbounded
+  --cores <n>         Positive core count; incompatible with --simulation
+  -- args...          Replace template Args; excludes --run, --replay, --simulation
+  --json              Machine-readable diagnostics
+  --verify-cache      Recompute cached results and compare
+  --validate-stages   Validate native compilation; requires --native
+  --no-verify         Skip the second checker
+  --verbose           Report dependency image selection
+  --timings[=json]    Report compiler timings on stderr
+  --mem-usage         Report compiler memory on stderr
+  -h, --help          Show this help before a source operand
+Operands after -- belong to the app, including --help, -h and help.
+Example: hirsel run app.hir --grants grants.json -- --help
+Standalone executables use --hirsel-grants, --hirsel-run and --hirsel-replay.
+For recording, --hirsel-record comes before --hirsel-grants.
+See docs/native-verification.md#record-remove-host-access-replay for the recipe.",
+        "test" => "usage: hirsel test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...]
+
+Run matching tests; the default engine is the interpreter.
+  --native            Run native tests (LLVM by default)
+  --backend           Select llvm or cranelift; requires --native
+  --seed <u64>        Select the property-test seed
+  --scheduler         One schedule: fifo@1, random@1 or pct@1, with :seed
+  --explore <n>       Explore n schedules; random@1 or pct@1 without :seed
+  --race              Detect races in interpreted tests
+  --sim-points        Interpreter points: root-release,atomic-store (either or both)
+  --bless             Update test snapshots
+  --bench             Run benchmarks; excludes bless, max-steps, scheduler, explore
+  --bench-time <ms>   Positive benchmark target time; requires --bench
+  --max-steps         Interpreter budget: unsigned integer or unbounded
+  --json              Machine-readable results
+  --no-verify         Skip the second checker
+  --verbose           Report dependency image selection
+  --timings[=json]    Report compiler timings on stderr
+  --mem-usage         Report compiler memory on stderr
+  -h, --help          Show this help before a source operand
+--race and --sim-points exclude --native and --bench.
+Example: hirsel test --native --backend cranelift app/hirsel.json
+Example: hirsel test --explore 10 --scheduler pct@1 app.hir filter",
+        _ => return None,
+    })
+}
+
+/// Recognize only whole help invocations, never scan source or app operands.
+fn parse_help(args: &[OsString]) -> Option<Result<&'static str, lexopt::Error>> {
+    match args {
+        [flag] if flag == "--help" || flag == "help" => Some(Ok(USAGE)),
+        [command, topic, rest @ ..] if command == "help" => Some(if rest.is_empty() {
+            topic
+                .to_str()
+                .and_then(command_help)
+                .ok_or_else(|| "unknown help topic".into())
+        } else {
+            Err("help takes exactly one command topic".into())
+        }),
+        [topic, flag, rest @ ..] if flag == "--help" || flag == "-h" => {
+            let text = topic.to_str().and_then(command_help)?;
+            Some(if rest.is_empty() {
+                Ok(text)
+            } else {
+                Err("command help takes no extra operands or options".into())
+            })
+        }
+        _ => None,
+    }
+}
+
 mod allocator;
 mod execution_policy;
 mod explain;
@@ -26,8 +147,7 @@ fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(args, start)))
 }
 enum Command {
-    Help,
-    FmtHelp,
+    Help(&'static str),
     New(hirsel_cli_args::NewOptions),
     Ctl {
         path: OsString,
@@ -238,10 +358,11 @@ fn step_budget(value: Option<OsString>) -> Result<Option<u64>, lexopt::Error> {
 }
 
 fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
+    if let Some(help) = parse_help(&args) {
+        return help.map(Command::Help);
+    }
     let mut args = Parser::from_args(args);
     let command = match args.next()? {
-        Some(Long("help")) => Command::Help,
-        Some(Value(command)) if command == "help" => Command::Help,
         Some(Value(command)) if command == "ctl" => {
             let path = args.value()?;
             let action = args.value()?;
@@ -845,7 +966,6 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 }
             } else {
                 match args.next()? {
-                    Some(Long("help")) if name == "fmt" => Command::FmtHelp,
                     Some(Long("json")) if name == "check" => Command::Source {
                         command: name,
                         flag: Some("--json"),
@@ -904,6 +1024,19 @@ fn take_flag(args: &mut Vec<OsString>, flag: &str) -> bool {
 
 /// Run the command, then report what `--timings` and `--mem-usage` measured.
 fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
+    // Help must precede resident/compiler/cache setup as well as source loading.
+    if let Some(help) = parse_help(&args) {
+        return match help {
+            Ok(text) => {
+                println!("{text}");
+                0
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                usage()
+            }
+        };
+    }
     let verify_cache = take_flag(&mut args, "--verify-cache");
     let command = args
         .iter()
@@ -1309,14 +1442,8 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
-        Command::FmtHelp => {
-            println!(
-                "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic."
-            );
-            return 0;
-        }
-        Command::Help => {
-            println!("{USAGE}");
+        Command::Help(text) => {
+            println!("{text}");
             return 0;
         }
         Command::Tapes { tapes } => {

@@ -22,6 +22,15 @@ coding agent. Its fixed goals:
 
 ## Start a program or package
 
+Discover exact options with `hirsel check --help`, `hirsel run --help`,
+`hirsel build --help`, `hirsel test --help` or `hirsel help fmt`.
+`-h` and `hirsel help COMMAND` show the same command help without source,
+manifest, toolchain, cache or grants. Use help before a source operand;
+`hirsel run app.hir -- --help` passes `--help` to the application.
+Compiler flags differ from standalone launch prefixes: see the
+[native recording recipe](native-verification.md#record-remove-host-access-replay).
+For a standalone executable, `--hirsel-record` comes before `--hirsel-grants`.
+
 A single `.hir` file needs no manifest: it belongs to `standalone@0` and selects
 exactly the `std@1` shipped with the toolchain, reusing its std precheck. An exact
 `<source>.hir.json` sidecar overrides that selection; a sidecar without std is the

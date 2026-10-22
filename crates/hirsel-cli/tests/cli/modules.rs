@@ -2,6 +2,7 @@ mod budgets;
 mod cache_defaults;
 mod candidate;
 mod compiler_workers;
+mod command_help_12;
 mod deadlines;
 mod dependency_card;
 mod durable;

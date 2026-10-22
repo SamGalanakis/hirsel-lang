@@ -12,6 +12,12 @@ defines native toolchain setup, launch admission and record/replay behavior.
 The commands below target x86-64 Linux with a matching `hirsel` on PATH and its
 pinned LLVM, link kit and runtime archives configured as described there.
 
+Use `hirsel build --help` or `hirsel help run` to discover compiler options
+without preparing inputs or a native toolchain. Put command help before the
+source operand; operands after `hirsel run ... --` are application Args.
+Standalone launch prefixes follow the [recording recipe](#record-remove-host-access-replay):
+`--hirsel-record` comes before `--hirsel-grants`.
+
 ## Prepare and build
 
 Run from the repository root. `mktemp` gives this session private scratch; keep
