@@ -42,5 +42,24 @@ class PathLists(unittest.TestCase):
             self.assertIsNone(merging.resolve('conformance/passing.txt', '', invalid, row))
 
 
+class LineSets(unittest.TestCase):
+    def test_every_row_obeys_three_way_set_membership(self):
+        # Exhaust all eight base/ours/theirs membership combinations, including
+        # deletion against unchanged, shared additions and both deletions.
+        from itertools import product
+        combinations = list(product([False, True], repeat=3))
+        texts = [''.join(f'row{i}\n' for i, flags in enumerate(combinations) if flags[side])
+                 for side in range(3)]
+        expected = {f'row{i}' for i, (base, ours, theirs) in enumerate(combinations)
+                    if (base and ours and theirs) or (ours and not base) or (theirs and not base)}
+        for path in ['tools/known-failures.tsv', 'crates/example/tests/it/modules.rs']:
+            with self.subTest(path=path):
+                self.assertEqual(set(merging.resolve(path, *texts).splitlines()), expected)
+
+    def test_unsorted_lines_keep_order_and_normalize_missing_final_newline(self):
+        self.assertEqual(merging.resolve('tools/known-failures.tsv', 'R\nkeep',
+                                         'keep\nzed', 'R\nkeep\nalpha'), 'keep\nzed\nalpha\n')
+
+
 if __name__ == '__main__':
     unittest.main()

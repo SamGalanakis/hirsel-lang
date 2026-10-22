@@ -6,14 +6,38 @@ crate root, so existing module paths, test names, guard setup and Buck2 test
 shards stay the same. Keep attributes and `#[path]` support modules in `main.rs`;
 they are not independent lines. Both Cargo and Buck2 compile the include, and
 `tools/buck2/fmt.py` checks each registered module as a rustfmt root, without
-requiring union-merged declarations to be reordered.
+requiring independent declarations to be reordered.
 
-Git's built-in `merge=union` combines these lists and `tools/known-failures.tsv`
-without requiring local driver configuration. Declaration and ledger row order
-has no semantics. `tools/check-hot-files`, run by `tools/land` on every rebased
-tree including push-only retries, rejects duplicate declarations and duplicate
-ledger IDs. The ledger uses main-runs' existing four-column/date validation.
-Do not add comments, attributes or blank lines to the declaration lists.
+The `hirsel` merge driver in `tools/buck2/merging.py` combines both these lists
+and `tools/known-failures.tsv` as whole-line sets. For base B and sides O/T the
+result is `(B ∩ O ∩ T) ∪ (O − B) ∪ (T − B)`: a baseline row survives only if
+both sides keep it, and either side's new rows survive. Thus deleting resolved
+failure R while another lane adds S yields S. Git's built-in `merge=union`
+would bring R back, silently hiding a fixed test. This driver protects ordinary
+merges and rebases as well as landing, which is why it is preferable to a
+push-only ledger check.
+
+Bootstrap (`python3 tools/buck2/prepare.py`) and `tools/land` install the driver
+in the clone's Git config. To configure it before a manual merge or rebase
+without preparing build tools, run:
+
+```sh
+git config merge.hirsel.name 'files many lanes add to (tools/buck2/merging.py)'
+git config merge.hirsel.driver 'python3 tools/buck2/merging.py %O %A %B %P'
+```
+
+Custom drivers require this local configuration; `.gitattributes` alone does
+not install them. The two former union patterns both use `merge=hirsel`:
+`crates/*/tests/*/modules.rs` and `tools/known-failures.tsv`. The set operation
+reuses the removal rule from `sorted_stretch`
+(`tools/buck2/merging.py` at `37dae771`, lines 193–194), over the entire file so Git's conflict-hunk boundaries cannot change its result.
+It retains ours' line order followed by new lines from theirs, removes identical
+duplicates and writes final newlines. Declaration and ledger row order has no
+semantics. Different rows with the same ledger ID remain visible to validation.
+`tools/check-hot-files`, run by `tools/land` on every rebased tree including
+push-only retries, rejects duplicate declarations and duplicate ledger IDs.
+The ledger uses main-runs' existing four-column/date validation. Do not add
+comments, attributes or blank lines to the declaration lists.
 
 Publish benchmark measurements in `RESULTS-<lane-or-session>.md` beside the
 historical `RESULTS.md`. LangArena and the tasks app default to a session report;
@@ -48,39 +72,39 @@ is excluded: its edits are not independent registrations.
 | --- | ---: | --- |
 | `conformance/passing.txt` | 176 | Path-set merge accepts unsorted appends/comments; preserves removals |
 | `third-party/NOTICES.md` | 96 | Existing append-only merge driver; preserve notice prose/attribution |
-| `tools/known-failures.tsv` | 84 | Built-in union; land rejects duplicate IDs |
+| `tools/known-failures.tsv` | 84 | Three-way line set; removals survive; land rejects duplicate IDs |
 | `docs/api.md` | 42 | Existing main-runs generator; legacy rebase conflicts keep main's writer |
 | `crates/hirsel-engine/src/registry/review-table.txt` | 35 | Existing semantic sorted-list merge |
 | `BUCK` | 31 | Already removed from Git, generated on demand |
 | `native-tests/library/operations.tsv` | 30 | Existing semantic sorted-list merge |
-| `crates/hirsel-driver/tests/it-stdlib/main.rs` | 18 | Ordinary declarations isolated into union `modules.rs` |
-| `crates/hirsel-driver/tests/it/main.rs` | 17 | Union `modules.rs` |
-| `crates/hirsel-driver/tests/it-scaling/main.rs` | 10 | Union `modules.rs` |
-| `crates/hirsel-rt/tests/it/main.rs` | 9 | Union `modules.rs` |
-| `crates/hirsel-run-config/tests/it/main.rs` | 8 | Union `modules.rs` |
+| `crates/hirsel-driver/tests/it-stdlib/main.rs` | 18 | Ordinary declarations isolated into independent `modules.rs` |
+| `crates/hirsel-driver/tests/it/main.rs` | 17 | Line-set `modules.rs` |
+| `crates/hirsel-driver/tests/it-scaling/main.rs` | 10 | Line-set `modules.rs` |
+| `crates/hirsel-rt/tests/it/main.rs` | 9 | Line-set `modules.rs` |
+| `crates/hirsel-run-config/tests/it/main.rs` | 8 | Line-set `modules.rs` |
 | `tools/buck2/BUCK` | 7 | Build rules, not an append-only test registry; unchanged |
-| `crates/hirsel-pipeline-tests/tests/front/main.rs` | 6 | Union `modules.rs` |
+| `crates/hirsel-pipeline-tests/tests/front/main.rs` | 6 | Line-set `modules.rs` |
 | `crates/hirsel-authority/src/corpus/passing.txt` | 6 | Path-set merge, accepting unsorted appends |
 | `crates/hirsel-rt/tests/descriptors/main.rs` | 5 | Actual test bodies, not a registry; unchanged |
 | `crates/hirsel-ownership/src/tests/{passing,pending}.txt` | 5 each | Path-set merge, accepting unsorted appends |
 | `crates/hirsel-authority/src/corpus/pending.txt` | 5 | Path-set merge, accepting unsorted appends |
-| `crates/hirsel-llvm/tests/it/main.rs` | 5 | Union `modules.rs` |
+| `crates/hirsel-llvm/tests/it/main.rs` | 5 | Line-set `modules.rs` |
 | `bench/langarena/RESULTS.md` | 5 | Historical; new reports shard by session |
 | `bench/tasks-perf/RESULTS.md` | 4 | Historical; explicit per-session output |
 | `bench/apps/tasks/RESULTS.md` | 3 | Historical; runner shards by session |
 | `third-party/BUCK` | 3 | Already ignored, generated on demand |
-| `crates/hirsel-interp/tests/it/main.rs` | 3 | Union `modules.rs` |
-| `crates/hirsel-free/tests/it/main.rs` | 3 | Union `modules.rs` |
-| `crates/hirsel-{validate,parser,lir,conformance}/tests/it/main.rs` | 2 each | Union `modules.rs` |
-| `crates/hirsel-pipeline-tests/tests/rc/main.rs` | 2 | Union `modules.rs` |
+| `crates/hirsel-interp/tests/it/main.rs` | 3 | Line-set `modules.rs` |
+| `crates/hirsel-free/tests/it/main.rs` | 3 | Line-set `modules.rs` |
+| `crates/hirsel-{validate,parser,lir,conformance}/tests/it/main.rs` | 2 each | Line-set `modules.rs` |
+| `crates/hirsel-pipeline-tests/tests/rc/main.rs` | 2 | Line-set `modules.rs` |
 | `crates/hirsel-{object-storage,code-store}/tests/it/main.rs` | 2 each | Actual test bodies, not registries; unchanged |
 | `crates/hirsel-driver/tests/it-precheck/main.rs` | 2 | Historical path, removed on main |
 | `crates/hirsel-modes/src/ownership/tests/passing.txt` | 2 | Historical path, moved to hirsel-ownership |
 | `crates/hirsel-modes/src/authority/corpus/pending.txt` | 2 | Historical path, moved to hirsel-authority |
 | `bench/micro/http/RESULTS.md` | 2 | Historical; runner already requires output |
 | `tools/toolchain-dist/BUCK`, `tools/buck2/native-toolchain/BUCK`, `bench/micro-json-reference/BUCK` | 2 each | Build rules, not test inventories; unchanged |
-| `crates/hirsel-{run-schema,remote,heapcheck,engine}/tests/it/main.rs` | 1 each | Union `modules.rs` |
-| `crates/hirsel-driver/tests/it-keyed/main.rs` | 1 | Union `modules.rs` |
+| `crates/hirsel-{run-schema,remote,heapcheck,engine}/tests/it/main.rs` | 1 each | Line-set `modules.rs` |
+| `crates/hirsel-driver/tests/it-keyed/main.rs` | 1 | Line-set `modules.rs` |
 | `crates/hirsel-driver/tests/it-image/main.rs` | 1 | Actual test body, not a registry; unchanged |
 | `conformance/pending.txt` | 1 | Path-set merge, accepting unsorted appends |
 | `tools/h2spec/passing.txt` | 1 | Static baseline, not shared lane registration; unchanged |
@@ -102,10 +126,17 @@ inventory, sizes, native pins and workspace metadata are all on that list.
 
 ## Verification
 
-`tools/tests/hot_files.py` creates two scratch branches that each append a
-module and ledger row, then rebases in both orders with system/global Git
-configuration disabled. `tools/tests/merging.py` covers the corpus append shape,
-twin rows, removals and conflicting expectations. `tools/tests/land.py` covers
+`tools/tests/hot_files.py` creates scratch branches and checks add/add,
+delete/add and delete/delete for both former union patterns, through real
+merges and rebases in both orders. System/global Git configuration is disabled;
+the scratch clone installs the same local driver as bootstrap and landing.
+The delete/add case failed in all four operation/order combinations with the
+old union attributes. `tools/tests/merging.py` exhausts all eight possible
+base/ours/theirs row memberships, checks line order/final newlines and covers
+the corpus append shape, twin rows, removals and conflicting expectations.
+Run `python3 tools/tests/hot_files.py` and `python3 tools/tests/merging.py`;
+main-runs also executes these host-side Git harnesses in its tool-test stage.
+`tools/tests/land.py` covers
 replaying multiple generated-file conflicts, regenerating an ignored build
 inventory, refusing source conflicts, moved-main retries and failed checks.
 The stdlib pre-switch harness listed 438 tests (original registry bodies plus
@@ -124,3 +155,39 @@ build/test and checked unchanged afterwards. Focused tool checks pass:
 4 registration/formatting checks, 4 corpus merge checks, 6 landing checks,
 and 4 task report checks. Temporary proof modules and ledger rows are not
 part of the landed change.
+
+## Resurrected-row audit (2026-10-22)
+
+Audited origin/main `5f7d6f73`: 46 failure rows, zero exact current rows found
+among deletions in the ledger's first-parent history. Comparing IDs also found
+eight matches: four owner-field repairs in `ede32cc4`, one expanded corpus
+reason in `b8c1ce45`, and three different historical reasons in `28f312b5` and
+`1fdf0d3b`. Those are edits or later reports, not proof of resurrection; they
+remain in the ledger. No additional row removal is justified at this revision.
+
+The nine rows resurrected by `db175cca` had already been removed again by
+`5f7d6f73` before this audit. Each is under
+`hirsel-pipeline-tests-test-front::modes_explanations::`; their original removal
+is cited individually below. `6050ca60` repaired the physical-path snapshots.
+
+| Test suffix | Earlier removing commit | Latest cleanup |
+| --- | --- | --- |
+| `case_1_borrowed_parameter_into_mut_storage` | `a213f336` | `5f7d6f73` |
+| `case_2_mut_parameter_as_global_result` | `a213f336` | `5f7d6f73` |
+| `case_3_global_store_and_global_result` | `a213f336` | `5f7d6f73` |
+| `case_4_task_of_another_scope` | `a213f336` | `5f7d6f73` |
+| `case_5_erased_brand_into_branded_binding` | `a213f336` | `5f7d6f73` |
+| `case_6_parameter_in_the_wrong_arena` | `a213f336` | `5f7d6f73` |
+| `case_7_escaping_capture_of_a_borrowed_parameter` | `a213f336` | `5f7d6f73` |
+| `case_8_result_of_a_temporary_closure_environment` | `a213f336` | `5f7d6f73` |
+| `constructed_record_placed_by_its_part` | `a213f336` | `5f7d6f73` |
+
+The other known union restorations are also absent: the Free full-pool waiter
+fixture removed in `13f723de`, and `MEM-14-dynamic-list-replace-{run,fail}.hir`
+removed in `e635d136`, were cleaned up again in `5ca29cdb`.
+The audit changes no failure classifications and claims no cleanup already
+performed by those commits. The focused Buck2 check
+`buck2 test //:hirsel-pipeline-tests-test-front-shard-1 -- --test-arg=modes_explanations::`
+ran 11 tests: all nine previously hidden tests and two related controls passed.
+Focused tool checks passed 6 registration tests, 6 merge tests and 17 landing
+tests (29 total).

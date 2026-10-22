@@ -11,6 +11,8 @@ resolves a conflict in one with `resolve` where the driver is not installed.
 - a package manifest (`hirsel.json`) merges structurally: keys, sources and
   dependencies either side added or removed, so two lanes adding std modules
   both keep theirs;
+- independent line ledgers and module declarations use a three-way set merge:
+  either side's removal wins and both sides' additions survive;
 - corpus path lists merge as sets, accepting unsorted appends and standalone
   comments while preserving removals and conflicting expectation changes;
 - a sorted list (SORTED_LISTS: ratchet and expectation lists, one entry per
@@ -51,6 +53,9 @@ SORTED_LISTS = (
 # Corpus ratchets are path sets even when lanes append unsorted batches or
 # comments. A path's inline reason is part of its value, not its identity.
 PATH_LISTS = tuple(path for path in SORTED_LISTS if path.endswith(('passing.txt', 'pending.txt')))
+# Whole-line identities, without key or ordering semantics. Keep this in sync
+# with the independent-line patterns in .gitattributes.
+LINE_SETS = ('crates/*/tests/*/modules.rs', 'tools/known-failures.tsv')
 DRIVER = 'hirsel'
 
 
@@ -62,8 +67,12 @@ def sorted_list(path: str) -> bool:
     return any(fnmatchcase(path, pattern) for pattern in SORTED_LISTS)
 
 
+def line_set(path: str) -> bool:
+    return any(fnmatchcase(path, pattern) for pattern in LINE_SETS)
+
+
 def resolvable(path: str) -> bool:
-    return path in APPEND_ONLY or path.rpartition('/')[2] == MANIFEST or sorted_list(path)
+    return line_set(path) or path in APPEND_ONLY or path.rpartition('/')[2] == MANIFEST or sorted_list(path)
 
 
 def resolve(path: str, base: str | None, ours: str | None, theirs: str | None) -> str | None:
@@ -73,6 +82,8 @@ def resolve(path: str, base: str | None, ours: str | None, theirs: str | None) -
     if ours is None or theirs is None or not resolvable(path):
         return None
     try:
+        if line_set(path):
+            return merge_line_set(base or '', ours, theirs)
         if path in APPEND_ONLY:
             return line_merge(base or '', ours, theirs, appended)
         if path in PATH_LISTS:
@@ -82,6 +93,19 @@ def resolve(path: str, base: str | None, ours: str | None, theirs: str | None) -
         return manifest(base, ours, theirs)
     except Conflict:
         return None
+
+
+def merge_line_set(base: str, ours: str, theirs: str) -> str:
+    """(base & ours & theirs) | (ours - base) | (theirs - base).
+
+    Use the removal rule from sorted_stretch over the whole file: Git's hunk
+    boundaries must not decide whether a deleted row returns. Keep ours' order,
+    then theirs' new lines; these lists have no ordering semantics.
+    """
+    ancestor, left, right = (text.splitlines() for text in (base, ours, theirs))
+    removed = (set(ancestor) - set(left)) | (set(ancestor) - set(right))
+    lines = dict.fromkeys(line for line in left + right if line not in removed)
+    return ''.join(line + '\n' for line in lines)
 
 
 def path_list(base: str, ours: str, theirs: str) -> str:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the independent line lists that Git merges with merge=union."""
+"""Check the independent line lists that Git merges as three-way line sets."""
 
 from pathlib import Path
 import re
@@ -22,7 +22,7 @@ def check(root=ROOT):
         main = path.with_name('main.rs').read_text()
         if 'include!("modules.rs");' not in main:
             errors.append(f'{path}: main.rs must include this registry')
-        # Ordinary sibling modules belong in the union list; #[path] helpers
+        # Ordinary sibling modules belong in the independent line list; #[path] helpers
         # and attributes remain together in main.rs.
         lines = main.splitlines()
         for i, line in enumerate(lines):

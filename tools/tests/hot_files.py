@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Concurrent independent registrations survive real Git rebases without configuration."""
+"""Independent registrations preserve additions and removals in real Git merges and rebases."""
 from pathlib import Path
 import os
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
 import runpy
+import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools/buck2'))
+import merging
+
 CHECK = runpy.run_path(str(ROOT / 'tools/check-hot-files'))['check']
 
 
@@ -34,6 +39,10 @@ class HotFiles(unittest.TestCase):
         # The checker uses main-runs' existing ledger parser.
         (self.root / 'tools/main-runs').symlink_to(ROOT / 'tools/main-runs')
         (self.root / '.gitattributes').write_text((ROOT / '.gitattributes').read_text())
+        driver = self.root / 'tools/buck2/merging.py'
+        driver.parent.mkdir()
+        shutil.copyfile(ROOT / 'tools/buck2/merging.py', driver)
+        merging.install(self.root)
         self.commit('base')
 
     def git(self, *args):
@@ -53,15 +62,37 @@ class HotFiles(unittest.TestCase):
             out.write(f'{row_id or name}\treason\towner\t2026-10-22\n')
         self.commit(name)
 
-    def test_two_branches_rebase_in_both_orders_without_a_merge_driver(self):
+    def check_both_orders(self, expected_modules, expected_ids):
+        for first, second in [('alpha', 'beta'), ('beta', 'alpha')]:
+            for operation in ['merge', 'rebase']:
+                with self.subTest(first=first, second=second, operation=operation):
+                    self.git('checkout', '-q', '-B', 'proof', second)
+                    self.git(operation, first)
+                    self.assertEqual(set(self.registry.read_text().splitlines()), expected_modules)
+                    self.assertEqual({row.split('\t')[0] for row in self.ledger.read_text().splitlines()},
+                                     expected_ids)
+                    self.assertEqual(CHECK(self.root), [])
+
+    def delete_first(self, name):
+        self.git('checkout', '-qb', name, 'main')
+        self.registry.write_text('')
+        self.ledger.write_text('')
+        self.commit(name)
+
+    def test_add_against_add(self):
         self.lane('alpha')
         self.lane('beta')
-        for first, second in [('alpha', 'beta'), ('beta', 'alpha')]:
-            self.git('checkout', '-q', '-B', 'proof', second)
-            self.git('rebase', first)
-            self.assertEqual(set(self.registry.read_text().splitlines()),
-                             {'mod first;', 'mod alpha;', 'mod beta;'})
-            self.assertEqual(CHECK(self.root), [])
+        self.check_both_orders({'mod first;', 'mod alpha;', 'mod beta;'}, {'first', 'alpha', 'beta'})
+
+    def test_delete_against_add(self):
+        self.delete_first('alpha')
+        self.lane('beta')
+        self.check_both_orders({'mod beta;'}, {'beta'})
+
+    def test_delete_against_delete(self):
+        self.delete_first('alpha')
+        self.delete_first('beta')
+        self.check_both_orders(set(), set())
 
     def test_duplicate_declarations_and_ledger_identities_are_rejected(self):
         with self.registry.open('a') as out:
@@ -72,7 +103,7 @@ class HotFiles(unittest.TestCase):
         self.assertIn('duplicate line', errors)
         self.assertIn('duplicate identity', errors)
 
-    def test_formatting_checks_module_bodies_without_sorting_union_declarations(self):
+    def test_formatting_checks_module_bodies_without_sorting_declarations(self):
         self.registry.write_text('mod zed;\nmod alpha;\n')
         for name in ['zed', 'alpha']:
             self.registry.with_name(name + '.rs').write_text('#[test]\nfn passes() {}\n')
@@ -87,7 +118,7 @@ class HotFiles(unittest.TestCase):
         self.assertIn('crates/example/tests/it/alpha.rs', command)
         self.assertNotIn('crates/example/tests/it/modules.rs', command)
 
-    def test_attributes_cannot_enter_a_union_registry(self):
+    def test_attributes_cannot_enter_an_independent_registry(self):
         self.registry.write_text('#[cfg(unix)]\nmod first;\n')
         self.assertIn('expected one independent mod declaration', '\n'.join(CHECK(self.root)))
 

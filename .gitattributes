@@ -14,6 +14,7 @@ native-tests/library/operations.tsv merge=hirsel
 native-tests/regressions/*.txt merge=hirsel
 
 # Pure independent lines: declarations and ledger rows have no ordering semantics.
+# Three-way set merge preserves removals as well as concurrent additions.
 # tools/check-hot-files rejects duplicates before landing.
-crates/*/tests/*/modules.rs merge=union
-tools/known-failures.tsv merge=union
+crates/*/tests/*/modules.rs merge=hirsel
+tools/known-failures.tsv merge=hirsel
