@@ -4,11 +4,11 @@ Minutes are approximate elapsed investigation time; overlapping waits are not a 
 Copied diagnostics normalize checkout paths and strip trailing display whitespace.
 The table preserves original output; the recipes below describe current rules.
 
-| Tried | Exact diagnostic | Fix | Minutes lost | Class |
+| Tried | Historical diagnostic | Current disposition / repair | Minutes lost | Class |
 | --- | --- | --- | ---: | --- |
 | Named the test `deadline`, already used by a local. | [Exact output](repros/incident-1.txt) | Renamed the test `request_deadline`; LANG-4. [Minimal program](repros/incident-1.hir). | 0.5 | language friction |
 | Declared a channel of ordinary counted Status. | [Historical initial output](repros/channel-initial.txt), CONC-6. | Retain `Sender[unique Status]` / `Receiver[unique Status]` and a unique producer. [Historical declaration repro](repros/channel-counted.hir). | 1 | intentional sendability policy |
-| Appended a qualified channel receive directly into List[Status]. | [Historical mixed output](repros/incident-2.txt), MODE-2 at `mut incoming`. | Bind `let row = channel.receive(tasks, mut incoming)?`, then append `take row`. The explicit `: unique Status` is unnecessary. [Isolated direct-append repro](repros/incident-2.hir). | 0.5 | intentional contextual inference; diagnostic needs clearer endpoint types |
+| Appended a qualified channel receive directly into List[Status]. | [Historical mixed output](repros/incident-2.txt), MODE-2 at `mut incoming`. | Bind `let row = channel.receive(tasks, mut incoming)?`, then append `take row`. The explicit `: unique Status` is unnecessary. [Isolated direct-append repro](repros/incident-2.hir). | 0.5 | intentional contextual inference; diagnostic fixed |
 | Translated `resolves_to: List[IpAddr]` to JSON enum objects. | [Exact output](repros/incident-3.txt) | Use IP strings (`["127.0.0.1"]`), not `[{"v4":[127,0,0,1]}]`; added a complete script recipe to building.md. | 0.5 | doc gap |
 
 ## Current executable recipes
@@ -30,8 +30,12 @@ negative control with `Receiver[unique Status]`. Under LANG-2/LANG-8, the
 `List[Status]` destination asks `?` for `Result[Status, F]`, which asks the generic
 receive for `Receiver[Status]`. That conflicts with the actual invariant
 `Receiver[unique Status]`, producing MODE-2. This rejection is intentional under
-today's rules. The diagnostic's failure to show both endpoint types is a separate
-compiler diagnostic defect; copying the receiver is not a repair.
+today's rules. [Endpoint guidance shipped in b37d5df3](https://github.com/SamGalanakis/hirsel-lang/commit/b37d5df3ec4aeaa0c42b2014345c53e951916f30):
+current MODE-2 names `Receiver[unique Status]` and the context-required
+`Receiver[Status]`, identifies `list.push`'s `value` argument, and suggests binding
+first, then passing `take row`. The [applied-repair regression](../../crates/hirsel-driver/tests/it/receive_endpoint_diagnostic_19.rs)
+checks, independently verifies and executes that repair. The historical mixed
+output predates this diagnostic fix; copying the receiver is not a repair.
 
 An inferred local lets the receiver fix its payload contract first. Its owned
 Result receipt preserves `unique Status` through `?`; `take row` then transfers

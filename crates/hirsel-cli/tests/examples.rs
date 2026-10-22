@@ -14,6 +14,89 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+// Check only the complete recipes changed by friction-truth-20. Historical
+// captures and the existing application/runtime matrices have separate controls.
+fn friction_recipe<'a>(document: &'a str, heading: &str, index: usize) -> &'a str {
+    let section = document.split_once(heading).unwrap().1;
+    let section = section.split("\n##").next().unwrap();
+    section
+        .split("```hirsel\n")
+        .skip(1)
+        .nth(index)
+        .unwrap()
+        .split_once("```")
+        .unwrap()
+        .0
+}
+
+fn export_friction_recipe(name: &str, source: &str) {
+    let fixture = Fixture::new(name, source);
+    let checked = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .env("HIRSEL_DAEMON", "off")
+        .env("HIRSEL_JOBS", "1")
+        .args(["check", "--json"])
+        .arg(fixture.0.join("hirsel.json"))
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "{name}: {checked:?}");
+    let artifact = fixture.0.join("recipe.tir");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .env("HIRSEL_DAEMON", "off")
+        .env("HIRSEL_JOBS", "1")
+        .args(["export", "--tir"])
+        .arg(fixture.0.join("hirsel.json"))
+        .arg("-o")
+        .arg(&artifact)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{name}: {output:?}");
+    let text = std::fs::read_to_string(artifact).unwrap();
+    hirsel_engine::with_compiler_stack(|| {
+        let mut program = hirsel_driver::load_program(&fixture.0.join("hirsel.json")).unwrap();
+        program.check_for_execution().unwrap();
+        program
+            .engine
+            .import_tir(&text)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    });
+}
+
+#[test]
+fn friction_truth_20_prefix_recipes() {
+    let document = include_str!("../../../examples/wc2/FRICTION.md");
+    let inferred = friction_recipe(document, "### Prefix inference and names", 0);
+    assert_eq!(
+        inferred,
+        include_str!("../../../examples/wc2/repros/incident-3.hir")
+    );
+    export_friction_recipe("friction_prefix", inferred);
+    let contextual = friction_recipe(document, "### Prefix inference and names", 1);
+    export_friction_recipe("friction_context", contextual);
+    // Removing context from each insufficient prefix must still reject. A
+    // later suffixed value or constructor cannot repair the first element.
+    for annotation in [": List[String]", ": List[u64]", ": List[Option[String]]"] {
+        let source = contextual.replace(annotation, "");
+        let fixture = Fixture::new("friction_insufficient_prefix", &source);
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .env("HIRSEL_DAEMON", "off")
+            .env("HIRSEL_JOBS", "1")
+            .args(["check", "--json"])
+            .arg(fixture.0.join("hirsel.json"))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("\"rule\":\"LANG-2\""));
+    }
+}
+
+#[test]
+fn friction_truth_20_task_result_recipe() {
+    let document = include_str!("../../../examples/kvd/FRICTION.md");
+    let source = friction_recipe(document, "## Current task result recipe", 0);
+    export_friction_recipe("friction_task_result", source);
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(name: &str, source: &str) -> Self {

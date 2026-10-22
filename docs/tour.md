@@ -162,6 +162,12 @@ The mistakes to avoid first:
 - Give numeric literals a context: `let n = 3u64` or `let n: u64 = 3`.
   `let n = 3` has no default integer type (LANG-2). Type arguments belong in
   types, never calls: `let xs: List[u64] = []`, then `list.push(mut xs, 1)`.
+  Without an expected type, an ordinary nonempty sequence defaults to `List`
+  from its first complete element type: `["-"]` is `List[String]`, and
+  `[1u64, 2]` is `List[u64]`. Empty `[]`, unsuffixed-first `[1, 2u64]` and
+  first-untyped-variant `[None(), Some("x")]` still need context; later elements
+  or uses cannot type an insufficient prefix. [Wc2's recipes](../examples/wc2/FRICTION.md#prefix-inference-and-names)
+  separate the historical rejection from current acceptance.
 - Every top-level function has a complete signature. An omitted result means
   `()`, not an inferred result. Use the last expression for a block's value;
   a final `return` is rejected (LANG-6, LANG-11).
@@ -1315,7 +1321,14 @@ first, then `list.push(mut rows, take row)`. The inferred local preserves the ow
 unique payload through `?`; a direct append lets the destination impose a weaker
 payload type that conflicts with the mutable receiver contract. An explicit
 `: unique Status` on that local is optional. [Linkcheck's complete recipe](../examples/linkcheck/FRICTION.md#receive-first-then-weaken-the-owned-row)
-shows the send, receive, storage and task join together.
+shows the send, receive, storage and task join together. Current MODE-2 explains
+both endpoint contracts and suggests this bind-then-take repair; the linked
+historical diagnostic predates that guidance.
+
+Task results obey the same sendability policy through nested error arms. A
+counted String inside an error variant needs a unique result at the task
+boundary, even if one call returns `Ok(())`. [Kvd's complete repair](../examples/kvd/FRICTION.md#current-task-result-recipe)
+shows the required expression as well as its callback contract.
 
 To wait for several children, add their handles to a `TaskSet` and hand it to
 `task.all`, which returns every result in the order they were added, or the

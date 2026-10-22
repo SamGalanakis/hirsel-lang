@@ -4,11 +4,11 @@ Minutes are approximate elapsed investigation time; overlapping waits are not a 
 Copied diagnostics normalize checkout paths and strip trailing display whitespace.
 The table preserves the original incidents; the recipes below describe current rules.
 
-| Tried | Exact diagnostic | Fix | Minutes lost | Class |
+| Tried | Historical diagnostic | Current disposition / repair | Minutes lost | Class |
 | --- | --- | --- | ---: | --- |
 | Used `distinct` and `result` as ordinary names. | [Exact output](repros/incident-1.txt) | Renamed them `sorted_unique` and `output_lines`; LANG-14. [Minimal program](repros/incident-1.hir). | 1 | language friction |
-| Considered the LANG-14 replacement suggestion. | [Exact output](repros/incident-2.txt) | Historical help suggested reserved `result`; use `value`. The misleading suggestion is a diagnostic defect, not permission to use a reserved name. [Minimal program](repros/incident-2.hir). | 0.5 | bug |
-| Inferred a list from its elements or the other `if` arm. | [Exact output](repros/incident-3.txt) | Added `List[cli.Flag]` / `List[String]`; LANG-2. [Minimal program](repros/incident-3.hir). | 0.5 | language friction |
+| Considered the LANG-14 replacement suggestion. | [Exact output](repros/incident-2.txt) | Historical help suggested reserved `result`. Fixed by [legal, fresh name suggestions](https://github.com/SamGalanakis/hirsel-lang/commit/7874edcd97e00508b3ff84d9abe7d65e7edb9d42); current help uses `value` when available. [Applied-repair controls](../../crates/hirsel-driver/tests/it/error_injection.rs) check the replacement. [Minimal program](repros/incident-2.hir). | 0.5 | bug (fixed) |
+| Inferred a list from its elements or the other `if` arm. | [Exact output](repros/incident-3.txt) | Originally added `List[cli.Flag]` / `List[String]`; LANG-2. The exact String repro now accepts as `List[String]`; only insufficient prefixes still need context (see below). [Minimal program](repros/incident-3.hir). | 0.5 | language friction |
 | Sorted a list after a mutable helper call. | [Exact output](repros/incident-4.txt) | Declared `@preserves_unique(lines)` on the append-only helper; MODE-2/CLO-2. [Minimal program](repros/incident-4.hir). | 1 | language friction |
 | Returned `out.print(..)?` from a Result function. | [Exact output](repros/incident-5.txt) | Print with `?`, then return `Ok(())`; LANG-7/LANG-8. [Minimal program](repros/incident-5.hir). | 0.5 | language friction |
 | Read buffered lines inside a collection loop. | [Exact output](repros/incident-6.txt) | Fixed by [natural-loop origin expiration](https://github.com/SamGalanakis/hirsel-lang/commit/8d85aeac8cb3c32b8669cc0550906234c18bf0a0); [application file loop restored](https://github.com/SamGalanakis/hirsel-lang/commit/a19ff14b9727354246a86d29663c28c62c80739a). The unchanged [12-line repro](repros/invalid-origin.hir) and restored app pass H, LLVM and Cranelift in the [exact-source regression](../../crates/hirsel-cli/tests/examples.rs); independent V still rejects forged early expiry. Verified 2026-10-22. | 4 | bug (fixed) |
@@ -26,16 +26,33 @@ evidence; changing a recipe does not change a language rule.
 
 ### Prefix inference and names
 
-[Untyped sequence](repros/incident-3.hir) rejects LANG-2: a sequence literal needs
-an expected sequence type. Its elements, a later use, or a later `if` arm cannot
-supply that type backwards. This remains intentional. Give the binding its type:
+[The original untyped String sequence](repros/incident-3.hir) now accepts.
+With no expected type, an ordinary nonempty sequence uses its first element's
+complete type and defaults to core `List`. This exact program infers `List[String]`:
 
 ```hirsel
-pub fn main() -> Result[(), ()] {
-  let sources: List[String] = ["-"]
-  Ok(())
+pub fn main() {
+  let sources = ["-"]
 }
 ```
+
+The linked LANG-2 output records the earlier incident, not today's verdict.
+An expected sequence type still selects its kind and element contract. Empty,
+unsuffixed-first and first-untyped-variant sequences still need context:
+`[]`, `[1, 2u64]` and `[None(), Some("x")]` cannot infer from later elements or
+uses. A later `if` arm cannot type an earlier insufficient prefix either.
+Give those bindings complete types:
+
+```hirsel
+pub fn main() {
+  let empty: List[String] = []
+  let counts: List[u64] = [1, 2u64]
+  let choices: List[Option[String]] = [None(), Some("x")]
+}
+```
+
+These are prefix inference rules (LANG-2), not a reason to annotate every list.
+[The tour](../../docs/tour.md) describes the same boundary.
 
 [Reserved `result`](repros/incident-1.hir) rejects LANG-14; `distinct` is reserved
 too. [A local named like a top-level function](repros/incident-7.hir) rejects
