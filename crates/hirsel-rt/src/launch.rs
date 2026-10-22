@@ -1608,6 +1608,10 @@ pub(crate) unsafe fn execute(
     };
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
+    let ordered = crate::tasks::ordered::admission::Admission::prepare(requested.as_ref())?;
+    let ordered_enabled = ordered
+        .as_ref()
+        .is_some_and(|admission| admission.enabled());
     let seed = launch_config.test_seed;
     if !(1..=RESULT_MAX).contains(&result_size) || (program.return_kind != 1 && result_size < 4) {
         return Err("the entry result is not a Result of at most 64 bytes".into());
@@ -1988,7 +1992,7 @@ pub(crate) unsafe fn execute(
                     crate::host::RunControl::from_inner(std::sync::Arc::clone(&options.control)),
                     // Explicit worker knobs exercise the substrate; production activation
                     // belongs to the ordered/free differential gate (E1/F1).
-                    options.workers.is_some(),
+                    options.workers.is_some() || ordered_enabled,
                 )?);
                 let metrics_pin = placement
                     .metrics
@@ -2154,7 +2158,8 @@ pub(crate) unsafe fn execute(
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.
-    if (width > 1
+    if (ordered_enabled
+        || width > 1
         || (options.workers.is_some()
             && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
         && unsafe { &mut *ctx }.run().free.is_none()
@@ -2167,6 +2172,11 @@ pub(crate) unsafe fn execute(
     // memory budget meters every worker's heap.
     if let Some(budgets) = &budgets {
         unsafe { &mut *ctx }.set_budgets(budgets.fuel, budgets.memory_bytes);
+    }
+    if let Some(ordered) = ordered {
+        // SAFETY: fresh root, after topology/budgets and before root publication.
+        // The independent E1 qualification gate keeps this inactive for now.
+        unsafe { ordered.install(ctx) };
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };

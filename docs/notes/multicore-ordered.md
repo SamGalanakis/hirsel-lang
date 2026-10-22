@@ -211,6 +211,18 @@ budget admission and exact charge/credit settlement remain gated.
 
 ## Integration status
 
+The normal launcher now prepares an Ordered admission plan from the validated
+`tasks.cooperative@1` provider, FIFO schedule, placement knobs and bound memory
+budget. A separate production qualification constant remains **false**. The
+plan therefore installs no scheduler, role or physical dispatcher, including
+when placement requests eight cores or dedicated commit. Substrate worker
+tests keep their explicit admission. Free and seeded non-FIFO schedules do not
+select this plan. Once E1 is qualified, the prepared plan will select the same
+saved-frame dispatcher at width one and wider widths, after topology and
+budgets are configured and before root publication. Dedicated execution still
+requires its own implementation; it cannot silently select shared retirement.
+This staging is not production activation or completed E1 acceptance.
+
 This is a protocol and guarded migration substrate, not an enabled concurrent
 native ordered executor. The default remains W1's cooperative run token.
 Concurrent drivers must first validate their service lifetimes and field access,

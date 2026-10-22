@@ -2,6 +2,7 @@
 //! ABI images; none retains a pointer into a caller's carrier across run-ahead.
 //! This module does not select a physical worker or run a scheduling point.
 
+pub(crate) mod admission;
 pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;
