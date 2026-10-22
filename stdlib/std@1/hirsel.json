@@ -1217,6 +1217,12 @@
       "module": [
         "regex"
       ]
+    },
+    {
+      "path": "line_scan.hir",
+      "module": [
+        "line_scan"
+      ]
     }
   ],
   "dependencies": []

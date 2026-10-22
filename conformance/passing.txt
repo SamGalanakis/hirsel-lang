@@ -5542,6 +5542,8 @@ conformance/SEM/SEM-3-keys-map-key-fail.hir
 conformance/SEM/SEM-3-keys-scalar-order-run.hir
 conformance/SEM/SEM-3-keys-scalar-vectors-run.hir
 conformance/SEM/SEM-3-keys-text-order-run.hir
+conformance/SEM/SEM-3-line-scan-7-controls-run.hir
+conformance/SEM/SEM-3-line-scan-7-vectors-run.hir
 conformance/SEM/SEM-3-log-run.hir
 conformance/SEM/SEM-3-log-slog-cases-run.hir
 conformance/SEM/SEM-3-log-slog-edges-run.hir

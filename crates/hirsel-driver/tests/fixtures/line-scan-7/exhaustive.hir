@@ -1,0 +1,75 @@
+// Bounded Rust-harness workload; deliberately outside the 1M-step corpus.
+fn check(data: Bytes, expected: List[Bytes], strip: bool) -> Result[(), line_scan.Error] {
+  let n = bytes.len(data)
+  let mut partitions: u64 = 1
+  for i in 1u64..n {
+    partitions *= 2
+  }
+  for mask in 0u64..partitions {
+    let mut s = line_scan.new(64, strip)?
+    let mut got: List[Bytes] = []
+    let mut start: u64 = 0
+    let mut bits = mask
+    for end in 1u64..n + 1 {
+      if end == n || bits % 2 == 1 {
+        for item in line_scan.feed(mut s, bytes.slice(data, start, end), end == n)? {
+          list.push(mut got, copy item)
+        }
+        start = end
+      }
+      bits /= 2
+    }
+    if n == 0 {
+      let _ = line_scan.feed(mut s, b"", true)?
+    }
+    failure.check(got == expected, Bounds())
+  }
+  Ok(())
+}
+
+fn limits(
+  data: Bytes,
+  max: u64,
+  expected: Result[List[Bytes], line_scan.Error],
+  strip: bool
+) -> Result[(), line_scan.Error] {
+  for cut in 0u64..bytes.len(data) + 1 {
+    let mut s = line_scan.new(max, strip)?
+    let mut got: List[Bytes] = []
+    let mut failed: Option[line_scan.Error] = None()
+    let chunks: List[Bytes] = [
+      bytes.slice(data, 0, cut),
+      bytes.slice(data, cut, bytes.len(data))
+    ]
+    for chunk in chunks {
+      if failed == None() {
+        match line_scan.feed(mut s, chunk, false) {
+          Ok(lines) => {
+            for item in lines {
+              list.push(mut got, copy item)
+            }
+          },
+          Error(error) => {
+            failed = Some(error)
+          },
+        }
+      }
+    }
+    if failed == None() {
+      for item in line_scan.feed(mut s, b"", true)? {
+        list.push(mut got, copy item)
+      }
+    }
+    let observed: Result[List[Bytes], line_scan.Error] = match failed {
+      Some(error) => Error(error),
+      None => Ok(take got),
+    }
+    failure.check(observed == expected, Bounds())
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), line_scan.Error] {
+  // Replaced with independent Rust whole-input-oracle rows by the test.
+  Ok(())
+}

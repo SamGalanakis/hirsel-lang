@@ -1,0 +1,69 @@
+// rule: SEM-3
+// expect: run
+// Go ScanLines boundary/EOF controls, ebe2feefc400f813aefdc8a036e66d2619da6649.
+pub fn main() -> Result[(), line_scan.Error] {
+  failure.check(
+    match line_scan.new(0, true) {
+      Error(InvalidPolicy()) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let mut s = line_scan.new(3, true)?
+  failure.check(line_scan.status(s) == Open(), Bounds())
+  failure.check(line_scan.feed(mut s, b"", false)? == [], Bounds())
+  failure.check(line_scan.feed(mut s, b"ab", false)? == [], Bounds())
+  failure.check(line_scan.buffered(s) == 2 && line_scan.offset(s) == 2, Bounds())
+  let first = line_scan.feed(mut s, b"\r\n\n", false)?
+  failure.check(first == [b"ab", b""], Bounds())
+  failure.check(line_scan.feed(mut s, b"xyz", false)? == [], Bounds())
+  failure.check(line_scan.feed(mut s, b"\n", false)? == [b"xyz"], Bounds())
+  failure.check(line_scan.feed(mut s, b"\r", true)? == [b""], Bounds())
+  failure.check(
+    line_scan.status(s) == Finished() && line_scan.buffered(s) == 0,
+    Bounds()
+  )
+  failure.check(line_scan.feed(mut s, b"", true) == Error(AlreadyFinished()), Bounds())
+  failure.check(
+    line_scan.feed(mut s, b"x", false) == Error(AlreadyFinished()),
+    Bounds()
+  )
+  failure.check(first == [b"ab", b""], Bounds())
+  let mut p = line_scan.new(3, true)?
+  failure.check(line_scan.feed(mut p, b"ok\n", false)? == [b"ok"], Bounds())
+  failure.check(line_scan.feed(mut p, b"ab", false)? == [], Bounds())
+  failure.check(line_scan.feed(mut p, b"cd\n", true) == Error(LineTooLong(6)), Bounds())
+  failure.check(
+    line_scan.offset(p) == 6 && line_scan.buffered(p) == 0 && line_scan.status(p) == Poisoned(),
+    Bounds()
+  )
+  failure.check(line_scan.feed(mut p, b"", true) == Error(ScannerFailed()), Bounds())
+  let mut atomic = line_scan.new(3, false)?
+  failure.check(
+    line_scan.feed(mut atomic, b"a\n1234\n", false) == Error(LineTooLong(5)),
+    Bounds()
+  )
+  failure.check(line_scan.buffered(atomic) == 0, Bounds())
+  let mut cr = line_scan.new(2, true)?
+  failure.check(
+    line_scan.feed(mut cr, b"ab\r\n", true) == Error(LineTooLong(2)),
+    Bounds()
+  )
+  let mut binary = line_scan.new(3, false)?
+  failure.check(
+    line_scan.feed(mut binary, b"\x00\xff\r\n", true)? == [b"\x00\xff\r"],
+    Bounds()
+  )
+  let saved = {
+    let mut owner = line_scan.new(8, true)?
+    let input = bytes.from_list([97u8, 98u8, 13u8, 10u8])
+    let held = line_scan.feed(mut owner, input, false)?
+    failure.check(
+      line_scan.feed(mut owner, b"zzzzzzzz\n", true)? == [b"zzzzzzzz"],
+      Bounds()
+    )
+    take held
+  }
+  failure.check(saved == [b"ab"], Bounds())
+  Ok(())
+}

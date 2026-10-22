@@ -1,0 +1,57 @@
+pub type AppError = Grant(GrantError) | Input(InputError) | Output(OutputError) | Scan(
+  line_scan.Error
+) | InvalidUtf8(u64) | InvalidJson(u64, json.JsonError)
+
+// Empty physical lines are skipped; whitespace-only lines still go to JSON.
+fn emit(output: Stdout, diagnostics: Stderr, take lines: List[Bytes], mut number: u64) -> Result[
+  (),
+  AppError
+] {
+  for data in lines {
+    number += 1
+    if bytes.len(data) != 0 {
+      let text = match string.from_bytes(copy data) {
+        Ok(decoded) => take decoded,
+        Error(_) => {
+          err.print(diagnostics, f"line {number}: invalid UTF-8\n")?
+          return Error(InvalidUtf8(number))
+        },
+      }
+      let value = match json.parse(take text) {
+        Ok(value) => take value,
+        Error(error) => {
+          err.print(diagnostics, f"line {number}: invalid JSON\n")?
+          return Error(InvalidJson(number, error))
+        },
+      }
+      let normalized = match json.stringify(value) {
+        Ok(rendered) => take rendered,
+        Error(error) => {
+          err.print(diagnostics, f"line {number}: invalid JSON\n")?
+          return Error(InvalidJson(number, error))
+        },
+      }
+      out.print(output, normalized)?
+      out.print(output, "\n")?
+    }
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  let diagnostics = io.stderr(rt)?
+  let mut scanner = line_scan.new(1048576, true)?
+  let mut number: u64 = 0
+  while true {
+    let mut chunk: List[u8] = []
+    let n = stdin.read(input, mut chunk, 4096)?
+    let lines = line_scan.feed(mut scanner, bytes.from_list(take chunk), n == 0)?
+    emit(output, diagnostics, take lines, mut number)?
+    if n == 0 {
+      return Ok(())
+    }
+  }
+  Ok(())
+}

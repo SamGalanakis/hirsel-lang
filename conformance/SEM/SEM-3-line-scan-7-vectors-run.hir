@@ -1,0 +1,78 @@
+// rule: SEM-3
+// expect: run
+// Go scan_test.go:267-308; full-input oracle independent of feed state.
+fn oracle(data: Bytes, strip: bool) -> List[Bytes] {
+  let mut lines: List[Bytes] = []
+  let mut start: u64 = 0
+  for i in 0u64..bytes.len(data) {
+    if data[i] == 10 {
+      let end = if strip && i > start && data[i - 1] == 13 {
+        i - 1
+      } else {
+        i
+      }
+      list.push(mut lines, unique bytes.slice(data, start, end))
+      start = i + 1
+    }
+  }
+  if start < bytes.len(data) {
+    let end = if strip && data[bytes.len(data) - 1] == 13 {
+      bytes.len(data) - 1
+    } else {
+      bytes.len(data)
+    }
+    list.push(mut lines, unique bytes.slice(data, start, end))
+  }
+  take lines
+}
+
+fn check(data: Bytes, strip: bool) -> Result[(), line_scan.Error] {
+  let expected = oracle(data, strip)
+  // Every pair of cuts includes empty chunks and adjacent CR/LF boundaries.
+  for a in 0u64..bytes.len(data) + 1 {
+    for b in a..bytes.len(data) + 1 {
+      let mut s = line_scan.new(64, strip)?
+      let mut got: List[Bytes] = []
+      let chunks: List[Bytes] = [
+        bytes.slice(data, 0, a),
+        bytes.slice(data, a, b),
+        bytes.slice(data, b, bytes.len(data))
+      ]
+      for chunk in chunks {
+        let lines = line_scan.feed(mut s, chunk, false)?
+        for item in lines {
+          list.push(mut got, copy item)
+        }
+        failure.check(line_scan.feed(mut s, b"", false)? == [], Bounds())
+      }
+      for item in line_scan.feed(mut s, b"", true)? {
+        list.push(mut got, copy item)
+      }
+      failure.check(got == expected, Bounds())
+    }
+  }
+  Ok(())
+}
+
+pub fn main() -> Result[(), line_scan.Error] {
+  let policies: List[bool] = [true, false]
+  for strip in policies {
+    let samples: List[Bytes] = [
+      b"",
+      b"\n",
+      b"\n\n",
+      b"\r",
+      b"\r\n",
+      b"a\nb",
+      b"a\r\n",
+      b"a\rb",
+      b"\r\r\n",
+      b"\x00\xff\n",
+      b"ab\n\r"
+    ]
+    for data in samples {
+      check(data, strip)?
+    }
+  }
+  Ok(())
+}

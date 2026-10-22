@@ -1,0 +1,104 @@
+// Adapted from Go bufio/scan.go:139-183,345-373 at ebe2feefc400f813aefdc8a036e66d2619da6649.
+// Copyright 2009 The Go Authors. BSD-3-Clause; full notice: docs/line-scan.md.
+// Feed owns its carry and outputs, rather than exposing Go's recycled token view.
+@serializable
+pub type Error = InvalidPolicy | LineTooLong(u64) | OffsetOverflow | AlreadyFinished | ScannerFailed
+
+@serializable
+pub type Status = Open | Finished | Poisoned
+
+pub opaque type Scanner: inert + noalloc_drop uses {} {
+  carry: unique List[u8],
+  max_line_bytes: u64,
+  strip_cr: bool,
+  offset: u64,
+  status: Status,
+}
+
+pub fn new(max_line_bytes: u64, strip_cr: bool) -> Result[unique Scanner, Error] uses {} {
+  if max_line_bytes == 0 {
+    return Error(InvalidPolicy())
+  }
+  let carry: unique List[u8] = []
+  let scanner: unique Scanner = Scanner(
+    carry: take carry,
+    max_line_bytes: max_line_bytes,
+    strip_cr: strip_cr,
+    offset: 0,
+    status: Open()
+  )
+  Ok(take scanner)
+}
+
+@noalloc
+pub fn status(s: Scanner) -> Status uses {} {
+  s.status
+}
+
+// Bytes accepted on success; first rejected byte's absolute offset on a limit error.
+@noalloc
+pub fn offset(s: Scanner) -> u64 uses {} {
+  s.offset
+}
+
+@noalloc
+pub fn buffered(s: Scanner) -> u64 uses {} {
+  core@1/list.len(s.carry)
+}
+
+fn poison(mut s: unique Scanner) -> () uses {} {
+  s.carry = []
+  s.status = Poisoned()
+}
+
+fn line(mut s: unique Scanner) -> unique Bytes uses {} {
+  let mut data = replace(mut s.carry, [])
+  let len = core@1/list.len(data)
+  if s.strip_cr && len != 0 && data[len - 1] == 13 {
+    let _ = core@1/list.pop(mut data)
+  }
+  core@1/bytes.from_list(take data)
+}
+
+// Scan only the new chunk. Validate before appending a segment; carry is never
+// rescanned, and an error drops all output built by this call and clears carry.
+pub fn feed(mut s: unique Scanner, chunk: Bytes, eof: bool) -> Result[
+  List[Bytes],
+  Error
+] uses {} {
+  if s.status == Finished() {
+    return Error(AlreadyFinished())
+  }
+  if s.status == Poisoned() {
+    return Error(ScannerFailed())
+  }
+  let len = core@1/bytes.len(chunk)
+  if len > 18446744073709551615u64 - s.offset {
+    poison(mut s)
+    return Error(OffsetOverflow())
+  }
+  let mut out: List[Bytes] = []
+  let mut start: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    if chunk[i] == 10 {
+      core@1/bytes.append(mut s.carry, core@1/bytes.slice(chunk, start, i))
+      core@1/list.push(mut out, line(mut s))
+      start = i + 1
+    } else if i - start >= s.max_line_bytes - core@1/list.len(s.carry) {
+      s.offset += i
+      poison(mut s)
+      return Error(LineTooLong(s.offset))
+    }
+    i += 1
+  }
+  core@1/bytes.append(mut s.carry, core@1/bytes.slice(chunk, start, len))
+  s.offset += len
+  if eof {
+    if core@1/list.len(s.carry) != 0 {
+      core@1/list.push(mut out, line(mut s))
+    }
+    s.status = Finished()
+  }
+  Ok(take out)
+}
