@@ -1117,6 +1117,16 @@ pub(super) fn created_completion(shape: usize, word: u64) -> Completion {
     }
 }
 
+fn created_kind(shape: usize) -> crate::io_keys::Kind {
+    match shape {
+        0 | 2 => crate::io_keys::Kind::File,
+        8 => crate::io_keys::Kind::Half {
+            stream: crate::io_keys::Key(71),
+        },
+        _ => crate::io_keys::Kind::Other,
+    }
+}
+
 #[test]
 fn native_host_created_handles_persist_creator_and_resource_without_host_words() {
     const WORDS: [u64; 3] = [
@@ -1140,10 +1150,10 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                 let _role = role::Guard::new(ctx);
                 for (index, word) in WORDS.into_iter().enumerate() {
                     let resource = crate::io_keys::Key(if index < 2 { 17 } else { 18 });
-                    let resources = [resource, resource];
+                    let resources = [(resource, created_kind(shape)); 2];
                     crate::stop::check(
                         ctx,
-                        prepare_creations(
+                        prepare_typed_creations(
                             ctx,
                             if shape == 8 {
                                 Request::NetSplit { net: 1, stream: 2 }
@@ -1266,6 +1276,10 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                         assert!(!WORDS.contains(&local));
                         let resource = crate::stop::check(ctx, replay_created_key(ctx, local));
                         assert_eq!(resource.0, if index < 2 { 17 } else { 18 });
+                        assert_eq!(
+                            crate::stop::check(ctx, replay_created_identity(ctx, local)),
+                            (resource, created_kind(shape))
+                        );
                         for word in handles::fields(&mut completion)
                             .unwrap()
                             .into_iter()
@@ -1274,6 +1288,10 @@ fn native_host_created_handles_persist_creator_and_resource_without_host_words()
                             assert_eq!(
                                 crate::stop::check(ctx, replay_created_key(ctx, *word)),
                                 resource
+                            );
+                            assert_eq!(
+                                crate::stop::check(ctx, replay_created_identity(ctx, *word)),
+                                (resource, created_kind(shape))
                             );
                         }
                         let completion = crate::stop::check(

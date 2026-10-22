@@ -111,6 +111,22 @@ pub(crate) unsafe fn prepare_creations(
     keys: KeySet,
     resources: &[crate::io_keys::Key],
 ) -> Stopped<()> {
+    let resources: Vec<_> = resources
+        .iter()
+        .map(|&key| (key, crate::io_keys::Kind::Other))
+        .collect();
+    unsafe { prepare_typed_creations(ctx, request, keys, &resources) }
+}
+
+/// As prepare_creations, preserving the adapter's discovered resource kind.
+/// # Safety
+/// The owner holds the role; every (key, kind) is admitted live metadata.
+pub(crate) unsafe fn prepare_typed_creations(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+    resources: &[(crate::io_keys::Key, crate::io_keys::Kind)],
+) -> Stopped<()> {
     unsafe { prepare_with_keys(ctx, request, keys) }?;
     let ordinals: Vec<_> = resources
         .iter()
@@ -120,10 +136,11 @@ pub(crate) unsafe fn prepare_creations(
     pending.created = resources
         .iter()
         .zip(ordinals)
-        .map(|(resource, ordinal)| Created {
+        .map(|(&(resource, kind), ordinal)| Created {
             path: pending.path.clone(),
             ordinal,
             resource: resource.0,
+            kind,
         })
         .collect();
     Ok(())
@@ -617,6 +634,15 @@ pub(crate) unsafe fn replay_request(
 
 /// Keys of a handle created by an admitted host completion, reconstructed
 /// solely from tape metadata. A missing mapping diverges without adapter use.
+pub(crate) fn replay_created_identity(
+    ctx: *mut TaskCtx,
+    word: u64,
+) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)> {
+    super::replay::token(ctx)
+        .expect("host replay admission")
+        .host_identity(word)
+}
+
 pub(crate) fn replay_created_key(ctx: *mut TaskCtx, word: u64) -> Stopped<crate::io_keys::Key> {
     super::replay::token(ctx)
         .expect("host replay admission")

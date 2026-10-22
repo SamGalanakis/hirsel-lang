@@ -8,6 +8,7 @@ pub(in crate::tasks::free) struct Created {
     pub(in crate::tasks::free) path: Vec<u32>,
     pub(in crate::tasks::free) ordinal: u64,
     pub(in crate::tasks::free) resource: u32,
+    pub(in crate::tasks::free) kind: crate::io_keys::Kind,
 }
 
 pub(in crate::tasks::free) struct Envelope {
@@ -19,21 +20,48 @@ impl Wire for Created {
         self.path.encode(out);
         self.ordinal.encode(out);
         self.resource.encode(out);
+        match self.kind {
+            crate::io_keys::Kind::File => 0u8.encode(out),
+            crate::io_keys::Kind::Sink { file_backed } => {
+                1u8.encode(out);
+                file_backed.encode(out);
+            }
+            crate::io_keys::Kind::Other => 2u8.encode(out),
+            crate::io_keys::Kind::Half { stream } => {
+                3u8.encode(out);
+                stream.0.encode(out);
+            }
+        }
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
         Ok(Self {
             path: Wire::decode(input)?,
             ordinal: Wire::decode(input)?,
             resource: Wire::decode(input)?,
+            kind: match u8::decode(input)? {
+                0 => crate::io_keys::Kind::File,
+                1 => crate::io_keys::Kind::Sink {
+                    file_backed: Wire::decode(input)?,
+                },
+                2 => crate::io_keys::Kind::Other,
+                3 => crate::io_keys::Kind::Half {
+                    stream: crate::io_keys::Key(Wire::decode(input)?),
+                },
+                _ => return Err("unknown host resource kind".into()),
+            },
         })
     }
 }
 impl Wire for Envelope {
     fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(b"F1H1");
         self.result.encode(out);
         self.created.encode(out);
     }
     fn decode(input: &mut crate::tape_wire::Decode<'_>) -> Result<Self, String> {
+        if input.take(4)? != b"F1H1" {
+            return Err("unsupported Free host envelope".into());
+        }
         Ok(Self {
             result: Wire::decode(input)?,
             created: Wire::decode(input)?,
@@ -226,11 +254,17 @@ impl Handles {
         }
         Ok(result)
     }
-    pub(in crate::tasks::free) fn resource(&self, word: u64) -> Stopped<crate::io_keys::Key> {
+    pub(in crate::tasks::free) fn identity(
+        &self,
+        word: u64,
+    ) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)> {
         self.words
             .get(&word)
-            .map(|created| crate::io_keys::Key(created.resource))
+            .map(|created| (crate::io_keys::Key(created.resource), created.kind))
             .ok_or_else(|| Stop::Diverged("unmapped replay host handle".into()))
+    }
+    pub(in crate::tasks::free) fn resource(&self, word: u64) -> Stopped<crate::io_keys::Key> {
+        self.identity(word).map(|(key, _)| key)
     }
 }
 
@@ -244,6 +278,7 @@ mod tests {
                 path: path.to_vec(),
                 ordinal,
                 resource,
+                kind: crate::io_keys::Kind::Other,
             }],
         }
     }
@@ -253,6 +288,49 @@ mod tests {
         };
         word
     }
+    #[test]
+    fn resource_kinds_round_trip_and_changed_metadata_cannot_replace_an_identity() {
+        use crate::io_keys::{Key, Kind};
+        for (index, kind) in [
+            Kind::File,
+            Kind::Sink { file_backed: false },
+            Kind::Sink { file_backed: true },
+            Kind::Other,
+            Kind::Half { stream: Key(71) },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut value = envelope(&[1, 2], index as u64 + 1, 17);
+            value.created[0].kind = kind;
+            let mut bytes = Vec::new();
+            value.encode(&mut bytes);
+            let decoded: Envelope = crate::tape_wire::decode(&bytes).unwrap();
+            assert_eq!(decoded.created[0].kind, kind);
+            let mut handles = Handles::default();
+            let word = word(handles.substitute(decoded).unwrap());
+            assert_eq!(handles.identity(word).unwrap(), (Key(17), kind));
+            assert!(handles.identity(999).is_err());
+            let mut changed = value;
+            changed.created[0].kind = if kind == Kind::Other {
+                Kind::File
+            } else {
+                Kind::Other
+            };
+            assert!(handles.substitute(changed).is_err());
+            assert_eq!(handles.identity(word).unwrap(), (Key(17), kind));
+            // Old or unknown private payload versions never decode as results.
+            bytes[0] ^= 1;
+            assert!(crate::tape_wire::decode::<Envelope>(&bytes).is_err());
+        }
+        let mut value = envelope(&[], 1, 17);
+        value.created[0].kind = Kind::Other;
+        let mut bytes = Vec::new();
+        value.encode(&mut bytes);
+        *bytes.last_mut().unwrap() = 255;
+        assert!(crate::tape_wire::decode::<Envelope>(&bytes).is_err());
+    }
+
     #[test]
     fn absent_and_failed_creations_never_allocate_a_replay_identity() {
         let failures = [
@@ -402,7 +480,8 @@ mod tests {
                     created: vec![Created {
                         path: vec![],
                         ordinal: 1,
-                        resource: 17
+                        resource: 17,
+                        kind: crate::io_keys::Kind::Other,
                     }]
                 })
                 .is_err()
@@ -505,7 +584,8 @@ mod payload_tests {
                         created: vec![Created {
                             path: vec![1],
                             ordinal: 1,
-                            resource: 17
+                            resource: 17,
+                            kind: crate::io_keys::Kind::Other,
                         }],
                     })
                     .is_err()

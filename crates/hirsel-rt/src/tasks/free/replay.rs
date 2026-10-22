@@ -382,6 +382,13 @@ impl Token {
         }
         self.shared.handles.lock().unwrap().substitute(envelope)
     }
+    pub(super) fn host_identity(
+        &self,
+        word: u64,
+    ) -> Stopped<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        self.shared.handles.lock().unwrap().identity(word)
+    }
+
     pub(super) fn host_resource(&self, word: u64) -> Stopped<crate::io_keys::Key> {
         self.shared.handles.lock().unwrap().resource(word)
     }

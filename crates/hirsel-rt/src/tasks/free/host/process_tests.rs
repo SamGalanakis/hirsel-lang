@@ -390,7 +390,8 @@ fn owned_process_results_preserve_all_payloads_and_reject_creation_metadata() {
                     created: vec![Created {
                         path: vec![],
                         ordinal: 1,
-                        resource: 17
+                        resource: 17,
+                        kind: crate::io_keys::Kind::Other,
                     }]
                 })
                 .is_err()
