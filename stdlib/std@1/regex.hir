@@ -1282,16 +1282,7 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
   let accelerated = prefix_admitted(re, text, false, work_limit)
   let haystack = core@1/string.as_bytes(text)
   let mut work = work_limit
-  let mut subject = Input(scalars: [], offsets: [], at: 0)
-  let mut byte: u64 = 0
-  for c in core@1/string.scalars(text) {
-    spend(mut work)?
-    core@1/list.push(mut subject.scalars, c)
-    core@1/list.push(mut subject.offsets, byte)
-    byte += scalar_width(c)
-  }
-  spend(mut work)?
-  core@1/list.push(mut subject.offsets, byte)
+  let subject = make_subject(text, mut work)?
   let mut cache = dfa_cache(re, accelerated, 65024)
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
@@ -1376,6 +1367,41 @@ fn captured(thread: Thread, at: u64, mut work: u64) -> Result[Captures, MatchErr
 
 fn make_subject(text: String, mut work: u64) -> Result[Input, MatchError] uses {} {
   let mut source_input = Input(scalars: [], offsets: [], at: 0)
+  // Borrowed haystack and bounded byte indexing: rust-lang/regex 80b9d14e,
+  // regex-automata/src/util/search.rs:102-130, hybrid/search.rs:50-140.
+  // Copyright 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+  // Retain the full scalar/offset contract for reverse search and captures.
+  let bytes = core@1/string.as_bytes(text)
+  let size = core@1/bytes.len(bytes)
+  let mut ascii = size >= 64 && size <= 16384 && work > size
+  if ascii {
+    // std/string_case.hir:is_ascii, without importing the Unicode case tables.
+    for i in 0u64..size {
+      if bytes[i] >= 128 {
+        ascii = false
+        break
+      }
+    }
+  }
+  if ascii {
+    // One debit per scalar plus EOF, exactly as below. Insufficient budgets
+    // and Unicode enter the original decoder without speculative charges.
+    work -= size + 1
+    core@1/list.reserve(mut source_input.scalars, size)
+    core@1/list.reserve(mut source_input.offsets, size + 1)
+    let mut at = 0u64
+    while at < size {
+      let c = match core@1/char.from_u32(core@1/int.widen(bytes[at])) {
+        Some(c) => c,
+        None() => '\0',
+      }
+      core@1/list.push(mut source_input.scalars, c)
+      core@1/list.push(mut source_input.offsets, at)
+      at += 1
+    }
+    core@1/list.push(mut source_input.offsets, size)
+    return Ok(take source_input)
+  }
   let mut byte = 0u64
   for c in core@1/string.scalars(text) {
     spend(mut work)?

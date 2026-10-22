@@ -87,3 +87,4 @@ mod utf8_construction_model_16;
 mod regex_prefilter_17;
 mod stdlib_regex_dfa;
 mod regex_capture_span_17;
+mod regex_subject_cost_18;
