@@ -638,3 +638,217 @@ fn native_concurrent_adapter_observations_retry_refusal_and_late_completion() {
         }
     }
 }
+
+struct HomeHost {
+    home: std::thread::ThreadId,
+    run: Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>,
+    recording: Arc<super::super::record::Recording>,
+    output: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+    dropped: std::rc::Rc<std::cell::Cell<bool>>,
+    stop_inside: bool,
+}
+impl crate::io::Adapter for HomeHost {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Ok(None)
+    }
+    fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        assert_eq!(
+            std::thread::current().id(),
+            self.home,
+            "non-Send adapter stays home"
+        );
+        let guard = unsafe { role::IdleGuard::try_new(self.run.load(Ordering::Acquire)) };
+        assert!(guard.is_some(), "home request retains no scheduler role");
+        drop(guard);
+        let Request::Print { stdout: 17, bytes } = request else {
+            panic!("home request")
+        };
+        if self.stop_inside {
+            let (cut, sweep) = self
+                .recording
+                .recorder
+                .stop("stopped", None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Claimed));
+            assert_eq!(sweep.in_doubt, [1]);
+        } else {
+            let _ = self.recording.recorder.flush().unwrap();
+        }
+        assert_eq!(bytes, vec![42; 4096]);
+        self.output.borrow_mut().extend_from_slice(&bytes);
+        Ok(Completion::Unit(Ok(())))
+    }
+}
+impl Drop for HomeHost {
+    fn drop(&mut self) {
+        assert_eq!(
+            std::thread::current().id(),
+            self.home,
+            "adapter destruction stays home"
+        );
+        self.dropped.set(true);
+    }
+}
+
+#[test]
+fn native_home_claim_uses_owned_log_and_quarantines_non_send_adapter_results() {
+    for width in [1, 8] {
+        for durable in [false, true] {
+            for point in 0..=5 {
+                let recording = super::super::record::Recording::new(b"home host claims", durable);
+                let install = recording.clone();
+                let observed = recording.clone();
+                let output = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                let dropped = std::rc::Rc::new(std::cell::Cell::new(false));
+                let run_ptr = Arc::new(std::sync::atomic::AtomicPtr::default());
+                let worker_run = run_ptr.clone();
+                let request_weak = Arc::new(Mutex::new(
+                    None::<std::sync::Weak<hirsel_free::claim::Request<Request>>>,
+                ));
+                let weak = request_weak.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.adapter = Some(Box::new(HomeHost {
+                    home: std::thread::current().id(),
+                    run: run_ptr,
+                    recording: recording.clone(),
+                    output: output.clone(),
+                    dropped: dropped.clone(),
+                    stop_inside: point == 2,
+                }));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let _role = role::Guard::new(ctx);
+                        worker_run.store((*ctx).run_ptr(), Ordering::Release);
+                        crate::stop::check(
+                            ctx,
+                            prepare(
+                                ctx,
+                                Request::Print {
+                                    stdout: 17,
+                                    bytes: vec![42; 4096],
+                                },
+                            ),
+                        );
+                        *weak.lock().unwrap() = Some(Arc::downgrade(
+                            &(*ctx).pending_host.as_ref().unwrap().request,
+                        ));
+                        if point == 0 {
+                            let (_, sweep) =
+                                observed.recorder.stop("stopped", None).unwrap().unwrap();
+                            assert_eq!(sweep.withdrawn, [1]);
+                            assert!(sweep.in_doubt.is_empty());
+                        }
+                        let issued = if point == 5 {
+                            let shared = &observed;
+                            let run_ptr = (*ctx).run_ptr();
+                            issue_home_loan(
+                                ctx,
+                                || {
+                                    // The transport has posted and admitted this
+                                    // callback on home, but native issue is still Prepared.
+                                    let (cut, sweep) =
+                                        shared.recorder.stop("stopped", None).unwrap().unwrap();
+                                    assert_eq!(
+                                        cut.progress[&Vec::new()],
+                                        Progress::new(1, Phase::Entered)
+                                    );
+                                    assert_eq!(sweep.withdrawn, [1]);
+                                    assert!(sweep.in_doubt.is_empty());
+                                },
+                                |request| {
+                                    (&mut *(*run_ptr).io_binding().cast::<crate::io::Binding>())
+                                        .adapter
+                                        .call(request.clone())
+                                },
+                            )
+                        } else if point == 1 {
+                            let shared = &observed;
+                            let run_ptr = (*ctx).run_ptr();
+                            issue_home_with(ctx, |request| {
+                                // Home has published Claimed, but has not yet
+                                // entered the adapter. A cut cannot withdraw it.
+                                let (_, sweep) =
+                                    shared.recorder.stop("stopped", None).unwrap().unwrap();
+                                assert_eq!(sweep.in_doubt, [1]);
+                                assert!(sweep.withdrawn.is_empty());
+                                (&mut *(*run_ptr).io_binding().cast::<crate::io::Binding>())
+                                    .adapter
+                                    .call(request.clone())
+                            })
+                        } else {
+                            issue_home(ctx)
+                        };
+                        assert!(
+                            (*ctx).recording.is_some(),
+                            "worker regains the owned log before any stop"
+                        );
+                        assert!((*ctx).pending_host.as_ref().unwrap().home_log.is_none());
+                        if point == 0 || point == 5 {
+                            assert!(matches!(issued, Err(Stop::Requested) | Ok(false)));
+                            crate::stop::check(ctx, Err::<(), _>(Stop::Requested));
+                            unreachable!();
+                        }
+                        assert!(crate::stop::check(ctx, issued));
+                        crate::stop::check(ctx, ended(ctx));
+                        if point == 3 {
+                            let (_, sweep) =
+                                observed.recorder.stop("stopped", None).unwrap().unwrap();
+                            assert_eq!(sweep.in_doubt, [1]);
+                        }
+                        assert_eq!(
+                            crate::stop::check(ctx, complete(ctx)),
+                            Completion::Unit(Ok(()))
+                        );
+                        STATUS_OK
+                    },
+                );
+                assert!(dropped.get());
+                assert_eq!(
+                    output.borrow().len(),
+                    if point == 0 || point == 5 { 0 } else { 4096 }
+                );
+                assert!(
+                    request_weak
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()
+                        .is_none()
+                );
+                if point == 4 {
+                    assert_eq!(outcome.ended, Ok(STATUS_OK));
+                    recording.recorder.stop("returned", None).unwrap().unwrap();
+                } else {
+                    assert_eq!(outcome.ended, Err(Stop::Requested));
+                }
+                let bytes = Arc::try_unwrap(recording)
+                    .ok()
+                    .unwrap()
+                    .recorder
+                    .into_sink()
+                    .bytes;
+                let tape = hirsel_free::tape::parse(&bytes).unwrap();
+                assert_eq!(
+                    tape.cut[&Vec::new()],
+                    Progress::new(
+                        1,
+                        match point {
+                            0 | 5 => Phase::Entered,
+                            1 | 2 => Phase::Claimed,
+                            3 => Phase::Ended(0),
+                            _ => Phase::Done,
+                        }
+                    )
+                );
+            }
+        }
+    }
+}

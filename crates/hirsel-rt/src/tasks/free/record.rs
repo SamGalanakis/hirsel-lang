@@ -112,6 +112,50 @@ impl Recording {
     }
 }
 
+/// Transfer the encoder into task-owned request storage before a synchronous
+/// home loan. The worker cannot publish another phase until it is restored.
+/// # Safety
+/// The running owner holds the role and retains the loan in task-owned storage.
+pub(super) unsafe fn lend_host(ctx: *mut TaskCtx) -> Box<Task> {
+    unsafe { (*ctx).recording.take() }.expect("a recorded home request")
+}
+
+/// # Safety
+/// The synchronous home call finished or was withdrawn; no home borrower remains.
+pub(super) unsafe fn restore_host(ctx: *mut TaskCtx, task: Box<Task>) {
+    assert!(unsafe { (*ctx).recording.is_none() });
+    unsafe { (*ctx).recording = Some(task) };
+}
+
+impl Task {
+    /// Home owns this encoder exclusively while its posting worker waits.
+    /// Claimed has no root tail, scheduler effect, or TaskCtx access.
+    pub(super) fn claim_host(
+        &mut self,
+        request: &hirsel_free::claim::Request<crate::io::Request>,
+    ) -> Stopped<bool> {
+        let mut worker = loop {
+            if let Some(worker) = self
+                .shared
+                .recorder
+                .worker_available(crate::pool::recorder_slot())
+            {
+                break worker;
+            }
+            std::thread::yield_now();
+        };
+        self.shared
+            .recorder
+            .phase(
+                &mut worker,
+                &mut self.log,
+                Progress::new(self.ordinal, Phase::Claimed),
+                |writer| self.shared.recorder.claim(writer, request),
+            )
+            .map_err(|_| Stop::Requested)
+    }
+}
+
 /// The running task supplies bounded runtime work. Table actions hold the
 /// scheduler role; resolved cell actions instead hold their independent access.
 /// The local recorder is removed from ctx before action borrows the context,

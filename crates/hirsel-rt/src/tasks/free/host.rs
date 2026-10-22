@@ -20,6 +20,7 @@ pub(crate) struct Pending {
     names: Vec<(u32, String)>,
     positions: Option<Positions>,
     attempt: u32,
+    home_log: Option<Box<super::record::Task>>,
 }
 
 /// # Safety
@@ -60,6 +61,7 @@ pub(crate) unsafe fn prepare_with_keys(
             names,
             positions: None,
             attempt: 0,
+            home_log: None,
         }));
     }
     super::record::begin(ctx);
@@ -78,6 +80,17 @@ pub(crate) unsafe fn prepare_with_keys(
 /// # Safety
 /// The owner holds the role and has published its prepared request.
 pub(crate) unsafe fn claim(ctx: *mut TaskCtx) -> Stopped<bool> {
+    unsafe { durable_entered(ctx) }?;
+    unsafe { wait_keys(ctx) }?;
+    let pending = unsafe { (*ctx).pending_host.as_deref().unwrap() } as *const Pending;
+    super::record::publish(ctx, Phase::Claimed, |writer| unsafe {
+        (&(*pending).shared)
+            .recorder
+            .claim(writer.expect("a recorded claim"), &(*pending).request)
+    })
+}
+
+unsafe fn durable_entered(ctx: *mut TaskCtx) -> Stopped<()> {
     let pending = unsafe { (*ctx).pending_host.as_deref().unwrap() } as *const Pending;
     let durable = unsafe {
         (&(*pending).shared)
@@ -92,12 +105,73 @@ pub(crate) unsafe fn claim(ctx: *mut TaskCtx) -> Stopped<bool> {
     if !durable {
         return Err(Stop::Requested);
     }
+    Ok(())
+}
+
+/// Prepare/durability and key waits ran on the owner. Home claims the same
+/// request word against the cutter, then calls the adapter. The log and all
+/// buffers live in Pending while the synchronous bridge owns their loan.
+/// # Safety
+/// The owner holds the role, Entered published, and the home Binding is live.
+pub(crate) unsafe fn issue_home(ctx: *mut TaskCtx) -> Stopped<bool> {
+    let run = unsafe { (*ctx).run_ptr() };
+    unsafe {
+        issue_home_with(ctx, |request| {
+            let binding = &mut *(*run).io_binding().cast::<crate::io::Binding>();
+            binding.adapter.call(request.clone())
+        })
+    }
+}
+
+/// # Safety
+/// As for issue_home; call runs only on home, is bounded and cannot suspend
+/// Hirsel or retain its request borrow. It must preserve home affinity.
+unsafe fn issue_home_with(
+    ctx: *mut TaskCtx,
+    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+) -> Stopped<bool> {
+    unsafe { issue_home_loan(ctx, || (), call) }
+}
+
+unsafe fn issue_home_loan(
+    ctx: *mut TaskCtx,
+    before_claim: impl FnOnce(),
+    call: impl FnOnce(&Request) -> Result<Completion, AdapterError>,
+) -> Stopped<bool> {
+    unsafe { durable_entered(ctx) }?;
     unsafe { wait_keys(ctx) }?;
-    super::record::publish(ctx, Phase::Claimed, |writer| unsafe {
-        (&(*pending).shared)
-            .recorder
-            .claim(writer.expect("a recorded claim"), &(*pending).request)
-    })
+    let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
+    unsafe { (*pending).home_log = Some(super::record::lend_host(ctx)) };
+    let mut call = Some(call);
+    let mut before_claim = Some(before_claim);
+    let mut issued = None;
+    let bridged = {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        unsafe {
+            crate::pool::call_home(ctx, &mut || {
+                before_claim.take().expect("one home loan")();
+                let pending = &mut *pending;
+                let claimed = pending
+                    .home_log
+                    .as_mut()
+                    .unwrap()
+                    .claim_host(&pending.request);
+                if matches!(claimed, Ok(true)) {
+                    let completion =
+                        call.take().expect("one bounded home call")(pending.request.buffers());
+                    pending.encoded.clear();
+                    completion.encode(&mut pending.encoded);
+                    pending.completion = Some(completion);
+                }
+                issued = Some(claimed);
+            })
+        }
+    };
+    // call_home waits for a claimed callback, even when stop was requested.
+    // Restore the encoder before propagating a withdrawal or terminal cut.
+    unsafe { super::record::restore_host(ctx, (*pending).home_log.take().unwrap()) };
+    bridged?;
+    issued.expect("a served home claim")
 }
 
 /// # Safety
