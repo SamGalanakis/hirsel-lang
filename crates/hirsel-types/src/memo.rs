@@ -800,7 +800,14 @@ impl<'q> ContextMemo<'q> {
     ) -> Result<bool, QueryError> {
         let placed_expected = self
             .observed(|t, generics, lookup| {
-                crate::properties::placed_structure_type(t, expected, generics, &mut |d| lookup(d))
+                crate::properties::placed_receiving_type(
+                    t,
+                    expected,
+                    actual,
+                    relation,
+                    generics,
+                    &mut |d| lookup(d),
+                )
             })
             .value?;
         let placed_actual = self

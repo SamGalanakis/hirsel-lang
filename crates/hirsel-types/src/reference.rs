@@ -341,8 +341,9 @@ fn compatible(
     if relation == TypeRelation::Exact {
         return Ok(semantic_equal(store, expected, store, actual).unwrap_or(false));
     }
-    let placed_expected =
-        crate::properties::placed_structure_type(store, expected, generics, lookup)?;
+    let placed_expected = crate::properties::placed_receiving_type(
+        store, expected, actual, relation, generics, lookup,
+    )?;
     let placed_actual = crate::properties::placed_structure_type(store, actual, generics, lookup)?;
     if (placed_expected, placed_actual) != (expected, actual) {
         return if payloads.is_some() {

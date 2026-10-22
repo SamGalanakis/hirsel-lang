@@ -2065,3 +2065,34 @@ fn placed_payload_comparisons_preserve_the_owner_and_explicit_arena() {
             .unwrap()
     );
 }
+
+#[test]
+fn an_unrelated_borrow_accepts_structural_payloads_in_the_actual_environment() {
+    let store = TypeInterner::new(None);
+    let text = store.intern(Type::with_kind(TypeKind::Primitive(Primitive::String)));
+    let row = Type::with_kind(TypeKind::Tuple(vec![text, text].into()));
+    let expected = store.intern(row.clone());
+    let mut local = row;
+    local.modes.relation = Relation::environment();
+    let actual = store.intern(local);
+    let context = GenericDeclarations::signature(&[]);
+    let mut lookup = |_: DefId| Ok::<_, QueryError>(None);
+    let mut memo = ContextMemo::new(&store, &context, &mut lookup);
+    assert!(
+        memo.view(expected, actual, TypeRelation::Parameter)
+            .unwrap()
+    );
+    // Taking the same local aggregate into global storage still escapes.
+    assert!(!memo.view(expected, actual, TypeRelation::Value).unwrap());
+    assert!(
+        reference::compatible_view_type_in(
+            &store,
+            expected,
+            actual,
+            TypeRelation::Parameter,
+            &context,
+            &mut lookup,
+        )
+        .unwrap()
+    );
+}

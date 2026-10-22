@@ -1150,6 +1150,40 @@ pub fn storage_content_type(
     normalize_type_properties(store, root, generics, lookup)
 }
 
+/// An unrelated borrowed aggregate is viewed in its actual placement. Its
+/// implicit payload relations inherit that placement on both sides; explicit
+/// payload relations and nonstructural contracts remain unchanged.
+pub(crate) fn placed_receiving_type(
+    store: &TypeInterner,
+    expected: TypeId,
+    actual: TypeId,
+    relation: TypeRelation,
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<TypeId, QueryError> {
+    let mut row = store
+        .get(expected)
+        .ok_or(QueryError::NotImplemented)?
+        .clone();
+    let expected = if relation == TypeRelation::Parameter
+        && row.modes.relation.is_global()
+        && matches!(
+            row.kind,
+            TypeKind::Tuple(_) | TypeKind::Box(_) | TypeKind::Record(_) | TypeKind::Variant(_)
+        ) {
+        row.modes.relation = store
+            .get(actual)
+            .ok_or(QueryError::NotImplemented)?
+            .modes
+            .relation
+            .clone();
+        store.intern(row)
+    } else {
+        expected
+    };
+    placed_structure_type(store, expected, generics, lookup)
+}
+
 /// Compare structural payloads under the same placement their projections inherit.
 /// Callable headers and generic arguments retain their declared contracts.
 pub(crate) fn placed_structure_type(
