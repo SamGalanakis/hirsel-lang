@@ -8,9 +8,10 @@ use hirsel_proof_export::{
 };
 use hirsel_syntax::ContentHash;
 use hirsel_syntax::{AnalysisSite, ItemKind, TypeBody};
-use hirsel_types::SignatureKind;
+use hirsel_types::{SignatureKind, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Source locations use a module identity, deliberately excluding the item name.
 fn module_identity(path: &DefPath) -> String {
@@ -32,6 +33,24 @@ fn reason(error: &QueryError) -> String {
             .join("; "),
         other => format!("{other:?}"),
     }
+}
+
+fn signature_references(types: &Arc<TypeInterner>, section: &SignatureSection) -> Vec<DefPath> {
+    let mut references: Vec<_> = section
+        .dependencies
+        .iter()
+        .map(|d| d.definition.path().clone())
+        .collect();
+    for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
+        references.extend(hirsel_proof_export::references(
+            types,
+            &hirsel_proof_export::DefinitionContent::Body {
+                signature: Arc::new(signature.clone()),
+                tir: None,
+            },
+        ));
+    }
+    references
 }
 
 impl QueryEngine {
@@ -180,6 +199,29 @@ impl QueryEngine {
                     value.value.clone(),
                 );
             }
+        }
+        // Registry rows cover no fingerprint dependencies, but their declarations
+        // still name types and loop-source operations that independent V needs.
+        // Close both public and owner declarations over the existing wire walk;
+        // this also reaches the operations' cursor/element declarations.
+        let mut pending: Vec<_> = signatures
+            .values()
+            .flat_map(|s| signature_references(self.types(), s))
+            .collect();
+        while let Some(path) = pending.pop() {
+            if signatures.contains_key(&path) {
+                continue;
+            }
+            let signature = self.item_signature(&path)?;
+            let (owner_view, _) = self.body_signature(&path.0.package, signature.value.clone())?;
+            let section = SignatureSection {
+                path: path.clone(),
+                dependencies: self.signature_coverage(&path)?,
+                public: (*signature.value).clone(),
+                owner_view: (owner_view != signature.value).then(|| (*owner_view).clone()),
+            };
+            pending.extend(signature_references(self.types(), &section));
+            signatures.insert(path, section);
         }
         let sources = Rc::new(self.sources.clone());
         let locator: Locator = Rc::new(move |span| {

@@ -636,6 +636,225 @@ fn round_trip(path: &Path) -> Result<Option<Kinds>, String> {
     Ok(Some(Kinds::of(&export)))
 }
 
+#[test]
+fn position_view_13_byte_history_round_trips() {
+    with_compiler_stack(|| {
+        let path = corpus().join("MEM/MEM-6-byte-history-invalid-first-bad.hir");
+        assert!(round_trip(&path).unwrap().is_some());
+    });
+}
+
+/// Every previously failing import remains an accepted positive control; a
+/// front-end rejection must not turn this regression into a silent skip.
+#[test]
+fn position_view_13_prior_sample_imports_round_trip() {
+    with_compiler_stack(|| {
+        let paths = [
+            "CAP/CAP-1-unix-listen-run.hir",
+            "CLO/CLO-2-std-option-zip-run.hir",
+            "CT/CT-5-std-derive-generic-run.hir",
+            "DET/DET-1-std-store-recover-run.hir",
+            "MEM/MEM-6-byte-history-invalid-first-bad.hir",
+            "MEM/MEM-6-map-value-copy-charge-run.hir",
+            "SEM/SEM-2-wave2-f32-text-errors.hir",
+            "SEM/SEM-3-bufio-writer5-file-run.hir",
+            "SEM/SEM-3-csv-go-read-2-run.hir",
+            "SEM/SEM-3-diff-pairs-1-run.hir",
+            "SEM/SEM-3-json-reader-import-002-run.hir",
+            "SEM/SEM-3-markdown-js-regression-7-run.hir",
+            "SEM/SEM-3-pathtime-path-boundary-run.hir",
+            "SEM/SEM-3-regex-captures-captures-11-run.hir",
+            "SEM/SEM-3-regex-captures-re2-140-run.hir",
+            "SEM/SEM-3-regex-captures-re2-168-run.hir",
+            "SEM/SEM-3-regex-captures-re2-59-run.hir",
+            "SEM/SEM-3-tar-gzip-next-run.hir",
+            "SEM/SEM-3-tar-write-run.hir",
+            "SEM/SEM-3-toml-test-invalid-array-1-run.hir",
+        ];
+        for path in paths {
+            assert!(
+                round_trip(&corpus().join(path))
+                    .unwrap_or_else(|error| panic!("{path}: {error}"))
+                    .is_some(),
+                "{path}: previously accepted fixture is no longer accepted",
+            );
+        }
+        eprintln!(
+            "PositionView retained imports: {}/{} round-trip without skips",
+            paths.len(),
+            paths.len()
+        );
+    });
+}
+
+const POSITION_VIEW_13: &str =
+    "fn view(value: PositionView) -> () { () }\npub fn main() -> Result[(), ()] { Ok(()) }\n";
+
+fn position_view_13_export(source: &str) -> (String, Export) {
+    let mut engine = engine(source);
+    let text = engine.export_tir(&named("main")).unwrap();
+    let export = hirsel_proof_export::import(
+        &text,
+        &engine.proof_environment(),
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .unwrap();
+    assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
+    (text, export)
+}
+
+#[test]
+fn position_view_13_declaration_without_iteration_round_trips() {
+    with_compiler_stack(|| {
+        position_view_13_export(POSITION_VIEW_13);
+    });
+}
+
+const POSITION_ITERATION_13: &str = "pub fn main() -> Result[(), ()] {\n  let text: String = \"é😀\"\n  for position in string.positions(text) {\n    let offset = string.byte_offset(text, position)\n  }\n  for scalar in string.scalars(text) { () }\n  Ok(())\n}\n";
+
+#[test]
+fn position_view_13_scalar_iteration_retains_the_source_brand() {
+    with_compiler_stack(|| {
+        let (text, export) = position_view_13_export(POSITION_ITERATION_13);
+        assert_eq!(position_view_13_export(POSITION_ITERATION_13).0, text);
+        let registry = registry::BuiltinRegistry::new();
+        for name in [
+            "PositionView",
+            "ScalarView",
+            "$intrinsic.ViewCursor",
+            "StrPos",
+            "Option",
+            "$intrinsic.ScalarPositions_open",
+            "$intrinsic.ScalarPositions_next",
+            "$intrinsic.UnicodeScalars_open",
+            "$intrinsic.UnicodeScalars_next",
+        ] {
+            let path = DefPath::core(name);
+            let transported = export.signatures.iter().find(|s| s.path == path).unwrap();
+            let declared = registry.get(&path).unwrap();
+            assert_eq!(
+                transported.public.fingerprint, declared.fingerprint,
+                "{path}"
+            );
+            assert_eq!(
+                hirsel_types::encoding::canonical_encoding(
+                    &export.types,
+                    &transported.public,
+                    &transported.dependencies
+                )
+                .unwrap(),
+                hirsel_types::encoding::canonical_encoding(registry.types(), &declared, &[])
+                    .unwrap(),
+                "{path}",
+            );
+        }
+    });
+}
+
+fn position_view_13_rehash(input: &mut hirsel_proof_export::ExportInput, path: &DefPath) {
+    let section = input.signatures.get_mut(path).unwrap();
+    let hash =
+        hirsel_types::encoding::fingerprint(&input.types, &section.public, &section.dependencies)
+            .unwrap();
+    section.public.fingerprint = hash;
+    for section in input.signatures.values_mut() {
+        for dependency in &mut section.dependencies {
+            if dependency.definition.path() == path {
+                dependency.fingerprint = hash;
+            }
+        }
+    }
+    if let Some(definition) = input.definitions.get_mut(path) {
+        std::sync::Arc::make_mut(definition).signature_hash = hash;
+    }
+}
+
+fn position_view_13_refuse(input: &hirsel_proof_export::ExportInput) -> ImportError {
+    // Recompute every transport digest; use a pristine interner and the full
+    // independent importer, including fingerprint re-derivation and V.
+    hirsel_proof_export::import(
+        &hirsel_proof_export::export(input),
+        &input.header.environment,
+        &hirsel_types::TypeInterner::new(None),
+    )
+    .unwrap_err()
+}
+
+#[test]
+fn position_view_13_missing_loop_dependency_is_refused_by_v() {
+    with_compiler_stack(|| {
+        let (_, export) = position_view_13_export(POSITION_VIEW_13);
+        let mut input = export.to_input();
+        assert!(
+            input
+                .signatures
+                .remove(&DefPath::core("$intrinsic.ScalarPositions_open"))
+                .is_some()
+        );
+        let error = position_view_13_refuse(&input);
+        assert!(error.message.starts_with("V rejects"), "{error}");
+        assert!(
+            error.message.contains("InvalidSignature") && error.message.contains("PositionView"),
+            "{error}"
+        );
+    });
+}
+
+#[test]
+fn position_view_13_forged_loop_source_is_refused_by_v() {
+    with_compiler_stack(|| {
+        let (_, export) = position_view_13_export(POSITION_VIEW_13);
+        let mut input = export.to_input();
+        let path = DefPath::core("PositionView");
+        let section = input.signatures.get_mut(&path).unwrap();
+        let hirsel_types::SignatureKind::Type(declaration) = &mut section.public.kind else {
+            panic!("type declaration")
+        };
+        declaration.loop_source.as_mut().unwrap().open =
+            DefPath::core("$intrinsic.UnicodeScalars_open");
+        position_view_13_rehash(&mut input, &path);
+        position_view_13_rehash(&mut input, &named("view"));
+        let error = position_view_13_refuse(&input);
+        assert!(error.message.starts_with("V rejects"), "{error}");
+        assert!(
+            error.message.contains("InvalidSignature") && error.message.contains("PositionView"),
+            "{error}"
+        );
+    });
+}
+
+#[test]
+fn position_view_13_wrapper_identity_cannot_replace_the_source_brand() {
+    with_compiler_stack(|| {
+        let (_, export) = position_view_13_export(POSITION_ITERATION_13);
+        let mut input = export.to_input();
+        let path = DefPath::core("$intrinsic.ScalarPositions_open");
+        let section = input.signatures.get_mut(&path).unwrap();
+        let hirsel_types::SignatureKind::Function(function) = &mut section.public.kind else {
+            panic!("open function")
+        };
+        let mut changed = false;
+        function.result =
+            hirsel_types::map_brand_origins(&input.types, function.result, |origin, _| {
+                let mut origin = origin.clone();
+                if let hirsel_types::OriginRoot::ArgumentBrand(parameter) = origin.root {
+                    origin.root = hirsel_types::OriginRoot::Parameter(parameter);
+                    changed = true;
+                }
+                Ok(origin)
+            })
+            .unwrap();
+        assert!(
+            changed,
+            "the registry must select the retained source brand"
+        );
+        position_view_13_rehash(&mut input, &path);
+        let error = position_view_13_refuse(&input);
+        assert!(error.message.starts_with("V rejects"), "{error}");
+        assert!(error.message.contains("TypeMismatch"), "{error}");
+    });
+}
+
 // Each maintained fixture must independently cover all four derivations.
 // These are explicit paths, not discoveries: deletion must remain a failure.
 fn required_fixtures() -> Vec<PathBuf> {
