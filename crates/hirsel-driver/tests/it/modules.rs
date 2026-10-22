@@ -101,3 +101,4 @@ mod uniqueness_loss_diagnostics_17;
 mod error_mapper_diagnostics_18;
 mod image_memory_dev_18;
 mod sequence_prefix_diagnostics_19;
+mod borrowed_capture_repairs_19;

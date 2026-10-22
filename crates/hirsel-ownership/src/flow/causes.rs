@@ -445,6 +445,25 @@ impl Checker<'_, '_> {
                 current = slot.clone();
                 continue;
             }
+            if cause == Cause::Capture && self.graph.scoped {
+                if let NameSite::Expression(e) = self.graph.owner {
+                    provenance.facts.push(Fact::new(
+                        Cause::BorrowedCapture,
+                        self.span_of(e),
+                        &[&name],
+                    ));
+                }
+                // Keep the source owner's declaration distinct from the
+                // closure that lends it. Both are existing checked sites.
+                let owner = match binding_mode(self, index) {
+                    Some(PassingMode::Borrow) => Cause::BorrowedParameter,
+                    Some(PassingMode::Mut) => Cause::MutParameter,
+                    Some(PassingMode::Take) => Cause::TakenParameter,
+                    None => Cause::Binding,
+                };
+                provenance.facts.push(Fact::new(owner, span, &[&name]));
+            }
+            // The final cause and site retain the existing cascade identity.
             provenance.facts.push(Fact::new(cause, span, &[&name]));
             provenance.root = Some((0, index));
             provenance.binding = Some(index);
@@ -552,8 +571,32 @@ impl Checker<'_, '_> {
         if let (Some(cause), Some(index)) = (explanation.cause().cloned(), provenance.binding) {
             let shared = self.properties[self.body.bindings[index].ty].shared;
             let x = cause.names.first().cloned().unwrap_or_default();
-            let (repairs, cautions) = locality_repairs(cause.kind, required.kind, &x, shared);
+            let repair_cause = if cause.kind == Cause::Capture && self.graph.scoped {
+                Cause::BorrowedCapture
+            } else {
+                cause.kind
+            };
+            let (repairs, cautions) = locality_repairs(repair_cause, required.kind, &x, shared);
             explanation.repairs = repairs;
+            if repair_cause == Cause::BorrowedCapture {
+                let receiver =
+                    matches!(required.kind, Requirement::Owned | Requirement::OwnedResult)
+                        .then(|| self.capture_global_receiver(value))
+                        .flatten();
+                let needs_global =
+                    !matches!(required.kind, Requirement::Owned | Requirement::OwnedResult)
+                        || receiver.is_some();
+                if needs_global
+                    && self.independent_capture_copy(value, self.body.bindings[index].ty)
+                {
+                    for repair in &mut explanation.repairs {
+                        if matches!(repair, Repair::KeepCaptureLocal(_)) {
+                            *repair = Repair::DeepCopy(x.clone());
+                        }
+                    }
+                }
+                explanation.also_required.extend(receiver);
+            }
             explanation.cautions = cautions;
         }
         explanation.required = Some(required);
@@ -564,6 +607,81 @@ impl Checker<'_, '_> {
             installed: provenance.installed,
             uniqueness: None,
         }
+    }
+    /// Diagnostic-only evidence, deliberately limited to concrete counted
+    /// sequences. Generic, resource and callable values need conditional help.
+    fn independent_capture_copy(&self, value: &Value, ty: TypeId) -> bool {
+        if value.unplaced()
+            || value.content.summary().scopes().next().is_some()
+            || self.arenas.placed(&value.modes.relation)
+            || !self.properties[ty].copyable
+            || self.properties[ty].plain
+        {
+            return false;
+        }
+        let mut pending = vec![ty];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            let row = self.t.get(ty).unwrap();
+            if self.arenas.placed(&row.modes.relation) {
+                return false;
+            }
+            match &row.kind {
+                TypeKind::Primitive(_) => {}
+                TypeKind::Builtin {
+                    kind: BuiltinType::List | BuiltinType::Array | BuiltinType::Inline,
+                    ..
+                } => pending.extend(row.kind.value_parts()),
+                _ => return false,
+            }
+        }
+        true
+    }
+    /// OWN-1 precedes required modes. Recover the already checked receiving
+    /// row from its call node, without running a second ownership judgment.
+    fn capture_global_receiver(&self, value: &Value) -> Option<Fact<Requirement>> {
+        let site = self.span_of(value.site?);
+        let Op::Use { operation, .. } = &self.graph.nodes[self.node].op else {
+            return None;
+        };
+        self.graph.nodes.iter().find_map(|node| {
+            let Op::Call {
+                expression,
+                callee,
+                arguments,
+                requirements,
+                ..
+            } = &node.op
+            else {
+                return None;
+            };
+            if expression != operation {
+                return None;
+            }
+            arguments
+                .iter()
+                .zip(requirements)
+                .find_map(|(arg, required)| {
+                    let span = self.span_of(arg.value);
+                    let required = required.as_ref()?;
+                    if span.start <= site.start
+                        && span.end >= site.end
+                        && self.arenas.global(&required.modes.relation)
+                    {
+                        let name = self.spelled(*callee)?;
+                        Some(Fact::new(
+                            Requirement::GlobalArgument,
+                            self.span_of(*callee),
+                            &[&name],
+                        ))
+                    } else {
+                        None
+                    }
+                })
+        })
     }
     /// A temporary result of a closure literal call, read without the closure
     /// or deep copied (probes 8a, 8g).
@@ -1031,4 +1149,13 @@ fn within_shallow(checker: &Checker<'_, '_>, e: ExprId, names: &BTreeSet<ExprId>
         }
     }
     false
+}
+
+/// The declaration's passing mode, independently of the closure's borrowed use.
+fn binding_mode(checker: &Checker<'_, '_>, index: usize) -> Option<PassingMode> {
+    let binding = &checker.body.bindings[index];
+    match binding.binding {
+        ResolvedName::Parameter(p) => Some(checker.parameter_passing(&binding.owner, p)),
+        _ => None,
+    }
 }

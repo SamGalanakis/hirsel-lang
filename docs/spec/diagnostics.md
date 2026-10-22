@@ -256,3 +256,23 @@ result's sendability requirement. For a callback with one simple result expressi
 proofs succeed and allocation is permitted. Changing an ordinary-returning call's result
 annotation alone is not offered as a repair. These explanations preserve the rejection rule
 and primary site.
+
+Borrowed captures crossing global storage are explained at the capturing closure,
+with a separate label for the source owner's declaration and the receiving contract.
+A failed `take` remains OWN-1 at the complete operation; when its checked call row
+requires a global argument, that requirement is included even though access fails
+before the mode check. Changing the enclosing parameter to `take` does not change
+the closure's borrowed capture.
+
+For concrete copyable counted sequences (`String`, `Bytes`, and nested
+`List`/`Array`/`Inline` values of concrete sequence or scalar types), the diagnostic
+may suggest `unique value` when the failed value has no arena placement or scoped
+content bound. This removes binding loans by deep copying; it may allocate and
+is not permitted under `@noalloc`. It preserves arena/region bounds and borrowed
+callable captures. A copied `Shared` root owns an independent global handle and
+uses `copy value` instead. Generic, resource, callable and arena-bound captures
+receive conditional guidance to keep the borrow local or construct independent
+owned inputs, without promising that `unique` or `copy` makes them global.
+Concrete suggestions have accepted source twins and the csvjoin callback repair
+runs through H, LLVM and Cranelift. These are diagnostic changes only; ownership
+judgments and first rule, primary span and source ordering remain unchanged.

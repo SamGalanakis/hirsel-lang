@@ -337,7 +337,7 @@ impl Cause {
             ),
             BorrowedCapture => (
                 "`{0}` is captured by borrowing",
-                "a borrowed capture stays with the frame that lends it",
+                "`{0}` is captured by borrowing here; it stays with the source owner (CLO-1)",
             ),
             AuthorityCapture => (
                 "`{0}` holds authority",
@@ -712,6 +712,8 @@ pub enum Repair {
     },
     HeapParameter(String),
     DeepCopy(String),
+    /// Conditional guidance when independence cannot be proved for a capture.
+    KeepCaptureLocal(String),
     TakeChangesMeaning(String),
     /// A redundant `copy` (R6): pass the binding itself.
     PassBorrowed(String),
@@ -761,6 +763,9 @@ impl Repair {
             Repair::DeepCopy(x) => format!(
                 "`unique {x}` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)"
             ),
+            Repair::KeepCaptureLocal(x) => format!(
+                "keep `{x}` within its source owner's scope, or construct an independent owned value; `unique` removes binding loans only for copyable counted data, and retains arena/region bounds and borrowed callable captures"
+            ),
             Repair::TakeAtLastUse(x) => {
                 format!("`take {x}` here (no cost: it moves `{x}`, which is not used again)")
             }
@@ -785,6 +790,9 @@ pub enum Caution {
     CopyStaysLocal(String),
     /// A deep copy is made where its source lives and keeps its placement.
     CopyKeepsPlacement(String),
+    /// Deep copies do not promote scoped storage or clone borrowed environments.
+    CaptureBounds,
+    CaptureCopy(String),
 }
 impl Caution {
     fn text(&self) -> String {
@@ -792,6 +800,8 @@ impl Caution {
             Caution::CopyStaysLocal(x) => format!(
                 "`copy {x}` does not help: a copy shares the blocks of `{x}`, which stay local"
             ),
+            Caution::CaptureCopy(x) => format!("when copying is allowed, `copy {x}` retains binding loans; it cannot promote borrowed content to global storage"),
+            Caution::CaptureBounds => "A unique copy retains arena/region bounds and borrowed callable captures; changing the enclosing parameter to `take` does not make a borrowed closure capture owned".into(),
             Caution::CopyKeepsPlacement(x) => {
                 format!("`unique {x}` and `copy {x}` keep the placement of `{x}` and do not help")
             }
@@ -805,6 +815,8 @@ pub struct Explanation {
     /// The provided side, from the observed value back to its root cause.
     pub provided: Vec<Fact<Cause>>,
     pub required: Option<Fact<Requirement>>,
+    /// A prior access failure may also know the receiving storage contract.
+    pub also_required: Vec<Fact<Requirement>>,
     pub repairs: Vec<Repair>,
     pub cautions: Vec<Caution>,
     pub root: Option<u64>,
@@ -892,7 +904,7 @@ impl Explanation {
                 message: format!("{prefix}: {}", fill(fact.kind.text().1, &fact.names)),
             });
         }
-        if let Some(fact) = &self.required {
+        for fact in self.required.iter().chain(&self.also_required) {
             diagnostic.secondary.push(hirsel_diag::Label {
                 span: fact.span,
                 message: format!("required: {}", fill(fact.kind.text().1, &fact.names)),
@@ -944,7 +956,7 @@ impl Repair {
             | Repair::PlaceResult { .. }
             | Repair::HeapParameter(_) => 1,
             Repair::DeepCopy(_) | Repair::UniqueResult { .. } => 2,
-            Repair::TakeChangesMeaning(_) => 3,
+            Repair::TakeChangesMeaning(_) | Repair::KeepCaptureLocal(_) => 3,
         }
     }
 }
@@ -967,6 +979,21 @@ pub fn locality_repairs(
     use Requirement as R;
     let x = x.to_owned();
     match (cause, required) {
+        // The producer may strengthen the conditional guidance to DeepCopy
+        // only from concrete copyable counted data without placement/scope bounds.
+        // A capture never becomes owned by changing its source parameter.
+        (Cause::BorrowedCapture, required)
+            if global(required) || matches!(required, R::Owned | R::OwnedResult) =>
+        {
+            if shared {
+                (vec![Repair::CopyShared(x)], vec![])
+            } else {
+                (
+                    vec![Repair::KeepCaptureLocal(x.clone())],
+                    vec![Caution::CaptureCopy(x), Caution::CaptureBounds],
+                )
+            }
+        }
         (Cause::BorrowedParameter, R::MutStorage | R::ResultGlobal | R::EscapingCapture)
             if shared =>
         {
