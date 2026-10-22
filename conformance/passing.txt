@@ -2602,6 +2602,8 @@ conformance/MEM/MEM-5-net-read-noalloc-ok.hir
 conformance/MEM/MEM-5-nfc-noalloc-bad.hir
 conformance/MEM/MEM-5-nfc-noalloc-ok.hir
 conformance/MEM/MEM-5-noalloc-borrowed-literal-local-ok.hir
+conformance/MEM/MEM-5-noalloc-cleanup-model-16-invalid-run.hir
+conformance/MEM/MEM-5-noalloc-cleanup-model-16-run.hir
 conformance/MEM/MEM-5-noalloc-discarded-view-literal-ok.hir
 conformance/MEM/MEM-5-noalloc-fresh-heap-string-bad.hir
 conformance/MEM/MEM-5-noalloc-heap-constant-read-ok.hir

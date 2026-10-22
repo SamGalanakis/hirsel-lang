@@ -8,3 +8,4 @@ mod borrow_cursor_tree_8;
 mod borrow_cursor_contracts_8;
 mod borrow_cursor_field_match_13;
 mod utf8_construction_model_16;
+mod noalloc_cleanup_model_16;

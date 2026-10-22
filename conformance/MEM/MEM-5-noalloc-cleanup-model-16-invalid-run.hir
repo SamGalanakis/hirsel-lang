@@ -1,0 +1,37 @@
+// rule: MEM-5
+// expect: fail SEM-1 at line 19
+// Runtime failure counterpart of MEM-5-noalloc-cleanup-model-16-run.hir.
+// A written take remains caller-owned while the later division is evaluated.
+resource type Token {
+  n: u64,
+}
+@noalloc drop(x) {
+  ()
+}
+
+@noalloc
+fn relay[T](take first: T, n: u64, take second: T) -> (T, T) {
+  (take first, take second)
+}
+
+@noalloc
+fn caller[T: noalloc_drop](take a: T, take b: T, z: u64) -> (T, T) {
+  relay(take a, 10u64 / z, take b)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = ((Token(n: 1u64),),)
+  let b = ((Token(n: 2u64),),)
+  let (x, y) = caller(take a, take b, 0u64)
+  let ((first,),) = take x
+  let ((second,),) = take y
+  let _ = out.print(
+    io.stdout(rt)?,
+    if first.n + second.n == 3u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

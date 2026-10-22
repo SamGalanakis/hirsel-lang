@@ -5251,18 +5251,31 @@ impl Checker<'_> {
                         },
                         _ => true,
                     };
-                    let may_fail = matches!(
-                        rvalue,
-                        Rvalue::Unary { .. }
-                            | Rvalue::Binary { .. }
-                            | Rvalue::Construct { .. }
-                            | Rvalue::Closure { .. }
-                    ) || typing::operands(rvalue).iter().any(|o| {
-                        self.body.places[o.place.0 as usize]
-                            .projection
-                            .iter()
-                            .any(|p| matches!(p, Projection::Index(_)))
-                    });
+                    // MEM-5: assembling an inline tuple from whole-value
+                    // takes only transfers ownership. It cannot destroy its
+                    // inputs on an invented constructor failure. Keep the
+                    // conservative failure join for copies and projections,
+                    // whose extraction may still need checks or preparation.
+                    let tuple_transfer = matches!(rvalue,
+                        Rvalue::Construct { constructor: Constructor::Tuple, fields, .. }
+                            if fields.iter().all(|field|
+                                field.value.usage == UseKind::Take
+                                    && self.body.places[field.value.place.0 as usize]
+                                        .projection.is_empty()));
+                    let may_fail = !tuple_transfer
+                        && matches!(
+                            rvalue,
+                            Rvalue::Unary { .. }
+                                | Rvalue::Binary { .. }
+                                | Rvalue::Construct { .. }
+                                | Rvalue::Closure { .. }
+                        )
+                        || typing::operands(rvalue).iter().any(|o| {
+                            self.body.places[o.place.0 as usize]
+                                .projection
+                                .iter()
+                                .any(|p| matches!(p, Projection::Index(_)))
+                        });
                     // The failure edge joins the state after every operand
                     // prefix. `joined` is the last prefix joined, so each
                     // join visits only what that operand changed.

@@ -37,3 +37,4 @@ mod rt_tls_native;
 mod stdlib_http_tls;
 mod unique_join;
 mod mode_obligations;
+mod noalloc_cleanup_model_16;
