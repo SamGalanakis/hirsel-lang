@@ -1407,6 +1407,21 @@ impl Lowering<'_, '_> {
         let s = &st.slots[slot.index()];
         let mut actions = Vec::new();
         let layout = self.place_layout(slot, &path)?;
+        // A committed whole destructure has transferred even its Plain fields.
+        // End that empty storage before a guard/cleanup join; erasing its Drop
+        // alone leaves conditional moved parts on an otherwise live parent.
+        let retire_shell = path.is_empty()
+            && s.live == Tri::Yes
+            && s.init == Tri::Yes
+            && s.fields_pending.at(&self.facts.paths(), &[]) == Tri::Yes
+            && self.lay.get(layout).is_some_and(|record| {
+                record.finalizer.is_some()
+                    && record.fields.iter().all(|field| {
+                        s.moved
+                            .at(&self.facts.paths(), &[Step::Field(field.ordinal)])
+                            == Tri::Yes
+                    })
+            });
         if !self.lay.trivial(layout)
             && owner_presence(s, &self.facts.paths(), &path, layout, self.lay) != Tri::No
         {
@@ -1452,6 +1467,12 @@ impl Lowering<'_, '_> {
             Terminator::Unreachable,
         );
         let at = self.sequence(b, &actions, &site)?;
+        if retire_shell && actions.is_empty() {
+            self.ed.code[at.index()].push(Inst::StorageDead {
+                slot,
+                if_live: false,
+            });
+        }
         self.ed.code[at.index()].extend(tail);
         self.ed.unit.terminators[at.index()] = terminator;
         Ok(())

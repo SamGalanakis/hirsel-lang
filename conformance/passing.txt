@@ -942,6 +942,8 @@ conformance/DROP/DROP-2-closure-zero-sized-destructure-run.hir
 conformance/DROP/DROP-2-destructure-branch-run.hir
 conformance/DROP/DROP-2-destructure-empty-call-run.hir
 conformance/DROP/DROP-2-destructure-empty-run.hir
+conformance/DROP/DROP-2-destructure-failure-order-17-bad.hir
+conformance/DROP/DROP-2-destructure-failure-order-17-run.hir
 conformance/DROP/DROP-2-destructure-failure.hir
 conformance/DROP/DROP-2-destructure-full-run.hir
 conformance/DROP/DROP-2-destructure-omitted-run.hir

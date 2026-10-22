@@ -1,0 +1,8 @@
+// rule: DROP-2
+// expect: reject LANG-13 at line 7
+// twin: DROP/DROP-2-destructure-failure-order-17-run.hir
+type Parent = destructure_17@1/owner.Parent
+
+fn consume(take parent: Parent) {
+  let Parent(kept: kept, ..) = take parent
+}

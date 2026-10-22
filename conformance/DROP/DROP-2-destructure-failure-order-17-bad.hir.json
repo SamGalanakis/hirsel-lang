@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "destructure_17",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "client"
+    ],
+    "name": "consume"
+  },
+  "sources": [
+    {
+      "path": "DROP-2-destructure-failure-order-17-run.hir",
+      "module": [
+        "owner"
+      ]
+    },
+    {
+      "path": "DROP-2-destructure-failure-order-17-bad.hir",
+      "module": [
+        "client"
+      ]
+    }
+  ],
+  "dependencies": []
+}

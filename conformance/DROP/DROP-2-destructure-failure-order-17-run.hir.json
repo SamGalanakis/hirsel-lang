@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "destructure_17",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "owner"
+    ],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "DROP-2-destructure-failure-order-17-run.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": []
+}

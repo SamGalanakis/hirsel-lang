@@ -1,0 +1,64 @@
+// rule: DROP-2
+// expect: run
+// boundary: Committed omissions continue in declaration order after a finalizer fails.
+// stdout: first
+// stdout: last
+// stdout: kept
+// stdout: caught
+pub resource type Trace {
+  stdout: Stdout,
+  text: String,
+  zero: u64,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+  let _ = 1u64 / x.zero
+}
+
+pub resource type Parent {
+  first: Trace,
+  kept: Trace,
+  last: Trace,
+}
+drop(x) {
+  let _ = out.print(x.first.stdout, "parent must not finalize\n")
+}
+
+pub fn consume(take parent: Parent) {
+  let Parent(kept: kept, ..) = take parent
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let caught: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      consume(
+        Parent(
+          first: Trace(stdout: stdout, text: "first\n", zero: 0),
+          kept: Trace(stdout: stdout, text: "kept\n", zero: 0),
+          last: Trace(stdout: stdout, text: "last\n", zero: 1)
+        )
+      )
+    }
+  )
+  match caught {
+    Ok(_) => failure.check(false, Arithmetic()),
+    Error(primary) => {
+      failure.check(primary.site.line == 15, Arithmetic())
+      match primary.cause {
+        None => failure.check(false, Arithmetic()),
+        Some(cause) => {
+          failure.check(cause.site.line == 15, Arithmetic())
+          match cause.cause {
+            None => (),
+            Some(_) => failure.check(false, Arithmetic()),
+          }
+        },
+      }
+      let _ = out.print(stdout, "caught\n")
+    },
+  }
+  Ok(())
+}
