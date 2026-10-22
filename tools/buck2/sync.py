@@ -970,6 +970,10 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["bench/langarena/*.hir", "bench/langarena/*.py", "bench/langarena/*.js", "bench/micro/measure.py", "stdlib/**"])')))
+    out.append("\n" + call("hirsel_script_test", name="gate-langarena-astar-9", script="bench/langarena/tests_astar_9.py",
+                            full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
+                            runtime_archives=RUNTIME_ARCHIVES,
+                            data=Raw('glob(["bench/langarena/*.hir", "bench/langarena/*.py", "bench/langarena/*.js", "bench/micro/measure.py", "stdlib/**"])')))
     out.append("\n" + call("hirsel_script_test", name="gate-distribution-notices", script="tools/tests/distribution_notices.py", full=False,
                             data=["tools/tests/distribution_notices.py"],
                             files_env={"HIRSEL_DISTRIBUTION_NOTICES": "//tools/toolchain-dist:notices.py"}))

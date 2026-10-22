@@ -10,7 +10,7 @@ type Cell {
 }
 
 type Entry {
-  score: i64,
+  score: i32,
   vertex: u64,
 }
 
@@ -33,25 +33,25 @@ fn precedes(a: Entry, b: Entry) -> bool {
 }
 
 // Rust a7c37f9 library/alloc/src/collections/binary_heap/mod.rs:807-882;
-// safe swaps replace holes in BinaryHeap<Reverse<(i32,usize)>> sift-up/down.
+// copied entries fill the moving hole in BinaryHeap<Reverse<(i32,usize)>>.
 fn push(mut queue_heap: unique List[Entry], item: Entry) {
   list.push(mut queue_heap, item)
   let mut i = list.len(queue_heap) - 1
   while i > 0 {
     let parent = (i - 1) / 2
-    if !precedes(queue_heap[i], queue_heap[parent]) {
+    if !precedes(item, queue_heap[parent]) {
       break
     }
-    list.swap(mut queue_heap, i, parent)
+    queue_heap[i] = queue_heap[parent]
     i = parent
   }
+  queue_heap[i] = item
 }
 
 fn pop(mut queue_heap: unique List[Entry]) -> Entry {
   let first = queue_heap[0]
   let last = option.unwrap_or(list.pop(mut queue_heap), first)
   if list.len(queue_heap) > 0 {
-    queue_heap[0] = last
     let mut i = 0u64
     while i * 2 + 1 < list.len(queue_heap) {
       let mut child = i * 2 + 1
@@ -61,12 +61,13 @@ fn pop(mut queue_heap: unique List[Entry]) -> Entry {
       ) {
         child += 1
       }
-      if !precedes(queue_heap[child], queue_heap[i]) {
+      if !precedes(queue_heap[child], last) {
         break
       }
-      list.swap(mut queue_heap, i, child)
+      queue_heap[i] = queue_heap[child]
       i = child
     }
+    queue_heap[i] = last
   }
   first
 }
@@ -181,7 +182,7 @@ fn bfs(s: State) -> List[u64] {
   []
 }
 
-fn heuristic(s: State, at: u64) -> i64 {
+fn heuristic(s: State, at: u64) -> i32 {
   // Walkable cells are inside the border, so the target is >= each coordinate.
   int.narrow(s.h - 2 - at / s.w + s.w - 2 - at % s.w)
 }
@@ -189,9 +190,13 @@ fn heuristic(s: State, at: u64) -> i64 {
 fn astar(s: State) -> List[u64] {
   let start = s.w + 1
   let target = (s.h - 2) * s.w + s.w - 2
-  let mut came: List[i64] = []
-  let mut g: List[i64] = []
-  let mut best: List[i64] = []
+  let mut came: unique List[i32] = []
+  let mut g: unique List[i32] = []
+  let mut best: unique List[i32] = []
+  // Same i32 score/parent lanes as upstream vec!, with one reservation each.
+  list.reserve(mut came, s.w * s.h)
+  list.reserve(mut g, s.w * s.h)
+  list.reserve(mut best, s.w * s.h)
   for _ in 0u64..s.w * s.h {
     list.push(mut came, -1)
     list.push(mut g, 2147483647)
@@ -207,7 +212,7 @@ fn astar(s: State) -> List[u64] {
     let at = current.vertex
     if at == target {
       let mut path_out: List[u64] = []
-      let mut cur: i64 = int.narrow(at)
+      let mut cur: i32 = int.narrow(at)
       while cur != -1 {
         let index: u64 = int.narrow(cur)
         list.push(mut path_out, index)

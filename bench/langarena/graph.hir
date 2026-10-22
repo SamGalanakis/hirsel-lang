@@ -13,26 +13,26 @@ fn precedes(a: Entry, b: Entry) -> bool {
 }
 
 // BinaryHeap<Reverse<Node>>: Rust a7c37f9 library/alloc/src/collections/
-// binary_heap/mod.rs:807-882 (sift_up/sift_down). Safe swaps replace Rust holes.
+// binary_heap/mod.rs:807-882 (sift_up/sift_down). Copyable entries fill holes.
 // Pair ordering matches the reference Node::cmp.
 fn push(mut queue_heap: unique List[Entry], item: Entry) {
   list.push(mut queue_heap, item)
   let mut i = list.len(queue_heap) - 1
   while i > 0 {
     let parent = (i - 1) / 2
-    if !precedes(queue_heap[i], queue_heap[parent]) {
+    if !precedes(item, queue_heap[parent]) {
       break
     }
-    list.swap(mut queue_heap, i, parent)
+    queue_heap[i] = queue_heap[parent]
     i = parent
   }
+  queue_heap[i] = item
 }
 
 fn pop(mut queue_heap: unique List[Entry]) -> Entry {
   let first = queue_heap[0]
   let last = option.unwrap_or(list.pop(mut queue_heap), first)
   if list.len(queue_heap) > 0 {
-    queue_heap[0] = last
     let mut i = 0u64
     while i * 2 + 1 < list.len(queue_heap) {
       let mut child = i * 2 + 1
@@ -42,12 +42,13 @@ fn pop(mut queue_heap: unique List[Entry]) -> Entry {
       ) {
         child += 1
       }
-      if !precedes(queue_heap[child], queue_heap[i]) {
+      if !precedes(queue_heap[child], last) {
         break
       }
-      list.swap(mut queue_heap, i, child)
+      queue_heap[i] = queue_heap[child]
       i = child
     }
+    queue_heap[i] = last
   }
   first
 }
@@ -65,36 +66,69 @@ type State {
   value_out: u32,
 }
 
+// LangArena graph_path.rs:249-295: identical score admission and stop rule.
+// Keep AStar's i32 score storage separate from the BFS/DFS distance frontier.
+fn astar(s: State) -> i64 {
+  let n = list.len(s.adj)
+  let target = n - 1
+  if target == 0 {
+    return 0
+  }
+  let mut g: unique List[i32] = []
+  let mut best: unique List[i32] = []
+  list.reserve(mut g, n)
+  list.reserve(mut best, n)
+  for _ in 0u64..n {
+    list.push(mut g, 2147483647)
+    list.push(mut best, 2147483647)
+  }
+  let mut pending: unique List[Entry] = []
+  let start_h: i32 = int.narrow(target)
+  g[0] = 0
+  best[0] = start_h
+  push(mut pending, Entry(score: int.widen(start_h), vertex: 0))
+  while list.len(pending) > 0 {
+    let current = pop(mut pending)
+    let v = current.vertex
+    if v == target {
+      return int.widen(g[v])
+    }
+    let current_g = g[v]
+    for neighbor in s.adj[v] {
+      let tentative = current_g + 1
+      if tentative < g[neighbor] {
+        g[neighbor] = tentative
+        let heuristic: i32 = int.narrow(target - neighbor)
+        let f = tentative + heuristic
+        if f < best[neighbor] {
+          best[neighbor] = f
+          push(mut pending, Entry(score: int.widen(f), vertex: neighbor))
+        }
+      }
+    }
+  }
+  -1
+}
+
 fn search(s: State) -> i64 {
+  if s.mode == 2 {
+    return astar(s)
+  }
   let n = list.len(s.adj)
   let target = n - 1
   if target == 0 {
     return 0
   }
   let mut visited: List[bool] = []
-  let mut g: List[i64] = []
-  let mut best: List[i64] = []
   for _ in 0u64..n {
-    if s.mode == 2 {
-      list.push(mut g, 2147483647)
-      list.push(mut best, 2147483647)
-    } else {
-      list.push(mut visited, false)
-    }
+    list.push(mut visited, false)
   }
   let mut pending: List[Entry] = []
   let mut head = 0u64
   let mut shortest = 2147483647i64
-  if s.mode == 2 {
-    let heuristic: i64 = int.narrow(target)
-    g[0] = 0
-    best[0] = heuristic
-    push(mut pending, Entry(score: heuristic, vertex: 0))
-  } else {
-    list.push(mut pending, Entry(score: 0, vertex: 0))
-    if s.mode == 0 {
-      visited[0] = true
-    }
+  list.push(mut pending, Entry(score: 0, vertex: 0))
+  if s.mode == 0 {
+    visited[0] = true
   }
   while if s.mode == 0 {
     head < list.len(pending)
@@ -105,10 +139,8 @@ fn search(s: State) -> i64 {
       let item = pending[head]
       head += 1
       item
-    } else if s.mode == 1 {
-      option.unwrap_or(list.pop(mut pending), Entry(score: 0, vertex: 0))
     } else {
-      pop(mut pending)
+      option.unwrap_or(list.pop(mut pending), Entry(score: 0, vertex: 0))
     }
     let v = current.vertex
     let distance = current.score
@@ -118,22 +150,8 @@ fn search(s: State) -> i64 {
       }
       visited[v] = true
     }
-    if s.mode == 2 && v == target {
-      return g[v]
-    }
     for neighbor in s.adj[v] {
-      if s.mode == 2 {
-        let tentative = g[v] + 1
-        if tentative < g[neighbor] {
-          g[neighbor] = tentative
-          let heuristic: i64 = int.narrow(target - neighbor)
-          let f = tentative + heuristic
-          if f < best[neighbor] {
-            best[neighbor] = f
-            push(mut pending, Entry(score: f, vertex: neighbor))
-          }
-        }
-      } else if neighbor == target {
+      if neighbor == target {
         if s.mode == 0 {
           return distance + 1
         }
