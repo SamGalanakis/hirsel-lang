@@ -480,7 +480,7 @@ mod benchmark {
     /// The B1 fork_join row without a compiler/launcher in the timed interval:
     /// n immediately joined children return i+1; exact triangular checksum.
     #[test]
-    #[ignore = "full gate; explicit ten-round perf session: bench/multicore/spawn-fast"]
+    #[ignore = "full gate; explicit ten-round perf session: /workspace/code/hirsel-briefs/spawn-fast/repo-evidence/bench/multicore/spawn-fast"]
     fn full_gate_fork_join() {
         unsafe extern "C" fn entry(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
             let value = unsafe { env.add(1).cast::<u64>().read() };

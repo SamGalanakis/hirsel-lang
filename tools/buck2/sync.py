@@ -998,6 +998,9 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
                             files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh"}))
+    out.append("\n" + call("hirsel_script_test", name="test-tasks-bench", script="tools/tests/tasks_bench.py", full=False,
+                            data=["tools/tests/tasks_bench.py", "bench/apps/tasks/bench", "bench/apps/tasks/support.py",
+                                  "bench/micro/measure.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-incremental-profile-9", script="tools/tests/incremental_profile_9.py", full=False,
                             data=["tools/compiler-bench/incremental-profile-9", "tools/tests/incremental_profile_9.py",
                                   "tools/tests/fixtures/incremental-profile-9/main.hir", "tools/tests/fixtures/incremental-profile-9/main.hir.json"]))

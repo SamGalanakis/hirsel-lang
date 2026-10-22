@@ -55,7 +55,7 @@ append loops and Rust allocator references retain their original contracts.
 Build it with `build-hirsel --case wordfreq-owned-bulk --configuration regions-on-whole`,
 then run its executable with the ordinary wordfreq input and epoch arguments.
 It is outside the frozen 51-input manifest and does not replace a primary row.
-The [copy-cost report](../../reports/wordfreq-copy-cost-2026-10-21.md) records its
+The [copy-cost report](/workspace/code/hirsel-briefs/wordfreq-copy-cost/repo-evidence/reports/wordfreq-copy-cost-2026-10-21.md) records its
 small instruction saving, slower measured cycles, and open performance target.
 
 | Program / subcases | Algorithm and oracle | Natural lifetime |

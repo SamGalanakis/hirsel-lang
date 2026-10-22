@@ -113,7 +113,7 @@ def placement(estimate, values):
 class Session:
     def __init__(self, args):
         self.args = args
-        self.directory = HERE / 'build' / args.session
+        self.directory = Path('/workspace/code/hirsel-briefs/langarena') / args.session
         self.directory.mkdir(parents=True, exist_ok=True)
         self.env = os.environ.copy()
         self.env.update(CARGO_BUILD_JOBS='2', RUSTUP_TOOLCHAIN='1.99.0', LC_ALL='C')
@@ -390,7 +390,7 @@ def report(data, published, output):
     for lang, participant in data['participants'].items():
         if participant.get('build_command'):
             lines.append(f'- {lang}: `{shlex.join(participant["build_command"])}`')
-    lines += ['', 'Raw samples, counters, logs and build commands are in ignored `build/' + data['session'] + '/measurements.json`.', '']
+    lines += ['', 'Raw samples, counters, logs and build commands: `' + data.get('evidence_directory', '/workspace/code/hirsel-briefs/langarena/' + data['session']) + '/measurements.json`.', '']
     lines += ['', '## Binary identities', '', '| Participant | Compiler SHA-256 | Executable SHA-256 |', '| --- | --- | --- |']
     for lang, p in data['participants'].items():
         if p['status'] == 'ready':
@@ -411,14 +411,14 @@ def main():
     parser.add_argument('--seed', type=int, default=20261021)
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--session', default=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S'))
-    parser.add_argument('--output', type=Path, help='report path; default RESULTS-<session>.md')
+    parser.add_argument('--output', type=Path, help='report path; default /workspace/code/hirsel-briefs/langarena/<session>/RESULTS.md')
     args = parser.parse_args()
     if args.rounds < 1 or not 1 <= args.timeout <= 900:
         parser.error('rounds must be positive; timeout must be between 1 and 900')
     if not re.fullmatch(r'[a-zA-Z0-9_.-]+', args.session):
         parser.error('session must be a simple directory name')
     if args.output is None:
-        args.output = HERE / f'RESULTS-{args.session}.md'
+        args.output = Path('/workspace/code/hirsel-briefs/langarena') / args.session / 'RESULTS.md'
     session = Session(args)
     raw = session.directory / 'measurements.json'
     if raw.exists():
@@ -431,7 +431,7 @@ def main():
     modules = build.groups()
     implemented = {name: module for module, names in modules.items() for name in names}
     blocked = blocked_tasks()
-    data = dict(config=config.name, rounds=args.rounds, seed=args.seed, session=args.session, cpu=args.cpu, timing_lock=str(measure.TIMING_LOCK), status='running',
+    data = dict(evidence_directory=str(session.directory), config=config.name, rounds=args.rounds, seed=args.seed, session=args.session, cpu=args.cpu, timing_lock=str(measure.TIMING_LOCK), status='running',
                 consumed_sources=sources_identity(),
                 at=datetime.now(timezone.utc).isoformat(), host=' '.join(os.uname()),
                 invocation=shlex.join(['python3', 'bench/langarena/compare.py', *sys.argv[1:]]),

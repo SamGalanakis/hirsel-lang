@@ -158,7 +158,8 @@ fn workload(size: u64, chunks: u64, into: bool) -> String {
 
 /// Explicit bounded harness: these workloads exceed the corpus step budget.
 /// Run on the host with --ignored; emit standalone default and measurement
-/// executables, then use reports/hex-builder-5/measure.py for interleaved perf.
+/// executables; the interleaved perf script is archived under
+/// /workspace/code/hirsel-briefs/hex-builder-5/repo-evidence/reports/hex-builder-5/.
 #[test]
 #[ignore = "hex-builder-5 bounded measurement artifact builder"]
 fn measurement_artifacts() {

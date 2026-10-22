@@ -76,11 +76,11 @@ with `hirsel run bench/tasks-perf/slice_copy.hir --max-steps unbounded`; its
 10k workload exceeds the corpus step budget, so the permanent 10k allocation
 assertion lives in the runtime integration tests. The fixed runtime requests
 80 bytes per interval (64 data bytes plus its 16-byte sequence header).
-[The measurements](results/slice-copy.json) distinguish process RSS from
+[The measurements](/workspace/code/hirsel-briefs/tasks-perf/repo-evidence/bench/tasks-perf/results/slice-copy.json) distinguish process RSS from
 runtime copy storage: the interpreter includes compiler state and boxed input
 construction, and already materializes String/Bytes views when it creates them.
 
-The [restart comparison](results/slice-copy-restart.json) contains ten seeded,
+The [restart comparison](/workspace/code/hirsel-briefs/tasks-perf/repo-evidence/bench/tasks-perf/results/slice-copy-restart.json) contains ten seeded,
 interleaved rounds of before, after and Rust (30 complete samples). Median
 instructions are 319.843M before and 319.959M after (1.00036x); median idle RSS
 is 15.441 MiB before and 15.451 MiB after (1.00063x). Both Hirsel binaries use

@@ -1,8 +1,8 @@
-Current matched follow-up: [FAST-2.md](FAST-2.md). The ≤3× target remains **INCOMPLETE**.
+Current matched follow-up: [FAST-2.md](/workspace/code/hirsel-briefs/http-fast-2/repo-evidence/bench/micro/http/FAST-2.md). The ≤3× target remains **INCOMPLETE**.
 
-This is a historical report. Publish each new measurement in a separate
-`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
-reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+This is a historical report. New measurement campaigns, raw sessions and
+reproduction scripts belong in `/workspace/code/hirsel-briefs/<lane>/`.
+Keep only a short result row or archive link in an existing results page.
 
 # HTTP serial measurements — 2026-10-21
 
@@ -20,7 +20,7 @@ One session (`c4da72ed-d98a-47f7-90a4-b0c4fa27e886`), ten rounds, seed
 all participants in seeded order while holding the shared CPU31 timing lock.
 Each fresh process serves 1024 requests and prints 1024. Counters include startup;
 reported values are medians of process counts divided by 1024. Both all-mode
-cycles/instructions and user events were recorded. [measurements.json](measurements.json)
+cycles/instructions and user events were recorded. [measurements.json](/workspace/code/hirsel-briefs/http-fast/repo-evidence/bench/micro/http/measurements.json)
 contains the counters and executable hashes. A single fixed release compiler
 and runtime were used for every Hirsel variant; only the saved std/example
 sources changed. Base source: `49b74942`.
@@ -108,7 +108,7 @@ frame-pointer callers were unreliable, so their flat samples were used only.
 The final profiles contain 1,707 keep and 2,327 hello samples. These short
 profiles guide attribution; they are not substitutes for the ten-round verdict.
 All final symbols with ≥0.3% self samples and their causal classification are in
-[profile-hello.tsv](profile-hello.tsv) and [profile-keep.tsv](profile-keep.tsv).
+[profile-hello.tsv](/workspace/code/hirsel-briefs/http-fast/repo-evidence/bench/micro/http/profile-hello.tsv) and [profile-keep.tsv](/workspace/code/hirsel-briefs/http-fast/repo-evidence/bench/micro/http/profile-keep.tsv).
 
 | Final symbol (self) | Hello | Keep | Cause / next seam |
 |---|---:|---:|---|
@@ -182,3 +182,11 @@ The hello example now isolates both read and response failures to the current
 connection and continues accepting. Previously it ignored receive failures but
 could return from the server on a response failure; this is an intentional
 example-policy change needed by its one-call inline request/response handler.
+
+## Archived campaign notes
+
+Campaign data and reproduction scripts live in `/workspace/code/hirsel-briefs/<lane>/repo-evidence/`.
+
+| Campaign | Archived report |
+| --- | --- |
+| http-replace-range-impl-7 | [RESULTS-http-replace-range-impl-7.md](/workspace/code/hirsel-briefs/http-replace-range-impl-7/repo-evidence/bench/micro/http/RESULTS-http-replace-range-impl-7.md) |

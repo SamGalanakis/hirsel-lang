@@ -68,7 +68,7 @@ variants, zlib 1.3 compiled with cc -O3, three inputs and levels 1, 6 and 9. Eac
 sample compresses 20 times and consumes output with CRC-32; process startup,
 input loading, compression and the checksum are all counted. CPU 31, seed 42,
 ten shuffled rounds, perf instructions plus cycles. Every output agrees. Raw
-medians and executable/input hashes are in `results.json`; preparation and
+medians and executable/input hashes are in `/workspace/code/hirsel-briefs/pa-compress/repo-evidence/bench/flate/results.json`; preparation and
 measurement commands are in `README.md`.
 
 | input | level | Map / zlib instructions | Array / zlib instructions | Array / Map |

@@ -72,10 +72,12 @@ other language uses the latest published results file from upstream `results/`.
 By default ten seeded interleaved rounds run on CPU31 under the shared
 `bench/micro/measure.py` timing lock; medians and geometric means use
 only paired tasks passing every round. Raw measurements, exact commands, logs,
-RSS and perf counters are retained in ignored `build/SESSION/measurements.json`.
-Reports default to `RESULTS-<session>.md`; use a distinct `--session <lane>` for
-each campaign, or choose a separate report with `--output`. Keep `RESULTS.md`
-as its historical campaign, and do not maintain a shared index of new reports.
+RSS and perf counters are retained under
+`/workspace/code/hirsel-briefs/langarena/SESSION/measurements.json`. Reports default
+to `RESULTS.md` in that external session directory; use a distinct `--session`
+for each campaign, or choose an external report path with `--output`.
+Keep `RESULTS.md` here as the canonical historical table with at most short
+result rows or archive links; campaign files belong outside the public repo.
 
 Full mode runs `run.js`: estimated Hirsel on the published host = local Hirsel /
 local Rust × published Rust. Runtime and RSS estimates are separate. Compile seconds are diagnostic

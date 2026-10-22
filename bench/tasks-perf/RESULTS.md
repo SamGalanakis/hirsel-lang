@@ -1,8 +1,8 @@
 # Tasks performance results
 
-This is a historical report. Publish each new measurement in a separate
-`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
-reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+This is a historical report. New measurement campaigns, raw sessions and
+reproduction scripts belong in `/workspace/code/hirsel-briefs/<lane>/`.
+Keep only a short result row or archive link in an existing results page.
 
 Microbenchmarks: baseline `b37afd182199`, ten seeded interleaved rounds on CPU31,
 seed 20261020, matching output checksums. Hirsel workloads use N=20,000 and one
@@ -33,7 +33,7 @@ The application session uses ten seeded interleaved rounds of old Hirsel,
 new Hirsel and Rust current_thread on CPU31 (client CPU7). Each operation
 uses a fresh process, a 10k-task snapshot, 1 req/s and one second of load;
 cold uses an empty snapshot. Full counters, hashes and sibling load are in
-[the raw session](results/tasks-session.json). The Hirsel baseline is the
+[the raw session](/workspace/code/hirsel-briefs/tasks-perf/repo-evidence/bench/tasks-perf/results/tasks-session.json). The Hirsel baseline is the
 tasks-rust lane’s measured binary (source revision `20c7208b9623`). These
 measurements exclude the separate sse-memory lane’s deep-copy changes.
 
@@ -61,7 +61,7 @@ intervening main changes. This is a combined-revision comparison, without
 attributing the entire difference to one lane. It uses the same ten-round
 seeded, interleaved protocol, CPU31/CPU7, 10k board and 1 req/s for one second.
 The comparison driver selects only `list` and `search`; all 60 samples passed
-and none were excluded. [Raw counters and hashes](results/combined-search-list-session.json)
+and none were excluded. [Raw counters and hashes](/workspace/code/hirsel-briefs/tasks-perf/repo-evidence/bench/tasks-perf/results/combined-search-list-session.json)
 retain the independent baseline for this session.
 
 | Operation | Isolated / Rust | Combined / Rust (95% CI) | Combined / isolated |

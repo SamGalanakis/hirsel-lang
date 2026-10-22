@@ -1,8 +1,8 @@
 # Single-thread network cost
 
-This is a historical report. Publish each new measurement in a separate
-`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
-reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+This is a historical report. New measurement campaigns, raw sessions and
+reproduction scripts belong in `/workspace/code/hirsel-briefs/<lane>/`.
+Keep only a short result row or archive link in an existing results page.
 
 The plain `net-only.hir` loop meets the target: **1.926× Rust user
 instructions**, down from 17.239× in the same interleaved session. Total

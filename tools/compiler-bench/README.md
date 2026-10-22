@@ -1,6 +1,6 @@
 # Compiler benchmarks
 
-The [2026-10-22 frozen service/compiler scoreboard](../../bench/apps/tasks/RESULTS-app-perf-refresh-2.md)
+The [2026-10-22 frozen service/compiler scoreboard](/workspace/code/hirsel-briefs/app-perf-refresh-2/repo-evidence/bench/apps/tasks/RESULTS-app-perf-refresh-2.md)
 contains ten-round hello/csvjson/tasks/standard syn10k check/debug cold and
 unchanged measurements, named body edits and separate resident-check evidence.
 It uses the post-cutover compiler and matching std/runtime/Rust sources, retains

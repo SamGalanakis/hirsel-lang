@@ -18,9 +18,9 @@ all its threads, and reads cycles, instructions, task-clock and duration_time.
 SMT siblings' busy shares and the actual capped scope's `throttled_usec` deltas
 are archived for every sample. No counters or timings include a capped queue wait.
 
-The checked-in [baseline tables](results/baseline.md) and compressed raw session
+The archived [baseline tables](/workspace/code/hirsel-briefs/multicore/repo-evidence/bench/multicore/results/baseline.md) and compressed raw session
 contain 810 successful checksum samples: 81 cells × ten rounds. Re-render with
-`bench/multicore/run --report-only --output bench/multicore/results/baseline.json.gz
+`bench/multicore/run --report-only --output /workspace/code/hirsel-briefs/multicore/repo-evidence/bench/multicore/results/baseline.json.gz
 --report /tmp/b1-baseline.md`. This archived run predates C1/W1/F1 and the landed
 tasks-rust server, so its free-mode and headroom cells explicitly remain
 dependency-owned. The `extern` tokio reference is built; the current native

@@ -1,8 +1,8 @@
 # Historical compiler speed scoreboard
 
-This is a historical report. Publish each new measurement in a separate
-`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
-reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+This is a historical report. New measurement campaigns, raw sessions and
+reproduction scripts belong in `/workspace/code/hirsel-briefs/<lane>/`.
+Keep only a short result row or archive link in an existing results page.
 
 **Historical, incomplete, superseded.** These rows measure compiler
 `69f9038496da68c7dec184e006628547c85050e6`, not current main or arch. The owner
@@ -412,3 +412,16 @@ A ratio above 1 means Hirsel costs more. Native compares startup (compile + laun
 - `stress/derive-64/hirsel/native/warm`: failed; capped: peak 239 MiB of 4G (systemd scope), 0.3 s, exit 3. hirsel: package manifest: package schema must be 1
 
 A failed/capped/timeout pair is attempted once and not repeated across later rounds. A smaller capped/timed-out scale program blocks larger sizes in that language/mode. No cap is raised and no failed cell is represented as a speedup.
+
+## Archived campaign notes
+
+Campaign data and reproduction scripts live in `/workspace/code/hirsel-briefs/<lane>/repo-evidence/`.
+
+| Campaign | Archived report |
+| --- | --- |
+| app-perf-refresh-2 | [RESULTS-app-perf-refresh-2.md](/workspace/code/hirsel-briefs/app-perf-refresh-2/repo-evidence/tools/compiler-bench/RESULTS-app-perf-refresh-2.md) |
+| incremental-profile-9 | [RESULTS-incremental-profile-9-01a161c9.md](/workspace/code/hirsel-briefs/incremental-profile-9/repo-evidence/tools/compiler-bench/RESULTS-incremental-profile-9-01a161c9.md) |
+| incremental-profile-9 | [RESULTS-incremental-profile-9.md](/workspace/code/hirsel-briefs/incremental-profile-9/repo-evidence/tools/compiler-bench/RESULTS-incremental-profile-9.md) |
+| modes-flow-2 | [RESULTS-modes-flow-2.md](/workspace/code/hirsel-briefs/modes-flow-2/repo-evidence/tools/compiler-bench/RESULTS-modes-flow-2.md) |
+| native-link-repeat-9 | [RESULTS-native-link-repeat-9-01a161f4.md](/workspace/code/hirsel-briefs/native-link-repeat-9/repo-evidence/tools/compiler-bench/RESULTS-native-link-repeat-9-01a161f4.md) |
+| native-remaining-attribution-9 | [RESULTS-native-remaining-attribution-9.md](/workspace/code/hirsel-briefs/native-remaining-attribution-9/repo-evidence/tools/compiler-bench/RESULTS-native-remaining-attribution-9.md) |

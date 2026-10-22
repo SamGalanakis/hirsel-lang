@@ -18,7 +18,7 @@ sweep before drawing a capacity conclusion. `--rounds` cannot be below ten.
 `--skip-build` reuses existing binaries; it is only for iterative harness checks.
 `--only` selects comma-separated operations for a focused run. A partial run is
 labelled partial in its generated report. All raw results are saved before
-rendering `RESULTS-<session>.md`. Never compare wall times from separate invocations.
+rendering `RESULTS.md` inside the external session directory. Never compare wall times from separate invocations.
 
 The server is a fresh capped process for every sample. A native pre-exec marker
 excludes perf startup from first-response latency. Cold-start cells use an
@@ -93,10 +93,10 @@ spending measurement time creating 10,000 tasks through HTTP. A create cell grow
 that board; an update cell repeatedly edits task 1, and every successful edit
 bumps the revision and saves even when the submitted fields match their old values.
 
-`attribution.json` records the reviewed profile interpretations for the measured
+An optional `attribution.json` in the external session directory records the reviewed profile interpretations for the measured
 binary hashes. The generator applies them only to matching binaries; a new
 binary requires fresh profile review. Full profiles remain in `results.json`,
-with compact excerpts in the session report `RESULTS-<session>.md`. `--startup-profiles-only` refreshes separate
+with compact excerpts in the external session report `RESULTS.md`. `--startup-profiles-only` refreshes separate
 startup profiles and never changes the ten-round measurement samples.
 
 `--kinds hirsel,hirsel-recorded,rust-one-worker` selects the parity and recording
@@ -111,3 +111,20 @@ startup. The flat RC increment, decrement/dispatch, destructor, COW entry and
 explicit-copy buckets are disjoint lower bounds. Inlined RC remains in enclosing
 Hirsel functions; do not treat missing symbols as zero overhead. Profiles and
 heaptrack are diagnostics outside the timing session.
+
+## Generated evidence
+
+Raw `results.json`, profiles and reports are generated, not tracked. Run from the
+repository root to regenerate a complete session (requires the tools above):
+
+```sh
+bench/apps/tasks/bench --output-dir /workspace/code/hirsel-briefs/<lane>/<session>
+```
+
+Without `--output-dir`, a new session defaults to
+`/workspace/code/hirsel-briefs/tasks-bench/<timestamp>/`. To regenerate just the
+report from that directory's existing samples, use
+`bench/apps/tasks/bench --report-only --output-dir /workspace/code/hirsel-briefs/<lane>/<session>`.
+The profile-only modes also require the saved session's `--output-dir`.
+The archived tracked sample is under
+`/workspace/code/hirsel-briefs/st-app/repo-evidence/bench/apps/tasks/results.json`.

@@ -1,7 +1,7 @@
 # Tasks performance follow-up
 
 The tables and causal narrative below describe the historical 2026-10-20
-session. The [2026-10-22 frozen scoreboard](RESULTS-app-perf-refresh-2.md)
+session. The [2026-10-22 frozen scoreboard](/workspace/code/hirsel-briefs/app-perf-refresh-2/repo-evidence/bench/apps/tasks/RESULTS-app-perf-refresh-2.md)
 reports current service, recording, RSS and compiler costs together, including
 the recorded-list 4 GiB failure. Its ratios must not be combined with this table.
 
@@ -131,14 +131,14 @@ The separate compiler-memory assertion for building the E2E client fails at
 functional E2E tests pass. A control using
 the same frozen release compiler and matching original/final std prechecks
 built successfully at 1532.7/1530.8 MiB, respectively (raw
-[control](../../tasks-perf/results/st-app-compiler-memory.json)). It does not
+[control](/workspace/code/hirsel-briefs/tasks-perf/repo-evidence/bench/tasks-perf/results/st-app-compiler-memory.json)). It does not
 reproduce a std-caused increase, but uses a different compiler build from the
 debug test. The debug assertion remains unresolved; it is not classified as
 unrelated or bypassed.
 
 ## Reclamation follow-up
 
-The [matched allocator follow-up](../../../reports/rss-throughput-2.md) retains
+The [matched allocator follow-up](/workspace/code/hirsel-briefs/rss-throughput-2/repo-evidence/reports/rss-throughput-2.md) retains
 the RSS savings but declines targeted libc page purging: create/list/update
 still cost 11.9%/34.9%/11.0% more total instructions than the pre-RSS control.
 The ten-round session completes 200 samples without failed cells. The maximum

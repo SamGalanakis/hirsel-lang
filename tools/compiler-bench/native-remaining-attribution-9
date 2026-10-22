@@ -2,7 +2,7 @@
 """Exclusive instruction attribution and bounded native-only predecessor controls.
 
 Sampling is diagnostic, never a speedup verdict. Unknown stacks stay unknown.
-References and scope adaptations are recorded in RESULTS-native-remaining-attribution-9.md.
+References and scope adaptations are linked from tools/compiler-bench/RESULTS.md (archived campaign notes).
 """
 import argparse
 from collections import Counter, defaultdict

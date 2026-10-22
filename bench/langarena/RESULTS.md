@@ -1,6 +1,6 @@
 # LangArena full-size comparison
 
-This report is fixed to the measured source snapshot below. Earlier campaign and porter notes are preserved in [the previous report](RESULTS-pre-full-20261022.md). Publish future campaigns in separate `RESULTS-<session>.md` files.
+This report is fixed to the measured source snapshot below. Earlier campaign and porter notes are preserved in [the previous report](/workspace/code/hirsel-briefs/pre-full-20261022/repo-evidence/bench/langarena/RESULTS-pre-full-20261022.md). Publish future campaigns under `/workspace/code/hirsel-briefs/<lane>/`; keep only a short result row or archive link here.
 
 Measured source: Hirsel origin/main `9f161d96ce059b57cf1a1b5b39e9e5e55b2fb130`; upstream LangArena `3c9f84ddaeec834c0631747cb789e8cfd602f993`. Config: unchanged `run.js` (50 tasks). Session: `la-compare-full-20261022`, started 2026-10-21T22:27:04.042846+00:00.
 
@@ -277,7 +277,7 @@ Profiles rerun the same full-size task with the identical measured release execu
 
 ## Blocked and failed tasks at the measured snapshot
 
-After this campaign, commit `07413cab` added the regex capture/flags ports and validated both `test.js` and `run.js` checksums for Template::Regex and Etc::LogParser. Their validation notes are preserved in [the historical report](RESULTS-pre-full-20261022.md#regex-captureflags-port-validation-2026-10-22). They have no timing samples in this frozen campaign. The following five blockers describe `9f161d96`, not current main; only the three Matmul pool blockers remain after that regex port.
+After this campaign, commit `07413cab` added the regex capture/flags ports and validated both `test.js` and `run.js` checksums for Template::Regex and Etc::LogParser. Their validation notes are preserved in [the historical report](/workspace/code/hirsel-briefs/pre-full-20261022/repo-evidence/bench/langarena/RESULTS-pre-full-20261022.md#regex-captureflags-port-validation-2026-10-22). They have no timing samples in this frozen campaign. The following five blockers describe `9f161d96`, not current main; only the three Matmul pool blockers remain after that regex port.
 
 - **Matmul::T4**: blocked: CPU parallel row execution with a fixed four-thread pool; in-run tasks share one cooperative run token.
 - **Matmul::T8**: blocked: CPU parallel row execution with a fixed eight-thread pool; in-run tasks share one cooperative run token.
@@ -360,3 +360,27 @@ Raw samples, counters, SMT sibling activity, command logs, profiles and immutabl
 | cranelift | `db4578be41f986a7054f5727bd6b790be6e7b37d88621becd007f8c92b640ca2` | `56303b5845d6e5d2ce771d5eda1c4d2dfe92750641946ecd0509b7c28aa86dbb` |
 
 Validation: `//:gate-langarena` passed 11 tests (10 existing plus one debug-column regression), including all 45 registered `test.js` checksums; the full campaign passed all 1,350 `run.js` sample checksums. All ten final diagnostic profiles also passed their expected full-size checksum. No test was removed or weakened. No benchmark workload, algorithm, checksum or safety setting was changed for this comparison.
+
+## Archived campaign notes
+
+Campaign data and reproduction scripts live in `/workspace/code/hirsel-briefs/<lane>/repo-evidence/`.
+
+| Campaign | Archived report |
+| --- | --- |
+| la-astar-9 | [RESULTS-la-astar-9.md](/workspace/code/hirsel-briefs/la-astar-9/repo-evidence/bench/langarena/RESULTS-la-astar-9.md) |
+| la-brainfuck-recursion-10 | [RESULTS-la-brainfuck-recursion-10.md](/workspace/code/hirsel-briefs/la-brainfuck-recursion-10/repo-evidence/bench/langarena/RESULTS-la-brainfuck-recursion-10.md) |
+| la-bwt-9 | [RESULTS-la-bwt-9.md](/workspace/code/hirsel-briefs/la-bwt-9/repo-evidence/bench/langarena/RESULTS-la-bwt-9.md) |
+| la-calculator-interpreter-10 | [RESULTS-la-calculator-interpreter-10.md](/workspace/code/hirsel-briefs/la-calculator-interpreter-10/repo-evidence/bench/langarena/RESULTS-la-calculator-interpreter-10.md) |
+| la-copy-graph-8 | [RESULTS-la-copy-graph-8.md](/workspace/code/hirsel-briefs/la-copy-graph-8/repo-evidence/bench/langarena/RESULTS-la-copy-graph-8.md) |
+| la-crc32-9 | [RESULTS-la-crc32-9.md](/workspace/code/hirsel-briefs/la-crc32-9/repo-evidence/bench/langarena/RESULTS-la-crc32-9.md) |
+| la-graph-rss-10 | [RESULTS-la-graph-rss-10.md](/workspace/code/hirsel-briefs/la-graph-rss-10/repo-evidence/bench/langarena/RESULTS-la-graph-rss-10.md) |
+| la-json-perf-8 | [RESULTS-la-json-perf-8.md](/workspace/code/hirsel-briefs/la-json-perf-8/repo-evidence/bench/langarena/RESULTS-la-json-perf-8.md) |
+| la-lzw-10 | [RESULTS-la-lzw-10.md](/workspace/code/hirsel-briefs/la-lzw-10/repo-evidence/bench/langarena/RESULTS-la-lzw-10.md) |
+| la-neural-net-10 | [RESULTS-la-neural-net-10.md](/workspace/code/hirsel-briefs/la-neural-net-10/repo-evidence/bench/langarena/RESULTS-la-neural-net-10.md) |
+| la-port-fidelity-8 | [RESULTS-la-port-fidelity-8.md](/workspace/code/hirsel-briefs/la-port-fidelity-8/repo-evidence/bench/langarena/RESULTS-la-port-fidelity-8.md) |
+| la-regex-ports-8 | [RESULTS-la-regex-ports-8.md](/workspace/code/hirsel-briefs/la-regex-ports-8/repo-evidence/bench/langarena/RESULTS-la-regex-ports-8.md) |
+| la-sieve-10 | [RESULTS-la-sieve-10.md](/workspace/code/hirsel-briefs/la-sieve-10/repo-evidence/bench/langarena/RESULTS-la-sieve-10.md) |
+| la-words-9 | [RESULTS-la-words-9.md](/workspace/code/hirsel-briefs/la-words-9/repo-evidence/bench/langarena/RESULTS-la-words-9.md) |
+| port-3 | [RESULTS-port-3.md](/workspace/code/hirsel-briefs/port-3/repo-evidence/bench/langarena/RESULTS-port-3.md) |
+| pre-full-20261022 | [RESULTS-pre-full-20261022.md](/workspace/code/hirsel-briefs/pre-full-20261022/repo-evidence/bench/langarena/RESULTS-pre-full-20261022.md) |
+| la-csv-perf-8 | [RESULTS-la-csv-perf-8.md](/workspace/code/hirsel-briefs/la-csv-perf-8/repo-evidence/bench/langarena/RESULTS-la-csv-perf-8.md) |

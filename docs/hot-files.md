@@ -39,10 +39,10 @@ push-only retries, rejects duplicate declarations and duplicate ledger IDs.
 The ledger uses main-runs' existing four-column/date validation. Do not add
 comments, attributes or blank lines to the declaration lists.
 
-Publish benchmark measurements in `RESULTS-<lane-or-session>.md` beside the
-historical `RESULTS.md`. LangArena and the tasks app default to a session report;
-other runners already take explicit output paths. Find reports with
-`rg --files -g 'RESULTS*.md'`; adding a report requires no shared index edit.
+Publish benchmark measurements, raw sessions, profiles and reproduction scripts
+under `/workspace/code/hirsel-briefs/<lane>/`. LangArena and the tasks app default
+to external session directories. Keep only a short result row or archive link in
+an existing results file; do not add per-lane result files to the public repo.
 Never union-merge Markdown tables: adjacent rows can have different headings,
 units, sessions and interpretation.
 
@@ -109,7 +109,7 @@ is excluded: its edits are not independent registrations.
 | `conformance/pending.txt` | 1 | Path-set merge, accepting unsorted appends |
 | `tools/h2spec/passing.txt` | 1 | Static baseline, not shared lane registration; unchanged |
 | `tools/compiler-bench/RESULTS.md`, `bench/micro/net/RESULTS.md` | 1 each | Historical; new reports shard |
-| `bench/langarena/RESULTS-port-3.md` | 1 | Already sharded |
+| `/workspace/code/hirsel-briefs/port-3/repo-evidence/bench/langarena/RESULTS-port-3.md` | 1 | Already sharded |
 | `tools/buck2/toolchains/BUCK` | 1 | Build rules, unchanged |
 | `BUCK.unsynced`, `third-party/BUCK.unsynced` | 1 each | Constant bootstrap stubs, unchanged |
 

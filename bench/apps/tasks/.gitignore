@@ -1,1 +1,7 @@
 /build/
+
+# Generated measurement evidence (normally written outside the repository).
+/results.json
+/attribution.json
+/RESULTS-*.md
+/app-perf-refresh-2/

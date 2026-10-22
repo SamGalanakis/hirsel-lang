@@ -1483,24 +1483,20 @@ also affect short segments. Use ten interleaved rounds on the same session,
 retain perf cycles/instructions and SMT sibling activity, and treat the result
 as conditional compute potential rather than measured multicore throughput.
 
-The [2026-10-20 dataset](../../reports/mc-profile-2026-10-20/results.json)
+The [2026-10-20 dataset](/workspace/code/hirsel-briefs/mc-profile/repo-evidence/reports/mc-profile-2026-10-20/results.json)
 retains ten profiler-on/off pairs for each control and two app loads. Every
 sample includes cycles, instructions, sibling activity, the per-N makespan and
 speedup, and work/span bounds; the adjacent compressed logs retain all segment
-durations. [Method and verdict](../../reports/mc-profile-2026-10-20/method.json)
+durations. [Method and verdict](/workspace/code/hirsel-briefs/mc-profile/repo-evidence/reports/mc-profile-2026-10-20/method.json)
 state the assumptions and source/artifact hashes. The snapshot has no conformance
 fixture spawning more than four total tasks and no spawning workload benchmark;
 the measured fixtures and resource-drop correctness control fill out the table
 without claiming they are task-heavy benchmarks.
 
-To reproduce in a fresh output directory:
-
-```sh
-python3 reports/mc-profile-2026-10-20/build.py /absolute/output
-python3 reports/mc-profile-2026-10-20/collect.py /absolute/output
-python3 reports/mc-profile-2026-10-20/collect.py /absolute/output tasks-app-saturated
-python3 reports/mc-profile-2026-10-20/analyze.py /absolute/output
-```
+The original campaign scripts are archived beside the dataset under
+`/workspace/code/hirsel-briefs/mc-profile/repo-evidence/`. They describe the
+original source snapshot; restore their repository-relative layout with that
+snapshot when reproducing the historical campaign.
 
 The app uses its sealed O3 application object and measurement archive with a
 small C host that selects the existing standalone admission flag. This supplies

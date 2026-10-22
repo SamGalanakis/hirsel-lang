@@ -1,2 +1,8 @@
 /build/
 /__pycache__/
+
+# Campaigns belong under hirsel-briefs.
+/RESULTS-*
+/la-graph-rss-10/
+/la_sieve_10/evidence.jsonl
+/reports/

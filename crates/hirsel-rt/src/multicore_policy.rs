@@ -4,7 +4,7 @@
 //! check. E1 must still prove all four rules before each early commit. Its
 //! initial probe and periodic probes supply the samples below; K1 retains the
 //! width-1 default until the differential gate passes. See the checked-in
-//! `reports/mc-profile-2-2026-10-20/REPORT.md` for measurement and ownership.
+//! `/workspace/code/hirsel-briefs/mc-profile-2/repo-evidence/reports/mc-profile-2-2026-10-20/REPORT.md` for measurement and ownership.
 
 /// The view representation selected using refresh cost and workload frequency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

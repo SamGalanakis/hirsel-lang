@@ -364,7 +364,7 @@ fn huff_encode(data: List[u8]) -> Huff {
 // compress.rs:432-473: load each encoded byte once, then walk its bits MSB
 // first. Keep the upstream boxed tree, bit-count-sized initialized scratch,
 // and zero-byte filtering. Rebindable borrowed cursors, bulk List zero fill
-// and list.truncate are missing; see RESULTS-la-port-fidelity-8.md.
+// and list.truncate are missing; see /workspace/code/hirsel-briefs/la-port-fidelity-8/repo-evidence/bench/langarena/RESULTS-la-port-fidelity-8.md.
 fn huff_decode(encoded: Huff) -> unique List[u8] {
   let Some(root) = huff_tree(encoded.freq) else {
     return []
