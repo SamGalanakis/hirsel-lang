@@ -1,0 +1,494 @@
+// Go encoding/base32 @ ebe2feef; independent fixed expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/base32.decode("", Standard(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n", Standard(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("!!!!", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n!\r\n!\r\n!\r\n!\r\n", Standard(), Required()) == Error(
+      CorruptInput(2)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("x===", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nx\r\n=\r\n=\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(2)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=A====", Standard(), Required()) == Error(CorruptInput(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\n=\r\nA\r\n=\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAA=AAAA", Standard(), Required()) == Error(CorruptInput(3)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\n=\r\nA\r\nA\r\nA\r\nA\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(11)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MMMMMMMMM", Standard(), Required()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nM\r\nM\r\nM\r\nM\r\nM\r\nM\r\nM\r\nM\r\nM\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(26)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MMMMMM", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nM\r\nM\r\nM\r\nM\r\nM\r\nM\r\n", Standard(), Required()) == Error(
+      CorruptInput(2)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A=", Standard(), Required()) == Error(CorruptInput(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(5)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=", Standard(), Required()) == Error(CorruptInput(3)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(11)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA==", Standard(), Required()) == Error(CorruptInput(4)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\n=\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(14)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA===", Standard(), Required()) == Error(CorruptInput(5)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\n=\r\n=\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(17)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAA=", Standard(), Required()) == Error(CorruptInput(5)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\nA\r\nA\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(17)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAA==", Standard(), Required()) == Error(CorruptInput(6)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\nA\r\nA\r\n=\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(20)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAA=", Standard(), Required()) == Error(CorruptInput(6)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nA\r\nA\r\nA\r\nA\r\nA\r\n=\r\n", Standard(), Required()) == Error(
+      CorruptInput(20)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAA==", Standard(), Required()) == Error(CorruptInput(7)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\nA\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(23)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A=======", Standard(), Required()) == Error(CorruptInput(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\n=\r\n=\r\n=\r\n=\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(5)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\n=\r\n=\r\n=\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAA=====", Standard(), Required()) == Error(CorruptInput(3)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\n=\r\n=\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(11)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAA====", Standard(), Required()) == Ok(b"\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\n=\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Ok(b"\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAA===", Standard(), Required()) == Ok(b"\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\nA\r\n=\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Ok(b"\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAA==", Standard(), Required()) == Error(CorruptInput(6)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\n=\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Error(CorruptInput(20)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAA=", Standard(), Required()) == Ok(b"\x00\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\n=\r\n",
+      Standard(),
+      Required()
+    ) == Ok(b"\x00\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAA", Standard(), Required()) == Ok(
+      b"\x00\x00\x00\x00\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode(
+      "\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\nA\r\n",
+      Standard(),
+      Required()
+    ) == Ok(b"\x00\x00\x00\x00\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n ", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n\t", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\na", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\né", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n\x00", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n0", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n ", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n\t", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\na", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\né", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n\x00", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n0", Standard(), Omitted()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A", Standard(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAA", Standard(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAA", Standard(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAA", Standard(), Omitted()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAAAA", Standard(), Omitted()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAAAAAAA", Standard(), Omitted()) == Error(
+      CorruptInput(8)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAA", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAA", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAA", Standard(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n ", Hex(), Required()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n\t", Hex(), Required()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\na", Hex(), Required()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\né", Hex(), Required()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n\x00", Hex(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\nZ", Hex(), Required()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n ", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n\t", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\na", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\né", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n\x00", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\nZ", Hex(), Omitted()) == Error(CorruptInput(10)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A", Hex(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAA", Hex(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAA", Hex(), Omitted()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAA", Hex(), Omitted()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAAAA", Hex(), Omitted()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAAAAAAAAA", Hex(), Omitted()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA", Hex(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAA", Hex(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAA", Hex(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AAAAAAA", Hex(), Required()) == Error(CorruptInput(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======A", Standard(), Required()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=======", Standard(), Required()) == Error(CorruptInput(8)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======\r\nMY======", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======", Standard(), Omitted()) == Error(CorruptInput(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=====", Standard(), Required()) == Error(CorruptInput(7)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======\r\n ", Standard(), Required()) == Error(
+      CorruptInput(10)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ XQ====", Standard(), Required()) == Error(CorruptInput(2)),
+    TextInvariant()
+  )
+  Ok(())
+}

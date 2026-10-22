@@ -1,0 +1,204 @@
+// Copyright 2011 The Go Authors. All rights reserved.
+// Port of encoding/base32/base32.go:122-186,312-398 at ebe2feef (BSD-3-Clause).
+// See docs/base32.md for adaptations and third-party/NOTICES.md for the license.
+@serializable
+pub type Alphabet = Standard | Hex
+
+@serializable
+pub type Padding = Required | Omitted
+
+@serializable
+pub type DecodeError = CorruptInput(u64)
+
+// Go EncodedLen, using quotient/remainder so the rounding addition cannot wrap.
+@noalloc
+pub fn encoded_len(n: u64, padding: Padding) -> Option[u64] uses {} {
+  let remainder = n % 5
+  let tail: u64 = if remainder == 0 {
+    0
+  } else if padding == Required() {
+    8
+  } else {
+    (remainder * 8 + 4) / 5
+  }
+  if n / 5 > (18446744073709551615u64 - tail) / 8 {
+    return None()
+  }
+  core@1/int.checked_add(n / 5 * 8, tail)
+}
+
+pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {} {
+  let len = core@1/bytes.len(data)
+  let size = match encoded_len(len, padding) {
+    Some(size) => size,
+    None() => {
+      core@1/failure.check(false, TextInvariant())
+      0
+    },
+  }
+  let table = core@1/string.as_bytes(
+    match alphabet {
+      Standard() => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+      Hex() => "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+    }
+  )
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
+  let mut i: u64 = 0
+  while i < len {
+    let used: u64 = if len - i >= 5 {
+      5
+    } else {
+      len - i
+    }
+    // A 40-bit quantum avoids Go's wrapping u32 shifts. Every shift is < 64.
+    let mut value: u64 = 0
+    let mut j: u64 = 0
+    while j < 5 {
+      let byte: u64 = if j < used {
+        core@1/int.widen(data[i + j])
+      } else {
+        0
+      }
+      value = value << 8 | byte
+      j += 1
+    }
+    let symbols = (used * 8 + 4) / 5
+    j = 0
+    while j < symbols {
+      core@1/list.push(mut out, table[value >> 35 - j * 5 & 31u64])
+      j += 1
+    }
+    if padding == Required() {
+      while j < 8 {
+        core@1/list.push(mut out, b'=')
+        j += 1
+      }
+    }
+    i += used
+  }
+  text.finish_valid(take out)
+}
+
+@noalloc
+fn digit(byte: u8, alphabet: Alphabet) -> u64 uses {} {
+  let value: u8 = if alphabet == Standard() {
+    if byte >= b'A' && byte <= b'Z' {
+      byte - b'A'
+    } else if byte >= b'2' && byte <= b'7' {
+      byte - b'2' + 26
+    } else {
+      32
+    }
+  } else {
+    if byte >= b'0' && byte <= b'9' {
+      byte - b'0'
+    } else if byte >= b'A' && byte <= b'V' {
+      byte - b'A' + 10
+    } else {
+      32
+    }
+  }
+  core@1/int.widen(value)
+}
+
+@noalloc
+fn next(data: Bytes, offset: u64) -> u64 uses {} {
+  let mut i = offset
+  while i < core@1/bytes.len(data) && (data[i] == b'\r' || data[i] == b'\n') {
+    i += 1
+  }
+  i
+}
+
+pub fn decode(input: String, alphabet: Alphabet, padding: Padding) -> Result[
+  unique Bytes,
+  DecodeError
+] uses {} {
+  let data = core@1/string.as_bytes(input)
+  let len = core@1/bytes.len(data)
+  // Count without stripping newlines: offsets below always index the original input.
+  let mut remaining: u64 = 0
+  for byte in data {
+    if byte != b'\r' && byte != b'\n' {
+      remaining += 1
+    }
+  }
+  // floor(remaining * 5 / 8), without an overflowing multiplication.
+  let size = match core@1/int.checked_add(remaining / 8 * 5, remaining % 8 * 5 / 8) {
+    Some(size) => size,
+    None() => {
+      core@1/failure.check(false, TextInvariant())
+      0
+    },
+  }
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
+  let mut i = next(data, 0)
+  while i < len {
+    let start = i
+    let mut count: u64 = 0
+    let mut value: u64 = 0
+    let mut padded = false
+    while count < 8 {
+      i = next(data, i)
+      if i == len {
+        if padding == Required() || count == 1 || count == 3 || count == 6 {
+          return Error(CorruptInput(start))
+        }
+        break
+      }
+      let at = i
+      let byte = data[i]
+      i += 1
+      remaining -= 1
+      let symbol = digit(byte, alphabet)
+      if symbol < 32 {
+        value = value << 5 | symbol
+        count += 1
+        continue
+      }
+      if byte != b'=' || padding == Omitted() || count < 2 {
+        return Error(CorruptInput(at))
+      }
+      // Preserve Go's short-padding precedence and preceding-byte error position.
+      if remaining < 7 - count {
+        return Error(CorruptInput(len))
+      }
+      let mut previous = at
+      let mut k = count + 1
+      while k < 8 {
+        i = next(data, i)
+        if data[i] != b'=' {
+          return Error(CorruptInput(previous))
+        }
+        previous = i
+        i += 1
+        remaining -= 1
+        k += 1
+      }
+      if count == 3 || count == 6 {
+        return Error(CorruptInput(at))
+      }
+      i = next(data, i)
+      if i != len {
+        return Error(CorruptInput(i))
+      }
+      padded = true
+      break
+    }
+    // Zero-fill the quantum; unused low bits are intentionally not validated.
+    let packed = value << (8 - count) * 5
+    let bytes = count * 5 / 8
+    let mut j: u64 = 0
+    while j < bytes {
+      core@1/list.push(mut out, core@1/int.narrow(packed >> 32 - j * 8 & 255u64))
+      j += 1
+    }
+    if padded {
+      break
+    }
+    i = next(data, i)
+  }
+  Ok(core@1/bytes.from_list(take out))
+}

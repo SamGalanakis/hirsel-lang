@@ -1,0 +1,3112 @@
+// Go encoding/base32 @ ebe2feef; independent fixed expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/base32.decode("\r", Standard(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n", Standard(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n", Standard(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r", Standard(), Omitted()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n", Standard(), Omitted()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n", Standard(), Omitted()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nY======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\r======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\n======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\r\n======", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=\r=====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=\n=====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=\r\n=====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY==\r====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY==\n====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY==\r\n====", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY===\r===", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY===\n===", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY===\r\n===", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY====\r==", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY====\n==", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY====\r\n==", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=====\r=", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=====\n=", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY=====\r\n=", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======\r", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======\n", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY======\r\n", Standard(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nY", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\r", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\n", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MY\r\n", Standard(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nQ====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\r====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\n====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\r\n====", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ=\r===", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ=\n===", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ=\r\n===", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ==\r==", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ==\n==", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ==\r\n==", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ===\r=", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ===\n=", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ===\r\n=", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ====\r", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ====\n", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ====\r\n", Standard(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nQ", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\r", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\n", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXQ\r\n", Standard(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\n===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\n===", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6=\r==", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6=\n==", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6=\r\n==", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6==\r=", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6==\n=", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6==\r\n=", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6===\r", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6===\n", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6===\r\n", Standard(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\n", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\n", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nQ=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nQ=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\r=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\n=", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\r\n=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ=\r", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ=\n", Standard(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ=\r\n", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nQ", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\r", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\n", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YQ\r\n", Standard(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nTB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\rB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\nB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\r\nB", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\n", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nTB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\rB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\nB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\r\nB", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\n", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\n", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nTBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\rBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\nBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\r\nBOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\rOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\nOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\nOI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\rI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\nI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\r\nI======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\r======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\n======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\r\n======", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=\r=====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=\n=====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=\r\n=====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI==\r====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI==\n====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI==\r\n====", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI===\r===", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI===\n===", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI===\r\n===", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI====\r==", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI====\n==", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI====\r\n==", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=====\r=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=====\n=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI=====\r\n=", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI======\r", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI======\n", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI======\r\n", Standard(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rMZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nMZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nMZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\rZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\nZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("M\r\nZXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\rXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\nXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZ\r\nXW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\rW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\nW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZX\r\nW6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\n6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW\r\n6YTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\rYTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\nYTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6\r\nYTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\rTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\nTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6Y\r\nTBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\rBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\nBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YT\r\nBOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\rOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\nOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTB\r\nOI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\rI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\nI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBO\r\nI", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\r", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\n", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("MZXW6YTBOI\r\n", Standard(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nA======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\r======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\n======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\r\n======", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=\r=====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=\n=====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=\r\n=====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA==\r====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA==\n====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA==\r\n====", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA===\r===", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA===\n===", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA===\r\n===", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA====\r==", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA====\n==", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA====\r\n==", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=====\r=", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=====\n=", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA=====\r\n=", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA======\r", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA======\n", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA======\r\n", Standard(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nA", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\r", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\n", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AA\r\n", Standard(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7Q====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rQ====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nQ====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nQ====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\r====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\n====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\r\n====", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q=\r===", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q=\n===", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q=\r\n===", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q==\r==", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q==\n==", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q==\r\n==", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q===\r=", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q===\n=", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q===\r\n=", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q====\r", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q====\n", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q====\r\n", Standard(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7Q", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rQ", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nQ", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nQ", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\r", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\n", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Q\r\n", Standard(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nA===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\n===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\n===", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA=\r==", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA=\n==", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA=\r\n==", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA==\r=", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA==\n=", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA==\r\n=", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA===\r", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA===\n", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA===\r\n", Standard(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nA", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\n", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\n", Standard(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nI=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nI=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\r=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\n=", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\r\n=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI=\r", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI=\n", Standard(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI=\r\n", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nI", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\r", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\n", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAI\r\n", Standard(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nP6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\n6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r\n6", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\n", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r\n", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nP6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\n6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r\n6", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\n", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r\n", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nP6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\n6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r\n6AA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\rAA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\nAA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r\nAA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\rA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\nA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\r\nA======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\r======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\n======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\r\n======", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=\r=====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=\n=====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=\r\n=====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA==\r====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA==\n====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA==\r\n====", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA===\r===", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA===\n===", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA===\r\n===", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA====\r==", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA====\n==", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA====\r\n==", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=====\r=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=====\n=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA=====\r\n=", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA======\r", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA======\n", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA======\r\n", Standard(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rAD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nAD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nAD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\rD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\nD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("A\r\nD7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\n7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD\r\n7YAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\rYAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\nYAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7\r\nYAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\rAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\nAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7Y\r\nAAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\rAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\nAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YA\r\nAP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\rP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\nP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAA\r\nP6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\n6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP\r\n6AA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\rAA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\nAA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6\r\nAA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\rA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\nA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6A\r\nA", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\r", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\n", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("AD7YAAP6AA\r\n", Standard(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

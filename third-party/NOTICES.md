@@ -1546,3 +1546,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 Go byte replacement: `stdlib/std@1/bytes.hir` ports the unmatched/replacement span-copy structure from Go `ebe2feefc400f813aefdc8a036e66d2619da6649`, `src/bytes/bytes.go:1192–1228`; `crates/hirsel-driver/tests/it-stdlib/bytes_replace_bulk_6.rs` adapts compatible all-replacement vectors from `src/bytes/bytes_test.go:1763–1821`. BSD-3-Clause (Go), copyright 2009 The Go Authors; the Go license above applies. Hirsel rejects empty patterns, keeps its prepared search and returns fresh storage; a measured singleton push avoids bulk-call overhead, and the measured extra count/reserve pass is declined.
+
+Base32 port: Copyright 2011 The Go Authors. All rights reserved.
+`stdlib/std@1/base32.hir` and `crates/hirsel-driver/tests/fixtures/base32-8/`
+adapt Go `src/encoding/base32/base32.go:122-186,312-398` and
+`base32_test.go:21-40,349-393` at
+`ebe2feefc400f813aefdc8a036e66d2619da6649`, under the BSD-3-Clause (Go)
+license reproduced above. See `docs/base32.md` for adaptations.

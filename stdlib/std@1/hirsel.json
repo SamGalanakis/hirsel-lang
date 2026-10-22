@@ -1229,6 +1229,12 @@
       "module": [
         "lru"
       ]
+    },
+    {
+      "path": "base32.hir",
+      "module": [
+        "base32"
+      ]
     }
   ],
   "dependencies": []

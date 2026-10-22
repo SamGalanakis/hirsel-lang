@@ -1,0 +1,2890 @@
+// Go encoding/base32 @ ebe2feef; independent fixed expectations.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/base32.decode("\r", Hex(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n", Hex(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n", Hex(), Required()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(std@1/base32.decode("\r", Hex(), Omitted()) == Ok(b""), TextInvariant())
+  failure.check(std@1/base32.decode("\n", Hex(), Omitted()) == Ok(b""), TextInvariant())
+  failure.check(
+    std@1/base32.decode("\r\n", Hex(), Omitted()) == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nO======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\r======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\n======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\r\n======", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=\r=====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=\n=====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=\r\n=====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO==\r====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO==\n====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO==\r\n====", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO===\r===", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO===\n===", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO===\r\n===", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO====\r==", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO====\n==", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO====\r\n==", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=====\r=", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=====\n=", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO=====\r\n=", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO======\r", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO======\n", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO======\r\n", Hex(), Required()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nO", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\r", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\n", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CO\r\n", Hex(), Omitted()) == Ok(b"\x66"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nG====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\r====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\n====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\r\n====", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG=\r===", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG=\n===", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG=\r\n===", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG==\r==", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG==\n==", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG==\r\n==", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG===\r=", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG===\n=", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG===\r\n=", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG====\r", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG====\n", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG====\r\n", Hex(), Required()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nG", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\r", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\n", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNG\r\n", Hex(), Omitted()) == Ok(b"\x66\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nU===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\n===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\n===", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU=\r==", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU=\n==", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU=\r\n==", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU==\r=", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU==\n=", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU==\r\n=", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU===\r", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU===\n", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU===\r\n", Hex(), Required()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nU", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nG=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\r=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\n=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\r\n=", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG=\r", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG=\n", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG=\r\n", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nG", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\r", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOG\r\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nJ1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nJ1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\n1", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r\n1", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\n", Hex(), Required()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nJ1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\n1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r\n1", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\n", Hex(), Omitted()) == Ok(b"\x66\x6f\x6f\x62\x61"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nJ1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\n1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r\n1E8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\rE8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\nE8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\nE8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\r8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\n8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\r\n8======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\r======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\n======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\r\n======", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=\r=====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=\n=====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=\r\n=====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8==\r====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8==\n====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8==\r\n====", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8===\r===", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8===\n===", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8===\r\n===", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8====\r==", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8====\n==", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8====\r\n==", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=====\r=", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=====\n=", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8=====\r\n=", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8======\r", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8======\n", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8======\r\n", Hex(), Required()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\rCPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\nCPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\nCPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\rPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\nPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("C\r\nPNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\rNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\nNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CP\r\nNMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\rMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\nMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPN\r\nMUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\rUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\nUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNM\r\nUOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\rOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\nOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMU\r\nOJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\rJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\nJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUO\r\nJ1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\n1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ\r\n1E8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\rE8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\nE8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1\r\nE8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\r8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\n8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E\r\n8", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\r", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\n", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("CPNMUOJ1E8\r\n", Hex(), Omitted()) == Ok(
+      b"\x66\x6f\x6f\x62\x61\x72"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r00======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n00======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n00======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r0======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n0======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n0======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\r======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\n======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\r\n======", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=\r=====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=\n=====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=\r\n=====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00==\r====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00==\n====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00==\r\n====", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00===\r===", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00===\n===", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00===\r\n===", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00====\r==", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00====\n==", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00====\r\n==", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=====\r=", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=====\n=", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00=====\r\n=", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00======\r", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00======\n", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00======\r\n", Hex(), Required()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r00", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n00", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n00", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r0", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n0", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n0", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\r", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\n", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("00\r\n", Hex(), Omitted()) == Ok(b"\x00"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nG====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\r====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\n====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\r\n====", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG=\r===", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG=\n===", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG=\r\n===", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG==\r==", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG==\n==", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG==\r\n==", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG===\r=", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG===\n=", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG===\r\n=", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG====\r", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG====\n", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG====\r\n", Hex(), Required()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nG", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\r", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\n", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VG\r\n", Hex(), Omitted()) == Ok(b"\x00\xff"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n0===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n===", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0=\r==", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0=\n==", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0=\r\n==", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0==\r=", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0==\n=", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0==\r\n=", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0===\r", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0===\n", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0===\r\n", Hex(), Required()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n0", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n008=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r08=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n08=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n08=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r8=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\n8=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\n8=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\r=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\n=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\r\n=", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008=\r", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008=\n", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008=\r\n", Hex(), Required()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n008", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r08", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n08", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n08", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r8", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\n8", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\n8", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\r", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO008\r\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO00FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO00FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO00FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO00FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n00FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n00FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r0FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n0FU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n0FU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\rFU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\nFU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\nFU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\rU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\nU", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\r\nU", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\n", Hex(), Required()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r\n", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n00FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r0FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n0FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n0FU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\rFU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\nFU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\nFU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\rU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\nU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\r\nU", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r\n", Hex(), Omitted()) == Ok(b"\x00\xff\x80\x01\xfe"),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n00FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r0FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n0FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n0FU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\rFU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\nFU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\nFU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\rU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\nU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\r\nU00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\n00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r\n00======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\r0======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\n0======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\r\n0======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\r======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\n======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\r\n======", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=\r=====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=\n=====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=\r\n=====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00==\r====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00==\n====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00==\r\n====", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00===\r===", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00===\n===", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00===\r\n===", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00====\r==", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00====\n==", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00====\r\n==", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=====\r=", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=====\n=", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00=====\r\n=", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00======\r", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00======\n", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00======\r\n", Hex(), Required()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r03VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\n03VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("\r\n03VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r3VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\n3VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("0\r\n3VO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\rVO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\nVO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03\r\nVO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\rO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\nO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03V\r\nO00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\n00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO\r\n00FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r0FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\n0FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO0\r\n0FU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\rFU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\nFU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00\r\nFU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\rU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\nU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00F\r\nU00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\n00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU\r\n00", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\r0", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\n0", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU0\r\n0", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\r", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\n", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base32.decode("03VO00FU00\r\n", Hex(), Omitted()) == Ok(
+      b"\x00\xff\x80\x01\xfe\x00"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}
