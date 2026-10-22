@@ -79,6 +79,9 @@ pub(crate) enum Borrow {
     Caller,
     /// A borrowed parameter, also the provenance carried across a return.
     Parameter(u32),
+    /// A cell of a borrowed inline argument. Retain its source offset so a
+    /// returned view can recover the caller's original leaf provenance.
+    ParameterCell(u32, u64),
 }
 
 #[derive(Clone, Debug)]
@@ -898,7 +901,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 parameter
             }
-            Borrow::Parameter(parameter) => parameter,
+            Borrow::Parameter(parameter) | Borrow::ParameterCell(parameter, _) => parameter,
             Borrow::Caller => {
                 return fail(
                     V::BorrowedReturn,
@@ -916,7 +919,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "returned view is not from a declared Borrow parameter",
             );
         }
-        Ok(Borrow::Parameter(parameter))
+        Ok(match borrow {
+            Borrow::ParameterCell(_, _) => borrow,
+            _ => Borrow::Parameter(parameter),
+        })
     }
 
     /// A read-only use: the value is still held (not consumed) and valid.
@@ -7584,13 +7590,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 }
                             }
                             let mut returned_parameters = std::collections::BTreeSet::new();
-                            if let Some(Borrow::Parameter(p)) = m.borrow {
+                            if let Some(Borrow::Parameter(p) | Borrow::ParameterCell(p, _)) =
+                                m.borrow
+                            {
                                 returned_parameters.insert(p);
                             }
                             if let Val::Image(image) = &m.val {
                                 for cell in image.cells.values() {
                                     if let Cell::Data {
-                                        borrow: Some(Borrow::Parameter(p)),
+                                        borrow:
+                                            Some(Borrow::Parameter(p) | Borrow::ParameterCell(p, _)),
                                         ..
                                     } = cell
                                     {
@@ -7830,11 +7839,26 @@ impl<'p, S: Stage> Machine<'p, S> {
                         borrow: None,
                     }
                 }
-                (hirsel_core_contract::Passing::Borrow, ArgumentValue::Value(v)) => Held {
-                    val: self.read_use(f, v)?,
-                    credits: 0,
-                    borrow: Some(Borrow::Parameter(arg.parameter)),
-                },
+                (hirsel_core_contract::Passing::Borrow, ArgumentValue::Value(v)) => {
+                    // Validate every leaf in the caller before rebinding its
+                    // provenance. Loan IDs are frame-local: an aggregate's
+                    // cells need the same parameter provenance as its holder.
+                    // The suspended caller keeps the argument live until return.
+                    let mut val = self.read_use(f, v)?;
+                    let borrow = Borrow::Parameter(arg.parameter);
+                    if let Val::Image(image) = &mut val {
+                        for (&offset, cell) in &mut image.cells {
+                            if let Cell::Data { borrow: source, .. } = cell {
+                                *source = Some(Borrow::ParameterCell(arg.parameter, offset));
+                            }
+                        }
+                    }
+                    Held {
+                        val,
+                        credits: 0,
+                        borrow: Some(borrow),
+                    }
+                }
                 (
                     passing,
                     ArgumentValue::Address {
@@ -9054,8 +9078,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 let call_site =
                                     self.unit(caller.unit).tables.calls[call.index()].clone();
                                 let bind = |borrow: Borrow| -> Checked<Borrow> {
-                                    let Borrow::Parameter(parameter) = borrow else {
-                                        return Ok(borrow);
+                                    let (parameter, offset) = match borrow {
+                                        Borrow::Parameter(parameter) => (parameter, None),
+                                        Borrow::ParameterCell(parameter, offset) => {
+                                            (parameter, Some(offset))
+                                        }
+                                        _ => return Ok(borrow),
                                     };
                                     let argument = call_site
                                         .arguments
@@ -9067,10 +9095,29 @@ impl<'p, S: Stage> Machine<'p, S> {
                                             err(V::BorrowedReturn, "returned view has no argument")
                                         })?;
                                     match argument.value {
-                                        ArgumentValue::Value(v) => Ok(self
-                                            .get(&caller, v)?
-                                            .borrow
-                                            .unwrap_or(Borrow::Caller)),
+                                        ArgumentValue::Value(v) => {
+                                            let source = self.get(&caller, v)?;
+                                            let leaf = if let Some(offset) = offset {
+                                                let Val::Image(image) = &source.val else {
+                                                    return fail(
+                                                        V::BorrowedReturn,
+                                                        "returned cell has no argument image",
+                                                    );
+                                                };
+                                                let Some(Cell::Data { borrow, .. }) =
+                                                    image.cells.get(&offset)
+                                                else {
+                                                    return fail(
+                                                        V::BorrowedReturn,
+                                                        "returned cell has no argument provenance",
+                                                    );
+                                                };
+                                                *borrow
+                                            } else {
+                                                None
+                                            };
+                                            Ok(leaf.or(source.borrow).unwrap_or(Borrow::Caller))
+                                        }
                                         ArgumentValue::Address { .. } => fail(
                                             V::BorrowedReturn,
                                             "returned view requires a borrowed argument value",
