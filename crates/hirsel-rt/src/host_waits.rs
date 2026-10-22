@@ -571,15 +571,34 @@ pub(crate) unsafe fn arm(
 ) -> Stopped<Option<u64>> {
     // The adapter and wait table are home-affine at width > 1. The bridge
     // also refreshes the run's armed/parked count before returning.
-    unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at)) }?
+    if unsafe { (*ctx).run_ref().free_mode } {
+        // Free home readiness can need the role while this worker waits for
+        // its bridge. Copy the issuer first: the adapter callback must not
+        // reenter the scheduler through this context after we leave the role.
+        let task = crate::tasks::current_path(ctx);
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, Some(&task))) }?
+    } else {
+        unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, None)) }?
+    }
 }
 
-unsafe fn arm_here(ctx: *mut TaskCtx, scope: u32, clock: u64, at: u64) -> Stopped<Option<u64>> {
+unsafe fn arm_here(
+    ctx: *mut TaskCtx,
+    scope: u32,
+    clock: u64,
+    at: u64,
+    issuer: Option<&[u32]>,
+) -> Stopped<Option<u64>> {
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
-        let task = crate::tasks::current_path(ctx);
-        let binding = unsafe { Binding::get(ctx) };
-        binding.adapter.issuer(&task);
+        if let Some(task) = issuer {
+            binding.adapter.issuer(task);
+        } else {
+            let task = crate::tasks::current_path(ctx);
+            let binding = unsafe { Binding::get(ctx) };
+            binding.adapter.issuer(&task);
+        }
     }
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;

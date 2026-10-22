@@ -16,7 +16,7 @@ struct Clock {
     calls: Arc<AtomicU64>,
     finishes: Arc<AtomicU64>,
     exit_op: u64,
-    disarm_probe: Option<Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>>,
+    bridge_probe: Option<Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>>,
 }
 
 struct NoReplayClock;
@@ -52,7 +52,7 @@ fn native_deadline_replay_substitutes_expiry_without_calling_live_timers() {
                 calls: calls.clone(),
                 finishes: finishes.clone(),
                 exit_op: 3,
-                disarm_probe: None,
+                bridge_probe: None,
             }));
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
@@ -165,11 +165,24 @@ fn native_deadline_replay_substitutes_expiry_without_calling_live_timers() {
     }
 }
 impl Adapter for Clock {
+    fn wants_issuer(&self) -> bool {
+        true
+    }
+    fn issuer(&mut self, task: &[u32]) {
+        assert_eq!(std::thread::current().id(), self.home);
+        assert!(task.is_empty(), "the scope timer belongs to the root");
+    }
     fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
         Ok(None)
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         assert_eq!(std::thread::current().id(), self.home);
+        if let Some(probe) = &self.bridge_probe {
+            // Timer issue must permit a simultaneous home readiness merge.
+            let run = probe.load(Ordering::Acquire);
+            assert!(!run.is_null());
+            drop(unsafe { role::IdleGuard::new(run) });
+        }
         // A synchronous cut here also proves the timer call holds no section.
         let cut = self.recording.recorder.flush().unwrap().unwrap();
         assert_eq!(
@@ -199,7 +212,7 @@ impl Adapter for Clock {
     }
     fn finish(&mut self, _: u64) {
         assert_eq!(std::thread::current().id(), self.home);
-        if let Some(probe) = &self.disarm_probe {
+        if let Some(probe) = &self.bridge_probe {
             // A synchronous disarm must let home finish an in-progress
             // readiness merge. Nonreentrant acquisition detects a worker
             // retaining its role across that bridge, independent of timing.
@@ -235,7 +248,7 @@ fn native_deadline_entry_records_before_home_arm_and_exit_records_expired() {
                     calls: calls.clone(),
                     finishes: finishes.clone(),
                     exit_op: 4,
-                    disarm_probe: None,
+                    bridge_probe: None,
                 }));
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
@@ -374,7 +387,7 @@ fn native_scope_exit_keeps_its_timer_until_the_saved_child_rest_returns() {
                 calls: calls.clone(),
                 finishes: finishes.clone(),
                 exit_op: 3,
-                disarm_probe: Some(run_ptr),
+                bridge_probe: Some(run_ptr),
             }));
             let layout = crate::Layout {
                 magic: crate::LAYOUT_MAGIC,
