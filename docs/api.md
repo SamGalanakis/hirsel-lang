@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2169 exported definitions; 907 variants.
+2170 exported definitions; 907 variants.
 
 ## Types and roots
 
@@ -6942,6 +6942,16 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](
 - `pub fn http.fetch( n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes] ) -> Result[Response, HttpError]`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
+
+<a id="def-std_401_2fhttp_2ffetch_5fbounded"></a>
+
+- `pub fn http.fetch_bounded( n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes], limit: u64 ) -> Result[Response, HttpError]`
+
+One-shot fetch with an explicit raw and decoded body limit. Config's
+max_body_bytes is an additional raw-body bound; decoding uses `limit`.
+A zero limit admits only an empty body. Status errors precede body reads.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
 
 <a id="def-std_401_2fhttp_2fform_5fbody"></a>
 
