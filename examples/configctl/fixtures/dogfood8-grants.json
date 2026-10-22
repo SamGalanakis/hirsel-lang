@@ -1,0 +1,13 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "configs",
+        "host": ".",
+        "access": "read"
+      }
+    ]
+  },
+  "args": []
+}

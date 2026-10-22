@@ -1,0 +1,3 @@
+Usage: configctl migrate FILE --to 2 [options] [--] [arguments]
+  -h, --help	Print help
+  --to <value>	Target version (2)

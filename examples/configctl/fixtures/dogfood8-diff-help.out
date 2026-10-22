@@ -1,0 +1,2 @@
+Usage: configctl diff OLD NEW [options] [--] [arguments]
+  -h, --help	Print help

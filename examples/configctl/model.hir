@@ -1,0 +1,259 @@
+/// Explicit wire DTOs; migration is app policy, never schema tooling execution.
+pub type V1 {
+  version: u32,
+  name: String,
+  retries: u32,
+}
+
+pub type Service {
+  name: String,
+}
+
+pub type Retry {
+  attempts: u32,
+}
+
+pub type V2 {
+  version: u32,
+  service: Service,
+  retry: Retry,
+}
+
+pub type Config = Version1(V1) | Version2(V2)
+
+pub type ConfigError = TooLarge | InvalidJson | InvalidShape | UnknownVersion | EmptyName | RetryRange | UnsupportedTarget | Encode
+
+fn v1_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique V1,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(V1), schema.strict_policy())
+
+fn v2_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique V2,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(V2), schema.strict_policy())
+
+fn v2_encode(value: V2, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(V2), schema.strict_policy())
+
+fn service_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Service,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Service), schema.strict_policy())
+
+fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Service), schema.strict_policy())
+
+fn retry_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
+  unique Retry,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Retry), schema.strict_policy())
+
+fn retry_schema_encode(value: Retry, mut check: schema.CheckState) -> Result[
+  unique json.Value,
+  schema.SchemaError
+] uses {} = comptime derive.schema_encode(shape(Retry), schema.strict_policy())
+
+pub fn validate(config: Config) -> Result[(), ConfigError] uses {} {
+  let (name, count) = match config {
+    Version1(v) => {
+      if v.version != 1 {
+        return Error(UnknownVersion())
+      }
+      (v.name, v.retries)
+    },
+    Version2(v) => {
+      if v.version != 2 {
+        return Error(UnknownVersion())
+      }
+      (v.service.name, v.retry.attempts)
+    },
+  }
+  if name == "" {
+    return Error(EmptyName())
+  }
+  if count > 10 {
+    return Error(RetryRange())
+  }
+  Ok(())
+}
+
+/// Duplicate decoded keys fail before any typed conversion.
+pub fn parse(data: Bytes) -> Result[unique Config, ConfigError] uses {} {
+  if bytes.len(data) > 65536 {
+    return Error(TooLarge())
+  }
+  let Ok(text) = string.from_bytes(unique data) else {
+    return Error(InvalidJson())
+  }
+  let Ok(wire) = json.parse(take text) else {
+    return Error(InvalidJson())
+  }
+  let Object(fields) = wire else {
+    return Error(InvalidShape())
+  }
+  let Some(Number(version)) = map.get(fields, "version") else {
+    return Error(InvalidShape())
+  }
+  let mut check = match schema.check_state(schema.default_options()) {
+    Ok(c) => take c,
+    Error(_) => {
+      return Error(InvalidShape())
+    },
+  }
+  let config = if version == "1" {
+    let Ok(v) = v1_decode(wire, mut check) else {
+      return Error(InvalidShape())
+    }
+    Version1(take v)
+  } else if version == "2" {
+    let Ok(v) = v2_decode(wire, mut check) else {
+      return Error(InvalidShape())
+    }
+    Version2(take v)
+  } else {
+    return Error(UnknownVersion())
+  }
+  validate(config)?
+  Ok(take config)
+}
+
+pub fn migrate(take config: Config, target: u32) -> Result[unique V2, ConfigError] uses {} {
+  validate(config)?
+  if target != 2 {
+    return Error(UnsupportedTarget())
+  }
+  match take config {
+    Version1(v) => {
+      let V1(version: _, name: name, retries: retries) = take v
+      Ok(
+        V2(
+          version: 2,
+          service: Service(name: unique name),
+          retry: Retry(attempts: retries)
+        )
+      )
+    },
+    Version2(v) => Ok(unique v),
+  }
+}
+
+pub fn migration(data: Bytes, target: u32) -> Result[unique Bytes, ConfigError] uses {} {
+  let v = migrate(parse(data)?, target)?
+  let mut check = match schema.check_state(schema.default_options()) {
+    Ok(c) => take c,
+    Error(_) => {
+      return Error(Encode())
+    },
+  }
+  let Ok(wire) = v2_encode(v, mut check) else {
+    return Error(Encode())
+  }
+  let Ok(text) = json.stringify(wire) else {
+    return Error(Encode())
+  }
+  let mut out: List[u8] = []
+  text.append(mut out, text)
+  list.push(mut out, b'\n')
+  Ok(unique bytes.from_list(take out))
+}
+
+fn change(path: String, old: json.Value, new: json.Value, mut out: List[u8]) -> Result[
+  (),
+  ConfigError
+] uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "path", Text(unique path))
+  map.insert(mut fields, "old", unique old)
+  map.insert(mut fields, "new", unique new)
+  let Ok(text) = json.stringify(Object(take fields)) else {
+    return Error(Encode())
+  }
+  text.append(mut out, text)
+  list.push(mut out, b'\n')
+  Ok(())
+}
+
+/// Semantic v2 changes, ordered by path; equality emits no bytes.
+pub fn diff(old: Bytes, new: Bytes) -> Result[unique Bytes, ConfigError] uses {} {
+  let a = migrate(parse(old)?, 2)?
+  let b = migrate(parse(new)?, 2)?
+  let mut out: List[u8] = []
+  if a.retry.attempts != b.retry.attempts {
+    change(
+      "retry.attempts",
+      Number(f"{a.retry.attempts}"),
+      Number(f"{b.retry.attempts}"),
+      mut out
+    )?
+  }
+  if a.service.name != b.service.name {
+    change(
+      "service.name",
+      Text(copy a.service.name),
+      Text(copy b.service.name),
+      mut out
+    )?
+  }
+  Ok(unique bytes.from_list(take out))
+}
+
+@test
+fn migrate_boundaries_and_idempotence(t: Test) -> Result[(), ConfigError] {
+  let zero = b"{\"version\":1,\"name\":\"wool\",\"retries\":0}"
+  let ten = b"{\"version\":1,\"name\":\"\xe9\x9b\xaa\",\"retries\":10}"
+  let expected = b"{\"version\":2,\"service\":{\"name\":\"wool\"},\"retry\":{\"attempts\":0}}\n"
+  test.check(t, migration(zero, 2)? == expected)
+  test.check(t, migration(expected, 2)? == expected)
+  test.check(
+    t,
+    migration(ten, 2)? == b"{\"version\":2,\"service\":{\"name\":\"\xe9\x9b\xaa\"},\"retry\":{\"attempts\":10}}\n"
+  )
+  test.check(t, results.is_error(migration(zero, 1)))
+  test.check(t, results.is_error(migration(expected, 1)))
+  Ok(())
+}
+
+@test
+fn reject_invalid_wire(t: Test) {
+  let invalid: List[Bytes] = [
+    b"{",
+    b"[]",
+    b"{}",
+    b"{\"version\":3}",
+    b"{\"version\":1,\"name\":\"\",\"retries\":0}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":11}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":-1}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":0.5}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":4294967296}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":\"0\"}",
+    b"{\"version\":1,\"name\":\"w\",\"retries\":0,\"extra\":0}",
+    b"{\"version\":1,\"name\":\"w\",\"na\\u006de\":\"w\",\"retries\":0}",
+    b"{\"version\":2,\"service\":{\"name\":\"w\",\"x\":0},\"retry\":{\"attempts\":0}}",
+    b"{\"version\":2,\"service\":{\"name\":\"w\"},\"retry\":{\"attempts\":0,\"attempts\":0}}",
+    b"{\"version\":2,\"service\":{\"name\":\"w\"},\"retry\":{}}",
+    b"{\"version\":2,\"service\":{\"name\":null},\"retry\":{\"attempts\":0}}"
+  ]
+  for data in invalid {
+    test.check(t, results.is_error(parse(data)))
+  }
+}
+
+@test
+fn semantic_diff(t: Test) -> Result[(), ConfigError] {
+  let a = b"{\"version\":1,\"name\":\"wool\",\"retries\":0}"
+  let same = b"{\"retry\":{\"attempts\":0},\"service\":{\"name\":\"wool\"},\"version\":2}"
+  let b = b"{\"version\":2,\"service\":{\"name\":\"\xe9\x9b\xaa\"},\"retry\":{\"attempts\":10}}"
+  test.check(t, diff(a, same)? == b"")
+  test.check(
+    t,
+    diff(a, b)? == b"{\"path\":\"retry.attempts\",\"old\":0,\"new\":10}\n{\"path\":\"service.name\",\"old\":\"wool\",\"new\":\"\xe9\x9b\xaa\"}\n"
+  )
+  test.check(t, results.is_error(diff(a, b"{}")))
+  test.check(t, results.is_error(diff(b"{}", a)))
+  Ok(())
+}

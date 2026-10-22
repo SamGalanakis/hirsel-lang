@@ -1,0 +1,173 @@
+// Required command / per-command structure adapts clap git-derive.rs:8-61,
+// ccc89b83875474399e9d9d70841163f6319d1a41, MIT (Individual contributors).
+pub type AppError = Usage | Arguments(ArgError) | File(FileError) | Grant(GrantError) | Output(
+  OutputError
+) | Config(model.ConfigError) | Read | Limit
+
+const ROOT_HELP: String = "Usage: configctl <COMMAND>\n\nCommands:\n  validate FILE\n  migrate FILE --to 2\n  diff OLD NEW\n\nOptions:\n  -h, --help  Print help\n"
+
+fn specs(command: String) -> List[cli.Flag] {
+  let mut flags: List[cli.Flag] = [
+    cli.Flag(name: "help", short: Some(b'h'), kind: Switch, help: "Print help")
+  ]
+  if command == "migrate" {
+    list.push(
+      mut flags,
+      cli.Flag(name: "to", short: None(), kind: Value, help: "Target version (2)")
+    )
+  }
+  take flags
+}
+
+// std.cli.parse stops at the first positional. Partition this app's options
+// before that call so FILE --to 2 works; -- and everything after it stay opaque.
+fn parse_command(take argv: List[String], flags: List[cli.Flag]) -> Result[
+  cli.Parsed,
+  AppError
+] {
+  let mut options: List[String] = []
+  let mut operands: List[String] = []
+  let mut after = false
+  let mut i: u64 = 0
+  while i < list.len(argv) {
+    let token = argv[i]
+    if after {
+      list.push(mut operands, copy token)
+    } else if token == "--" {
+      after = true
+    } else if string.starts_with(token, "-") && token != "-" {
+      list.push(mut options, copy token)
+      if token == "--to" || token == "-to" {
+        if i + 1 == list.len(argv) {
+          return Error(Usage())
+        }
+        i += 1
+        list.push(mut options, copy argv[i])
+      }
+    } else {
+      list.push(mut operands, copy token)
+    }
+    i += 1
+  }
+  list.push(mut options, "--")
+  for operand in take operands {
+    list.push(mut options, take operand)
+  }
+  let Ok(parsed) = cli.parse(take options, flags) else {
+    return Error(Usage())
+  }
+  for (_, values) in parsed.flags {
+    if list.len(values) != 1 {
+      return Error(Usage())
+    }
+  }
+  Ok(take parsed)
+}
+
+fn read(d: Dir, name: String) -> Result[unique Bytes, AppError] {
+  let mut f = match file.open(d, path.of(name)) {
+    Ok(f) => take f,
+    Error(_) => {
+      return Error(Read())
+    },
+  }
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = 65537u64 - list.len(data)
+    let count: u64 = if remaining < 4096 {
+      remaining
+    } else {
+      4096
+    }
+    let Ok(n) = bufio.file_read_more(d, mut f, mut reader, count) else {
+      return Error(Read())
+    }
+    if n > 65536 - list.len(data) {
+      return Error(Limit())
+    }
+    if n == 0 {
+      break
+    }
+    for byte in bufio.peek(reader, n) {
+      list.push(mut data, byte)
+    }
+    bufio.consume(mut reader, n)
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let Ok(root) = cli.parse(take argv, specs("")) else {
+    return Error(Usage())
+  }
+  if list.len(root.positional) == 0 {
+    if map.get(root.flags, "help") == Some(["true"]) {
+      out.write(io.stdout(rt)?, string.as_bytes(ROOT_HELP))?
+      return Ok(())
+    }
+    return Error(Usage())
+  }
+  if map.len(root.flags) != 0 {
+    return Error(Usage())
+  }
+  let command = root.positional[0]
+  if command != "validate" && command != "migrate" && command != "diff" {
+    return Error(Usage())
+  }
+  let flags = specs(command)
+  let mut tail: List[String] = []
+  for i in 1u64..list.len(root.positional) {
+    list.push(mut tail, copy root.positional[i])
+  }
+  let parsed = parse_command(take tail, flags)?
+  if map.get(parsed.flags, "help") == Some(["true"]) {
+    if list.len(parsed.positional) != 0 || map.len(parsed.flags) != 1 {
+      return Error(Usage())
+    }
+    let usage = if command == "validate" {
+      "configctl validate FILE"
+    } else if command == "migrate" {
+      "configctl migrate FILE --to 2"
+    } else {
+      "configctl diff OLD NEW"
+    }
+    out.write(io.stdout(rt)?, string.as_bytes(cli.usage(usage, flags)))?
+    return Ok(())
+  }
+  if map.get(parsed.flags, "help") != None() {
+    return Error(Usage())
+  }
+  let count: u64 = if command == "diff" {
+    2
+  } else {
+    1
+  }
+  if list.len(parsed.positional) != count {
+    return Error(Usage())
+  }
+  if command == "migrate" {
+    if map.get(parsed.flags, "to") != Some(["2"]) {
+      return Error(Usage())
+    }
+  } else if map.len(parsed.flags) != 0 {
+    return Error(Usage())
+  }
+  let d = io.dir(rt, path.of("configs"))?
+  let data = read(d, parsed.positional[0])?
+  if command == "validate" {
+    model.validate(model.parse(data) ? Config) ? Config
+  } else {
+    let output = if command == "migrate" {
+      model.migration(data, 2) ? Config
+    } else {
+      model.diff(data, read(d, parsed.positional[1])?) ? Config
+    }
+    out.write(io.stdout(rt)?, output)?
+  }
+  Ok(())
+}

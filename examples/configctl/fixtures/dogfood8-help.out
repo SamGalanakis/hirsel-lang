@@ -1,0 +1,9 @@
+Usage: configctl <COMMAND>
+
+Commands:
+  validate FILE
+  migrate FILE --to 2
+  diff OLD NEW
+
+Options:
+  -h, --help  Print help
