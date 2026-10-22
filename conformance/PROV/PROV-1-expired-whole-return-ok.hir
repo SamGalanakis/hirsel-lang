@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: accept
+fn make(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn probe(take r0: List[u64]) -> () {
+  let mut r = r0
+  let p = make(r)
+  r[0] = 3u64
+  let moved = take p
+  if true {
+    return
+  }
+}

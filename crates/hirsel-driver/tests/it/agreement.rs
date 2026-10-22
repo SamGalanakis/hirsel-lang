@@ -1286,11 +1286,22 @@ fn a_written_take_keeps_a_records_sibling_relation_but_ends_copies_outside_it() 
             .unwrap();
         let end = instructions.remove(end);
         instructions.insert(copied + 1, end);
-        assert!(
-            kinds(&forged, &signatures).contains(&ViolationKind::InvalidOrigin(copy)),
-            "{:?}",
-            kinds(&forged, &signatures)
-        );
+        let reads = forged.bodies[0]
+            .rvalues
+            .iter()
+            .find_map(|value| match value {
+                hirsel_tir::Rvalue::Binary { left, right, .. } => Some([left.place, right.place]),
+                _ => None,
+            })
+            .unwrap();
+        let violations = kinds(&forged, &signatures);
+        assert!(!violations.contains(&ViolationKind::InvalidOrigin(copy)));
+        for read in reads {
+            assert!(
+                violations.contains(&ViolationKind::InvalidOrigin(read)),
+                "{violations:?}"
+            );
+        }
         // Hand-built control: end `c` as soon as it is bound, before `pos`,
         // whose owner moved into `c`, is compared. `pos` lives outside the
         // taken storage, so the owner's identity ends for it (PROV-1).
@@ -1323,20 +1334,21 @@ fn a_written_take_keeps_a_records_sibling_relation_but_ends_copies_outside_it() 
             })
             .unwrap();
         block.instructions.insert(bound + 1, end);
-        // `pos` is the first name this arm binds.
-        let pos = block
-            .instructions
+        let reads = forged.bodies[0]
+            .rvalues
             .iter()
-            .find_map(|i| match i.kind {
-                hirsel_tir::InstructionKind::BindOrigin { place, .. } => Some(place),
+            .find_map(|value| match value {
+                hirsel_tir::Rvalue::Binary { left, right, .. } => Some([left.place, right.place]),
                 _ => None,
             })
             .unwrap();
-        assert!(
-            kinds(&forged, &signatures).contains(&ViolationKind::InvalidOrigin(pos)),
-            "{:?}",
-            kinds(&forged, &signatures)
-        );
+        let violations = kinds(&forged, &signatures);
+        for read in reads {
+            assert!(
+                violations.contains(&ViolationKind::InvalidOrigin(read)),
+                "{violations:?}"
+            );
+        }
     });
 }
 

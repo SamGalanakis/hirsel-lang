@@ -1,0 +1,17 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-1-expired-whole-take-ok.hir
+type Receipt[T] {
+  value: T,
+}
+
+fn make(r: List[u64]) -> Receipt[Option[u8 of r]] {
+  Receipt(value: None)
+}
+
+fn probe(take r0: List[u64]) -> () {
+  let mut r = r0
+  let p = make(r)
+  r[0] = 3u64
+  let moved = p.value
+}

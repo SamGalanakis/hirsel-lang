@@ -1,0 +1,16 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 15
+// twin: PROV/PROV-1-expired-whole-call-ok.hir
+fn make(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[u64], take p: Option[u8 of r]) -> () {}
+
+fn probe(take r0: List[u64]) -> () {
+  let mut r = r0
+  let p = make(r)
+  r[0] = 3u64
+  let moved = take p
+  inspect(r, take moved)
+}

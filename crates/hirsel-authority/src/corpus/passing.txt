@@ -427,6 +427,20 @@ PROV/PROV-1-ended-block-owner-use-bad.hir
 PROV/PROV-1-ended-block-owner-use-ok.hir
 PROV/PROV-1-ended-owner-use-bad.hir
 PROV/PROV-1-ended-owner-use-ok.hir
+PROV/PROV-1-expired-field-copy-bad.hir
+PROV/PROV-1-expired-field-read-bad.hir
+PROV/PROV-1-expired-field-take-bad.hir
+PROV/PROV-1-expired-whole-brand-call-bad.hir
+PROV/PROV-1-expired-whole-call-ok.hir
+PROV/PROV-1-expired-whole-copy-match-bad.hir
+PROV/PROV-1-expired-whole-copy-ok.hir
+PROV/PROV-1-expired-whole-generic-call-bad.hir
+PROV/PROV-1-expired-whole-match-bad.hir
+PROV/PROV-1-expired-whole-read-call-bad.hir
+PROV/PROV-1-expired-whole-return-bad.hir
+PROV/PROV-1-expired-whole-return-ok.hir
+PROV/PROV-1-expired-whole-take-ok.hir
+PROV/PROV-1-expired-whole-taken-brand-call-bad.hir
 PROV/PROV-1-field-index-container-bad.hir
 PROV/PROV-1-field-index-container-ok.hir
 PROV/PROV-1-field-owner-mut-call-bad.hir
@@ -473,6 +487,7 @@ PROV/PROV-1-mutate-ends-brand-bad.hir
 PROV/PROV-1-mutate-ends-brand-ok.hir
 PROV/PROV-1-open-moved-result.hir
 PROV/PROV-1-reassign-ends-brand-bad.hir
+PROV/PROV-1-refreshed-owner-loop-bad.hir
 PROV/PROV-1-refreshed-owner-loop-ok.hir
 PROV/PROV-1-same-parameter-bad.hir
 PROV/PROV-1-same-parameter-ok.hir
@@ -657,4 +672,3 @@ PROV/PROV-5-mut-brand-owner-ok.hir
 PROV/PROV-5-replace-brand-owner-bad.hir
 PROV/PROV-5-replace-brand-owner-ok.hir
 PROV/PROV-5-whole-record-replacement.hir
-PROV/PROV-1-refreshed-owner-loop-bad.hir

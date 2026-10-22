@@ -1,0 +1,11 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 8
+// twin: PROV/PROV-1-expired-whole-return-ok.hir
+fn probe(mut r: List[u64], take p: Option[u8 of r]) -> Option[u8 of r] {
+  r[0] = 3u64
+  let moved = take p
+  if true {
+    return take moved
+  }
+  None
+}

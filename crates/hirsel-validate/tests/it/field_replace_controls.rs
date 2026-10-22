@@ -188,7 +188,9 @@ fn a_mutable_call_still_expires_an_external_value_branded_by_its_argument() {
     f.body().locals[destination_root.0 as usize].ty = old;
     f.body().places[destination as usize].ty = old;
     let value = RvalueId(f.body().rvalues.len() as u32);
-    f.body().rvalues.push(Rvalue::Use(copy(incoming)));
+    f.body()
+        .rvalues
+        .push(Rvalue::Use(operand(incoming, UseKind::Borrow)));
     f.body().blocks[1].instructions.push(inst(
         InstructionKind::Assign {
             destination: PlaceId(destination),

@@ -4705,7 +4705,9 @@ fn element_mutation_expires_container_brands_but_preserves_siblings() {
             f.body().locals[result_root.0 as usize].ty = branded;
             f.body().places[result as usize].ty = branded;
             let rv = RvalueId(f.body().rvalues.len() as u32);
-            f.body().rvalues.push(Rvalue::Use(copy(value)));
+            f.body()
+                .rvalues
+                .push(Rvalue::Use(operand(value, UseKind::Borrow)));
             let last = f.body().blocks.last_mut().unwrap();
             last.instructions.push(inst(
                 InstructionKind::Assign {

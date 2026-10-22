@@ -1351,6 +1351,8 @@ impl Checker<'_> {
         let Some(actual) = self.ty(expression) else {
             return;
         };
+        let expiry = self.ended(declared);
+        let actual = self.part_brands(actual, declared);
         let mut row = self.t.get(actual).unwrap().clone();
         let provenance = self.t.get(declared).unwrap();
         if !provenance.brand.alternatives.is_empty() {
@@ -1378,10 +1380,21 @@ impl Checker<'_> {
         row.modes.relation = lifetime.union(&placement);
         // Retain the projected kind, other modes and cleanup evidence while
         // applying flow-sensitive provenance from the selected checked field.
-        if self.t.get(actual) != Some(&row) {
-            let refined = self.intern(row);
-            self.set_ty(expression, refined);
+        let mut refined = if self.t.get(actual) != Some(&row) {
+            self.intern(row)
+        } else {
+            actual
+        };
+        if let Some(expiry) = expiry {
+            // Refinement changes the physical row, not the selected field's
+            // expired evidence. Give this occurrence its own expiry marker.
+            if self.ended(refined) != Some(expiry) {
+                let row = self.t.get(refined).unwrap().clone();
+                refined = self.t.intern_graph(1, |_| vec![row])[0];
+                self.invalid.insert(refined, expiry);
+            }
         }
+        self.set_ty(expression, refined);
     }
     pub(super) fn projection_fields(
         &mut self,

@@ -4324,6 +4324,67 @@ impl Checker<'_> {
             state.origins.retained.set(index, retained);
         }
     }
+    /// A whole taken data graph may forget brands only when its receiving
+    /// declaration needs none. Generic and hand-back contracts keep evidence.
+    fn taken_brandless_data(&mut self, callee: &Callee, argument: &CallArgument) -> bool {
+        if argument.value.usage != UseKind::Take
+            || !self.body.places[argument.value.place.0 as usize]
+                .projection
+                .is_empty()
+        {
+            return false;
+        }
+        let function = match callee {
+            Callee::Definition { path, .. } => {
+                self.signatures.get(path).and_then(|s| match &s.kind {
+                    SignatureKind::Function(f) => Some(f),
+                    _ => None,
+                })
+            }
+            Callee::Indirect { value, .. } => {
+                self.t
+                    .get(self.place_type(value.place))
+                    .and_then(|row| match &row.kind {
+                        TypeKind::Function(f) => Some(f),
+                        _ => None,
+                    })
+            }
+        };
+        let Some(parameter) =
+            function.and_then(|f| f.parameters.get(argument.parameter.0 as usize))
+        else {
+            return false;
+        };
+        if parameter.passing != hirsel_syntax::PassingMode::Take
+            || !self.bound(
+                self.t,
+                parameter.ty,
+                hirsel_types::Bound::Data,
+                &self.generic_declarations(),
+            )
+        {
+            return false;
+        }
+        let mut pending = vec![parameter.ty];
+        let mut seen = HashSet::default();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            let row = self.t.get(ty).unwrap();
+            if !row.brand.alternatives.is_empty() || matches!(row.kind, TypeKind::Parameter(_)) {
+                return false;
+            }
+            pending.extend(row.kind.value_parts());
+            if matches!(row.kind, TypeKind::Named { .. }) {
+                let Some(layout) = self.layout(self.t, ty) else {
+                    return false;
+                };
+                pending.extend(layout.value_parts());
+            }
+        }
+        true
+    }
     fn callee_preserves_state(
         &self,
         callee: &Callee,
@@ -5215,7 +5276,9 @@ impl Checker<'_> {
                     let mut content_loans = self.rvalue_loans(model, state, rvalue);
                     let mut dependencies = content_loans.held();
                     let target = &self.body.places[destination.0 as usize];
-                    let transport = matches!(rvalue, Rvalue::Use(o) if o.usage == UseKind::Take)
+                    let transport = matches!(rvalue, Rvalue::Use(o)
+                        if matches!(o.usage, UseKind::Take | UseKind::Copy)
+                            && self.body.places[o.place.0 as usize].projection.is_empty())
                         && target.projection.is_empty()
                         && matches!(
                             self.body.locals[target.root.0 as usize].storage,
@@ -5928,7 +5991,11 @@ impl Checker<'_> {
                             false,
                         );
                     }
-                    self.read(model, state, &a.value, report);
+                    let transport = model
+                        .parts(a.value.place)
+                        .any(|part| !state.origins.expired[part].is_empty())
+                        && self.taken_brandless_data(callee, a);
+                    self.read_operand(model, state, &a.value, false, false, transport, report);
                 }
                 let mut mutated = Vec::new();
                 for argument in arguments {

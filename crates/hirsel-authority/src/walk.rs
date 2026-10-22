@@ -175,8 +175,8 @@ pub(super) struct Checker<'a> {
     brand_inputs: BTreeMap<OriginRoot, Vec<TypeId>>,
     indexed_brand_rows: usize,
     mut_parameters: Vec<BindingKey>,
-    /// Place expressions visited as a write target or as the base of a larger
-    /// place; the read of an ended value is judged at the whole place read.
+    /// Places visited as write targets, bases of larger places, or whole
+    /// transfer operands; only reads need live brand evidence.
     unread: BTreeSet<ExprId>,
     /// Reads of ended values, reported unless the enclosing call reports
     /// the ended owner at its own branded use.
@@ -917,8 +917,8 @@ impl<'a> Checker<'a> {
         }
         fallback
     }
-    /// Spec issue #60 (provisional): a value whose brand owner has ended may
-    /// only be dropped. Reading it, as a whole place, is PROV-1 at the read.
+    /// Whole transfers carry ended brands into owned storage. Reading an
+    /// expired value, including a projection, is PROV-1 at the read.
     /// A call that itself reports the ended owner at a branded use owns that
     /// failure (section 23), so its arguments' reads are not reported again.
     fn expr(
@@ -1581,6 +1581,17 @@ impl<'a> Checker<'a> {
                 } else {
                     context.filter(|_| marker)
                 };
+                // A whole transfer preserves evidence, including expiry. A
+                // projection still reads the selected part and is judged below.
+                if matches!(op, UnaryOp::Take | UnaryOp::Copy)
+                    && matches!(
+                        self.tree.expressions[value.0 as usize].kind,
+                        ExprKind::Path(_)
+                    )
+                    && self.source_place(value).projections.is_empty()
+                {
+                    self.unread.insert(value);
+                }
                 self.expr(value, operand_context);
                 used = self.used(value);
                 if inferred_box {

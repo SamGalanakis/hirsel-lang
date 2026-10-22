@@ -5109,7 +5109,9 @@ fn loop_backedge_expires_a_handle_of_an_iteration_owner() {
     access.binding = Some(iteration);
     f.body().places.push(access);
     let read = RvalueId(f.body().rvalues.len() as u32);
-    f.body().rvalues.push(Rvalue::Use(copy(carry)));
+    f.body()
+        .rvalues
+        .push(Rvalue::Use(operand(carry, UseKind::Borrow)));
     let replace = RvalueId(f.body().rvalues.len() as u32);
     f.body().rvalues.push(Rvalue::Use(take(marked)));
     f.body().blocks[0].terminator = Terminator::Goto(BlockId(1));
@@ -5986,7 +5988,7 @@ fn ending_a_field_expires_enclosing_brands_but_not_sibling_brands() {
             fun.parameters[1].ty = marked;
         }
         f.emit(InstructionKind::EndOrigin(field_id));
-        f.assign(result, Rvalue::Use(copy(value)), 0);
+        f.assign(result, Rvalue::Use(operand(value, UseKind::Borrow)), 0);
         f.emit(InstructionKind::Drop {
             place: PlaceId(result),
             if_live: false,
@@ -6059,7 +6061,7 @@ fn branch_joins_preserve_owner_expiry_including_nested_brands() {
             fun.parameters[1].ty = marked;
         }
         f.emit(InstructionKind::EndOrigin(field_id));
-        f.assign(result, Rvalue::Use(copy(value)), 0);
+        f.assign(result, Rvalue::Use(operand(value, UseKind::Borrow)), 0);
         f.emit(InstructionKind::Drop {
             place: PlaceId(result),
             if_live: false,
@@ -6306,7 +6308,9 @@ fn loop_backedge_expires_a_retained_parameter_handle() {
     let scratch = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Temporary);
     revise_comparison_place(&mut f, scratch, |t| t.brand = brand.clone());
     let read = RvalueId(f.body().rvalues.len() as u32);
-    f.body().rvalues.push(Rvalue::Use(copy(handle)));
+    f.body()
+        .rvalues
+        .push(Rvalue::Use(operand(handle, UseKind::Borrow)));
     f.body().blocks[0].terminator = Terminator::Goto(BlockId(1));
     f.body().blocks.push(block(
         vec![
@@ -7533,7 +7537,9 @@ fn loop_feedback_expires_exact_written_prefixes_and_owned_aliases() {
             ));
         }
         let read = RvalueId(f.body().rvalues.len() as u32);
-        f.body().rvalues.push(Rvalue::Use(copy(handle)));
+        f.body()
+            .rvalues
+            .push(Rvalue::Use(operand(handle, UseKind::Borrow)));
         let mut instructions = vec![
             inst(
                 InstructionKind::Assign {
