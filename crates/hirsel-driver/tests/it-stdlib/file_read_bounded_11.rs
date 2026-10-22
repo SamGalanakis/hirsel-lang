@@ -134,6 +134,8 @@ fn filesystem_boundaries_cursor_requests_and_cross_engine_replay() {
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")));
         let dir = base.join(format!("file-read-bounded-11-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("data")).unwrap();
+        // The launcher exposes target scratch through a symlink; grants need its canonical host root.
+        let dir = dir.canonicalize().unwrap();
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let tools = native::Toolchain::in_tree_with_runtime(
             &dir.join("runtime"),
