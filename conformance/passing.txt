@@ -5126,6 +5126,8 @@ conformance/SEM/SEM-2-f32-ties-even.hir
 conformance/SEM/SEM-2-f64-ties-even.hir
 conformance/SEM/SEM-2-float-exact-primitives-run.hir
 conformance/SEM/SEM-2-float-parse-lemire-vectors-run.hir
+conformance/SEM/SEM-2-float-reduction-model-16-invalid-run.hir
+conformance/SEM/SEM-2-float-reduction-model-16-run.hir
 conformance/SEM/SEM-2-float-resize-run.hir
 conformance/SEM/SEM-2-format-into-float-appends-run.hir
 conformance/SEM/SEM-2-infinity.hir

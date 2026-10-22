@@ -339,24 +339,15 @@ fn adjacent_pair_reductions_match_an_independent_host_tree_at_both_widths() {
                 let sign = if seed & 1 == 0 { 1.0 } else { -1.0 };
                 values.push(sign * (seed >> 11) as f64 / (1u64 << 53) as f64 * 2f64.powi(exponent));
             }
-            let mut wide = values.clone();
-            let mut narrow: Vec<f32> = values.iter().map(|&v| v as f32).collect();
-            while wide.len() > 1 {
-                wide = wide
-                    .chunks(2)
-                    .map(|c| if c.len() == 2 { c[0] + c[1] } else { c[0] })
-                    .collect();
-                narrow = narrow
-                    .chunks(2)
-                    .map(|c| if c.len() == 2 { c[0] + c[1] } else { c[0] })
-                    .collect();
-            }
+            let wide = super::float_reduction_model_16::pair_rounds(&values, |a, b| a + b);
+            let narrow: Vec<f32> = values.iter().map(|&v| v as f32).collect();
+            let narrow = super::float_reduction_model_16::pair_rounds(&narrow, |a, b| a + b);
             for (family, uint, words, expected) in [
                 (
                     "f64",
                     "u64",
                     values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                    wide.first().copied().unwrap_or(0.0).to_bits(),
+                    wide.unwrap_or(0.0).to_bits(),
                 ),
                 (
                     "f32",
@@ -365,7 +356,7 @@ fn adjacent_pair_reductions_match_an_independent_host_tree_at_both_widths() {
                         .iter()
                         .map(|&v| (v as f32).to_bits() as u64)
                         .collect(),
-                    narrow.first().copied().unwrap_or(0.0).to_bits() as u64,
+                    narrow.unwrap_or(0.0).to_bits() as u64,
                 ),
             ] {
                 let inputs = words

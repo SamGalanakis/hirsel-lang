@@ -1,0 +1,37 @@
+// rule: SEM-2
+// expect: run
+// Adjacent rounds differ from left fold (1) and exact/reassociated sum (2).
+pub fn main(t: Test) -> Result[(), ()] {
+  let narrow: Array[f32] = [33554432f32, 1f32, -33554432f32, 1f32]
+  let wide: Array[f64] = [18014398509481984f64, 1f64, -18014398509481984f64, 1f64]
+  core@1/test.check(t, core@1/f32.bits(std@1/f32.sum(narrow)) == 0u32)
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum(wide)) == 0u64)
+  core@1/test.check(t, std@1/f32.sum_exact(narrow) == 2f32)
+  core@1/test.check(t, std@1/f64.sum_exact(wide) == 2f64)
+  let odd: Array[f64] = [18014398509481984f64, 1f64, -18014398509481984f64, 1f64, 1f64]
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum(odd)) == 0x3ff0000000000000u64)
+  // CONTROLS
+  // These products round before subtraction. Explicit mul_add returns 1.
+  let a: f32 = 4097f32
+  let b: f64 = 134217729f64
+  core@1/test.check(t, core@1/f32.bits(a * a - 16785408f32) == 0u32)
+  core@1/test.check(t, core@1/f64.bits(b * b - 18014398777917440f64) == 0u64)
+  core@1/test.check(t, float.mul_add(a, a, -16785408f32) == 1f32)
+  core@1/test.check(t, float.mul_add(b, b, -18014398777917440f64) == 1f64)
+  let x: f32 = 16777216f32
+  let y: f64 = 9007199254740992f64
+  core@1/test.check(t, core@1/f32.bits(x + 1f32 - x) == 0u32)
+  core@1/test.check(t, core@1/f64.bits(y + 1f64 - y) == 0u64)
+  core@1/test.check(t, x + (1f32 - x) == 1f32)
+  core@1/test.check(t, y + (1f64 - y) == 1f64)
+  // Exact sum is a separate control, never the ordinary-sum oracle.
+  core@1/test.check(
+    t,
+    std@1/f32.sum_exact([33554432f32, 1f32, -33554432f32, 1f32]) == 2f32
+  )
+  core@1/test.check(
+    t,
+    std@1/f64.sum_exact([18014398509481984f64, 1f64, -18014398509481984f64, 1f64]) == 2f64
+  )
+  Ok(())
+}

@@ -33,7 +33,11 @@ observable NaN. `float.min` and `float.max` are IEEE 754-2019 `minimum` and `max
 propagates, −0 < +0); `float.min_number` and `float.max_number` ignore NaN.
 `f32.sum` and `f64.sum` use the fixed reduction tree of the
 [core library](core-library.md#numeric-and-string-details); `f32.sum_exact` and
-`f64.sum_exact` are correctly rounded. Math functions are ordinary std source with a stated
+`f64.sum_exact` are correctly rounded. Ordinary sums add adjacent pairs in rounds,
+rounding each addition at the element width and carrying an unpaired final element
+unchanged into the next round. Empty sums return +0; singleton sums preserve their
+value (including −0). The same IEEE rules apply at each node for zero, infinities
+and the observable canonical NaN. Math functions are ordinary std source with a stated
 error bound ([floats](std-library.md#scalars)), so every engine computes the same bits.
 `float.to_i32` returns a `Result`; std's `f32.total_order` and `f64.total_order` are for
 sorting. A finite

@@ -1,0 +1,27 @@
+// rule: SEM-2
+// expect: run
+// Invalid real arithmetic returns the canonical NaN; signed zero survives odd carry.
+pub fn main(t: Test) -> Result[(), ()] {
+  let p32 = core@1/f32.from_bits(0x7f800000u32)
+  let n32 = core@1/f32.from_bits(0xff800000u32)
+  let p64 = core@1/f64.from_bits(0x7ff0000000000000u64)
+  let n64 = core@1/f64.from_bits(0xfff0000000000000u64)
+  core@1/test.check(
+    t,
+    core@1/f32.bits(std@1/f32.sum([p32, n32, 1f32])) == 0x7fc00000u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum([p64, n64, 1f64])) == 0x7ff8000000000000u64
+  )
+  let z32 = core@1/f32.from_bits(0x80000000u32)
+  let z64 = core@1/f64.from_bits(0x8000000000000000u64)
+  core@1/test.check(t, core@1/f32.bits(std@1/f32.sum([z32, z32, z32])) == 0x80000000u32)
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum([z64, z64, z64])) == 0x8000000000000000u64
+  )
+  core@1/test.check(t, core@1/f32.bits(std@1/f32.sum([z32, 0f32])) == 0u32)
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum([z64, 0f64])) == 0u64)
+  Ok(())
+}
