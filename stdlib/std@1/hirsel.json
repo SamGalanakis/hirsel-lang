@@ -1253,6 +1253,12 @@
       "module": [
         "quoted_printable"
       ]
+    },
+    {
+      "path": "list_drift.hir",
+      "module": [
+        "list"
+      ]
     }
   ],
   "dependencies": []

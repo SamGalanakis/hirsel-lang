@@ -54,3 +54,4 @@ mod utf16_8;
 mod http_replace_range;
 mod json_merge_patch_8;
 mod quoted_printable_8;
+mod stdlib_drift;

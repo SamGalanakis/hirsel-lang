@@ -114,7 +114,8 @@ fn step(mut s: State, iteration: u64) {
         merge(mut xs, mut temp, 0, size - 1)
       }
     } else {
-      list.sort_stable(mut xs, compare)
+      // Upstream Vec::sort allocates scratch; the noalloc WikiSort API does not.
+      list.sort_stable_fast(mut xs, compare)
     }
   }
   let after = next(mut s, size)

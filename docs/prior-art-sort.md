@@ -117,3 +117,62 @@ LLVM can remove the repeated pivot bounds check and address calculation, and
 vectorize a concrete infallible integer comparison where its existing rules
 permit it. Fallible or generic callbacks retain their ordinary call sequence;
 no compiler, IR, runtime or callback contract changes are involved.
+
+## Allocating stable driftsort
+
+`list.sort_stable_fast` ports Rust core's stable driftsort, revision
+`f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`. References under
+`library/core/src/slice/sort/` are `stable/mod.rs:30–140` (entry and scratch
+policy), `stable/drift.rs:22–310` (powersort, lazy runs, eager fallback),
+`stable/quicksort.rs:19–183` (bounded recursion, ancestor equality and stable
+partition), `stable/merge.rs:10–70` (shorter-run buffered merge),
+`shared/pivot.rs:17–117` (adaptive pseudomedian), and `shared/mod.rs:20–49`
+(strict descending and nondecreasing run detection).
+
+The allocation is acceptable for this explicitly allocating API: Hirsel permits
+ordinary bounded heap allocation outside `@noalloc`; exhaustion follows normal
+allocation failure and cleanup. `sort_stable` remains the allocation-free
+WikiSort, with its original signature and comparator order. Choose it when
+allocation is prohibited; choose `sort_stable_fast` for throughput. Sort::Self
+now uses the allocating API because upstream Rust calls `Vec::sort`, which
+also allocates scratch. Its input, clone, PRNG and checksum are unchanged.
+
+Deviations from Rust:
+
+- Sort original u64 indices, then apply the permutation with ownership-preserving
+  swaps. Rust's uninitialized T scratch, pointer copies and panic hole guards
+  cannot be expressed for arbitrary move-only Hirsel T. No owner enters scratch.
+  For inputs above 20, all callbacks finish before owners move; a callback failure
+  drops the scratch and retains the original input owner set and order. Smaller
+  inputs use the existing stable adjacent-swap insertion, retaining a permutation
+  at every failure point. Ordinary failures propagate immediately; no callback is
+  reordered by a purity assumption. The old noalloc API's callback order is intact.
+- Allocate one n-entry index list and one scratch list of
+  `max(48, ceil(n/2), min(n, 1_000_000))` u64 entries. This applies Rust's 8 MB
+  full-scratch policy to indices, with at most two list allocations after the
+  small-input path, and initialized entries instead of MaybeUninit. The extra
+  index list is required by ownership. Rust's 4 KiB uninitialized stack buffer
+  is omitted; the powersort stack is three initialized Inline arrays of 66
+  entries. No type-size specialization or zero-sized-type detection is used.
+- The internal smallsort threshold is 32, with stable insertion shifts of u64
+  indices in place of Rust's type-specialized smallsort (`shared/smallsort.rs`).
+  The public <=20 path uses adjacent swaps instead of temporary T moves.
+- Stable partition uses checked source loops instead of unsafe pointers,
+  pointer arithmetic and four-element unrolling. Conditional writes with separate
+  left/right cursors replace Rust PartitionState's destination-base selection:
+  checked index arithmetic in that selector raised task instructions from 15.89B
+  to 18.94B in the measured alternative. Both forms place exactly the same
+  indices; pivot comparison order and the skipped self-comparison follow Rust. The pivot
+  is an index into the untouched input, so Freeze/interior-mutable-type pivot
+  copies and marker specialization are unnecessary under Hirsel's read-only
+  comparator loans. The merge uses checked indices and explicit remainder loops
+  instead of raw pointers and a panic guard. Scratch failure needs no owner repair.
+- Test vectors adapt `library/alloctests/tests/sort/tests.rs:18–22,450–565`
+  (length boundaries, stable occurrence ids and patterns) and `599–638`
+  (failure retains the original set). Eight deterministic distributions replace
+  random seeds; small sizes are bounded for the interpreter. A separate native
+  1,100,000-element vector runs all eight patterns above the full-scratch cap.
+  Move-only resources replace Rust Clone/Drop test values, with a finalizer ledger and two distinct
+  comparator failure sites. Observable interior mutation of a borrowed T is
+  unavailable in Hirsel's comparator contract. Tests compare interpreter, heap
+  evaluator, LLVM and Cranelift, including terminal failure and cleanup.

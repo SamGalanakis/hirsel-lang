@@ -1,0 +1,307 @@
+// Rust f6c1107f8be13e48465e12c0fd26e6a39fe18e4f, core/src/slice/sort:
+// stable/mod.rs:30-140, drift.rs:22-310, quicksort.rs:19-183,
+// merge.rs:10-70, shared/pivot.rs:17-117, shared/mod.rs:20-49.
+// Sort indices, then apply cycles by swaps: generic owners are never copied
+// into scratch, and a failed comparison leaves every owner in the input.
+
+/// Stable driftsort with bounded O(n) scratch. Choose this for throughput;
+/// choose sort_stable for its @noalloc guarantee. Equal keys retain order.
+/// Above 20 elements, comparisons finish before elements move. Smaller inputs
+/// use stable insertion by swaps; comparator failures propagate immediately.
+pub fn sort_stable_fast[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let n = core@1/list.len(xs)
+  if n <= 20 {
+    insertion(mut xs, 0, n, by)
+    return
+  }
+  let mut indices: List[u64] = []
+  core@1/list.reserve(mut indices, n)
+  for i in 0u64..n {
+    core@1/list.push(mut indices, i)
+  }
+  // Rust's max(ceil(n/2), min(n, 8MB / sizeof(T))), applied to u64 indices.
+  let full_capacity = min_size(n, 1000000)
+  let half_capacity = if full_capacity < n - n / 2 { n - n / 2 } else { full_capacity }
+  let capacity = if half_capacity < 48 { 48u64 } else { half_capacity }
+  let mut scratch: List[u64] = []
+  core@1/list.reserve(mut scratch, capacity)
+  for _ in 0u64..capacity {
+    core@1/list.push(mut scratch, 0)
+  }
+  let mut p = unique take indices
+  let mut buf = unique take scratch
+  drift_sort(xs, mut p, mut buf, 0, n, n <= 64, by)
+  // p[destination] = source. Rotate each cycle in its forward direction.
+  for i in 0u64..n {
+    let mut at = i
+    let mut next = p[at]
+    while next != i {
+      core@1/list.swap(mut xs, at, next)
+      p[at] = at
+      at = next
+      next = p[at]
+    }
+    p[at] = at
+  }
+}
+
+@noalloc
+fn drift_insert[T](xs: List[T], mut p: unique List[u64], begin: u64, end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let mut i = begin + 1
+  while i < end {
+    let value = p[i]
+    let mut j = i
+    while j > begin && by(xs[value], xs[p[j - 1]]) < 0 {
+      p[j] = p[j - 1]
+      j -= 1
+    }
+    p[j] = value
+    i += 1
+  }
+}
+
+// shared/pivot.rs median3 and adaptive recursive pseudomedian, unchanged order.
+@noalloc
+fn drift_median[T](xs: List[T], p: List[u64], a: u64, b: u64, c: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  let x = by(xs[p[a]], xs[p[b]]) < 0
+  let y = by(xs[p[a]], xs[p[c]]) < 0
+  if x == y {
+    let z = by(xs[p[b]], xs[p[c]]) < 0
+    if z != x { c } else { b }
+  } else { a }
+}
+
+@noalloc
+fn drift_median_rec[T](xs: List[T], p: List[u64], a: u64, b: u64, c: u64, n: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  if n >= 8 {
+    let k = n / 8
+    let aa = drift_median_rec(xs, p, a, a + k * 4, a + k * 7, k, by)
+    let bb = drift_median_rec(xs, p, b, b + k * 4, b + k * 7, k, by)
+    let cc = drift_median_rec(xs, p, c, c + k * 4, c + k * 7, k, by)
+    drift_median(xs, p, aa, bb, cc, by)
+  } else {
+    drift_median(xs, p, a, b, c, by)
+  }
+}
+
+// stable_partition writes the left side forward and the right side backward.
+// The pivot is not compared with itself; it joins the requested partition.
+@noalloc
+fn drift_partition[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, end: u64, pivot_at: u64, equal: bool,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> u64 uses {} {
+  let pivot = p[pivot_at]
+  let mut left: u64 = 0
+  let mut right = end - begin
+  for i in begin..end {
+    let value = p[i]
+    let goes_left = if i == pivot_at { equal } else if equal {
+      by(xs[pivot], xs[value]) >= 0
+    } else {
+      by(xs[value], xs[pivot]) < 0
+    }
+    // Separate cursors avoid the checked destination-base arithmetic needed
+    // by Rust's pointer selector. Both paths write exactly the same indices.
+    if goes_left {
+      buf[left] = value
+      left += 1
+    } else {
+      right -= 1
+      buf[right] = value
+    }
+  }
+  for i in 0u64..left {
+    p[begin + i] = buf[i]
+  }
+  for i in left..end - begin {
+    p[begin + i] = buf[end - begin - 1 - (i - left)]
+  }
+  begin + left
+}
+
+@noalloc
+fn drift_quick[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, end: u64, budget: u64, ancestor: Option[u64],
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let mut lo = begin
+  let mut hi = end
+  let mut limit = budget
+  let mut parent = ancestor
+  while hi - lo > 32 {
+    if limit == 0 {
+      drift_sort(xs, mut p, mut buf, lo, hi, true, by)
+      return
+    }
+    limit -= 1
+    let k = (hi - lo) / 8
+    let pivot_at = if hi - lo < 64 {
+      drift_median(xs, p, lo, lo + k * 4, lo + k * 7, by)
+    } else {
+      drift_median_rec(xs, p, lo, lo + k * 4, lo + k * 7, k, by)
+    }
+    let pivot = p[pivot_at]
+    let equal = match parent {
+      Some(a) => by(xs[a], xs[pivot]) >= 0,
+      None() => false,
+    }
+    let mid = if equal { lo } else {
+      drift_partition(xs, mut p, mut buf, lo, hi, pivot_at, false, by)
+    }
+    if mid == lo {
+      // An empty less-than partition has left p unchanged, including pivot_at.
+      lo = drift_partition(xs, mut p, mut buf, lo, hi, pivot_at, true, by)
+      parent = None()
+    } else {
+      drift_quick(xs, mut p, mut buf, mid, hi, limit, Some(pivot), by)
+      hi = mid
+    }
+  }
+  if hi > lo + 1 {
+    drift_insert(xs, mut p, lo, hi, by)
+  }
+}
+
+@noalloc
+fn drift_quicksort[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let limit = 2u64 * (63u64 - core@1/int.leading_zeros((end - begin) | 1u64))
+  drift_quick(xs, mut p, mut buf, begin, end, limit, None(), by)
+}
+
+// merge.rs: copy the shorter run, merge forward or backward, favoring the
+// left run on equality. Only initialized u64 indices live in this scratch.
+@noalloc
+fn drift_merge[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, mid: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  if mid == begin || mid == end { return }
+  if mid - begin <= end - mid {
+    for i in begin..mid { buf[i - begin] = p[i] }
+    let mut a: u64 = 0
+    let mut b = mid
+    let mut out = begin
+    while a < mid - begin && b < end {
+      if by(xs[p[b]], xs[buf[a]]) < 0 {
+        p[out] = p[b]
+        b += 1
+      } else {
+        p[out] = buf[a]
+        a += 1
+      }
+      out += 1
+    }
+    while a < mid - begin {
+      p[out] = buf[a]
+      a += 1
+      out += 1
+    }
+  } else {
+    for i in mid..end { buf[i - mid] = p[i] }
+    let mut a = mid
+    let mut b = end - mid
+    let mut out = end
+    while a > begin && b > 0 {
+      out -= 1
+      if by(xs[buf[b - 1]], xs[p[a - 1]]) < 0 {
+        a -= 1
+        p[out] = p[a]
+      } else {
+        b -= 1
+        p[out] = buf[b]
+      }
+    }
+    while b > 0 {
+      out -= 1
+      b -= 1
+      p[out] = buf[b]
+    }
+  }
+}
+
+type DriftRun { len: u64, sorted: bool }
+
+@noalloc
+fn drift_create_run[T](xs: List[T], mut p: unique List[u64], begin: u64, end: u64,
+  drift_threshold: u64, eager: bool, by: @noalloc fn(T, T) -> i32 uses {}) -> DriftRun uses {} {
+  if end - begin >= drift_threshold && end - begin > 1 {
+    let descending = by(xs[p[begin + 1]], xs[p[begin]]) < 0
+    let mut at = begin + 2
+    while at < end {
+      let less = by(xs[p[at]], xs[p[at - 1]]) < 0
+      if less != descending { break }
+      at += 1
+    }
+    if at - begin >= drift_threshold {
+      if descending { reverse_range(mut p, begin, at) }
+      return DriftRun(len: at - begin, sorted: true)
+    }
+  }
+  let len = min_size(end - begin, if eager { 32u64 } else { drift_threshold })
+  if eager { drift_insert(xs, mut p, begin, begin + len, by) }
+  DriftRun(len: len, sorted: eager)
+}
+
+@noalloc
+fn drift_logical_merge[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, end: u64, left: DriftRun, right: DriftRun,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> DriftRun uses {} {
+  let n = end - begin
+  if n > core@1/list.len(buf) || left.sorted || right.sorted {
+    let mid = begin + left.len
+    if !left.sorted { drift_quicksort(xs, mut p, mut buf, begin, mid, by) }
+    if !right.sorted { drift_quicksort(xs, mut p, mut buf, mid, end, by) }
+    drift_merge(xs, mut p, mut buf, begin, mid, end, by)
+    DriftRun(len: n, sorted: true)
+  } else {
+    DriftRun(len: n, sorted: false)
+  }
+}
+
+// drift.rs powersort stack and lazy logical runs. Desired depths increase,
+// so 66 slots suffice for every addressable list. No heap stack allocations.
+@noalloc
+fn drift_sort[T](xs: List[T], mut p: unique List[u64], mut buf: unique List[u64],
+  begin: u64, end: u64, eager: bool,
+  by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let n = end - begin
+  if n < 2 { return }
+  let numerator = 1u64 << 62u64
+  let scale = numerator / n + if numerator % n == 0 { 0u64 } else { 1u64 }
+  let drift_threshold = if n <= 4096 { min_size(n - n / 2, 64) } else {
+    let log = 63u64 - core@1/int.leading_zeros(n | 1u64)
+    let shift = (log + 1) / 2
+    ((1u64 << shift) + (n >> shift)) / 2
+  }
+  let mut lengths: Inline[u64, 66] = [0u64; 66]
+  let mut sorted: Inline[bool, 66] = [false; 66]
+  let mut depths: Inline[u64, 66] = [0u64; 66]
+  let mut count: u64 = 0
+  let mut scan: u64 = 0
+  let mut prev = DriftRun(len: 0, sorted: true)
+  while true {
+    let next = if scan < n {
+      drift_create_run(xs, mut p, begin + scan, end, drift_threshold, eager, by)
+    } else { DriftRun(len: 0, sorted: true) }
+    let depth = if scan < n {
+      let x = (scan - prev.len + scan) * scale
+      let y = (scan + scan + next.len) * scale
+      core@1/int.leading_zeros(x ^ y)
+    } else { 0u64 }
+    while count > 1 && depths[count - 1] >= depth {
+      let left = DriftRun(len: lengths[count - 1], sorted: sorted[count - 1])
+      prev = drift_logical_merge(xs, mut p, mut buf,
+        begin + scan - left.len - prev.len, begin + scan, left, prev, by)
+      count -= 1
+    }
+    lengths[count] = prev.len
+    sorted[count] = prev.sorted
+    depths[count] = depth
+    count += 1
+    if scan >= n { break }
+    scan += next.len
+    prev = next
+  }
+  if !prev.sorted { drift_quicksort(xs, mut p, mut buf, begin, end, by) }
+}
