@@ -341,6 +341,33 @@ fn compatible(
     if relation == TypeRelation::Exact {
         return Ok(semantic_equal(store, expected, store, actual).unwrap_or(false));
     }
+    let placed_expected =
+        crate::properties::placed_structure_type(store, expected, generics, lookup)?;
+    let placed_actual = crate::properties::placed_structure_type(store, actual, generics, lookup)?;
+    if (placed_expected, placed_actual) != (expected, actual) {
+        return if payloads.is_some() {
+            compatible_view_type_in(
+                store,
+                placed_expected,
+                placed_actual,
+                relation,
+                generics,
+                lookup,
+            )
+        } else {
+            compatible(
+                store,
+                placed_expected,
+                placed_actual,
+                relation,
+                forget_brands,
+                None,
+                received,
+                generics,
+                lookup,
+            )
+        };
+    }
     let Some(expected_row) = store.get(expected).cloned() else {
         return Ok(false);
     };

@@ -2016,3 +2016,52 @@ fn signature_dependencies_clone_only_compact_identity_and_hash() {
         }
     }
 }
+
+#[test]
+fn placed_payload_comparisons_preserve_the_owner_and_explicit_arena() {
+    let store = TypeInterner::new(None);
+    let bytes = store.intern(Type::with_kind(TypeKind::Primitive(Primitive::Bytes)));
+    let place = |n| {
+        Relation::place(Origin {
+            root: OriginRoot::Local(owner(), LocalId(n)),
+            fields: vec![].into(),
+        })
+    };
+    let box_row = |part, relation| {
+        let mut row = Type::with_kind(TypeKind::Box(part));
+        row.modes.relation = relation;
+        store.intern(row)
+    };
+    let a = place(1);
+    let b = place(2);
+    let placed_bytes = |relation| {
+        let mut row = store.get(bytes).unwrap().clone();
+        row.modes.relation = relation;
+        store.intern(row)
+    };
+    let implicit = box_row(bytes, a.clone());
+    let explicit = box_row(placed_bytes(a.clone()), a.clone());
+    let global = box_row(bytes, Relation::global());
+    let other = box_row(bytes, b.clone());
+    let context = GenericDeclarations::signature(&[]);
+    let mut lookup = |_: DefId| Ok::<_, QueryError>(None);
+    let mut memo = ContextMemo::new(&store, &context, &mut lookup);
+    assert!(memo.view(implicit, explicit, TypeRelation::Value).unwrap());
+    assert!(!memo.view(global, explicit, TypeRelation::Value).unwrap());
+    assert!(!memo.view(other, explicit, TypeRelation::Parameter).unwrap());
+    let local_a = box_row(bytes, a.union(&Relation::environment()));
+    let local_b = box_row(bytes, b.union(&Relation::environment()));
+    assert!(
+        !memo
+            .view(local_a, local_b, TypeRelation::Parameter)
+            .unwrap()
+    );
+    let local = box_row(bytes, Relation::environment());
+    assert!(memo.view(local, local_a, TypeRelation::Parameter).unwrap());
+    let nested_implicit = box_row(implicit, a.clone());
+    let nested_explicit = box_row(explicit, a);
+    assert!(
+        memo.view(nested_implicit, nested_explicit, TypeRelation::Value)
+            .unwrap()
+    );
+}

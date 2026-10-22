@@ -798,6 +798,24 @@ impl<'q> ContextMemo<'q> {
         relation: TypeRelation,
         policy: CompatPolicy,
     ) -> Result<bool, QueryError> {
+        let placed_expected = self
+            .observed(|t, generics, lookup| {
+                crate::properties::placed_structure_type(t, expected, generics, &mut |d| lookup(d))
+            })
+            .value?;
+        let placed_actual = self
+            .observed(|t, generics, lookup| {
+                crate::properties::placed_structure_type(t, actual, generics, &mut |d| lookup(d))
+            })
+            .value?;
+        if (placed_expected, placed_actual) != (expected, actual) {
+            let policy = if policy.payloads.is_some() {
+                self.view_policy(placed_actual)?
+            } else {
+                policy
+            };
+            return self.compatible(placed_expected, placed_actual, relation, policy);
+        }
         let t = self.t;
         let Some(expected_row) = t.get(expected).cloned() else {
             return Ok(false);

@@ -1125,7 +1125,7 @@ pub(crate) fn receives_relation(
             })
         )
     });
-    expected.has_environment()
+    expected.is_environment()
         || actual == expected
         || (!dependent && actual.contained_in(expected))
         || (relation == TypeRelation::Parameter && expected.is_global())
@@ -1148,6 +1148,52 @@ pub fn storage_content_type(
     row.modes.relation = row.modes.relation.retain(|r| *r != Reach::Environment);
     let root = store.intern(row);
     normalize_type_properties(store, root, generics, lookup)
+}
+
+/// Compare structural payloads under the same placement their projections inherit.
+/// Callable headers and generic arguments retain their declared contracts.
+pub(crate) fn placed_structure_type(
+    store: &TypeInterner,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<TypeId, QueryError> {
+    fn visit(
+        store: &TypeInterner,
+        root: TypeId,
+        generics: &GenericDeclarations,
+        lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+        memo: &mut IdMap<TypeId, TypeId>,
+    ) -> Result<TypeId, QueryError> {
+        if let Some(id) = memo.get(&root) {
+            return Ok(*id);
+        }
+        let Some(original) = store.get(root) else {
+            return Ok(root);
+        };
+        if !matches!(
+            original.kind,
+            TypeKind::Tuple(_) | TypeKind::Box(_) | TypeKind::Record(_) | TypeKind::Variant(_)
+        ) {
+            return Ok(root);
+        }
+        let mut row = original.clone();
+        row.kind = row.kind.try_map_edges(|part| {
+            let part = placed_part_type(store, root, part, generics, lookup)?;
+            visit(store, part, generics, lookup, memo)
+        })?;
+        let id = if &row == original {
+            root
+        } else {
+            store.intern(row)
+        };
+        memo.insert(root, id);
+        Ok(id)
+    }
+    store
+        .validate(root)
+        .map_err(|_| QueryError::NotImplemented)?;
+    visit(store, root, generics, lookup, &mut IdMap::default())
 }
 
 pub fn placed_part_type(
