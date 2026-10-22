@@ -1,0 +1,88 @@
+pub type ScanError[E, W] = Input(bufio.ReadError[E]) | Output(W)
+
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Scan(
+  ScanError[InputError, OutputError]
+) | Output(OutputError) | Usage
+
+pub type Counts {
+  bytes: u64,
+  newlines: u64,
+  max_buffered: u64,
+}
+
+// Go ebe2feef src/bufio/bufio.go:135-207: inspect, then explicitly discard.
+// Hirsel peek never refills, consume clamps, and its loan ends before mutation.
+fn scan[S, E, T, W](
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  mut sink: T,
+  emit: fn(mut T, Bytes) -> Result[(), W],
+  capacity: u64
+) -> Result[Counts, ScanError[E, W]] uses {refill, emit} {
+  let mut reader = bufio.new(capacity)
+  let mut counts = Counts(bytes: 0, newlines: 0, max_buffered: 0)
+  while true {
+    // The previous span was fully consumed: read_more cannot grow unread data.
+    let n = bufio.read_more(mut reader, mut source, refill, capacity)?
+    if n == 0 {
+      return Ok(counts)
+    }
+    let have = bufio.buffered(reader)
+    if have > counts.max_buffered {
+      counts.max_buffered = have
+    }
+    {
+      let span = bufio.peek(reader, have)
+      let mut i: u64 = 0
+      while i < bytes.len(span) {
+        if span[i] == b'\n' {
+          counts.newlines += 1
+        }
+        i += 1
+      }
+      // Ok means the whole span was written. An error may have emitted a prefix;
+      // stop immediately, since the write result supplies no retry offset.
+      emit(mut sink, span)?
+    }
+    bufio.consume(mut reader, have)
+    counts.bytes += have
+  }
+  Ok(counts)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) > 1 {
+    return Error(Usage())
+  }
+  let capacity = if arg.len(args) == 0 {
+    4096u64
+  } else {
+    match u64.parse(arg.text(args, 0)?) {
+      Ok(n) => n,
+      Error(_) => return Error(Usage()),
+    }
+  }
+  if capacity == 0 || capacity > 65536 {
+    return Error(Usage())
+  }
+  // Obtain all grants before reading or writing any input.
+  let mut input = io.stdin(rt)?
+  let mut output = io.stdout(rt)?
+  let diagnostics = io.stderr(rt)?
+  let counts = scan(
+    mut input,
+    fn(mut source: Stdin, mut buffer: List[u8], max: u64) -> Result[u64, InputError] {
+      stdin.read(source, mut buffer, max)
+    },
+    mut output,
+    fn(mut sink: Stdout, span: Bytes) -> Result[(), OutputError] {
+      out.write(sink, span)
+    },
+    capacity
+  )?
+  err.print(
+    diagnostics,
+    f"bytes={counts.bytes} newlines={counts.newlines} max_buffered={counts.max_buffered}\n"
+  )?
+  Ok(())
+}

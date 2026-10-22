@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut reader = bufio.new(7)
+  let n = {
+    let span = bufio.peek(reader, 7)
+    test.check(t, bytes.len(span) == 0)
+    bytes.len(span)
+  }
+  bufio.consume(mut reader, n)
+  test.check(t, bufio.buffered(reader) == 0)
+  Ok(())
+}

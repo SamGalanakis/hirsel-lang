@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: reject MODE-1 at line 10
+// twin: SEM/SEM-3-binary-pipe-consume-run.hir
+// A borrowed peek must end before even a clamping consume mutates its reader.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut reader = bufio.new(7)
+  // Even an empty span retains the reader loan.
+  let span = bufio.peek(reader, 7)
+  let n = bytes.len(span)
+  bufio.consume(mut reader, n)
+  test.check(t, bytes.len(span) == 0)
+  Ok(())
+}

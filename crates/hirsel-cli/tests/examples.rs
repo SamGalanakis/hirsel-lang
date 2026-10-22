@@ -3114,3 +3114,43 @@ fn dogfood6_logdigest() {
 
 #[path = "support/native_argv_recipe_6.rs"]
 mod native_argv_recipe_6;
+
+#[test]
+fn binary_pipe_recipe() {
+    let example = Example::new(
+        "binary-pipe",
+        &[
+            (
+                "main.hir",
+                include_str!("../../../examples/binary-pipe/main.hir"),
+            ),
+            (
+                "scanner_test.hir",
+                include_str!("../../../examples/binary-pipe/scanner_test.hir"),
+            ),
+        ],
+        include_str!("../../../examples/binary-pipe/hirsel.json"),
+    );
+    check_package_tests("binary-pipe", &example.dir.join("hirsel.json"), 5);
+    std::fs::write(
+        example.dir.join("grants.json"),
+        include_str!("../../../examples/binary-pipe/grants.json"),
+    )
+    .unwrap();
+    let script = example.dir.join("verify.py");
+    std::fs::write(
+        &script,
+        include_str!("../../../examples/binary-pipe/verify.py"),
+    )
+    .unwrap();
+    let output = Command::new("python3")
+        .arg(script)
+        .args(["--hirsel", env!("CARGO_BIN_EXE_hirsel"), "--root"])
+        .arg(&example.dir)
+        .arg("--output")
+        .arg(example.dir.join("evidence"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+}

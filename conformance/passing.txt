@@ -6711,3 +6711,5 @@ conformance/PROV/PROV-1-regex-all-5-position-bad.hir
 conformance/OWN/OWN-2-regex-all-5-take-bad.hir
 conformance/PROV/PROV-1-regex-all-5-position-ok.hir
 conformance/OWN/OWN-2-regex-all-5-take-ok.hir
+conformance/SEM/SEM-3-binary-pipe-consume-bad.hir
+conformance/SEM/SEM-3-binary-pipe-consume-run.hir

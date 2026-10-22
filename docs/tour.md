@@ -1795,3 +1795,6 @@ that read files, build text, parse JSON and implement a command loop.
 
 For a local nested type graph, the [typed JSON hook kit](typed-json-kit.md)
 generates every explicitly listed nominal's reader/writer and the root bytes decoder.
+
+For a streaming binary filter with borrowed peek/consume, explicit grants and an
+exact-byte OS-pipe and replay recipe, see [binary pipes](binary-pipes.md).

@@ -1,0 +1,132 @@
+// Independent Go vectors: ebe2feef src/bufio/bufio_test.go:843-903,1565-1608.
+// Hirsel uses explicit refills and clamping consume, with no negative u64 sizes.
+type Script {
+  data: Bytes,
+  at: u64,
+  calls: u64,
+  short: u64,
+}
+
+fn scripted_refill(mut s: Script, mut out: List[u8], max: u64) -> Result[u64, u8] uses {} {
+  s.calls += 1
+  let mut n: u64 = 0
+  // Deterministic short reads: 1, 2, ..., short, repeated.
+  let limit = 1u64 + (s.calls - 1) % s.short
+  while n < max && n < limit && s.at < bytes.len(s.data) {
+    list.push(mut out, s.data[s.at])
+    s.at += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+fn collect(mut out: List[u8], span: Bytes) -> Result[(), u8] uses {} {
+  for b in span {
+    list.push(mut out, b)
+  }
+  Ok(())
+}
+
+fn vector(t: Test, data: Bytes, newlines: u64) -> Result[(), ScanError[u8, u8]] {
+  let capacities: List[u64] = [1, 2, 7, 4096]
+  for capacity in capacities {
+    let mut source = Script(data: data, at: 0, calls: 0, short: 3)
+    let mut output: List[u8] = []
+    let counts = scan(mut source, scripted_refill, mut output, collect, capacity)?
+    test.check(t, bytes.from_list(take output) == data)
+    test.check(t, counts.bytes == bytes.len(data))
+    test.check(t, counts.newlines == newlines)
+    test.check(t, counts.max_buffered <= capacity)
+    test.check(t, source.at == bytes.len(data))
+    test.check(t, source.calls > 0)
+  }
+  Ok(())
+}
+
+@test
+fn empty(t: Test) -> Result[(), ScanError[u8, u8]] {
+  vector(t, b"", 0)
+}
+
+@test
+fn binary_short_reads(t: Test) -> Result[(), ScanError[u8, u8]] {
+  vector(t, b"\0\x80\xff\xc0\xaf\r\n\n\r\0tail\xff", 2)
+}
+
+@test
+fn long_no_newline(t: Test) -> Result[(), ScanError[u8, u8]] {
+  let mut data: List[u8] = []
+  let mut i: u64 = 0
+  while i < 257 {
+    list.push(mut data, 255u8)
+    i += 1
+  }
+  vector(t, bytes.from_list(take data), 0)
+}
+
+@test
+fn peek_and_clamping_consume(t: Test) -> Result[(), bufio.ReadError[u8]] {
+  let mut source = Script(data: b"abcdefghijklmnop", at: 0, calls: 0, short: 16)
+  let mut reader = bufio.new(16)
+  test.check(t, bufio.peek(reader, 0) == b"")
+  test.check(t, bufio.peek(reader, 32) == b"")
+  test.check(t, source.calls == 0)
+  // Select a full first read, then retain data until explicitly consumed.
+  source.calls = 15
+  test.check(t, bufio.read_more(mut reader, mut source, scripted_refill, 16)? == 16)
+  test.check(t, bufio.peek(reader, 0) == b"")
+  test.check(t, bufio.peek(reader, 1) == b"a")
+  test.check(t, bufio.peek(reader, 4) == b"abcd")
+  test.check(t, bufio.peek(reader, 32) == b"abcdefghijklmnop")
+  test.check(t, source.calls == 16)
+  bufio.consume(mut reader, 0)
+  bufio.consume(mut reader, 6)
+  test.check(t, bufio.buffered(reader) == 10)
+  test.check(t, bufio.peek(reader, 99) == b"ghijklmnop")
+  bufio.consume(mut reader, 10)
+  test.check(t, bufio.buffered(reader) == 0)
+  bufio.consume(mut reader, 27)
+  test.check(t, source.calls == 16)
+  test.check(t, bufio.read_more(mut reader, mut source, scripted_refill, 16)? == 0)
+  test.check(t, bufio.peek(reader, 1) == b"")
+  source.at = 0
+  source.calls = 15
+  test.check(t, bufio.read_more(mut reader, mut source, scripted_refill, 16)? == 16)
+  bufio.consume(mut reader, 27)
+  test.check(t, bufio.buffered(reader) == 0)
+  test.check(t, source.calls == 16)
+  Ok(())
+}
+
+fn broken_read(mut s: Script, mut out: List[u8], max: u64) -> Result[u64, u8] uses {} {
+  list.push(mut out, 255u8)
+  Error(7)
+}
+
+fn broken_write(mut calls: u64, span: Bytes) -> Result[(), u8] uses {} {
+  calls += 1
+  Error(8)
+}
+
+@test
+fn errors_stop_without_retry(t: Test) {
+  let mut source = Script(data: b"abcd", at: 0, calls: 0, short: 1)
+  let mut output: List[u8] = []
+  test.check(
+    t,
+    match scan(mut source, broken_read, mut output, collect, 2) {
+      Error(Input(Source(code))) => code == 7,
+      _ => false,
+    }
+  )
+  test.check(t, list.len(output) == 0)
+  let mut calls: u64 = 0
+  test.check(
+    t,
+    match scan(mut source, scripted_refill, mut calls, broken_write, 2) {
+      Error(Output(code)) => code == 8,
+      _ => false,
+    }
+  )
+  test.check(t, calls == 1 && source.calls == 1 && source.at == 1)
+}
