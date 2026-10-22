@@ -474,21 +474,33 @@ pub(crate) unsafe fn migrate(ctx: *mut TaskCtx) -> Stopped<()> {
 
 /// Reporting a returned root error is a host effect and must wait for the
 /// root's turn before invoking its sink or any yielding result cleanup.
-pub(crate) fn root_report(ctx: *mut TaskCtx) -> Stopped<()> {
+pub(crate) fn root_report(
+    ctx: *mut TaskCtx,
+    returned: &crate::exit_report::Returned,
+) -> Stopped<()> {
     assert_eq!(current(ctx) as u32, 0);
-    at_head(ctx)
+    at_head(ctx)?;
+    // SAFETY: LaunchFrame owns the initialized returned value until reporting
+    // and its mandatory cleanup finish. The decoder reads initialized fields.
+    unsafe { super::events::task_result(ctx, returned.layout, returned.value) };
+    Ok(())
 }
 
 /// Finish the root only after its final segment/logs and all preceding turns
 /// retire. Returned-error reporting and its cleanup must already have run.
 /// Explicit harness end markers are idempotent; production calls this once.
-pub(crate) fn root_end(ctx: *mut TaskCtx) -> Stopped<()> {
+pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
     let task = current(ctx);
     assert_eq!(task as u32, 0, "only the root publishes the launch result");
     if driver(ctx).is_finishing(task) {
         return Ok(());
     }
-    let (_, progress) = head_effect(ctx, "task.end", || ((), Next::End))?;
+    let (_, progress) = head_canonical(
+        ctx,
+        "task.end",
+        || ((), Next::End),
+        |_| unsafe { super::events::root_end(ctx, status) },
+    )?;
     assert_eq!(progress, Progress::Poll);
     poll(ctx)?;
     driver(ctx).finishing(task);

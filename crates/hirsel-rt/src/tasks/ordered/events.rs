@@ -40,6 +40,7 @@ pub(super) struct Boundary {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum CanonicalItem {
+    Root,
     Object(ObjectId),
     Cancellation(Vec<u32>),
     CompletionRank(ObjectId),
@@ -199,6 +200,11 @@ pub(super) enum CanonicalOutcome {
     TaskFailed {
         failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
     },
+    RootEnd {
+        status: u8,
+        result: Option<Vec<u8>>,
+        failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
+    },
     Unit,
 }
 
@@ -314,7 +320,7 @@ pub(super) struct Log {
     scopes: BTreeMap<u64, ObjectId>,
     tasks: BTreeMap<u64, ObjectId>,
     values: BTreeMap<u32, super::values::Program>,
-    canonical: Vec<CanonicalEvent>,
+    pub(super) canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
 }
 
@@ -1707,6 +1713,40 @@ pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option
             op: Some("task.await_any"),
         });
     }
+}
+
+/// Final root status after mandatory returned-result cleanup, using the
+/// initialized result snapshot taken before the reporting sink can yield.
+/// # Safety
+/// The root owns the role, its failure state and immutable run metadata.
+pub(super) unsafe fn root_end(ctx: *mut TaskCtx, status: u8) -> Option<Subevents> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        return None;
+    };
+    let log = driver.events.as_ref()?;
+    let result = match log.task_results.get(&Vec::new()) {
+        Some(result) => Some(result.payload.clone()?),
+        None => None,
+    };
+    let chain = unsafe { (*ctx).failure.chain(&[]) };
+    let failures = if chain.is_empty() {
+        Vec::new()
+    } else {
+        let table = unsafe { (*ctx).run_ref().failure_table }?;
+        chain
+            .iter()
+            .map(|(record, path)| (table.failure(record), path.clone()))
+            .collect()
+    };
+    Some(vec![(
+        CanonicalItem::Root,
+        CanonicalOutcome::RootEnd {
+            status,
+            result,
+            failures,
+        },
+    )])
 }
 
 /// Snapshot a failing end after its actual rank/cancellation effects. The
@@ -4092,6 +4132,169 @@ mod tests {
                             },
                         );
                         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn root_end_events_fix_status_failures_and_returned_values_before_cleanup() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let image = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&image as *const crate::Layout];
+        for mode in 0..4 {
+            for known in [false, true] {
+                let mut reference = None;
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = layouts.as_ptr();
+                        run.config.layout_count = 1;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy = Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                enable(ctx);
+                                if known {
+                                    install_value(ctx, 2, received_integer_program());
+                                    static TABLE: [u8; 40] = {
+                                        let mut bytes = [0; 40];
+                                        bytes[0] = 1;
+                                        bytes[8] = 1;
+                                        bytes[16] = 17;
+                                        bytes[20] = 3;
+                                        bytes
+                                    };
+                                    (*ctx).run().failure_table =
+                                        crate::isolate::FailureTable::new(&TABLE);
+                                }
+                            },
+                            move |ctx| unsafe {
+                                let _role = role::Guard::new(ctx);
+                                if mode >= 2 {
+                                    let mut result = [1u64, 42];
+                                    let returned = crate::exit_report::Returned {
+                                        value: result.as_mut_ptr().cast(),
+                                        layout: 2,
+                                        payload_offset: 8,
+                                        node: std::ptr::null(),
+                                    };
+                                    super::super::engine::root_report(ctx, &returned).unwrap();
+                                    result.fill(0);
+                                    let mut cause = 99;
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_canceled(ctx, &mut cause, &0),
+                                        crate::STATUS_OK
+                                    );
+                                    assert_eq!(cause, 0);
+                                }
+                                let failed = mode == 1 || mode == 3;
+                                let status = if failed {
+                                    crate::failure::hirsel_rt_v2_failure_begin(
+                                        ctx,
+                                        1,
+                                        hirsel_core_contract::RUNTIME_RULE_BASE,
+                                        1,
+                                        0,
+                                    )
+                                } else {
+                                    crate::STATUS_OK
+                                };
+                                super::super::engine::root_end(ctx, status).unwrap();
+                                super::super::engine::root_end(ctx, status).unwrap();
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let ends: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| row.op == "task.end")
+                                    .collect();
+                                if known || mode == 0 {
+                                    assert_eq!(ends.len(), 1);
+                                    let end = ends[0];
+                                    assert_eq!(end.item, CanonicalItem::Root);
+                                    assert_eq!(end.transition, Transition::End);
+                                    assert_eq!((end.version, end.subevent), (1, 0));
+                                    assert_eq!(
+                                        end.outcome,
+                                        CanonicalOutcome::RootEnd {
+                                            status,
+                                            result: (mode >= 2).then(|| [
+                                                1u32.to_le_bytes().as_slice(),
+                                                &42u64.to_le_bytes()
+                                            ]
+                                            .concat()),
+                                            failures: if failed {
+                                                vec![(
+                                                    hirsel_run_schema::Failure {
+                                                        rule: hirsel_core_contract::RUNTIME_RULES
+                                                            [0]
+                                                        .into(),
+                                                        site: hirsel_run_schema::Site {
+                                                            definition: String::new(),
+                                                            file: String::new(),
+                                                            line: 17,
+                                                            column: 3,
+                                                        },
+                                                        operation: None,
+                                                    },
+                                                    vec![],
+                                                )]
+                                            } else {
+                                                Vec::new()
+                                            },
+                                        }
+                                    );
+                                    assert!(log.canonical().is_ok());
+                                } else {
+                                    assert!(ends.is_empty());
+                                    assert!(log.canonical().is_err());
+                                    assert_eq!(
+                                        log.unsupported.last().unwrap().op,
+                                        Some("task.end")
+                                    );
+                                }
+                                *seen.lock().unwrap() = log.canonical.clone();
+                                status
+                            },
+                        );
+                        assert_eq!(
+                            outcome.ended,
+                            Ok(if mode == 1 || mode == 3 {
+                                crate::STATUS_FAILURE
+                            } else {
+                                crate::STATUS_OK
+                            })
+                        );
                         let rows = output.lock().unwrap().clone();
                         if let Some(reference) = &reference {
                             assert_eq!(&rows, reference);

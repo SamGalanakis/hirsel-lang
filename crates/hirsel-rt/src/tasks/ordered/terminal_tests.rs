@@ -356,12 +356,49 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
                 0
             );
             engine::enable(ctx, Policy::admit(&Default::default(), None));
+            super::events::enable(ctx);
+            // Only the semantic error field is initialized-value evidence;
+            // the fixture's probe pointer at offset0 never enters the trace.
+            super::events::install_value(
+                ctx,
+                3,
+                super::values::Program::new(
+                    vec![
+                        super::values::Node::Fields {
+                            extent: 16,
+                            fields: vec![super::values::Field { offset: 8, node: 1 }],
+                        },
+                        super::values::Node::Bits(8),
+                    ],
+                    0,
+                )
+                .unwrap(),
+            );
             crate::pool::start(ctx, width, true);
             crate::pool::free::enable(ctx);
             let frame = crate::stop::LaunchFrame::new(entry, 0, 0, [0; 5], &mut report);
             assert_eq!(crate::stop::run_root(ctx, frame), Ok(STATUS_OK));
             assert!(probe.reported.load(Ordering::Acquire));
             assert!(probe.cleaned.load(Ordering::Acquire));
+            {
+                let _role = role::Guard::new(ctx);
+                let log = engine::driver(ctx).events.as_ref().unwrap();
+                let ends: Vec<_> = log
+                    .canonical
+                    .iter()
+                    .filter(|row| row.item == super::events::CanonicalItem::Root)
+                    .collect();
+                assert_eq!(ends.len(), 1);
+                assert_eq!(ends[0].transition, super::events::Transition::End);
+                assert_eq!(
+                    ends[0].outcome,
+                    super::events::CanonicalOutcome::RootEnd {
+                        status: STATUS_OK,
+                        result: Some(42u64.to_le_bytes().to_vec()),
+                        failures: Vec::new(),
+                    }
+                );
+            }
             crate::context::hirsel_rt_v2_ctx_destroy(ctx);
         }
     }
