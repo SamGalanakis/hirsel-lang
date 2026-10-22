@@ -106,6 +106,30 @@ impl Program {
                     self.value_field(field, u64::MAX);
                 }
             }
+            LayoutKind::Inline { element, count } if *count <= 65_536 => {
+                let stride = if *count == 0 { 0 } else { size / count };
+                if stride.checked_mul(*count) != Some(size) {
+                    return;
+                }
+                self.words[at + 1] = VALUE_FIELDS;
+                for index in 0..*count {
+                    let field = self.instruction(VALUE_FIELD, index * stride);
+                    self.reference(field + 2, *element);
+                    self.words[field + 3] = u64::MAX;
+                }
+            }
+            LayoutKind::Simd { element, lanes }
+                if record.abi.scalars.len() == *lanes as usize && *lanes <= 65_536 =>
+            {
+                // SIMD's extent includes tail alignment. The authoritative
+                // lane offsets omit that padding, unlike size / lanes.
+                self.words[at + 1] = VALUE_FIELDS;
+                for &(offset, _) in &record.abi.scalars {
+                    let field = self.instruction(VALUE_FIELD, offset);
+                    self.reference(field + 2, *element);
+                    self.words[field + 3] = u64::MAX;
+                }
+            }
             LayoutKind::Variant => {
                 let Some(tag) = &record.tag else { return };
                 let (form, nullary) = match tag.form {

@@ -1776,6 +1776,255 @@ mod tests {
     }
 
     #[test]
+    fn linked_inline_and_simd_values_skip_element_and_vector_padding() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
+        use hirsel_types::{Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let boolean = types.p(Primitive::Bool);
+            let number = types.p(Primitive::U64);
+            let byte = types.p(Primitive::U8);
+            let float = types.p(Primitive::F32);
+            let unit = types.unit();
+            let record = types.record(&[boolean, number]);
+            let pair = types.inline(record, 2);
+            let nested = types.inline(pair, 3);
+            let empty = types.inline(record, 0);
+            let units = types.inline(unit, 4);
+            let bytes = types.simd(byte, 3);
+            let bools = types.simd(boolean, 3);
+            let floats = types.simd(float, 3);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let roots = [nested, empty, units, bytes, bools, floats]
+                .map(|ty| builder.layout(&types.store, ty).unwrap());
+            let table = builder.finish();
+            hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                for (case, root) in roots.into_iter().enumerate() {
+                    let program = unsafe {
+                        Program::from_layouts(linked(root), count as u32 + 2, |id| {
+                            &layouts[((id as usize - 2) + count - rotation) % count]
+                        })
+                    }
+                    .unwrap();
+                    let SizeSpec::Fixed(size) = table.layouts[root.0 as usize].size else {
+                        panic!("fixed")
+                    };
+                    let mut image = MaybeUninit::<[u64; 12]>::uninit();
+                    let at = image.as_mut_ptr().cast::<u8>();
+                    let mut expected = Vec::new();
+                    unsafe {
+                        match case {
+                            0 => {
+                                assert_eq!(size, 96);
+                                for i in 0..6usize {
+                                    at.add(i * 16).write((i % 2) as u8);
+                                    at.add(i * 16 + 8).cast::<u64>().write(i as u64 + 42);
+                                    expected.push((i % 2) as u8);
+                                    expected.extend_from_slice(&(i as u64 + 42).to_le_bytes());
+                                }
+                            }
+                            1 | 2 => assert_eq!(size, 0),
+                            3 | 4 => {
+                                assert_eq!(size, 4, "three byte lanes have tail padding");
+                                let lanes = if case == 3 { [7, 8, 9] } else { [1, 0, 1] };
+                                for (i, lane) in lanes.into_iter().enumerate() {
+                                    at.add(i).write(lane);
+                                }
+                                expected.extend_from_slice(&lanes);
+                            }
+                            5 => {
+                                assert_eq!(size, 16, "three f32 lanes have tail padding");
+                                for (i, bits) in
+                                    [0x7fc0_0001u32, 0x8000_0000, 0].into_iter().enumerate()
+                                {
+                                    at.add(i * 4).cast::<u32>().write(bits);
+                                    expected.extend_from_slice(&bits.to_le_bytes());
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        assert_eq!(program.encode(at, |_, _| None).unwrap(), expected);
+                        if case == 4 {
+                            at.add(1).write(2);
+                            assert_eq!(program.encode(at, |_, _| None), Err(Error::Value));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_inline_and_simd_message_events_own_initialized_values() {
+        use crate::tasks::*;
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
+        use hirsel_types::{Primitive, testing::Types};
+        use std::sync::{Arc, Mutex};
+        for vector in [false, true] {
+            let mut types = Types::default();
+            let boolean = types.p(Primitive::Bool);
+            let number = types.p(Primitive::U64);
+            let byte = types.p(Primitive::U8);
+            let record = types.record(&[boolean, number]);
+            let aggregate = if vector {
+                types.simd(byte, 3)
+            } else {
+                types.inline(record, 2)
+            };
+            let option = types.variant(&[&[], &[aggregate]]);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&TargetSpec::x86_64_unknown_linux_gnu(), &owners);
+            let root = builder.layout(&types.store, option).unwrap();
+            let table = builder.finish();
+            let option = &table.layouts[root.0 as usize];
+            let tag = option.tag.as_ref().unwrap();
+            let value_offset = tag.variants[1].fields[0].offset as usize;
+            let tag_offset = tag.offset as usize;
+            let explicit_tag = matches!(tag.form, TagForm::Ordinal);
+            let SizeSpec::Fixed(extent) = option.size else {
+                panic!("fixed inline option")
+            };
+            let mut reference = None;
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let linked =
+                    |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let pointers: Vec<_> = (0..count)
+                    .map(|id| &layouts[(id + count - rotation) % count] as *const crate::Layout)
+                    .collect();
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = pointers.as_ptr();
+                        run.config.layout_count = pointers.len() as u32;
+                        unsafe { run.use_physical_dispatch() };
+                        let descriptor = linked(root);
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy =
+                                    crate::ordered::Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                super::super::events::enable(ctx);
+                            },
+                            move |ctx| unsafe {
+                                let mut endpoints = [0u64; 2];
+                                let none = vec![0u64; extent.div_ceil(8) as usize];
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_open(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        endpoints.as_mut_ptr(),
+                                        &0,
+                                        none.as_ptr().cast(),
+                                        descriptor
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut image = none.clone();
+                                if explicit_tag {
+                                    image
+                                        .as_mut_ptr()
+                                        .cast::<u8>()
+                                        .add(tag_offset)
+                                        .cast::<u32>()
+                                        .write(1);
+                                }
+                                let at = image.as_mut_ptr().cast::<u8>().add(value_offset);
+                                let mut expected = 1u32.to_le_bytes().to_vec();
+                                if vector {
+                                    std::ptr::copy_nonoverlapping([7u8, 8, 9].as_ptr(), at, 3);
+                                    expected.extend_from_slice(&[7, 8, 9]);
+                                } else {
+                                    for (i, value) in [42u64, 99].into_iter().enumerate() {
+                                        at.add(i * 16).write((i % 2) as u8);
+                                        at.add(i * 16 + 8).cast::<u64>().write(value);
+                                        expected.push((i % 2) as u8);
+                                        expected.extend_from_slice(&value.to_le_bytes());
+                                    }
+                                }
+                                let mut status = u32::MAX;
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_send(
+                                        ctx,
+                                        &mut status,
+                                        &mut endpoints[0],
+                                        image.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                assert_eq!(image, none);
+                                let mut received = none.clone();
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_receive(
+                                        ctx,
+                                        0,
+                                        0,
+                                        &mut status,
+                                        &mut endpoints[1],
+                                        received.as_mut_ptr().cast()
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(status, crate::channels::DONE);
+                                // Destroy the caller's copy before inspecting immutable event values.
+                                received.fill(u64::MAX);
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[0], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    close_endpoint(ctx, endpoints[1], 0, 0),
+                                    crate::STATUS_OK
+                                );
+                                let _role = role::Guard::new(ctx);
+                                super::super::engine::at_head(ctx).unwrap();
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows = log.canonical().unwrap();
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Value {
+                                        status: 0,
+                                        payload: expected.clone()
+                                    }));
+                                assert!(rows.iter().any(|row| row.outcome
+                                    == super::super::events::CanonicalOutcome::Received {
+                                        status: crate::channels::DONE,
+                                        payload: Some(expected.clone())
+                                    }));
+                                *seen.lock().unwrap() = rows.to_vec();
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn indirect_values_reject_null_mismatched_descriptors_and_bounded_cycles() {
         let program = Program::new(
             vec![
