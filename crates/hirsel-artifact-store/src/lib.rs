@@ -52,6 +52,32 @@ pub struct Reference {
     pub len: u64,
 }
 
+/// Content access supplies integrity, never query or verifier authority.
+pub trait Contents: Send + Sync {
+    fn get_content(&self, reference: Reference) -> Option<Bytes>;
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference>;
+}
+
+#[derive(Default)]
+pub struct Memory {
+    entries: std::sync::Mutex<std::collections::HashMap<ContentHash, (Reference, Bytes)>>,
+}
+impl Contents for Memory {
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let (actual, bytes) = entries.get(&reference.output.0)?;
+        (*actual == reference).then(|| bytes.clone())
+    }
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        let reference = domain.reference(bytes)?;
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(reference.output.0, (reference, bytes.into()));
+        Some(reference)
+    }
+}
+
 impl Domain {
     /// The canonical reference to these bytes, without publication or authority.
     pub fn reference(self, bytes: &[u8]) -> Option<Reference> {
@@ -215,6 +241,14 @@ impl Bytes {
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+}
+impl Contents for Store {
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        self.get(reference)
+    }
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        self.put(domain, bytes).ok()
+    }
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GcReport {
