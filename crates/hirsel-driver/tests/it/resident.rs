@@ -1923,6 +1923,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         peak: AtomicUsize,
         writers: Mutex<Vec<std::thread::ThreadId>>,
         summaries: AtomicUsize,
+        types: AtomicUsize,
         home: std::thread::ThreadId,
     }
     impl store::ResultStore for ObservedStore {
@@ -1933,7 +1934,9 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             panic!("query publication must identify its product kind");
         }
         fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
-            if domain.kind == QueryKind::Summary as u32 + 16 {
+            if domain.kind == 2 {
+                self.types.fetch_add(1, Ordering::SeqCst);
+            } else if domain.kind == QueryKind::Summary as u32 + 16 {
                 assert_eq!(std::thread::current().id(), self.home);
             } else {
                 assert_eq!(domain.kind, QueryKind::Modes as u32 + 16);
@@ -1983,6 +1986,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
                 peak: AtomicUsize::new(0),
                 writers: Mutex::new(vec![]),
                 summaries: AtomicUsize::new(0),
+                types: AtomicUsize::new(0),
                 home: std::thread::current().id(),
             });
             let mut adapters = compiler_adapters();
@@ -2020,6 +2024,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             let writers = store.writers.lock().unwrap();
             assert_eq!(writers.len(), 64);
             assert_eq!(store.summaries.load(Ordering::SeqCst), 64);
+            assert!(store.types.load(Ordering::SeqCst) > 0);
             if jobs > 1 {
                 assert!(
                     writers

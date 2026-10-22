@@ -44,7 +44,7 @@ impl QueryEngine {
             semantic(summary, growth),
             checked.map(|c| semantic(&c.summary, &c.growth)),
         );
-        let bytes = self.encode_record(&value)?;
+        let bytes = super::persistent::canonical_bytes(self.types.clone(), &self.items, &value)?;
         Some(ContentHash::of_parts(
             "hirsel.summary.output.v1",
             [bytes.as_slice()],
