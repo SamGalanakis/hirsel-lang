@@ -20,9 +20,7 @@ mod jsonl;
 pub(super) use host_values::HostHandleId;
 pub(crate) use jsonl::Trace;
 
-#[cfg(test)]
 mod blocked;
-#[cfg(test)]
 pub(super) mod charges;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -412,9 +410,7 @@ pub(super) struct Log {
     pub(super) canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
     closed_blocked: bool,
-    #[cfg(test)]
     charges: Option<crate::budget::stretch_trace::Observer>,
-    #[cfg(test)]
     budget_terminal: bool,
     #[cfg(test)]
     pub(super) rejected_budget_stretches: Vec<Stretch>,
@@ -981,7 +977,6 @@ impl Log {
 
 /// The source-free quiet verdict already owns IdleGuard and every frame is
 /// saved. Only its selected Blocked cause may close an unfinished wait prefix.
-#[cfg(test)]
 pub(in crate::tasks) fn blocked(
     s: &mut super::super::Scheduler,
     table: Option<crate::isolate::FailureTable>,
@@ -991,8 +986,7 @@ pub(in crate::tasks) fn blocked(
 
 /// Enable only at admission, before any operation can retire. No run identity
 /// or production dispatcher is changed by installing the evidence collector.
-#[cfg(test)]
-pub(super) fn enable(ctx: *mut TaskCtx) {
+pub(crate) fn enable(ctx: *mut TaskCtx) {
     unsafe { (*ctx).ordered_charge_trace.enable() };
     unsafe { (*ctx).run_ref() }
         .ordered_roots
@@ -2617,7 +2611,6 @@ pub(super) fn record(
     operation: Option<(&Operation<Command>, &Outcome)>,
     retirement: Retirement<'_>,
 ) {
-    #[cfg(test)]
     let canonical_before = charges::retirement(ctx, task, retirement.before, retirement.credit);
     // Default execution pays no summary, path or carrier copy. The role owns
     // this lookup, even while the frontier is moved out for a bounded effect.
@@ -3071,18 +3064,9 @@ pub(super) fn record(
             op: operation.map(|(op, _)| op.descriptor.name),
             transition: transition.clone(),
             retirement: retirement.index,
-            before: {
-                #[cfg(test)]
-                {
-                    canonical_before
-                        .clone()
-                        .unwrap_or_else(|| retirement.before.clone())
-                }
-                #[cfg(not(test))]
-                {
-                    retirement.before.clone()
-                }
-            },
+            before: canonical_before
+                .clone()
+                .unwrap_or_else(|| retirement.before.clone()),
             credit: retirement.credit,
             native_outcome: None,
         };

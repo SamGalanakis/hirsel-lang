@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 const FMT_HELP: &str = "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic.";
 
@@ -51,7 +51,7 @@ Example: hirsel build --debug --backend llvm app.hir -o app-debug
 Standalone launch: ./app --hirsel-grants grants.json argument
 For recording, --hirsel-record comes before --hirsel-grants.
 See docs/native-verification.md#record-remove-host-access-replay for the recipe.",
-        "run" => "usage: hirsel run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] [--verify-cache] [--validate-stages] [--no-verify] [--json] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...]
+        "run" => "usage: hirsel run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] [--verify-cache] [--validate-stages] [--no-verify] [--json] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...]
 
 Run a source entry; the default engine is the interpreter.
   --native            Compile and run natively (LLVM by default)
@@ -65,6 +65,7 @@ Run a source entry; the default engine is the interpreter.
   --replay <tape>     Replay recorded effects without live grants
   --max-steps         Interpreter budget: unsigned integer or unbounded
   --cores <n>         Positive core count; incompatible with --simulation
+  --trace-events <jsonl> Native canonical Ordered events; requires qualified executor
   -- args...          Replace template Args; excludes --run, --replay, --simulation
   --json              Machine-readable diagnostics
   --verify-cache      Recompute cached results and compare
@@ -136,6 +137,8 @@ mod explain;
 mod measure;
 mod new;
 mod serve;
+#[cfg(test)]
+mod trace_events_tests;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
@@ -241,6 +244,7 @@ enum Command {
         backend: Option<hirsel_driver::native::Backend>,
         proofs: Proofs,
         arguments: Option<Vec<OsString>>,
+        trace_events: Option<OsString>,
         max_steps: Option<u64>,
         json: bool,
     },
@@ -823,6 +827,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut file = None;
                 let mut proofs = Proofs::default();
                 let mut arguments = None;
+                let mut trace_events = None;
                 loop {
                     if let Some(mut raw) = args.try_raw_args() {
                         if raw.peek().is_some_and(|arg| arg == "--") {
@@ -860,6 +865,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                             );
                         }
                         Long("record") if record.is_none() => record = Some(args.value()?),
+                        Long("trace-events") if trace_events.is_none() => {
+                            trace_events = Some(args.value()?)
+                        }
                         Long("revocations") if revocations.is_none() => {
                             revocations = Some(args.value()?)
                         }
@@ -894,6 +902,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 }
                 if !native && selected.is_some() {
                     return Err("--backend requires --native".into());
+                }
+                if trace_events.is_some() && !native {
+                    return Err("--trace-events requires --native".into());
                 }
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
@@ -959,6 +970,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         backend: selected,
                         proofs,
                         arguments,
+                        trace_events,
                         max_steps,
                         json,
                     },
@@ -1700,6 +1712,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             backend,
             proofs,
             arguments,
+            trace_events,
             max_steps: _,
             json,
         } => {
@@ -1710,7 +1723,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 3).
-            return match hirsel_driver::native::run_path_native_backend_with_validation(
+            return match hirsel_driver::native::run_path_native_backend_with_trace_events(
                 Path::new(&file),
                 launch.host(arguments.as_deref()),
                 evidence.as_ref(),
@@ -1719,6 +1732,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 hirsel_driver::native::Output::Inherit { json },
                 verify,
                 validation,
+                trace_events.as_deref().map(Path::new),
             ) {
                 // The native driver already wrote the complete failure chain.
                 Ok(Ok(outcome @ RunOutcome::Failed { .. })) => outcome.exit_code() as u8,
@@ -1738,6 +1752,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             backend: _,
             proofs: _,
             arguments,
+            trace_events: _,
             max_steps,
             json,
         } => {

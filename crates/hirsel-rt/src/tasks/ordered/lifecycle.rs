@@ -183,7 +183,6 @@ pub(crate) unsafe fn spawn(
         (*child).task_id = index;
         if (*ctx).run_ref().ordered_roots.get().is_some() {
             (*child).roots.trace_creator.path = path.clone();
-            #[cfg(test)]
             (*child).ordered_charge_trace.enable();
         }
         (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);

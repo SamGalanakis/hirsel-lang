@@ -2121,6 +2121,9 @@ fn launch_impl(
             .env("HIRSEL_RT_TRACE_ROOTS", &roots)
             .env("HIRSEL_RT_COUNT_MAX", "3");
     }
+    if let Some(path) = live.as_ref().and_then(|live| live.trace_events) {
+        command.arg("--hirsel-trace-events").arg(absolute(path)?);
+    }
     // A live launch selects record and replay by flag; harness launches by environment.
     match tape {
         Tape::Replay(path) => {
@@ -2387,6 +2390,7 @@ fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
 
 pub(crate) struct LiveRun<'a> {
     pub run: &'a hirsel_run_config::ValidatedRun,
+    pub trace_events: Option<&'a Path>,
     pub inherit: bool,
     pub stdout: &'a mut dyn std::io::Write,
     pub stderr: &'a mut dyn std::io::Write,

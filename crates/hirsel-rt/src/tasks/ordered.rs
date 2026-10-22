@@ -694,7 +694,6 @@ impl Backend<Command> for Objects<'_> {
         events::record(self.ctx, task, Some((op, result)), retirement);
     }
 
-    #[cfg(test)]
     fn record_budget_stop(
         &mut self,
         task: TaskId,

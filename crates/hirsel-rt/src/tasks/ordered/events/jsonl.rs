@@ -30,7 +30,6 @@ impl Trace {
     /// # Safety
     /// Admission's home thread, after run_root returned, before abandonment
     /// or destruction. The run remains live, including when workers linger.
-    #[cfg(test)]
     pub(crate) unsafe fn capture(
         run: *mut crate::context::RunShared,
         pending: u32,

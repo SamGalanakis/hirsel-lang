@@ -1463,10 +1463,14 @@ fn facts(
 ///
 /// # Safety
 /// The program's entry and descriptors are live for the call.
-unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> RunOutcome {
+unsafe fn launch(program: &Program, mut arguments: Vec<std::ffi::OsString>) -> RunOutcome {
     let host = crate::host::Host::process();
     let sinks = crate::host::Sinks::process();
     let refuse = |reason: &str| refused(&sinks, reason.into());
+    let trace_events = match crate::trace_events::select(&mut arguments) {
+        Ok(path) => path,
+        Err(error) => return refuse(&error),
+    };
     let selected = if program.standalone() {
         match crate::standalone::select(
             arguments.clone(),
@@ -1521,8 +1525,11 @@ unsafe fn launch(program: &Program, arguments: Vec<std::ffi::OsString>) -> RunOu
             Err(error) => return refuse(&error.to_string()),
         },
     };
-    host.start(program, config, selection, arguments, sinks)
-        .wait()
+    let mut run = host.start(program, config, selection, arguments, sinks);
+    if let Some(path) = trace_events {
+        run = run.with_trace_events(path);
+    }
+    run.wait()
 }
 
 /// A launched (not standalone) executable's selection: a replay, a run record the embedded
@@ -1619,6 +1626,11 @@ pub(crate) unsafe fn execute(
             .and_then(|io| io.tasks.as_deref())
             == Some("tasks.free@1");
     let mut free_session = None;
+    let trace_destination = options
+        .trace_events
+        .as_ref()
+        .map(|path| crate::trace_events::pin(path, ordered_enabled))
+        .transpose()?;
     let seed = launch_config.test_seed;
     if !(1..=RESULT_MAX).contains(&result_size) || (program.return_kind != 1 && result_size < 4) {
         return Err("the entry result is not a Result of at most 64 bytes".into());
@@ -1631,6 +1643,37 @@ pub(crate) unsafe fn execute(
         .iter()
         .map(|(name, file)| (*name, file))
         .collect();
+    if let Some(destination) = &trace_destination {
+        let io = production_io.as_ref().map(|(io, _, _)| io);
+        let grants = io.map_or_else(Vec::new, |io| io.mount_pins());
+        destination
+            .check_with_files(&grants, &output_grants)
+            .map_err(|e| e.to_string())?;
+        let tape = production_io
+            .as_ref()
+            .and_then(|(_, _, tape)| tape.as_deref());
+        let placement = requested
+            .as_ref()
+            .and_then(|run| run.record().placement.as_ref());
+        for path in [
+            tape,
+            placement
+                .and_then(|p| p.metrics.as_deref())
+                .map(std::path::Path::new),
+            placement
+                .and_then(|p| p.control.as_deref())
+                .map(std::path::Path::new),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let other =
+                crate::host_paths::RecorderDestination::pin(path).map_err(|e| e.to_string())?;
+            destination
+                .check_distinct(&other)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     let mut arguments = if let Some(run) = &requested {
         run.record().args.clone().unwrap_or_default()
     } else if entry.is_zero() {
@@ -2257,6 +2300,15 @@ pub(crate) unsafe fn execute(
         // The independent E1 qualification gate keeps this inactive for now.
         unsafe { ordered.install(ctx) };
     }
+    if trace_destination.is_some() {
+        crate::tasks::ordered::events::enable(ctx);
+        let roots = entry.roots();
+        crate::tasks::ordered::events::initial_host(
+            ctx,
+            (roots & crate::standalone::ROOT_IO != 0).then_some(IO_HANDLE),
+            (roots & crate::standalone::ROOT_ENV != 0).then_some(u64::MAX),
+        );
+    }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };
     // A host's stop wakes the run's idle wait.
@@ -2401,6 +2453,10 @@ pub(crate) unsafe fn execute(
         Ok(_) => 0,
     };
     let detached = pending > 0;
+    // Copy only fully validated, quiescent evidence before any row/stack teardown.
+    let trace = trace_destination.as_ref().map(|_| unsafe {
+        crate::tasks::ordered::events::Trace::capture((*ctx).run_ptr(), pending)
+    });
     let result = match &ran {
         Ok(_) => {
             unsafe { (*ctx).run_ref() }
@@ -2685,6 +2741,13 @@ pub(crate) unsafe fn execute(
     if let Some(error) = report_refusal {
         return Err(error);
     }
+    if let (Some(destination), Some(trace)) = (trace_destination, trace) {
+        let real_io = real.as_ref().map(|io| io.borrow());
+        let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
+        trace
+            .map_err(str::to_owned)?
+            .publish(destination, &grants, &output_grants)?;
+    }
     Ok(outcome)
 }
 
@@ -2696,6 +2759,7 @@ pub(crate) struct Options {
     pub(crate) workers: Option<(u32, bool)>,
     /// The scheduling row counters, when the host asked for them.
     pub(crate) metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
+    pub(crate) trace_events: Option<std::path::PathBuf>,
 }
 
 /// The delay after which a test stops the run from another thread: `HIRSEL_RT_STOP_AFTER_MS`.

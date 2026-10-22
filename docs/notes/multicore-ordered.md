@@ -223,6 +223,23 @@ budgets are configured and before root publication. Dedicated execution still
 requires its own implementation; it cannot silently select shared retirement.
 This staging is not production activation or completed E1 acceptance.
 
+`hirsel run --native --trace-events events.jsonl` and an embedding host's
+`RunHandle::with_trace_events` select canonical JSONL export. A standalone
+executable takes the observer prefix `--hirsel-trace-events events.jsonl`
+before its run or replay arguments. While E1 is unqualified, these requests
+refuse before program entry, without opening the trace destination. They do
+not opt a program into physical dispatch or change its run identity.
+
+The collector and exact charge observer are available in production builds.
+The task-local journal allocates only for an enabled trace; untraced execution
+retains bounded summaries with the existing 64-piece/1024-envelope limits.
+The complete trace is copied and validated after root completion, before
+scheduler destruction. Running workers, unsupported initialized values and
+incomplete evidence refuse export. Only validated evidence can create a file;
+the existing pinned recorder checks protect mounts and sinks, and distinct
+destination checks protect recordings and placement sidecars from aliases.
+Native direct tests exercise this writer while the production gate is closed.
+
 This is a protocol and guarded migration substrate, not an enabled concurrent
 native ordered executor. The default remains W1's cooperative run token.
 Concurrent drivers must first validate their service lifetimes and field access,

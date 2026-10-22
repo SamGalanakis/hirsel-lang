@@ -101,6 +101,7 @@ pub mod tape_binary;
 pub mod tape_links;
 mod tape_wire;
 pub mod tasks;
+mod trace_events;
 
 pub use alloc::{
     CLASS_COUNT, CLASS_SIZES, CTX_DUP_MAX_OFFSET, CTX_FREE_INLINE_OFFSET, CTX_FUEL_OFFSET,

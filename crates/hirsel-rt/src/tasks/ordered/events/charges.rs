@@ -1,4 +1,4 @@
-//! Test-only integration of exact charge witnesses with retired event positions.
+//! Optional integration of exact charge witnesses with retired event positions.
 use super::*;
 use crate::budget::stretch::Settled;
 use hirsel_run_schema::BudgetKind;
@@ -15,6 +15,9 @@ pub(in crate::tasks::ordered) fn partial(
     result: Result<(), BudgetKind>,
 ) {
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !super::enabled(s) {
+        return;
+    }
     let path = s.tasks[task as u32 as usize].as_ref().unwrap().path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         return;
@@ -31,6 +34,7 @@ pub(in crate::tasks::ordered) fn partial(
         "exact head charge prefix"
     );
     if let Err(kind) = result {
+        #[cfg(test)]
         log.rejected_budget_stretches.push(before.clone());
         let before = observer.take(task);
         let retirement = driver.frontier.as_ref().unwrap().retired();
@@ -46,6 +50,9 @@ pub(in crate::tasks::ordered) fn stopped(
     kind: BudgetKind,
 ) {
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !super::enabled(s) {
+        return;
+    }
     let path = s.tasks[task as u32 as usize].as_ref().unwrap().path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         return;
@@ -61,6 +68,7 @@ pub(in crate::tasks::ordered) fn stopped(
         Err(kind),
         "exact rejected stretch prefix"
     );
+    #[cfg(test)]
     log.rejected_budget_stretches.push(before.clone());
     let before = observer.take(task);
     emit(log, path, retirement, before, kind);

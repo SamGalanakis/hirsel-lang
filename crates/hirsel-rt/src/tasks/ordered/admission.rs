@@ -10,6 +10,10 @@ use hirsel_run_config::{Commit, ValidatedRun};
 // performance gates have qualified production E1. Keep this independent of F1.
 const PRODUCTION_QUALIFIED: bool = false;
 
+pub(crate) fn qualified() -> bool {
+    PRODUCTION_QUALIFIED
+}
+
 pub(crate) struct Admission {
     policy: Policy,
 }

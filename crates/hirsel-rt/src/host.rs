@@ -314,6 +314,7 @@ impl Host {
             control: Default::default(),
             workers: None,
             metrics: None,
+            trace_events: None,
         }
     }
 }
@@ -388,8 +389,16 @@ pub struct RunHandle<'p> {
     control: std::sync::Arc<crate::stop::Control>,
     workers: Option<(u32, bool)>,
     metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
+    trace_events: Option<std::path::PathBuf>,
 }
 impl RunHandle<'_> {
+    /// Export complete canonical Ordered events. Refuses before entry while
+    /// the production executor is unqualified, or for another scheduling mode.
+    /// The destination is created only after complete evidence validates.
+    pub fn with_trace_events(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.trace_events = Some(path.into());
+        self
+    }
     pub fn execution(&self) -> &Execution {
         &self.execution
     }
@@ -426,11 +435,13 @@ impl RunHandle<'_> {
             control,
             workers,
             metrics,
+            trace_events,
         } = self;
         let options = crate::launch::Options {
             control,
             workers,
             metrics,
+            trace_events,
         };
         // SAFETY: a loaded program's code and data live for the process.
         match unsafe {

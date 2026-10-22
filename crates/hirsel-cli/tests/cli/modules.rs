@@ -15,6 +15,7 @@ mod https;
 mod observation_view;
 mod onboard;
 mod placement;
+mod trace_events;
 mod ready_together;
 mod remote;
 mod replay;

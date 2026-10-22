@@ -1,5 +1,5 @@
-//! Exact charge witnesses for test traces (owner ruling 604208).
-//! Production retains only bounded Stretch summaries. Like stretch::reference,
+//! Optional exact charge witnesses for canonical traces (owner ruling 618475).
+//! Untraced execution retains only bounded Stretch summaries. Like stretch::reference,
 //! this observer interprets charges in order; a rejected batch contributes only
 //! the first failing charge, never its speculative suffix.
 use super::stretch::{Budgets, Piece, Settled, Stretch};
@@ -19,48 +19,55 @@ pub(crate) enum Charge {
 /// scheduler. Read only the task's compiled fuel word and this disjoint field.
 #[derive(Default)]
 pub(crate) struct Local {
-    enabled: bool,
+    journal: Option<Box<Journal>>,
+}
+#[derive(Default)]
+struct Journal {
     fuel: i64,
     charges: Vec<Charge>,
 }
 impl Local {
     pub(crate) fn enable(&mut self) {
-        self.enabled = true;
+        self.journal.get_or_insert_default();
     }
     pub(crate) fn grant(&mut self, fuel: i64) {
-        self.fuel = fuel;
+        if let Some(journal) = &mut self.journal {
+            journal.fuel = fuel;
+        }
     }
     pub(crate) fn capture(&mut self, word: i64) {
-        if self.enabled {
-            let points = self.fuel.saturating_sub(word).max(0) as u64;
+        if let Some(journal) = &mut self.journal {
+            let points = journal.fuel.saturating_sub(word).max(0) as u64;
             if points != 0 {
-                self.charges.push(Charge::Fuel(points));
+                journal.charges.push(Charge::Fuel(points));
             }
+            journal.fuel = word.max(0);
         }
-        self.fuel = word.max(0);
     }
     pub(crate) fn allocation(&mut self, bytes: u64) {
-        if self.enabled {
-            self.charges.push(Charge::Alloc(bytes));
+        if let Some(journal) = &mut self.journal {
+            journal.charges.push(Charge::Alloc(bytes));
         }
     }
     pub(crate) fn free(&mut self, word: i64, bytes: u64) {
         self.capture(word);
-        if self.enabled {
-            self.charges.push(Charge::Free(bytes));
+        if let Some(journal) = &mut self.journal {
+            journal.charges.push(Charge::Free(bytes));
         }
     }
     pub(crate) fn take(&mut self) -> Option<Vec<Charge>> {
-        self.enabled.then(|| std::mem::take(&mut self.charges))
+        self.journal
+            .as_mut()
+            .map(|journal| std::mem::take(&mut journal.charges))
     }
     /// The committing callback reports these same logical deaths as receipt
     /// credit. They belong to that op, rather than the owner's next segment.
     pub(crate) fn committed_credit(&mut self, mut bytes: u64) {
-        if !self.enabled {
+        let Some(journal) = &mut self.journal else {
             return;
-        }
+        };
         while bytes != 0 {
-            let Some(Charge::Free(freed)) = self.charges.pop() else {
+            let Some(Charge::Free(freed)) = journal.charges.pop() else {
                 panic!("commit credit must end in its actual frees");
             };
             bytes = bytes.checked_sub(freed).expect("exact commit credit");
@@ -176,6 +183,32 @@ fn summary(budgets: Budgets, charges: Vec<Charge>) -> Stretch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untraced_local_charges_keep_no_journal_or_buffer() {
+        let mut local = Local::default();
+        for _ in 0..128 {
+            local.grant(64);
+            local.capture(63);
+            local.allocation(32);
+            local.free(62, 32);
+            local.committed_credit(32);
+            assert!(local.take().is_none());
+            assert!(local.journal.is_none());
+        }
+        local.enable();
+        local.grant(64);
+        local.capture(63);
+        local.allocation(32);
+        local.free(62, 32);
+        local.committed_credit(32);
+        assert_eq!(
+            local.take(),
+            Some(vec![Charge::Fuel(1), Charge::Alloc(32), Charge::Fuel(1)])
+        );
+        assert_eq!(local.take(), Some(vec![]));
+    }
+
     use crate::budget::stretch::{Event, summarise};
     #[test]
     fn exact_witness_truncates_coalesced_highs_and_fuel_batches_after_first_stop() {

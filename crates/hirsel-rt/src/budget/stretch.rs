@@ -62,7 +62,7 @@ pub struct Stretch {
     budgets: Budgets,
     /// Pieces and, before each but the first, the credit event that opened it.
     pub(super) pieces: Vec<(u64, Piece)>,
-    #[cfg(test)]
+    // Filled only by an explicitly enabled runtime witness (or protocol tests).
     pub(crate) exact: Vec<super::stretch_trace::Charge>,
 }
 
@@ -71,7 +71,6 @@ impl Stretch {
         Stretch {
             budgets,
             pieces: vec![(0, Piece::default())],
-            #[cfg(test)]
             exact: Vec::new(),
         }
     }

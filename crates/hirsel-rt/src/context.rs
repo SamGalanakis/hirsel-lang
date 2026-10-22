@@ -171,7 +171,6 @@ pub struct TaskCtx {
     pub(crate) native_host_result: Option<Box<Result<crate::io::Completion, ()>>>,
     /// Replay holds request and transition buffers across admitted-prefix saves.
     pub(crate) replay_host: Option<Box<crate::tasks::free::host::ReplayHost>>,
-    #[cfg(test)]
     pub(crate) ordered_charge_trace: crate::budget::stretch_trace::Local,
     /// Owned Ordered request/result buffers retained across frontier saves.
     pub(crate) pending_ordered_host: Option<Box<crate::tasks::ordered::host::concurrent::Pending>>,
@@ -373,7 +372,6 @@ impl TaskCtx {
             pending_ordered_host: None,
             native_host_result: None,
             replay_host: None,
-            #[cfg(test)]
             ordered_charge_trace: Default::default(),
         }
     }

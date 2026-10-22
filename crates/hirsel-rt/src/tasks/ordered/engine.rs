@@ -139,7 +139,6 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
                 .ordered_memory
                 .store(driver.memory, std::sync::atomic::Ordering::Release)
         };
-        #[cfg(test)]
         if let Some(log) = &mut driver.events {
             super::events::charges::initialize(log, frontier.settled, driver.budgets);
         }
@@ -156,18 +155,12 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     let level = frontier.settled.level;
     unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
-    #[cfg(test)]
-    unsafe {
-        (*ctx).ordered_charge_trace.grant(grant as i64)
-    };
+    unsafe { (*ctx).ordered_charge_trace.grant(grant as i64) };
 }
 
 fn capture_fuel(ctx: *mut TaskCtx) {
     let word = unsafe { (*ctx).view.compiled.fuel };
-    #[cfg(test)]
-    unsafe {
-        (*ctx).ordered_charge_trace.capture(word)
-    };
+    unsafe { (*ctx).ordered_charge_trace.capture(word) };
     let remaining = word.max(0) as u64;
     let (task, driver) = fuel_state(ctx);
     let budgets = driver.budgets;
@@ -220,7 +213,6 @@ fn stretch(ctx: *mut TaskCtx) -> Stretch {
         .stretches
         .remove(&task)
         .unwrap_or_else(|| Stretch::new(driver.budgets));
-    #[cfg(test)]
     if let Some(exact) = unsafe { (*ctx).ordered_charge_trace.take() } {
         before.exact = exact;
     }
@@ -229,7 +221,6 @@ fn stretch(ctx: *mut TaskCtx) -> Stretch {
 
 #[inline]
 fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
-    #[cfg(test)]
     let task = current(ctx);
     let result = driver(ctx)
         .frontier
@@ -237,7 +228,6 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
         .unwrap()
         .settled
         .settle(before);
-    #[cfg(test)]
     super::events::charges::partial(ctx, task, before, result);
     result.map_err(Stop::BudgetExceeded)
 }
@@ -282,7 +272,6 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
             allocation
                 .alloc(bytes)
                 .expect("one allocation fits an envelope");
-            #[cfg(test)]
             {
                 unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
                 if let Some(exact) = unsafe { (*ctx).ordered_charge_trace.take() } {
@@ -291,10 +280,7 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
             }
             settle_head(ctx, &allocation)?;
         } else {
-            #[cfg(test)]
-            unsafe {
-                (*ctx).ordered_charge_trace.allocation(bytes)
-            };
+            unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
             driver(ctx)
                 .stretches
                 .entry(task)
@@ -324,7 +310,6 @@ pub(crate) fn memory_charged(ctx: *mut TaskCtx, bytes: u64) {
 }
 
 pub(crate) fn memory_freed(ctx: *mut TaskCtx, bytes: u64) {
-    #[cfg(test)]
     unsafe {
         let word = (*ctx).view.compiled.fuel;
         (*ctx).ordered_charge_trace.free(word, bytes);
@@ -542,7 +527,6 @@ pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
 /// A budget settlement that already closed Frontier keeps its original cause.
 /// No callback or diagnostic publication is allowed before this gate returns.
 pub(crate) fn terminal(ctx: *mut TaskCtx, stop: &Stop) -> Stopped<()> {
-    #[cfg(test)]
     if super::events::charges::terminal_recorded(ctx) {
         return Ok(());
     }
@@ -595,7 +579,6 @@ impl<F: FnOnce() -> (T, Outcome, Next), T> Backend<Command> for HeadEffect<'_, '
     ) {
         self.objects.record_retirement(task, op, result, retirement);
     }
-    #[cfg(test)]
     fn record_budget_stop(
         &mut self,
         task: TaskId,

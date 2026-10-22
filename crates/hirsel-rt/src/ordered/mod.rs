@@ -134,7 +134,6 @@ pub trait Backend<P> {
     /// A waiting operation may resume, yield or call without a second op.
     /// Its continuation has a positional stretch but consumes no ordinal.
     fn record_continuation(&mut self, _task: TaskId, _retirement: Retirement<'_>) {}
-    #[cfg(test)]
     fn record_budget_stop(
         &mut self,
         _task: TaskId,
@@ -581,7 +580,6 @@ impl<P, R> Frontier<P, R> {
         backend: &mut B,
     ) -> Result<Progress, BudgetKind> {
         if let Err(kind) = self.settled.settle(&before) {
-            #[cfg(test)]
             backend.record_budget_stop(task, &before, self.retired, kind);
             self.stopped = true;
             return Err(kind);
@@ -620,7 +618,6 @@ impl<P, R> Frontier<P, R> {
         let task = self.head.expect("a continuation has a head");
         assert!(self.tasks[&task].log.is_empty(), "absorb before continuing");
         if let Err(kind) = self.settled.settle(&before) {
-            #[cfg(test)]
             backend.record_budget_stop(task, &before, self.retired, kind);
             self.stopped = true;
             return Err(kind);

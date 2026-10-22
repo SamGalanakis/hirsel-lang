@@ -100,6 +100,28 @@ pub struct RecorderDestination {
     existing: Option<File>,
 }
 impl RecorderDestination {
+    /// Two host sidecars must never overwrite the same leaf, including
+    /// nonexistent leaves under aliased parents and existing hard links.
+    pub(crate) fn check_distinct(&self, other: &Self) -> Result<(), RunRefusal> {
+        let same_leaf = self.name == other.name
+            && identity(&self.parent.file).map_err(|e| invalid("recorder", e))?
+                == identity(&other.parent.file).map_err(|e| invalid("recorder", e))?;
+        let same_file = match (&self.existing, &other.existing) {
+            (Some(a), Some(b)) => {
+                identity(a).map_err(|e| invalid("recorder", e))?
+                    == identity(b).map_err(|e| invalid("recorder", e))?
+            }
+            _ => false,
+        };
+        if same_leaf || same_file {
+            return Err(invalid(
+                "trace_events",
+                "destination overlaps another host recording or sidecar",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn pin(path: &Path) -> Result<Self, RunRefusal> {
         let existing = match open_at(libc::AT_FDCWD, path.as_os_str(), libc::O_PATH) {
             Ok(file) => Some(file),

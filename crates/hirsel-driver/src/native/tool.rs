@@ -92,6 +92,23 @@ pub fn run_path_native_backend_with_validation(
     verify: hirsel_engine::Verify,
     validation: super::Validation,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    run_path_native_backend_with_trace_events(
+        path, launch, evidence, backend, output, verify, validation, None,
+    )
+}
+
+/// Native launch with a host-owned canonical Ordered trace destination. The
+/// runtime validates qualification before entry and writes only complete evidence.
+pub fn run_path_native_backend_with_trace_events(
+    path: &Path,
+    launch: crate::HostLaunch<'_>,
+    evidence: Option<&super::Evidence>,
+    backend: super::Backend,
+    output: Output<'_>,
+    verify: hirsel_engine::Verify,
+    validation: super::Validation,
+    trace_events: Option<&Path>,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
     let (inherit, json, stdout, stderr): (bool, bool, &mut dyn Write, &mut dyn Write) = match output
     {
@@ -183,6 +200,7 @@ pub fn run_path_native_backend_with_validation(
             proofs.as_ref(),
             backend,
             validation,
+            trace_events,
             inherit,
             stdout,
             stderr,
@@ -218,6 +236,7 @@ fn run(
     proofs: Option<&super::Proofs>,
     backend: super::Backend,
     validation: super::Validation,
+    trace_events: Option<&Path>,
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -264,6 +283,7 @@ fn run(
         tape,
         super::link::LiveRun {
             run,
+            trace_events,
             inherit,
             stdout,
             stderr,

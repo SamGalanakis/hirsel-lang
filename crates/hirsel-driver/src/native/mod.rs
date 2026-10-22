@@ -73,8 +73,8 @@ pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
 pub use runner::{Counts, Execution, Image, Mode, Runner, counts, runner};
 pub use stages::{NativeError, Options, ReadyProgram, StageName, Validation, build, build_program};
 pub use tool::{
-    Output, run_path_native, run_path_native_backend, run_path_native_backend_with_validation,
-    run_path_native_with_config,
+    Output, run_path_native, run_path_native_backend, run_path_native_backend_with_trace_events,
+    run_path_native_backend_with_validation, run_path_native_with_config,
 };
 
 /// The pinned LLVM release emission binds, for reports and artifacts.
