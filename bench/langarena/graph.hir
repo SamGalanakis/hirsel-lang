@@ -2,6 +2,7 @@
 // langarena: Graph::DFS
 // langarena: Graph::AStar
 // Port: LangArena 3c9f84d rust/src/benchmarks/graph_path.rs:11-316.
+// Bounded i32 adjacency follows the reference; list indices remain u64.
 // Queue storage uses a list and a head index; stack/heap order is unchanged.
 type Entry {
   score: i64,
@@ -61,7 +62,7 @@ fn random(mut seed: u64, max: u64) -> u64 {
 }
 
 type State {
-  adj: List[List[u64]],
+  adj: List[List[i32]],
   mode: u64,
   value_out: u32,
 }
@@ -94,7 +95,8 @@ fn astar(s: State) -> i64 {
       return int.widen(g[v])
     }
     let current_g = g[v]
-    for neighbor in s.adj[v] {
+    for neighbor_id in s.adj[v] {
+      let neighbor: u64 = int.narrow(neighbor_id)
       let tentative = current_g + 1
       if tentative < g[neighbor] {
         g[neighbor] = tentative
@@ -150,7 +152,8 @@ fn search(s: State) -> i64 {
       }
       visited[v] = true
     }
-    for neighbor in s.adj[v] {
+    for neighbor_id in s.adj[v] {
+      let neighbor: u64 = int.narrow(neighbor_id)
       if neighbor == target {
         if s.mode == 0 {
           return distance + 1
@@ -187,15 +190,19 @@ pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
   String
 ] {
   let n = harness.number(config, "vertices")
+  if n == 0 || n > 2147483647 {
+    return Error("graph vertices must be in 1..2147483647")
+  }
   let jumps = harness.number(config, "jumps")
   let jump_len = harness.number(config, "jump_len")
-  let mut adj: List[List[u64]] = []
+  let mut adj: List[List[i32]] = []
+  list.reserve(mut adj, n)
   for _ in 0u64..n {
     list.push(mut adj, [])
   }
   for i in 1u64..n {
-    list.push(mut adj[i], i - 1)
-    list.push(mut adj[i - 1], i)
+    list.push(mut adj[i], int.narrow(i - 1))
+    list.push(mut adj[i - 1], int.narrow(i))
   }
   let mut seed = 42u64
   for v in 0u64..n {
@@ -208,8 +215,9 @@ pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
       let bound: i64 = int.narrow(n)
       if u >= 0 && u < bound && u != vertex {
         let index: u64 = int.narrow(u)
-        list.push(mut adj[v], index)
-        list.push(mut adj[index], v)
+        let id: i32 = int.narrow(u)
+        list.push(mut adj[v], id)
+        list.push(mut adj[index], int.narrow(v))
       }
     }
   }

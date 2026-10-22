@@ -96,7 +96,7 @@ def fixture_sources():
     graph, maze = '', ''
     for i, adj in enumerate(graph_cases()):
         expected, _, _, _ = model(adj, 0, len(adj)-1, lambda v: len(adj)-1-v)
-        rows = '[' + ', '.join(hir_list(row) for row in adj) + ']'
+        rows = '[' + ', '.join(hir_list(row, 'i32') for row in adj) + ']'
         graph += f'''\n@test
 fn la_astar_9_graph_{i}(t: Test) {{
   let s = State(adj: {rows}, mode: 2, value_out: 0)
