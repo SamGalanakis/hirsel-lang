@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct Replay {
     session: Mutex<Option<Session>>,
     published: AtomicBool,
+    handles: Mutex<super::host::handles::Handles>,
 }
 
 impl Replay {
@@ -22,6 +23,7 @@ impl Replay {
         Ok(Arc::new(Self {
             session: Mutex::new(Some(session)),
             published: AtomicBool::new(false),
+            handles: Mutex::default(),
         }))
     }
 
@@ -32,8 +34,8 @@ impl Replay {
     /// scopes whose children use these admitted operations, task-set selection, serial gates and
     /// scalar mutex operations including kill/cause and scalar channels with
     /// endpoint aliases/closes, and explicit bounded host requests whose
-    /// results create no handles; general host dispatch and handle mapping
-    /// remain gated. Deterministic yielding object finalizers
+    /// results use admitted scalar/byte forms or creator-qualified Handle
+    /// creations; general host dispatch and other handle shapes remain gated. Deterministic yielding object finalizers
     /// must use only these admitted operations and task-owned detached images.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
@@ -363,6 +365,25 @@ impl Token {
         publication
             .map(|()| result)
             .map_err(|error| crate::stop::Stop::Diverged(error.0))
+    }
+
+    pub(super) fn host_result(
+        &self,
+        envelope: super::host::handles::Envelope,
+    ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
+        if envelope
+            .created
+            .as_ref()
+            .is_some_and(|created| created.path != self.path)
+        {
+            return Err(Stop::Diverged(
+                "host creation belongs to a different task".into(),
+            ));
+        }
+        self.shared.handles.lock().unwrap().substitute(envelope)
+    }
+    pub(super) fn host_resource(&self, word: u64) -> Stopped<crate::io_keys::Key> {
+        self.shared.handles.lock().unwrap().resource(word)
     }
 
     pub(super) fn host_positions(

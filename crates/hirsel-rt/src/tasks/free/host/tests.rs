@@ -589,7 +589,7 @@ fn native_concurrent_adapter_observations_retry_refusal_and_late_completion() {
                     .iter()
                     .filter_map(|record| {
                         if let hirsel_free::record::Record::Observation { bytes, .. } = record {
-                            Some(crate::tape_wire::decode(bytes).unwrap())
+                            Some(crate::tape_wire::decode::<Envelope>(bytes).unwrap().result)
                         } else {
                             None
                         }
@@ -599,7 +599,7 @@ fn native_concurrent_adapter_observations_retry_refusal_and_late_completion() {
                     .iter()
                     .filter_map(|record| {
                         if let hirsel_free::record::Record::Completion { bytes, .. } = record {
-                            Some(crate::tape_wire::decode(bytes).unwrap())
+                            Some(crate::tape_wire::decode::<Envelope>(bytes).unwrap().result)
                         } else {
                             None
                         }
@@ -1094,5 +1094,154 @@ fn replay_epoch_tape(bytes: &[u8], expected: &hirsel_free::projection::Projectio
             "{outcome:?}"
         );
         assert_eq!(&replay.finish().unwrap(), expected);
+    }
+}
+
+#[test]
+fn native_host_created_handles_persist_creator_and_resource_without_host_words() {
+    const WORDS: [u64; 3] = [
+        0x1f23_4567_89ab_cdef,
+        0x2f23_4567_89ab_cdef,
+        0x3f23_4567_89ab_cdef,
+    ];
+    for durable in [false, true] {
+        let recording =
+            super::super::record::Recording::new(b"native logical host handles", durable);
+        let install = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                let _role = role::Guard::new(ctx);
+                for (index, word) in WORDS.into_iter().enumerate() {
+                    let resource = crate::io_keys::Key(if index < 2 { 17 } else { 18 });
+                    crate::stop::check(
+                        ctx,
+                        prepare_created(
+                            ctx,
+                            Request::Stdout { io: 1 },
+                            KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
+                            resource,
+                        ),
+                    );
+                    assert!(crate::stop::check(ctx, claim(ctx)));
+                    crate::stop::check(ctx, invoke(ctx, |_| Completion::Handle(Ok(word))));
+                    crate::stop::check(ctx, ended(ctx));
+                    assert_eq!(
+                        crate::stop::check(ctx, complete(ctx)),
+                        Completion::Handle(Ok(word))
+                    );
+                    crate::stop::check(
+                        ctx,
+                        prepare_with_keys(
+                            ctx,
+                            Request::Print {
+                                stdout: word,
+                                bytes: vec![index as u8],
+                            },
+                            KeySet::new(vec![(resource, Mode::Exclusive)]),
+                        ),
+                    );
+                    assert!(crate::stop::check(ctx, claim(ctx)));
+                    crate::stop::check(ctx, invoke(ctx, |_| Completion::Unit(Ok(()))));
+                    crate::stop::check(ctx, ended(ctx));
+                    crate::stop::check(ctx, complete(ctx));
+                }
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let cut = recording
+            .recorder
+            .stop("returned", None)
+            .unwrap()
+            .unwrap()
+            .0;
+        let expected =
+            hirsel_free::projection::Projection::new("returned", &cut.progress, &recording.trace());
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        for word in WORDS {
+            assert!(
+                !bytes.windows(8).any(|window| window == word.to_le_bytes()),
+                "host word entered the tape"
+            );
+        }
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        let records = hirsel_free::record::decode(&parsed.logs[&Vec::new()]).unwrap();
+        let created: Vec<_> = records
+            .iter()
+            .filter_map(|record| {
+                if let hirsel_free::record::Record::Completion { bytes, .. } = record {
+                    crate::tape_wire::decode::<Envelope>(bytes).unwrap().created
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            created
+                .iter()
+                .map(|created| (created.path.clone(), created.ordinal, created.resource))
+                .collect::<Vec<_>>(),
+            vec![(vec![], 1, 17), (vec![], 2, 17), (vec![], 3, 18)]
+        );
+        for width in [1, 2, 8] {
+            let replay = super::super::replay::Replay::new(&bytes).unwrap();
+            let install = replay.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe { install.root(ctx) },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    for index in 0..3 {
+                        let completion = crate::stop::check(
+                            ctx,
+                            replay_request(
+                                ctx,
+                                Request::Stdout { io: 1 },
+                                KeySet::new(vec![(crate::io_keys::ROOT, Mode::Shared)]),
+                            ),
+                        );
+                        let Ok(Completion::Handle(Ok(local))) = completion else {
+                            panic!("a replay handle")
+                        };
+                        assert!(!WORDS.contains(&local));
+                        let resource = crate::stop::check(ctx, replay_created_key(ctx, local));
+                        assert_eq!(resource.0, if index < 2 { 17 } else { 18 });
+                        let completion = crate::stop::check(
+                            ctx,
+                            replay_request(
+                                ctx,
+                                Request::Print {
+                                    stdout: local,
+                                    bytes: vec![index as u8],
+                                },
+                                KeySet::new(vec![(resource, Mode::Exclusive)]),
+                            ),
+                        );
+                        assert_eq!(completion, Ok(Completion::Unit(Ok(()))));
+                    }
+                    super::super::replay::start(ctx);
+                    unreachable!("logical handle replay passed cut");
+                },
+            );
+            assert!(
+                matches!(outcome.ended, Err(Stop::Blocked(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(replay.finish().unwrap(), expected);
+        }
     }
 }

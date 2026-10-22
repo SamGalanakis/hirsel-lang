@@ -29,6 +29,7 @@ pub(crate) struct Task {
     shared: Arc<Recording>,
     log: hirsel_free::concurrent::Task,
     ordinal: u64,
+    host_handles: u64,
 }
 
 pub(super) struct Child {
@@ -59,6 +60,7 @@ pub(super) fn spawn<T>(
                     shared: child.shared,
                     log: writer.spawn_prepared(child.log),
                     ordinal: 0,
+                    host_handles: 0,
                 });
                 // SAFETY: the exclusively owned box was initialized above.
                 Some(unsafe { child.owner.assume_init() })
@@ -110,6 +112,15 @@ impl Recording {
         assert_ne!(id, u64::MAX, "host request identity overflow");
         self.recorder.prepare(id, request)
     }
+}
+
+pub(super) fn reserve_host_handle(ctx: *mut TaskCtx) -> u64 {
+    let task = unsafe { (*ctx).recording.as_mut() }.expect("recorded handle creation");
+    task.host_handles = task
+        .host_handles
+        .checked_add(1)
+        .expect("host handle ordinal overflow");
+    task.host_handles
 }
 
 /// Transfer the encoder into task-owned request storage before a synchronous
@@ -423,6 +434,7 @@ impl Recording {
                 shared: self.clone(),
                 log,
                 ordinal: 0,
+                host_handles: 0,
             }))
         };
     }
@@ -449,6 +461,7 @@ pub(crate) fn child(ctx: *mut TaskCtx) -> Stopped<Task> {
         shared,
         log,
         ordinal: 0,
+        host_handles: 0,
     })
 }
 

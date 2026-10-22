@@ -1,6 +1,6 @@
 //! Request ownership and native recorded host phases. This foundation does
-//! not admit general host operations: logical handle mapping, adapter routing
-//! and completion replay must wrap it before production activation.
+//! admits explicit bounded host tests only. General adapter routing,
+//! readiness, resource discovery and terminal activation remain gated.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};
 use crate::io_keys::{KeySet, Mode, Positions};
@@ -8,6 +8,8 @@ use crate::tape_wire::Wire;
 use hirsel_free::claim::Claim;
 use hirsel_free::phase::Progress;
 use std::sync::Arc;
+pub(super) mod handles;
+use handles::{Created, Envelope};
 
 pub(crate) struct Pending {
     shared: Arc<super::record::Recording>,
@@ -21,6 +23,7 @@ pub(crate) struct Pending {
     positions: Option<Positions>,
     attempt: u32,
     home_log: Option<Box<super::record::Task>>,
+    created: Option<Created>,
 }
 
 /// # Safety
@@ -62,6 +65,7 @@ pub(crate) unsafe fn prepare_with_keys(
             positions: None,
             attempt: 0,
             home_log: None,
+            created: None,
         }));
     }
     super::record::begin(ctx);
@@ -75,6 +79,26 @@ pub(crate) unsafe fn prepare_with_keys(
         writer.prepare(&(*pending).request);
         take_positions(&mut *pending, writer);
     })
+}
+
+/// # Safety
+/// As for prepare_with_keys. The adapter assigns resource by live alias
+/// discovery; it is a logical key, never an fd/inode or the new handle word.
+pub(crate) unsafe fn prepare_created(
+    ctx: *mut TaskCtx,
+    request: Request,
+    keys: KeySet,
+    resource: crate::io_keys::Key,
+) -> Stopped<()> {
+    unsafe { prepare_with_keys(ctx, request, keys) }?;
+    let ordinal = super::record::reserve_host_handle(ctx);
+    let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
+    pending.created = Some(Created {
+        path: pending.path.clone(),
+        ordinal,
+        resource: resource.0,
+    });
+    Ok(())
 }
 
 /// # Safety
@@ -159,9 +183,12 @@ unsafe fn issue_home_loan(
                 if matches!(claimed, Ok(true)) {
                     let completion =
                         call.take().expect("one bounded home call")(pending.request.buffers());
-                    pending.encoded.clear();
-                    completion.encode(&mut pending.encoded);
+                    let encoded = handles::encode(pending, &completion);
                     pending.completion = Some(completion);
+                    if let Err(stop) = encoded {
+                        issued = Some(Err(stop));
+                        return;
+                    }
                 }
                 issued = Some(claimed);
             })
@@ -217,10 +244,9 @@ unsafe fn invoke_result(
         call(unsafe { (*pending).request.buffers() })
     };
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() };
-    pending.encoded.clear();
-    completion.encode(&mut pending.encoded);
+    let encoded = handles::encode(pending, &completion);
     pending.completion = Some(completion);
-    Ok(())
+    encoded
 }
 
 /// # Safety
@@ -350,8 +376,8 @@ pub(crate) unsafe fn complete_result(
         .expect("one returned host completion"))
 }
 
-/// Replay-only request ownership. This initial admission excludes completions
-/// that create host handles: those require a persisted resource mapping.
+/// Replay-only request ownership. Handle creations carry an explicit
+/// creator-qualified identity and persisted resource; other shapes are gated.
 pub(crate) struct ReplayHost {
     _request: Request,
     keys: Vec<(String, bool)>,
@@ -361,7 +387,7 @@ pub(crate) struct ReplayHost {
 }
 
 /// # Safety
-/// Replay admission, role held; request and completion create no host handle.
+/// Replay admission, role held; result uses an admitted payload/handle shape.
 /// The caller delivers the result then checks replay::start before pure code.
 pub(crate) unsafe fn replay_request(
     ctx: *mut TaskCtx,
@@ -405,14 +431,16 @@ pub(crate) unsafe fn replay_request(
                 let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
                 let bytes = token.host_observation(&host.positions)?;
                 host.positions.clear();
-                let result = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+                let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+                let result = token.host_result(envelope)?;
                 if !matches!(
                     &result,
                     Err(_)
                         | Ok(Completion::Unit(_)
                             | Completion::Size(_)
                             | Completion::Bytes(_)
-                            | Completion::Wait(_))
+                            | Completion::Wait(_)
+                            | Completion::Handle(_))
                 ) {
                     return Err(Stop::Diverged(
                         "host result requires unsupported logical handle mapping".into(),
@@ -446,7 +474,8 @@ pub(crate) unsafe fn replay_request(
         let token = super::replay::token(ctx).unwrap();
         token.publish(ctx, Phase::Done, || {
             let bytes = token.host_completion()?;
-            let result = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+            let envelope = crate::tape_wire::decode(&bytes).map_err(Stop::Diverged)?;
+            let result = token.host_result(envelope)?;
             let host = unsafe { (*ctx).replay_host.as_deref_mut().unwrap() };
             if host.observed.as_ref() != Some(&result) {
                 return Err(Stop::Diverged(
@@ -459,6 +488,14 @@ pub(crate) unsafe fn replay_request(
     }
     let mut host = unsafe { (*ctx).replay_host.take().unwrap() };
     Ok(host.observed.take().unwrap())
+}
+
+/// Keys of a handle created by an admitted host completion, reconstructed
+/// solely from tape metadata. A missing mapping diverges without adapter use.
+pub(crate) fn replay_created_key(ctx: *mut TaskCtx, word: u64) -> Stopped<crate::io_keys::Key> {
+    super::replay::token(ctx)
+        .expect("host replay admission")
+        .host_resource(word)
 }
 
 unsafe fn replay_wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
