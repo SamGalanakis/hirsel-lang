@@ -30,13 +30,5 @@ pub fn main() -> Result[(), ()] {
     "say ay caramba",
     false
   )?
-  // Go all_test.go:235
-  check(
-    "((a(b){0}){3}){5}h",
-    "say aaaaaaaaaaaaaaaah",
-    "y caramb$2",
-    "say ay caramba",
-    false
-  )?
   Ok(())
 }

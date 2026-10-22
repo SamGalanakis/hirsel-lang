@@ -148,12 +148,17 @@ def main():
             original = rows[batch:batch + 8]
             heavy = group == 're2' and any('acegikmoqsuwy' in call for _, call in original) or group == 'replacement' and batch == 64
             size = 2 if heavy else 8
-            for part in range(0, len(original), size):
-                suffix = '' if part == 0 else f'-part-{part // size + 1}'
+            chunks = [original[i:i + size] for i in range(0, len(original), size)]
+            if group == 'replacement' and batch == 64:
+                # Each nested counted-capture replacement passes under 1M;
+                # the two together exceed it on the reference interpreter.
+                chunks[-1:] = [[original[-2]], [original[-1]]]
+            for part, chunk in enumerate(chunks):
+                suffix = '' if part == 0 else f'-part-{part + 1}'
                 path = OUT / f'SEM-3-regex-captures-{group}-{batch // 8 + 1}{suffix}-run.hir'
                 helper = CAPTURE if group in ('captures', 're2') else REPLACE if group == 'replacement' else ''
                 content = HEADER + helper + '\npub fn main() -> Result[(), ()] {\n'
-                for origin, call in original[part:part + size]:
+                for origin, call in chunk:
                     content += f'  // Go {origin}\n{call}\n'
                     counts[group] += 1
                 path.write_text(content + '  Ok(())\n}\n')

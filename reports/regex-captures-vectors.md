@@ -6,7 +6,7 @@ Go `ebe2feefc400f813aefdc8a036e66d2619da6649`. Expectations are copied from the 
 - re2: 1636 rows
 - replacement: 87 rows
 - invalid: 9 rows
-- Corpus programs: 244
+- Corpus programs: 245
 
 Every excluded row:
 

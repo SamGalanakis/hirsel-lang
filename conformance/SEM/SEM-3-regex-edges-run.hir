@@ -32,6 +32,8 @@ fn invalid(pattern: String, offset: u64) {
   )
 }
 
+// Matching checks are separate from absence/syntax checks to retain the
+// 1M interpreter-step budget after capture-thread support.
 pub fn main() -> Result[(), ()] {
   span("", "", 0, 0)?
   span("", "abc", 0, 0)?
@@ -68,23 +70,5 @@ pub fn main() -> Result[(), ()] {
   span("[a-]+", "--a", 0, 3)?
   span("[]a]+", "]aa", 0, 3)?
   span("\\Aé\\z", "é", 0, 2)?
-  absent(".", "\n")?
-  absent("^a", "ba")?
-  absent("a$", "a\n")?
-  absent("\\d", "٣")?
-  absent("\\s", "\u{000b}")?
-  absent("a{2}", "a")?
-  absent("a{2,4}b", "aaaaac")?
-  invalid("é(", 3)
-  invalid("é[", 3)
-  invalid("a**", 2)
-  invalid("(?=a)", 2)
-  invalid("\\1", 1)
-  invalid("[z-a]", 3)
-  invalid("a{3,2}", 6)
-  invalid("*a", 0)
-  invalid(")", 0)
-  invalid("[\\d-a]", 4)
-  invalid("[[:alpha:]]", 1)
   Ok(())
 }

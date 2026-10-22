@@ -1,0 +1,56 @@
+// rule: SEM-3
+// expect: run
+fn span(pattern: String, input: String, start: u64, end: u64) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(
+    regex.find(re, input, 10000) == Ok(Some(regex.Span(start: start, end: end))),
+    TextInvariant()
+  )
+  failure.check(regex.is_match(re, input, 10000) == Ok(true), TextInvariant())
+  Ok(())
+}
+
+fn absent(pattern: String, input: String) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find(re, input, 10000) == Ok(None()), TextInvariant())
+  Ok(())
+}
+
+fn invalid(pattern: String, offset: u64) {
+  failure.check(
+    match regex.compile(pattern, 1000) {
+      Error(Syntax(at)) => at == offset,
+      _ => false,
+    },
+    TextInvariant()
+  )
+}
+
+// Original absence/syntax assertions from regex-edges-run, all retained.
+pub fn main() -> Result[(), ()] {
+  absent(".", "\n")?
+  absent("^a", "ba")?
+  absent("a$", "a\n")?
+  absent("\\d", "٣")?
+  absent("\\s", "\u{000b}")?
+  absent("a{2}", "a")?
+  absent("a{2,4}b", "aaaaac")?
+  invalid("é(", 3)
+  invalid("é[", 3)
+  invalid("a**", 2)
+  invalid("(?=a)", 2)
+  invalid("\\1", 1)
+  invalid("[z-a]", 3)
+  invalid("a{3,2}", 6)
+  invalid("*a", 0)
+  invalid(")", 0)
+  invalid("[\\d-a]", 4)
+  invalid("[[:alpha:]]", 1)
+  Ok(())
+}

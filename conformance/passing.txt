@@ -6066,8 +6066,10 @@ conformance/SEM/SEM-3-regex-captures-replacement-8-run.hir
 conformance/SEM/SEM-3-regex-captures-replacement-9-part-2-run.hir
 conformance/SEM/SEM-3-regex-captures-replacement-9-part-3-run.hir
 conformance/SEM/SEM-3-regex-captures-replacement-9-part-4-run.hir
+conformance/SEM/SEM-3-regex-captures-replacement-9-part-5-run.hir
 conformance/SEM/SEM-3-regex-captures-replacement-9-run.hir
 conformance/SEM/SEM-3-regex-depth-run.hir
+conformance/SEM/SEM-3-regex-edges-part-2-run.hir
 conformance/SEM/SEM-3-regex-edges-run.hir
 conformance/SEM/SEM-3-regex-extract-run.hir
 conformance/SEM/SEM-3-regex-find-001-run.hir
