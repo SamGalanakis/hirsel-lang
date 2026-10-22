@@ -66,6 +66,7 @@ pub(super) fn request_keys(
     let keys = match request {
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
+        | R::Signals { io: 1 }
         | R::Stdin { io: 1 }
         | R::Random { io: 1 }
         | R::Stdout { io: 1 }
@@ -86,7 +87,8 @@ pub(super) fn request_keys(
         R::Monotonic { clock }
         | R::Wall { clock }
         | R::SleepUntil { clock, .. }
-        | R::RandomBytes { random: clock, .. } => {
+        | R::RandomBytes { random: clock, .. }
+        | R::SignalWait { signals: clock, .. } => {
             let (key, kind) = identity(*clock)?;
             if kind != Kind::Other {
                 return Err(Stop::Diverged("native scalar resource kind differs".into()));
