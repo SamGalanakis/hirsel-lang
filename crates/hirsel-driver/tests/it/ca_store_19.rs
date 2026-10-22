@@ -2,8 +2,8 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 #[derive(Default)]
@@ -11,6 +11,10 @@ struct Observed {
     inner: store::MemStore,
     reads: AtomicUsize,
     writes: AtomicUsize,
+    content_reads: AtomicUsize,
+    content_writes: AtomicUsize,
+    indexes: Mutex<std::collections::BTreeSet<hirsel_syntax::ContentHash>>,
+    forbid_content_reads: AtomicBool,
 }
 impl store::ResultStore for Observed {
     fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
@@ -19,7 +23,20 @@ impl store::ResultStore for Observed {
     }
     fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
         self.writes.fetch_add(1, Ordering::Relaxed);
+        self.indexes.lock().unwrap().insert(key.0);
         store::ResultStore::put(&self.inner, key, bytes);
+    }
+    fn get_content(&self, reference: store::Reference) -> Option<store::Bytes> {
+        assert!(
+            !self.forbid_content_reads.load(Ordering::Relaxed),
+            "stale dependency action materialized a payload"
+        );
+        self.content_reads.fetch_add(1, Ordering::Relaxed);
+        store::ResultStore::get_content(&self.inner, reference)
+    }
+    fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+        self.content_writes.fetch_add(1, Ordering::Relaxed);
+        store::ResultStore::put_content(&self.inner, domain, bytes)
     }
     fn name(&self) -> &'static str {
         "observed-completion"
@@ -56,6 +73,8 @@ fn compact_store_hits_do_not_lookup_or_materialize_modes_bodies() {
             assert!(seeded.iter().all(|o| o.result.is_ok()));
             store.reads.store(0, Ordering::Relaxed);
             store.writes.store(0, Ordering::Relaxed);
+            store.content_reads.store(0, Ordering::Relaxed);
+            store.content_writes.store(0, Ordering::Relaxed);
             let (mut fresh, actual) = publish(store.clone(), source, jobs);
             assert!(actual.iter().all(|o| o.result.is_ok()));
             assert_eq!(
@@ -64,6 +83,8 @@ fn compact_store_hits_do_not_lookup_or_materialize_modes_bodies() {
                 "one compact record per definition; no Modes lookup"
             );
             assert_eq!(store.writes.load(Ordering::Relaxed), 0);
+            assert_eq!(store.content_writes.load(Ordering::Relaxed), 0);
+            assert_eq!(store.content_reads.load(Ordering::Relaxed), 2);
             assert_eq!(fresh.store_adoptions(), 2);
             for output in &actual {
                 for phase in [QueryKind::Check, QueryKind::Modes] {
@@ -78,7 +99,9 @@ fn compact_store_hits_do_not_lookup_or_materialize_modes_bodies() {
             let changed = source
                 .replace("x:u32", "x:u64")
                 .replace("->u32{x+1u32}", "->u64{x+1u64}");
+            store.forbid_content_reads.store(true, Ordering::Relaxed);
             let (invalidated_engine, invalidated) = publish(store.clone(), &changed, jobs);
+            store.forbid_content_reads.store(false, Ordering::Relaxed);
             let (cold_engine, cold) = publish(Arc::new(Observed::default()), &changed, jobs);
             let render = |engine: &QueryEngine, outcomes: &[PublishedResult]| {
                 outcomes
@@ -240,13 +263,13 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             let source = "fn value()->u32{1u32}\nfn caller()->u32{value()}\n";
             let (_, outputs) = publish(store.clone(), source, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
-            let count = store.inner.len();
+            let count = store.indexes.lock().unwrap().len();
             assert_eq!(count, 4, "Modes and Summary are separate domains");
             let changed = source.replace("{1u32}", "{2u32}");
             let (edited, outputs) = publish(store.clone(), &changed, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
             assert_eq!(
-                store.inner.len(),
+                store.indexes.lock().unwrap().len(),
                 count,
                 "body edits do not allocate new addresses"
             );

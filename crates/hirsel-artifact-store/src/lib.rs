@@ -53,6 +53,14 @@ pub struct Reference {
 }
 
 impl Domain {
+    /// The canonical reference to these bytes, without publication or authority.
+    pub fn reference(self, bytes: &[u8]) -> Option<Reference> {
+        (bytes.len() <= MAX_RECORD).then(|| Reference {
+            output: self.output(bytes),
+            domain: self,
+            len: bytes.len() as u64,
+        })
+    }
     fn output(self, bytes: &[u8]) -> Output {
         Output(ContentHash::of_parts(
             "hirsel.artifact.output.v1",

@@ -1932,6 +1932,14 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         fn put(&self, _: &store::EntryKey, _: &[u8]) {
             panic!("query publication must identify its product kind");
         }
+        fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+            if domain.kind == QueryKind::Summary as u32 + 16 {
+                assert_eq!(std::thread::current().id(), self.home);
+            } else {
+                assert_eq!(domain.kind, QueryKind::Modes as u32 + 16);
+            }
+            domain.reference(bytes)
+        }
         fn put_query(&self, kind: QueryKind, _: &store::EntryKey, _: store::Action, _: &[u8]) {
             if kind == QueryKind::Summary {
                 assert_eq!(std::thread::current().id(), self.home);

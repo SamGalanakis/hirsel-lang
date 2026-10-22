@@ -24,16 +24,13 @@ fn key(name: &str) -> EntryKey {
         LoweringPolicy::Comptime,
     )
 }
-fn variant(sig: &str, payload: &str) -> Variant {
-    Variant {
-        inputs: h("source"),
-        reads: Reads::from_vec(vec![(
-            ReadKey::Signature(DefId::intern(&path("dep"))),
-            h(sig),
-        )])
-        .unwrap(),
-        payload: payload.as_bytes().into(),
-    }
+fn variant(sig: &str, payload: &str) -> VariantRef {
+    let reads = Reads::from_vec(vec![(
+        ReadKey::Signature(DefId::intern(&path("dep"))),
+        h(sig),
+    )])
+    .unwrap();
+    VariantRef::publish(&MemStore::default(), &key("a"), reads, payload.as_bytes()).unwrap()
 }
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -99,10 +96,18 @@ fn entries_hold_four_variants_and_hit_on_matching_reads() {
     assert_eq!(entry.variants.len(), VARIANTS);
     entry.insert(variant("s3", "p3 again"));
     assert_eq!(entry.variants.len(), VARIANTS, "same reads replace");
-    assert_eq!(&*entry.variants[0].payload, b"p3 again");
+    assert_eq!(
+        entry.variants[0].output,
+        product_domain(QueryKind::Check)
+            .reference(b"p3 again")
+            .unwrap()
+    );
     let dep = ReadKey::Signature(DefId::intern(&path("dep")));
     let current = |sig: &'static str| move |k: &ReadKey| (*k == dep).then(|| h(sig));
-    assert_eq!(&*entry.hit(current("s4")).unwrap().payload, b"p4");
+    assert_eq!(
+        entry.hit(current("s4")).unwrap().output,
+        product_domain(QueryKind::Check).reference(b"p4").unwrap()
+    );
     assert!(entry.hit(current("s0")).is_none(), "evicted");
     assert!(entry.hit(current("other")).is_none());
     let decoded = Entry::decode(&entry.encode()).unwrap();
@@ -281,8 +286,13 @@ fn dir_concurrent_handles_publish_complete_records_during_eviction() {
 fn bound_entries_reject_wrong_keys_schema_truncation_and_damaged_records() {
     let store = MemStore::default();
     let mut entry = Entry::default();
-    let mut v = variant("sig", "checked output");
-    v.bind_payload(&key("a"));
+    let v = VariantRef::publish(
+        &store,
+        &key("a"),
+        variant("sig", "unused").reads,
+        b"checked output",
+    )
+    .unwrap();
     entry.insert(v);
     let bytes = entry.encode_for(&key("a"));
     store.put(&key("a"), &bytes);
@@ -313,8 +323,8 @@ fn bound_entries_reject_wrong_keys_schema_truncation_and_damaged_records() {
     // payload unconditional. The immutable per-payload witness still rejects.
     entry.variants[0].reads = Reads::empty();
     store.put(&key("a"), &entry.encode_for(&key("a")));
-    let mut loaded = Entry::load(&store, &key("a"));
-    assert!(loaded.variants[0].unbind_payload(&key("a")).is_none());
+    let loaded = Entry::load(&store, &key("a"));
+    assert!(loaded.variants[0].resolve(&store, &key("a")).is_none());
 }
 
 #[test]
@@ -331,34 +341,50 @@ fn logical_addresses_survive_edits_and_actions_bind_complete_inputs() {
         first.0, changed.0,
         "logical address excludes source content"
     );
-    let mut old = variant("signature1", "same result");
-    old.inputs = first.1;
-    let mut new = old.clone();
-    new.inputs = changed.1;
+    let store = MemStore::default();
+    let old = VariantRef::publish(
+        &store,
+        &first,
+        variant("signature1", "unused").reads,
+        b"same result",
+    )
+    .unwrap();
+    let new = VariantRef::publish(&store, &changed, old.reads.clone(), b"same result").unwrap();
     assert_ne!(old.action(&first), new.action(&changed));
-    new.inputs = first.1;
-    new.reads = variant("signature2", "unused").reads;
-    assert_ne!(old.action(&first), new.action(&first));
-    old.bind_payload(&first);
+    assert_eq!(
+        old.output, new.output,
+        "equal outputs ignore source actions"
+    );
+    let other_reads = VariantRef::publish(
+        &store,
+        &first,
+        variant("signature2", "unused").reads,
+        b"same result",
+    )
+    .unwrap();
+    assert_ne!(old.action(&first), other_reads.action(&first));
+    assert_eq!(
+        old.output, other_reads.output,
+        "equal outputs ignore dependency witnesses"
+    );
     let mut entry = Entry::default();
     entry.insert(old.clone());
-    new.inputs = changed.1;
-    new.bind_payload(&changed);
     entry.insert(new);
     assert_eq!(
         entry.variants.len(),
         2,
         "variants retain prior source actions"
     );
-    let store = MemStore::default();
     store.put(&first, &entry.encode_for(&first));
     assert_eq!(Entry::load(&store, &changed), entry);
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.len(), 2, "one index and one shared output");
     let mut lost_inputs = old.clone();
     lost_inputs.inputs = changed.1;
-    assert!(lost_inputs.unbind_payload(&first).is_none());
-    assert!(old.unbind_payload(&first).is_some());
-    assert_eq!(&*old.payload, b"same result");
+    assert!(lost_inputs.resolve(&store, &first).is_none());
+    assert_eq!(
+        &*old.resolve(&store, &first).unwrap().payload,
+        b"same result"
+    );
 }
 
 #[test]
@@ -374,9 +400,8 @@ fn directory_roots_keep_address_action_and_product_domain_distinct() {
         LoweringPolicy::Comptime,
     );
     let mut entry = Entry::default();
-    let mut output = variant("dep", "body");
-    output.inputs = first.1;
-    output.bind_payload(&first);
+    let output =
+        VariantRef::publish(&store, &first, variant("dep", "unused").reads, b"body").unwrap();
     entry.insert(output);
     let action = entry.action(&first);
     store.put_query(first.2, &first, action, &entry.encode_for(&first));
@@ -388,7 +413,7 @@ fn directory_roots_keep_address_action_and_product_domain_distinct() {
     assert_ne!(association.action.0, first.0);
     assert_eq!(
         association.reference.domain.kind,
-        QueryKind::Check as u32 + 16
+        QueryKind::Check as u32 + 256
     );
     assert_eq!(
         Entry::load(&store, &changed),
@@ -402,4 +427,67 @@ fn directory_roots_keep_address_action_and_product_domain_distinct() {
         "a forged key cannot cross product domains"
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn action_index_admission_does_not_fetch_content_and_missing_outputs_miss() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct Counted {
+        inner: MemStore,
+        content_reads: AtomicUsize,
+    }
+    impl ResultStore for Counted {
+        fn get(&self, key: &EntryKey) -> Option<Bytes> {
+            self.inner.get(key)
+        }
+        fn put(&self, key: &EntryKey, bytes: &[u8]) {
+            self.inner.put(key, bytes);
+        }
+        fn get_content(&self, reference: Reference) -> Option<Bytes> {
+            self.content_reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.get_content(reference)
+        }
+        fn name(&self) -> &'static str {
+            "counted-content"
+        }
+    }
+    let store = Counted::default();
+    let key = key("a");
+    let mut entry = Entry::default();
+    let variant = VariantRef::publish(
+        &store,
+        &key,
+        variant("before", "unused").reads,
+        b"one immutable output",
+    )
+    .unwrap();
+    entry.insert(variant.clone());
+    let index = entry.encode_for(&key);
+    store.put(&key, &index);
+    let loaded = Entry::load(&store, &key);
+    assert!(loaded.hit(|_| Some(h("after"))).is_none());
+    assert_eq!(store.content_reads.load(Ordering::Relaxed), 0);
+    let hit = loaded.hit(|_| Some(h("before"))).unwrap();
+    assert_eq!(
+        &*hit.resolve(&store, &key).unwrap().payload,
+        b"one immutable output"
+    );
+    assert_eq!(store.content_reads.load(Ordering::Relaxed), 1);
+    let mut wrong_domain = hit.clone();
+    wrong_domain.output.domain.kind += 1;
+    assert!(wrong_domain.resolve(&store, &key).is_none());
+    let mut oversized = hit.clone();
+    oversized.output.len = hirsel_artifact_store::MAX_RECORD as u64 + 1;
+    assert!(oversized.resolve(&store, &key).is_none());
+    store.inner.take();
+    store.put(&key, &index);
+    let loaded = Entry::load(&store, &key);
+    assert!(
+        loaded
+            .hit(|_| Some(h("before")))
+            .unwrap()
+            .resolve(&store, &key)
+            .is_none()
+    );
 }
