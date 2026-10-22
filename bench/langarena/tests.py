@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import build
 import compare
+from tests_crc32_9 import CRC32Recurrence
 
 ROOT = build.ROOT
 HERE = build.HERE
