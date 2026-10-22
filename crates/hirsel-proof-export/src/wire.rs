@@ -306,7 +306,7 @@ fn probe(w: &Writer<Cx>, write: impl FnOnce(&mut Writer<Cx>)) -> Vec<TypeId> {
     if w.context.content.is_some() {
         cx.content = Some(Default::default());
     }
-    let mut scratch = Writer::with_context(cx);
+    let mut scratch = Writer::discarding(cx);
     write(&mut scratch);
     scratch.finish().1.probe.unwrap_or_default()
 }

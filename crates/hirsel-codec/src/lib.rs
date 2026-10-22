@@ -88,6 +88,7 @@ pub fn line_column(text: &str, offset: usize) -> (u32, u32) {
 pub struct Writer<C = ()> {
     out: String,
     depth: usize,
+    discard: bool,
     pub context: C,
 }
 
@@ -97,10 +98,20 @@ impl<C> Writer<C> {
         Self {
             out: String::new(),
             depth: 0,
+            discard: false,
             context,
         }
     }
-    /// The written text and the context.
+    /// Visit a snapshot with `context`, without allocating or formatting text.
+    /// Snapshot implementations and context observations run exactly as for an
+    /// emitting writer. Like serde's `IgnoredAny`, only scalar output is ignored.
+    pub fn discarding(context: C) -> Self {
+        Self {
+            discard: true,
+            ..Self::with_context(context)
+        }
+    }
+    /// The written text (empty for a discard writer) and the context.
     pub fn finish(self) -> (String, C) {
         (self.out, self.context)
     }
@@ -110,6 +121,9 @@ impl<C> Writer<C> {
         }
     }
     pub fn open(&mut self, tag: &str) {
+        if self.discard {
+            return;
+        }
         if self.depth > 0 {
             self.out.push('\n');
             let mut indent = 2 * self.depth;
@@ -124,14 +138,23 @@ impl<C> Writer<C> {
         self.depth += 1;
     }
     pub fn close(&mut self) {
+        if self.discard {
+            return;
+        }
         self.depth -= 1;
         self.out.push(')');
     }
     pub fn uint(&mut self, n: u128) {
+        if self.discard {
+            return;
+        }
         self.separate();
         push_decimal(&mut self.out, n);
     }
     pub fn int(&mut self, n: i128) {
+        if self.discard {
+            return;
+        }
         self.separate();
         if n < 0 {
             self.out.push('-');
@@ -139,6 +162,9 @@ impl<C> Writer<C> {
         push_decimal(&mut self.out, n.unsigned_abs());
     }
     pub fn text(&mut self, s: &str) {
+        if self.discard {
+            return;
+        }
         self.separate();
         self.out.push('"');
         for c in s.chars() {
@@ -154,6 +180,9 @@ impl<C> Writer<C> {
         self.out.push('"');
     }
     pub fn bytes(&mut self, b: &[u8]) {
+        if self.discard {
+            return;
+        }
         self.separate();
         self.out.push('#');
         push_hex(&mut self.out, b);
@@ -881,6 +910,31 @@ mod tests {
                 .map(|i| NameIx(i as u32))
                 .ok_or_else(|| r.error("unknown name"))
         }
+    }
+
+    #[test]
+    fn discard_writer_preserves_observations_without_allocating_text() {
+        #[derive(Default)]
+        struct Paths(Vec<DefPath>);
+        impl Observe for Paths {
+            fn def_path(&mut self, path: &DefPath) {
+                self.0.push(path.clone());
+            }
+        }
+        let value = vec![DefPath::core("B"), DefPath::core("A"), DefPath::core("B")];
+        let mut emit = Writer::with_context(Paths::default());
+        value.write(&mut emit);
+        let mut discard = Writer::discarding(Paths::default());
+        value.write(&mut discard);
+        discard.uint(u128::MAX);
+        discard.int(i128::MIN);
+        discard.text("\u{0}\n🦀");
+        discard.bytes(&[0, 255]);
+        assert_eq!(discard.context.0, emit.context.0);
+        assert_eq!(discard.context.0, value);
+        assert_eq!(discard.out.capacity(), 0);
+        assert!(discard.finish().0.is_empty());
+        assert!(!emit.finish().0.is_empty());
     }
 
     #[test]

@@ -59,8 +59,12 @@ pub(crate) struct Naming {
 
 impl Naming {
     pub(crate) fn reference(&mut self, path: &DefPath, collecting: bool) -> String {
-        if collecting && self.seen.insert(path.clone()) {
-            self.named.push(path.clone());
+        if collecting {
+            if self.seen.insert(path.clone()) {
+                self.named.push(path.clone());
+            }
+            // Collection observes the path but never needs its wire spelling.
+            return String::new();
         }
         if let Some(&member) = self.group.get(path) {
             if !collecting {
@@ -131,7 +135,12 @@ fn encode(
 
 /// Every definition `content` names, first occurrence first.
 pub fn references(types: &Arc<TypeInterner>, content: &DefinitionContent) -> Vec<DefPath> {
-    encode(types, content, Naming::default()).1.named
+    let mut cx = Cx::new(Rc::new(|_| Location::unknown()), types.clone());
+    cx.content = Some(Naming::default());
+    cx.begin_collect();
+    let mut w = Writer::discarding(cx);
+    write_content(content, &mut w);
+    w.finish().1.content.expect("content naming").named
 }
 
 /// One recursive group's hash preimage (LANG-6): what a code store keeps
@@ -453,6 +462,121 @@ pub fn call_sites(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The previous two-pass, text-producing implementation is the oracle.
+    /// Retain an allocating collect pass too, so changes to scratch sinks are
+    /// checked independently of the new `references` entry point.
+    fn emitted_references(types: &Arc<TypeInterner>, content: &DefinitionContent) -> Vec<DefPath> {
+        let mut cx = Cx::new(Rc::new(|_| Location::unknown()), types.clone());
+        cx.content = Some(Naming::default());
+        cx.begin_collect();
+        let mut w = Writer::with_context(cx);
+        write_content(content, &mut w);
+        let (_, mut cx) = w.finish();
+        cx.begin_emit();
+        let mut w = Writer::with_context(cx);
+        write_content(content, &mut w);
+        w.finish().1.content.unwrap().named
+    }
+
+    #[test]
+    fn collected_references_match_emission_for_recursive_nominal_group_and_role_vectors() {
+        use hirsel_syntax::DefId;
+        use hirsel_types::{
+            GenericArgument, HeapRole, NominalRoles, Signature, SignatureKind, Type, TypeKind,
+        };
+        let types = TypeInterner::new(None);
+        let a = DefPath::core("A");
+        let b = DefPath::core("B");
+        let role = DefPath::core("Role");
+        let recursive = types.intern_graph(2, |ids| {
+            vec![
+                Type::with_kind(TypeKind::Tuple(vec![ids[1], ids[1]].into())),
+                Type::with_kind(TypeKind::Named {
+                    definition: DefId::intern(&b),
+                    arguments: vec![GenericArgument::Type(ids[0])].into(),
+                }),
+            ]
+        });
+        let mut signature = Signature {
+            definition: DefId::intern(&a),
+            metadata: Default::default(),
+            kind: SignatureKind::Const {
+                ty: recursive[0],
+                generics: vec![].into(),
+            },
+            fingerprint: ContentHash([7; 32]),
+        };
+        for roles in [false, true] {
+            if roles {
+                signature.metadata.roles = NominalRoles {
+                    unsafe_capability: Some(role.clone()),
+                    result_type: Some(role.clone()),
+                    tasks_capability: Some(role.clone()),
+                    scope_capability: Some(role.clone()),
+                    heap: Some(HeapRole {
+                        arena: role.clone(),
+                        operation: role.clone(),
+                    }),
+                };
+                signature.metadata.recursive_group = Some(ContentHash([9; 32]));
+            }
+            let signature = Arc::new(signature.clone());
+            for content in [
+                DefinitionContent::Body {
+                    signature: signature.clone(),
+                    tir: None,
+                },
+                DefinitionContent::Body {
+                    signature: signature.clone(),
+                    tir: Some(Arc::new(Definition {
+                        caller_bodies: vec![],
+                        protocol_associations: vec![],
+                        types: Arc::from([]),
+                        path: DefId::intern(&b),
+                        signature_hash: ContentHash([3; 32]),
+                        bodies: vec![],
+                        entry: BodyId(0),
+                        contracts: vec![],
+                    })),
+                },
+                DefinitionContent::Named {
+                    signature,
+                    source: vec![b"(Ref \"ignored\")".to_vec()],
+                    reads: vec![b.clone(), a.clone(), role.clone(), b.clone()],
+                },
+            ] {
+                let old = emitted_references(&types, &content);
+                let new = references(&types, &content);
+                assert_eq!(new, old);
+                // A type's nominal appears before its owning signature, even
+                // through a recursive graph. Duplicate reads preserve order.
+                assert_eq!(&new[..2], &[b.clone(), a.clone()]);
+                assert_eq!(
+                    new.contains(&role),
+                    matches!(content, DefinitionContent::Named { .. })
+                );
+                for group in [
+                    BTreeMap::new(),
+                    BTreeMap::from([(a.clone(), 0), (b.clone(), 1)]),
+                ] {
+                    let naming = Naming {
+                        hashes: BTreeMap::from([
+                            (a.clone(), ContentHash([1; 32])),
+                            (b.clone(), ContentHash([2; 32])),
+                            (role.clone(), ContentHash([3; 32])),
+                        ]),
+                        group,
+                        ..Default::default()
+                    };
+                    let (text, observed) = encode(&types, &content, naming);
+                    assert_eq!(observed.named, new);
+                    assert!(observed.missing.is_none());
+                    assert!(!content_references(&text).unwrap().is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn content_references_read_ref_nodes_only_and_refuse_malformed_text() {

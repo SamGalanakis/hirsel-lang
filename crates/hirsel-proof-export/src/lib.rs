@@ -213,7 +213,7 @@ pub(crate) fn collect(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
     let types = w.context.types.clone();
     let mut cx = std::mem::replace(&mut w.context, Cx::new(locator, types));
     cx.begin_collect();
-    let mut scratch = Writer::with_context(cx);
+    let mut scratch = Writer::discarding(cx);
     write(&mut scratch);
     let (_, mut cx) = scratch.finish();
     cx.begin_emit();
