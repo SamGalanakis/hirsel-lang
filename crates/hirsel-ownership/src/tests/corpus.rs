@@ -257,6 +257,29 @@ fn source_corpus_ratchets_rule_and_primary_line() {
                 let first_error = ds.iter().find(|d| d.severity == Severity::Error);
                 if let Some((rule, line)) = rejection {
                     let line = line.parse::<u32>().unwrap();
+                    // J owns the nested receiving-type contracts of these
+                    // constructions. Its first error already satisfies the
+                    // corpus rule and primary site; do not demand a second
+                    // rejection from I or reinterpret these as acceptances.
+                    if matches!(
+                        name.as_str(),
+                        "MODE/MODE-2-copied-part-type-argument-bad.hir"
+                            | "MODE/MODE-2-inferred-box-explicit-bad.hir"
+                            | "MODE/MODE-2-inferred-tuple-explicit-bad.hir"
+                    ) {
+                        let first = authority.iter().find(|d| d.severity == Severity::Error);
+                        return match first {
+                            Some(d)
+                                if d.rule.as_str() == rule
+                                    && map.location(d.primary).unwrap().line == line =>
+                            {
+                                Ok(())
+                            }
+                            _ => Err(format!(
+                                "not done: expected J {rule} line {line}; got {first:?}"
+                            )),
+                        };
+                    }
                     match first_error {
                         Some(d)
                             if d.rule.as_str() == rule

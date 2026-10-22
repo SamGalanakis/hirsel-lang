@@ -1861,6 +1861,27 @@ impl<'a> Checker<'a> {
             .unwrap_or_else(|error| self.proof_failure(error, expected));
         let actual = instantiate_cleanup_bounds(target, actual, &declarations)
             .unwrap_or_else(|error| self.proof_failure(error, actual));
+        // An unrelated parameter's Environment is access to the argument,
+        // not placement of its owned payload. Match that access root before
+        // hand-back comparison propagates structural placement into parts.
+        // Every nested contract (including unique and brands) stays intact.
+        let expected = if value.usage == UseKind::Mut
+            && target
+                .get(expected)
+                .unwrap()
+                .modes
+                .relation
+                .is_environment()
+            && matches!(
+                target.get(expected).unwrap().kind,
+                TypeKind::Box(_) | TypeKind::Tuple(_) | TypeKind::Record(_) | TypeKind::Variant(_)
+            ) {
+            let mut row = target.get(expected).unwrap().clone();
+            row.modes.relation = target.get(actual).unwrap().modes.relation.clone();
+            target.intern(row)
+        } else {
+            expected
+        };
         let mut row = target.get(actual).unwrap().clone();
         if !matches!(
             row.kind,

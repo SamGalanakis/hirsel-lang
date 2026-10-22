@@ -7805,7 +7805,13 @@ impl Checker<'_, '_> {
         // evidence, not a contract: the part's current uniqueness is the
         // operand's, kept in `shared_parts`. A part typed by an expected type
         // is a contract.
-        let inferred = self.ty(value) == Some(part);
+        // Constructor parameters are receiving contracts even when their
+        // row equals an operand's pre-flow row. Copying that operand may
+        // already have ended its uniqueness without changing its row.
+        let inferred = !matches!(
+            self.tree.expressions[aggregate.0 as usize].kind,
+            ExprKind::Call { .. }
+        ) && self.ty(value) == Some(part);
         if inferred {
             required.uniqueness = Uniqueness::Aliased;
         }
