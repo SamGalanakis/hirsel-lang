@@ -22,8 +22,12 @@ fn source() -> String {
         .replace("30000u64", "8u64");
     kernel = kernel
         .replace(
-            "b'.' => {",
-            "b'.' => {\n      list.push(mut t.output, t.cells[t.pos])",
+            "b'.' => {\n      t.value_out",
+            "b'.' => {\n      list.push(mut t.output, t.cells[t.pos])\n      t.value_out",
+        )
+        .replace(
+            "b'.' => {\n          tape.value_out",
+            "b'.' => {\n          list.push(mut tape.output, tape.cells[tape.pos])\n          tape.value_out",
         )
         .replace(
             "Print() => {",

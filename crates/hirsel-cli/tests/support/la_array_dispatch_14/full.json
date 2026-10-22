@@ -1,0 +1,251 @@
+[
+  {
+    "name": "empty",
+    "program": "",
+    "expected": null
+  },
+  {
+    "name": "comments",
+    "program": "comments only",
+    "expected": null
+  },
+  {
+    "name": "unmatched_open",
+    "program": "[",
+    "expected": null
+  },
+  {
+    "name": "unmatched_close",
+    "program": "]",
+    "expected": null
+  },
+  {
+    "name": "unmatched_nested",
+    "program": "[[]",
+    "expected": null
+  },
+  {
+    "name": "zero_loop",
+    "program": "[+>+<-].",
+    "expected": {
+      "cells": {},
+      "pos": 0,
+      "output": [
+        0
+      ],
+      "checksum": 0,
+      "length": 30000
+    }
+  },
+  {
+    "name": "minimal",
+    "program": "++++[>++++<-]>.",
+    "expected": {
+      "cells": {
+        "1": 16
+      },
+      "pos": 1,
+      "output": [
+        16
+      ],
+      "checksum": 16,
+      "length": 30000
+    }
+  },
+  {
+    "name": "nested",
+    "program": "++[>++[>+++<-]<-]>>.",
+    "expected": {
+      "cells": {
+        "2": 12
+      },
+      "pos": 2,
+      "output": [
+        12
+      ],
+      "checksum": 12,
+      "length": 30000
+    }
+  },
+  {
+    "name": "inc_wrap",
+    "program": "-+.",
+    "expected": {
+      "cells": {},
+      "pos": 0,
+      "output": [
+        0
+      ],
+      "checksum": 0,
+      "length": 30000
+    }
+  },
+  {
+    "name": "dec_wrap",
+    "program": "-.",
+    "expected": {
+      "cells": {
+        "0": 255
+      },
+      "pos": 0,
+      "output": [
+        255
+      ],
+      "checksum": 255,
+      "length": 30000
+    }
+  },
+  {
+    "name": "byte_wrap",
+    "program": "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++.",
+    "expected": {
+      "cells": {},
+      "pos": 0,
+      "output": [
+        0
+      ],
+      "checksum": 0,
+      "length": 30000
+    }
+  },
+  {
+    "name": "left_boundary",
+    "program": "<<+.<.",
+    "expected": {
+      "cells": {
+        "0": 1
+      },
+      "pos": 0,
+      "output": [
+        1,
+        1
+      ],
+      "checksum": 5,
+      "length": 30000
+    }
+  },
+  {
+    "name": "grow",
+    "program": ">>>>>>>>>>+.<.",
+    "expected": {
+      "cells": {
+        "10": 1
+      },
+      "pos": 9,
+      "output": [
+        1,
+        0
+      ],
+      "checksum": 4,
+      "length": 30000
+    }
+  },
+  {
+    "name": "comma",
+    "program": ",",
+    "expected": null
+  },
+  {
+    "name": "comma_after",
+    "program": "+.,",
+    "expected": null
+  },
+  {
+    "name": "skipped_comma",
+    "program": "[,].",
+    "expected": {
+      "cells": {},
+      "pos": 0,
+      "output": [
+        0
+      ],
+      "checksum": 0,
+      "length": 30000
+    }
+  },
+  {
+    "name": "out_wrap",
+    "program": "-.........................",
+    "expected": {
+      "cells": {
+        "0": 255
+      },
+      "pos": 0,
+      "output": [
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255,
+        255
+      ],
+      "checksum": 4294967211,
+      "length": 30000
+    }
+  },
+  {
+    "name": "hello",
+    "program": "++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>.",
+    "expected": {
+      "cells": {
+        "1": 87,
+        "2": 100,
+        "3": 33,
+        "4": 10
+      },
+      "pos": 4,
+      "output": [
+        72,
+        101,
+        108,
+        108,
+        111,
+        32,
+        87,
+        111,
+        114,
+        108,
+        100,
+        33,
+        10
+      ],
+      "checksum": 1781448654,
+      "length": 30000
+    }
+  },
+  {
+    "name": "full_growth",
+    "program": "generated: 30000 right moves followed by +.<.",
+    "expected": {
+      "cells": {
+        "30000": 1
+      },
+      "pos": 29999,
+      "output": [
+        1,
+        0
+      ],
+      "checksum": 4,
+      "length": 30001
+    }
+  }
+]

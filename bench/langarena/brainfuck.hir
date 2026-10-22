@@ -153,13 +153,43 @@ fn run(source: String, recursive: bool) -> Option[u32] {
     let mut pc = 0u64
     while pc < list.len(commands) {
       let c = commands[pc]
-      if c == b',' {
-        return None()
-      }
-      if c == b'[' && tape.cells[tape.pos] == 0 || c == b']' && tape.cells[tape.pos] != 0 {
-        pc = jumps[pc]
-      } else {
-        command(mut tape, c)
+      // Direct dispatch: brainfuck_array.rs:87-115 at 3c9f84d (MIT;
+      // see LICENSE). Keep the checked tape operations used by command.
+      match c {
+        b'+' => {
+          tape.cells[tape.pos] = u8.wrapping_add(tape.cells[tape.pos], 1)
+        },
+        b'-' => {
+          tape.cells[tape.pos] = u8.wrapping_sub(tape.cells[tape.pos], 1)
+        },
+        b'>' => {
+          tape.pos += 1
+          if tape.pos >= list.len(tape.cells) {
+            list.push(mut tape.cells, 0)
+          }
+        },
+        b'<' => {
+          if tape.pos > 0 {
+            tape.pos -= 1
+          }
+        },
+        b'[' => {
+          if tape.cells[tape.pos] == 0 {
+            pc = jumps[pc]
+          }
+        },
+        b']' => {
+          if tape.cells[tape.pos] != 0 {
+            pc = jumps[pc]
+          }
+        },
+        b'.' => {
+          tape.value_out = u32.wrapping_add(
+            tape.value_out << 2,
+            int.widen(tape.cells[tape.pos])
+          )
+        },
+        _ => return None(),
       }
       pc += 1
     }
