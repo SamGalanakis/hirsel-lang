@@ -688,11 +688,18 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
             s.cancel_scope(scope, CANCEL_CHILD_FAILED);
             let siblings = s.scope(scope).children.clone();
             s.wake_owner(scope);
+            let mut cancellations = Vec::new();
             for sibling in siblings {
                 if sibling != index {
-                    s.cancel(sibling, CANCEL_CHILD_FAILED);
+                    if let Some(events) =
+                        super::events::cancel_observed(s, sibling, CANCEL_CHILD_FAILED)
+                    {
+                        cancellations.extend(events);
+                    }
                 }
             }
+            cancellations.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            unsafe { super::events::failed_end(ctx_ptr, s, index, cancellations) };
         }
         ((), Next::End)
     };
