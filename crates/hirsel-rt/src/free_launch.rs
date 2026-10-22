@@ -13,16 +13,27 @@ use std::sync::Arc;
 pub(crate) const ENABLED: bool = cfg!(test);
 
 pub(crate) enum Session {
-    Recording(Arc<record::Recording>),
+    Recording {
+        recorder: Arc<record::Recording>,
+        namespace_coupled: bool,
+    },
     Replay {
         driver: Arc<replay::Replay>,
         end: Option<String>,
+        namespace_coupled: bool,
     },
+}
+
+fn binding(bytes: &[u8]) -> Result<(Recording, bool), String> {
+    let bytes = bytes
+        .strip_prefix(b"F1B1")
+        .ok_or("unsupported Free admission binding")?;
+    decode(bytes)
 }
 
 pub(crate) fn header(bytes: &[u8]) -> Result<Recording, String> {
     let tape = hirsel_free::tape::parse(bytes)?;
-    let header: Recording = decode(&tape.binding)?;
+    let (header, _) = binding(&tape.binding)?;
     let run = header.bound_run().map_err(|e| e.to_string())?;
     if run.record().io.as_ref().and_then(|io| io.tasks.as_deref()) != Some("tasks.free@1") {
         return Err("Free tape binds another Tasks provider".into());
@@ -43,10 +54,15 @@ impl Session {
             (RecordingLevel::None, _) => Ok(None),
             (_, Some(path)) => {
                 let (file, header, _) = crate::host_launch::header(io, admitted, path, outputs)?;
-                let mut binding = Vec::new();
+                let namespace_coupled = io.namespace_coupled();
+                let mut binding = b"F1B1".to_vec();
                 header.encode(&mut binding);
+                namespace_coupled.encode(&mut binding);
                 record::Recording::open(file, &binding, level == RecordingLevel::Durable)
-                    .map(Self::Recording)
+                    .map(|recorder| Self::Recording {
+                        recorder,
+                        namespace_coupled,
+                    })
                     .map(Some)
                     .map_err(|e| format!("Free recording: {e}"))
             }
@@ -57,6 +73,7 @@ impl Session {
     pub(crate) fn replay(bytes: &[u8]) -> Result<Self, String> {
         header(bytes)?;
         let tape = hirsel_free::tape::parse(bytes)?;
+        let (_, namespace_coupled) = binding(&tape.binding)?;
         // Validate terminal bytes before any task or user callback can run.
         if let Some(end) = &tape.end {
             terminal(&end.outcome)?;
@@ -66,6 +83,7 @@ impl Session {
         Ok(Self::Replay {
             driver,
             end: tape.end.map(|e| e.outcome),
+            namespace_coupled,
         })
     }
 
@@ -73,8 +91,20 @@ impl Session {
     /// Sole-root admission, before workers start or code runs.
     pub(crate) unsafe fn install(&self, ctx: *mut crate::TaskCtx) {
         unsafe {
+            let namespace_coupled = match self {
+                Self::Recording {
+                    namespace_coupled, ..
+                }
+                | Self::Replay {
+                    namespace_coupled, ..
+                } => *namespace_coupled,
+            };
+            (*ctx)
+                .run_ref()
+                .free_namespace_coupled
+                .store(namespace_coupled, std::sync::atomic::Ordering::Relaxed);
             match self {
-                Self::Recording(recorder) => recorder.root(ctx),
+                Self::Recording { recorder, .. } => recorder.root(ctx),
                 Self::Replay { driver, .. } => driver.root(ctx),
             }
         }
@@ -88,8 +118,8 @@ impl Session {
     }
 
     pub(crate) fn finish_recording(&self, outcome: &RunOutcome) -> Result<(), String> {
-        if let Self::Recording(recording) = self {
-            recording
+        if let Self::Recording { recorder, .. } = self {
+            recorder
                 .recorder
                 .stop_with(
                     |sweep| terminal_bytes("native-outcome-v2", outcome, sweep),
@@ -101,7 +131,7 @@ impl Session {
     }
 
     pub(crate) fn finish_replay(&self) -> Result<Option<Terminal>, String> {
-        let Self::Replay { driver, end } = self else {
+        let Self::Replay { driver, end, .. } = self else {
             return Ok(None);
         };
         // This is the same strict consume-every-record/progress-at-cut check
@@ -271,3 +301,6 @@ mod network_tests;
 
 #[cfg(test)]
 mod tls_tests;
+
+#[cfg(test)]
+mod namespace_tests;

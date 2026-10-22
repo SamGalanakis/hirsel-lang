@@ -294,6 +294,7 @@ pub(crate) struct RunShared {
     /// Ordinary configured native Free admission, distinct from F0/BodyRun tests.
     pub(crate) free_production: bool,
     pub(crate) free_root_env: bool,
+    pub(crate) free_namespace_coupled: std::sync::atomic::AtomicBool,
     pub(crate) free_return: (u64, u64),
     /// Published at ordered admission, read without borrowing policy state.
     pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
@@ -872,6 +873,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free_replay: false,
         free_production: false,
         free_root_env: false,
+        free_namespace_coupled: Default::default(),
         free_return: (0, 0),
         ordered_mode: Default::default(),
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),

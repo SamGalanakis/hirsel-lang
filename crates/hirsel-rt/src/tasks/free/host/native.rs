@@ -3,6 +3,21 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+pub(crate) fn namespace_policy(keys: KeySet, coupled: bool) -> KeySet {
+    if coupled
+        && keys
+            .keys()
+            .iter()
+            .any(|(key, _)| *key == crate::io_keys::NAMESPACE)
+    {
+        let mut keys = keys.keys().to_vec();
+        keys.push((crate::io_keys::COUPLED, Mode::Exclusive));
+        KeySet::new(keys)
+    } else {
+        keys
+    }
+}
+
 /// # Safety
 /// Sole-root admission, before native Io entries and child dispatch.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
@@ -63,8 +78,8 @@ pub(in crate::tasks::free) fn replay_keys(
 }
 
 /// One allow-list and footprint rule for live admission and replay. Native
-/// files currently require fully described File identities and the namespace
-/// domain alone; extra adapter domains refuse before preparation or effect.
+/// files require fully described File identities. The admitted namespace policy
+/// adds its conservative domain; undeclared extras refuse before any effect.
 #[cfg(test)]
 pub(super) fn request_keys(
     request: &Request,
@@ -99,6 +114,15 @@ pub(in crate::tasks::free) fn request_keys_with_domains(
 ) -> Stopped<KeySet> {
     use crate::io_keys::{Kind, NAMESPACE, ROOT};
     use Request as R;
+    let mut identity = |word| {
+        let (key, kind) = identity(word)?;
+        if let Kind::Half { stream } = kind
+            && (key.0 < 4 || stream.0 < 4 || key == stream)
+        {
+            return Err(Stop::Diverged("invalid native half parent domain".into()));
+        }
+        Ok((key, kind))
+    };
     let mut file = |word| {
         let (key, kind) = identity(word)?;
         if kind != Kind::File {

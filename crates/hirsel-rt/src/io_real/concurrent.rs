@@ -211,6 +211,9 @@ impl ConcurrentIo {
 }
 
 impl ConcurrentAdapter for ConcurrentIo {
+    fn namespace_coupled(&self) -> bool {
+        self.registry.lock().unwrap().namespace_coupled()
+    }
     fn keys(&self, request: &Request) -> KeySet {
         self.registry.lock().unwrap().keys(request)
     }

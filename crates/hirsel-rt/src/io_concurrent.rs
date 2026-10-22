@@ -16,6 +16,11 @@ use std::sync::{Arc, Mutex};
 
 /// Io callable from any thread.
 pub trait ConcurrentAdapter: Send + Sync {
+    /// Admission policy: unknown storage may alias any namespace resource.
+    /// This remains fixed for the admitted service's lifetime.
+    fn namespace_coupled(&self) -> bool {
+        false
+    }
     /// The logical keys of `request`'s issue transition. The default couples every request
     /// under one key, as for any adapter that declares none.
     fn keys(&self, _request: &Request) -> KeySet {

@@ -33,6 +33,16 @@ impl Service {
     ) -> Stopped<()> {
         let run = unsafe { (*ctx).run_ref() };
         assert!(run.free_mode);
+        let coupled = adapter.namespace_coupled();
+        if run.free_production
+            && super::super::record::on(ctx)
+            && run.free_namespace_coupled.load(Ordering::Relaxed) != coupled
+        {
+            return Err(Stop::Refused(
+                "namespace policy changed after recording admission".into(),
+            ));
+        }
+        run.free_namespace_coupled.store(coupled, Ordering::Relaxed);
         let driver = adapter.readiness();
         let live = Arc::new(super::live::State::default());
         if run.free_production && !super::super::record::on(ctx) && !super::super::replay::on(ctx) {
@@ -265,6 +275,16 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
         unsafe { (*ctx).run_ref().free_root_env },
     )
     .map_err(|_| Stop::Refused("native host request metadata is not admitted".into()))?;
+    let coupled = unsafe {
+        (*ctx)
+            .run_ref()
+            .free_namespace_coupled
+            .load(Ordering::Relaxed)
+    };
+    if coupled != io.adapter.namespace_coupled() {
+        return Err(Stop::Refused("namespace policy changed during run".into()));
+    }
+    let expected = super::native::namespace_policy(expected, coupled);
     if expected != io.adapter.keys(request) {
         return Err(Stop::Refused(
             "native host footprint has unadmitted domains".into(),

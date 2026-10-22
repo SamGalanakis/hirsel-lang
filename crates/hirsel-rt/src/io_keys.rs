@@ -128,6 +128,9 @@ impl Default for Registry {
 }
 
 impl Registry {
+    pub(crate) fn namespace_coupled(&self) -> bool {
+        self.unknown_storage
+    }
     fn fresh(&mut self) -> Key {
         let key = Key(self.next);
         self.next = self

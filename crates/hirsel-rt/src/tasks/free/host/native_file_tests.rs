@@ -375,13 +375,35 @@ fn native_file_keys_validate_all_resource_metadata_and_namespace_modes() {
         .unwrap(),
         KeySet::new(vec![(Key(8), Mode::Exclusive)])
     );
-    assert!(
+    // Item2 admits a half close with its own exclusive and parent shared keys.
+    assert_eq!(
         native::request_keys(&Request::Close { handle: 18 }, |_| Ok((
             Key(8),
             Kind::Half { stream: Key(9) }
         )))
-        .is_err()
+        .unwrap(),
+        KeySet::new(vec![(Key(8), Mode::Exclusive), (Key(9), Mode::Shared)])
     );
+    for (resource, parent) in [(8, 0), (8, 1), (8, 2), (8, 3), (8, 8), (0, 9), (3, 9)] {
+        assert!(
+            native::request_keys(&Request::Close { handle: 18 }, |_| Ok((
+                Key(resource),
+                Kind::Half {
+                    stream: Key(parent)
+                }
+            )))
+            .is_err()
+        );
+    }
+    for file_backed in [false, true] {
+        assert!(
+            native::request_keys(&Request::Close { handle: 18 }, |_| Ok((
+                Key(8),
+                Kind::Sink { file_backed }
+            )))
+            .is_err()
+        );
+    }
 }
 
 struct ExtraDomain;

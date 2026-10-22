@@ -207,6 +207,24 @@ impl crate::journal::Journal for HomeJournal {
     }
 }
 impl RealIo {
+    pub(crate) fn namespace_coupled(&self) -> bool {
+        use crate::io_keys::Storage;
+        let output = |output: &Output| match output {
+            Output::Local(_) => Storage::Unknown,
+            Output::Send(output) => output.resource_storage(),
+        };
+        let input = match &self.streams.input {
+            Input::Blocking(_) => Storage::Unknown,
+            Input::Send(_, storage) => *storage,
+            Input::Cooperative(input) => input.storage(),
+        };
+        [
+            output(&self.streams.output),
+            output(&self.streams.stderr),
+            input,
+        ]
+        .contains(&Storage::Unknown)
+    }
     /// Preserve custom home-affine journals; explicit Send journals use send_journal_to.
     pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
         self.journal = crate::journal::Journaled::with_destination(HomeJournal::Local(journal));

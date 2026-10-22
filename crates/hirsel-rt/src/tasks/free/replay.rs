@@ -15,6 +15,7 @@ pub(crate) struct Replay {
     output: Mutex<(Vec<u8>, Vec<u8>)>,
     authorities: super::host::requests::Authorities,
     root_env: AtomicBool,
+    namespace_coupled: AtomicBool,
 }
 
 impl Replay {
@@ -28,6 +29,7 @@ impl Replay {
             output: Mutex::default(),
             authorities: Default::default(),
             root_env: AtomicBool::new(false),
+            namespace_coupled: AtomicBool::new(false),
         }))
     }
 
@@ -46,6 +48,15 @@ impl Replay {
         if unsafe { (*ctx).run_ref().free_production } {
             let env = unsafe { (*ctx).run_ref().free_root_env };
             self.root_env.store(env, Ordering::Relaxed);
+            self.namespace_coupled.store(
+                unsafe {
+                    (*ctx)
+                        .run_ref()
+                        .free_namespace_coupled
+                        .load(Ordering::Relaxed)
+                },
+                Ordering::Relaxed,
+            );
             self.authorities.root(env);
         }
         unsafe { (*ctx).run().free_replay = true };
@@ -417,13 +428,17 @@ impl Token {
         request: &crate::io::Request,
     ) -> Stopped<crate::io_keys::KeySet> {
         let handles = self.shared.handles.lock().unwrap();
-        super::host::native::request_keys_with_domains(
+        let keys = super::host::native::request_keys_with_domains(
             request,
             |word| handles.identity(word),
             |word| handles.process_keys(word),
             |word| handles.net_ports(word),
             self.shared.root_env.load(Ordering::Relaxed),
-        )
+        )?;
+        Ok(super::host::native::namespace_policy(
+            keys,
+            self.shared.namespace_coupled.load(Ordering::Relaxed),
+        ))
     }
 
     pub(super) fn host_identity(
