@@ -1,0 +1,393 @@
+// rust-csv 05612e87 examples/tutorial-perf-alloc-02.rs:1-26, MIT.
+// Streaming record loop; license and semantic adaptations in README.md.
+pub type AppError = Usage | Arguments(ArgError) | Flags(cli.ParseError) | Grant(
+  GrantError
+) | Files(FileError) | Buffered(bufio.ReadError[FileError]) | Output(OutputError) | Csv(
+  String,
+  u64,
+  u64,
+  csv.CsvError
+) | Header(String, u64, u64) | Width(String, u64, u64) | Limit(String, String, u64, u64) | InvalidRead
+
+type Source {
+  dir: Dir,
+  file: File of .dir,
+  buffer: bufio.Reader,
+  side: String,
+  offset: u64,
+  row_start: u64,
+  row: u64,
+  byte_limit: u64,
+  row_limit: u64,
+}
+
+type Limits {
+  right_bytes: u64,
+  right_rows: u64,
+  key_bytes: u64,
+  row_bytes: u64,
+  output_rows: u64,
+  output_bytes: u64,
+}
+
+type Emitted {
+  rows: u64,
+  bytes: u64,
+}
+
+fn refill(mut source: Source, mut output: List[u8], max: u64) -> Result[u64, AppError] {
+  // A buffered byte cursor keeps raw positions exact without duplicating CSV syntax.
+  let count = bufio.file_read(
+    source.dir,
+    mut source.file,
+    mut source.buffer,
+    mut output,
+    1
+  )?
+  if count != 0 {
+    source.offset += count
+    if source.offset > source.byte_limit {
+      return Error(Limit("right-bytes", unique source.side, source.row, source.offset))
+    }
+    if source.offset - source.row_start > source.row_limit {
+      return Error(Limit("row-bytes", unique source.side, source.row, source.offset))
+    }
+  }
+  Ok(count)
+}
+
+fn next(mut reader: csv.Reader, mut source: Source) -> Result[
+  Option[List[String]],
+  AppError
+] {
+  source.row_start = source.offset
+  source.row += 1
+  match csv.read_record(mut reader, mut source, refill) {
+    Ok(row) => Ok(take row),
+    Error(Source(error)) => Error(take error),
+    Error(Csv(error)) => Error(
+      Csv(unique source.side, source.row, source.offset, error)
+    ),
+    Error(InvalidRead()) => Error(InvalidRead()),
+  }
+}
+
+fn header(mut reader: csv.Reader, mut source: Source, key: String) -> Result[
+  (List[String], u64),
+  AppError
+] {
+  let Some(names) = next(mut reader, mut source)? else {
+    return Error(Header(unique source.side, source.row, source.offset))
+  }
+  let mut seen: Map[String, bool] = map.empty()
+  let mut found: Option[u64] = None()
+  for i in 0u64..list.len(names) {
+    if map.contains(seen, names[i]) {
+      return Error(Header(unique source.side, source.row, source.offset))
+    }
+    map.insert(mut seen, copy names[i], true)
+    if names[i] == key {
+      found = Some(i)
+    }
+  }
+  let Some(index) = found else {
+    return Error(Header(unique source.side, source.row, source.offset))
+  }
+  Ok((take names, index))
+}
+
+fn validate(row: List[String], width: u64, key: u64, source: Source, limits: Limits) -> Result[
+  (),
+  AppError
+] {
+  if list.len(row) != width {
+    return Error(Width(unique source.side, source.row, source.offset))
+  }
+  if bytes.len(string.as_bytes(row[key])) > limits.key_bytes {
+    return Error(Limit("key-bytes", unique source.side, source.row, source.offset))
+  }
+  Ok(())
+}
+
+fn emit(
+  output: Stdout,
+  row: List[String],
+  mut emitted: Emitted,
+  limits: Limits,
+  data: bool,
+  ordinal: u64,
+  offset: u64
+) -> Result[(), AppError] {
+  if data && emitted.rows == limits.output_rows {
+    return Error(Limit("output-rows", "left", ordinal, offset))
+  }
+  let mut encoded: List[u8] = []
+  // At most one joined record is encoded before checking the byte budget.
+  let Ok(()) = csv.write_record(row, b',', mut encoded) else {
+    return Error(InvalidRead())
+  }
+  // Go's writer emits a blank line for a sole empty field; its reader skips
+  // blank lines. Preserve that one-cell record explicitly for round-tripping.
+  if list.len(row) == 1 && row[0] == "" {
+    encoded = [b'"', b'"', b'\n']
+  }
+  let count = list.len(encoded)
+  if count > limits.output_bytes - emitted.bytes {
+    return Error(Limit("output-bytes", "left", ordinal, offset))
+  }
+  out.write(output, bytes.from_list(take encoded))?
+  emitted.bytes += count
+  if data {
+    emitted.rows += 1
+  }
+  Ok(())
+}
+
+fn option(flags: Map[String, List[String]], name: String) -> Result[
+  Option[String],
+  AppError
+] {
+  match map.get(flags, name) {
+    None() => Ok(None()),
+    Some(values) => {
+      if list.len(values) != 1 {
+        return Error(Usage())
+      }
+      Ok(Some(unique values[0]))
+    },
+  }
+}
+
+fn limit(flags: Map[String, List[String]], name: String, ceiling: u64) -> Result[
+  u64,
+  AppError
+] {
+  let Some(text) = option(flags, name)? else {
+    return Ok(ceiling)
+  }
+  let Ok(value) = u64.parse(text) else {
+    return Error(Usage())
+  }
+  if value > ceiling {
+    return Error(Usage())
+  }
+  Ok(value)
+}
+
+fn run(rt: Io, args: Args) -> Result[(), AppError] {
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let mut specs: List[cli.Flag] = []
+  let flag_names: List[String] = [
+    "left-key",
+    "right-key",
+    "mode",
+    "max-right-bytes",
+    "max-right-rows",
+    "max-key-bytes",
+    "max-row-bytes",
+    "max-output-rows",
+    "max-output-bytes"
+  ]
+  for name in flag_names {
+    list.push(
+      mut specs,
+      cli.Flag(name: copy name, short: None(), kind: Value(), help: copy name)
+    )
+  }
+  list.push(
+    mut specs,
+    cli.Flag(name: "stats", short: None(), kind: Switch(), help: "streaming counters")
+  )
+  let parsed = cli.parse_interspersed(take argv, specs) ? Flags
+  if list.len(parsed.positional) != 2 {
+    return Error(Usage())
+  }
+  let Some(left_key) = option(parsed.flags, "left-key")? else {
+    return Error(Usage())
+  }
+  let Some(right_key) = option(parsed.flags, "right-key")? else {
+    return Error(Usage())
+  }
+  let Some(mode) = option(parsed.flags, "mode")? else {
+    return Error(Usage())
+  }
+  if mode != "inner" && mode != "left" {
+    return Error(Usage())
+  }
+  let limits = Limits(
+    right_bytes: limit(parsed.flags, "max-right-bytes", 16777216)?,
+    right_rows: limit(parsed.flags, "max-right-rows", 100000)?,
+    key_bytes: limit(parsed.flags, "max-key-bytes", 4096)?,
+    row_bytes: limit(parsed.flags, "max-row-bytes", 1048576)?,
+    output_rows: limit(parsed.flags, "max-output-rows", 1000000)?,
+    output_bytes: limit(parsed.flags, "max-output-bytes", 268435456)?
+  )
+  let output = io.stdout(rt)?
+  let stats = if map.contains(parsed.flags, "stats") {
+    Some(io.stderr(rt)?)
+  } else {
+    None()
+  }
+  let dir = io.dir(rt, path.of("data")) ? Files
+  let mut right = Source(
+    dir: dir,
+    file: file.open(dir, path.of(parsed.positional[1]))?,
+    buffer: bufio.new(4096),
+    side: "right",
+    offset: 0,
+    row_start: 0,
+    row: 0,
+    byte_limit: limits.right_bytes,
+    row_limit: limits.row_bytes
+  )
+  let config = csv.Config(
+    delimiter: b',',
+    fields_per_record: None(),
+    max_record_bytes: limits.row_bytes
+  )
+  let mut right_reader = match csv.reader(config) {
+    Ok(reader) => take reader,
+    Error(error) => return Error(Csv("right", 1, 0, error)),
+  }
+  let (right_names, right_index) = header(mut right_reader, mut right, right_key)?
+  let mut index: unique Map[String, List[List[String]]] = unique map.empty()
+  let mut right_rows: u64 = 0
+  while true {
+    let Some(row) = next(mut right_reader, mut right)? else {
+      break
+    }
+    validate(row, list.len(right_names), right_index, right, limits)?
+    if right_rows == limits.right_rows {
+      return Error(Limit("right-rows", "right", right.row, right.offset))
+    }
+    let key = unique row[right_index]
+    let mut matches: unique List[List[String]] = match take map.remove(mut index, key) {
+      Some(rows) => take rows,
+      None() => [],
+    }
+    list.push(mut matches, unique row)
+    map.insert(mut index, take key, take matches)
+    right_rows += 1
+  }
+  let mut left = Source(
+    dir: dir,
+    file: file.open(dir, path.of(parsed.positional[0]))?,
+    buffer: bufio.new(4096),
+    side: "left",
+    offset: 0,
+    row_start: 0,
+    row: 0,
+    byte_limit: 18446744073709551615u64,
+    row_limit: limits.row_bytes
+  )
+  let mut left_reader = match csv.reader(config) {
+    Ok(reader) => take reader,
+    Error(error) => return Error(Csv("left", 1, 0, error)),
+  }
+  let (left_names, left_index) = header(mut left_reader, mut left, left_key)?
+  let mut names = copy left_names
+  let mut seen: Map[String, bool] = map.empty()
+  for name in left_names {
+    map.insert(mut seen, copy name, true)
+  }
+  for i in 0u64..list.len(right_names) {
+    if i != right_index {
+      let mut name = copy right_names[i]
+      while map.contains(seen, name) {
+        name = f"right_{name}"
+      }
+      map.insert(mut seen, copy name, true)
+      list.push(mut names, take name)
+    }
+  }
+  let mut emitted = Emitted(rows: 0, bytes: 0)
+  emit(output, names, mut emitted, limits, false, 1, left.offset)?
+  let mut left_rows: u64 = 0
+  let mut max_left_row_bytes: u64 = left.offset
+  while true {
+    let Some(row) = next(mut left_reader, mut left)? else {
+      break
+    }
+    validate(row, list.len(left_names), left_index, left, limits)?
+    left_rows += 1
+    let size = left.offset - left.row_start
+    if size > max_left_row_bytes {
+      max_left_row_bytes = size
+    }
+    let matches = match map.get(index, row[left_index]) {
+      Some(rows) => take rows,
+      None() => [],
+    }
+    let count = list.len(matches)
+    let planned = if count == 0 && mode == "left" {
+      1u64
+    } else {
+      count
+    }
+    if planned > limits.output_rows - emitted.rows {
+      return Error(Limit("output-rows", "left", left.row, left.offset))
+    }
+    if count == 0 && mode == "left" {
+      let mut joined = copy row
+      for i in 0u64..list.len(right_names) {
+        if i != right_index {
+          list.push(mut joined, "")
+        }
+      }
+      emit(output, joined, mut emitted, limits, true, left.row, left.offset)?
+    }
+    for matched in matches {
+      let mut joined = copy row
+      for i in 0u64..list.len(right_names) {
+        if i != right_index {
+          list.push(mut joined, copy matched[i])
+        }
+      }
+      emit(output, joined, mut emitted, limits, true, left.row, left.offset)?
+    }
+  }
+  if let Some(sink) = stats {
+    err.print(
+      sink,
+      f"left_rows={left_rows} right_rows={right_rows} right_bytes={right.offset} max_left_row_bytes={max_left_row_bytes} output_rows={emitted.rows} output_bytes={emitted.bytes} file_buffer_bytes=4096\n"
+    )?
+  }
+  Ok(())
+}
+
+fn describe(error: AppError) -> String {
+  match error {
+    Usage() => "Usage",
+    Arguments(_) => "Arguments",
+    Flags(_) => "Flags",
+    Grant(_) => "Grant",
+    Files(_) => "Files",
+    Buffered(_) => "Buffered",
+    Output(_) => "Output",
+    InvalidRead() => "InvalidRead",
+    Header(side, row, offset) => f"Header {side} row={row} byte={offset}",
+    Width(side, row, offset) => f"Width {side} row={row} byte={offset}",
+    Limit(kind, side, row, offset) => f"Limit {kind} {side} row={row} byte={offset}",
+    Csv(side, row, offset, cause) => {
+      let reason = match cause {
+        Syntax(pos) => f"Syntax line={pos.line} column={pos.column} start_line={pos.start_line}",
+        UnequalFields(pos) => f"UnequalFields line={pos.line} column={pos.column}",
+        RecordTooLarge() => "RecordTooLarge",
+        InvalidUtf8() => "InvalidUtf8",
+        InvalidDelimiter() => "InvalidDelimiter",
+      }
+      f"Csv {side} row={row} byte={offset} {reason}"
+    },
+  }
+}
+
+// Keep the launch Result inline; detailed internal errors are rendered as text.
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  match run(rt, args) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(describe(error)),
+  }
+}
