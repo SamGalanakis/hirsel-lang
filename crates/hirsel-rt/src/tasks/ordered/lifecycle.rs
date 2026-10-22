@@ -500,6 +500,8 @@ unsafe fn exit_scope(
     error: u8,
     caller_site: u64,
 ) -> Stopped<(u8, bool)> {
+    engine::at_head(ctx)?;
+    super::events::prepare_scope_exit(ctx, unsafe { scope.read() });
     let ((scope, waited), progress) = engine::head_effect(ctx, "task.scope_exit", || {
         let s = scheduler(ctx);
         let scope = s.scope_handle(unsafe { scope.read() });
@@ -508,7 +510,7 @@ unsafe fn exit_scope(
         s.cancel_epoch.changed();
         if error != 0 || unsafe { (*ctx).failure.active() } {
             for child in s.scope(scope).children.clone() {
-                s.cancel(child, CANCEL_PARENT);
+                super::events::scope_cancel(s, me, child);
             }
         }
         let waited = !s.settled(scope);
@@ -569,9 +571,7 @@ unsafe fn exit_scope(
     } else {
         STATUS_OK
     };
-    super::events::complete_owner(ctx, "task.scope_exit", || {
-        super::events::OwnerOutcome::ScopeExit { status, expired }
-    });
+    super::events::complete_scope_exit(ctx, status, expired);
     Ok((status, expired))
 }
 

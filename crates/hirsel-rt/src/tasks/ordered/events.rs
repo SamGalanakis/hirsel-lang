@@ -149,6 +149,14 @@ pub(super) enum CanonicalOutcome {
         scope: ObjectId,
         path: Vec<u32>,
     },
+    ScopeExiting {
+        members: Vec<ObjectId>,
+    },
+    ScopeExited {
+        status: u8,
+        expired: bool,
+        failures: Vec<(hirsel_run_schema::Failure, Vec<u32>)>,
+    },
     Joining,
     Joined {
         status: u8,
@@ -215,6 +223,12 @@ pub(super) struct TaskResult {
     pub payload: Option<Vec<u8>>,
 }
 
+struct ScopeExitEvidence {
+    scope: ObjectId,
+    members: Vec<ObjectId>,
+    cancellations: Subevents,
+}
+
 #[derive(Default)]
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
@@ -230,6 +244,7 @@ pub(super) struct Log {
     pub receive_polls: Vec<ReceivePollCompletion>,
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
     joins: BTreeMap<Vec<u32>, (ObjectId, ObjectId)>,
+    scope_exits: BTreeMap<Vec<u32>, ScopeExitEvidence>,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -345,7 +360,7 @@ impl Log {
 
     /// A partial projection must never be accepted as a complete trace.
     pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
-        if self.unsupported.is_empty() && self.joins.is_empty() {
+        if self.unsupported.is_empty() && self.joins.is_empty() && self.scope_exits.is_empty() {
             Ok(&self.canonical)
         } else {
             Err(&self.unsupported)
@@ -701,6 +716,164 @@ pub(super) fn complete_owner(
     });
 }
 
+/// Retain scope membership in spawn order before saved waits and reverse
+/// cleanup calls can vacate child rows. Missing identities remain unsupported.
+pub(super) fn prepare_scope_exit(ctx: *mut TaskCtx, scope_word: u64) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let scope = s.scopes[scope_word as u32 as usize].as_ref().unwrap();
+    assert_eq!(scope.generation, (scope_word >> 32) as u32);
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_ref().unwrap();
+    let evidence = log.scopes.get(&scope_word).cloned().and_then(|id| {
+        let members = scope
+            .children
+            .iter()
+            .map(|&index| {
+                let row = s.tasks[index as usize].as_ref().unwrap();
+                log.tasks
+                    .get(&super::super::handle(index, row.generation))
+                    .cloned()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ScopeExitEvidence {
+            scope: id,
+            members,
+            cancellations: Vec::new(),
+        })
+    });
+    if let Some(evidence) = evidence {
+        let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        assert!(
+            driver
+                .events
+                .as_mut()
+                .unwrap()
+                .scope_exits
+                .insert(path, evidence)
+                .is_none()
+        );
+    }
+}
+
+/// Scope cancellation records first-wins causes in the same bounded effect,
+/// before readiness or cleanup can observe them.
+pub(super) fn scope_cancel(s: &mut super::super::Scheduler, owner: u32, child: u32) {
+    let Some(events) = cancel_observed(s, child, super::super::CANCEL_PARENT) else {
+        return;
+    };
+    let path = s.task(owner).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    if let Some(pending) = driver.events.as_mut().unwrap().scope_exits.get_mut(&path) {
+        pending.cancellations.extend(events);
+    }
+}
+
+fn scope_exit_subevents(log: &Log, path: &[u32], initial: bool) -> Option<Subevents> {
+    let pending = log.scope_exits.get(path)?;
+    let mut events = vec![(
+        CanonicalItem::Object(pending.scope.clone()),
+        if initial {
+            CanonicalOutcome::ScopeExiting {
+                members: pending.members.clone(),
+            }
+        } else {
+            CanonicalOutcome::Unit
+        },
+    )];
+    if initial {
+        events.extend(pending.members.iter().map(|child| {
+            (
+                CanonicalItem::Object(child.clone()),
+                CanonicalOutcome::Alias(pending.scope.clone()),
+            )
+        }));
+        events.extend(pending.cancellations.clone());
+    }
+    Some(events)
+}
+
+pub(super) fn complete_scope_exit(ctx: *mut TaskCtx, status: u8, expired: bool) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.tasks[unsafe { (*ctx).task_id } as usize]
+        .as_ref()
+        .unwrap()
+        .path
+        .clone();
+    let chain = unsafe { (*ctx).failure.chain(&path) };
+    let failures = if chain.is_empty() {
+        Some(Vec::new())
+    } else {
+        unsafe { (*ctx).run_ref().failure_table }.map(|table| {
+            chain
+                .iter()
+                .map(|(record, path)| (table.failure(record), path.clone()))
+                .collect()
+        })
+    };
+    complete_owner(ctx, "task.scope_exit", || OwnerOutcome::ScopeExit {
+        status,
+        expired,
+    });
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let before = Stretch::new(driver.budgets);
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path] - 1;
+    if let (Some(pending), Some(failures)) = (log.scope_exits.remove(&path), failures) {
+        let mut events: Subevents = pending
+            .members
+            .into_iter()
+            .map(|child| (CanonicalItem::Object(child), CanonicalOutcome::Unit))
+            .collect();
+        events.push((
+            CanonicalItem::Object(pending.scope),
+            CanonicalOutcome::ScopeExited {
+                status,
+                expired,
+                failures,
+            },
+        ));
+        let boundary = Boundary {
+            task: path,
+            ordinal,
+            op: None,
+            transition: Transition::Keep,
+            retirement,
+            before,
+            credit: 0,
+            native_outcome: None,
+        };
+        log.subevents(&boundary, "task.scope_exit", events);
+    } else {
+        log.unsupported.push(Unsupported {
+            task: path,
+            ordinal,
+            op: Some("task.scope_exit"),
+        });
+    }
+}
+
 /// Fix generation-qualified join identities before its first head boundary.
 /// No saved frame or result storage is retained by this binding.
 pub(super) fn prepare_join(ctx: *mut TaskCtx, scope: u64, child: u64) {
@@ -1003,6 +1176,9 @@ pub(super) fn record(
                     ),
                 ]);
             }
+            Command::Head {
+                name: "task.scope_exit",
+            } => return scope_exit_subevents(log, &path, true),
             Command::Head { name: "task.join" } => return join_subevents(log, &path),
             Command::Head { name: "task.end" } => {
                 return end_subevents(s, task, false, matches!(retirement.transition, Next::Hold));
@@ -1152,6 +1328,9 @@ pub(super) fn record(
                 unreachable!()
             };
             let log = driver.events.as_ref()?;
+            if log.last_ops.get(&path) == Some(&"task.scope_exit") {
+                return scope_exit_subevents(log, &path, false);
+            }
             if log.last_ops.get(&path) == Some(&"task.join") {
                 return join_subevents(log, &path);
             }
@@ -2707,6 +2886,473 @@ mod tests {
                     } else {
                         references[usize::from(parked)] = Some(ends);
                     }
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn scope_trace_child(
+        ctx: *mut TaskCtx,
+        environment: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        use crate::tasks::*;
+        let [log, index, wait, expected] =
+            unsafe { crate::alloc::payload(environment).cast::<[u64; 4]>().read() };
+        if wait != 0 {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let saved = {
+                    let _role = unsafe { role::Guard::new(ctx) };
+                    let s = scheduler(ctx);
+                    matches!(s.task(0).wait, Some(Wait::Exit { .. })) && readiness::saved(s, 0)
+                };
+                if saved {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < until,
+                    "scope owner never saved its wait"
+                );
+                let mut cause = 99;
+                assert_eq!(
+                    unsafe { hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+                    crate::STATUS_OK
+                );
+            }
+        }
+        let mut result = [1u64, index + 40];
+        assert_eq!(
+            unsafe {
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    result.as_mut_ptr().cast(),
+                    [0u64; 2].as_ptr().cast(),
+                    16,
+                    3,
+                )
+            },
+            crate::STATUS_OK
+        );
+        unsafe { &*(log as *const std::sync::Mutex<Vec<u64>>) }
+            .lock()
+            .unwrap()
+            .push(index);
+        let mut cause = 99;
+        assert_eq!(
+            unsafe { hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+            crate::STATUS_OK
+        );
+        assert_eq!(u64::from(cause), expected);
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn scope_exit_events_keep_members_cancellation_and_reverse_called_rests() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 32,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let image = crate::Layout {
+            size: 16,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &image];
+        for wait in [false, true] {
+            for cancel in [false, true] {
+                let mut reference = None;
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        let cleanup = Arc::new(Mutex::new(Vec::<u64>::new()));
+                        let order = cleanup.clone();
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = layouts.as_ptr();
+                        run.config.layout_count = 2;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy = Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                enable(ctx);
+                                install_value(ctx, 3, received_integer_program());
+                            },
+                            move |ctx| unsafe {
+                                let mut scope = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_enter(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut scope,
+                                        &0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut children = [0; 2];
+                                for (index, child) in children.iter_mut().enumerate() {
+                                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                                        ctx,
+                                        2,
+                                        32,
+                                        8,
+                                        crate::alloc::DOMAIN_HEAP,
+                                        0,
+                                    );
+                                    let expected = if cancel {
+                                        if index == 0 { 1 } else { 2 }
+                                    } else {
+                                        0
+                                    };
+                                    crate::alloc::payload(env).cast::<[u64; 4]>().write([
+                                        Arc::as_ptr(&order) as u64,
+                                        index as u64,
+                                        u64::from(wait),
+                                        expected,
+                                    ]);
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_spawn(
+                                            ctx,
+                                            0,
+                                            0,
+                                            std::ptr::null_mut(),
+                                            child,
+                                            &scope,
+                                            scope_trace_child,
+                                            env,
+                                            0
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                if cancel {
+                                    assert_eq!(
+                                        hirsel_rt_v2_task_cancel(ctx, &scope, &children[0]),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                assert_eq!(
+                                    hirsel_rt_v2_task_scope_exit(
+                                        ctx,
+                                        0,
+                                        0,
+                                        &scope,
+                                        u8::from(cancel)
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(*order.lock().unwrap(), [1, 0]);
+                                let _role = role::Guard::new(ctx);
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| row.op == "task.scope_exit")
+                                    .cloned()
+                                    .collect();
+                                assert!(
+                                    log.unsupported
+                                        .iter()
+                                        .all(|row| row.op != Some("task.scope_exit"))
+                                );
+                                assert!(log.scope_exits.is_empty());
+                                assert!(
+                                    rows.iter()
+                                        .all(|row| row.ordinal == if cancel { 4 } else { 3 }
+                                            && row.task.is_empty())
+                                );
+                                for (subevent, row) in rows.iter().enumerate() {
+                                    assert_eq!(row.subevent as usize, subevent);
+                                }
+                                let members = vec![
+                                    ObjectId {
+                                        creator: vec![],
+                                        ordinal: 1,
+                                    },
+                                    ObjectId {
+                                        creator: vec![],
+                                        ordinal: 2,
+                                    },
+                                ];
+                                assert_eq!(
+                                    rows[0].outcome,
+                                    CanonicalOutcome::ScopeExiting {
+                                        members: members.clone()
+                                    }
+                                );
+                                assert_eq!(
+                                    rows[0].transition,
+                                    if wait {
+                                        Transition::Park
+                                    } else {
+                                        Transition::Keep
+                                    }
+                                );
+                                let calls: Vec<_> = rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if let Transition::Call {
+                                            members,
+                                            then_yield,
+                                        } = &row.transition
+                                        {
+                                            assert!(!then_yield);
+                                            Some(members.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                assert_eq!(calls, [vec![vec![1]], vec![vec![0]]]);
+                                let causes: Vec<_> = rows
+                                    .iter()
+                                    .filter(|row| {
+                                        matches!(row.item, CanonicalItem::Cancellation(_))
+                                    })
+                                    .collect();
+                                if cancel {
+                                    assert_eq!(causes.len(), 2);
+                                    assert_eq!(
+                                        causes[0].item,
+                                        CanonicalItem::Cancellation(vec![0])
+                                    );
+                                    assert_eq!(
+                                        causes[0].outcome,
+                                        CanonicalOutcome::Scalar(1u32.to_le_bytes().to_vec())
+                                    );
+                                    assert_eq!(
+                                        causes[1].item,
+                                        CanonicalItem::Cancellation(vec![1])
+                                    );
+                                    assert_eq!(
+                                        causes[1].outcome,
+                                        CanonicalOutcome::Scalar(2u32.to_le_bytes().to_vec())
+                                    );
+                                } else {
+                                    assert!(causes.is_empty());
+                                }
+                                let end = rows.last().unwrap();
+                                assert_eq!(
+                                    end.item,
+                                    CanonicalItem::Object(ObjectId {
+                                        creator: vec![],
+                                        ordinal: 0
+                                    })
+                                );
+                                assert_eq!(
+                                    end.outcome,
+                                    CanonicalOutcome::ScopeExited {
+                                        status: crate::STATUS_OK,
+                                        expired: false,
+                                        failures: Vec::new()
+                                    }
+                                );
+                                assert_eq!(
+                                    rows[rows.len() - 3].item,
+                                    CanonicalItem::Object(members[0].clone())
+                                );
+                                assert_eq!(
+                                    rows[rows.len() - 2].item,
+                                    CanonicalItem::Object(members[1].clone())
+                                );
+                                assert!(scheduler(ctx).scopes[scope as u32 as usize].is_none());
+                                *seen.lock().unwrap() = rows;
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn failed_scope_child(
+        ctx: *mut TaskCtx,
+        _: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        unsafe {
+            crate::failure::hirsel_rt_v2_failure_begin(
+                ctx,
+                1,
+                hirsel_core_contract::RUNTIME_RULE_BASE,
+                1,
+                0,
+            )
+        }
+    }
+
+    #[test]
+    fn scope_exit_failure_events_preserve_child_paths_and_refuse_missing_source_metadata() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&environment as *const crate::Layout];
+        for known in [false, true] {
+            let mut reference = None;
+            for width in [1, 2, 4, 8] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                        enable(ctx);
+                        if known {
+                            static TABLE: [u8; 40] = {
+                                let mut bytes = [0; 40];
+                                bytes[0] = 1;
+                                bytes[8] = 1;
+                                bytes[16] = 17;
+                                bytes[20] = 3;
+                                bytes
+                            };
+                            (*ctx).run().failure_table = crate::isolate::FailureTable::new(&TABLE);
+                        }
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<u64>().write(0);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                failed_scope_child,
+                                env,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_FAILURE
+                        );
+                        let _role = role::Guard::new(ctx);
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let rows: Vec<_> = log
+                            .canonical
+                            .iter()
+                            .filter(|row| row.op == "task.scope_exit")
+                            .cloned()
+                            .collect();
+                        assert!(log.scope_exits.is_empty());
+                        if known {
+                            assert!(
+                                log.unsupported
+                                    .iter()
+                                    .all(|row| row.op != Some("task.scope_exit"))
+                            );
+                            assert_eq!(
+                                rows.last().unwrap().outcome,
+                                CanonicalOutcome::ScopeExited {
+                                    status: crate::STATUS_FAILURE,
+                                    expired: false,
+                                    failures: vec![(
+                                        hirsel_run_schema::Failure {
+                                            rule: hirsel_core_contract::RUNTIME_RULES[0].into(),
+                                            site: hirsel_run_schema::Site {
+                                                definition: String::new(),
+                                                file: String::new(),
+                                                line: 17,
+                                                column: 3
+                                            },
+                                            operation: None,
+                                        },
+                                        vec![0]
+                                    )],
+                                }
+                            );
+                        } else {
+                            assert!(
+                                log.unsupported
+                                    .iter()
+                                    .any(|row| row.op == Some("task.scope_exit"))
+                            );
+                            assert!(!rows.iter().any(|row| matches!(
+                                row.outcome,
+                                CanonicalOutcome::ScopeExited { .. }
+                            )));
+                            assert!(log.canonical().is_err());
+                        }
+                        let chain = (*ctx).failure.take_chain(&[]);
+                        assert_eq!(chain.len(), 1);
+                        assert_eq!(chain[0].1, [0]);
+                        *seen.lock().unwrap() = rows;
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                let rows = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&rows, reference);
+                } else {
+                    reference = Some(rows);
                 }
             }
         }
