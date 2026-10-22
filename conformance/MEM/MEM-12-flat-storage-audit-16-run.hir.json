@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "MEM-12-flat-storage-audit-16-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

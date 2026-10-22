@@ -680,7 +680,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         let block =
                             self.builder
                                 .load(self.module.ptr_type(), place.ptr, place.align);
-                        let from = self.payload_of(block, payload)?;
+                        // Region slots hold payload pointers, while counted slots
+                        // hold header pointers. The copy must start at the payload
+                        // in either representation.
+                        let source_ty = self.lir_type(self.unit.addresses[address.index()].ty)?;
+                        let from = if source_ty.repr == ValueRepr::Uncounted {
+                            self.uncounted_payload(block, payload)?
+                        } else {
+                            self.payload_of(block, payload)?
+                        };
                         let extent = self.extent(payload, from.ptr)?;
                         let anchor = self.failure_edge(failure)?.anchor;
                         let copy = self.alloc_block(payload, extent, from.align, anchor)?;

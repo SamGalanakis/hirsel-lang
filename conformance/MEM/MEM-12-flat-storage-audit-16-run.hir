@@ -1,0 +1,92 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+// Public value/lifetime contract only. Physical cells/extents are checked by
+// flat_storage_audit_16 in the RC harness, not by this output.
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+flat type Batch {
+  items: List[Item] @ growable,
+}
+
+fn sum(xs: Batch) -> u64 {
+  let mut total = list.len(xs.items)
+  for x in xs.items {
+    total += x.n + string.byte_len(x.text)
+  }
+  total
+}
+
+fn copies() -> bool {
+  let x = Item(text: "é🐑", n: 7)
+  let mut y = copy x
+  let mut z = copy x
+  y.n = 11
+  z.n = 19
+  x.n == 7 && y.n == 11 && z.n == 19 && x.text == "é🐑" && y.text == x.text && z.text == x.text
+}
+
+// A nonescaping immutable source is eligible for region placement. Explicit
+// copies still own distinct bytes (the RC harness checks physical identity).
+fn local_copies() -> bool {
+  let x = Item(text: "é🐑", n: 7)
+  let y = copy x
+  let z = copy x
+  x.n + y.n + z.n + string.byte_len(x.text) + string.byte_len(y.text) + string.byte_len(
+    z.text
+  ) == 39
+}
+
+fn lifetimes() -> bool {
+  let saved = {
+    let original = Item(text: "é🐑", n: 7)
+    copy original
+  }
+  let original = Item(text: "abc", n: 3)
+  let seen = {
+    let mut changed = copy original
+    changed.n = 19
+    changed.n
+  }
+  saved.n == 7 && string.byte_len(saved.text) == 6 && original.n == 3 && original.text == "abc" && seen == 19
+}
+
+fn batches() -> bool {
+  let empty = Batch(items: [])
+  let one = Batch(items: [Item(text: "", n: 3)])
+  let many = Batch(
+    items: [Item(text: "", n: 3), Item(text: "abc", n: 4), Item(text: "é🐑", n: 5)]
+  )
+  let first = copy many
+  let second = copy many
+  sum(empty) == 0 && sum(one) == 4 && sum(many) == 24 && sum(first) == 24 && sum(second) == 24
+}
+
+fn growth() -> bool {
+  let mut items: List[Item] = []
+  list.reserve(mut items, 1)
+  for n in 0u64..3u64 {
+    list.push(mut items, Item(text: "é🐑", n: n))
+  }
+  let xs = Batch(items: take items)
+  let ys = copy xs
+  sum(xs) == 24 && sum(ys) == 24
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let ok = copies() && local_copies() && lifetimes() && batches() && growth()
+  out.print(
+    io.stdout(rt) ? output_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

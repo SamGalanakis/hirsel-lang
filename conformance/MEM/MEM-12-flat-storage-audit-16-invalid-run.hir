@@ -1,0 +1,20 @@
+// rule: MEM-12
+// expect: fail SEM-1 at line 17
+// Failure during a copy's fixed-field mutation must release its independent
+// payload and the still-live original, including a region-backed original.
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+flat type Batch {
+  items: List[Item] @ growable,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let original = Item(text: "é🐑", n: 18446744073709551615u64)
+  let mut copied = copy original
+  copied.n += 1u64
+  let _ = original.n
+  Ok(())
+}

@@ -5,6 +5,98 @@
 use super::*;
 use hirsel_lir::layout_types::SizeTerm;
 
+/// One live flat payload in H's checked backing ledger. The block handle and
+/// runtime header are outside these bytes; spare allocation capacity is reported
+/// separately. Cells are typed handles, never inferred from address-like bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlatStorage {
+    pub alloc: AllocId,
+    pub generation: u32,
+    pub owner: Owner,
+    pub layout: LayoutId,
+    pub capacity: u64,
+    pub bytes: Vec<u8>,
+    pub initialized: bool,
+    pub cell_offsets: Vec<u64>,
+    pub resources: usize,
+}
+
+/// Opt-in physical instrumentation for bounded layout tests. Observe live flat
+/// backing payloads after each executor step, including partially initialized
+/// constructions. This does not change execution, allocation or trace formats.
+/// The callback receives the step, flat payloads, and IDs of *all* live
+/// heap/region blocks, allowing a test to detect separately retained parts.
+/// Frame/temporary/static storage is excluded from the last list. Snapshots
+/// are transient and allocated only by this explicitly selected test path.
+/// Normal and injected exits receive the same terminal audit as `run`.
+pub fn run_with_flat_storage_observer<S: Stage>(
+    program: &Program<S>,
+    entry: &hirsel_syntax::DefPath,
+    args: &[Arg],
+    ops: &mut dyn Operations,
+    config: &Config,
+    observe: &mut dyn FnMut(u64, &[FlatStorage], &[AllocId]),
+) -> crate::Run {
+    let mut machine = Machine::new(program, config, ops);
+    let result = (|| {
+        program.check()?;
+        machine.start(program.entry(entry)?, args)?;
+        while machine.step()? {
+            let storage: Vec<_> = machine
+                .ledger
+                .allocations
+                .indexed()
+                .filter_map(|(id, a)| {
+                    let layout = a.layout?;
+                    if a.state != AllocState::Live
+                        || program.layouts.layout(layout)?.kind != LayoutKind::Flat
+                    {
+                        return None;
+                    }
+                    Some(FlatStorage {
+                        alloc: AllocId(id as u32),
+                        generation: a.generation,
+                        owner: a.owner,
+                        layout,
+                        capacity: a.capacity,
+                        bytes: a.extent.read_bytes(0, a.size).to_vec(),
+                        initialized: a.extent.all_init(0, a.size),
+                        cell_offsets: a.extent.cells.keys().copied().collect(),
+                        resources: a.extent.resources.len(),
+                    })
+                })
+                .collect();
+            // All live heap/region blocks, including non-flat construction
+            // sources, so tests can distinguish transients from retained parts.
+            let blocks: Vec<_> = machine
+                .ledger
+                .allocations
+                .indexed()
+                .filter(|(_, a)| {
+                    a.state == AllocState::Live && matches!(a.owner, Owner::Heap | Owner::Region(_))
+                })
+                .map(|(id, _)| AllocId(id as u32))
+                .collect();
+            observe(machine.steps, &storage, &blocks);
+        }
+        let (observation, exemptions) = machine.finish()?;
+        Ok(crate::Audit {
+            observation,
+            exemptions,
+        })
+    })()
+    .map_err(|v: Box<crate::Violation>| *v);
+    crate::Run {
+        result: crate::blocked(result, &machine.output, machine.signaled),
+        output: machine.output.clone(),
+        sites: machine.sites,
+        choices: machine.choices,
+        steps: machine.steps,
+        trace: machine.ledger.trace.clone(),
+        counters: machine.ledger.counters,
+    }
+}
+
 /// The u64 length prefix of a variable FlatFormatV0 part.
 const PREFIX: u64 = 8;
 

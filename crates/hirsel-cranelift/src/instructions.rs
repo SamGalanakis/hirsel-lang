@@ -978,7 +978,14 @@ impl FnEmitter<'_, '_, '_> {
             {
                 let place = self.place(address)?;
                 let block = self.load_ptr(place.ptr);
-                let from = self.payload_of(block, payload)?;
+                // An uncounted region slot already holds the payload address.
+                let regional = self.lir_type(self.unit.addresses[address.index()].ty)?.repr
+                    == ValueRepr::Uncounted;
+                let from = if regional {
+                    self.uncounted_payload(block, payload)?
+                } else {
+                    self.payload_of(block, payload)?
+                };
                 let extent = self.extent(payload, from.ptr)?;
                 let anchor = self.failure_edge(failure)?.anchor;
                 let copy = self.alloc_block(payload, extent, from.align, anchor)?;

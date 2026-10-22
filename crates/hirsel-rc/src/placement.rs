@@ -16,8 +16,8 @@
 //! by that flow and no member is returned, passed to a call, captured,
 //! stored into a foreign container, written
 //! through or disposed. Region values are uncounted: their slots lose their
-//! drops, which the region's exit discharges, and a copy of one is a plain
-//! read.
+//! drops, which the region's exit discharges, and a non-flat copy is a plain
+//! read. A flat copy still owns distinct bytes.
 //!
 //! With regions off, every compiler-local allocation is a counted heap block,
 //! except in a `noalloc` function, where region placement is how the promise
@@ -30,7 +30,7 @@ use hirsel_lir::ir::{
     RegionInstance, RegionInstanceId, ScopeId, ScopeInfo, SlotId, SlotInfo, SlotKind, StorageOwner,
     TaskDomainId, Terminator, ValueId, ValueRepr,
 };
-use hirsel_lir::layout_types::{LayoutKind, LayoutTable, StorageKind};
+use hirsel_lir::layout_types::{CopyRecipe, LayoutKind, LayoutTable, StorageKind};
 use hirsel_lir::stage::{Placed, Value};
 use hirsel_types::Allocation;
 use std::collections::{BTreeMap, BTreeSet};
@@ -390,6 +390,16 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                         foreign.insert(Node::Slot(displaced));
                     }
                 },
+                // A flat copy owns distinct bytes even when the source lives
+                // in a region (MEM-12). Do not join its result to the source:
+                // rewrite would otherwise replace the copy with a borrowed read.
+                Inst::Copy { result, .. }
+                    if table
+                        .layout(unit.types[unit.values[result.index()].ty.index()].layout)
+                        .is_some_and(|r| r.copy == CopyRecipe::FlatBytes) =>
+                {
+                    define_foreign(result);
+                }
                 Inst::Read {
                     result,
                     address,

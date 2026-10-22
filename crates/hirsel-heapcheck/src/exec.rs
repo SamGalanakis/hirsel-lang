@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 mod codec;
 mod compare;
 mod flat;
+pub use flat::{FlatStorage, run_with_flat_storage_observer};
 mod soa;
 use soa::ColumnRow;
 mod fork;

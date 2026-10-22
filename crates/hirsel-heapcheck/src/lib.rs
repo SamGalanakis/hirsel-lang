@@ -19,7 +19,7 @@ mod scalar;
 mod snapshot;
 pub mod violation;
 
-pub use exec::{rc_trace, rc_trace_with_config};
+pub use exec::{FlatStorage, rc_trace, rc_trace_with_config, run_with_flat_storage_observer};
 pub use ledger::{Counters, Event, Exemption, History, Trace};
 pub use observe::{Observation, Observed};
 pub use program::{
