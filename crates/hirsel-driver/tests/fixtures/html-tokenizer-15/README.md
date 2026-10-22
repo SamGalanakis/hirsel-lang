@@ -25,3 +25,19 @@ iterative script dispatch, and omission of atoms/namespace metadata. These are
 documented in `docs/spec/std-library.md`. All markup recovery, duplicate-key
 selection, character references and rawtext behavior tested here come from the
 pinned tokenizer; there is no DOM or sanitization claim.
+
+The Rust harness keeps the complete 369-case H/LLVM/Cranelift run and heap
+checks separate. Heap cases use fresh ledgers in bounded batches because the
+independent oracle retains dead allocation history. The full all-2,231-reference
+input is a separate unignored test with its exact original bytes and expected
+token; it is not split into smaller entity inputs. Exhaustive work cutoffs for
+all five sources run in bounded ranges through each source's first success,
+with the same assertions as the full fixture. Every heap run requires zero
+live heap bytes. Per-case resident/peak readings are diagnostic evidence only.
+
+Whole case 251 currently exceeds the checked-heap pool memory reservation. Its
+unignored `html_tokenizer_15_heap_full_entity_input` test is recorded in
+`tools/known-failures.tsv`, owned by `heapcheck-dead-frames-16`; that lane must
+remove the entry after repairing dead Frame/Temporary ledger retention while
+preserving the independent audit. The complete fixture passes H, LLVM and
+Cranelift; the whole-case heap obligation remains open.
