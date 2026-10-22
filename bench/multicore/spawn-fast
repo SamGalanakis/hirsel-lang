@@ -28,7 +28,7 @@ a = p.parse_args()
 if a.iterations < 1:
     p.error('iterations must be positive')
 harness = a.harness.resolve()
-case = 'tasks::free::spawn::benchmark::fork_join'
+case = 'tasks::free::spawn::benchmark::full_gate_fork_join'
 rows = []
 rng = random.Random(a.seed)
 lock = Path('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock')
