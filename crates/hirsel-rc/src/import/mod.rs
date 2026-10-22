@@ -1170,6 +1170,8 @@ fn import_mapped(
     let body = &def.bodies[view.body.0 as usize];
     let actuals = &instances.actuals[id.index()];
     let types = &*program.types;
+    let aliases = view_temporaries(body);
+    let joined = joined_views(body, &aliases);
     let mut im = Importer {
         program,
         instances,
@@ -1190,13 +1192,13 @@ fn import_mapped(
         finalizer_memo: std::collections::HashSet::new(),
         out: Out::default(),
         local_slot: Vec::new(),
-        aliases: view_temporaries(body),
+        aliases,
         slices: slice_views::Slices::default(),
         encoding_views: BTreeSet::new(),
         observations: discarded_callable_reads(body, types),
         nullary: nullary_temporaries(body),
         node_anchors: node_anchors(body),
-        joined: joined_views(body),
+        joined,
         views: PVec::default(),
         entry_views: Vec::new(),
         loop_slots: Vec::new(),
@@ -1512,7 +1514,7 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
 /// move of a joined view (into a `match` scrutinee, or an outer `if` of a
 /// nested one) assigns that same view, and a joined view may move only into
 /// another.
-fn joined_views(body: &tir::Body) -> Vec<bool> {
+fn joined_views(body: &tir::Body, aliases: &[Option<tir::PlaceId>]) -> Vec<bool> {
     let (assigned, _, pinned) = view_assignments(body);
     let root = |p: &tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
     // Eligibility is separate from selection. A single direct-loan temporary
@@ -1570,7 +1572,12 @@ fn joined_views(body: &tir::Body) -> Vec<bool> {
         .map(|(local, sources)| {
             eligible[local]
                 && (sources.len() > 1
-                    || matches!(
+                    // Keep a single stable source as an address alias. In
+                    // particular, a nested loop element's match must retain
+                    // the outer owner's fixed origin after the element's
+                    // access loan ends. A real join can still promote this
+                    // alias through the dependency closure below.
+                    || aliases[local].is_none() && matches!(
                         sources.as_slice(),
                         [Some(
                             ViewSource::Moved(_)

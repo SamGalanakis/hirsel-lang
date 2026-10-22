@@ -1079,19 +1079,39 @@ fn loop_version_map_reduction() {
     let (_, lowered) = lower_valid(
         "type V = Text(String) | Num(u64)\nfn texts(fields: Map[String, V]) -> Result[Map[String, String], u64] { let mut entries: Map[String, String] = map.empty(); for (key, value) in fields { match value { Text(s) => map.insert(mut entries, unique key, unique s), Num(k) => return Error(k) } }; Ok(take entries) }\nfn main() -> Result[Map[String, String], u64] { texts(map.empty()) }",
     );
-    // The borrowed variant travels as SSA backing: no slot is initialized for
-    // it. C must validate the deep copy's field read against that backing.
+    // The borrowed fields retain their fixed source instead of initializing
+    // owning temporaries. Both deep copies read through the map parameter's
+    // original version and an element loan; C checks that loan independently.
     let unit = unit_named(&lowered, "texts");
-    assert!(unit.instructions.iter().any(|instruction| {
+    let mut copies = 0;
+    for instruction in &unit.instructions {
         let hirsel_lir::ir::Inst::UniqueCopy { value, .. } = instruction else {
-            return false;
+            continue;
         };
-        unit.instructions.iter().any(|read| matches!(read,
-            hirsel_lir::ir::Inst::Read { result, address, reaching, .. }
+        copies += 1;
+        assert!(matches!(
+            unit.values[value.index()].holding,
+            hirsel_lir::ir::Holding::Borrowed(_)
+        ));
+        assert!(unit.instructions.iter().any(|read| matches!(read,
+            hirsel_lir::ir::Inst::Read { result, address, reaching, mode: hirsel_lir::ir::ReadMode::Borrow }
                 if result == value
-                    && unit.addresses[address.index()].base == hirsel_lir::ir::AddressBase::Value(*reaching)
-        ))
-    }), "{}", dump(unit));
+                    && *reaching == unit.parameters[0]
+                    && matches!(unit.addresses[address.index()].base,
+                        hirsel_lir::ir::AddressBase::Slot(slot)
+                            if unit.slots[slot.index()].kind == hirsel_lir::ir::SlotKind::Parameter(0))
+                    && unit.addresses[address.index()].projection.get(&unit.pools.projections)
+                        .is_some_and(|path| path.iter().any(|step| matches!(step, hirsel_lir::ir::ProjectionStep::Index(_))))
+        )), "{}", dump(unit));
+        assert!(
+            !unit
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction,
+            hirsel_lir::ir::Inst::Store { value: stored, .. } if stored == value))
+        );
+    }
+    assert_eq!(copies, 2, "{}", dump(unit));
 }
 
 #[test]
