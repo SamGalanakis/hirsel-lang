@@ -78,9 +78,33 @@ impl Fixture {
         let output = command.output().unwrap();
         assert!(output.status.success(), "{engine}: {output:?}");
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        // The imported compression module contributes its own codec controls.
+        // Pin membership as well as the count so a missing inverse vector cannot
+        // be hidden by another test added to that module.
+        let mut expected: Vec<String> = [
+            "codec_vectors",
+            "huff_decode_cursor_vectors",
+            "inverse_empty_ignores_primary",
+            "inverse_reduced_checksums",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((0..61).map(|index| format!("inverse_vector_{index}")))
+        .map(|name| format!("la_bwt_inverse_11@1/compress/{name}"))
+        .collect();
+        expected.sort();
+        let mut actual = Vec::new();
+        for test in report["tests"].as_array().unwrap() {
+            assert_eq!(test["status"], "passed", "{engine}: {test}");
+            assert_eq!(test["failure"], serde_json::Value::Null, "{engine}: {test}");
+            actual.push(test["name"].as_str().unwrap().to_owned());
+        }
+        actual.sort();
+        assert_eq!(actual, expected, "{engine}: {report}");
+        let total = expected.len();
         assert_eq!(
             report["summary"],
-            serde_json::json!({"passed": 64, "failed": 0, "total": 64}),
+            serde_json::json!({"passed": total, "failed": 0, "total": total}),
             "{engine}: {report}"
         );
     }
