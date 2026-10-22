@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Emit existing JSON derive declarations for explicitly listed local nominals."""
+import argparse
+import re
+import sys
+
+# LANG-14 ordinary identifiers, excluding keywords and the discard pattern.
+KEYWORDS = set('fn let mut match if else for in while break continue return take copy '
+               'unique type distinct flat resource drop box pub opaque const comptime '
+               'shape heap before requires ensures result where uses of local global '
+               'once todo extern unsafe true false'.split())
+BUILTINS = set('Date Option List Result String Bytes bool u8 u16 u32 u64 u128 '
+               'i8 i16 i32 i64 i128 f32 f64 Map Set Shared Task Test'.split())
+
+
+def snake(name):
+    """Port std@1/derive.snake, including upper runs and digit boundaries."""
+    out = []
+    for i, char in enumerate(name):
+        if 'A' <= char <= 'Z':
+            previous_upper = i > 0 and 'A' <= name[i - 1] <= 'Z'
+            next_lower = i + 1 < len(name) and 'a' <= name[i + 1] <= 'z'
+            if i > 0 and name[i - 1] != '_' and (not previous_upper or next_lower):
+                out.append('_')
+            out.append(char.lower())
+        else:
+            out.append(char)
+    return ''.join(out)
+
+
+def nominal(name):
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', name) or name == '_' or name in KEYWORDS:
+        raise ValueError(f'{name!r}: expected one local non-generic nominal identifier; '
+                         'qualified/imported paths and type arguments are unsupported; '
+                         'wire imported hooks manually in their defining module')
+    if name in BUILTINS:
+        raise ValueError(f'{name!r}: built-in types use existing hooks; list only local nominals '
+                         '(do not list Date, Option or List)')
+    return name
+
+
+def declarations(names, root):
+    """Validate the complete request before constructing any source."""
+    nominal(root)
+    stems = {}
+    for name in names:
+        nominal(name)
+        stem = snake(name)
+        if stem in stems:
+            raise ValueError(f'{name!r} and {stems[stem]!r}: duplicate or colliding generated stem {stem!r}')
+        stems[stem] = name
+    if root not in names:
+        raise ValueError(f'root {root!r} must be included in the explicit type list')
+    symbols = [stem + suffix for stem in stems for suffix in ('_from_json_reader', '_json_into')]
+    symbols.append(snake(root) + '_from_json_bytes')
+    for symbol in symbols:
+        if symbol in names:
+            raise ValueError(f'generated declaration {symbol!r} collides with a supplied type identifier')
+    blocks = []
+    for stem, name in stems.items():
+        blocks.append(f'''fn {stem}_from_json_reader(mut cursor: std@1/json.Reader) -> core@1/Result[{name}, core@1/String] uses {{}} = comptime std@1/derive.from_json_reader(
+  shape({name})
+)''')
+        blocks.append(f'''fn {stem}_json_into(value: {name}, mut out: core@1/List[core@1/u8], depth: core@1/u64) -> core@1/Result[
+  (),
+  std@1/json.JsonError
+] uses {{}} = comptime std@1/derive.json_into(shape({name}))''')
+    blocks.append(f'''fn {snake(root)}_from_json_bytes(data: core@1/Bytes) -> core@1/Result[{root}, core@1/String] uses {{}} = comptime std@1/derive.from_json_bytes(
+  shape({root})
+)''')
+    return '\n\n'.join(blocks) + '\n'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument('types', nargs='+', metavar='TYPE', help='every local nominal, including nested types')
+    parser.add_argument('--root', required=True, metavar='TYPE', help='listed type that gets a bytes decoder')
+    args = parser.parse_args()
+    try:
+        source = declarations(args.types, args.root)
+    except ValueError as error:
+        parser.error(str(error))
+    sys.stdout.write(source)
+
+
+if __name__ == '__main__':
+    main()

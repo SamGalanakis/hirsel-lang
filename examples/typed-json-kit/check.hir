@@ -1,0 +1,2 @@
+// A launch entry for `hirsel check`; the library manifest has no entry.
+pub fn main() {}

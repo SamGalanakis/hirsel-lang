@@ -973,6 +973,13 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
                             files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh"}))
+    out.append("\n" + call("hirsel_script_test", name="test-json-hooks", script="tools/tests/test_json_hooks.py", full=False,
+                            args=["Unit"], data=["tools/json-hooks", "tools/tests/test_json_hooks.py"]))
+    out.append("\n" + call("hirsel_script_test", name="test-json-hooks-integration", script="tools/tests/test_json_hooks.py", full=False,
+                            args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-json-hooks-integration/hirsel", "Integration"],
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
+                            runtime_archives=RUNTIME_ARCHIVES,
+                            data=Raw('glob(["tools/json-hooks", "tools/tests/test_json_hooks.py", "examples/typed-json-kit/main.hir", "examples/typed-json-kit/check.hir", "examples/typed-json-kit/hirsel.json", "examples/typed-json-kit/check.json", "stdlib/std@1/**"])')))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],

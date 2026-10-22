@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "typed_json_kit",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "hooks.hir",
+      "module": []
+    },
+    {
+      "path": "check.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

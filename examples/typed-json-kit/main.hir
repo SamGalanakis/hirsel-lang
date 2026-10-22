@@ -1,0 +1,105 @@
+/// Hand-authored library fixture. Generate hooks.hir before checking or testing.
+pub type Item {
+  name: String,
+  active: bool,
+}
+
+pub type Snapshot {
+  captured: time.Date,
+  items: List[Item],
+}
+
+pub fn decode(data: Bytes) -> Result[Snapshot, String] uses {} {
+  snapshot_from_json_bytes(data)
+}
+
+pub fn encode(value: Snapshot) -> Result[unique Bytes, json.JsonError] uses {} {
+  let mut out: List[u8] = []
+  snapshot_json_into(value, mut out, 0)?
+  Ok(unique bytes.from_list(take out))
+}
+
+fn encode_error(error: json.JsonError) -> String uses {} {
+  "encode failed"
+}
+
+@test
+fn nested_roundtrip(t: Test) -> Result[(), String] {
+  let Some(captured) = date.new(2024, 2, 29) else {
+    return Error("fixture date")
+  }
+  let value = Snapshot(
+    captured: captured,
+    items: [Item(name: "a\nb", active: true), Item(name: "old", active: false)]
+  )
+  let expected = b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"a\\nb\",\"active\":true},{\"name\":\"old\",\"active\":false}]}"
+  let output = encode(value) ? encode_error
+  test.check(t, output == expected)
+  let decoded = decode(output)?
+  test.check(t, decoded.captured == value.captured)
+  test.check(t, list.len(decoded.items) == 2)
+  test.check(t, decoded.items[0].name == "a\nb")
+  test.check(t, decoded.items[0].active && !decoded.items[1].active)
+  Ok(())
+}
+
+// A local, allocated input dies on return; the caller then uses strings/lists.
+fn retained() -> Result[Snapshot, String] uses {} {
+  let mut input: List[u8] = []
+  text.append(
+    mut input,
+    "{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"kept\\ntext\",\"active\":true}]}"
+  )
+  let data = bytes.from_list(take input)
+  decode(data)
+}
+
+@test
+fn retained_after_input_drop(t: Test) -> Result[(), String] {
+  let decoded = retained()?
+  test.check(t, decoded.items[0].name == "kept\ntext")
+  test.check(t, decoded.items[0].active)
+  let output = encode(decoded) ? encode_error
+  test.check(
+    t,
+    output == b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"kept\\ntext\",\"active\":true}]}"
+  )
+  Ok(())
+}
+
+// serde test_ignore_unknown's unknown-before-known and nested-sequence vector,
+// extended with nested objects/null and repeated at the nested nominal boundary.
+@test
+fn unknown_nested_values(t: Test) -> Result[(), String] {
+  let decoded = decode(
+    b"{\"whoops1\":2,\"captured\":\"2024-02-29\",\"whoops2\":[2,{\"deep\":[null,true,{}]}],\"items\":[{\"whoops\":[{\"x\":[1,2]}],\"name\":\"wool\",\"active\":true}],\"whoops3\":2}"
+  )?
+  test.check(t, decoded.items[0].name == "wool")
+  let output = encode(decoded) ? encode_error
+  test.check(
+    t,
+    output == b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"wool\",\"active\":true}]}"
+  )
+  Ok(())
+}
+
+@test
+fn malformed_nested_values(t: Test) {
+  let cases: List[Bytes] = [
+    b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":3,\"active\":true}]}",
+    b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"x\"}]}",
+    b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"x\",\"active\":true,\"active\":false}]}",
+    b"{\"captured\":\"2023-02-29\",\"items\":[]}",
+    b"{\"captured\":\"2024-02-29\",\"items\":[{\"extra\":[1,],\"name\":\"x\",\"active\":true}]}",
+    b"{\"captured\":\"2024-02-29\",\"items\":[]} false"
+  ]
+  for data in cases {
+    test.check(
+      t,
+      match decode(data) {
+        Error(_) => true,
+        _ => false,
+      }
+    )
+  }
+}

@@ -1792,3 +1792,6 @@ minimization would omit it.
 
 Continue with the [dogfood tools](../examples/README.md) for complete programs
 that read files, build text, parse JSON and implement a command loop.
+
+For a local nested type graph, the [typed JSON hook kit](typed-json-kit.md)
+generates every explicitly listed nominal's reader/writer and the root bytes decoder.
