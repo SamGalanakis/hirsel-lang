@@ -321,6 +321,8 @@ pub(crate) struct RunShared {
         std::sync::OnceLock<std::sync::Arc<crate::tasks::free::host::concurrent::Service>>,
     /// Explicit native Free host routing; production admission remains gated.
     pub(crate) free_native_io: std::sync::atomic::AtomicBool,
+    /// Native telemetry context derives from admitted span creation, without host calls.
+    pub(crate) free_native_spans: crate::tasks::free::host::native::Spans,
 }
 
 impl RunShared {
@@ -877,6 +879,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         ordered_roots: Default::default(),
         free_io: Default::default(),
         free_native_io: Default::default(),
+        free_native_spans: Default::default(),
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };

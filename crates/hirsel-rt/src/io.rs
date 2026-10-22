@@ -3908,6 +3908,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_context(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if crate::tasks::free::host::native::enabled(ctx) {
+        let Some(bytes) = crate::tasks::free::host::native::span_context(
+            ctx,
+            unsafe { telemetry.read() },
+            unsafe { span.read() },
+        ) else {
+            return crate::STATUS_FAILURE;
+        };
+        unsafe {
+            crate::tasks::free::host::native::convert_result(
+                ctx,
+                Completion::Bytes(Ok(bytes)),
+                |completion| {
+                    let Completion::Bytes(Ok(bytes)) = completion else {
+                        unreachable!()
+                    };
+                    out.write(crate::text::allocate_bytes(ctx, bytes));
+                },
+            )
+        };
+        return crate::STATUS_OK;
+    }
     let binding = unsafe { Binding::get(ctx) };
     let Some(context) = binding
         .adapter
@@ -3975,11 +3997,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_finish(
         },
         Err(_) => {
             // CAP-2 still precedes the refusal: only the span's own Telemetry abandons it.
-            if unsafe { Binding::get(ctx) }
-                .adapter
-                .telemetry_context(telemetry, span)
-                .is_none()
-            {
+            let valid = if crate::tasks::free::host::native::enabled(ctx) {
+                crate::tasks::free::host::native::span_valid(ctx, telemetry, span)
+            } else {
+                unsafe { Binding::get(ctx) }
+                    .adapter
+                    .telemetry_context(telemetry, span)
+                    .is_some()
+            };
+            if !valid {
                 return crate::STATUS_FAILURE;
             }
             Request::Close { handle: span }

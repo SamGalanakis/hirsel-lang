@@ -509,7 +509,8 @@ unsafe fn invoke_resolved(
             ));
         }
     }
-    let encoded = handles::encode(pending, &mut completion);
+    let encoded = native::observe_span(ctx, pending.request.buffers(), &completion)
+        .and_then(|()| handles::encode(pending, &mut completion));
     pending.completion = Some(completion);
     encoded
 }
@@ -762,6 +763,7 @@ pub(crate) unsafe fn replay_request(
                 host.positions.clear();
                 host.output_count = count;
                 let result = token.host_result(envelope)?;
+                native::observe_span(ctx, &host._request, &result)?;
                 if matches!(result, Err(AdapterError::Blocked)) {
                     token.host_readiness(false)?;
                 }
@@ -890,3 +892,6 @@ mod native_input_tests;
 
 #[cfg(test)]
 mod native_signal_tests;
+
+#[cfg(test)]
+mod native_telemetry_tests;

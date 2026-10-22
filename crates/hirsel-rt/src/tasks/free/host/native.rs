@@ -26,6 +26,7 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    validate_span(ctx, &request)?;
     let result = if super::super::replay::on(ctx) {
         let keys = super::super::replay::token(ctx)
             .unwrap()
@@ -66,6 +67,7 @@ pub(super) fn request_keys(
     let keys = match request {
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
+        | R::Telemetry { io: 1 }
         | R::Signals { io: 1 }
         | R::Stdin { io: 1 }
         | R::Random { io: 1 }
@@ -94,6 +96,27 @@ pub(super) fn request_keys(
                 return Err(Stop::Diverged("native scalar resource kind differs".into()));
             }
             vec![(key, Mode::Exclusive)]
+        }
+        R::TelemetryBegin { telemetry, .. }
+        | R::TelemetryLog { telemetry, .. }
+        | R::TelemetryMeasure { telemetry, .. } => {
+            let (key, kind) = identity(*telemetry)?;
+            if kind != Kind::Other {
+                return Err(Stop::Diverged("native telemetry kind differs".into()));
+            }
+            vec![(key, Mode::Exclusive)]
+        }
+        R::TelemetryEvent {
+            telemetry, span, ..
+        }
+        | R::TelemetryFinish {
+            telemetry, span, ..
+        } => {
+            let provider = identity(*telemetry)?;
+            if provider.1 != Kind::Other || identity(*span)? != provider {
+                return Err(Stop::Diverged("native span resource differs".into()));
+            }
+            vec![(provider.0, Mode::Exclusive)]
         }
         R::Directory { io: 1, .. } => vec![(NAMESPACE, Mode::Shared)],
         R::NarrowDir { directory, .. }
@@ -179,7 +202,14 @@ pub(super) fn request_keys(
                 (NAMESPACE, Mode::Exclusive),
             ]
         }
-        R::Close { handle } => vec![(file(*handle)?, Mode::Exclusive), (NAMESPACE, Mode::Shared)],
+        R::Close { handle } => {
+            let (key, kind) = identity(*handle)?;
+            match kind {
+                Kind::File => vec![(key, Mode::Exclusive), (NAMESPACE, Mode::Shared)],
+                Kind::Other => vec![(key, Mode::Exclusive)],
+                _ => return Err(Stop::Diverged("unadmitted native close resource".into())),
+            }
+        }
         _ => return Err(Stop::Diverged("unadmitted native host request".into())),
     };
     Ok(KeySet::new(keys))
@@ -231,4 +261,108 @@ pub(crate) unsafe fn convert_result<T>(
     let converted = convert(unsafe { &*value });
     drop(unsafe { (*ctx).native_host_result.take().unwrap() });
     converted
+}
+
+#[derive(Default)]
+pub(crate) struct Spans(std::sync::Mutex<SpanState>);
+#[derive(Default)]
+struct SpanState {
+    issued: crate::telemetry::Issued,
+    rows: std::collections::BTreeMap<u64, (u64, Vec<u8>)>,
+}
+
+fn validate_span(ctx: *mut TaskCtx, request: &Request) -> Stopped<()> {
+    if let Request::TelemetryEvent {
+        telemetry, span, ..
+    }
+    | Request::TelemetryFinish {
+        telemetry, span, ..
+    } = request
+        && !span_valid(ctx, *telemetry, *span)
+    {
+        return Err(Stop::Diverged("unknown native telemetry span owner".into()));
+    }
+    Ok(())
+}
+
+pub(crate) fn span_valid(ctx: *mut TaskCtx, telemetry: u64, span: u64) -> bool {
+    unsafe { (*ctx).run_ref() }
+        .free_native_spans
+        .0
+        .lock()
+        .unwrap()
+        .rows
+        .get(&span)
+        .is_some_and(|(owner, _)| *owner == telemetry)
+}
+
+pub(crate) fn span_context(ctx: *mut TaskCtx, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+    unsafe { (*ctx).run_ref() }
+        .free_native_spans
+        .0
+        .lock()
+        .unwrap()
+        .rows
+        .get(&span)
+        .filter(|(owner, _)| *owner == telemetry)
+        .map(|(_, bytes)| bytes.clone())
+}
+
+/// Apply derived span state once per Ended, using the same initialized
+/// completion and parent bytes live and in replay. No host query or phase.
+pub(super) fn observe_span(
+    ctx: *mut TaskCtx,
+    request: &Request,
+    completion: &Result<Completion, AdapterError>,
+) -> Stopped<()> {
+    if !enabled(ctx) {
+        return Ok(());
+    }
+    match (request, completion) {
+        (
+            Request::TelemetryBegin {
+                telemetry, parent, ..
+            },
+            Ok(Completion::Span {
+                handle,
+                trace,
+                span,
+            }),
+        ) => {
+            let parent_trace = crate::telemetry::kernel::parent(parent)
+                .map_err(|_| Stop::Diverged("invalid telemetry parent".into()))?;
+            let mut state = unsafe { (*ctx).run_ref() }
+                .free_native_spans
+                .0
+                .lock()
+                .unwrap();
+            if state.rows.contains_key(handle) || !state.issued.admits(parent_trace, trace, span) {
+                return Err(Stop::Diverged(
+                    "invalid or repeated native span identity".into(),
+                ));
+            }
+            state.issued.accept(parent_trace, *trace, *span);
+            state.rows.insert(
+                *handle,
+                (
+                    *telemetry,
+                    crate::telemetry::kernel::context(trace, span, parent),
+                ),
+            );
+        }
+        (
+            Request::TelemetryFinish { span, .. } | Request::Close { handle: span },
+            Ok(Completion::Unit(Ok(()))),
+        ) => {
+            unsafe { (*ctx).run_ref() }
+                .free_native_spans
+                .0
+                .lock()
+                .unwrap()
+                .rows
+                .remove(span);
+        }
+        _ => {}
+    }
+    Ok(())
 }

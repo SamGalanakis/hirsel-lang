@@ -342,6 +342,7 @@ fn discover(
         G::Watcher { .. } | G::Directory { .. } => {
             registry.resource(handle, Kind::File);
         }
+        G::Span { telemetry, .. } => registry.alias(*telemetry, handle),
         G::Half { .. } => {} // registered with their parent before result publication
         _ => {
             registry.resource(handle, Kind::Other);
