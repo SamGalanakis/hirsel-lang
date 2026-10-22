@@ -59,6 +59,9 @@ pub(crate) struct TaskRoots {
     /// Free mode: an entered or cleanup phase is applying releases, whose walks apply nested
     /// releases at once.
     in_phase: bool,
+    pub(crate) trace_creator: crate::ordered::root_ids::Creator,
+    /// Only trace admission records decrements, including immediate nested tails.
+    pub(crate) trace_releases: Vec<Option<(crate::ordered::root_ids::SharedRootId, bool)>>,
 }
 
 impl TaskRoots {
@@ -165,6 +168,23 @@ unsafe fn add(ctx: &mut TaskCtx, block: *mut Header) {
 /// Give up one root at once: whether it was the last, after which the caller walks the root
 /// (its count stays 1, the dying block's alone).
 unsafe fn take(ctx: &mut TaskCtx, block: *mut Header) -> bool {
+    let registry = ctx.run_ref().ordered_roots.get();
+    let identity = registry.and_then(|registry| registry.get(block));
+    let last = unsafe { take_inner(ctx, block) };
+    if let Some(identity) = identity {
+        ctx.roots.trace_releases.push(Some((identity, last)));
+        if last {
+            ctx.run_ref().ordered_roots.get().unwrap().retire(block);
+        }
+    } else if ctx.run_ref().ordered_roots.get().is_some()
+        && unsafe { (*ctx.descriptor((*block).index())).flags } & crate::LAYOUT_MUTEX_ROOT == 0
+    {
+        ctx.roots.trace_releases.push(None);
+    }
+    last
+}
+
+unsafe fn take_inner(ctx: &mut TaskCtx, block: *mut Header) -> bool {
     let max = u64::from(ctx.run_ref().count_max);
     // SAFETY: the caller holds a root of the live block.
     let word = unsafe { word(block) };

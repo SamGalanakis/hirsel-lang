@@ -41,6 +41,7 @@ pub(super) struct Boundary {
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum CanonicalItem {
     Root,
+    SharedRoot(crate::ordered::root_ids::SharedRootId),
     Object(ObjectId),
     Cancellation(Vec<u32>),
     CompletionRank(ObjectId),
@@ -173,6 +174,9 @@ pub(super) enum CanonicalOutcome {
     },
     Failures(Vec<(hirsel_run_schema::Failure, Vec<u32>)>),
     RootReleased {
+        last: bool,
+    },
+    Thaw {
         last: bool,
     },
     Released {
@@ -359,6 +363,24 @@ pub(crate) fn owned_host_result(
         )),
         value => value.clone(),
     }
+}
+
+/// Drain actual decrements, including nested root walks, in mutation order.
+/// Unknown imported roots reject the whole projection; pointer bytes are absent.
+/// # Safety
+/// This committing callback exclusively owns ctx's non-suspending root tail.
+pub(super) unsafe fn root_releases(ctx: *mut TaskCtx) -> Option<Subevents> {
+    unsafe { std::mem::take(&mut (*ctx).roots.trace_releases) }
+        .into_iter()
+        .map(|release| {
+            release.map(|(identity, last)| {
+                (
+                    CanonicalItem::SharedRoot(identity),
+                    CanonicalOutcome::RootReleased { last },
+                )
+            })
+        })
+        .collect()
 }
 
 /// Deadline scopes are created in the head's bounded entry, before the
@@ -771,6 +793,9 @@ impl Log {
 /// or production dispatcher is changed by installing the evidence collector.
 #[cfg(test)]
 pub(super) fn enable(ctx: *mut TaskCtx) {
+    unsafe { (*ctx).run_ref() }
+        .ordered_roots
+        .get_or_init(Default::default);
     let driver = super::engine::driver(ctx);
     assert!(driver.recorded.is_empty());
     assert!(driver.events.replace(Log::default()).is_none());
@@ -4476,6 +4501,326 @@ mod tests {
                             reference = Some(rows);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_root_trace_refuses_unregistered_roots_and_retires_shallow_thaws() {
+        use crate::tasks::*;
+        let root_layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: crate::LAYOUT_FROZEN,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&root_layout as *const crate::Layout];
+        for width in [1, 2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    enable(ctx);
+                },
+                |ctx| unsafe {
+                    let root = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(root).cast::<u64>().write(99);
+                    crate::shared::hirsel_rt_v2_freeze(ctx, root);
+                    let mut last = 99;
+                    assert_eq!(
+                        crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, root),
+                        crate::STATUS_OK
+                    );
+                    assert_eq!(last, 1);
+                    crate::shared::hirsel_rt_v2_thaw(ctx, root);
+                    assert!(
+                        (*ctx)
+                            .run_ref()
+                            .ordered_roots
+                            .get()
+                            .unwrap()
+                            .get(root)
+                            .is_none()
+                    );
+                    (*ctx).heap().free(root);
+                    // An imported root without freeze provenance must never be
+                    // certified merely because its release and bytes are valid.
+                    let unknown = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(unknown).cast::<u64>().write(77);
+                    assert_eq!(
+                        crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, unknown),
+                        crate::STATUS_OK
+                    );
+                    crate::roots::hirsel_rt_v2_root_release(ctx, unknown);
+                    let _role = role::Guard::new(ctx);
+                    super::super::engine::at_head(ctx).unwrap();
+                    let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                    assert!(log.canonical().is_err());
+                    assert!(
+                        log.unsupported
+                            .iter()
+                            .any(|row| row.op == Some("shared.thaw"))
+                    );
+                    assert!(
+                        log.unsupported
+                            .iter()
+                            .any(|row| row.op == Some("root.release"))
+                    );
+                    assert!((*ctx).roots.trace_releases.is_empty());
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        }
+    }
+
+    #[derive(Default)]
+    struct FreezeOrder {
+        wide: bool,
+        second: std::sync::atomic::AtomicBool,
+        order: std::sync::Mutex<Vec<u64>>,
+    }
+
+    unsafe extern "C" fn shared_identity_child(
+        ctx: *mut TaskCtx,
+        env: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        use std::sync::atomic::Ordering;
+        unsafe {
+            let [probe, index] = crate::alloc::payload(env).cast::<[u64; 2]>().read();
+            let probe = &*(probe as *const FreezeOrder);
+            // Let the parent's second spawn retire before the first child's
+            // long head segment. The queued sibling may then freeze early.
+            if index == 0 {
+                let mut cause = 99;
+                assert_eq!(
+                    crate::tasks::hirsel_rt_v2_task_canceled(ctx, &mut cause, &0),
+                    crate::STATUS_OK
+                );
+                assert_eq!(cause, 0);
+            }
+            if index == 0 && probe.wide {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !probe.second.load(Ordering::Acquire) {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "younger pure segment never froze"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+            let root = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+            crate::alloc::payload(root).cast::<u64>().write(100 + index);
+            crate::shared::hirsel_rt_v2_freeze(ctx, root);
+            probe.order.lock().unwrap().push(index);
+            if index == 1 {
+                probe.second.store(true, Ordering::Release);
+            }
+            crate::roots::hirsel_rt_v2_root_dup(ctx, root);
+            let mut last = 99;
+            assert_eq!(
+                crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, root),
+                crate::STATUS_OK
+            );
+            assert_eq!(last, 0);
+            crate::roots::hirsel_rt_v2_root_release(ctx, root);
+            assert_eq!(
+                crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, root),
+                crate::STATUS_OK
+            );
+            assert_eq!(last, 1);
+            crate::roots::hirsel_rt_v2_root_release(ctx, root);
+            let mut result = [1u64, index];
+            crate::tasks::hirsel_rt_v2_task_finish(
+                ctx,
+                result.as_mut_ptr().cast(),
+                [0u64; 2].as_ptr().cast(),
+                16,
+                4,
+            )
+        }
+    }
+
+    #[test]
+    fn shared_root_ids_ignore_opposite_physical_freeze_orders_and_preserve_release_thaw_events() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let root_layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: crate::LAYOUT_FROZEN,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let environment = crate::Layout {
+            size: 16,
+            flags: 0,
+            ..root_layout
+        };
+        let result = environment;
+        let layouts = [&root_layout as *const crate::Layout, &environment, &result];
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let probe = Arc::new(FreezeOrder {
+                    wide: width > 1,
+                    ..Default::default()
+                });
+                let child_probe = probe.clone();
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 3;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                        install_value(ctx, 4, received_integer_program());
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        for index in 0..2 {
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                3,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env)
+                                .cast::<[u64; 2]>()
+                                .write([Arc::as_ptr(&child_probe) as u64, index]);
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    shared_identity_child,
+                                    env,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                        }
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_OK
+                        );
+                        let _role = role::Guard::new(ctx);
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let rows = log.canonical().unwrap();
+                        for index in 0..2u32 {
+                            let id = crate::ordered::root_ids::SharedRootId {
+                                creator: vec![index],
+                                freeze: 0,
+                            };
+                            let root_rows: Vec<_> = rows
+                                .iter()
+                                .filter(|row| row.item == CanonicalItem::SharedRoot(id.clone()))
+                                .collect();
+                            assert_eq!(root_rows.len(), 4);
+                            assert_eq!(
+                                root_rows
+                                    .iter()
+                                    .map(|row| row.outcome.clone())
+                                    .collect::<Vec<_>>(),
+                                [
+                                    CanonicalOutcome::Thaw { last: false },
+                                    CanonicalOutcome::RootReleased { last: false },
+                                    CanonicalOutcome::Thaw { last: true },
+                                    CanonicalOutcome::RootReleased { last: true },
+                                ]
+                            );
+                            assert_eq!(
+                                root_rows.iter().map(|row| row.ordinal).collect::<Vec<_>>(),
+                                if index == 0 {
+                                    [1, 2, 3, 4]
+                                } else {
+                                    [0, 1, 2, 3]
+                                }
+                            );
+                            assert_eq!(
+                                root_rows.iter().map(|row| row.version).collect::<Vec<_>>(),
+                                [1, 2, 3, 4]
+                            );
+                            assert!(
+                                root_rows
+                                    .iter()
+                                    .all(|row| row.transition == Transition::Keep)
+                            );
+                        }
+                        *seen.lock().unwrap() = rows.to_vec();
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                assert_eq!(
+                    *probe.order.lock().unwrap(),
+                    if width == 1 { vec![0, 1] } else { vec![1, 0] }
+                );
+                let rows = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&rows, reference);
+                } else {
+                    reference = Some(rows);
                 }
             }
         }

@@ -113,7 +113,7 @@ pub(crate) unsafe fn endpoint(
         ctx,
         name,
         || {
-            let left = if engine::driver(ctx).events.is_some() {
+            let left = if super::events::observing(ctx) {
                 scheduler(ctx).channels.close_images(word)
             } else {
                 scheduler(ctx).channels.close(word)
@@ -191,7 +191,7 @@ pub(crate) unsafe fn mutex(
         ctx,
         name,
         || {
-            let left = if engine::driver(ctx).events.is_some() {
+            let left = if super::events::observing(ctx) {
                 scheduler(ctx).sync.close_images(word)
             } else {
                 scheduler(ctx).sync.close(word)
@@ -304,9 +304,18 @@ pub(crate) unsafe fn shared_release(ctx: *mut TaskCtx, block: *mut Header) {
 /// # Safety
 /// As for SharedThawTurn; the root remains borrowed through the head gate.
 pub(crate) unsafe fn thaw(ctx: *mut TaskCtx, root: *mut Header, out: *mut u8) -> Stopped<u8> {
-    let (last, progress) = engine::head_effect(ctx, "shared.thaw", || {
-        (unsafe { crate::roots::sole(root) }, Next::Keep)
-    })?;
+    let (last, progress) = engine::head_canonical(
+        ctx,
+        "shared.thaw",
+        || (unsafe { crate::roots::sole(root) }, Next::Keep),
+        |last| {
+            let identity = unsafe { (*ctx).run_ref() }.ordered_roots.get()?.get(root)?;
+            Some(vec![(
+                super::events::CanonicalItem::SharedRoot(identity),
+                super::events::CanonicalOutcome::Thaw { last: *last },
+            )])
+        },
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     unsafe { out.write(u8::from(last)) };
     Ok(STATUS_OK)
@@ -1048,9 +1057,10 @@ mod tests {
                     let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
                     (*ctx).set_budgets(None, Some(2 * charge));
                     engine::enable(ctx, Policy::admit(&Default::default(), Some(2 * charge)));
+                    super::super::events::enable(ctx);
                 },
                 |ctx| unsafe {
-                    for _ in 0..3 {
+                    for iteration in 0..3u64 {
                         let inner = crate::alloc::hirsel_rt_v2_alloc(
                             ctx,
                             2,
@@ -1070,6 +1080,8 @@ mod tests {
                         crate::alloc::payload(root)
                             .cast::<*mut Header>()
                             .write(inner);
+                        crate::shared::hirsel_rt_v2_freeze(ctx, inner);
+                        crate::shared::hirsel_rt_v2_freeze(ctx, root);
                         crate::roots::hirsel_rt_v2_root_release(ctx, root);
                         let _role = role::Guard::new(ctx);
                         assert_eq!(
@@ -1078,6 +1090,27 @@ mod tests {
                         );
                         assert_eq!((*ctx).heap_ref().meter.held(), 0);
                         assert_eq!((*ctx).ordered_freed.get(), 0, "credits cannot apply twice");
+                        assert!((*ctx).roots.trace_releases.is_empty());
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        let events = log.canonical().unwrap();
+                        let tail = &events[events.len() - 2..];
+                        for (row, freeze) in tail.iter().zip([iteration * 2 + 1, iteration * 2]) {
+                            assert_eq!(
+                                row.item,
+                                super::super::events::CanonicalItem::SharedRoot(
+                                    crate::ordered::root_ids::SharedRootId {
+                                        creator: vec![],
+                                        freeze
+                                    }
+                                )
+                            );
+                            assert_eq!(
+                                row.outcome,
+                                super::super::events::CanonicalOutcome::RootReleased { last: true }
+                            );
+                            assert_eq!(row.ordinal, iteration);
+                        }
+                        assert_eq!((tail[0].subevent, tail[1].subevent), (0, 1));
                     }
                     let _role = role::Guard::new(ctx);
                     let task = engine::current(ctx);

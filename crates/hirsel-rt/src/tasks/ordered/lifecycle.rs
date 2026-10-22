@@ -181,6 +181,9 @@ pub(crate) unsafe fn spawn(
     unsafe {
         child.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
         (*child).task_id = index;
+        if (*ctx).run_ref().ordered_roots.get().is_some() {
+            (*child).roots.trace_creator.path = path.clone();
+        }
         (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
     }
     let mut task = Task::new(generation, child, Some(scope as u32), path, None);

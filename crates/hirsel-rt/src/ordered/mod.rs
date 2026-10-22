@@ -13,6 +13,7 @@ pub mod capture;
 pub mod footprint;
 pub mod native;
 pub mod objects;
+pub(crate) mod root_ids;
 
 use std::collections::{BTreeMap, VecDeque};
 

@@ -288,8 +288,8 @@ impl Backend<Command> for Objects<'_> {
         if let Command::PlainClose { word, mutex } = &op.payload {
             assert!(!early, "close only retires");
             let before = unsafe { (*self.ctx).ordered_freed.get() };
-            let canonical;
-            let observing = engine::driver(self.ctx).events.is_some();
+            let mut canonical;
+            let observing = events::observing(self.ctx);
             if *mutex {
                 let left = if observing {
                     super::scheduler(self.ctx).sync.close_images(*word)
@@ -327,6 +327,14 @@ impl Backend<Command> for Objects<'_> {
                     unsafe { drops::plain_images(self.ctx, &images, descriptor) };
                 }
             }
+            if observing {
+                canonical = canonical
+                    .zip(unsafe { events::root_releases(self.ctx) })
+                    .map(|(mut events, roots)| {
+                        events.extend(roots);
+                        events
+                    });
+            }
             let credit = unsafe { (*self.ctx).ordered_freed.replace(before) } - before;
             let mut result = Outcome::image(0, Vec::new());
             result.canonical = canonical;
@@ -344,8 +352,16 @@ impl Backend<Command> for Objects<'_> {
             let before = unsafe { (*self.ctx).ordered_freed.get() };
             unsafe { crate::roots::retire_shared(self.ctx, *block) };
             let credit = unsafe { (*self.ctx).ordered_freed.replace(before) } - before;
+            let mut result = Outcome::image(0, Vec::new());
+            if unsafe { (*self.ctx).run_ref() }
+                .ordered_roots
+                .get()
+                .is_some()
+            {
+                result.canonical = unsafe { events::root_releases(self.ctx) };
+            }
             return Receipt {
-                result: Outcome::image(0, Vec::new()),
+                result,
                 next: Next::Keep,
                 credit,
             };
