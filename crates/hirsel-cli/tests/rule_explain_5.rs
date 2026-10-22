@@ -128,6 +128,8 @@ fn rule_explain_5_every_entry_matches_guidance_and_reference_without_a_package()
 #[test]
 fn rule_explain_5_errors_are_exit_two_with_no_fabricated_explanation() {
     let cwd = EmptyCwd::new();
+    // Build the deliberately unknown ID so it is not a source rule citation.
+    let oversized = format!("OWN-{}", "9".repeat(48));
     for args in [
         vec![],
         vec!["own-2"],
@@ -139,7 +141,7 @@ fn rule_explain_5_errors_are_exit_two_with_no_fabricated_explanation() {
         vec![" OWN-2"],
         vec!["OWN-2\n"],
         vec!["UNKNOWN-999"],
-        vec!["OWN-999999999999999999999999999999999999999999999999"],
+        vec![oversized.as_str()],
         vec!["error_code"],
         vec!["2"],
         vec!["FAIL-1"],
