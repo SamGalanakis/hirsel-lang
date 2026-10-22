@@ -7,7 +7,7 @@
 //! still observes its value, so the store changes only how much is recomputed.
 use crate::memo::{ReadKey, Reads};
 use crate::{LoweringPolicy, QueryKind};
-pub use hirsel_artifact_store::Bytes;
+pub use hirsel_artifact_store::{Action, Bytes};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -15,10 +15,11 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 mod dir;
 pub use dir::{DirStore, GcReport};
 
-/// `H("hirsel.result.v2", environment hash, DefPath, item text hash,
-/// QueryKind, LoweringPolicy)`: a DefinitionKey without its reads.
+/// Stable logical address plus explicit source inputs. The address does not
+/// change when the body changes; variants bind inputs and dependency outputs
+/// into complete actions before a payload can be adopted.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct EntryKey(pub ContentHash);
+pub struct EntryKey(pub ContentHash, pub ContentHash, pub QueryKind);
 impl EntryKey {
     pub fn new(
         environment: ContentHash,
@@ -27,16 +28,19 @@ impl EntryKey {
         kind: QueryKind,
         policy: LoweringPolicy,
     ) -> Self {
-        Self(ContentHash::of_parts(
-            "hirsel.result.v2",
-            [
-                environment.0.as_slice(),
-                definition.fingerprint().0.as_slice(),
-                text.0.as_slice(),
-                &[kind as u8],
-                &[policy as u8],
-            ],
-        ))
+        Self(
+            ContentHash::of_parts(
+                "hirsel.result.address.v3",
+                [
+                    environment.0.as_slice(),
+                    definition.fingerprint().0.as_slice(),
+                    &[kind as u8],
+                    &[policy as u8],
+                ],
+            ),
+            text,
+            kind,
+        )
     }
     pub fn hex(&self) -> String {
         self.0.0.iter().map(|b| format!("{b:02x}")).collect()
@@ -55,8 +59,9 @@ pub trait ResultStore: Send + Sync {
     fn put(&self, key: &EntryKey, value: &[u8]);
     /// Publish a query product with its domain explicit at the provider seam.
     /// The key already binds the kind; byte-only providers share `put`.
-    fn put_query(&self, kind: QueryKind, key: &EntryKey, value: &[u8]) {
-        let _ = kind;
+    fn put_query(&self, kind: QueryKind, key: &EntryKey, action: Action, value: &[u8]) {
+        assert_eq!(kind, key.2);
+        let _ = action;
         self.put(key, value);
     }
     /// The provider name the run config selects it by (`dir@1`, ...).
@@ -83,6 +88,7 @@ pub struct Entry {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Variant {
+    pub inputs: ContentHash,
     pub reads: Reads,
     pub payload: Bytes,
 }
@@ -105,17 +111,27 @@ fn payload_reads_hash(reads: &Reads) -> ContentHash {
 }
 
 impl Variant {
+    pub(crate) fn action(&self, key: &EntryKey) -> Action {
+        Action(ContentHash::of_parts(
+            "hirsel.result.action.v1",
+            [
+                key.0.0.as_slice(),
+                self.inputs.0.as_slice(),
+                payload_reads_hash(&self.reads).0.as_slice(),
+            ],
+        ))
+    }
     /// Bind a front-end payload to the complete read set. This witness stays
     /// with the payload even if a provider loses or swaps the entry's reads.
-    pub(crate) fn bind_payload(&mut self) {
-        let mut bytes = b"HRP1".to_vec();
-        bytes.extend(payload_reads_hash(&self.reads).0);
+    pub(crate) fn bind_payload(&mut self, key: &EntryKey) {
+        let mut bytes = b"HRP2".to_vec();
+        bytes.extend(self.action(key).0.0);
         bytes.extend(self.payload.iter());
         self.payload = bytes.into();
     }
-    pub(crate) fn unbind_payload(&mut self) -> Option<()> {
-        let bytes = self.payload.strip_prefix(b"HRP1")?;
-        bytes.strip_prefix(payload_reads_hash(&self.reads).0.as_slice())?;
+    pub(crate) fn unbind_payload(&mut self, key: &EntryKey) -> Option<()> {
+        let bytes = self.payload.strip_prefix(b"HRP2")?;
+        bytes.strip_prefix(self.action(key).0.0.as_slice())?;
         self.payload = self
             .payload
             .range(36, (self.payload.len() - 36) as u64, 1)?;
@@ -123,7 +139,7 @@ impl Variant {
     }
 }
 
-const ENTRY_MAGIC: &[u8; 4] = b"HRE2";
+const ENTRY_MAGIC: &[u8; 4] = b"HRE4";
 
 impl Entry {
     /// The first variant whose every read still observes its recorded value.
@@ -138,7 +154,8 @@ impl Entry {
     /// Adds a variant first, replacing one with the same reads and dropping
     /// the least recently written past `VARIANTS`.
     pub fn insert(&mut self, variant: Variant) {
-        self.variants.retain(|v| v.reads != variant.reads);
+        self.variants
+            .retain(|v| v.inputs != variant.inputs || v.reads != variant.reads);
         self.variants.insert(0, variant);
         self.variants.truncate(VARIANTS);
     }
@@ -146,6 +163,7 @@ impl Entry {
         let mut out = ENTRY_MAGIC.to_vec();
         out.push(self.variants.len() as u8);
         for v in &self.variants {
+            out.extend(v.inputs.0);
             v.reads.encode(&mut out);
             out.extend((v.payload.len() as u64).to_le_bytes());
             out.extend(v.payload.iter());
@@ -164,12 +182,16 @@ impl Entry {
         }
         let mut variants = Vec::with_capacity(count as usize);
         for _ in 0..count {
+            let (inputs, rest) = input.split_at_checked(32)?;
+            let inputs = ContentHash(inputs.try_into().ok()?);
+            input = rest;
             let reads = Reads::decode(&mut input)?;
             let (len, rest) = input.split_at_checked(8)?;
             let len = u64::from_le_bytes(len.try_into().ok()?) as usize;
             let (payload, rest) = rest.split_at_checked(len)?;
             input = rest;
             variants.push(Variant {
+                inputs,
                 reads,
                 payload: bytes.range(
                     (payload.as_ptr() as usize - bytes.as_ptr() as usize) as u64,
@@ -185,7 +207,7 @@ impl Entry {
     /// query (rustc_middle/src/query/on_disk_cache.rs:468-485). Here the existing
     /// checksum frame additionally detects damaged reads and payload bytes.
     pub fn encode_for(&self, key: &EntryKey) -> Vec<u8> {
-        let mut bytes = b"HRE3".to_vec();
+        let mut bytes = b"HRE4".to_vec();
         bytes.extend(key.0.0);
         bytes.extend(self.encode());
         frame(&bytes)
@@ -195,12 +217,19 @@ impl Entry {
         store
             .get(key)
             .and_then(|bytes| {
-                let payload = unframe(&bytes)?.strip_prefix(b"HRE3")?;
+                let payload = unframe(&bytes)?.strip_prefix(b"HRE4")?;
                 let payload = payload.strip_prefix(key.0.0.as_slice())?;
                 let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
                 Entry::decode_bytes(bytes.range(offset as u64, payload.len() as u64, 1)?)
             })
             .unwrap_or_default()
+    }
+    pub(crate) fn action(&self, key: &EntryKey) -> Action {
+        let actions: Vec<_> = self.variants.iter().map(|v| v.action(key)).collect();
+        Action(ContentHash::of_parts(
+            "hirsel.result.variants.v1",
+            actions.iter().map(|a| a.0.0.as_slice()),
+        ))
     }
 }
 
@@ -223,7 +252,7 @@ impl ResultStore for NoneStore {
 /// `mem@1`: one map per process, shared by every session.
 #[derive(Debug, Default)]
 pub struct MemStore {
-    entries: Mutex<HashMap<EntryKey, Bytes>>,
+    entries: Mutex<HashMap<ContentHash, (EntryKey, Bytes)>>,
 }
 impl MemStore {
     /// The process's shared store.
@@ -246,12 +275,14 @@ impl MemStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .map(|v| v.len() + std::mem::size_of::<EntryKey>())
+            .map(|(_, v)| v.len() + std::mem::size_of::<EntryKey>())
             .sum()
     }
     /// Empties the store, returning what it held.
     pub fn take(&self) -> HashMap<EntryKey, Bytes> {
         std::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_values()
+            .collect()
     }
 }
 impl ResultStore for MemStore {
@@ -259,14 +290,14 @@ impl ResultStore for MemStore {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-            .cloned()
+            .get(&key.0)
+            .map(|(_, bytes)| bytes.clone())
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(*key, value.into());
+            .insert(key.0, (*key, value.into()));
     }
     fn name(&self) -> &'static str {
         "mem@1"
@@ -292,7 +323,7 @@ pub struct SimStore {
 }
 #[derive(Debug, Default)]
 struct SimState {
-    entries: HashMap<EntryKey, Vec<u8>>,
+    entries: HashMap<ContentHash, Vec<u8>>,
     faults: SimFaults,
     gets: u64,
     puts: u64,
@@ -338,7 +369,7 @@ impl ResultStore for SimStore {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let ordinal = state.gets;
         state.gets += 1;
-        let Some(framed) = state.entries.get(key).cloned() else {
+        let Some(framed) = state.entries.get(&key.0).cloned() else {
             state.log.push(SimOp::Miss(*key));
             return None;
         };
@@ -354,7 +385,7 @@ impl ResultStore for SimStore {
                 Some(payload.into())
             }
             None => {
-                state.entries.remove(key);
+                state.entries.remove(&key.0);
                 state.log.push(SimOp::Corrupt(*key));
                 None
             }
@@ -368,7 +399,7 @@ impl ResultStore for SimStore {
             state.log.push(SimOp::Lost(*key));
             return;
         }
-        state.entries.insert(*key, frame(value));
+        state.entries.insert(key.0, frame(value));
         state.log.push(SimOp::Put(*key));
     }
     fn name(&self) -> &'static str {
