@@ -1,0 +1,66 @@
+// rule: SEM-1
+// expect: run
+// Borrowed scalar parsing has the String entry's exact rounding and errors,
+// including nonfinite spellings and invalid bytes without UTF-8 construction.
+pub fn main(t: Test) -> Result[(), ()] {
+  let valid: List[String] = [
+    "0",
+    "-0",
+    "1.25",
+    "1e-7",
+    "2.2250738585072014e-308",
+    "2.4703282292062328e-324",
+    "1.7976931348623157e308",
+    "1.00000000000000011102230246251565404236316680908203125",
+    "1.000000059604644775390625",
+    "1e-10000",
+    "inf",
+    "-inf"
+  ]
+  for spelling in valid {
+    match f64.parse(spelling) {
+      Ok(expected) => {
+        let Ok(actual) = f64.parse_bytes(string.as_bytes(spelling)) else {
+          return Error(())
+        }
+        test.equal(t, f64.bits(actual), f64.bits(expected))
+      },
+      Error(e) => test.equal(t, f64.parse_bytes(string.as_bytes(spelling)), Error(e)),
+    }
+    match f32.parse(spelling) {
+      Ok(expected) => {
+        let Ok(actual) = f32.parse_bytes(string.as_bytes(spelling)) else {
+          return Error(())
+        }
+        test.equal(t, f32.bits(actual), f32.bits(expected))
+      },
+      Error(e) => test.equal(t, f32.parse_bytes(string.as_bytes(spelling)), Error(e)),
+    }
+  }
+  let invalid: List[Bytes] = [
+    b"",
+    b"\xff",
+    b"\xc3\xa9",
+    b"1\x00",
+    b"NaN!",
+    b"1.",
+    b"+1",
+    b"1e+",
+    b"1x"
+  ]
+  for data in invalid {
+    test.equal(t, f64.parse_bytes(data), Error(Invalid))
+    test.equal(t, f32.parse_bytes(data), Error(Invalid))
+  }
+  let Ok(nan64) = f64.parse_bytes(b"NaN") else {
+    return Error(())
+  }
+  let Ok(nan32) = f32.parse_bytes(b"NaN") else {
+    return Error(())
+  }
+  test.check(t, nan64 != nan64 && nan32 != nan32)
+  let interval = bytes.slice(b"x1.25x", 1, 5)
+  test.equal(t, f64.parse_bytes(interval), Ok(1.25))
+  test.equal(t, f32.parse_bytes(interval), Ok(1.25f32))
+  Ok(())
+}

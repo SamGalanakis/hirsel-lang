@@ -96,16 +96,23 @@ pub fn to_string(value: f64) -> unique String uses {} {
 
 @noalloc
 pub fn parse(text: String) -> Result[f64, scalar.ParseError] uses {} {
-  if text == "NaN" {
+  parse_bytes(core@1/string.as_bytes(text))
+}
+
+// The same exact conversion and special spellings over a borrowed byte interval.
+// Non-ASCII or malformed bytes are Invalid; no String allocation is required.
+@noalloc
+pub fn parse_bytes(data: Bytes) -> Result[f64, scalar.ParseError] uses {} {
+  if data == b"NaN" {
     return Ok(core@1/f64.from_bits(9221120237041090560u64))
   }
-  if text == "inf" {
+  if data == b"inf" {
     return Ok(core@1/f64.from_bits(9218868437227405312u64))
   }
-  if text == "-inf" {
+  if data == b"-inf" {
     return Ok(core@1/f64.from_bits(18442240474082181120u64))
   }
-  match internal.float_decimal.parse(text, 52, 1023) {
+  match internal.float_decimal.parse_bytes(data, 52, 1023) {
     Error(error) => Error(error),
     Ok(bits) => {
       let word: u64 = core@1/int.narrow(bits)

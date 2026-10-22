@@ -4799,6 +4799,7 @@ conformance/SEM/SEM-1-float-from-int-input-ok.hir
 conformance/SEM/SEM-1-float-from-int-result-bad.hir
 conformance/SEM/SEM-1-float-from-int-result-ok.hir
 conformance/SEM/SEM-1-float-from-int-run.hir
+conformance/SEM/SEM-1-float-parse-bytes-run.hir
 conformance/SEM/SEM-1-floor-mod.hir
 conformance/SEM/SEM-1-format-into-appends-run.hir
 conformance/SEM/SEM-1-format-into-fused-append-run.hir
