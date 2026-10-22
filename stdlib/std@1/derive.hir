@@ -1729,6 +1729,23 @@ fn reader_tuple(mut w: Writer, types: List[String], expected: String, variant: b
   Ok(take names)
 }
 
+// Rust HashSet::new keeps empty storage unallocated. A derived record needs
+// the unknown-key tracker only after encountering its first unknown field;
+// known fields already detect decoded duplicates with their Option slots.
+// Keep the same hashed set for unknown fields, including wide objects.
+pub fn remember_unknown_key(mut keys: Option[Set[String]], take key: String) -> bool uses {} {
+  let mut seen = match option.remove(mut keys) {
+    Some(previous) => take previous,
+    None => set.empty(),
+  }
+  let duplicate = set.contains(seen, key)
+  if !duplicate {
+    set.insert(mut seen, take key)
+  }
+  keys = Some(take seen)
+  !duplicate
+}
+
 fn reader_members(
   mut w: Writer,
   names: List[String],
@@ -1750,7 +1767,7 @@ fn reader_members(
   let key = fresh(mut w, "key")
   put(
     mut w,
-    f" let mut {keys}: Set[String] = set.empty()\n let mut {first} = true\n while true {{\n let Some({key}) = (match std@1/json.object_key(mut cursor, mut {first}) {{ Ok(k) => k, Error(_) => return Error(\"not JSON\") }}) else {{ break }}\n"
+    f" let mut {keys}: Option[Set[String]] = None\n let mut {first} = true\n while true {{\n let Some({key}) = (match std@1/json.object_key(mut cursor, mut {first}) {{ Ok(k) => k, Error(_) => return Error(\"not JSON\") }}) else {{ break }}\n"
   )
   i = 0
   for name in names {
@@ -1767,7 +1784,7 @@ fn reader_members(
   }
   put(
     mut w,
-    f" let unknown_key = std@1/json.text_owned({key})\n if set.contains({keys}, unknown_key) {{ return Error(\"not JSON\") }}\n set.insert(mut {keys}, take unknown_key)\n std@1/derive.read_json(std@1/json.colon(mut cursor))?\n std@1/derive.read_json(std@1/json.skip(mut cursor))?\n }}\n"
+    f" let unknown_key = std@1/json.text_owned({key})\n if !std@1/derive.remember_unknown_key(mut {keys}, take unknown_key) {{ return Error(\"not JSON\") }}\n std@1/derive.read_json(std@1/json.colon(mut cursor))?\n std@1/derive.read_json(std@1/json.skip(mut cursor))?\n }}\n"
   )
   let mut arguments: List[String] = []
   i = 0
