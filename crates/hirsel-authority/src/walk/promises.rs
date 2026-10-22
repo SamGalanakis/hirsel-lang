@@ -636,17 +636,7 @@ impl Checker<'_> {
         if !different {
             return true;
         }
-        let valid = view && {
-            let store = self.t;
-            // This check concerns nested contracts. Root judgments are made
-            // independently by I and the existing authority/placement checks.
-            let mut row = store.get(expected).unwrap().clone();
-            row.kind = store.get(actual).unwrap().kind.clone();
-            let actual = store.intern(row);
-            self.proof(false, |memo| {
-                memo.view(expected, actual, TypeRelation::Parameter)
-            })
-        };
+        let valid = self.proof(false, |memo| memo.nested_uniqueness(expected, actual, view));
         if !valid {
             let value = self.received_span(span);
             let receiver = self.receiving.as_ref().map_or(span, |r| r.span);

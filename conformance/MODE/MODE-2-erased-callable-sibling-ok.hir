@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+fn probe(take xs: unique List[u64]) -> Wrap[unique List[u64]] {
+  Wrap(value: take xs)
+}

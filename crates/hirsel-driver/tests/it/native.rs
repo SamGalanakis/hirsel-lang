@@ -1963,10 +1963,18 @@ fn generated_body_debug_preserves_nested_body_sites() {
                 )
                 .unwrap();
                 let mut found = false;
+                let mut source_less_intrinsics = 0;
                 for function in objects.iter().flat_map(|o| &o.debug) {
                     assert!(function.well_formed());
                     for range in &function.ranges {
                         let item = range.item as usize;
+                        if function.owner_kinds[item]
+                            == hirsel_lir::debug::DebugOwnerKind::SourceLessCoreIntrinsic
+                        {
+                            assert!(!sources.contains_key(&function.items[item]));
+                            source_less_intrinsics += 1;
+                            continue;
+                        }
                         let source = &sources[&function.items[item]];
                         let (file, base) = source.source(function.sources[item]).unwrap();
                         let location = file.location(base + range.offset).unwrap();
@@ -1974,6 +1982,10 @@ fn generated_body_debug_preserves_nested_body_sites() {
                             && (location.line, location.column) == (line, column);
                     }
                 }
+                assert!(
+                    source_less_intrinsics > 0,
+                    "{backend:?}: intrinsic intervals missing"
+                );
                 assert!(
                     found,
                     "{backend:?}: {name}: generated failure debug coordinate {line}:{column} missing"

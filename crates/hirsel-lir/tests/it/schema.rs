@@ -1348,12 +1348,33 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_unit_key() {
         debug: vec![hirsel_lir::debug::DebugFunction::from_source_rows(
             "hirsel_f".into(),
             32,
-            vec![(path("f"), 0), (path("f"), 1)],
+            vec![
+                (path("f"), 0),
+                (path("f"), 1),
+                (DefPath::core("$intrinsic.DebugFixture"), 0),
+            ],
             4,
             [(0, 8, 0, 4), (8, 12, 0, 4), (16, 20, 1, 9), (20, 20, 0, 1)],
         )],
     };
     assert!(artifact.debug[0].well_formed());
+    assert_eq!(
+        artifact.debug[0].owner_kinds,
+        vec![
+            hirsel_lir::debug::DebugOwnerKind::Source,
+            hirsel_lir::debug::DebugOwnerKind::Source,
+            hirsel_lir::debug::DebugOwnerKind::SourceLessCoreIntrinsic,
+        ]
+    );
+    let mut forged = artifact.debug[0].clone();
+    forged.owner_kinds[0] = hirsel_lir::debug::DebugOwnerKind::SourceLessCoreIntrinsic;
+    assert!(
+        !forged.well_formed(),
+        "a real source cannot be marked source-less"
+    );
+    let mut truncated = artifact.debug[0].clone();
+    truncated.owner_kinds.pop();
+    assert!(!truncated.well_formed());
     assert_eq!(
         artifact.debug[0].ranges.len(),
         2,

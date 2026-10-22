@@ -1,0 +1,14 @@
+// rule: MODE-6
+// expect: accept
+@capability(global)
+pub opaque type Local: () uses {} {
+  n: u64,
+}
+
+type Wrap[T] {
+  value: T,
+}
+
+fn probe(take f: fn() -> ()) -> Wrap[(Local, fn() -> ())] {
+  Wrap(value: (Local(n: 0), f))
+}

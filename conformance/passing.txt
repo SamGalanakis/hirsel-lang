@@ -3218,6 +3218,8 @@ conformance/MODE/MODE-2-deep-receipt-shared-boundary-bad.hir
 conformance/MODE/MODE-2-deep-receipt-shared-middle-bad.hir
 conformance/MODE/MODE-2-equality-operand-drops-unique-mismatch-bad.hir
 conformance/MODE/MODE-2-equality-operand-drops-unique-ok.hir
+conformance/MODE/MODE-2-erased-callable-sibling-bad.hir
+conformance/MODE/MODE-2-erased-callable-sibling-ok.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-bad.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-ok.hir
 conformance/MODE/MODE-2-flat-capture-preserves-unique-ok.hir
@@ -3835,6 +3837,8 @@ conformance/MODE/MODE-5-sendability-capture-bad.hir
 conformance/MODE/MODE-5-sendability-capture-ok.hir
 conformance/MODE/MODE-6-arena-return-bad.hir
 conformance/MODE/MODE-6-arena-return-ok.hir
+conformance/MODE/MODE-6-erased-callable-sibling-bad.hir
+conformance/MODE/MODE-6-erased-callable-sibling-ok.hir
 conformance/MODE/MODE-6-escaping-capture-bad.hir
 conformance/MODE/MODE-6-escaping-capture-ok.hir
 conformance/MODE/MODE-6-net-global-capture-ok.hir

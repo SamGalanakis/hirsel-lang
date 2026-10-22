@@ -282,3 +282,49 @@ fn a_taken_unique_part_is_received_through_its_payload_view() {
     );
     assert_eq!(verdict, Ok(true));
 }
+
+#[test]
+fn nested_uniqueness_ignores_locality_and_keeps_payload_boundaries() {
+    let t = TypeInterner::new(None);
+    let aliased = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::String)));
+    let mut local_unique = Type::with_kind(TypeKind::Primitive(Primitive::String));
+    local_unique.modes.uniqueness = Uniqueness::Unique;
+    local_unique.modes.relation = Relation::environment();
+    let unique = t.intern(local_unique);
+    let tuple = |part| t.intern(Type::with_kind(TypeKind::Tuple(vec![part].into())));
+    let mut declarations = world(&t);
+    let SignatureKind::Type(wrap) = &mut Arc::make_mut(&mut declarations[0]).kind else {
+        panic!("Wrap is a nominal type");
+    };
+    wrap.resource = true;
+    let generics = GenericDeclarations::default();
+    let mut lookup = |id| Ok(declarations.iter().find(|s| s.definition == id).cloned());
+    let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+    assert_eq!(
+        memo.nested_uniqueness(tuple(aliased), tuple(unique), true),
+        Ok(true)
+    );
+    assert_eq!(
+        memo.nested_uniqueness(tuple(aliased), tuple(unique), false),
+        Ok(false)
+    );
+    assert_eq!(
+        memo.nested_uniqueness(tuple(unique), tuple(aliased), true),
+        Ok(false)
+    );
+    let nominal = |name, part| {
+        t.intern(Type::with_kind(TypeKind::Named {
+            definition: def(name),
+            arguments: vec![GenericArgument::Type(part)].into(),
+        }))
+    };
+    // Resource Wrap is non-Data; Opaque explicitly promises Data.
+    assert_eq!(
+        memo.nested_uniqueness(nominal("Wrap", aliased), nominal("Wrap", unique), true),
+        Ok(false)
+    );
+    assert_eq!(
+        memo.nested_uniqueness(nominal("Opaque", aliased), nominal("Opaque", unique), true),
+        Ok(true)
+    );
+}

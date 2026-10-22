@@ -249,3 +249,40 @@ fn a_private_ceiling_can_conservatively_name_its_own_seal() {
         engine.lower_to_tir(&path("probe")).unwrap();
     });
 }
+
+/// Locality and uniqueness failures keep distinct rule sets at the same
+/// aggregate reception seam, and both accepted twins still lower under V.
+#[test]
+fn scoped_siblings_and_lost_uniqueness_report_only_their_own_axis() {
+    with_compiler_stack(|| {
+        for (name, expected) in [
+            ("MODE-6-erased-callable-sibling-bad.hir", vec!["MODE-6"]),
+            ("MODE-6-erased-callable-sibling-ok.hir", vec![]),
+            ("MODE-2-erased-callable-sibling-bad.hir", vec!["MODE-2"]),
+            ("MODE-2-erased-callable-sibling-ok.hir", vec![]),
+        ] {
+            let source = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../conformance/MODE")
+                    .join(name),
+            )
+            .unwrap();
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let file = engine.sources.add("axis.hir", source.clone()).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert_eq!(
+                output
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.rule.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{source}: {:?}",
+                output.diagnostics
+            );
+            if expected.is_empty() {
+                engine.lower_to_tir(&path("probe")).unwrap();
+            }
+        }
+    });
+}

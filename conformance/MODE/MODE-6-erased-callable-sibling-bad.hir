@@ -1,0 +1,15 @@
+// rule: MODE-6
+// expect: reject MODE-6 at line 14
+// twin: MODE/MODE-6-erased-callable-sibling-ok.hir
+@capability(local)
+pub opaque type Local: () uses {} {
+  n: u64,
+}
+
+type Wrap[T] {
+  value: T,
+}
+
+fn probe(take f: fn() -> ()) -> Wrap[(Local, fn() -> ())] {
+  Wrap(value: (Local(n: 0), f))
+}

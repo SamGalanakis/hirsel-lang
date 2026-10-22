@@ -118,7 +118,7 @@ impl ObjectStore for ReadOnlyObjects {
 }
 
 /// The store format version in `dir@1`'s directory name.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// The `dir@1` partition of one target, backend and opt level: objects of different
 /// partitions never share a directory, so a key collision across them is impossible.

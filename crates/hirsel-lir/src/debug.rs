@@ -11,6 +11,23 @@ use crate::profile::ProfileSources;
 use hirsel_syntax::DefPath;
 use std::collections::HashMap;
 
+/// Whether an interval owner has Hirsel source text. Core compiler intrinsics
+/// retain machine intervals for profilers but have no source anchor to resolve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum DebugOwnerKind {
+    Source,
+    SourceLessCoreIntrinsic,
+}
+impl DebugOwnerKind {
+    fn of(path: &DefPath) -> Self {
+        if path.package_is("core", "1") && path.0.modules == ["$intrinsic"] {
+            Self::SourceLessCoreIntrinsic
+        } else {
+            Self::Source
+        }
+    }
+}
+
 /// One function's intervals.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct DebugFunction {
@@ -24,6 +41,8 @@ pub struct DebugFunction {
     /// Canonical existing-source selector for each item entry. A definition
     /// can appear more than once when code spans declaration and generated text.
     pub sources: Vec<u32>,
+    /// Source ownership kind for each item, including inlined items.
+    pub owner_kinds: Vec<DebugOwnerKind>,
     /// Its declaration's offset in the first item.
     pub declaration: u32,
     /// Mapped code, in address order and disjoint. Code outside every range (between two
@@ -73,6 +92,7 @@ impl DebugFunction {
             symbol,
             size,
             sources: vec![0; items.len()],
+            owner_kinds: items.iter().map(DebugOwnerKind::of).collect(),
             items,
             declaration,
             ranges,
@@ -98,6 +118,12 @@ impl DebugFunction {
     pub fn well_formed(&self) -> bool {
         !self.items.is_empty()
             && self.sources.len() == self.items.len()
+            && self.owner_kinds.len() == self.items.len()
+            && self
+                .items
+                .iter()
+                .zip(&self.owner_kinds)
+                .all(|(path, kind)| *kind == DebugOwnerKind::of(path))
             && self.ranges.iter().all(|r| {
                 r.start < r.stop && r.stop <= self.size && (r.item as usize) < self.items.len()
             })
@@ -115,6 +141,10 @@ pub struct Profile<'a> {
     pub sources: Option<&'a ProfileSources>,
 }
 
+hirsel_codec::snapshot_enum!(DebugOwnerKind {
+    Source,
+    SourceLessCoreIntrinsic
+});
 hirsel_codec::snapshot_struct!(DebugRange {
     start,
     stop,
@@ -126,6 +156,7 @@ hirsel_codec::snapshot_struct!(DebugFunction {
     size,
     items,
     sources,
+    owner_kinds,
     declaration,
     ranges
 });

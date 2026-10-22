@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+// twin: MODE/MODE-2-erased-callable-sibling-ok.hir
+type Wrap[T] {
+  value: T,
+}
+
+fn probe(take xs: List[u64]) -> Wrap[unique List[u64]] {
+  Wrap(value: take xs)
+}

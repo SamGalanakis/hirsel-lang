@@ -1042,6 +1042,56 @@ impl<'q> ContextMemo<'q> {
         value
     }
 
+    /// MODE-2 alone for nested value parts. Other reception checks own locality,
+    /// brands and callable headers; a mismatch on those axes is not a uniqueness
+    /// failure. Reuse the ordinary view's owned-payload policy, including Data
+    /// requirements for nominal generic arguments and callable boundaries.
+    pub fn nested_uniqueness(
+        &mut self,
+        expected: TypeId,
+        actual: TypeId,
+        view: bool,
+    ) -> Result<bool, QueryError> {
+        let policy = if view {
+            Some(self.view_policy(actual)?)
+        } else {
+            None
+        };
+        let payloads = policy
+            .and_then(|policy| policy.payloads)
+            .map(|id| &self.payload_sets[id.0 as usize]);
+        let mut pending = vec![(expected, actual, view, false)];
+        let mut seen = HashSet::default();
+        while let Some((expected, actual, view, nested)) = pending.pop() {
+            if !seen.insert((expected, actual, view, nested)) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (self.t.get(expected), self.t.get(actual)) else {
+                return Ok(false);
+            };
+            if matches!(a.kind, TypeKind::Error) || matches!(b.kind, TypeKind::Error) {
+                continue;
+            }
+            if nested
+                && a.modes.uniqueness != b.modes.uniqueness
+                && !(view
+                    && a.modes.uniqueness == Uniqueness::Aliased
+                    && b.modes.uniqueness == Uniqueness::Unique)
+            {
+                return Ok(false);
+            }
+            let children_view = view && payloads.is_some_and(|set| set.contains(&actual));
+            pending.extend(
+                a.kind
+                    .value_parts()
+                    .into_iter()
+                    .zip(b.kind.value_parts())
+                    .map(|(a, b)| (a, b, children_view, true)),
+            );
+        }
+        Ok(true)
+    }
+
     /// The non-writing view relation (main's `compatible_view_type_in`).
     pub fn view(
         &mut self,
