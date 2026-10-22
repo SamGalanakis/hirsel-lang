@@ -328,6 +328,107 @@ impl Shadow {
             Self::Parts(p) => p.get(index).cloned().unwrap_or_default(),
         }
     }
+    /// Project borrowed subtrees, deferring copies and leaf-bound additions until
+    /// the result escapes. A missing Parts child discards earlier additions;
+    /// Ownership and Index add their bounds *after* selecting that child.
+    pub(crate) fn project(&self, steps: impl IntoIterator<Item = (usize, bool)>) -> Self {
+        let mut steps = steps.into_iter();
+        let Some(first) = steps.next() else {
+            #[cfg(test)]
+            checked_shadow_cost_7::record_clone(self);
+            return self.clone();
+        };
+        let Some(second) = steps.next() else {
+            // One projection already materializes only its escaping result.
+            // Retain that shallow path without deferred-bound bookkeeping.
+            let mut part = self.part(first.0);
+            if first.1 {
+                part.add_bound(&self.total());
+            }
+            return part;
+        };
+        let empty = Self::default();
+        let mut node = self;
+        let mut inherited = Bound::new();
+        let mut views: Vec<&Bound> = vec![];
+        for (index, indexed) in [first, second].into_iter().chain(steps) {
+            let mut added = indexed.then(|| {
+                let mut total = node.projection_total(&inherited);
+                for home in &views {
+                    union(&mut total, home);
+                }
+                total
+            });
+            loop {
+                match node {
+                    Self::Ownership { content, .. } => {
+                        // An index or outer ownership already covers all nested
+                        // ownership totals, including the deferred leaf bounds.
+                        if added.is_none() {
+                            added = Some(node.projection_total(&inherited));
+                        }
+                        node = content;
+                    }
+                    Self::View { content, home } => {
+                        views.push(home);
+                        node = content;
+                    }
+                    Self::Parts(parts) => {
+                        node = parts.get(index).unwrap_or_else(|| {
+                            inherited.clear();
+                            &empty
+                        });
+                        break;
+                    }
+                    Self::Uniform(_) => break,
+                }
+            }
+            if let Some(added) = added {
+                union(&mut inherited, &added);
+            }
+        }
+        #[cfg(test)]
+        checked_shadow_cost_7::record_clone(node);
+        let mut result = node.clone();
+        if !inherited.is_empty() {
+            result.add_bound(&inherited);
+        }
+        for home in views.into_iter().rev() {
+            result = Self::View {
+                content: Box::new(result),
+                home: home.clone(),
+            };
+        }
+        result
+    }
+    /// Total of a borrowed subtree after deferred add_bound calls. Empty Parts
+    /// (even behind views) have no leaf to receive those additions.
+    fn projection_total(&self, inherited: &[u32]) -> Bound {
+        if inherited.is_empty() {
+            return self.total();
+        }
+        let mut total = vec![];
+        let mut leaf = false;
+        let mut work = vec![self];
+        while let Some(node) = work.pop() {
+            match node {
+                Self::Uniform(bound) => {
+                    leaf = true;
+                    union(&mut total, bound);
+                }
+                Self::Parts(parts) => work.extend(parts),
+                Self::Ownership { content, .. } => work.push(content),
+                Self::View { content, home } => {
+                    union(&mut total, home);
+                    work.push(content);
+                }
+            }
+        }
+        if leaf {
+            union(&mut total, inherited);
+        }
+        total
+    }
     /// Invocation consumes the callable access view before reading captures.
     /// The capture fields retain their own storage bounds and borrowed homes.
     pub fn capture(&self, index: usize) -> Self {
@@ -1535,3 +1636,7 @@ pub(crate) fn protocol_call(
         valid.is_some()
     })
 }
+
+#[cfg(test)]
+#[path = "../tests/it/checked_shadow_cost_7.rs"]
+mod checked_shadow_cost_7;

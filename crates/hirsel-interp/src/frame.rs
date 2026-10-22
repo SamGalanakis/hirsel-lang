@@ -885,20 +885,12 @@ impl Frame {
             .shadows
             .get(place.root.0 as usize)
             .ok_or_else(|| invalid("local out of range"))?;
-        let mut node: Option<Shadow> = None;
-        for &step in self.indices(id, &self.steps)?.iter() {
-            let current = node.as_ref().unwrap_or(root);
-            let part = match step {
-                AccessStep::Field(i) | AccessStep::VariantField { field: i, .. } => current.part(i),
-                AccessStep::Index(i) => {
-                    let mut part = current.part(i);
-                    part.add_bound(&current.total());
-                    part
-                }
-            };
-            node = Some(part);
-        }
-        Ok(node.unwrap_or_else(|| root.clone()))
+        Ok(
+            root.project(self.indices(id, &self.steps)?.iter().map(|&step| {
+                let (index, _, indexed) = step.parts();
+                (index, indexed)
+            })),
+        )
     }
     /// Replace moves caller-owned content, excluding the callee's access root.
     /// Real region and arena bounds remain attached to the displaced owner.
