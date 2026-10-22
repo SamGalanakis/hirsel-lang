@@ -106,14 +106,15 @@ class Retention(unittest.TestCase):
 
 
 class Results(unittest.TestCase):
-    def decode(self, sources, statuses=(logs.PASS,), all_results=False):
+    def decode(self, sources, statuses=(logs.PASS,), all_results=False, exit_code=None):
         events = []
         for command in sources:
             events.append({'Event': {'data': {'SpanEnd': {'data': {'TestRun': {
                 'suite': {'suite_name': 'binary', 'target_label': {
                     'label': {'package': 'root//', 'name': 'binary'}, 'configuration': {'full_name': 'dev#hash'}}},
                 'command_report': {'status': {'Success': {}}, 'details': {
-                    'command_kind': {'command': command}, 'metadata': {'start_time': [100, 0]}}},
+                    'command_kind': {'command': command}, 'metadata': {'start_time': [100, 0]},
+                    **({'signed_exit_code': exit_code} if exit_code is not None else {})}},
             }}}}}})
         for status in statuses:
             events.append({'Event': {'timestamp': [101, 0], 'data': {'Instant': {'data': {'TestResult': {
@@ -140,6 +141,12 @@ class Results(unittest.TestCase):
         self.assertEqual(result['provenance']['digest'], 'digest')
         self.assertEqual(result['provenance']['configuration'], {'full_name': 'dev#hash'})
         self.assertTrue(result['provenance']['command_succeeded'])
+
+    def test_failed_process_preserves_its_signed_exit_code(self):
+        result = self.decode([{'RemoteCommand': {'cache_hit': False}}],
+                             statuses=(logs.FAIL,), exit_code=137)['binary']
+        self.assertEqual(result['provenance']['signed_exit_code'], 137)
+        self.assertFalse(result['provenance']['command_succeeded'])
 
     def test_all_observations_keeps_repeated_results_and_missing_results(self):
         observed = self.decode([{'LocalCommand': {}}], [logs.FAIL, logs.PASS], all_results=True)

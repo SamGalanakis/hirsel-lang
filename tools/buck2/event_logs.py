@@ -261,6 +261,7 @@ def test_results(event_log, *, history=None, all_results=False):
             start_time=(details.get('metadata') or {}).get('start_time'),
             configuration=suite['target_label'].get('configuration'),
             suite=suite.get('suite_name'), report_status=report.get('status'),
+            signed_exit_code=details.get('signed_exit_code'),
             command_succeeded='Success' in report.get('status', {}) and details.get('signed_exit_code', 0) == 0))
     for line in events.splitlines():
         if '"TestResult"' not in line:

@@ -352,7 +352,8 @@ def run_stages(directory, log, tier):
                 if result['status'] not in PASSED:
                     test_reason = ('missing TestResult' if result.get('missing_result') else
                                    'Buck2 Infra Failure' if result['status'] == event_logs.INFRA_FAILURE else
-                                   infra_reason(details=result['details'], timed_out=result['status'] == event_logs.TIMED_OUT))
+                                   infra_reason(result.get('provenance', {}).get('signed_exit_code') or 0,
+                                                details=result['details'], timed_out=result['status'] == event_logs.TIMED_OUT))
                     test_reason = test_reason or (reason if not result['details'].strip() else None)
                 state = ('infrastructure' if test_reason else
                          {event_logs.PASS: 'pass', event_logs.FAIL: 'failure', event_logs.SKIP: 'skipped',

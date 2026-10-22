@@ -129,6 +129,18 @@ class Lifecycle(unittest.TestCase):
                     reds, ran, skip, perf, status = self.tool['run_stages'](directory, log, 'fast')
         return reds, status
 
+    def test_killed_process_is_infrastructure_even_with_partial_success_and_a_known_row(self):
+        for code, known in [(137, []), (137, ['binary']), (1, [])]:
+            with self.subTest(code=code, known=known):
+                result = self.result([('prefix', 'ok')], truncated=True, status=self.events.FAIL)
+                result['details'] += 'test unfinished ... \n---- STDERR ----\nKilled\n'
+                result['provenance'].update(signed_exit_code=code, command_succeeded=False)
+                reds, status = self.observe([('binary', result)], known)
+                self.assertEqual(reds['workspace tests: binary']['kind'], 'infra' if code == 137 else 'code')
+                observation = next(o for o in status['observations'] if o['scope'] == 'target')
+                self.assertEqual(observation['state'], 'infrastructure' if code == 137 else 'failure')
+                self.assertFalse(observation['complete'])
+
     def test_stage_exception_runs_and_preserves_failure_recovery_and_infrastructure(self):
         identity = 'stage: cost coverage'
         known = {identity: [identity, 'missing measured rows', 'lane', '2026-10-22']}
