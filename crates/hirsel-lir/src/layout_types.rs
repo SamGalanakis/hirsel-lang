@@ -99,7 +99,7 @@ pub struct TargetSpec {
     pub alignments: ScalarAlignments,
     pub c_convention: CConvention,
     pub object_format: ObjectFormat,
-    /// The pinned LLVM 21 data layout string expected for this triple.
+    /// The pinned LLVM data layout string expected for this triple.
     pub llvm_data_layout: String,
     pub versions: ArtifactVersions,
 }
