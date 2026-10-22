@@ -109,9 +109,27 @@ pub(crate) unsafe fn endpoint(
             "drop.leftovers"
         }
     };
-    let (left, progress) = engine::head_effect(ctx, name, || {
-        (scheduler(ctx).channels.close(word), Next::Keep)
-    })?;
+    let (left, progress) = engine::head_canonical(
+        ctx,
+        name,
+        || {
+            let left = if engine::driver(ctx).events.is_some() {
+                scheduler(ctx).channels.close_images(word)
+            } else {
+                scheduler(ctx).channels.close(word)
+            };
+            (left, Next::Keep)
+        },
+        |left| unsafe {
+            super::events::close_observed(
+                ctx,
+                Kind::Receiver,
+                word,
+                left.as_ref()
+                    .map(|(images, descriptor)| (images, *descriptor)),
+            )
+        },
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     let Some((left, descriptor)) = left else {
         return Ok(STATUS_OK);
@@ -169,8 +187,27 @@ pub(crate) unsafe fn mutex(
     } else {
         "drop.leftovers"
     };
-    let (left, progress) =
-        engine::head_effect(ctx, name, || (scheduler(ctx).sync.close(word), Next::Keep))?;
+    let (left, progress) = engine::head_canonical(
+        ctx,
+        name,
+        || {
+            let left = if engine::driver(ctx).events.is_some() {
+                scheduler(ctx).sync.close_images(word)
+            } else {
+                scheduler(ctx).sync.close(word)
+            };
+            (left, Next::Keep)
+        },
+        |left| unsafe {
+            super::events::close_observed(
+                ctx,
+                Kind::Mutex,
+                word,
+                left.as_ref()
+                    .map(|(images, descriptor)| (images, *descriptor)),
+            )
+        },
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     let Some((image, descriptor)) = left else {
         return Ok(STATUS_OK);

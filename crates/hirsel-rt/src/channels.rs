@@ -663,6 +663,15 @@ impl Channels {
     /// with their descriptor index, for the caller to drop oldest first; none when the element
     /// needs no drop.
     pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
+        self.close_inner(word, false)
+    }
+
+    /// Retain inert leftovers too, for initialized-value retirement evidence.
+    pub(crate) fn close_images(&mut self, word: u64) -> Option<(Ring, u32)> {
+        self.close_inner(word, true)
+    }
+
+    fn close_inner(&mut self, word: u64, retain_inert: bool) -> Option<(Ring, u32)> {
         self.prepare_close();
         let (channel, _) = self.endpoint_of(word);
         let cell = self.payload(channel);
@@ -671,7 +680,11 @@ impl Channels {
         cell.next_event();
         drop(state);
         let left = closed.into_left();
-        if cell.element.inert { None } else { left }
+        if cell.element.inert && !retain_inert {
+            None
+        } else {
+            left
+        }
     }
 
     /// Detach without freeing image storage in the phase. The caller retains

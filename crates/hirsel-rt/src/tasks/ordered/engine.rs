@@ -587,6 +587,30 @@ pub(super) fn head_observed<T>(
     effect: impl FnOnce() -> (T, Next),
     outcome: impl FnOnce(&T) -> Vec<u8>,
 ) -> Stopped<(T, Progress)> {
+    head_outcome(ctx, name, effect, |value| Outcome::image(0, outcome(value)))
+}
+
+/// Capture typed canonical subevents while a bounded head effect still owns
+/// its result. Disabled observation never invokes the encoder.
+pub(super) fn head_canonical<T>(
+    ctx: *mut TaskCtx,
+    name: &'static str,
+    effect: impl FnOnce() -> (T, Next),
+    encode: impl FnOnce(&T) -> Option<super::events::Subevents>,
+) -> Stopped<(T, Progress)> {
+    head_outcome(ctx, name, effect, |value| {
+        let mut outcome = Outcome::image(0, Vec::new());
+        outcome.canonical = encode(value);
+        outcome
+    })
+}
+
+fn head_outcome<T>(
+    ctx: *mut TaskCtx,
+    name: &'static str,
+    effect: impl FnOnce() -> (T, Next),
+    outcome: impl FnOnce(&T) -> Outcome,
+) -> Stopped<(T, Progress)> {
     at_head(ctx)?;
     let task = current(ctx);
     accepted(ctx, task, false);
@@ -598,12 +622,12 @@ pub(super) fn head_observed<T>(
             objects,
             effect: Some(|| {
                 let (value, next) = effect();
-                let encoded = if observing {
+                let outcome = if observing {
                     outcome(&value)
                 } else {
-                    Vec::new()
+                    Outcome::image(0, Vec::new())
                 };
-                (value, Outcome::image(0, encoded), next)
+                (value, outcome, next)
             }),
             result: &mut result,
         };

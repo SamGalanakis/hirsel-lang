@@ -338,12 +338,25 @@ impl Synchronizers {
 
     /// Detach before running user destruction, which may create or close cells.
     pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
+        self.close_inner(word, false)
+    }
+
+    /// Retain inert leftovers too, for initialized-value retirement evidence.
+    pub(crate) fn close_images(&mut self, word: u64) -> Option<(Ring, u32)> {
+        self.close_inner(word, true)
+    }
+
+    fn close_inner(&mut self, word: u64, retain_inert: bool) -> Option<(Ring, u32)> {
         let mutex = self.mutex(word);
         let mut state = mutex.lock();
         let closed = self.close_locked(word, &mutex, &mut state, Ring::new(mutex.element.size, 1));
         drop(state);
         drop(mutex);
-        closed.into_left()
+        if retain_inert {
+            (!closed.image.is_empty()).then_some((closed.image, closed.descriptor))
+        } else {
+            closed.into_left()
+        }
     }
 
     pub(crate) fn end(&mut self) {

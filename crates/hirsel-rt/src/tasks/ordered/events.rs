@@ -168,6 +168,10 @@ pub(super) enum CanonicalOutcome {
         member: Option<ObjectId>,
         rank: Option<u64>,
     },
+    Released {
+        kind: u64,
+        leftovers: Vec<Vec<u8>>,
+    },
     Receiving,
     Received {
         status: u32,
@@ -783,6 +787,40 @@ pub(super) unsafe fn complete_receive(
             op: Some("channel.receive"),
         });
     }
+}
+
+/// Own FIFO leftover values before finalizers can overwrite or release them.
+/// Empty cells/sender credits require no payload descriptor or carrier read.
+/// # Safety
+/// Each detached image is initialized for its linked descriptor and remains
+/// exclusively owned by this close until the observer returns.
+pub(super) unsafe fn close_observed(
+    ctx: *mut TaskCtx,
+    kind: crate::ordered::objects::Kind,
+    word: u64,
+    left: Option<(&crate::channels::Ring, u32)>,
+) -> Option<Subevents> {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        return None;
+    };
+    driver.events.as_ref()?;
+    let item = CanonicalItem::Object(driver.objects.identity(kind, word)?.clone());
+    let mut leftovers = Vec::new();
+    if let Some((images, descriptor)) = left {
+        for index in 0..images.len() {
+            let (_, payload) =
+                unsafe { object_value(ctx, s, kind, word, descriptor, images.at(index)) }?;
+            leftovers.push(payload);
+        }
+    }
+    Some(vec![(
+        item,
+        CanonicalOutcome::Released {
+            kind: kind.code(),
+            leftovers,
+        },
+    )])
 }
 
 /// Snapshot while the effect still owns the initialized carrier. A successful
@@ -1948,6 +1986,10 @@ pub(super) fn record(
                 | Command::MutexCreate { .. }
                 | Command::ChannelOpen { .. } => CanonicalOutcome::Created(item.clone()),
                 Command::SenderDup { .. } => CanonicalOutcome::Alias(item.clone()),
+                Command::SenderClose { .. } => CanonicalOutcome::Released {
+                    kind: crate::ordered::objects::Kind::Sender.code(),
+                    leftovers: Vec::new(),
+                },
                 Command::AtomicLoad { .. } => CanonicalOutcome::Scalar(result.image.clone()),
                 Command::AtomicStore { .. } => CanonicalOutcome::Unit,
                 _ => return None,
@@ -4730,6 +4772,269 @@ mod tests {
                                         .all(|row| row.op != Some("task.cancel_all"))
                                 );
                                 assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
+                                *seen.lock().unwrap() = rows;
+                                crate::STATUS_OK
+                            },
+                        );
+                        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                        let rows = output.lock().unwrap().clone();
+                        if let Some(reference) = &reference {
+                            assert_eq!(&rows, reference);
+                        } else {
+                            reference = Some(rows);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    static CLOSE_TRACE: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "C" fn overwrite_close_value(
+        ctx: *mut TaskCtx,
+        value: *mut u8,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let image = unsafe { value.cast::<[u64; 2]>().read() };
+        assert_eq!(image[0], 1);
+        CLOSE_TRACE.lock().unwrap().push(image[1]);
+        unsafe { value.cast::<[u64; 2]>().write([0; 2]) };
+        let mut cause = 99;
+        assert_eq!(
+            unsafe { crate::tasks::hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+            crate::STATUS_OK
+        );
+        assert_eq!(cause, 0);
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn close_events_own_fifo_payloads_before_overwriting_yielding_finalizers() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let close = crate::Step {
+            kind: crate::STEP_CLOSE_HANDLE,
+            field: 0,
+            variant: 0,
+            span: 0,
+            offset: 0,
+            stride: 0,
+            count: 0,
+            count_offset: 0,
+            layout: std::ptr::null(),
+        };
+        for finalizing in [false, true] {
+            for decoded in [false, true] {
+                let image = crate::Layout {
+                    magic: crate::LAYOUT_MAGIC,
+                    version: crate::LAYOUT_VERSION,
+                    size: 16,
+                    align: 8,
+                    finalizer: if finalizing {
+                        Some(overwrite_close_value)
+                    } else {
+                        None
+                    },
+                    steps: std::ptr::null(),
+                    step_count: 0,
+                    field_count: 0,
+                    flags: 0,
+                    logical: 0,
+                    logical_count: std::ptr::null(),
+                    scan: std::ptr::null(),
+                    scan_words: 0,
+                };
+                let wrapper = crate::Layout {
+                    size: 8,
+                    finalizer: None,
+                    flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
+                    steps: &close,
+                    step_count: 1,
+                    field_count: 1,
+                    ..image
+                };
+                let layouts = [&image as *const crate::Layout, &wrapper];
+                let mut reference = None;
+                for width in [1, 2, 4, 8] {
+                    for reorder in [
+                        hirsel_run_config::Reorder::Off,
+                        hirsel_run_config::Reorder::Auto,
+                    ] {
+                        CLOSE_TRACE.lock().unwrap().clear();
+                        let output = Arc::new(Mutex::new(Vec::new()));
+                        let seen = output.clone();
+                        let mut run = crate::host::BodyRun::new(width, true);
+                        run.config.layouts = layouts.as_ptr();
+                        run.config.layout_count = 2;
+                        unsafe { run.use_physical_dispatch() };
+                        let outcome = run.run(
+                            |ctx| unsafe {
+                                let mut policy = Policy::admit(&Default::default(), None);
+                                policy.reorder = reorder;
+                                super::super::engine::enable(ctx, policy);
+                                enable(ctx);
+                                if decoded {
+                                    install_value(ctx, 2, received_integer_program());
+                                }
+                            },
+                            move |ctx| unsafe {
+                                let mut endpoints = [0; 2];
+                                assert_eq!(
+                                    hirsel_rt_v2_channel_open(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        endpoints.as_mut_ptr(),
+                                        &0,
+                                        [0u64; 2].as_ptr().cast(),
+                                        2
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                let mut duplicate = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_sender_dup(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut duplicate,
+                                        &0,
+                                        &endpoints[0]
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                for (mut sender, value) in [(endpoints[0], 42), (duplicate, 43)] {
+                                    let mut payload = [1u64, value];
+                                    let mut status = 99;
+                                    assert_eq!(
+                                        hirsel_rt_v2_channel_send(
+                                            ctx,
+                                            &mut status,
+                                            &mut sender,
+                                            payload.as_mut_ptr().cast()
+                                        ),
+                                        crate::STATUS_OK
+                                    );
+                                    assert_eq!(status, crate::channels::DONE);
+                                    assert_eq!(payload, [0; 2]);
+                                }
+                                for word in [endpoints[0], duplicate, endpoints[1]] {
+                                    assert_eq!(
+                                        crate::finalize::hirsel_rt_v2_close_handle(ctx, word, 0, 0),
+                                        crate::STATUS_OK
+                                    );
+                                }
+                                let mut payload = [1u64, 77];
+                                let mut mutex = 0;
+                                assert_eq!(
+                                    hirsel_rt_v2_mutex_create(
+                                        ctx,
+                                        std::ptr::null_mut(),
+                                        &mut mutex,
+                                        payload.as_mut_ptr().cast(),
+                                        [0u64; 2].as_ptr().cast(),
+                                        2,
+                                        3
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(payload, [0; 2]);
+                                assert_eq!(
+                                    crate::roots::hirsel_rt_v2_root_drop(
+                                        ctx,
+                                        mutex as *mut crate::Header,
+                                        0,
+                                        0
+                                    ),
+                                    crate::STATUS_OK
+                                );
+                                assert_eq!(
+                                    *CLOSE_TRACE.lock().unwrap(),
+                                    if finalizing {
+                                        vec![42, 43, 77]
+                                    } else {
+                                        Vec::new()
+                                    }
+                                );
+                                let _role = role::Guard::new(ctx);
+                                let log =
+                                    super::super::engine::driver(ctx).events.as_ref().unwrap();
+                                let rows: Vec<_> = log
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| {
+                                        matches!(row.outcome, CanonicalOutcome::Released { .. })
+                                    })
+                                    .cloned()
+                                    .collect();
+                                assert_eq!(rows.len(), if decoded { 4 } else { 2 });
+                                let channel = CanonicalItem::Object(ObjectId {
+                                    creator: vec![],
+                                    ordinal: 0,
+                                });
+                                for row in &rows[..2] {
+                                    assert_eq!(row.item, channel);
+                                    assert_eq!(row.op, "drop.trivial");
+                                    assert_eq!(row.transition, Transition::Keep);
+                                    assert_eq!(
+                                        row.outcome,
+                                        CanonicalOutcome::Released {
+                                            kind: crate::ordered::objects::Kind::Sender.code(),
+                                            leftovers: Vec::new()
+                                        }
+                                    );
+                                }
+                                if decoded {
+                                    let encode = |value: u64| {
+                                        [1u32.to_le_bytes().as_slice(), &value.to_le_bytes()]
+                                            .concat()
+                                    };
+                                    assert_eq!(rows[2].item, channel);
+                                    assert_eq!(
+                                        rows[2].outcome,
+                                        CanonicalOutcome::Released {
+                                            kind: crate::ordered::objects::Kind::Receiver.code(),
+                                            leftovers: vec![encode(42), encode(43)]
+                                        }
+                                    );
+                                    assert_eq!(
+                                        rows[3].outcome,
+                                        CanonicalOutcome::Released {
+                                            kind: crate::ordered::objects::Kind::Mutex.code(),
+                                            leftovers: vec![encode(77)]
+                                        }
+                                    );
+                                    assert!(rows[2..].iter().all(|row| row.op
+                                        == if finalizing {
+                                            "drop.leftovers"
+                                        } else {
+                                            "drop.trivial"
+                                        }));
+                                    if finalizing {
+                                        let first = log
+                                            .canonical
+                                            .iter()
+                                            .position(|row| row == &rows[2])
+                                            .unwrap();
+                                        let cleanup = log
+                                            .canonical
+                                            .iter()
+                                            .position(|row| row.op == "task.check_canceled")
+                                            .unwrap();
+                                        assert!(
+                                            first < cleanup,
+                                            "close snapshot precedes user finalizer operations"
+                                        );
+                                    }
+                                } else {
+                                    assert!(log.unsupported.iter().any(|row| row.op
+                                        == Some(if finalizing {
+                                            "drop.leftovers"
+                                        } else {
+                                            "drop.trivial"
+                                        })));
+                                    assert!(log.canonical().is_err());
+                                }
                                 *seen.lock().unwrap() = rows;
                                 crate::STATUS_OK
                             },

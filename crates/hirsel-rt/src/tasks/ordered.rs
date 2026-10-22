@@ -288,20 +288,50 @@ impl Backend<Command> for Objects<'_> {
         if let Command::PlainClose { word, mutex } = &op.payload {
             assert!(!early, "close only retires");
             let before = unsafe { (*self.ctx).ordered_freed.get() };
+            let canonical;
+            let observing = engine::driver(self.ctx).events.is_some();
             if *mutex {
-                let left = super::scheduler(self.ctx).sync.close(*word);
+                let left = if observing {
+                    super::scheduler(self.ctx).sync.close_images(*word)
+                } else {
+                    super::scheduler(self.ctx).sync.close(*word)
+                };
+                canonical = unsafe {
+                    events::close_observed(
+                        self.ctx,
+                        crate::ordered::objects::Kind::Mutex,
+                        *word,
+                        left.as_ref()
+                            .map(|(images, descriptor)| (images, *descriptor)),
+                    )
+                };
                 if let Some((image, descriptor)) = left {
                     unsafe { drops::plain_images(self.ctx, &image, descriptor) };
                 }
             } else {
-                let left = super::scheduler(self.ctx).channels.close(*word);
+                let left = if observing {
+                    super::scheduler(self.ctx).channels.close_images(*word)
+                } else {
+                    super::scheduler(self.ctx).channels.close(*word)
+                };
+                canonical = unsafe {
+                    events::close_observed(
+                        self.ctx,
+                        crate::ordered::objects::Kind::Receiver,
+                        *word,
+                        left.as_ref()
+                            .map(|(images, descriptor)| (images, *descriptor)),
+                    )
+                };
                 if let Some((images, descriptor)) = left {
                     unsafe { drops::plain_images(self.ctx, &images, descriptor) };
                 }
             }
             let credit = unsafe { (*self.ctx).ordered_freed.replace(before) } - before;
+            let mut result = Outcome::image(0, Vec::new());
+            result.canonical = canonical;
             return Receipt {
-                result: Outcome::image(0, Vec::new()),
+                result,
                 next: Next::Keep,
                 credit,
             };
