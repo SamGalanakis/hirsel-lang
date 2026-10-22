@@ -1,5 +1,9 @@
 Current matched follow-up: [FAST-2.md](FAST-2.md). The ≤3× target remains **INCOMPLETE**.
 
+This is a historical report. Publish each new measurement in a separate
+`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
+reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+
 # HTTP serial measurements — 2026-10-21
 
 The serial HTTP/1 path improves, but the ≤3× hello-web target is **not met**.

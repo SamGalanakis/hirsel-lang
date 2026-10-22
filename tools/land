@@ -27,6 +27,7 @@ ROOT = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_outp
                            check=True).stdout.strip())
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
 import generated  # noqa: E402
+import merging  # noqa: E402
 
 PY = sys.executable
 BUCK2 = str(ROOT / '.buck2/bin/buck2')
@@ -95,6 +96,32 @@ def checks(lint=True):
                               and check('formatting', [PY, 'tools/buck2/fmt.py', '--check']))))
 
 
+def rebase():
+    """Replay source commits; generated conflicts have no hand-written resolution.
+
+    Ignored build inventories are removed from Git and sync.py regenerates
+    them before checks. Committed pages keep main's generated version: their
+    sole writer, main-runs, regenerates them on main after the push. Never
+    create a lane commit containing a guessed or hand-merged generated page.
+    """
+    result = git('rebase', 'origin/main')
+    while result.returncode:
+        conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.splitlines()
+        if not conflicts or any(path not in generated.BUILD_INPUTS + generated.MAIN_WRITTEN
+                                for path in conflicts):
+            return result
+        for path in conflicts:
+            if path in generated.BUILD_INPUTS:
+                resolved = git('rm', '-f', '--ignore-unmatch', '--', path)
+            else:
+                resolved = git('restore', '--source=origin/main', '--staged', '--worktree', '--', path)
+            if resolved.returncode:
+                return resolved
+            say(f'resolved generated conflict in {path}; its generator owns regeneration')
+        result = git('-c', 'core.editor=true', 'rebase', '--continue')
+    return result
+
+
 def main():
     if sys.argv[1:]:
         print(__doc__, file=sys.stderr)
@@ -102,6 +129,7 @@ def main():
     if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
         say('the worktree has uncommitted changes; commit them first')
         return 1
+    merging.install(ROOT)
     branch = git('branch', '--show-current').stdout.strip()
     started = time.monotonic()
     # Kept across the re-exec into a rebased tree's own tools/land.
@@ -112,15 +140,15 @@ def main():
             say('git fetch failed\n' + fetched.stderr)
             return 1
         main_sha = git('rev-parse', 'origin/main').stdout.strip()
-        changed = git('diff', '--name-only', '--diff-filter=d', 'origin/main...HEAD').stdout.split()
-        if refused := generated.refusal(changed):
-            print('\n'.join('land: ' + line for line in refused), flush=True)
-            return 1
-        if git('rebase', 'origin/main').returncode:
+        if rebase().returncode:
             conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.split()
             git('rebase', '--abort')
             say('the rebase onto origin/main conflicts in: ' + (', '.join(conflicts) or 'see git rebase')
                 + '; rebase by hand, resolve, then run tools/land again')
+            return 1
+        changed = git('diff', '--name-only', '--diff-filter=d', 'origin/main...HEAD').stdout.splitlines()
+        if refused := generated.refusal(changed):
+            print('\n'.join('land: ' + line for line in refused), flush=True)
             return 1
         head = git('rev-parse', 'HEAD').stdout.strip()
         if head == main_sha:
@@ -131,6 +159,8 @@ def main():
             say('the rebased tree has another tools/land; running it')
             os.environ.update(HIRSEL_LAND_ATTEMPT=str(attempt), HIRSEL_LAND_LINTED='1' if linted else '0')
             os.execv(PY, [PY, str(ROOT / 'tools/land')])
+        if not check('independent line lists', [PY, 'tools/check-hot-files']):
+            return 1
         unchecked = linted and attempt >= UNCHECKED_AFTER
         if unchecked:
             say(f'attempt {attempt}: pushing {head[:12]} on origin/main {main_sha[:12]} without rebuilding:'

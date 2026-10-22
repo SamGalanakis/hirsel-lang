@@ -11,6 +11,8 @@ resolves a conflict in one with `resolve` where the driver is not installed.
 - a package manifest (`hirsel.json`) merges structurally: keys, sources and
   dependencies either side added or removed, so two lanes adding std modules
   both keep theirs;
+- corpus path lists merge as sets, accepting unsorted appends and standalone
+  comments while preserving removals and conflicting expectation changes;
 - a sorted list (SORTED_LISTS: ratchet and expectation lists, one entry per
   line in the order of its key, the text before a tab or ` | `): where both
   sides change one stretch, the entries either side added stay, the entries
@@ -46,6 +48,9 @@ SORTED_LISTS = (
     'native-tests/library/operations.tsv',
     'native-tests/regressions/*.txt',
 )
+# Corpus ratchets are path sets even when lanes append unsorted batches or
+# comments. A path's inline reason is part of its value, not its identity.
+PATH_LISTS = tuple(path for path in SORTED_LISTS if path.endswith(('passing.txt', 'pending.txt')))
 DRIVER = 'hirsel'
 
 
@@ -70,11 +75,55 @@ def resolve(path: str, base: str | None, ours: str | None, theirs: str | None) -
     try:
         if path in APPEND_ONLY:
             return line_merge(base or '', ours, theirs, appended)
+        if path in PATH_LISTS:
+            return path_list(base or '', ours, theirs)
         if sorted_list(path):
             return line_merge(base or '', ours, theirs, sorted_stretch)
         return manifest(base, ours, theirs)
     except Conflict:
         return None
+
+
+def path_list(base: str, ours: str, theirs: str) -> str:
+    """Three-way merge by corpus path, independent of append order/comments.
+
+    Preserve either side's additions and removals. Different changes to the
+    same path's expectation (including delete versus edit) stay conflicts.
+    Sort entries just as ratchet writers do; standalone comments survive too.
+    """
+    def parse(text):
+        entries, comments = {}, []
+        for line in text.splitlines():
+            if not line.strip() or line.startswith('#'):
+                if line not in comments:
+                    comments.append(line)
+                continue
+            path = line.split(' # ', 1)[0]
+            if (not path.endswith('.hir') or any(c.isspace() for c in path)
+                    or path.startswith('/') or '..' in path.split('/') or path in entries):
+                raise Conflict('invalid or duplicate corpus path')
+            entries[path] = line
+        return entries, comments
+
+    parsed = [parse(text) for text in (base, ours, theirs)]
+    ancestor, left, right = [entries for entries, _ in parsed]
+    lines = []
+    for path in sorted(ancestor.keys() | left.keys() | right.keys()):
+        old, a, b = (entries.get(path) for entries in (ancestor, left, right))
+        if a == b:
+            value = a
+        elif a == old:
+            value = b
+        elif b == old:
+            value = a
+        else:
+            raise Conflict('both sides changed one corpus expectation')
+        if value is not None:
+            lines.append(value)
+    old_comments, a_comments, b_comments = [comments for _, comments in parsed]
+    removed = (set(old_comments) - set(a_comments)) | (set(old_comments) - set(b_comments))
+    comments = list(dict.fromkeys(line for line in a_comments + b_comments if line not in removed))
+    return ''.join(line + '\n' for line in comments + lines)
 
 
 def line_merge(base: str, ours: str, theirs: str, stretch) -> str:

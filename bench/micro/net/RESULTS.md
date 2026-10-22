@@ -1,5 +1,9 @@
 # Single-thread network cost
 
+This is a historical report. Publish each new measurement in a separate
+`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
+reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+
 The plain `net-only.hir` loop meets the target: **1.926× Rust user
 instructions**, down from 17.239× in the same interleaved session. Total
 instructions are 1.017× Rust. The actual runtime ABI regression test performs

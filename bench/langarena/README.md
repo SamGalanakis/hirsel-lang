@@ -73,7 +73,9 @@ By default ten seeded interleaved rounds run on CPU31 under the shared
 `bench/micro/measure.py` timing lock; medians and geometric means use
 only paired tasks passing every round. Raw measurements, exact commands, logs,
 RSS and perf counters are retained in ignored `build/SESSION/measurements.json`.
-Use `--output /tmp/my-groups.md` for a porter report to avoid editing RESULTS.md.
+Reports default to `RESULTS-<session>.md`; use a distinct `--session <lane>` for
+each campaign, or choose a separate report with `--output`. Keep `RESULTS.md`
+as its historical campaign, and do not maintain a shared index of new reports.
 
 Full mode runs `run.js`: estimated Hirsel on the published host = local Hirsel /
 local Rust × published Rust. Runtime and RSS estimates are separate. Compile seconds are diagnostic

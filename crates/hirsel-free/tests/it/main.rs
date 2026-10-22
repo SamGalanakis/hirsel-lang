@@ -2,11 +2,4 @@
 
 hirsel_guard::install!();
 
-mod codec;
-mod executor;
-mod gate;
-mod traces;
-
-mod schedule;
-
-mod concurrent;
+include!("modules.rs");

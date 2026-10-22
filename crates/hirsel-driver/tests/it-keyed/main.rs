@@ -2,4 +2,4 @@
 
 hirsel_guard::install!();
 
-mod scaling_interp_keyed;
+include!("modules.rs");

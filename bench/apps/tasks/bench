@@ -520,7 +520,7 @@ def main():
         notes = json.loads((APP / 'attribution.json').read_text())
         document['attribution'] = notes['notes'] if notes['binaries'] == document['binaries'] else {}
         (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
-        report(document, APP / 'RESULTS.md')
+        report(document, APP / ('RESULTS-' + document['session'].replace(':', '') + '.md'))
         return 0
     if args.rounds < 10:
         parser.error('measurement protocol requires at least 10 rounds')
@@ -578,7 +578,7 @@ def main():
             print(f'FAILED: {error}', flush=True)
         (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
     if args.samples_only:
-        report(document, APP / 'RESULTS.md')
+        report(document, APP / ('RESULTS-' + document['session'].replace(':', '') + '.md'))
         lock.close()
         return 1 if document['errors'] else 0
     for op in operations:
@@ -594,7 +594,7 @@ def main():
             except Exception as error:
                 document['errors'].append(dict(cell=f'profile-{kind}-{op}', error=str(error)))
     (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
-    report(document, APP / 'RESULTS.md')
+    report(document, APP / ('RESULTS-' + document['session'].replace(':', '') + '.md'))
     for kind in KINDS:
         try:
             document['profiles'][f'{kind}/heap'] = memory_profile(kind, args, archive / f'heap-{kind}')
@@ -604,7 +604,7 @@ def main():
     notes = json.loads((APP / 'attribution.json').read_text())
     document['attribution'] = notes['notes'] if notes['binaries'] == document['binaries'] else {}
     (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
-    report(document, APP / 'RESULTS.md')
+    report(document, APP / ('RESULTS-' + document['session'].replace(':', '') + '.md'))
     lock.close()
     return 1 if document['errors'] else 0
 

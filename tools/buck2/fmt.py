@@ -8,6 +8,7 @@ rustfmt starts from each target's root file and follows its modules.
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -26,6 +27,17 @@ def main():
     roots = {}
     for target in attributes.values():
         roots.setdefault(target['edition'], set()).add(target['crate_root'])
+        # rustfmt does not follow include!. Check each declared module as a
+        # root, with its harness's edition. The pure declaration list's syntax
+        # is checked by check-hot-files; its union-merged order is immaterial.
+        registry = Path(target['crate_root']).with_name('modules.rs')
+        if (ROOT / registry).is_file() and registry.parts[:1] == ('crates',):
+            for line in (ROOT / registry).read_text().splitlines():
+                if match := re.fullmatch(r'mod (\w+);', line):
+                    source = registry.with_name(match[1] + '.rs')
+                    if not (ROOT / source).is_file():
+                        source = registry.parent / match[1] / 'mod.rs'
+                    roots[target['edition']].add(str(source))
     status = 0
     for edition, files in sorted(roots.items()):
         command = [str(RUSTFMT), '--edition', edition, *sys.argv[1:], *sorted(files)]

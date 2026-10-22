@@ -1,5 +1,9 @@
 # Historical compiler speed scoreboard
 
+This is a historical report. Publish each new measurement in a separate
+`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
+reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+
 **Historical, incomplete, superseded.** These rows measure compiler
 `69f9038496da68c7dec184e006628547c85050e6`, not current main or arch. The owner
 stopped the roughly ten-hour campaign after the compiler had been superseded.

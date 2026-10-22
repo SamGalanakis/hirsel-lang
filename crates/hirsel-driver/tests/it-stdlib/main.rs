@@ -4,48 +4,7 @@
 
 hirsel_guard::install!();
 
-mod binary_endian_5;
-mod numeric_native;
-mod package_s3;
-mod reference_vectors;
 #[path = "../support/source_std.rs"]
 mod source_std;
-mod source_std_cache;
-mod stdlib_aead_vectors;
-mod stdlib_bigdecimal_dectest;
-mod stdlib_bigint_toom3;
-mod stdlib_collection_vectors;
-mod stdlib_constant_time;
-mod stdlib_crc32;
-mod stdlib_deque;
-mod stdlib_exact_sum_vectors;
-mod stdlib_graphemes;
-mod stdlib_hash_vectors;
-mod stdlib_http;
-mod stdlib_http_wire;
-mod stdlib_integer_policy;
-mod stdlib_iter;
-mod stdlib_json;
-mod stdlib_markdown;
-mod stdlib_net;
-mod stdlib_nfc;
-mod stdlib_origin_work;
-mod stdlib_pathtime;
-mod stdlib_patterns;
-mod stdlib_pqcombined;
-mod stdlib_priority_queue;
-mod stdlib_schedule;
-mod stdlib_sort;
-mod stdlib_substring;
-mod stdlib_table;
-mod stdlib_testhelpers;
-mod stdlib_text_wire;
-mod stdlib_uri;
-mod stdlib_wave1;
-mod stdlib_wave2_num;
-mod stdlib_xxhash64;
-mod string_splitn_5;
-mod utf8_stream_5;
 
-mod base64_stream_5;
-mod hex_builder_5;
+include!("modules.rs");

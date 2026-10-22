@@ -12,3 +12,8 @@ crates/hirsel-ownership/src/tests/passing.txt merge=hirsel
 crates/hirsel-ownership/src/tests/pending.txt merge=hirsel
 native-tests/library/operations.tsv merge=hirsel
 native-tests/regressions/*.txt merge=hirsel
+
+# Pure independent lines: declarations and ledger rows have no ordering semantics.
+# tools/check-hot-files rejects duplicates before landing.
+crates/*/tests/*/modules.rs merge=union
+tools/known-failures.tsv merge=union

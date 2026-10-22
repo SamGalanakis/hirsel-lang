@@ -1,5 +1,9 @@
 # LangArena: Hirsel and a local Rust anchor
 
+This is a historical report. Publish each new measurement in a separate
+`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
+reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+
 The original full-size campaign below predates the port-1 additions. Current
 Brainfuck, Matmul, Base64, Hash and Calculator status is recorded in
 [Port-1 validation and quick comparison](#port-1-validation-and-quick-comparison).

@@ -4,37 +4,7 @@
 
 hirsel_guard::install!();
 
-mod rc_append_into;
-mod rc_arena_credit;
-mod rc_bytes_freeze;
-mod rc_cleanup;
-mod rc_cleanup_inline;
-mod rc_cleanup_joins;
-mod rc_cleanup_variant;
-mod rc_closure_calls;
-mod rc_drop_specialization;
-mod rc_flat_builder;
-mod rc_flat_field;
-mod rc_flat_native;
-mod rc_flat_walk;
-mod rc_import;
-mod rc_instance;
-mod rc_legalize;
-mod rc_library_cleanup_join;
-mod rc_library_iter;
-mod rc_library_list;
-mod rc_library_sorted;
-mod rc_library_views;
-mod rc_maps;
-mod rc_maps_native;
-mod rc_normalize;
-mod rc_packed_walk;
-mod rc_perceus;
-mod rc_placement;
-mod rc_reuse;
-mod rc_root_anchors;
-mod rc_scaling;
-mod rc_spare_push;
-mod rc_statics;
 #[path = "support.rs"]
 mod rc_support;
+
+include!("modules.rs");

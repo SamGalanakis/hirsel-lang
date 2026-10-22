@@ -392,12 +392,14 @@ def main():
     parser.add_argument('--seed', type=int, default=20261021)
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--session', default=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S'))
-    parser.add_argument('--output', type=Path, default=HERE / 'RESULTS.md')
+    parser.add_argument('--output', type=Path, help='report path; default RESULTS-<session>.md')
     args = parser.parse_args()
     if args.rounds < 1 or not 1 <= args.timeout <= 900:
         parser.error('rounds must be positive; timeout must be between 1 and 900')
     if not re.fullmatch(r'[a-zA-Z0-9_.-]+', args.session):
         parser.error('session must be a simple directory name')
+    if args.output is None:
+        args.output = HERE / f'RESULTS-{args.session}.md'
     session = Session(args)
     raw = session.directory / 'measurements.json'
     if raw.exists():

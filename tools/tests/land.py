@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FAKES = {
     '.buck2/bin/buck2': '#!/bin/sh\necho root//:a\n',
     'tools/buck2/sync.py': '',
+    'tools/check-hot-files': '',
     'tools/buck2/event_logs.py': '',
     # The first Clippy run lands another lane's commit on origin, as a lane landing meanwhile would.
     'tools/buck2/clippy.py': '''import os, subprocess
@@ -46,6 +47,7 @@ class Land(unittest.TestCase):
         self.git(self.top, 'clone', '-q', str(self.origin), str(self.lane))
         files = dict(FAKES, **{'tools/land': (ROOT / 'tools/land').read_text(),
                                'tools/buck2/generated.py': (ROOT / 'tools/buck2/generated.py').read_text(),
+                               'tools/buck2/merging.py': (ROOT / 'tools/buck2/merging.py').read_text(),
                                '.gitignore': '.buck2/\n'})
         for name, text in files.items():
             (self.lane / name).parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +83,68 @@ class Land(unittest.TestCase):
         self.assertEqual(self.main_log(), ['change', 'other', 'base'])
         [row] = [json.loads(line) for line in (self.lane / '.git/hirsel-landings.jsonl').read_text().splitlines()]
         self.assertEqual((row['branch'], row['landed']), ('my-lane', self.git(self.origin, 'rev-parse', 'main').strip()))
+
+    def conflicting_lanes(self, path):
+        # Land has two source commits to replay, both carry a generated edit.
+        self.git(self.lane, 'checkout', '-q', 'main')
+        target = self.lane / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('base\n')
+        self.git(self.lane, 'add', path)
+        self.git(self.lane, 'commit', '-qm', 'common generated base')
+        self.git(self.lane, 'checkout', '-q', 'my-lane')
+        self.git(self.lane, 'rebase', 'main')
+        for i in range(2):
+            target.write_text(f'lane {i}\n')
+            (self.lane / f'source-{i}').write_text('source change\n')
+            self.git(self.lane, 'add', '-A')
+            self.git(self.lane, 'commit', '-qm', f'change {i}')
+        self.git(self.lane, 'checkout', '-q', 'main')
+        target.write_text('main generator output\n')
+        self.git(self.lane, 'add', path)
+        self.git(self.lane, 'commit', '-qm', 'main generator')
+        self.git(self.lane, 'push', '-q', 'origin', 'main')
+        self.git(self.lane, 'checkout', '-q', 'my-lane')
+
+    def test_generated_pages_keep_mains_writer_and_preserve_source_commits(self):
+        self.conflicting_lanes('docs/api.md')
+        landed = self.land()
+        self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+        self.assertEqual(landed.stdout.count('resolved generated conflict in docs/api.md'), 2)
+        self.assertEqual((self.lane / 'docs/api.md').read_text(), 'main generator output\n')
+        self.assertEqual(self.main_log()[:2], ['change 1', 'change 0'])
+        for i in range(2):
+            self.assertEqual((self.lane / f'source-{i}').read_text(), 'source change\n')
+
+    def test_a_generated_only_conflict_drops_the_obsolete_generated_commit(self):
+        self.conflicting_lanes('docs/api.md')
+        (self.lane / 'docs/api.md').write_text('obsolete generated-only page\n')
+        self.git(self.lane, 'add', 'docs/api.md')
+        self.git(self.lane, 'commit', '-qm', 'obsolete generated page')
+        landed = self.land()
+        self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+        self.assertNotIn('obsolete generated page', self.main_log())
+        self.assertEqual((self.lane / 'docs/api.md').read_text(), 'main generator output\n')
+
+    def test_generated_build_inventory_is_untracked_and_regenerated(self):
+        self.conflicting_lanes('BUCK')
+        (self.lane / 'tools/buck2/sync.py').write_text(
+            "from pathlib import Path\nPath('BUCK').write_text('fresh inventory\\n')\n")
+        with open(self.lane / '.gitignore', 'a') as ignore:
+            ignore.write('BUCK\n')
+        self.git(self.lane, 'add', 'tools/buck2/sync.py', '.gitignore')
+        self.git(self.lane, 'commit', '-qm', 'generator')
+        landed = self.land()
+        self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+        self.assertEqual((self.lane / 'BUCK').read_text(), 'fresh inventory\n')
+        self.assertEqual(self.git(self.lane, 'ls-files', 'BUCK'), '')
+
+    def test_source_conflicts_still_refuse_the_push_and_abort_the_rebase(self):
+        self.conflicting_lanes('source.rs')
+        refused = self.land()
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        self.assertIn('conflicts in: source.rs', refused.stdout)
+        self.assertEqual(self.git(self.lane, 'branch', '--show-current').strip(), 'my-lane')
 
     def test_a_red_check_refuses_the_push_and_prints_its_first_error(self):
         refused = self.land(FAKE_FMT_RED='1')

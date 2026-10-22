@@ -18,7 +18,7 @@ sweep before drawing a capacity conclusion. `--rounds` cannot be below ten.
 `--skip-build` reuses existing binaries; it is only for iterative harness checks.
 `--only` selects comma-separated operations for a focused run. A partial run is
 labelled partial in its generated report. All raw results are saved before
-rendering `RESULTS.md`. Never compare wall times from separate invocations.
+rendering `RESULTS-<session>.md`. Never compare wall times from separate invocations.
 
 The server is a fresh capped process for every sample. A native pre-exec marker
 excludes perf startup from first-response latency. Cold-start cells use an
@@ -96,7 +96,7 @@ bumps the revision and saves even when the submitted fields match their old valu
 `attribution.json` records the reviewed profile interpretations for the measured
 binary hashes. The generator applies them only to matching binaries; a new
 binary requires fresh profile review. Full profiles remain in `results.json`,
-with compact excerpts in `RESULTS.md`. `--startup-profiles-only` refreshes separate
+with compact excerpts in the session report `RESULTS-<session>.md`. `--startup-profiles-only` refreshes separate
 startup profiles and never changes the ten-round measurement samples.
 
 `--kinds hirsel,hirsel-recorded,rust-one-worker` selects the parity and recording

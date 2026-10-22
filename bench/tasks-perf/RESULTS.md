@@ -1,5 +1,9 @@
 # Tasks performance results
 
+This is a historical report. Publish each new measurement in a separate
+`RESULTS-<lane-or-session>.md` beside it; do not append rows here. Discover
+reports with `rg --files -g 'RESULTS*.md'` (no shared report index to edit).
+
 Microbenchmarks: baseline `b37afd182199`, ten seeded interleaved rounds on CPU31,
 seed 20261020, matching output checksums. Hirsel workloads use N=20,000 and one
 epoch; the failure-table example uses 10,000 sites and 100 loads. Instructions

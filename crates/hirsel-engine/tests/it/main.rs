@@ -4,4 +4,4 @@
 
 hirsel_guard::install!();
 
-mod queries;
+include!("modules.rs");
