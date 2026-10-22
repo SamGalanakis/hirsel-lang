@@ -788,3 +788,57 @@ fn a_serving_peer_is_a_well_formed_server_whose_anonymous_policy_is_absent_from_
     ]}]);
     invalid(net, "io.net.listeners");
 }
+
+#[test]
+fn malformed_resolver_entries_name_the_nested_array_in_templates_and_records() {
+    let good = script();
+    validate(good.clone()).unwrap();
+    let template = |net| serde_json::to_vec(&json!({"io":{"dirs":[],"net":net}})).unwrap();
+    RunConfig::bind_grants(
+        &template(good.clone()),
+        [0; 32],
+        "probe@1/main".into(),
+        LaunchKind::Main,
+    )
+    .unwrap();
+    for (value, reason) in [
+        (json!({"v4":"192.0.2.1"}), "invalid type: map"),
+        (json!(true), "invalid type: boolean `true`"),
+    ] {
+        let mut bad = good.clone();
+        bad["peers"][0]["resolves_to"][0] = value;
+        for refusal in [
+            validate(bad.clone()),
+            RunConfig::bind_grants(
+                &template(bad),
+                [0; 32],
+                "probe@1/main".into(),
+                LaunchKind::Main,
+            ),
+        ] {
+            let Err(RunRefusal::Malformed { detail }) = refusal else {
+                panic!("expected malformed resolver entry")
+            };
+            assert!(
+                detail.starts_with(&format!(
+                    "io.net.peers[0].resolves_to[0]: {reason}, expected a string at line 1 column "
+                )),
+                "{detail}"
+            );
+        }
+    }
+    let mut missing = good;
+    missing["peers"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("resolves_to");
+    let Err(RunRefusal::Malformed { detail }) = validate(missing) else {
+        panic!("expected missing resolves_to")
+    };
+    assert!(
+        detail.starts_with(
+            "io.net.peers[0].resolves_to: missing field `resolves_to` at line 1 column "
+        ),
+        "{detail}"
+    );
+}

@@ -180,3 +180,99 @@ fn optimized_warm_fragments_preserve_executables_and_runtime_across_policies_and
     }
     std::fs::remove_dir_all(cache).unwrap();
 }
+
+#[test]
+fn malformed_launch_grants_report_paths_before_running_and_empty_dirs_still_run() {
+    let source = file(
+        r#"pub fn main(rt: Io) -> Result[(), GrantError] {
+      match io.stdout(rt) {
+        Ok(output) => { let _ = out.print(output, "program-ran"); () }
+        Error(_) => ()
+      }
+      Ok(())
+    }"#,
+    );
+    let exe = source.with_extension("grants.exe");
+    let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .env("HIRSEL_DAEMON", "off")
+        .env("HIRSEL_JOBS", "1")
+        .args(["build", "--debug", "--backend", "cranelift"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{built:?}");
+    let cases = [
+        (
+            r#"{"io":{"stdout":"stdout.bytes@1"},"env":{"TOKEN":"credential-must-stay-private"}}"#,
+            "io.dirs",
+            "missing field `dirs`",
+        ),
+        (
+            r#"{"io":{"stdout":"stdout.bytes@1","dirs":[],"net":{"provider":"net.script@2","rules":[],"peers":[{"address":"example.com","port":443,"resolves_to":[{"v4":"192.0.2.1"}],"tls":"plain","connections":[]}]}},"env":{"TOKEN":"credential-must-stay-private"}}"#,
+            "io.net.peers[0].resolves_to[0]",
+            "invalid type: map, expected a string",
+        ),
+    ];
+    for engine in ["interpreted", "native", "built"] {
+        let launch = |grants: &str| {
+            let mut cmd = if engine == "built" {
+                Command::new(&exe)
+            } else {
+                let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                cmd.arg("run").arg(&source);
+                if engine == "native" {
+                    cmd.args(["--native", "--backend", "cranelift"]);
+                }
+                cmd
+            };
+            cmd.env("HIRSEL_DAEMON", "off")
+                .env("HIRSEL_JOBS", "1")
+                .arg(if engine == "built" {
+                    "--hirsel-grants"
+                } else {
+                    "--grants"
+                })
+                .arg(grants)
+                .output()
+                .unwrap()
+        };
+        for (grants, path, reason) in cases {
+            let output = launch(grants);
+            assert!(!output.status.success(), "{engine}: {output:?}");
+            assert!(
+                output.stdout.is_empty(),
+                "program ran: {engine}: {output:?}"
+            );
+            let detail = String::from_utf8(output.stderr).unwrap();
+            assert!(
+                detail.contains(&format!("{path}: {reason}"))
+                    && detail.contains(" at line 1 column "),
+                "{engine}: {detail}"
+            );
+            assert!(
+                detail.contains(r#""kind":"malformed""#),
+                "{engine}: {detail}"
+            );
+            assert!(
+                !detail.contains("credential-must-stay-private"),
+                "{engine}: {detail}"
+            );
+        }
+        for (grants, expected) in [
+            (
+                r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#,
+                &b"program-ran"[..],
+            ),
+            (r#"{"io":{"dirs":[]}}"#, &b""[..]),
+        ] {
+            let output = launch(grants);
+            assert!(output.status.success(), "{engine}: {output:?}");
+            assert_eq!(output.stdout, expected);
+            assert!(output.stderr.is_empty(), "{engine}: {output:?}");
+        }
+    }
+    std::fs::remove_file(exe).unwrap();
+    std::fs::remove_file(source).unwrap();
+}

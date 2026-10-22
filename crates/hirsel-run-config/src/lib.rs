@@ -214,10 +214,7 @@ impl RunConfig {
             placement: Option<Placement>,
         }
         integer_tokens(bytes)?;
-        let mut grants: Grants =
-            serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
-                detail: e.to_string(),
-            })?;
+        let mut grants: Grants = schema_diagnostic::from_slice(bytes)?;
         if let (Some(base), Some(io)) = (base, &mut grants.io) {
             // A runner's grant set names host directories as the run's own mounts do.
             let runners = io.runners.iter_mut().filter_map(|r| r.grants.as_mut());
@@ -455,9 +452,7 @@ impl RunConfig {
     /// before validation.
     fn parse(bytes: &[u8]) -> Result<Self, RunRefusal> {
         integer_tokens(bytes)?;
-        serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
-            detail: e.to_string(),
-        })
+        schema_diagnostic::from_slice(bytes)
     }
     /// Builders pass through exactly the same parser/validator as standalone bytes.
     pub fn validated(&self) -> Result<ValidatedRun, RunRefusal> {
@@ -1239,4 +1234,338 @@ fn canonical_bytes(record: &RunConfig) -> Vec<u8> {
         ))
         .expect("run serialization");
     bytes
+}
+
+// The forwarding structure follows serde_path_to_error 0.1.20, src/de.rs
+// (7aad3f59acd6d239615ee8b315e0c666915a13bf). Use its path tracker directly;
+// this bridge only captures structured missing-field errors and redacts values.
+/*
+serde_path_to_error (David Tolnay), MIT license:
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+*/
+mod schema_diagnostic {
+    use super::RunRefusal;
+    use serde::de::{self, Deserialize, DeserializeSeed, Visitor};
+    use std::{cell::Cell, fmt};
+
+    pub(super) fn from_slice<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, RunRefusal> {
+        let missing = Cell::new(None);
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        let value = serde_path_to_error::deserialize(Wrap(&mut deserializer, &missing)).map_err(
+            |error| {
+                let mut path = error.path().to_string();
+                if let Some(field) = missing.get() {
+                    if path == "." {
+                        path.clear();
+                    } else {
+                        path.push('.');
+                    }
+                    path.push_str(field);
+                }
+                RunRefusal::Malformed {
+                    detail: format!("{path}: {}", redact_strings(&error.inner().to_string())),
+                }
+            },
+        )?;
+        // serde_json::from_slice also requires the entire input to be consumed.
+        deserializer.end().map_err(|error| RunRefusal::Malformed {
+            detail: error.to_string(),
+        })?;
+        Ok(value)
+    }
+
+    // serde_json can reject a typed request before invoking the visitor (e.g.
+    // a string where a sequence was requested). Its Debug-quoted input strings
+    // need redaction too. This only scrubs rendered values; paths and missing
+    // fields always come from structured callbacks, never from error text.
+    fn redact_strings(message: &str) -> String {
+        let mut result = String::new();
+        let mut chars = message.chars();
+        while let Some(ch) = chars.next() {
+            result.push(ch);
+            if ch == '"' {
+                result.push_str("<redacted>\"");
+                while let Some(ch) = chars.next() {
+                    match ch {
+                        '\\' => {
+                            chars.next();
+                        }
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    #[derive(Debug)]
+    struct Error<E> {
+        source: E,
+        missing: Option<&'static str>,
+    }
+    impl<E> Error<E> {
+        fn source(source: E) -> Self {
+            Self {
+                source,
+                missing: None,
+            }
+        }
+        fn unwrap(self, missing: &Cell<Option<&'static str>>) -> E {
+            if self.missing.is_some() {
+                missing.set(self.missing);
+            }
+            self.source
+        }
+    }
+    impl<E: fmt::Display> fmt::Display for Error<E> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.source.fmt(f)
+        }
+    }
+    impl<E: std::error::Error> std::error::Error for Error<E> {}
+    impl<E: de::Error> de::Error for Error<E> {
+        fn custom<T: fmt::Display>(message: T) -> Self {
+            Self::source(E::custom(message))
+        }
+        fn missing_field(field: &'static str) -> Self {
+            Self {
+                source: E::missing_field(field),
+                missing: Some(field),
+            }
+        }
+        fn duplicate_field(field: &'static str) -> Self {
+            Self::source(E::duplicate_field(field))
+        }
+        fn unknown_field(_field: &str, expected: &'static [&'static str]) -> Self {
+            Self::source(E::unknown_field("<redacted>", expected))
+        }
+        fn unknown_variant(_variant: &str, expected: &'static [&'static str]) -> Self {
+            Self::source(E::unknown_variant("<redacted>", expected))
+        }
+        fn invalid_type(value: de::Unexpected<'_>, expected: &dyn de::Expected) -> Self {
+            Self::source(E::invalid_type(kind(value), expected))
+        }
+        fn invalid_value(value: de::Unexpected<'_>, expected: &dyn de::Expected) -> Self {
+            Self::source(E::invalid_value(kind(value), expected))
+        }
+    }
+    fn kind(value: de::Unexpected<'_>) -> de::Unexpected<'static> {
+        use de::Unexpected::*;
+        Other(match value {
+            Bool(_) => "boolean",
+            Unsigned(_) => "integer",
+            Signed(_) => "integer",
+            Float(_) => "floating point",
+            Char(_) => "character",
+            Str(_) => "string",
+            Bytes(_) => "byte array",
+            Unit => "null",
+            Option => "Option",
+            NewtypeStruct => "newtype struct",
+            Seq => "sequence",
+            Map => "map",
+            Enum => "enum",
+            UnitVariant => "unit variant",
+            NewtypeVariant => "newtype variant",
+            TupleVariant => "tuple variant",
+            StructVariant => "struct variant",
+            Other(_) => "value",
+        })
+    }
+
+    struct Wrap<'a, T>(T, &'a Cell<Option<&'static str>>);
+    macro_rules! deserialize {
+        ($($method:ident $(($($arg:ident: $ty:ty),*))?;)*) => {$(
+            fn $method<V: Visitor<'de>>(self, $($($arg: $ty,)*)? visitor: V) -> Result<V::Value, Self::Error> {
+                self.0.$method($($($arg,)*)? Wrap(visitor, self.1)).map_err(Error::source)
+            }
+        )*};
+    }
+    impl<'de, D: de::Deserializer<'de>> de::Deserializer<'de> for Wrap<'_, D> {
+        type Error = Error<D::Error>;
+        deserialize! {
+            deserialize_any; deserialize_bool; deserialize_i8; deserialize_i16; deserialize_i32;
+            deserialize_i64; deserialize_i128; deserialize_u8; deserialize_u16; deserialize_u32;
+            deserialize_u64; deserialize_u128; deserialize_f32; deserialize_f64; deserialize_char;
+            deserialize_str; deserialize_string; deserialize_bytes; deserialize_byte_buf;
+            deserialize_option; deserialize_unit; deserialize_unit_struct(name: &'static str);
+            deserialize_newtype_struct(name: &'static str); deserialize_seq; deserialize_tuple(len: usize);
+            deserialize_tuple_struct(name: &'static str, len: usize); deserialize_map;
+            deserialize_struct(name: &'static str, fields: &'static [&'static str]);
+            deserialize_enum(name: &'static str, variants: &'static [&'static str]);
+            deserialize_identifier; deserialize_ignored_any;
+        }
+        fn is_human_readable(&self) -> bool {
+            self.0.is_human_readable()
+        }
+    }
+    impl<'de, S: DeserializeSeed<'de>> DeserializeSeed<'de> for Wrap<'_, S> {
+        type Value = S::Value;
+        fn deserialize<D: de::Deserializer<'de>>(self, de: D) -> Result<Self::Value, D::Error> {
+            self.0
+                .deserialize(Wrap(de, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+    }
+    macro_rules! visit {
+        ($($method:ident($ty:ty);)*) => {$(
+            fn $method<E: de::Error>(self, value: $ty) -> Result<Self::Value, E> {
+                self.0.$method::<Error<E>>(value).map_err(|error| error.unwrap(self.1))
+            }
+        )*};
+    }
+    impl<'de, V: Visitor<'de>> Visitor<'de> for Wrap<'_, V> {
+        type Value = V::Value;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.expecting(f)
+        }
+        visit! {
+            visit_bool(bool); visit_i8(i8); visit_i16(i16); visit_i32(i32); visit_i64(i64); visit_i128(i128);
+            visit_u8(u8); visit_u16(u16); visit_u32(u32); visit_u64(u64); visit_u128(u128);
+            visit_f32(f32); visit_f64(f64); visit_char(char); visit_str(&str); visit_borrowed_str(&'de str);
+            visit_string(String); visit_bytes(&[u8]); visit_borrowed_bytes(&'de [u8]); visit_byte_buf(Vec<u8>);
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            self.0
+                .visit_unit::<Error<E>>()
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            self.0
+                .visit_none::<Error<E>>()
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_some<D: de::Deserializer<'de>>(self, de: D) -> Result<Self::Value, D::Error> {
+            self.0
+                .visit_some(Wrap(de, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_newtype_struct<D: de::Deserializer<'de>>(
+            self,
+            de: D,
+        ) -> Result<Self::Value, D::Error> {
+            self.0
+                .visit_newtype_struct(Wrap(de, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, access: A) -> Result<Self::Value, A::Error> {
+            self.0
+                .visit_seq(Wrap(access, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_map<A: de::MapAccess<'de>>(self, access: A) -> Result<Self::Value, A::Error> {
+            self.0
+                .visit_map(Wrap(access, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+        fn visit_enum<A: de::EnumAccess<'de>>(self, access: A) -> Result<Self::Value, A::Error> {
+            self.0
+                .visit_enum(Wrap(access, self.1))
+                .map_err(|error| error.unwrap(self.1))
+        }
+    }
+    impl<'de, A: de::SeqAccess<'de>> de::SeqAccess<'de> for Wrap<'_, A> {
+        type Error = Error<A::Error>;
+        fn next_element_seed<S: DeserializeSeed<'de>>(
+            &mut self,
+            seed: S,
+        ) -> Result<Option<S::Value>, Self::Error> {
+            self.0
+                .next_element_seed(Wrap(seed, self.1))
+                .map_err(Error::source)
+        }
+        fn size_hint(&self) -> Option<usize> {
+            self.0.size_hint()
+        }
+    }
+    impl<'de, A: de::MapAccess<'de>> de::MapAccess<'de> for Wrap<'_, A> {
+        type Error = Error<A::Error>;
+        fn next_key_seed<S: DeserializeSeed<'de>>(
+            &mut self,
+            seed: S,
+        ) -> Result<Option<S::Value>, Self::Error> {
+            self.0
+                .next_key_seed(Wrap(seed, self.1))
+                .map_err(Error::source)
+        }
+        fn next_value_seed<S: DeserializeSeed<'de>>(
+            &mut self,
+            seed: S,
+        ) -> Result<S::Value, Self::Error> {
+            self.0
+                .next_value_seed(Wrap(seed, self.1))
+                .map_err(Error::source)
+        }
+        fn size_hint(&self) -> Option<usize> {
+            self.0.size_hint()
+        }
+    }
+    impl<'a, 'de, A: de::EnumAccess<'de>> de::EnumAccess<'de> for Wrap<'a, A> {
+        type Error = Error<A::Error>;
+        type Variant = Wrap<'a, A::Variant>;
+        fn variant_seed<S: DeserializeSeed<'de>>(
+            self,
+            seed: S,
+        ) -> Result<(S::Value, Self::Variant), Self::Error> {
+            self.0
+                .variant_seed(Wrap(seed, self.1))
+                .map(|(value, variant)| (value, Wrap(variant, self.1)))
+                .map_err(Error::source)
+        }
+    }
+    impl<'de, A: de::VariantAccess<'de>> de::VariantAccess<'de> for Wrap<'_, A> {
+        type Error = Error<A::Error>;
+        fn unit_variant(self) -> Result<(), Self::Error> {
+            self.0.unit_variant().map_err(Error::source)
+        }
+        fn newtype_variant_seed<S: DeserializeSeed<'de>>(
+            self,
+            seed: S,
+        ) -> Result<S::Value, Self::Error> {
+            self.0
+                .newtype_variant_seed(Wrap(seed, self.1))
+                .map_err(Error::source)
+        }
+        fn tuple_variant<V: Visitor<'de>>(
+            self,
+            len: usize,
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0
+                .tuple_variant(len, Wrap(visitor, self.1))
+                .map_err(Error::source)
+        }
+        fn struct_variant<V: Visitor<'de>>(
+            self,
+            fields: &'static [&'static str],
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0
+                .struct_variant(fields, Wrap(visitor, self.1))
+                .map_err(Error::source)
+        }
+    }
 }

@@ -477,3 +477,125 @@ fn scripted_provider_data_is_not_authority() {
     // A scripted world is a different provider from the host network.
     assert!(!grants_within(&net(vec![]), &stream));
 }
+
+fn malformed_template(bytes: &[u8]) -> String {
+    let Err(RunRefusal::Malformed { detail }) =
+        RunConfig::bind_grants(bytes, [0; 32], "probe@1/main".into(), LaunchKind::Main)
+    else {
+        panic!("expected a malformed grant template")
+    };
+    detail
+}
+
+#[test]
+fn missing_grant_fields_name_the_containing_object_and_field() {
+    for (text, path, field) in [
+        (r#"{"io":{"stdout":"stdout.bytes@1"}}"#, "io.dirs", "dirs"),
+        (
+            r#"{"io":{"dirs":[{"path":"data","access":"read"}]}}"#,
+            "io.dirs[0].host",
+            "host",
+        ),
+        (
+            r#"{"io":{"dirs":[],"telemetry":{}}}"#,
+            "io.telemetry.provider",
+            "provider",
+        ),
+    ] {
+        let detail = malformed_template(text.as_bytes());
+        assert!(
+            detail.starts_with(&format!(
+                "{path}: missing field `{field}` at line 1 column "
+            )),
+            "{detail}"
+        );
+    }
+    for text in ["{}", r#"{"io":null}"#, r#"{"io":{"dirs":[]}}"#] {
+        RunConfig::bind_grants(
+            text.as_bytes(),
+            [0; 32],
+            "probe@1/main".into(),
+            LaunchKind::Main,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn nested_grant_object_array_and_option_errors_keep_locations_without_values() {
+    // serde_path_to_error tests/deserialize.rs:8-95, pinned 7aad3f59: nested
+    // struct, Vec and present Option vectors, expressed in Hirsel's closed schema.
+    for (text, path, reason) in [
+        (
+            r#"{"io":{"dirs":[{"path":"data","host":true,"access":"read"}]}}"#,
+            "io.dirs[0].host",
+            "expected a string",
+        ),
+        (r#"{"args":["valid",{}]}"#, "args[1]", "expected a string"),
+        (
+            r#"{"io":{"dirs":[],"telemetry":{"provider":"telemetry.null@1","seed":true}}}"#,
+            "io.telemetry.seed",
+            "expected u64",
+        ),
+    ] {
+        let detail = malformed_template(text.as_bytes());
+        assert!(
+            detail.starts_with(&format!("{path}: invalid type:")),
+            "{detail}"
+        );
+        assert!(
+            detail.contains(reason) && detail.contains(" at line 1 column "),
+            "{detail}"
+        );
+    }
+}
+
+#[test]
+fn grant_schema_prechecks_and_complete_json_consumption_stay_strict() {
+    for (text, reason) in [
+        (r#"{"args":[],"args":[]}"#, "duplicate field `args`"),
+        (r#"{"io":{"dirs":[],"dirs":[]}}"#, "duplicate field `dirs`"),
+        (r#"{"io":{"dirs":[],"unknown":true}}"#, "unknown field"),
+        (
+            r#"{"env":{"TOKEN":"secret","TOKEN":"secret"}}"#,
+            "duplicate Env key",
+        ),
+        ("{", "EOF"),
+        (r#"{"args":[}"#, "expected value"),
+        ("{} true", "trailing characters"),
+    ] {
+        let detail = malformed_template(text.as_bytes());
+        assert!(
+            detail.contains(reason) && detail.contains(" at line 1 column "),
+            "{detail}"
+        );
+        assert!(!detail.contains("secret"), "{detail}");
+    }
+    for number in ["01", "-0", "1.0", "1e0"] {
+        let text = format!(r#"{{"inputs":{{"hash_seed":{number}}}}}"#);
+        assert_eq!(malformed_template(text.as_bytes()), "noncanonical integer");
+    }
+    assert!(malformed_template(b"\xff").contains("line 1 column"));
+    RunConfig::bind_grants(b"{} \n\t", [0; 32], "probe@1/main".into(), LaunchKind::Main).unwrap();
+}
+
+#[test]
+fn malformed_grants_never_echo_rejected_or_neighboring_credentials() {
+    const SECRET: &str = "credential-DO-NOT-PRINT-\"quoted\"-\\-λ";
+    for value in [
+        serde_json::json!({"io":{"dirs":SECRET}}),
+        serde_json::json!({"args":SECRET}),
+        serde_json::json!({"admission":{"expires":SECRET}}),
+        serde_json::json!({"io":{"dirs":[{"path":"data","host":"/data","access":SECRET}]}}),
+        serde_json::json!({"placement":{"cores":SECRET}}),
+    ] {
+        let mut value = value;
+        value["env"] = serde_json::json!({"TOKEN":SECRET});
+        let detail = malformed_template(&serde_json::to_vec(&value).unwrap());
+        assert!(
+            !detail.contains("credential-DO-NOT-PRINT") && !detail.contains("quoted"),
+            "{detail}"
+        );
+        assert!(detail.contains(" at line 1 column "), "{detail}");
+    }
+}
