@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// httpdate src/lib.rs:71-117 (pin/license in docs/http-date.md).
+fn vector(seconds: i128, expected: String) -> () {
+  let stamp = time.Timestamp(unix_nanoseconds: seconds * 1000000000)
+  failure.check(http_date.parse(expected) == Ok(stamp), TextInvariant())
+  failure.check(http_date.format(stamp) == Ok(expected), TextInvariant())
+  let Ok(rendered) = http_date.format(stamp) else {
+    failure.check(false, TextInvariant())
+    return ()
+  }
+  failure.check(http_date.parse(rendered) == Ok(stamp), TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  vector(0i128, "Thu, 01 Jan 1970 00:00:00 GMT")
+  vector(784111777i128, "Sun, 06 Nov 1994 08:49:37 GMT")
+  vector(951782400i128, "Tue, 29 Feb 2000 00:00:00 GMT")
+  vector(951868800i128, "Wed, 01 Mar 2000 00:00:00 GMT")
+  vector(4107542399i128, "Sun, 28 Feb 2100 23:59:59 GMT")
+  vector(4107542400i128, "Mon, 01 Mar 2100 00:00:00 GMT")
+  vector(253402300799i128, "Fri, 31 Dec 9999 23:59:59 GMT")
+  vector(86400i128, "Fri, 02 Jan 1970 00:00:00 GMT")
+  Ok(())
+}

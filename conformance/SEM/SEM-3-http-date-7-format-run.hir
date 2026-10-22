@@ -1,0 +1,23 @@
+// rule: SEM-3
+// expect: run
+fn bad(nanos: i128, expected: http_date.FormatError) -> () {
+  failure.check(
+    http_date.format(time.Timestamp(unix_nanoseconds: nanos)) == Error(expected),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  bad(-1i128, OutOfRange())
+  bad(-1000000000i128, OutOfRange())
+  bad(253402300800000000000i128, OutOfRange())
+  bad(-170141183460469231731687303715884105728i128, OutOfRange())
+  bad(170141183460469231731687303715884105727i128, OutOfRange())
+  bad(1i128, Subsecond())
+  bad(999999999i128, Subsecond())
+  bad(1000000001i128, Subsecond())
+  bad(784111777000000001i128, Subsecond())
+  bad(253402300799000000001i128, Subsecond())
+  bad(253402300799999999999i128, Subsecond())
+  Ok(())
+}

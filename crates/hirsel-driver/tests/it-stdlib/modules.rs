@@ -41,3 +41,4 @@ mod stdlib_xxhash64;
 mod string_splitn_5;
 mod utf8_stream_5;
 mod bytes_replace_bulk_6;
+mod http_date_7;

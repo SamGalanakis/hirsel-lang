@@ -6,6 +6,12 @@
   },
   "sources": [
     {
+      "path": "http_date.hir",
+      "module": [
+        "http_date"
+      ]
+    },
+    {
       "path": "identity.hir",
       "module": [
         "probe"

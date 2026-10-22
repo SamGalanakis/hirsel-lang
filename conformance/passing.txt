@@ -5397,6 +5397,9 @@ conformance/SEM/SEM-3-hmac-sha384-run.hir
 conformance/SEM/SEM-3-hmac-sha512-256-run.hir
 conformance/SEM/SEM-3-hmac-sha512-run.hir
 conformance/SEM/SEM-3-html-escape-run.hir
+conformance/SEM/SEM-3-http-date-7-format-run.hir
+conformance/SEM/SEM-3-http-date-7-reject-run.hir
+conformance/SEM/SEM-3-http-date-7-vectors-run.hir
 conformance/SEM/SEM-3-invalid-utf8-returned.hir
 conformance/SEM/SEM-3-json-corpus-run.hir
 conformance/SEM/SEM-3-json-direct-run.hir

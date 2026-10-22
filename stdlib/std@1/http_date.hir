@@ -1,0 +1,220 @@
+// Strict IMF-fixdate adapter, ported from httpdate src/date.rs:33-44,
+// 180-228,277-316 at 53df52094835dd85aca70e23b9f384abcf843f7f.
+// Copyright (c) 2016 Pyfisch; MIT license and deviations in docs/http-date.md.
+@serializable
+pub type ParseError {
+  offset: u64,
+  kind: ParseErrorKind,
+}
+
+@serializable
+pub type ParseErrorKind = Length | NonAscii | Separator | Weekday | Month | Digit | Year | Day | Hour | Minute | Second | Calendar
+
+@serializable
+pub type FormatError = OutOfRange | Subsecond
+
+@noalloc
+fn digits(data: Bytes, start: u64, width: u64) -> Result[i32, ParseError] uses {} {
+  let mut value: i32 = 0
+  let mut i: u64 = start
+  while i < start + width {
+    let byte = data[i]
+    if byte < b'0' || byte > b'9' {
+      return Error(ParseError(offset: i, kind: Digit()))
+    }
+    value = value * 10 + core@1/int.widen(byte - b'0')
+    i += 1
+  }
+  Ok(value)
+}
+
+@noalloc
+fn weekday_token(value: time.Weekday) -> (u8, u8, u8) uses {} {
+  match value {
+    Monday => (b'M', b'o', b'n'),
+    Tuesday => (b'T', b'u', b'e'),
+    Wednesday => (b'W', b'e', b'd'),
+    Thursday => (b'T', b'h', b'u'),
+    Friday => (b'F', b'r', b'i'),
+    Saturday => (b'S', b'a', b't'),
+    Sunday => (b'S', b'u', b'n'),
+  }
+}
+
+@noalloc
+fn month_token(value: u8) -> (u8, u8, u8) uses {} {
+  match value {
+    1 => (b'J', b'a', b'n'),
+    2 => (b'F', b'e', b'b'),
+    3 => (b'M', b'a', b'r'),
+    4 => (b'A', b'p', b'r'),
+    5 => (b'M', b'a', b'y'),
+    6 => (b'J', b'u', b'n'),
+    7 => (b'J', b'u', b'l'),
+    8 => (b'A', b'u', b'g'),
+    9 => (b'S', b'e', b'p'),
+    10 => (b'O', b'c', b't'),
+    11 => (b'N', b'o', b'v'),
+    _ => (b'D', b'e', b'c'),
+  }
+}
+
+/// Exactly 29 ASCII bytes, matching weekday, GMT, and years 1970 through 9999.
+@noalloc
+pub fn parse(value: String) -> Result[time.Timestamp, ParseError] uses {} {
+  let data = core@1/string.as_bytes(value)
+  let size = core@1/bytes.len(data)
+  if size != 29 {
+    return Error(
+      ParseError(
+        offset: if size < 29 {
+          size
+        } else {
+          29
+        },
+        kind: Length()
+      )
+    )
+  }
+  let mut i: u64 = 0
+  while i < 29 {
+    if data[i] > 127 {
+      return Error(ParseError(offset: i, kind: NonAscii()))
+    }
+    let expected = if i == 3 {
+      b','
+    } else if i == 4 || i == 7 || i == 11 || i == 16 || i == 25 {
+      b' '
+    } else if i == 19 || i == 22 {
+      b':'
+    } else if i == 26 {
+      b'G'
+    } else if i == 27 {
+      b'M'
+    } else if i == 28 {
+      b'T'
+    } else {
+      data[i]
+    }
+    if data[i] != expected {
+      return Error(ParseError(offset: i, kind: Separator()))
+    }
+    i += 1
+  }
+  let weekday = (data[0], data[1], data[2])
+  if weekday != weekday_token(Monday()) && weekday != weekday_token(Tuesday()) && weekday != weekday_token(
+    Wednesday()
+  ) && weekday != weekday_token(Thursday()) && weekday != weekday_token(Friday()) && weekday != weekday_token(
+    Saturday()
+  ) && weekday != weekday_token(Sunday()) {
+    return Error(ParseError(offset: 0, kind: Weekday()))
+  }
+  let month_text = (data[8], data[9], data[10])
+  let mut month: u8 = 1
+  while month <= 12 && month_token(month) != month_text {
+    month += 1
+  }
+  if month > 12 {
+    return Error(ParseError(offset: 8, kind: Month()))
+  }
+  let day = digits(data, 5, 2)?
+  let year = digits(data, 12, 4)?
+  let hour = digits(data, 17, 2)?
+  let minute = digits(data, 20, 2)?
+  let second = digits(data, 23, 2)?
+  if year < 1970 || year > 9999 {
+    return Error(ParseError(offset: 12, kind: Year()))
+  }
+  let Some(civil) = date.new(year, month, core@1/int.narrow(day)) else {
+    return Error(ParseError(offset: 5, kind: Day()))
+  }
+  if hour > 23 {
+    return Error(ParseError(offset: 17, kind: Hour()))
+  }
+  if minute > 59 {
+    return Error(ParseError(offset: 20, kind: Minute()))
+  }
+  // Do not call time.parse: its leap-second policy clamps 60 to 59.
+  if second > 59 {
+    return Error(ParseError(offset: 23, kind: Second()))
+  }
+  let Some(clock) = time_of_day.new(
+    core@1/int.narrow(hour),
+    core@1/int.narrow(minute),
+    core@1/int.narrow(second),
+    0
+  ) else {
+    return Error(ParseError(offset: 17, kind: Calendar()))
+  }
+  if weekday_token(date.weekday(civil)) != weekday {
+    return Error(ParseError(offset: 0, kind: Weekday()))
+  }
+  match date_time.to_timestamp(time.DateTime(date: civil, time: clock), 0) {
+    Ok(stamp) => Ok(stamp),
+    Error(_) => Error(ParseError(offset: 12, kind: Calendar())),
+  }
+}
+
+@preserves_unique(out)
+fn append_token(mut out: List[u8], token: (u8, u8, u8)) -> () uses {} {
+  let (first, second, third) = token
+  core@1/list.push(mut out, first)
+  core@1/list.push(mut out, second)
+  core@1/list.push(mut out, third)
+}
+
+@preserves_unique(out)
+fn append(mut out: List[u8], data: Bytes) -> () uses {} {
+  for byte in data {
+    core@1/list.push(mut out, byte)
+  }
+}
+
+@preserves_unique(out)
+fn append_digits(mut out: List[u8], value: i32, width: u64) -> () uses {} {
+  let mut divisor: i32 = if width == 4 {
+    1000
+  } else {
+    10
+  }
+  let mut left = value
+  while divisor > 0 {
+    core@1/list.push(mut out, b'0' + core@1/int.narrow(left / divisor))
+    left %= divisor
+    divisor /= 10
+  }
+}
+
+/// Canonical UTC text; rejects out-of-range and subsecond timestamps.
+pub fn format(value: time.Timestamp) -> Result[unique String, FormatError] uses {} {
+  // Bound before arithmetic/conversion, including i128 MIN/MAX.
+  if value.unix_nanoseconds < 0 || value.unix_nanoseconds > 253402300799999999999i128 {
+    return Error(OutOfRange())
+  }
+  if value.unix_nanoseconds % 1000000000 != 0 {
+    return Error(Subsecond())
+  }
+  let utc = match date_time.from_timestamp(value, 0) {
+    Ok(civil) => civil,
+    Error(_) => return Error(OutOfRange()),
+  }
+  if date.year(utc.date) < 1970 || date.year(utc.date) > 9999 {
+    return Error(OutOfRange())
+  }
+  let mut out: List[u8] = []
+  append_token(mut out, weekday_token(date.weekday(utc.date)))
+  append(mut out, b", ")
+  append_digits(mut out, core@1/int.widen(date.day(utc.date)), 2)
+  append(mut out, b" ")
+  append_token(mut out, month_token(date.month(utc.date)))
+  append(mut out, b" ")
+  append_digits(mut out, date.year(utc.date), 4)
+  append(mut out, b" ")
+  append_digits(mut out, core@1/int.widen(time_of_day.hour(utc.time)), 2)
+  append(mut out, b":")
+  append_digits(mut out, core@1/int.widen(time_of_day.minute(utc.time)), 2)
+  append(mut out, b":")
+  append_digits(mut out, core@1/int.widen(time_of_day.second(utc.time)), 2)
+  append(mut out, b" GMT")
+  Ok(text.finish_valid(take out))
+}
