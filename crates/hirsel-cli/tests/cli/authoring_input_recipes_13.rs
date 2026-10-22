@@ -125,6 +125,122 @@ pub fn main() -> Result[(), ()] {
 }
 
 #[test]
+fn authoring_input_recipes_13_bytes_unicode_reject_and_utf8_repair() {
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("main.hir");
+    let manifest = scratch.path().join("hirsel.json");
+    fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema":1,"package":{"name":"byte_recipe","version":"0"},
+            "sources":[{"path":"main.hir","module":[]}],"dependencies":[],
+            "entry":{"module":[],"name":"main"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for (scalar, expected, adjacent) in [
+        ("雪", &[0xe9u8, 0x9b, 0xaa][..], false),
+        ("é", &[0xc3, 0xa9][..], true),
+        ("雪", &[0xe9, 0x9b, 0xaa][..], true),
+        ("🙂", &[0xf0, 0x9f, 0x99, 0x82][..], true),
+    ] {
+        // Include the exact configctl witness, then exercise a Unicode column
+        // after another scalar and byte escapes immediately around the error.
+        let source = if adjacent {
+            format!("fn data()->Bytes {{ let _ = \"λ\"; b\"\\n{scalar}\\xff\"}}\n")
+        } else {
+            format!("fn data()->Bytes {{b\"{scalar}\"}}\n")
+        };
+        fs::write(&path, &source).unwrap();
+        let output = command()
+            .env("HIRSEL_JOBS", "1")
+            .args(["check", "--json"])
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let diagnostics: Vec<serde_json::Value> =
+            serde_json::Deserializer::from_slice(&output.stdout)
+                .into_iter()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let d = &diagnostics[0];
+        assert_eq!(d["rule"], "SEM-3");
+        assert_eq!(d["message"], "non-ASCII character in bytes literal");
+        let start = source.find(scalar).unwrap();
+        let column = source[..start].chars().count() + 1;
+        assert_eq!(d["primary"]["start"], start);
+        assert_eq!(d["primary"]["end"], start + scalar.len());
+        assert_eq!(d["primary"]["line"], 1);
+        assert_eq!(d["primary"]["end_line"], 1);
+        assert_eq!(d["primary"]["column"], column);
+        assert_eq!(d["primary"]["end_column"], column + 1);
+        let notes = d["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        let help = notes[0].as_str().unwrap();
+        assert!(help.contains("ASCII plus byte escapes"), "{help}");
+        assert!(!help.contains("@format"), "{help}");
+        let replacement = help.split('`').nth(1).unwrap();
+        let expected_spelling = expected
+            .iter()
+            .map(|b| format!("\\x{b:02x}"))
+            .collect::<String>();
+        assert_eq!(replacement, expected_spelling);
+        assert_eq!(scalar.as_bytes(), expected);
+        let human = command()
+            .env("HIRSEL_JOBS", "1")
+            .arg("check")
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert_eq!(human.status.code(), Some(1));
+        let human = format!(
+            "{}{}",
+            String::from_utf8_lossy(&human.stdout),
+            String::from_utf8_lossy(&human.stderr)
+        );
+        assert!(human.contains(&format!("main.hir:1:{column}")), "{human}");
+        assert!(human.contains(help), "{human}");
+        let expected = if adjacent {
+            [vec![10], expected.to_vec(), vec![255]].concat()
+        } else {
+            expected.to_vec()
+        };
+        let numbers = expected
+            .iter()
+            .map(|b| format!("{b}u8"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let repaired = source.replace(scalar, replacement)
+            + &format!(
+                "pub fn main() -> Result[(), ()] {{ failure.check(data() == bytes.from_list([{numbers}]), Arithmetic()); Ok(()) }}\n"
+            );
+        fs::write(&path, repaired).unwrap();
+        // Export checks source through V; run verifies the independent byte oracle.
+        success(
+            &command()
+                .env("HIRSEL_JOBS", "1")
+                .args(["export", "--tir"])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(scratch.path().join("repaired.tir"))
+                .output()
+                .unwrap(),
+        );
+        success(
+            &command()
+                .env("HIRSEL_JOBS", "1")
+                .arg("run")
+                .arg(&manifest)
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
 fn authoring_input_recipes_13_composed_input() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();

@@ -557,7 +557,7 @@ impl<'a> Scanner<'a> {
         self.pos += len;
         if ch.is_none()
             || ch.is_some_and(|c| {
-                c <= '\u{1f}' || c == '\u{7f}' || bidi(c) || (bytes && !c.is_ascii())
+                c <= '\u{1f}' || c == '\u{7f}' || bidi(c) || (bytes && c.is_control())
             })
         {
             self.error(
@@ -566,6 +566,24 @@ impl<'a> Scanner<'a> {
                 self.pos,
                 "forbidden literal character",
             );
+        } else if bytes && let Some(ch) = ch.filter(|c| !c.is_ascii()) {
+            // Replace only this scalar, preserving adjacent text and escapes.
+            // Unlike String literals, Bytes literals do not accept \u escapes.
+            let mut utf8 = [0; 4];
+            let escaped = ch
+                .encode_utf8(&mut utf8)
+                .bytes()
+                .map(|byte| format!("\\x{byte:02x}"))
+                .collect::<String>();
+            let mut diagnostic = Diagnostic::error(
+                const { RuleId::of("SEM-3") },
+                self.span(at, self.pos),
+                "non-ASCII character in bytes literal",
+            );
+            diagnostic.notes.push(format!(
+                "help: byte literals use ASCII plus byte escapes; replace this character with `{escaped}` for its UTF-8 bytes"
+            ));
+            self.output.diagnostics.push(diagnostic);
         }
     }
     /// One text piece of an f-string: from `f"` (a head) or a hole's closing `}`

@@ -58,6 +58,9 @@ in [syntax](syntax.md); there is no implicit conversion to or from an integer.
 sources like sequences. Slicing with a `StrPos of s` never splits a scalar. `==`, order and
 hash are bytewise; normalisation is explicit. Unicode tables are pinned definitions. Bidi
 control characters in source must be escaped; invalid UTF-8 in a source file is SEM-3.
+For example, the byte string `b"\xe9\x9b\xaa"` contains the three UTF-8 bytes
+of `雪`. Byte escapes specify bytes directly; they do not normalize text or repair
+malformed UTF-8.
 
 An f-string ([syntax](syntax.md)) evaluates to a fresh `unique String`: its text and
 holes, left to right, appended to an empty builder through

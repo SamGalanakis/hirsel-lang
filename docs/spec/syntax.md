@@ -141,6 +141,10 @@ fill         = string-scalar ; (* one scalar, excluding braces *)
 `string-scalar` excludes the quote, backslash, raw controls U+0000–U+001F and U+007F,
 newlines and `Bidi_Control`; `ascii-string-scalar` also excludes non-ASCII. A string
 `\xNN` is limited to 00–7F, so no escape produces invalid UTF-8; bytes permit 00–FF.
+Byte strings (`b"..."`) use ASCII source scalars plus byte escapes, with no
+`\u{...}` escapes. To spell UTF-8 text as bytes, escape each encoded byte:
+`b"\xc3\xa9"` for `é`, `b"\xe9\x9b\xaa"` for `雪`, and
+`b"\xf0\x9f\x99\x82"` for `🙂`.
 `\u{...}` has one to six hex digits and must denote a Unicode scalar value (no surrogates,
 nothing above 10FFFF). A character literal denotes exactly one Unicode scalar;
 `character-scalar` excludes apostrophe, backslash, raw controls U+0000–U+001F

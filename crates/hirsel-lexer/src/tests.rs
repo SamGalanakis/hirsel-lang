@@ -208,6 +208,100 @@ fn invalid_literal_scalars_and_unterminated_literals() {
 }
 
 #[test]
+fn bytes_non_ascii_scalars_have_exact_utf8_repairs() {
+    // Fixed UTF-8 oracles, independent of the diagnostic's encoder.
+    for (scalar, expected, spelling) in [
+        ('é', &[0xc3, 0xa9][..], r"\xc3\xa9"),
+        ('雪', &[0xe9, 0x9b, 0xaa][..], r"\xe9\x9b\xaa"),
+        ('🙂', &[0xf0, 0x9f, 0x99, 0x82][..], r"\xf0\x9f\x99\x82"),
+        ('\u{301}', &[0xcc, 0x81][..], r"\xcc\x81"),
+    ] {
+        let text = format!(r#"b"a\n{scalar}\xffz""#);
+        let (sources, output) = fixture(&text);
+        assert_eq!(output.diagnostics.len(), 1);
+        let d = &output.diagnostics[0];
+        assert_eq!(d.rule.as_str(), "SEM-3");
+        assert_eq!(d.message, "non-ASCII character in bytes literal");
+        assert_eq!(d.primary.start, 5);
+        assert_eq!(d.primary.end, 5 + scalar.len_utf8() as u32);
+        assert_eq!(sources.slice(d.primary), Some(scalar.to_string().as_str()));
+        assert_eq!(
+            d.notes,
+            [format!(
+                "help: byte literals use ASCII plus byte escapes; replace this character with `{spelling}` for its UTF-8 bytes"
+            )]
+        );
+        let suggested = d.notes[0].split('`').nth(1).unwrap();
+        let decoded = suggested
+            .as_bytes()
+            .chunks_exact(4)
+            .map(|chunk| {
+                assert_eq!(&chunk[..2], b"\\x");
+                u8::from_str_radix(std::str::from_utf8(&chunk[2..]).unwrap(), 16).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, expected);
+        assert_eq!(scalar.to_string().as_bytes(), expected);
+        single(&text.replace(scalar, suggested), TokenKind::Bytes);
+        assert_eq!(significant(&output), [&TokenKind::Invalid]);
+    }
+    // Adjacent scalars remain separate causes and retain their original bytes.
+    let (_, output) = fixture(r#"b"é雪🙂é""#);
+    assert_eq!(output.diagnostics.len(), 4);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|d| (d.primary.start, d.primary.end))
+            .collect::<Vec<_>>(),
+        [(2, 4), (4, 7), (7, 11), (12, 14)]
+    );
+    // Rust tests/ui/array-slice-vec/byte-literals.rs:5,10 at
+    // afe686de2708699b69dd31ed14be326f4e95edfc: ASCII + high hex + tab.
+    // Copyright The Rust Project Contributors, MIT; notice: third-party/NOTICES.md.
+    // The all-byte and basic escape vectors above already cover its other forms.
+    single(r#"b"a\xF0\t""#, TokenKind::Bytes);
+}
+
+#[test]
+fn bytes_utf8_repairs_do_not_relax_forbidden_characters() {
+    for scalar in [
+        '\0', '\t', '\u{1f}', '\u{7f}', '\u{85}', '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}',
+        '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}',
+        '\u{2069}',
+    ] {
+        let text = format!("b\"{scalar}\"");
+        error(&text, "SEM-3", 2, 2 + scalar.len_utf8() as u32);
+        let (_, output) = fixture(&text);
+        assert_eq!(output.diagnostics.len(), 1);
+        assert_eq!(output.diagnostics[0].message, "forbidden literal character");
+        assert!(output.diagnostics[0].notes.is_empty());
+    }
+    let bytes = b"b\"\xff\"";
+    let output = scan(Anchor(0), bytes);
+    round_trip(bytes, &output);
+    assert_eq!(output.diagnostics.len(), 1);
+    let d = &output.diagnostics[0];
+    assert_eq!(d.rule.as_str(), "SEM-3");
+    assert_eq!((d.primary.start, d.primary.end), (2, 3));
+    assert_eq!(d.message, "forbidden literal character");
+    assert!(d.notes.is_empty());
+    for ascii in ' '..='~' {
+        if !matches!(ascii, '"' | '\\') {
+            single(&format!("b\"{ascii}\""), TokenKind::Bytes);
+        }
+    }
+    // Raw bytes have no escapes, so a scalar-only escape repair is inapplicable.
+    let (_, output) = fixture("br\"雪\"");
+    assert_eq!(
+        output.diagnostics[0].message,
+        "forbidden raw literal character"
+    );
+    assert!(output.diagnostics[0].notes.is_empty());
+    error(r#"b"\u{e9}""#, "SEM-3", 2, 8);
+}
+
+#[test]
 fn trivia_doc_comments_nesting_and_physical_newlines() {
     let (_, output) =
         fixture(" \t\n\r\n// c\n/// d\r\n//// d\n/* a\n/* b */\r\nz */ /**/ /** d */");
