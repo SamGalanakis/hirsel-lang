@@ -36,3 +36,7 @@ pub const VALUE_HANDLE: u64 = 5;
 /// Fixed counted pointer value (runtime ABI 40); VALUE operand3 is the linked
 /// payload layout. Headers, addresses and reference counts are not values.
 pub const VALUE_INDIRECT: u64 = 6;
+
+/// Counted fixed-stride payload (ABI 41). VALUE operands: kind, minimum
+/// extent, stride, element-start offset, linked element layout, zero, zero.
+pub const VALUE_SEQUENCE: u64 = 7;

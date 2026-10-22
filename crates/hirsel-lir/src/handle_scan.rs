@@ -6,7 +6,8 @@
 //! Unsupported borrowed/variable-flat representations explicitly yield unknown.
 
 use crate::layout_types::{
-    HandleKind, LayoutId, LayoutKind, LayoutRecord, ScalarKind, ScanStep, SizeSpec, TagForm,
+    HandleKind, LayoutId, LayoutKind, LayoutRecord, ScalarKind, ScanStep, SizeSpec, SizeTerm,
+    TagForm,
 };
 
 pub use hirsel_core_contract::handle_scan::*;
@@ -67,6 +68,27 @@ impl Program {
     fn value(&mut self, record: &LayoutRecord) {
         let at = self.instruction(VALUE, VALUE_UNKNOWN);
         let SizeSpec::Fixed(size) = record.size else {
+            if let (LayoutKind::Sequence { element }, SizeSpec::Dynamic(size)) =
+                (&record.kind, &record.size)
+                && let [
+                    SizeTerm::Constant(start),
+                    SizeTerm::ReadLength {
+                        offset: 0,
+                        scalar: ScalarKind::U64,
+                    },
+                    SizeTerm::Constant(stride),
+                    SizeTerm::Multiply,
+                    SizeTerm::Add,
+                ] = size.as_slice()
+            {
+                self.words[at + 1] = VALUE_SEQUENCE;
+                // Only the two fixed header fields belong to the minimum extent;
+                // over-aligned elements may start later.
+                self.words[at + 2] = 16;
+                self.words[at + 3] = *stride;
+                self.words[at + 4] = *start;
+                self.reference(at + 5, *element);
+            }
             return;
         };
         self.words[at + 2] = size;
