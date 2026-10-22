@@ -2943,6 +2943,7 @@ conformance/MODE/MODE-1-local-result-temporary-source-bad.hir
 conformance/MODE/MODE-1-local-result-temporary-source-ok.hir
 conformance/MODE/MODE-1-local-taken-parameter-bad.hir
 conformance/MODE/MODE-1-local-taken-parameter-ok.hir
+conformance/MODE/MODE-1-lru-cache-7-peek-bad.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-bad.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-ok.hir
 conformance/MODE/MODE-1-mapped-view-escape-bad.hir
@@ -6825,6 +6826,7 @@ conformance/SEM/SEM-5-list-sort-stable-size-65-run.hir
 conformance/SEM/SEM-5-list-sort-zig-binary-search-run.hir
 conformance/SEM/SEM-5-list-sort-zig-sort-run.hir
 conformance/SEM/SEM-5-list-sort-zig-stable-run.hir
+conformance/SEM/SEM-5-lru-cache-7-run.hir
 conformance/SEM/SEM-5-map-consume-unused-entry-run.hir
 conformance/SEM/SEM-5-map-get-after-overwrite-run.hir
 conformance/SEM/SEM-5-map-get-hit-miss-run.hir

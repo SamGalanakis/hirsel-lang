@@ -1,0 +1,103 @@
+// Unit-count adaptations of BuildBuddy lru_test.go:40-103,129-158.
+fn cache(limit: u64) -> unique lru.Cache[u64] {
+  let created: unique Result[lru.Cache[u64], lru.CapacityError] = lru.new(limit)
+  match take created {
+    Ok(c) => take c,
+    Error(_) => {
+      failure.check(false, Bounds())
+      cache(1)
+    },
+  }
+}
+
+fn inserted(take status: unique lru.PutResult[u64]) {
+  match take status {
+    Inserted => {},
+    _ => failure.check(false, Bounds()),
+  }
+}
+
+fn evicted(take status: unique lru.PutResult[u64], key: String, value: u64) {
+  match take status {
+    Evicted(entry) => failure.check(entry.key == key && entry.value == value, Bounds()),
+    _ => failure.check(false, Bounds()),
+  }
+}
+
+fn replaced(take status: unique lru.PutResult[u64], key: String, value: u64) {
+  match take status {
+    Replaced(entry) => failure.check(entry.key == key && entry.value == value, Bounds()),
+    _ => failure.check(false, Bounds()),
+  }
+}
+
+fn removed(mut c: unique lru.Cache[u64], key: String, value: u64) {
+  match take lru.remove(mut c, key) {
+    Some(entry) => failure.check(entry.key == key && entry.value == value, Bounds()),
+    None => failure.check(false, Bounds()),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let invalid: unique Result[lru.Cache[u64], lru.CapacityError] = lru.new(0)
+  match take invalid {
+    Error(error) => failure.check(error.requested == 0, Bounds()),
+    Ok(_) => failure.check(false, Bounds()),
+  }
+  let mut c = cache(2)
+  failure.check(
+    lru.capacity(c) == 2 && lru.len(c) == 0 && lru.slot_count(c) == 0,
+    Bounds()
+  )
+  failure.check(!lru.touch(mut c, "missing"), Bounds())
+  failure.check(lru.peek(c, "missing") == None, Bounds())
+  failure.check(option.is_none(lru.remove(mut c, "missing")), Bounds())
+  inserted(lru.put(mut c, "a", 5))
+  inserted(lru.put(mut c, "b", 4))
+  evicted(lru.put(mut c, "c", 3), "a", 5)
+  replaced(lru.put(mut c, "c", 10), "c", 3)
+  failure.check(lru.peek(c, "b") == Some(4), Bounds())
+  // Peek leaves b oldest. Replacement leaves c newest.
+  evicted(lru.put(mut c, "d", 8), "b", 4)
+  failure.check(lru.touch(mut c, "c"), Bounds())
+  evicted(lru.put(mut c, "e", 9), "d", 8)
+  removed(mut c, "c", 10)
+  removed(mut c, "e", 9)
+  failure.check(lru.len(c) == 0 && lru.slot_count(c) == 2, Bounds())
+  // Independent oldest controls: a,b -> evict a, then b.
+  inserted(lru.put(mut c, "a", 5))
+  inserted(lru.put(mut c, "b", 4))
+  evicted(lru.put(mut c, "c", 3), "a", 5)
+  evicted(lru.put(mut c, "d", 2), "b", 4)
+  removed(mut c, "c", 3)
+  removed(mut c, "d", 2)
+  // One slot: replacement, missing removal and repeated reuse.
+  let mut one = cache(1)
+  inserted(lru.put(mut one, "a", 1))
+  replaced(lru.put(mut one, "a", 2), "a", 1)
+  evicted(lru.put(mut one, "b", 3), "a", 2)
+  removed(mut one, "b", 3)
+  for i in 0u64..80u64 {
+    inserted(lru.put(mut one, "same", i))
+    removed(mut one, "same", i)
+    failure.check(lru.len(one) == 0 && lru.slot_count(one) == 1, Bounds())
+  }
+  // Remove middle, head, tail; reinsert all; drain and reinsert again.
+  let mut three = cache(3)
+  inserted(lru.put(mut three, "a", 1))
+  inserted(lru.put(mut three, "b", 2))
+  inserted(lru.put(mut three, "c", 3))
+  removed(mut three, "b", 2)
+  removed(mut three, "c", 3)
+  removed(mut three, "a", 1)
+  inserted(lru.put(mut three, "c", 4))
+  inserted(lru.put(mut three, "b", 5))
+  inserted(lru.put(mut three, "a", 6))
+  failure.check(lru.slot_count(three) == 3, Bounds())
+  removed(mut three, "c", 4)
+  removed(mut three, "b", 5)
+  removed(mut three, "a", 6)
+  inserted(lru.put(mut three, "again", 7))
+  removed(mut three, "again", 7)
+  Ok(())
+}

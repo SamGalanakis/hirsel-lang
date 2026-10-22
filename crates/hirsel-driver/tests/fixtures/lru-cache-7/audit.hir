@@ -1,0 +1,90 @@
+// Same module as the actual std source in the test manifest only. No public
+// inspection API or duplicate implementation is added to the std package.
+pub fn audit[T](c: Cache[T]) -> bool {
+  let allocated = core@1/list.len(c.slots)
+  if allocated > c.limit || c.count > allocated || c.count + core@1/list.len(c.free) != allocated {
+    return false
+  }
+  if c.count == 0 && (c.head != 0 || c.tail != 0) {
+    return false
+  }
+  let mut previous: u64 = 0
+  let mut cursor = c.head
+  let mut seen: u64 = 0
+  while cursor != 0 {
+    if cursor > allocated || seen >= c.count {
+      return false
+    }
+    if c.slots[cursor - 1].prev != previous {
+      return false
+    }
+    if !indexed(c.slots[cursor - 1], c.index, cursor) {
+      return false
+    }
+    previous = cursor
+    cursor = c.slots[cursor - 1].next
+    seen += 1
+  }
+  if seen != c.count || previous != c.tail {
+    return false
+  }
+  if core@1/map.len(c.index) != c.count {
+    return false
+  }
+  for i in 0u64..core@1/list.len(c.free) {
+    let slot = c.free[i]
+    if slot == 0 || slot > allocated {
+      return false
+    }
+    if occupied(c.slots[slot - 1]) {
+      return false
+    }
+    if c.slots[slot - 1].prev != 0 || c.slots[slot - 1].next != 0 {
+      return false
+    }
+    for j in 0u64..i {
+      if c.free[j] == slot {
+        return false
+      }
+    }
+  }
+  true
+}
+
+pub fn order[T](c: Cache[T], keys: List[String]) -> bool {
+  if core@1/list.len(keys) != c.count {
+    return false
+  }
+  let mut cursor = c.head
+  for key in keys {
+    if cursor == 0 {
+      return false
+    }
+    if !matches_key(c.slots[cursor - 1], key) {
+      return false
+    }
+    cursor = c.slots[cursor - 1].next
+  }
+  cursor == 0
+}
+
+fn indexed[T](slot: Slot[T], index: Map[String, u64], id: u64) -> bool {
+  match slot.entry {
+    Some(entry) => core@1/map.get(index, entry.key) == Some(id),
+    None => false,
+  }
+}
+
+fn occupied[T](slot: Slot[T]) -> bool {
+  match slot.entry {
+    Some(_) => true,
+    None => false,
+  }
+}
+
+fn matches_key[T](slot: Slot[T], key: String) -> bool {
+  match slot.entry {
+    Some(entry) => entry.key == key,
+    None => false,
+  }
+}

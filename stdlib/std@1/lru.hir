@@ -1,0 +1,203 @@
+// Port of LangArena 3c9f84dd rust/src/benchmarks/cache_simulation.rs:5-158.
+// See docs/lru-cache.md for attribution, invariants and ownership deviations.
+pub type CapacityError {
+  requested: u64,
+}
+
+pub type Entry[T] {
+  key: unique String,
+  value: unique T,
+}
+
+pub type PutResult[T] = Inserted | Replaced(unique Entry[T]) | Evicted(unique Entry[T])
+
+type Slot[T] {
+  entry: unique Option[unique Entry[T]],
+  prev: u64,
+  next: u64,
+}
+
+pub opaque type Cache[T]: () uses {T} {
+  limit: u64,
+  index: unique Map[String, u64],
+  slots: unique List[unique Slot[T]],
+  free: unique List[u64],
+  head: u64,
+  tail: u64,
+  count: u64,
+}
+
+/// Capacity counts entries, independently of key and value byte sizes.
+pub fn new[T](max_entries: u64) -> unique Result[Cache[T], CapacityError] uses {} {
+  if max_entries == 0 {
+    return Error(CapacityError(requested: max_entries))
+  }
+  let index: unique Map[String, u64] = core@1/map.empty()
+  let slots: unique List[unique Slot[T]] = []
+  let free: unique List[u64] = []
+  let cache: unique Cache[T] = Cache(
+    limit: max_entries,
+    index: take index,
+    slots: take slots,
+    free: take free,
+    head: 0,
+    tail: 0,
+    count: 0
+  )
+  success(take cache)
+}
+
+// Keep the opaque cleanup contract at the Result construction boundary.
+fn success[T](take cache: unique Cache[T]) -> unique Result[Cache[T], CapacityError] uses {cache} {
+  Ok(take cache)
+}
+
+@noalloc
+pub fn len[T](c: Cache[T]) -> u64 uses {} {
+  c.count
+}
+
+@noalloc
+pub fn capacity[T](c: Cache[T]) -> u64 uses {} {
+  c.limit
+}
+
+/// Allocated logical slots, including empty reusable slots; never exceeds capacity.
+@noalloc
+pub fn slot_count[T](c: Cache[T]) -> u64 uses {} {
+  core@1/list.len(c.slots)
+}
+
+// Copy a scalar index before any link mutation. Zero denotes no link.
+fn find[T](c: Cache[T], key: String) -> u64 uses {} {
+  match core@1/map.get(c.index, key) {
+    Some(slot) => slot,
+    None => 0u64,
+  }
+}
+
+fn unlink[T](mut c: unique Cache[T], slot: u64) -> () uses {c} {
+  let prev = c.slots[slot - 1].prev
+  let next = c.slots[slot - 1].next
+  if prev == 0 {
+    c.head = next
+  } else {
+    c.slots[prev - 1].next = next
+  }
+  if next == 0 {
+    c.tail = prev
+  } else {
+    c.slots[next - 1].prev = prev
+  }
+  c.slots[slot - 1].prev = 0
+  c.slots[slot - 1].next = 0
+}
+
+fn front[T](mut c: unique Cache[T], slot: u64) -> () uses {c} {
+  c.slots[slot - 1].next = c.head
+  if c.head != 0 {
+    c.slots[c.head - 1].prev = slot
+  }
+  c.head = slot
+  if c.tail == 0 {
+    c.tail = slot
+  }
+}
+
+/// Reports presence and makes a hit most recently used, without observing its payload.
+pub fn touch[T](mut c: unique Cache[T], key: String) -> bool uses {c} {
+  let slot = find(c, key)
+  if slot == 0 {
+    return false
+  }
+  if slot != c.head {
+    unlink(mut c, slot)
+    front(mut c, slot)
+  }
+  true
+}
+
+/// A view tied to c; does not change recency or deep-copy the payload.
+pub fn peek[T: copyable](c: Cache[T], key: String) -> Option[T] in c uses {} {
+  let slot = find(c, key)
+  if slot == 0 {
+    return None()
+  }
+  match c.slots[slot - 1].entry {
+    Some(entry) => Some(copy entry.value),
+    None => None(),
+  }
+}
+
+fn erase_index[T](mut index: unique Map[String, u64], slot: Slot[T]) -> () uses {} {
+  match slot.entry {
+    Some(entry) => {
+      let _ = core@1/map.remove(mut index, entry.key)
+    },
+    None => {},
+  }
+}
+
+fn detach[T](mut c: unique Cache[T], slot: u64) -> unique Option[unique Entry[T]] uses {c} {
+  erase_index(mut c.index, c.slots[slot - 1])
+  unlink(mut c, slot)
+  let entry = replace(mut c.slots[slot - 1].entry, None())
+  core@1/list.push(mut c.free, slot)
+  c.count -= 1
+  take entry
+}
+
+/// Transfers an entry's owners to the caller and clears its reusable slot.
+pub fn remove[T](mut c: unique Cache[T], key: String) -> unique Option[unique Entry[T]] uses {c} {
+  let slot = find(c, key)
+  if slot == 0 {
+    return None()
+  }
+  detach(mut c, slot)
+}
+
+fn owned_key(key: String) -> unique String uses {} {
+  unique key
+}
+
+/// Consumes value; replacement and eviction return the previous owned entry.
+/// A replacement is MRU, just like an insertion or successful touch.
+pub fn put[T](mut c: unique Cache[T], take key: unique String, take value: unique T) -> unique PutResult[
+  T
+] uses {c, value} {
+  let existing = find(c, key)
+  let mut outcome: unique PutResult[T] = Inserted()
+  if existing != 0 {
+    match take detach(mut c, existing) {
+      Some(entry) => {
+        outcome = Replaced(take entry)
+      },
+      None => {},
+    }
+  } else if c.count == c.limit {
+    let oldest = c.tail
+    match take detach(mut c, oldest) {
+      Some(entry) => {
+        outcome = Evicted(take entry)
+      },
+      None => {},
+    }
+  }
+  let entry: unique Entry[T] = Entry(key: owned_key(key), value: take value)
+  let held: unique Option[unique Entry[T]] = Some(take entry)
+  let item: unique Slot[T] = Slot(entry: take held, prev: 0, next: 0)
+  let slot = match core@1/list.pop(mut c.free) {
+    Some(slot) => {
+      c.slots[slot - 1] = take item
+      slot
+    },
+    None => {
+      core@1/list.push(mut c.slots, take item)
+      core@1/list.len(c.slots)
+    },
+  }
+  core@1/map.insert(mut c.index, take key, slot)
+  front(mut c, slot)
+  c.count += 1
+  take outcome
+}

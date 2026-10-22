@@ -1,0 +1,22 @@
+pub fn main() -> Result[(), ()] {
+  let created: unique Result[lru.Cache[List[List[String]]], lru.CapacityError] = lru.new(
+    1
+  )
+  match take created {
+    Ok(c) => {
+      let mut cache = take c
+      let _ = lru.put(mut cache, "key", [["nested"]])
+      {
+        let retained = lru.peek(cache, "key")
+        failure.check(retained == Some([["nested"]]), Bounds())
+      }
+      failure.check(lru.touch(mut cache, "key"), Bounds())
+      match take lru.remove(mut cache, "key") {
+        Some(entry) => failure.check(entry.value == [["nested"]], Bounds()),
+        None => failure.check(false, Bounds()),
+      }
+    },
+    Error(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

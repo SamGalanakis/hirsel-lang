@@ -1223,6 +1223,12 @@
       "module": [
         "line_scan"
       ]
+    },
+    {
+      "path": "lru.hir",
+      "module": [
+        "lru"
+      ]
     }
   ],
   "dependencies": []

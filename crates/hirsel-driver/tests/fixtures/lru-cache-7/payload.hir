@@ -1,0 +1,16 @@
+pub opaque type Payload: noalloc_drop uses {} {
+  name: String,
+  parts: List[List[String]],
+}
+
+pub fn make(label: String) -> unique Payload {
+  Payload(name: unique label, parts: [["nested", "contents"], ["tail"]])
+}
+
+pub fn name(value: Payload) -> String in value {
+  value.name
+}
+
+pub fn valid(value: Payload) -> bool {
+  value.parts == [["nested", "contents"], ["tail"]]
+}

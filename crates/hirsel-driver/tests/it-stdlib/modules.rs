@@ -48,3 +48,4 @@ mod http_date_7;
 mod sorted_bounds_7;
 mod iter_peekable_7;
 mod line_scan_7;
+mod lru_cache_7;

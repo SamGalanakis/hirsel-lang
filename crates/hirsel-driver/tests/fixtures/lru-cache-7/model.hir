@@ -1,0 +1,146 @@
+type Pair {
+  key: String,
+  value: u64,
+}
+
+fn cache(limit: u64) -> unique lru_checked.Cache[u64] {
+  let created: unique Result[lru_checked.Cache[u64], lru_checked.CapacityError] = lru_checked.new(
+    limit
+  )
+  match take created {
+    Ok(c) => take c,
+    Error(_) => {
+      failure.check(false, Bounds())
+      cache(1)
+    },
+  }
+}
+
+fn position(items: List[Pair], key: String) -> u64 {
+  for i in 0u64..list.len(items) {
+    if items[i].key == key {
+      return i
+    }
+  }
+  list.len(items)
+}
+
+fn check_entry(entry: lru_checked.Entry[u64], expected: Pair) {
+  failure.check(entry.key == expected.key && entry.value == expected.value, Bounds())
+}
+
+pub fn main() -> Result[(), ()] {
+  let limits: List[u64] = [1u64, 2u64, 7u64]
+  let pool: List[String] = [
+    "",
+    "a",
+    "b",
+    "c",
+    "d",
+    "é",
+    "λ",
+    "same-prefix-a",
+    "same-prefix-b",
+    "ten",
+    "eleven"
+  ]
+  for limit in limits {
+    for seed in 1u64..5u64 {
+      let mut c = cache(limit)
+      let mut items: unique List[Pair] = []
+      let mut state = seed
+      for step in 0u64..300u64 {
+        state = (state * 1664525 + 1013904223) % 4294967296
+        let key = pool[state / 65536 % 11]
+        let op = state / 256 % 5
+        let at = position(items, key)
+        let present = at < list.len(items)
+        if op < 2 {
+          let mut kind: u64 = 0
+          let mut old = Pair(key: "", value: 0)
+          if present {
+            old = list.remove(mut items, at)
+            kind = 1
+          } else if list.len(items) == limit {
+            let last = list.len(items) - 1
+            old = list.remove(mut items, last)
+            kind = 2
+          }
+          match take lru_checked.put(mut c, unique key, step) {
+            Inserted => failure.check(kind == 0, Bounds()),
+            Replaced(entry) => {
+              failure.check(kind == 1, Bounds())
+              check_entry(entry, old)
+            },
+            Evicted(entry) => {
+              failure.check(kind == 2, Bounds())
+              check_entry(entry, old)
+            },
+          }
+          list.push(mut items, Pair(key: unique key, value: step))
+          let mut j = list.len(items) - 1
+          while j > 0 {
+            list.swap(mut items, j, j - 1)
+            j -= 1
+          }
+        } else if op == 2 {
+          failure.check(lru_checked.touch(mut c, key) == present, Bounds())
+          if present {
+            let pair = list.remove(mut items, at)
+            list.push(mut items, take pair)
+            let mut j = list.len(items) - 1
+            while j > 0 {
+              list.swap(mut items, j, j - 1)
+              j -= 1
+            }
+          }
+        } else if op == 3 {
+          match take lru_checked.remove(mut c, key) {
+            Some(entry) => {
+              failure.check(present, Bounds())
+              let old = list.remove(mut items, at)
+              check_entry(entry, old)
+            },
+            None => failure.check(!present, Bounds()),
+          }
+        } else {
+          let expected: Option[u64] = if present {
+            Some(items[at].value)
+          } else {
+            None()
+          }
+          failure.check(lru_checked.peek(c, key) == expected, Bounds())
+        }
+        failure.check(lru_checked.len(c) == list.len(items), Bounds())
+        failure.check(lru_checked.capacity(c) == limit, Bounds())
+        failure.check(lru_checked.slot_count(c) <= limit, Bounds())
+        failure.check(lru_checked.audit(c), Bounds())
+        let mut keys: unique List[String] = []
+        for pair in items {
+          list.push(mut keys, unique pair.key)
+        }
+        failure.check(lru_checked.order(c, keys), Bounds())
+        for number in 0u64..11u64 {
+          let query = pool[number]
+          let found = position(items, query)
+          let expected: Option[u64] = if found < list.len(items) {
+            Some(items[found].value)
+          } else {
+            None()
+          }
+          failure.check(lru_checked.peek(c, query) == expected, Bounds())
+        }
+      }
+      while list.len(items) > 0 {
+        let old = list.remove(mut items, 0)
+        match take lru_checked.remove(mut c, old.key) {
+          Some(entry) => check_entry(entry, old),
+          None => failure.check(false, Bounds()),
+        }
+        failure.check(lru_checked.audit(c), Bounds())
+      }
+      failure.check(lru_checked.len(c) == 0, Bounds())
+    }
+  }
+  Ok(())
+}

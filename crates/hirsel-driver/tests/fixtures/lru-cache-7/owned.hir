@@ -1,0 +1,54 @@
+// Opaque noncopyable data with nested heap owners; no payload copying.
+fn cache() -> unique lru.Cache[payload.Payload] {
+  let created: unique Result[lru.Cache[payload.Payload], lru.CapacityError] = lru.new(1)
+  match take created {
+    Ok(c) => take c,
+    Error(_) => {
+      failure.check(false, Bounds())
+      cache()
+    },
+  }
+}
+
+fn release() -> unique List[unique lru.Entry[payload.Payload]] {
+  let mut c = cache()
+  let mut entries: unique List[unique lru.Entry[payload.Payload]] = []
+  let _ = lru.put(mut c, "a", payload.make("first"))
+  match take lru.put(mut c, "a", payload.make("second")) {
+    Replaced(entry) => list.push(mut entries, take entry),
+    _ => failure.check(false, Bounds()),
+  }
+  match take lru.put(mut c, "b", payload.make("third")) {
+    Evicted(entry) => list.push(mut entries, take entry),
+    _ => failure.check(false, Bounds()),
+  }
+  failure.check(lru.touch(mut c, "b"), Bounds())
+  match take lru.remove(mut c, "b") {
+    Some(entry) => list.push(mut entries, take entry),
+    None => failure.check(false, Bounds()),
+  }
+  failure.check(lru.len(c) == 0 && lru.slot_count(c) == 1, Bounds())
+  // Cache is destroyed on return. All three independent owners escape it.
+  take entries
+}
+
+pub fn main() -> Result[(), ()] {
+  let entries = release()
+  failure.check(list.len(entries) == 3, Bounds())
+  failure.check(
+    entries[0].key == "a" && payload.name(entries[0].value) == "first",
+    Bounds()
+  )
+  failure.check(
+    entries[1].key == "a" && payload.name(entries[1].value) == "second",
+    Bounds()
+  )
+  failure.check(
+    entries[2].key == "b" && payload.name(entries[2].value) == "third",
+    Bounds()
+  )
+  for entry in entries {
+    failure.check(payload.valid(entry.value), Bounds())
+  }
+  Ok(())
+}

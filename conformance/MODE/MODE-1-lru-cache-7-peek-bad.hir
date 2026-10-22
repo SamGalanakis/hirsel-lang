@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: SEM/SEM-5-lru-cache-7-run.hir
+pub fn demo(mut c: unique lru.Cache[List[List[String]]]) {
+  let retained = lru.peek(c, "key")
+  let _ = lru.touch(mut c, "key")
+  let _ = retained
+}
