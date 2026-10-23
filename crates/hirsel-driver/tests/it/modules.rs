@@ -108,3 +108,4 @@ mod helper_unique_promise_19;
 mod result_tail_diagnostics_19;
 mod package_head_22;
 mod nominal_authority_22;
+mod visibility_boundary_22;
