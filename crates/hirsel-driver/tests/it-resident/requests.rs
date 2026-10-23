@@ -161,14 +161,17 @@ fn shared_runtime_cancellation_does_not_cancel_another_subscription() {
 }
 
 #[test]
-fn host_shutdown_leaves_live_snapshot_owned_by_lease() {
+fn host_shutdown_cancels_live_subscriptions_without_readiness() {
     let (mut host, runtime) = host();
     let mut request = host.request(&false).unwrap();
     drop(host);
     reply(&runtime, Poll::Ready(Ok(vec![product()])));
-    assert_eq!(request.poll(), Poll::Ready(Ok(vec![product()])));
+    assert_eq!(request.poll(), Poll::Ready(Err(RequestError::Cancelled)));
     drop(request);
-    assert!(!events(&runtime).iter().any(|e| e.starts_with("cancel")));
+    assert_eq!(
+        events(&runtime),
+        ["observe/seal/select", "request 1", "cancel 1"]
+    );
 }
 
 #[test]

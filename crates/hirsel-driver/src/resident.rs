@@ -3,18 +3,23 @@
 //! dependency validation and deterministic transactions belong to the engine.
 use hirsel_engine::requests::{OutputReadiness, RequestEngine, SelectedRequest};
 use hirsel_engine::runtime::{QueryRuntime, RequestId};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::Poll;
 
 /// Transport-owned host. Keeping this alive retains the engine's shared handles,
 /// without retaining a second program, verdict, output or invalidation cache.
-pub struct Host<E> {
+pub struct Host<E: RequestEngine> {
     engine: E,
+    /// Transport subscriptions only. Weak ownership cannot pin semantic products.
+    active: Vec<Weak<Subscription<E::Runtime>>>,
 }
 
 impl<E: RequestEngine> Host<E> {
     pub fn new(engine: E) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            active: Vec::new(),
+        }
     }
 
     pub fn request(
@@ -30,16 +35,54 @@ impl<E: RequestEngine> Host<E> {
             .lock()
             .expect("query runtime poisoned")
             .request(&roots);
-        Ok(RequestLease {
+        let subscription = Arc::new(Subscription {
             runtime,
+            active: Mutex::new(Some(id)),
+        });
+        self.active
+            .retain(|weak| weak.upgrade().is_some_and(|s| s.is_active()));
+        self.active.push(Arc::downgrade(&subscription));
+        Ok(RequestLease {
+            subscription,
             output,
-            active: Some(id),
+            completed: false,
         })
+    }
+}
+
+impl<E: RequestEngine> Drop for Host<E> {
+    fn drop(&mut self) {
+        for subscription in self.active.iter().filter_map(Weak::upgrade) {
+            subscription.cancel();
+        }
+    }
+}
+
+struct Subscription<R: QueryRuntime> {
+    runtime: Arc<Mutex<R>>,
+    active: Mutex<Option<RequestId>>,
+}
+impl<R: QueryRuntime> Subscription<R> {
+    fn is_active(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+    fn cancel(&self) {
+        if let Some(id) = self.active.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cancel(id);
+        }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum RequestError<E> {
+    /// The owning transport host shut down before query completion.
+    Cancelled,
     /// Runtime-owned immutable diagnostics. A failed query never runs readiness.
     Query(hirsel_artifact_store::Reference),
     Output(E),
@@ -49,17 +92,27 @@ pub enum RequestError<E> {
 /// Dropping it cancels only this request; the shared runtime owns coalesced work.
 #[must_use = "dropping a request lease cancels the request"]
 pub struct RequestLease<R: QueryRuntime, O> {
-    runtime: Arc<Mutex<R>>,
+    subscription: Arc<Subscription<R>>,
     output: O,
-    active: Option<RequestId>,
+    completed: bool,
 }
 
 impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
     /// The transport drives this when work can advance. After Ready the lease
     /// is terminal, like a completed Future; polling it again is a caller error.
     pub fn poll(&mut self) -> Poll<Result<O::Output, RequestError<O::Error>>> {
-        let id = self.active.expect("request already completed");
+        assert!(!self.completed, "request already completed");
+        let mut active = self
+            .subscription
+            .active
+            .lock()
+            .expect("request subscription poisoned");
+        let Some(id) = *active else {
+            self.completed = true;
+            return Poll::Ready(Err(RequestError::Cancelled));
+        };
         let result = self
+            .subscription
             .runtime
             .lock()
             .expect("query runtime poisoned")
@@ -67,7 +120,9 @@ impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
         match result {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
-                self.active = None;
+                active.take();
+                drop(active);
+                self.completed = true;
                 Poll::Ready(match result {
                     Ok(products) => self.output.ready(&products).map_err(RequestError::Output),
                     Err(diagnostics) => Err(RequestError::Query(diagnostics)),
@@ -79,7 +134,8 @@ impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
     /// Forward the host's explicit allowance to the one retention authority.
     /// Live products/mappings remain owned by the runtime and its consumers.
     pub fn evict_to(&mut self, retained_bytes: u64) {
-        self.runtime
+        self.subscription
+            .runtime
             .lock()
             .expect("query runtime poisoned")
             .evict_to(retained_bytes);
@@ -88,11 +144,6 @@ impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
 
 impl<R: QueryRuntime, O> Drop for RequestLease<R, O> {
     fn drop(&mut self) {
-        if let Some(id) = self.active.take() {
-            self.runtime
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .cancel(id);
-        }
+        self.subscription.cancel();
     }
 }
