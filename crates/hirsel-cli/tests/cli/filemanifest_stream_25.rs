@@ -168,17 +168,24 @@ fn receipt(vector: &Vector, engine: &str, projection: &Value) {
         json!({"id":vector.id,"engine":engine,"selected":1,"started":1,"completed":1,"passed":1,"failed":0,"unrun":0,"input_sha256":row["input_sha256"],"expected_sha256":row["expected_sha256"],"source_sha256":hash(include_bytes!("../../../../examples/filemanifest/main.hir")),"compiler":hirsel_driver::COMPILER_IDENTITY,"projection":projection})
     );
 }
-// Event values use the public simulator's canonical encoding: a Path ends in
-// String(tag 3, little-endian byte length, UTF-8). Match only frozen candidate
-// spellings; no Hirsel source/parser computes an expected value.
+// Each canonical argument is length-prefixed. The Path is argument 1;
+// paged directory reads append a cursor and recursive flag after it.
+// Match its String field only against the frozen independent spellings.
 fn event_path(input: &[u8], candidates: &BTreeSet<String>) -> String {
+    let mut rest = input;
+    let mut argument = &[][..];
+    for _ in 0..2 {
+        let (length, tail) = rest.split_at(8);
+        let length = usize::try_from(u64::from_le_bytes(length.try_into().unwrap())).unwrap();
+        (argument, rest) = tail.split_at(length);
+    }
     candidates
         .iter()
         .find(|path| {
             let mut tail = vec![3];
             tail.extend_from_slice(&(path.len() as u64).to_le_bytes());
             tail.extend_from_slice(path.as_bytes());
-            input.ends_with(&tail)
+            argument.ends_with(&tail)
         })
         .unwrap_or_else(|| panic!("unknown event Path: {input:?}"))
         .clone()

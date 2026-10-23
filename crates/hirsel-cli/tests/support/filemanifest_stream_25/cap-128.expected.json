@@ -1,1 +1,1 @@
-{"status":0,"stdout":"{\"schema\":1,\"entries\":[{\"path\":\"a000\",\"size\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]}\n","stderr":"","read_dirs":["","empty","empty/deep","m","m/n"],"opens":["a000"],"metadata":["a000"],"file_reads":2}
+{"status":0,"stdout":"{\"schema\":1,\"entries\":[{\"path\":\"a000\",\"size\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]}\n","stderr":"","read_dirs":["","empty","empty/deep","m","m/n",""],"opens":["a000"],"metadata":["a000"],"file_reads":2}

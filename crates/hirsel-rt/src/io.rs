@@ -5046,6 +5046,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     out: *mut WalkResult,
     directory: *const u64,
 ) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { directory_iterator(ctx, destination, out, directory.read(), String::new(), true) }
 }
 unsafe fn directory_iterator(
@@ -5056,7 +5057,6 @@ unsafe fn directory_iterator(
     path: String,
     recursive: bool,
 ) -> u8 {
-    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe {
         capability_call(
             ctx,
@@ -5658,6 +5658,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
     directory: *const u64,
     path: *const u64,
 ) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let p = crate::paths::names(ctx)
         .path_text(unsafe { path.read() })
         .to_owned();

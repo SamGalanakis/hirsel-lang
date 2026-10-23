@@ -216,12 +216,29 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
             );
             assert!(checked_capture(&twin).diagnostics.is_empty(), "{twin}");
         }
-        for source in [
-            "fn f()->fn()->u64 {let mut n=0u64;fn()->u64 {n+=1;n}}",
-            "fn f()->once fn()->u64 {let mut n=0u64;fn()->u64 {take n}}",
+        // capture-take-reconcile-30/REPORT.md: Many invocations borrow their
+        // capture slots. Mutation also violates the read-only alias contract.
+        for (source, expected_rules) in [
+            (
+                "fn f()->fn()->u64 {let mut n=0u64;fn()->u64 {n+=1;n}}",
+                &["CLO-4", "LANG-15"][..],
+            ),
+            (
+                "fn f()->once fn()->u64 {let mut n=0u64;fn()->u64 {take n}}",
+                &["CLO-4"][..],
+            ),
         ] {
             let output = checked_capture(source);
-            let d = mutable_capture_error(&output);
+            let errors: Vec<_> = output
+                .diagnostics
+                .iter()
+                .filter(|d| d.severity == hirsel_diag::Severity::Error)
+                .collect();
+            assert_eq!(
+                errors.iter().map(|d| d.rule.as_str()).collect::<Vec<_>>(),
+                expected_rules
+            );
+            let d = errors.iter().find(|d| d.rule.as_str() == "CLO-4").unwrap();
             let human = d.render_human(&output.sources);
             assert!(!human.contains("let saved ="), "{human}");
             assert!(human.contains("takes or mutates"), "{human}");

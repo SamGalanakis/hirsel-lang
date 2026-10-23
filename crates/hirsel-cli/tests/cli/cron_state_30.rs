@@ -226,6 +226,15 @@ fn cron_state_30_reference_checked() {
                                         );
                                     }
                                     if let Some(bytes) = files.get("state/state.json") {
+                                        // Malformed admission must preserve the original bytes;
+                                        // that fixture is intentionally not a JSON document.
+                                        if id == "malformed-state" {
+                                            assert_eq!(
+                                                bytes,
+                                                case["prior"].as_str().unwrap().as_bytes()
+                                            );
+                                            continue;
+                                        }
                                         let book: Value = serde_json::from_slice(bytes).unwrap();
                                         if id == "gap-over" || id == "refusal-retained" {
                                             assert_eq!(book["refused"], true);

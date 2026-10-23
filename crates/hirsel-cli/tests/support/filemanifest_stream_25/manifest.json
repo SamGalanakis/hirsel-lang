@@ -35,7 +35,7 @@
       "spec": "examples/filemanifest/README.md, paragraph beginning file.walk reads the root directory; examples/filemanifest/main.hir::scan, visited check before step matching. Core traversal contract: docs/spec/core-library.md, paragraph ending unvisited subtrees cannot cause an error before their turn or be read after an early stop."
     }
   ],
-  "projection": "Exact app status/stdout/stderr; ordered directory reads; selected metadata/open paths; file.read count. Simulator root file.walk and native root ReadDir both project to empty path. No RSS assertion.",
+  "projection": "Exact app status/stdout/stderr; ordered directory reads; selected metadata/open paths; file.read count. Simulator root file.walk and native root ReadDir both project to empty path. No RSS assertion. ReadDirPage refills, including exact-page terminal scans, follow the fixed128 contract in read-dir-bounded-29/REPORT.md:13-19; input and application-output bytes are unchanged.",
   "cases": [
     {
       "id": "cap-0",
@@ -53,7 +53,7 @@
       "id": "cap-127",
       "input_sha256": "51a18cb7d030dbb5cc0b3de1491aef1e6ddc4f6eb3328c8b896375f2b4afe666",
       "raw_sha256": "7dfb602033865ff44d8ab202fb0b27081efc75daae42a124ce7c6680daf98771",
-      "expected_sha256": "861c89999109c8b6e2ef6a18b2061721f992694bef2dce7df43bd8bf2d3d6dc4",
+      "expected_sha256": "5ba6a32a746a46e5981ba9570dfad2c9e9006e79eb6e7a881baea2f91747b223",
       "catalogue_sha256": "4e14df1dde2d86fd074c7fcf340e31e060bedf17c1e068ebe53af0d6effae191",
       "disposition": [
         "filter-directories",
@@ -65,7 +65,7 @@
       "id": "cap-128",
       "input_sha256": "fc8d8716d8f3779202179bcd0381448c465e5f7af20ed19a824dedf9fa2b9c78",
       "raw_sha256": "4ddba7c945e7cc39c656afcd946b2c563ffa56e6d2ebc6d035024c23b9270583",
-      "expected_sha256": "861c89999109c8b6e2ef6a18b2061721f992694bef2dce7df43bd8bf2d3d6dc4",
+      "expected_sha256": "5ba6a32a746a46e5981ba9570dfad2c9e9006e79eb6e7a881baea2f91747b223",
       "catalogue_sha256": "f8e811ee513b8bb13768b25543bcc2220cb954a06d126585e7eb5e1138da2835",
       "disposition": [
         "filter-directories",
@@ -77,7 +77,7 @@
       "id": "cap-129",
       "input_sha256": "6f2c3dc3a026789dd7f4409cb9d91c7d6e66442251bcf2827ce574e06ce1ced7",
       "raw_sha256": "79ec5dfe179c459d42e7c6ee873b13f7b740ca2f7cb92def7ca74e848ac5dc4e",
-      "expected_sha256": "c9545e679ad6d285eb8d1aa93bee9a7ea43b9f95aea50ce73e0d16144143a264",
+      "expected_sha256": "639d2ae079cad6674d17e5df9d6f069c8d5127a4160555adc364b9bbd6dbaca4",
       "catalogue_sha256": "d0fc3307cc21e6e33a0ae27f89c7dc0661d0b61b300afa873d67a3c50827dda5",
       "disposition": [
         "filter-directories",
@@ -89,7 +89,7 @@
       "id": "late-error",
       "input_sha256": "aa6fd46f766e88bafd75afa7c5ccce2939dbfdb8bc72e562b8c344b2b8c786c8",
       "raw_sha256": "5a89062d32a3fc1cd5cd8d98e6498d95a05941d9554c0da95e931ab7f0fd4a6d",
-      "expected_sha256": "5225735242fc6977a8ced76b03f27c22ffe34c7962fddaeea6dc30e9af9d3404",
+      "expected_sha256": "e7e62b981250942a91dfe06de302c69abd07d6b0bc773dcec6a4b489a8a258e3",
       "catalogue_sha256": "2e6d82454c16cd37e98d24e7411496780621f1ac4acf596ffffd703d82b1e6ad",
       "disposition": [
         "filter-directories",
@@ -102,7 +102,7 @@
       "id": "lookahead-error",
       "input_sha256": "dfc89d33a9d999abd1484b92d694bcb1f069c194963616fb0af71a4339833ed0",
       "raw_sha256": "0732e6056c3f5f89fa9941683a23cb68bfef376e8a7087dd5047fd91d7449d06",
-      "expected_sha256": "18228c59970eebd8a1cdf2448567515d0709bb6585782326bbcc3710fce57e29",
+      "expected_sha256": "413c6f4aa941567ac52c6672acc5d9b3f6e8bce6a3edb22abccb49a40e17c2ec",
       "catalogue_sha256": "b980d25c9969203df566ce7d01b3c7d59ad63b7bff0ccdfe9ed14aa62051746f",
       "disposition": [
         "filter-directories",

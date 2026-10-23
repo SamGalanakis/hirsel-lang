@@ -137,13 +137,13 @@ fn file_pull_chunks_prefix_zero_and_sink_error_replay_without_files() {
             "four bytes + EOF, zero, prefix, writer error: {text}"
         );
         for (line, bytes) in reads.iter().zip(["61", "c3", "a9", "7a", "", "61", "61"]) {
-            assert!(line.contains(" 1 -> bytes ok "), "{line}");
-            assert_eq!(line.split_once(" -> bytes ok ").unwrap().1, bytes);
+            assert!(line.contains(" 1 -> file_input bytes "), "{line}");
+            assert_eq!(line.split_once(" -> file_input bytes ").unwrap().1, bytes);
         }
         let files: Vec<_> = events(text)
             .lines()
             .filter(|line| line.starts_with("open "))
-            .map(|line| line.split_once(" -> handle ok ").unwrap().1)
+            .map(|line| line.split_once(" -> file_input opened ").unwrap().1)
             .collect();
         assert_eq!(files.len(), 4);
         for (file, count) in files.iter().zip([5, 0, 1, 1]) {

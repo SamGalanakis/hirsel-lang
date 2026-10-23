@@ -498,8 +498,16 @@ fn rpc_gateway_30_replay_refuses_changed_source_config_and_tape() {
             let mut changed = record.clone();
             match kind {
                 "config" => {
-                    let event=changed.events.iter_mut().find(|e| matches!(e.request,hirsel_rt::io::Request::FileRead{..}) && matches!(&e.completion,hirsel_rt::io::Completion::Bytes(Ok(bytes)) if !bytes.is_empty())).unwrap();
-                    event.completion = hirsel_rt::io::Completion::Bytes(Ok(b"{}".to_vec()));
+                    // Host reads are explicit recorded inputs (replay-child-artifact-29).
+                    let event = changed.events.iter_mut().find(|e| {
+                        matches!(e.request, hirsel_rt::io::Request::FileRead { .. })
+                            && matches!(&e.completion,
+                                hirsel_rt::io::Completion::FileInput(hirsel_rt::io::FileInput::Bytes(bytes))
+                                if !bytes.is_empty())
+                    }).unwrap();
+                    event.completion = hirsel_rt::io::Completion::FileInput(
+                        hirsel_rt::io::FileInput::Bytes(b"{}".to_vec()),
+                    );
                 }
                 "extra-event" => changed.events.push(record.events[0].clone()),
                 _ => changed.arguments.push("changed".into()),
