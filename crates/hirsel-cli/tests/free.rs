@@ -2226,14 +2226,7 @@ fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm() {
     );
 }
 
-#[test]
-fn f1_runner_compute_single_permit_cross_engine_outcomes() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-compute-single-permit");
-    let program = scratch.path("main.hir");
-    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_COMPUTE_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn half(n: u64) -> Result[u64, String] {
   failure.check(n < 100u64, Arithmetic())
   if n % 2u64 == 1u64 { return Error("odd") }
@@ -2248,8 +2241,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "runner outcomes\n") ? Output
   Ok(())
 }
-"#).unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":null,"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_COMPUTE_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":null,"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_compute_single_permit_cross_engine_outcomes() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-compute-single-permit");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_COMPUTE_SOURCE).unwrap();
+    let grants = F1_RUNNER_COMPUTE_GRANTS;
     let tape = scratch.path("record");
     let report = scratch.path("projection");
     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -2291,16 +2294,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     }
 }
 
-#[test]
-fn f1_runner_call_child_host_waits_replay_without_child_effects() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-call-host-waits");
-    let program = scratch.path("main.hir");
-    std::fs::write(
-        &program,
-        r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_HOST_WAIT_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let out = match io.stdout(rt) { Ok(v) => v, Error(_) => return Error("stdout") }
   let random = match io.random(rt) { Ok(v) => v, Error(_) => return Error("random") }
@@ -2319,10 +2313,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "parent result\n") ? Output
   Ok(())
 }
-"#,
-    )
-    .unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","random":"random.splitmix64@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_HOST_WAIT_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","random":"random.splitmix64@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_call_child_host_waits_replay_without_child_effects() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-call-host-waits");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_HOST_WAIT_SOURCE).unwrap();
+    let grants = F1_RUNNER_HOST_WAIT_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -3355,4 +3357,94 @@ fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effec
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Actual-eight runner acceptance. A caller replay substitutes recorded child
+/// results and cannot repeat a callee's host effects.
+fn f1_runner_width_and_permit_matrix(
+    name: &str,
+    text: &str,
+    grants: &str,
+    live_output: &[u8],
+    replay_output: &[u8],
+) {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new(name);
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, text).unwrap();
+    let report = scratch.path("projection");
+    let mut grants: serde_json::Value = serde_json::from_str(grants).unwrap();
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        grants["recording"] = level.into();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .args(["run", "--native"])
+            .arg(&program)
+            .args(["--grants", &grants.to_string(), "--cores", "8", "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 8);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("{name} {level} native width8 permits8"),
+        );
+        assert!(live.status.success(), "{live:?}");
+        assert_eq!(live.stdout, live_output, "{live:?}");
+        assert!(live.stderr.is_empty(), "{live:?}");
+        let bytes = std::fs::read(&tape).unwrap();
+        assert!(bytes.starts_with(hirsel_free::tape::MAGIC));
+        assert!(hirsel_free::tape::parse(&bytes).unwrap().end.is_some());
+        let projection = std::fs::read_to_string(&report).unwrap();
+        for engine in ENGINES {
+            for width in ["1", "8"] {
+                for permits in [1, 8] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&tape)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = bounded_output(
+                        &mut command,
+                        &program,
+                        &format!("{name} {level} {engine:?} width{width} permits{permits}"),
+                    );
+                    assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                    assert_eq!(replay.stdout, replay_output, "{replay:?}");
+                    assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                    assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn f1_runner_compute_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-compute-matrix",
+        F1_RUNNER_COMPUTE_SOURCE,
+        F1_RUNNER_COMPUTE_GRANTS,
+        b"runner outcomes\n",
+        b"runner outcomes\n",
+    );
+}
+
+#[test]
+fn f1_runner_host_waits_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-host-wait-matrix",
+        F1_RUNNER_HOST_WAIT_SOURCE,
+        F1_RUNNER_HOST_WAIT_GRANTS,
+        b"child effect\nparent result\n",
+        b"parent result\n",
+    );
 }
