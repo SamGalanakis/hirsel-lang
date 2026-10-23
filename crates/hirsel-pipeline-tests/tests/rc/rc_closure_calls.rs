@@ -337,3 +337,50 @@ fn a_child_returning_an_owned_result_retains_its_cleanup_fiber() {
     assert!(flags.contains(&1), "flags: {flags:?}");
     assert!(!flags.iter().any(|f| f & 2 != 0));
 }
+
+#[test]
+fn a_known_spawned_callable_reaches_its_owned_task_main_adapter() {
+    let (_, lowered) = lower_valid(
+        "fn main(tasks: Tasks)->u64 {task.scope(tasks, fn(s:Scope)->u64 {let n=42u64; let child=task.async(s,fn()->u64 {n}); task.await(s,take child)})}",
+    );
+    let adapters: Vec<_> = lowered
+        .units
+        .iter()
+        .filter(|u| u.header.definition.is_core("$native.task_main"))
+        .collect();
+    assert!(
+        adapters.iter().any(|u| u
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Indirect(_)))),
+        "the dynamic control remains available"
+    );
+    let specialized = adapters
+        .iter()
+        .find(|u| {
+            u.tables
+                .calls
+                .iter()
+                .any(|c| matches!(c.callee, Callee::Bound { .. }))
+        })
+        .expect("known callable code must cross the task_main capture");
+    assert!(
+        !specialized
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Indirect(_)))
+    );
+    assert!(specialized.tables.calls.iter().any(|c| matches!(c.callee, Callee::Operation(op) if specialized.tables.operations[op.index()].definition.is_core("$intrinsic.TaskFinish"))), "holding-result ownership still belongs to TaskFinish");
+    assert!(
+        lowered
+            .units
+            .iter()
+            .any(|u| u.tables.closures.iter().any(|c| c
+                .code
+                .is_some_and(|code| u.tables.symbols[code.symbol.index()].instance
+                    == Some(specialized.header.instance)))),
+        "spawn must actually reference the specialized adapter"
+    );
+}
