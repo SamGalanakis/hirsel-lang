@@ -258,6 +258,195 @@ fn imaged_std_products_equal_fresh_ones() {
     });
 }
 
+// Bounded per-definition coverage; the original complete identity above remains.
+fn ordinary_std_definition_products_partition(partition: usize) {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let products = f.0.join("std-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        let shared = compiler.clone().with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(products)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        // `aaa` places std after the program's own sources, exercising FileId rebasing.
+        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
+        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        assert!(definitions.len() > 100);
+        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let checked = |p: &mut LoadedProgram| {
+            let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
+            let rendered: Vec<_> = output
+                .diagnostics
+                .iter()
+                .map(|d| d.render_human(&output.sources))
+                .collect();
+            (output.completion, rendered)
+        };
+        assert_eq!(checked(&mut imaged), checked(&mut reference));
+        let entry = imaged.entry.clone();
+        assert_eq!(
+            imaged.engine.semantic_program_revision(&entry).unwrap(),
+            reference.engine.semantic_program_revision(&entry).unwrap()
+        );
+        let mut lowered = 0;
+        for (index, path) in definitions.iter().copied().map(DefId::path).enumerate() {
+            if index % 2 != partition { continue; }
+            assert_eq!(
+                imaged.engine.semantic_program_revision(path).unwrap(),
+                reference.engine.semantic_program_revision(path).unwrap(),
+                "{path}"
+            );
+            let Ok(expected) = reference.engine.lower_to_tir(path) else {
+                continue;
+            };
+            let actual = imaged.engine.lower_to_tir(path).unwrap();
+            assert_eq!(
+                imaged.engine.source_audit(path).unwrap(),
+                reference.engine.source_audit(path).unwrap(),
+                "{path}"
+            );
+            // Anchors are process-unique, so each is named by its placement;
+            // TypeId's Debug omits provenance.
+            // Each session interns its own rows: compare them by content.
+            let (types, value) = (imaged.engine.types().clone(), &actual.value);
+            let actual_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
+            let (types, value) = (reference.engine.types().clone(), &expected.value);
+            let expected_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
+            assert_eq!(
+                placed(&imaged.engine.sources, actual_text),
+                placed(&reference.engine.sources, expected_text),
+                "{path}"
+            );
+            assert_eq!(actual.dependencies, expected.dependencies, "{path}");
+            lowered += 1;
+        }
+        // The two disjoint partitions each prove >50 successful Lower
+        // comparisons, so their explicit union exceeds the original100.
+        assert!(lowered > 50, "partition={partition} lowered={lowered}");
+        for path in definitions.iter().copied().map(DefId::path) {
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    imaged.engine.recompute_count(path, phase),
+                    0,
+                    "{path}: {phase:?}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn ordinary_std_definition_products_partition_even() { ordinary_std_definition_products_partition(0); }
+#[test]
+fn ordinary_std_definition_products_partition_odd() { ordinary_std_definition_products_partition(1); }
+
+// Per-definition-only quarters omit the separately proven client check prefix.
+// Bounded per-definition coverage; the original complete identity above remains.
+fn ordinary_std_definition_products_quarter(partition: usize) {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let products = f.0.join("std-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let phase = std::time::Instant::now();
+        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        eprintln!("[ca41-coverage] quarter={partition} precompute={:?}", phase.elapsed());
+        let shared = compiler.clone().with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(products)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        // `aaa` places std after the program's own sources, exercising FileId rebasing.
+        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
+        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        assert!(definitions.len() > 100);
+        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let inventory: Vec<_> = definitions.iter().map(|id| id.path().to_string()).collect();
+        assert!(inventory.windows(2).all(|pair| pair[0] < pair[1]));
+        eprintln!("[ca41-coverage] quarter={partition} complete-inventory={inventory:?}");
+        let phase = std::time::Instant::now();
+        let mut lowered = 0;
+        let mut compared = vec![];
+        for (index, path) in definitions.iter().copied().map(DefId::path).enumerate() {
+            if index % 4 != partition { continue; }
+            compared.push(path.to_string());
+            assert_eq!(
+                imaged.engine.semantic_program_revision(path).unwrap(),
+                reference.engine.semantic_program_revision(path).unwrap(),
+                "{path}"
+            );
+            let Ok(expected) = reference.engine.lower_to_tir(path) else {
+                continue;
+            };
+            let actual = imaged.engine.lower_to_tir(path).unwrap();
+            assert_eq!(
+                imaged.engine.source_audit(path).unwrap(),
+                reference.engine.source_audit(path).unwrap(),
+                "{path}"
+            );
+            // Anchors are process-unique, so each is named by its placement;
+            // TypeId's Debug omits provenance.
+            // Each session interns its own rows: compare them by content.
+            let (types, value) = (imaged.engine.types().clone(), &actual.value);
+            let actual_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
+            let (types, value) = (reference.engine.types().clone(), &expected.value);
+            let expected_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
+            assert_eq!(
+                placed(&imaged.engine.sources, actual_text),
+                placed(&reference.engine.sources, expected_text),
+                "{path}"
+            );
+            assert_eq!(actual.dependencies, expected.dependencies, "{path}");
+            lowered += 1;
+        }
+        eprintln!("[ca41-coverage] quarter={partition} compared={compared:?} lowered={lowered} elapsed={:?}", phase.elapsed());
+        assert!(lowered > 25, "quarter={partition} lowered={lowered}");
+        for path in definitions.iter().copied().map(DefId::path) {
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    imaged.engine.recompute_count(path, phase),
+                    0,
+                    "{path}: {phase:?}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn ordinary_std_definition_products_quarter_0() { ordinary_std_definition_products_quarter(0); }
+#[test]
+fn ordinary_std_definition_products_quarter_1() { ordinary_std_definition_products_quarter(1); }
+#[test]
+fn ordinary_std_definition_products_quarter_2() { ordinary_std_definition_products_quarter(2); }
+#[test]
+fn ordinary_std_definition_products_quarter_3() { ordinary_std_definition_products_quarter(3); }
+
 const LIBRARY: &str = "pub fn value(x: u64) -> u64 {
   x + 1
 }

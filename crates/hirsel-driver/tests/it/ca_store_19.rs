@@ -1582,3 +1582,35 @@ fn ordinary_precomputed_dependency_products_do_not_recheck_bodies_during_native_
         }
     });
 }
+
+#[test]
+fn ordinary_actor_generic_products_do_not_recheck_bodies_during_native_export() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new().prefix("hirsel-precompute-client-").tempdir().unwrap();
+        let dir = scratch.path();
+        let library = dir.join("library.json");
+        std::fs::write(&library, serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"api.hir","module":["lib"]}],"dependencies":[]}).to_string()).unwrap();
+        std::fs::write(dir.join("api.hir"), std::fs::read_to_string(crate::image_fixture::std_manifest().parent().unwrap().join("actor.hir")).unwrap()).unwrap();
+        let manifest = dir.join("client.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"aaa","version":"1"},"sources":[{"path":"client.hir","module":[]}],"dependencies":[{"manifest":"library.json","package":{"name":"library","version":"1"},"expose":[{"head":"lib","module":["lib"]}]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        std::fs::write(dir.join("client.hir"), "pub fn main()->Result[(),()]{Ok(())}\n").unwrap();
+        let products = dir.join("products");
+        let compiler = COMPILER.clone().with_config(CompileConfig { jobs: hirsel_intern::jobs::Jobs::new(1), ..CompileConfig::for_memory_cap(None) });
+        compiler.precompute_package(&library, &products).unwrap();
+        let shared = compiler.with_config(CompileConfig { store: Arc::new(store::DirStore::new(products)), jobs: hirsel_intern::jobs::Jobs::new(1), ..CompileConfig::for_memory_cap(None) });
+        let mut cached = shared.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+        let paths: Vec<_> = cached.engine.indexed_definitions().into_iter().filter(|path| path.0.package.name == "library").collect();
+        cached.check_for_execution().unwrap();
+        for path in &paths {
+            cached.engine.semantic_program_revision(path).unwrap();
+            if cached.engine.lower_to_tir(path).is_ok() {
+                cached.engine.source_audit(path).unwrap();
+            }
+        }
+        cached.engine.export_native_input().unwrap();
+        for path in &paths {
+            assert_eq!(cached.engine.recompute_count(path, QueryKind::Check), 0, "{path}");
+            assert_eq!(cached.engine.recompute_count(path, QueryKind::Modes), 0, "{path}");
+        }
+    });
+}

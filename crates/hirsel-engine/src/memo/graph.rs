@@ -545,7 +545,7 @@ pub fn invalidation_count(kind: ReadKind) -> Count {
         ReadKind::Lookup => Count::InvalidatedLookup,
         ReadKind::NameSet => Count::InvalidatedNameSet,
         ReadKind::Representation => Count::InvalidatedRepresentation,
-        ReadKind::ExecutedBody => Count::InvalidatedExecutedBody,
+        ReadKind::ExecutedBody | ReadKind::LayoutBody => Count::InvalidatedExecutedBody,
         ReadKind::ExecutedSignature => Count::InvalidatedExecutedSignature,
         ReadKind::CitedText => Count::InvalidatedCitedText,
         ReadKind::DeclarationCandidates => Count::InvalidatedDeclarationCandidates,

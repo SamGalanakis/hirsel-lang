@@ -1975,6 +1975,25 @@ impl QueryEngine {
         if !self.s1.is_empty() {
             return None;
         }
+        // A durable lookup must not bypass this session's rejected private
+        // context. Fresh readers may independently revalidate retained bytes;
+        // an invalidated resident completion follows ordinary recomputation.
+        let id = DefId::intern(path);
+        let retained = self
+            .lowered
+            .get(&id)
+            .and_then(|entry| entry.acceptance.clone())
+            .or_else(|| {
+                self.lower_receipts
+                    .get(&id)
+                    .and_then(|entry| entry.acceptance.clone())
+            });
+        if retained
+            .as_ref()
+            .is_some_and(|receipt| !self.lower_acceptance_holds(Some(receipt)))
+        {
+            return None;
+        }
         let variant = self.stored_variant(path, QueryKind::Lower)?;
         let record: LowerRecord = self.decode_record(&variant.payload)?;
         if record.output.value.path != DefId::intern(path)
@@ -2473,6 +2492,43 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn layout_reads_never_discharge_callable_execution_authority() {
+        let (engine, syntax) = fixture();
+        let path = &syntax.item.definition;
+        let id = DefId::intern(path);
+        let digest = syntax.text_hash;
+        let layout = Reads::from_vec(vec![
+            (ReadKey::LayoutBody(id), digest),
+            (ReadKey::Representation(id), digest),
+        ])
+        .unwrap();
+        assert!(!engine.lower_requires_execution(path, &layout));
+        let mut executed: Vec<_> = layout.iter().cloned().collect();
+        executed.push((ReadKey::ExecutedBody(id), digest));
+        assert!(engine.lower_requires_execution(path, &Reads::from_vec(executed).unwrap()));
+        assert!(
+            engine.lower_requires_execution(
+                path,
+                &Reads::from_vec(vec![
+                    (ReadKey::ExecutedBody(id), digest),
+                    (ReadKey::Representation(id), digest)
+                ])
+                .unwrap()
+            )
+        );
+        assert!(
+            engine.lower_requires_execution(
+                path,
+                &Reads::from_vec(vec![(
+                    ReadKey::ValidationUniverse(crate::memo::PackageKey::of(&path.0.package)),
+                    digest
+                )])
+                .unwrap()
+            )
+        );
+    }
 
     #[test]
     fn malformed_semantic_bodies_miss_before_adoption_or_comparison() {

@@ -1526,7 +1526,7 @@ impl QueryEngine {
             .map(|(k, _)| k.definition().unwrap().path().clone())
             .collect();
         for path in representations {
-            self.read_implementation(&path);
+            self.read_layout_body(&path);
         }
         self.label_generated_result(entry.result())
     }
