@@ -1,0 +1,109 @@
+{
+  "seed": 2026102514,
+  "counts": {
+    "trees": 96,
+    "mutations": 64,
+    "depth": 2,
+    "partitions": 34,
+    "operations": 390
+  },
+  "oracle": {
+    "name": "Ciborium Value (no serde transcode)",
+    "revision": "00279e48e75ecf9546aae36f6d004447c676065b",
+    "source_sha256": {
+      "ciborium-ll/src/dec.rs": "e21d8ad558ecc15c6c485f3d91472192a474ac595b820ab2b5f407902fcf83f4",
+      "ciborium-ll/src/enc.rs": "3becb07fc3cfae5d6620fb09fe2ffe92b28c52582762586886c91de68f700b1c",
+      "ciborium-ll/src/hdr.rs": "477d2ace283630eca402c8c20b8e8edc663aae83b3e2e495fc3dd920b0bd4fb9",
+      "ciborium/src/value/canonical.rs": "a37caa8dd3bd44f5dd80bc63aeee414300821f5ca656f58c1bd698c5fe42b8d3",
+      "ciborium/tests/codec.rs": "a920aad0306da559d960200d95f971c8908d3987260856c3070a8820274fb3cb",
+      "ciborium/tests/canonical.rs": "aa51dd834cd566731479fb312192cddd0e93bd79a0730a481f6782f6957781fa"
+    },
+    "binary_sha256": "06166649ca7f84e71ace33427ef3ade17b74352836d271f088b8148c01d31126",
+    "adapter_sha256": "aac2e448a075fd009b29ca1461fb0fd7e9228cde884b8becf79962cb68147b21",
+    "lock_sha256": "aae191b96977ad826946b30aba7e562b005e548cb648d1030536f4d1926ff5ce",
+    "generator_sha256": "834b82ed8cb859c07bf70ad8966f778e0e0c24cbcfb295487f75f1867c8c57d6"
+  },
+  "files": {
+    "part-00.json": "24f30a5a234e26ece1a35e4d56c77ab81ea7ff1bdbf396886414a36cda006547",
+    "part-01.json": "d46881b35a298d58ee2a1d398453f0b90eadeb9769a97caf4f743f4f79dba571",
+    "part-02.json": "c0bd4b93e0b6aeafb2af62f34969439029c88f6200bf31470f8dd52dd9f0066e",
+    "part-03.json": "69266bec486748592ea6dfd5a895b9f341c990ee1f6a53567d3fc16b342d3797",
+    "part-04.json": "444d7e390a5e311dc5abf6ca2ad66a857d6c010d5668170ca412f58f1e9d37d0",
+    "part-05.json": "150d23fe64a876821053fca57e2b379a745315f53caaa13005444fde3d4f1395",
+    "part-06.json": "cd69b23c207d08e2483a5c51e9f7f5fa25abd8d5228adffc011616830f67e1b0",
+    "part-07.json": "9e35c8d1a13e7f7099c38a37b4d246bc5b207787234d3f68b12d8fc4a42e52cd",
+    "part-08.json": "e962daa5e33dbcc27d8bf17f1bdc6776629a4847b6b056631f54e3bf2893cf40",
+    "part-09.json": "7153f8a320023d5714063742750183b32ddc08d3950e0185c0e281293b277333",
+    "part-10.json": "bb86028eafe8934c5b9be952fb30474f43aa3f2293b6af25589cb2edbb0d4008",
+    "part-11.json": "49e94260b8622f2e65e6464ab014d2eca8f58775af7e150ff208d78ed6f2eaec",
+    "part-12.json": "14faa25ab83ed7f27772164c84a64f282d0af34d175da69700890af18ff9a9b2",
+    "part-13.json": "8f9696bc71e3b1436f177f74441dfaac6502e2ad68b9aaeda9b033ce62ad2b44",
+    "part-14.json": "87307a635671226a8f3f1ccaa78edb6908b7269ee152e31cad74e4b973ec1826",
+    "part-15.json": "b739fea68154c0c3a1df2dbe1839f75b4e58c90fa431b0ca71717b01a5f06ca0",
+    "part-16.json": "cbefc261b517a9f68903cf170c5f71ad647bae3bc19c1c82b05cd881334fe4cc",
+    "part-17.json": "76d8cd2041068f90e0228b4023a3b7d557e346467c7d352a9bac0d0102fc578b",
+    "part-18.json": "e73d33a8e1ab683f60614074026bbc09e8f1b81989152b235c625d5553f227a4",
+    "part-19.json": "899531e31c80677032794e3f5fb764b287d51a653541b0d62e4f9ebb8a82494e",
+    "part-20.json": "cc36fc960f0dea00250caa51500e79c778bc9ea385a1cdd99612393266f094a2",
+    "part-21.json": "f7043f2c560cff05937aaba8238ee15ea0ff1dbcf3dffc6e9fd8d5491b7ff9ad",
+    "part-22.json": "5ad984bdfcfed079f0a27505ac69373f9470789b26a1fa5bd8259bb427e74a7f",
+    "part-23.json": "4136deed769d63f3a353d758d292d492d138739180e1589578e38dc935468afe",
+    "part-24.json": "b38806f767c1229c513e98595fd100da4584cb87273dd8d1d571f3c294b2064f",
+    "part-25.json": "60374afd28769df3acd1cef728d7ad356bb325cc091365dad4a0ac19f15986ab",
+    "part-26.json": "e1904bb01a77e22286b2ce4a40ed6537edda61be5b87a997b9bbcbea7c715ed0",
+    "part-27.json": "10fc843eec30d0a25b6e9adecf85dea46727b414cf002cbd070b99af25be4887",
+    "part-28.json": "7d27dd0fca164d0a397b7b4eafd72a27a1d99cb181db6c96ced78dbdc9e73e6c",
+    "part-29.json": "0224af16ef52daf28b9022ea0439227d9b7f14020e726d0bc2a25d1abb5029e1",
+    "part-30.json": "27c85da4b9c97ba0e8320266c12037363992fa9412faffdad87b7695daa06687",
+    "part-31.json": "850001dac17be29864f9d793d40f6410c26b6fc864aa9a4720fe99e929e40e62",
+    "part-32.json": "000a26d554c1b9d8299b94a3ce2f6a29d358d192fb5fcc35c434d4e07fff3a44",
+    "part-33.json": "e8b3b5d4d09e23cc96a7b0239f2b7bada4db0dc3e987f098d760738481160668"
+  },
+  "spec_paragraphs": {
+    "decode": "`msgpack` implements the MessagePack JSON domain; `cbor` implements the corresponding\nRFC 8949 domain. Both decode exactly one item into `json.Value`, reject trailing bytes,\nvalidate UTF-8, reject duplicate text map keys, and preserve insertion order. Integers\nbecome exact decimal `Number` lexemes, including MessagePack's unsigned 64-bit maximum\nand CBOR's negative minimum, -18446744073709551616. Finite binary16/32/64 floats become\nshortest binary64 decimal text, with signed zero preserved and `.0` appended when\nneeded to retain the floating-point type (`1.0` stays a float on re-encoding). A\nsubsequent encode chooses integer or floating representation from that text; original\nwire widths are not retained.",
+    "unsupported": "There is no lossless JSON mapping for binary strings, MessagePack extensions, CBOR tags,\nnonfinite floats, non-text keys or CBOR simple values other than bool/null. These return\n`Unsupported`; they are never silently converted to strings, arrays or null. CBOR accepts\ndefinite and indefinite text, arrays and maps, and nonpreferred integer/float widths.\nReserved two-byte simple values below 32 are malformed and return `Syntax`.\nEvery indefinite text chunk must independently be valid UTF-8; nested indefinite text\nchunks and breaks outside indefinite containers are malformed.",
+    "number": "Both encoders validate public `Number` strings with JSON's grammar. Integer lexemes must\nfit the format's integer range; decimal/exponent lexemes convert to finite binary64.\nOut-of-range integers, nonfinite conversions and invalid lexemes return `InvalidNumber`.\nNegative zero is encoded as a float. Other float spellings can change on decode; JSON's\narbitrary decimal precision and spelling are not a wire-format guarantee.",
+    "encoding": "MessagePack writes shortest integer and length headers and binary64 floats. String, array\nor map extents above 4294967295 return `Unsupported(extent)` on encoding. CBOR always\nwrites definite lengths and shortest integer/length headers. With `deterministic = false`,\nit retains object insertion order and uses binary64 floats. With `true`, it uses the\nshortest exactly preserving float width, including signed zero, and orders text keys by\nunsigned lexicographic comparison of their complete preferred CBOR encodings (RFC 8949\nsection 4.2.1). For this text-key domain, that is UTF-8 byte length followed by byte order.\nDeterministic output is stable across input map insertion order and run hash seeds.",
+    "errors": "`binary.DecodeError` has these cases:\n`Truncated(u64)`, `Syntax(u64)`, `Unsupported(u64)`, `Utf8(u64)`, `DuplicateKey(u64)`,\n`Nesting(u64)`, `Trailing(u64)` and `InvalidNumber`. Decode offsets are zero-based byte\npositions; UTF-8 errors identify the offending string or chunk payload start. Duplicate\nerrors identify the repeated key header. Both enforce the same library nesting policy as\nJSON: at most 128 open arrays/maps, with scalar leaves consuming no level. Encoder nesting\nerrors identify the attempted depth, 128. Partial results are released on error."
+  },
+  "deviations": [
+    "JSON policy rejects parsed Bytes/Tag/non-text keys/nonfinite values; duplicate keys remain present until policy rejection. Root tags use upstream AllowAny<Value> to retain bignum tags; the selected tagged vectors are root items.",
+    "Ciborium consumes one item without requiring EOF; adapter requires complete consumption.",
+    "Ciborium Value normalizes undefined to Null; retain the low-level Simple header and reject by policy. Other unsupported simples retain raw parser errors.",
+    "Hirsel errors use read-start or string-payload/key-header offsets; explicit input edits list offsets independently of Ciborium diagnostics.",
+    "Hirsel ordinary encoding forces binary64 via upstream length/leaf encoding plus float policy adapter.",
+    "Library depth128 overrides upstream depth256.",
+    "Ciborium generic canonical ordering is length-first; text-only complete preferred byte order checked pairwise at lengths0,1,2,23,24,255,256."
+  ],
+  "provenance": "Ciborium codec.rs:41-90 scalar/nonpreferred and canonical.rs:24-69 ordering goldens (Apache-2.0; third-party/NOTICES.md); generated combinations and mutations are bounded test vectors.",
+  "spec_source": {
+    "path": "docs/spec/std-library.md#messagepack-and-cbor",
+    "revision": "e53a48b0",
+    "paragraphs": "Exact current paragraph text; line wrapping and Markdown retained."
+  },
+  "deviation_paragraphs": [
+    [
+      "unsupported",
+      "decode"
+    ],
+    [
+      "decode"
+    ],
+    [
+      "unsupported"
+    ],
+    [
+      "errors"
+    ],
+    [
+      "encoding"
+    ],
+    [
+      "errors"
+    ],
+    [
+      "encoding"
+    ]
+  ],
+  "provenance_finalizer_sha256": "a6957438169b9d87dd860e7fea8e8f5f4d5b1466ba24eedd88d9554d130d5c4f"
+}
