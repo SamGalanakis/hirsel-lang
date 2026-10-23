@@ -2640,3 +2640,156 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         assert_eq!(child.stdout, b"linked child\n");
     }
 }
+
+#[test]
+fn f1_runner_simulated_crash_records_child_stop_and_replays_abandoned_outcome() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-simulated-crash");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let random = match io.random(rt) { Ok(v) => v, Error(_) => return Error("random") }
+  let mut i = 0u64
+  while i < 32u64 {
+    match random.bytes(random, 1u64) { Ok(_) => (), Error(_) => return Error("draw") }
+    i = i + 1u64
+  }
+  Ok(n)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.call(runner, child, 8u64) == Error(InDoubt(Abandoned())), Arithmetic())
+  failure.check(runner.call(runner, child, 9u64) == Error(InDoubt(Abandoned())), Arithmetic())
+  out.print(out, "abandoned twice\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{"crash":{"enable":1000000,"fire":1000000}},"grants":{"random":"random.splitmix64@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"abandoned twice\n",
+        b"abandoned twice\n",
+    );
+    for ordinal in 0..2 {
+        let child_tape = scratch.path(&format!("record.call-{ordinal}"));
+        let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
+        assert!(
+            recording
+                .events
+                .iter()
+                .any(|event| event.request == hirsel_rt::io::Request::Stopped
+                    && event.completion == hirsel_rt::io::Completion::Ready)
+        );
+        assert!(
+            !recording
+                .events
+                .iter()
+                .any(|event| matches!(event.request, hirsel_rt::io::Request::CallReturn(_)))
+        );
+        let mut reference = None;
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&child_tape)
+                .args(["--cores", "1"]);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("crashed child {ordinal} replay {engine:?}"),
+            );
+            assert!(!replay.status.success(), "{replay:?}");
+            assert!(
+                String::from_utf8_lossy(&replay.stderr).contains("its place stopped the run"),
+                "{replay:?}"
+            );
+            let observed = (replay.status.code(), replay.stdout, replay.stderr);
+            if let Some(reference) = &reference {
+                assert_eq!(&observed, reference);
+            } else {
+                reference = Some(observed);
+            }
+        }
+    }
+}
+
+#[test]
+fn f1_runner_short_callee_crash_and_lost_reply_keep_distinct_outcomes() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    for (fault, outcome) in [("crash", "Abandoned"), ("lose_reply", "Lost")] {
+        let scratch = Scratch::new(&format!("f1-runner-short-{fault}"));
+        let program = scratch.path("main.hir");
+        std::fs::write(
+            &program,
+            format!(
+                r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {{ Ok(n) }}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {{
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.call(runner, child, 8u64) == Error(InDoubt({outcome}())), Arithmetic())
+  out.print(out, "outcome lost\n") ? Output
+  Ok(())
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let grants = format!(
+            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{{"{fault}":{{"enable":1000000,"fire":1000000}}}},"grants":{{"dirs":[]}},"definitions":null}}]}},"args":[]}}"#
+        );
+        f1_runner_call_record_replay(
+            &scratch,
+            &program,
+            &grants,
+            b"outcome lost\n",
+            b"outcome lost\n",
+        );
+        let child_tape = scratch.path("record.call-0");
+        let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
+        assert!(
+            !recording
+                .events
+                .iter()
+                .any(|event| event.request == hirsel_rt::io::Request::Stopped)
+        );
+        assert!(recording.events.iter().any(|event| matches!(
+            event.request,
+            hirsel_rt::io::Request::CallReturn(hirsel_run_schema::CalleeOutcome::Ok(_))
+        )));
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&child_tape)
+                .args(["--cores", "1"]);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("short {fault} child replay {engine:?}"),
+            );
+            assert!(replay.status.success(), "{replay:?}");
+            assert!(replay.stdout.is_empty(), "{replay:?}");
+            assert!(replay.stderr.is_empty(), "{replay:?}");
+        }
+    }
+}

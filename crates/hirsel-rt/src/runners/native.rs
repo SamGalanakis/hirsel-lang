@@ -5,6 +5,7 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 mod adapter;
+mod callee_io;
 mod home;
 mod transport;
 pub(crate) use adapter::wrap;

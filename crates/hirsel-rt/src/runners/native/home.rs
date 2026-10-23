@@ -21,6 +21,7 @@ struct Child {
     run: CalleeRun,
     key: [u8; 32],
     lose_reply: bool,
+    crashing: bool,
     io: Rc<RefCell<RealIo>>,
     recording: bool,
 }
@@ -50,11 +51,6 @@ impl Home {
     }
 
     fn start_callee(&mut self, _token: u64, key: [u8; 32], spec: Spec) -> Stopped<()> {
-        if spec.crash_after.is_some() {
-            return Err(Stop::Refused(
-                "native Free runner crash simulation is not yet admitted".into(),
-            ));
-        }
         let seed = |name: &str| hirsel_run_schema::callee_seed(&key, name);
         let grants = spec.grant.grants;
         self.tag += 1;
@@ -147,7 +143,11 @@ impl Home {
         })?;
         io.discard_history();
         let io = Rc::new(RefCell::new(io));
-        let binding = Box::new(Binding::new(crate::launch::Shared(io.clone())));
+        let binding = match spec.crash_after {
+            Some(point) => Binding::new(super::callee_io::CalleeIo::new(io.clone(), point)),
+            None => Binding::new(crate::launch::Shared(io.clone())),
+        };
+        let binding = Box::new(binding);
         let mut runtime = self.config.runtime;
         runtime.hash_seed = seed("hash");
         let run = unsafe {
@@ -164,6 +164,7 @@ impl Home {
             run,
             key,
             lose_reply: spec.lose_reply,
+            crashing: spec.crash_after.is_some(),
             io,
             recording: tape.is_some(),
         });
@@ -195,6 +196,39 @@ impl Home {
                 index += 1;
                 continue;
             };
+            if matches!(
+                &reply,
+                Err(Stop::Environmental(
+                    hirsel_run_schema::Environmental::Stopped
+                ))
+            ) && self.children[index].crashing
+            {
+                let child = self.children.swap_remove(index);
+                if child.recording {
+                    child
+                        .io
+                        .borrow_mut()
+                        .finish_recording(&hirsel_run_schema::RunOutcome::Environmental(
+                            hirsel_run_schema::Environmental::Stopped,
+                        ))
+                        .map_err(|e| {
+                            Stop::Environmental(hirsel_run_schema::Environmental::Recording(
+                                format!("callee Io trailer: {e}"),
+                            ))
+                        })?;
+                }
+                if let Some(waiter) = self.slot.transport.complete(
+                    child.key,
+                    RunnerCompletion {
+                        outcome: CallOutcome::InDoubt(ABANDONED),
+                        callee: Some(hirsel_run_schema::callee_instance(&child.key)),
+                    },
+                ) {
+                    waiters.push(waiter);
+                }
+                changed = true;
+                continue;
+            }
             let reply = reply?;
             let child = self.children.swap_remove(index);
             let returned = match reply.tag {
@@ -233,7 +267,11 @@ impl Home {
                         )))
                     })?;
             }
-            let outcome = if child.lose_reply {
+            let outcome = if child.crashing {
+                // A callee that ends before its selected crash point ran to
+                // completion, but the simulated place still loses its outcome.
+                CallOutcome::InDoubt(ABANDONED)
+            } else if child.lose_reply {
                 CallOutcome::InDoubt(LOST)
             } else {
                 match reply.tag {
