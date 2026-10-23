@@ -411,7 +411,7 @@ type WatchEvent = Created(Path) | Modified(Path) | Removed(Path) | Renamed(Path,
 `DirEntry` is `serializable` like `FileKind` and `Metadata`: a listed path is data, and
 reading the entry again still needs the `Dir`.
 
-`file.read_dir` lists direct children, including empty directories and symlinks,
+`file.read_dir` materializes only the requested directory, listing its direct children, including empty directories and symlinks,
 sorted by UTF-8 path bytes. Entry paths are relative to the supplied `Dir`, including
 the requested directory prefix. Invalid UTF-8 entry names return `FileFault`.
 `file.metadata` describes the final entry without following its symlink; parent
@@ -753,8 +753,18 @@ replacing that directory entry makes `file.narrow` return `None`. A `File` close
 an `AtomicFile` aborts and removes its temporary on drop, and `file.commit` consumes it on
 either outcome. Directory paths are relative; absolute paths, traversal outside the root
 (resolved links included) return `FileFault` without granting
-authority. `file.walk` yields relative paths in UTF-8 byte order and ends after its first
-`Error`.
+authority. `file.walk` yields regular-file and symlink relative paths in global UTF-8
+byte order. Directories are traversal work, including empty directories, and are
+not yielded. Symlinks are yielded as entries and never descended; their targets
+are not resolved for traversal. Confinement of directory reads is unchanged.
+Only the root directory is read when constructing the iterator; further
+directories are read as iteration reaches them. The traversal cursor retains at
+most one sorted page per active depth, O(depth × largest single directory)
+entries and their path bytes. Consumed Path identities and recorded inputs can
+remain retained for the run; this bound describes cursor storage and unread work. A root read error is the outer `Error`;
+a descendant read error is yielded at discovery, after any earlier paths, and
+the iterator then ends permanently. Unlike eager traversal, unvisited subtrees
+cannot cause an error before their turn or be read after an early stop.
 
 `file.open` opens a read-only `File` at position 0; `file.create` opens an
 append-only `File`, creating a missing file and truncating an existing file to zero

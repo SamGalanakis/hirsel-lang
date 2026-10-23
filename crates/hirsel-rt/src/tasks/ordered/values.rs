@@ -756,63 +756,61 @@ impl Program {
         self.nodes[self.root].extent()
     }
 
-    /// The runtime walk owns initialized Result[Path,FileError] rows after
-    /// position. Private cursor history, intern IDs and union padding are omitted.
+    /// Runtime walk v2 owns remaining sorted directory pages. Encode paths as
+    /// UTF-8 and the directory as its logical identity, omitting addresses.
     unsafe fn walk_values(
         &self,
         block: *const crate::Header,
         out: &mut Vec<u8>,
         fuel: &mut usize,
+        resolve: &mut impl FnMut(Kind, u64) -> Option<ObjectId>,
     ) -> Result<(), Error> {
         let capacity = unsafe { self.owner_capacity(1, block) }?;
-        if capacity < 16 {
+        if capacity < 8 {
             return Err(Error::Value);
         }
         let at = unsafe { block.add(1).cast::<u8>() };
-        let position = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
-            .map_err(|_| Error::Value)?;
-        let count = usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
-            .map_err(|_| Error::Value)?;
-        if position > count
-            || count
-                .checked_mul(16)
-                .and_then(|n| n.checked_add(16))
-                .is_none_or(|n| n > capacity)
-        {
+        let state = unsafe {
+            at.cast::<*const crate::io::StreamingWalk>()
+                .read_unaligned()
+        };
+        if state.is_null() {
             return Err(Error::Value);
         }
-        *fuel = fuel.checked_sub(count - position).ok_or(Error::Limit)?;
-        out.extend_from_slice(&((count - position) as u64).to_le_bytes());
-        let names = self.names.as_ref().ok_or(Error::Unsupported)?;
-        for i in position..count {
-            let item = unsafe { at.add(16 + i * 16) };
-            let tag = unsafe { item.cast::<u32>().read_unaligned() };
-            out.extend_from_slice(&tag.to_le_bytes());
-            match tag {
-                0 => {
-                    let word = unsafe { item.add(8).cast::<u64>().read_unaligned() };
-                    let text = names.paths.text(word).ok_or(Error::Value)?;
-                    if out.len().saturating_add(8).saturating_add(text.len()) > BYTES_MAX {
-                        return Err(Error::Limit);
-                    }
-                    out.extend_from_slice(&(text.len() as u64).to_le_bytes());
-                    out.extend_from_slice(text.as_bytes());
+        // This descriptor/code pair is runtime-owned; the pointer was installed
+        // by file_walk and remains owned until the environment's final release.
+        let state = unsafe { &*state };
+        let object = resolve(Kind::Capability, state.directory).ok_or(Error::UnresolvedHandle)?;
+        if object.creator.len() > WORK_MAX {
+            return Err(Error::Limit);
+        }
+        out.extend_from_slice(&(object.creator.len() as u64).to_le_bytes());
+        for part in object.creator {
+            out.extend_from_slice(&part.to_le_bytes());
+        }
+        out.extend_from_slice(&object.ordinal.to_le_bytes());
+        *fuel = fuel
+            .checked_sub(state.walk.pages.len())
+            .ok_or(Error::Limit)?;
+        out.extend_from_slice(&(state.walk.pages.len() as u64).to_le_bytes());
+        for page in &state.walk.pages {
+            *fuel = fuel.checked_sub(page.len()).ok_or(Error::Limit)?;
+            out.extend_from_slice(&(page.len() as u64).to_le_bytes());
+            for entry in page {
+                if entry.kind > 3 {
+                    return Err(Error::Value);
                 }
-                1 => {
-                    let tag = unsafe { item.add(8).cast::<u32>().read_unaligned() };
-                    if tag > 10 {
-                        return Err(Error::Value);
-                    }
-                    out.extend_from_slice(&tag.to_le_bytes());
-                    if tag <= 1 {
-                        let code = unsafe { item.add(12).cast::<u32>().read_unaligned() };
-                        out.extend_from_slice(&code.to_le_bytes());
-                    }
+                if out
+                    .len()
+                    .saturating_add(12)
+                    .saturating_add(entry.path.len())
+                    > BYTES_MAX
+                {
+                    return Err(Error::Limit);
                 }
-                _ => return Err(Error::Value),
-            }
-            if out.len() > BYTES_MAX {
-                return Err(Error::Limit);
+                out.extend_from_slice(&entry.kind.to_le_bytes());
+                out.extend_from_slice(&(entry.path.len() as u64).to_le_bytes());
+                out.extend_from_slice(entry.path.as_bytes());
             }
         }
         Ok(())
@@ -1140,7 +1138,7 @@ impl Program {
                         let name = if !iterator && code == 0 {
                             generic.as_deref().ok_or(Error::Unsupported)?
                         } else if walk && ordinal == 0 {
-                            "hirsel.runtime.file_walk.next.v1"
+                            "hirsel.runtime.file_walk.next.v2"
                         } else {
                             self.codes.get(&code).ok_or(Error::Unsupported)?.as_str()
                         };
@@ -1167,7 +1165,9 @@ impl Program {
                             return Err(Error::Value);
                         }
                         out.push(2); // Runtime-owned walk environment, not a compiler layout.
-                        unsafe { self.walk_values(block, &mut out, &mut extent_fuel) }?;
+                        unsafe {
+                            self.walk_values(block, &mut out, &mut extent_fuel, &mut resolve)
+                        }?;
                         continue;
                     }
                     if descriptor == 2 {
@@ -1504,9 +1504,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_walk_iterator_values_skip_consumed_rows_and_normalize_path_words() {
+    fn runtime_walk_iterator_values_encode_remaining_pages_and_logical_directory_identity() {
         let mut reference = None;
-        for noise in [0, 7] {
+        for directory in [7, 99] {
             let mut program = Program::new(
                 vec![Node::Callable {
                     iterator: true,
@@ -1515,22 +1515,24 @@ mod tests {
                 0,
             )
             .unwrap();
-            let names = std::sync::Arc::new(crate::paths::Names::default());
-            for i in 0..noise {
-                names.paths.intern(&format!("/noise/{i}"));
-            }
-            let path = names.paths.intern("/same/path");
-            program.names = Some(names);
             program.owners = vec![
                 OwnerBounds {
-                    size: 64,
+                    size: 8,
                     flags: crate::LAYOUT_NO_EXTENT,
                     #[cfg(feature = "system-allocator")]
-                    align: 8,
+                    align: 8
                 };
                 2
             ];
-            let mut storage = MaybeUninit::<[u64; 9]>::uninit();
+            let mut cursor = Box::new(crate::io::StreamingWalk {
+                directory,
+                walk: Default::default(),
+            });
+            cursor.walk.push(vec![hirsel_kernels::walk::Entry {
+                path: "same/λ".into(),
+                kind: 2,
+            }]);
+            let mut storage = MaybeUninit::<[u64; 3]>::uninit();
             let owner = storage.as_mut_ptr().cast::<crate::Header>();
             unsafe {
                 owner.write(crate::Header {
@@ -1538,44 +1540,44 @@ mod tests {
                     descriptor: 1,
                 });
                 let at = owner.add(1).cast::<u8>();
-                at.cast::<u64>().write(1);
-                at.add(8).cast::<u64>().write(3);
-                // First row and every padding word remain uninitialized.
-                at.add(32).cast::<u32>().write(0);
-                at.add(40).cast::<u64>().write(path);
-                at.add(48).cast::<u32>().write(1);
-                at.add(56).cast::<u32>().write(3); // FileError::NotFound, no payload.
+                at.cast::<*const crate::io::StreamingWalk>().write(&*cursor);
                 let iterator = [
                     owner as usize,
                     crate::io::hirsel_rt_v2_file_walk_step as *const () as usize,
                     0,
                 ];
-                let bytes = program
-                    .encode(iterator.as_ptr().cast(), |_, _| None)
-                    .unwrap();
+                let encode = |program: &Program| {
+                    program.encode(iterator.as_ptr().cast(), |kind, word| {
+                        assert_eq!((kind, word), (Kind::Capability, directory));
+                        Some(ObjectId {
+                            creator: vec![1, 2],
+                            ordinal: 5,
+                        })
+                    })
+                };
+                let bytes = encode(&program).unwrap();
+                assert!(
+                    bytes
+                        .windows("same/λ".len())
+                        .any(|w| w == "same/λ".as_bytes())
+                );
                 if let Some(reference) = &reference {
                     assert_eq!(&bytes, reference);
                 } else {
                     reference = Some(bytes.clone());
                 }
-                assert!(bytes.windows(10).any(|w| w == b"/same/path"));
-                at.cast::<u64>().write(4);
-                assert_eq!(
-                    program.encode(iterator.as_ptr().cast(), |_, _| None),
-                    Err(Error::Value)
-                );
-                at.cast::<u64>().write(1);
-                at.add(56).cast::<u32>().write(11);
-                assert_eq!(
-                    program.encode(iterator.as_ptr().cast(), |_, _| None),
-                    Err(Error::Value)
-                );
-                at.add(56).cast::<u32>().write(3);
-                program.owners[1].size = 63;
-                assert_eq!(
-                    program.encode(iterator.as_ptr().cast(), |_, _| None),
-                    Err(Error::Value)
-                );
+                cursor.walk.next_entry();
+                assert_ne!(encode(&program).unwrap(), bytes);
+                cursor.walk.push(vec![hirsel_kernels::walk::Entry {
+                    path: "invalid".into(),
+                    kind: 4,
+                }]);
+                assert_eq!(encode(&program), Err(Error::Value));
+                at.cast::<*const crate::io::StreamingWalk>()
+                    .write(std::ptr::null());
+                assert_eq!(encode(&program), Err(Error::Value));
+                program.owners[1].size = 7;
+                assert_eq!(encode(&program), Err(Error::Value));
             }
         }
     }

@@ -194,7 +194,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         FileWrite { directory: n.wrapping_add(7), file: n.wrapping_add(9), bytes: bytes.clone() },
         FileAppend { directory: n.wrapping_add(7), file: n.wrapping_add(9), bytes: bytes.clone() },
         NarrowFile { directory: n.wrapping_add(7), file: n.wrapping_add(9) },
-        Walk { directory: n.wrapping_add(7) },
+
         ReadDir { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         Metadata { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         Mkdir { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
@@ -314,7 +314,6 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Bytes(result!(bytes.clone(), io_error.clone())),
         Completion::View(MapView::of(bytes.clone())),
         Completion::Watch(result!(watch_event(n, &text), io_error.clone())),
-        Completion::Paths(result!(vec![String::new(), text.clone()], io_error.clone())),
         Completion::Entries(result!(
             vec![DirEntry {
                 path: text.clone(),
@@ -423,7 +422,6 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::Unit(_) => (),
             Completion::Size(_) => (),
             Completion::Bytes(_) => (),
-            Completion::Paths(_) => (),
             Completion::Entries(_) => (),
             Completion::Metadata(_) => (),
             Completion::NetHandle(_) => (),

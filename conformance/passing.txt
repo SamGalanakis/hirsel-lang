@@ -142,6 +142,7 @@ conformance/CAP/CAP-1-unix-listen-run.hir
 conformance/CAP/CAP-1-unix-peer-run.hir
 conformance/CAP/CAP-1-unix-scripted-listen-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
+conformance/CAP/CAP-1-walk-stream-byte-order-run.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
 conformance/CAP/CAP-2-capability-summary-bad.hir

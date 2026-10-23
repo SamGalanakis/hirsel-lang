@@ -122,7 +122,7 @@ impl HostLibrary {
             _ => return Ok(None),
         }))
     }
-    fn free_advance(&mut self, request: &mut Call) -> Result<Poll, Error> {
+    pub(super) fn free_advance(&mut self, request: &mut Call) -> Result<Poll, Error> {
         let path = self.library.task_path();
         let cancellation = self.library.host_cancellation();
         let codec = self.free.as_mut().unwrap();
@@ -136,6 +136,9 @@ impl HostLibrary {
         call: OperationCall<'_>,
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        if call.path == &DefPath::core("iter.next") {
+            return self.walk_next(call, cx, Some((request, completion)));
+        }
         let operation =
             hirsel_interp::OperationsAdapter::resolve(self, call.path).ok_or_else(invalid)?;
         self.free_ready = Some((request, completion));
@@ -189,6 +192,30 @@ impl HostLibrary {
                 Ok(OperationResult::Park { token, wait })
             }
         }
+    }
+    /// The existing typed wait owns the walk cursor as its iter.next argument.
+    pub(super) fn park_walk(
+        &mut self,
+        request: Call,
+        call: OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let token = self.next_wait;
+        self.next_wait += 1;
+        let wait = hirsel_interp::BlockedWait {
+            spawn_path: self.library.task_path(),
+            anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+            kind: "free.host.walk".into(),
+            targets: vec![],
+        };
+        self.free_waits.insert(
+            token,
+            Wait {
+                request,
+                operation: OwnedCall::new(call),
+            },
+        );
+        Ok(OperationResult::Park { token, wait })
     }
     pub(super) fn free_poll(
         &mut self,

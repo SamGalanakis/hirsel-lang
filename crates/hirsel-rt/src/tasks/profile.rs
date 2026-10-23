@@ -187,7 +187,6 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::FileWrite { .. } => "FileWrite",
         Request::FileAppend { .. } => "FileAppend",
         Request::NarrowFile { .. } => "NarrowFile",
-        Request::Walk { .. } => "Walk",
         Request::ReadDir { .. } => "ReadDir",
         Request::Metadata { .. } => "Metadata",
         Request::Mkdir { .. } => "Mkdir",

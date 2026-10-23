@@ -206,7 +206,11 @@ impl Library {
             vec![],
         ))
     }
-    pub(super) fn next_iterator(&mut self, it: Value) -> Result<OperationResult, Error> {
+    pub fn next_iterator(
+        &mut self,
+        it: Value,
+        walked: Option<Option<Value>>,
+    ) -> Result<OperationResult, Error> {
         if matches!(&it, Value::Record { definition, .. } if definition.is_core("IterState")) {
             let mut fields = unpack(it, "IterState")?;
             let next = fields.pop().unwrap();
@@ -228,6 +232,9 @@ impl Library {
                 fields,
             });
             return Ok(result);
+        }
+        if let Some(item) = walked {
+            return Ok(pulled(it, item));
         }
         let mut items = collection::elements(&it, BuiltinType::Iter)?;
         let item = if items.is_empty() {

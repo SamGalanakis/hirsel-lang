@@ -353,9 +353,6 @@ pub enum Request {
         directory: u64,
         file: u64,
     },
-    Walk {
-        directory: u64,
-    },
     ReadDir {
         directory: u64,
         path: String,
@@ -717,7 +714,6 @@ pub enum Completion {
     Unit(Result<(), IoError>),
     Size(Result<u64, IoError>),
     Bytes(Result<Vec<u8>, IoError>),
-    Paths(Result<Vec<String>, IoError>),
     Entries(Result<Vec<DirEntry>, IoError>),
     Metadata(Result<Metadata, IoError>),
     NetHandle(Result<u64, NetError>),
@@ -992,7 +988,6 @@ pub(crate) trait Storage {
     fn unwatch(&mut self, id: u64);
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
-    fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1222,7 +1217,6 @@ impl State {
             | Request::FileRead { directory, .. }
             | Request::FileSeek { directory, .. }
             | Request::NarrowFile { directory, .. }
-            | Request::Walk { directory }
             | Request::Size { directory, .. }
             | Request::ReadDir { directory, .. }
             | Request::Metadata { directory, .. }
@@ -2034,12 +2028,6 @@ impl State {
                         })
                 };
                 Ok(C::Unit(result))
-            }
-            R::Walk { directory } => {
-                let root = self.directory(*directory)?;
-                storage.activate(*directory, &root);
-                let result = error.map_or_else(|| storage.walk(&root), Err);
-                Ok(C::Paths(result))
             }
             R::WatchNext { directory, watcher } => {
                 let root = self.directory(*directory)?;
@@ -4806,7 +4794,34 @@ pub struct WalkOption {
     pub padding: u32,
     pub value: HandleResult,
 }
-/// Pointer-free runtime environment: position, count, inline Result[Path,FileError] items.
+/// Private runtime-owned cursor environment. The public Iter ABI is unchanged;
+/// its counted environment owns the sorted directory pages until drop.
+pub(crate) struct StreamingWalk {
+    pub(crate) directory: u64,
+    pub(crate) walk: hirsel_kernels::walk::Walk,
+}
+unsafe extern "C" fn drop_walk(
+    _ctx: *mut crate::TaskCtx,
+    value: *mut u8,
+    _anchor: u64,
+    _site: u64,
+) -> u8 {
+    // SAFETY: the constructor installs this owned pointer; Iter is affine,
+    // so the environment has exactly one final release.
+    unsafe {
+        drop(Box::from_raw(value.cast::<*mut StreamingWalk>().read()));
+    }
+    crate::STATUS_OK
+}
+fn walk_entries(entries: &[DirEntry]) -> Vec<hirsel_kernels::walk::Entry> {
+    entries
+        .iter()
+        .map(|e| hirsel_kernels::walk::Entry {
+            path: e.path.clone(),
+            kind: e.kind as u32,
+        })
+        .collect()
+}
 #[repr(transparent)]
 pub struct WalkDescriptor(pub crate::Layout);
 // SAFETY: this immutable descriptor has no steps or mutable pointees.
@@ -4816,9 +4831,9 @@ unsafe impl Sync for WalkDescriptor {}
 pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(crate::Layout {
     magic: crate::LAYOUT_MAGIC,
     version: crate::LAYOUT_VERSION,
-    size: 16,
+    size: 8,
     align: 8,
-    finalizer: None,
+    finalizer: Some(drop_walk),
     steps: std::ptr::null(),
     step_count: 0,
     field_count: 0,
@@ -4828,30 +4843,6 @@ pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(cr
     scan: std::ptr::null(),
     scan_words: 0,
 });
-/// # Safety
-/// Context live; each item contains only a run-context Path or FileError.
-pub unsafe fn walk_environment(
-    ctx: *mut crate::TaskCtx,
-    items: &[HandleResult],
-) -> *mut crate::Header {
-    let size = (items.len() as u64)
-        .checked_mul(16)
-        .and_then(|n| n.checked_add(16))
-        .unwrap_or_else(|| crate::fault("walk extent overflow"));
-    let environment =
-        unsafe { crate::alloc::hirsel_rt_v2_alloc(ctx, 1, size, 8, crate::DOMAIN_HEAP, 0) };
-    unsafe {
-        let payload = crate::alloc::payload(environment);
-        payload.cast::<u64>().write(0);
-        payload.add(8).cast::<u64>().write(items.len() as u64);
-        std::ptr::copy_nonoverlapping(
-            items.as_ptr().cast::<u8>(),
-            payload.add(16),
-            items.len() * 16,
-        );
-    }
-    environment
-}
 /// # Safety
 /// Context bound; directory borrowed and result writable.
 #[unsafe(no_mangle)]
@@ -4863,45 +4854,35 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let Ok(mut completion) = (unsafe {
+    let directory = unsafe { directory.read() };
+    let Ok(completion) = (unsafe {
         capability_call(
             ctx,
-            Request::Walk {
-                directory: directory.read(),
+            Request::ReadDir {
+                directory,
+                path: String::new(),
             },
         )
     }) else {
         return crate::STATUS_FAILURE;
     };
-    let Completion::Paths(value) = &mut completion else {
-        crate::fault("walk completion mismatch");
-    };
-    if let Ok(paths) = value {
-        paths.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-    }
     unsafe {
         crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
-            let Completion::Paths(value) = completion else {
-                unreachable!()
+            let Completion::Entries(value) = completion else {
+                crate::fault("walk root completion mismatch")
             };
             out.cast::<u8>()
                 .write_bytes(0, std::mem::size_of::<WalkResult>());
             match value {
-                Ok(paths) => {
-                    let size = (paths.len() as u64)
-                        .checked_mul(16)
-                        .and_then(|n| n.checked_add(16))
-                        .unwrap_or_else(|| crate::fault("walk extent overflow"));
+                Ok(entries) => {
+                    let mut walk = hirsel_kernels::walk::Walk::default();
+                    walk.push(walk_entries(entries));
                     let environment =
-                        crate::alloc::hirsel_rt_v2_alloc(ctx, 1, size, 8, crate::DOMAIN_HEAP, 0);
+                        crate::alloc::hirsel_rt_v2_alloc(ctx, 1, 8, 8, crate::DOMAIN_HEAP, 0);
                     let payload = crate::alloc::payload(environment);
-                    payload.cast::<u64>().write(0);
-                    payload.add(8).cast::<u64>().write(paths.len() as u64);
-                    for (index, path) in paths.iter().enumerate() {
-                        payload.add(16 + index * 16).cast::<HandleResult>().write(
-                            HandleResult::of(Ok(crate::paths::names(ctx).paths.intern(path))),
-                        );
-                    }
+                    payload
+                        .cast::<*mut StreamingWalk>()
+                        .write(Box::into_raw(Box::new(StreamingWalk { directory, walk })));
                     (*out).value = WalkIterator {
                         code: hirsel_rt_v2_file_walk_step as *const std::ffi::c_void,
                         environment,
@@ -4910,11 +4891,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
                 }
                 Err(error) => {
                     (*out).tag = 1;
-                    std::ptr::copy_nonoverlapping(
-                        error_word(error.clone()).to_le_bytes().as_ptr(),
-                        std::ptr::addr_of_mut!((*out).value).cast::<u8>(),
-                        8,
-                    )
+                    std::ptr::addr_of_mut!((*out).value)
+                        .cast::<u64>()
+                        .write(error_word(error.clone()));
                 }
             }
         })
@@ -4939,24 +4918,62 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(_ctx) };
     let payload = crate::alloc::payload(environment);
-    let position = unsafe { payload.cast::<u64>().read() };
-    let count = unsafe { payload.add(8).cast::<u64>().read() };
     let mut result = WalkOption::default();
-    if position < count {
-        let offset = position
-            .checked_mul(16)
-            .and_then(|n| n.checked_add(16))
-            .filter(|&n| n <= isize::MAX as u64)
-            .unwrap_or_else(|| crate::fault("walk position overflow"));
-        let value = unsafe { payload.add(offset as usize).cast::<HandleResult>().read() };
-        result.tag = 1;
-        result.value = value;
-        unsafe {
-            payload
-                .cast::<u64>()
-                .write(if value.tag == 1 { count } else { position + 1 })
-        };
+    // Do not retain a Rust borrow across capability_call: it can suspend the task.
+    let state = unsafe { payload.cast::<*mut StreamingWalk>().read() };
+    while let Some(entry) = unsafe { (*state).walk.next_entry() } {
+        match entry.kind {
+            1 => {
+                let directory = unsafe { (*state).directory };
+                let Ok(completion) = (unsafe {
+                    capability_call(
+                        _ctx,
+                        Request::ReadDir {
+                            directory,
+                            path: entry.path,
+                        },
+                    )
+                }) else {
+                    return crate::STATUS_FAILURE;
+                };
+                unsafe {
+                    crate::tasks::free::host::native::convert_result(
+                        _ctx,
+                        completion,
+                        |completion| {
+                            let Completion::Entries(entries) = completion else {
+                                crate::fault("walk child completion mismatch")
+                            };
+                            match entries {
+                                Ok(entries) => (*state).walk.push(walk_entries(entries)),
+                                Err(error) => {
+                                    (*state).walk.stop();
+                                    result.tag = 1;
+                                    result.value = HandleResult::of(Err(error.clone()));
+                                }
+                            }
+                        },
+                    );
+                }
+                if result.tag == 1 {
+                    break;
+                }
+            }
+            0 | 2 => {
+                result.tag = 1;
+                result.value =
+                    HandleResult::of(Ok(crate::paths::names(_ctx).paths.intern(&entry.path)));
+                break;
+            }
+            _ => {
+                unsafe { (*state).walk.stop() };
+                result.tag = 1;
+                result.value = HandleResult::of(Err(IoError::Fault(1)));
+                break;
+            }
+        }
     }
+
     unsafe { out.write(result) };
     crate::STATUS_OK
 }
@@ -5461,9 +5478,6 @@ mod filesystem_authority_tests {
             unreachable!()
         }
         fn read_dir(&mut self, _: &str) -> Result<Vec<DirEntry>, IoError> {
-            unreachable!()
-        }
-        fn walk(&mut self, _: &str) -> Result<Vec<String>, IoError> {
             unreachable!()
         }
     }

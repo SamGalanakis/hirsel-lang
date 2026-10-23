@@ -353,73 +353,6 @@ fn niche_images_match_derived_layouts_on_both_targets() {
 }
 
 #[test]
-fn walk_step_stops_after_the_first_error_and_releases_its_environment() {
-    let ctx = support::Ctx::diagnostic();
-    let items = [
-        HandleResult::of(Ok(7)),
-        HandleResult::of(Err(IoError::Canceled(2))),
-        HandleResult::of(Ok(8)),
-    ];
-    unsafe {
-        let environment = walk_environment(ctx.0, &items);
-        let mut out = WalkOption::default();
-        assert_eq!(
-            hirsel_rt_v2_file_walk_step(ctx.0, environment, 0, 0, std::ptr::null_mut(), &mut out),
-            0
-        );
-        assert_eq!(
-            out,
-            WalkOption {
-                tag: 1,
-                padding: 0,
-                value: items[0]
-            }
-        );
-        assert_eq!(
-            hirsel_rt_v2_file_walk_step(ctx.0, environment, 0, 0, std::ptr::null_mut(), &mut out),
-            0
-        );
-        assert_eq!(
-            out,
-            WalkOption {
-                tag: 1,
-                padding: 0,
-                value: items[1]
-            }
-        );
-        for _ in 0..2 {
-            assert_eq!(
-                hirsel_rt_v2_file_walk_step(
-                    ctx.0,
-                    environment,
-                    0,
-                    0,
-                    std::ptr::null_mut(),
-                    &mut out
-                ),
-                0
-            );
-            assert_eq!(out.tag, 0);
-        }
-        assert!(
-            hirsel_rt::io::hirsel_rt_v2_file_walk_descriptor
-                .0
-                .finalizer
-                .is_none()
-        );
-        hirsel_rt::release::hirsel_rt_v2_release(
-            ctx.0,
-            environment,
-            (*environment).index(),
-            std::ptr::null(),
-            0,
-            0,
-        );
-    }
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
-#[test]
 fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malformed_data() {
     use hirsel_rt::launch::{
         Recording, parse_recording, parse_tape, render_recording, render_tape,
@@ -506,26 +439,41 @@ fn path_order_uses_exact_text_without_allocating_or_comparing_capability_ids() {
 }
 
 #[test]
-fn link_and_directory_cycles_terminate_with_file_fault() {
+fn walk_yields_link_cycles_without_descending_or_resolving_targets() {
     use std::os::unix::fs::symlink;
     let (temp, real) = setup();
     let mut real = Library(real);
     let root = real.directory(Io(1), "").unwrap().unwrap();
     symlink("second", temp.path().join("first")).unwrap();
     symlink("first", temp.path().join("second")).unwrap();
-    assert_eq!(real.walk(root), Ok(Err(IoError::Fault(1))));
+    assert_eq!(
+        real.walk(root),
+        Ok(Ok(["first", "old", "second", "sub/a", "sub/é"]
+            .map(str::to_owned)
+            .to_vec()))
+    );
     assert_eq!(real.read(root, "first"), Ok(Err(IoError::Fault(1))));
     std::fs::remove_file(temp.path().join("first")).unwrap();
     std::fs::remove_file(temp.path().join("second")).unwrap();
     symlink("..", temp.path().join("sub/back")).unwrap();
-    assert_eq!(real.walk(root), Ok(Err(IoError::Fault(1))));
+    assert_eq!(
+        real.walk(root),
+        Ok(Ok(["old", "sub/a", "sub/back", "sub/é"]
+            .map(str::to_owned)
+            .to_vec()))
+    );
     std::fs::remove_file(temp.path().join("sub/back")).unwrap();
     // A cycle through sibling directories must preserve traversal ancestry
     // independently of the descriptor ancestry used to resolve each link.
     std::fs::create_dir(temp.path().join("other")).unwrap();
     symlink("../other", temp.path().join("sub/across")).unwrap();
     symlink("../sub", temp.path().join("other/across")).unwrap();
-    assert_eq!(real.walk(root), Ok(Err(IoError::Fault(1))));
+    assert_eq!(
+        real.walk(root),
+        Ok(Ok(["old", "other/across", "sub/a", "sub/across", "sub/é"]
+            .map(str::to_owned)
+            .to_vec()))
+    );
     std::fs::remove_file(temp.path().join("sub/across")).unwrap();
     std::fs::remove_file(temp.path().join("other/across")).unwrap();
     assert!(real.walk(root).unwrap().is_ok());
@@ -572,7 +520,12 @@ fn absolute_link_targets_are_refused_even_when_they_point_inside_the_grant() {
     let root = real.directory(Io(1), "").unwrap().unwrap();
     symlink(temp.path().join("old"), temp.path().join("link")).unwrap();
     assert_eq!(real.read(root, "link"), Ok(Err(IoError::Fault(1))));
-    assert_eq!(real.walk(root), Ok(Err(IoError::Fault(1))));
+    assert_eq!(
+        real.walk(root),
+        Ok(Ok(["link", "old", "sub/a", "sub/é"]
+            .map(str::to_owned)
+            .to_vec()))
+    );
     std::fs::remove_file(temp.path().join("link")).unwrap();
     symlink("old", temp.path().join("link")).unwrap();
     assert_eq!(real.read(root, "link"), Ok(Ok(b"old".to_vec())));
@@ -1431,4 +1384,12 @@ fn a_durable_journal_of_a_host_run_recovers_at_every_record_boundary_and_replays
     sim.finish().unwrap();
     assert_eq!(sim.stdout(), real.0.stdout());
     assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
+}
+
+#[test]
+fn retired_walk_text_recording_requires_recording_again() {
+    let old = "hirsel-io-tape 7\nwalk 7 -> paths ok 61\n";
+    let error = hirsel_rt::launch::parse_tape(old).unwrap_err();
+    assert!(error.contains("retired Request::Walk"), "{error}");
+    assert!(error.contains("re-record"), "{error}");
 }

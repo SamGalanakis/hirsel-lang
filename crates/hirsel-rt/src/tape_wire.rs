@@ -246,7 +246,7 @@ macro_rules! wire_struct {
     };
 }
 macro_rules! wire_enum {
-    ($ty:path { $($tag:literal => $variant:ident $(($($tuple:ident),*))? $({$($field:ident),*})?),* $(,)? }) => {
+    ($ty:path { $($tag:literal => $variant:ident $(($($tuple:ident),*))? $({$($field:ident),*})?),* $(,)? } $(retired { $($old:literal => $reason:literal),* $(,)? })?) => {
         impl Wire for $ty {
             fn encode(&self, out: &mut Vec<u8>) {
                 match self {
@@ -260,6 +260,7 @@ macro_rules! wire_enum {
             fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
                 Ok(match u32::decode(input)? {
                     $($tag => Self::$variant $(($(wire_enum!(@decode $tuple input)),*))? $({$($field: Wire::decode(input)?),*})?),*,
+                    $($($old => return Err($reason.into()),)*)?
                     _ => return Err("unknown binary tape variant".into()),
                 })
             }
@@ -369,7 +370,7 @@ wire_enum!(crate::io::Request {
     56 => FileWrite{ directory, file, bytes },
     57 => FileAppend{ directory, file, bytes },
     58 => NarrowFile{ directory, file },
-    59 => Walk{ directory },
+    // Tag 59 (eager Walk) is permanently reserved by "Stream file.walk through sorted directory cursors"; never reuse.
     60 => ReadDir{ directory, path },
     61 => Metadata{ directory, path },
     62 => Mkdir{ directory, path },
@@ -424,7 +425,7 @@ wire_enum!(crate::io::Request {
     111 => Stopped,
     112 => Ready{ wait, points },
     113 => Schedule{ count, choice }
-});
+} retired { 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {
     0 => Unavailable,
@@ -462,7 +463,7 @@ wire_enum!(crate::io::Completion {
     12 => Unit(v0),
     13 => Size(v0),
     14 => Bytes(v0),
-    15 => Paths(v0),
+    // Tag 15 (eager Paths) is permanently reserved by "Stream file.walk through sorted directory cursors"; never reuse.
     16 => Entries(v0),
     17 => Metadata(v0),
     18 => NetHandle(v0),
@@ -944,6 +945,23 @@ mod tests {
         assert!(decode::<crate::io::AdapterError>(&[6, 0, 0]).is_err());
     }
 
+    #[test]
+    fn retired_walk_binary_recording_requires_recording_again() {
+        let mut old = 59u32.to_le_bytes().to_vec();
+        old.extend_from_slice(&7u64.to_le_bytes());
+        assert_eq!(
+            decode::<crate::io::Request>(&old).unwrap_err(),
+            "retired Request::Walk recording; re-record with streaming file.walk"
+        );
+        let request = crate::io::Request::ReadDir {
+            directory: 7,
+            path: String::new(),
+        };
+        let mut bytes = vec![];
+        request.encode(&mut bytes);
+        assert_eq!(&bytes[..4], &60u32.to_le_bytes());
+        assert_eq!(decode::<crate::io::Request>(&bytes).unwrap(), request);
+    }
     #[test]
     fn fixed_integer_vectors_and_bad_lengths() {
         // Bincode 1.3 fixed-int vectors: LE scalar, u64 byte-span count,

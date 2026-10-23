@@ -1,0 +1,109 @@
+// rule: CAP-1
+// expect: run
+pub fn main(t: Test) -> Result[(), FileError] {
+  let d = test.dir(
+    t,
+    [
+      (path.of("s0/a-"), b""),
+      (path.of("s0/a.c"), b""),
+      (path.of("s0/a/b-"), b""),
+      (path.of("s0/a/b.c"), b""),
+      (path.of("s0/a/b/d"), b""),
+      (path.of("s0/a0"), b""),
+      (path.of("s0/é/x"), b""),
+      (path.of("s0/中"), b""),
+      (path.of("s0/z"), b""),
+      (path.of("s1/a-"), b""),
+      (path.of("s1/a.c"), b""),
+      (path.of("s1/a/b-"), b""),
+      (path.of("s1/a/b.c"), b""),
+      (path.of("s1/a/b/d"), b""),
+      (path.of("s1/a0"), b""),
+      (path.of("s1/é/x"), b""),
+      (path.of("s1/中"), b""),
+      (path.of("s1/z"), b""),
+      (path.of("s2/a-"), b""),
+      (path.of("s2/a.c"), b""),
+      (path.of("s2/a/b-"), b""),
+      (path.of("s2/a/b.c"), b""),
+      (path.of("s2/a/b/d"), b""),
+      (path.of("s2/a0"), b""),
+      (path.of("s2/é/x"), b""),
+      (path.of("s2/中"), b""),
+      (path.of("s2/z"), b""),
+      (path.of("s3/a-"), b""),
+      (path.of("s3/a.c"), b""),
+      (path.of("s3/a/b-"), b""),
+      (path.of("s3/a/b.c"), b""),
+      (path.of("s3/a/b/d"), b""),
+      (path.of("s3/a0"), b""),
+      (path.of("s3/é/x"), b""),
+      (path.of("s3/中"), b""),
+      (path.of("s3/z"), b""),
+      (
+        path.of(
+          "deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/leaf"
+        ),
+        b""
+      )
+    ]
+  )
+  file.mkdir(d, path.of("empty"))?
+  let expected = [
+    "deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/leaf",
+    "s0/a-",
+    "s0/a.c",
+    "s0/a/b-",
+    "s0/a/b.c",
+    "s0/a/b/d",
+    "s0/a0",
+    "s0/z",
+    "s0/é/x",
+    "s0/中",
+    "s1/a-",
+    "s1/a.c",
+    "s1/a/b-",
+    "s1/a/b.c",
+    "s1/a/b/d",
+    "s1/a0",
+    "s1/z",
+    "s1/é/x",
+    "s1/中",
+    "s2/a-",
+    "s2/a.c",
+    "s2/a/b-",
+    "s2/a/b.c",
+    "s2/a/b/d",
+    "s2/a0",
+    "s2/z",
+    "s2/é/x",
+    "s2/中",
+    "s3/a-",
+    "s3/a.c",
+    "s3/a/b-",
+    "s3/a/b.c",
+    "s3/a/b/d",
+    "s3/a0",
+    "s3/z",
+    "s3/é/x",
+    "s3/中"
+  ]
+  let mut i = 0u64
+  for item in take file.walk(d)? {
+    failure.check(path.text(item?) == expected[i], Bounds())
+    i += 1u64
+  }
+  failure.check(i == list.len(expected), Bounds())
+  let mut first = 0u64
+  for item in take file.walk(d)? {
+    let _ = item?
+    first += 1u64
+    if first == 10u64 {
+      break
+    }
+  }
+  failure.check(first == 10u64, Bounds())
+  let direct = file.read_dir(d, path.of(""))?
+  failure.check(list.len(direct) == 6, Bounds())
+  Ok(())
+}

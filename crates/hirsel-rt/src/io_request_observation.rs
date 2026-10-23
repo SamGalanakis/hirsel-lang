@@ -148,7 +148,6 @@ pub(crate) fn project<A>(
         | R::ReadOnlyDir { directory }
         | R::Open { directory, .. }
         | R::Create { directory, .. }
-        | R::Walk { directory }
         | R::ReadDir { directory, .. }
         | R::Metadata { directory, .. }
         | R::Mkdir { directory, .. }

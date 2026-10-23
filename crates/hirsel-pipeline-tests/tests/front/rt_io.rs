@@ -225,7 +225,7 @@ fn byte_block(ctx: &rt_support::Ctx, bytes: &[u8]) -> (*mut hirsel_rt::Header, u
 }
 
 #[test]
-fn walk_follows_relative_links_component_by_component_and_replays_their_paths() {
+fn walk_yields_symlinks_without_descending_and_replays_directory_pages() {
     use std::os::unix::fs::symlink;
     let (temp, real) = setup();
     symlink("sub", temp.path().join("alias")).unwrap();
@@ -233,16 +233,7 @@ fn walk_follows_relative_links_component_by_component_and_replays_their_paths() 
     symlink("alias/../old", temp.path().join("chain")).unwrap();
     let mut real = Library(real);
     let root = real.directory(Io(1), "").unwrap().unwrap();
-    let expected = vec![
-        "alias/a",
-        "alias/link",
-        "alias/é",
-        "chain",
-        "old",
-        "sub/a",
-        "sub/link",
-        "sub/é",
-    ];
+    let expected = vec!["alias", "chain", "old", "sub/a", "sub/link", "sub/é"];
     assert_eq!(
         real.walk(root),
         Ok(Ok(expected.iter().map(|p| (*p).into()).collect()))

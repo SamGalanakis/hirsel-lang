@@ -78,7 +78,6 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::FileWrite { .. } => true,
             Request::FileAppend { .. } => true,
             Request::NarrowFile { .. } => false,
-            Request::Walk { .. } => true,
             Request::ReadDir { .. } => true,
             Request::Metadata { .. } => true,
             Request::Mkdir { .. } => true,

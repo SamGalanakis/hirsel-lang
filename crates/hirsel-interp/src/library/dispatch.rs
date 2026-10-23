@@ -781,11 +781,8 @@ impl Library {
             return Ok(fault_result(f));
         }
         if name == "file.walk" {
-            return Ok(match self.simulation.walk_paths(tree, dir, &root) {
-                Ok(paths) => ok(collection::sequence(
-                    BuiltinType::Iter,
-                    paths.into_iter().map(|p| ok(path(&p))).collect::<Vec<_>>(),
-                )),
+            return Ok(match self.simulation.walk_entries(tree, dir, &root, "") {
+                Ok(entries) => ok(super::walk::iterator(a[0].clone(), entries)),
                 Err(error) => file_error(error),
             });
         }
@@ -2326,7 +2323,37 @@ primary_operations! { library, call, context, name, a, value;
                     .transferring([0, 1]),
                 ));
             },
-    Primitive: "iter.next" => return library.next_iterator(arg(a, 0)?.clone()).map(Some),
+    Primitive: "iter.next" => {
+        let mut it = arg(a, 0)?.clone();
+        let saved = (!context.configuration.inputs.is_empty()).then(|| library.simulation.clone());
+        let trace_len = context.trace.len();
+        let walked = super::walk::pull(&mut it, |directory, p| {
+            let (tree, root, dir) = library.simulation.directory(directory)?;
+            let entries = if let Some(fault) = library.tasks.canceled().map(Fault::Canceled)
+                .or_else(|| library.simulation.fault("file.read_dir")) {
+                Err(fault_result(fault))
+            } else {
+                library.simulation.walk_entries(tree, dir, &root, p).map_err(file_error)
+            };
+            let output = match &entries {
+                Ok(entries) => ok(collection::sequence(BuiltinType::List, entries.iter().map(|e|
+                    Value::Record { definition: (&hirsel_syntax::DefPath::core("DirEntry")).into(),
+                        fields: vec![Some(path(&e.path)), Some(variant(e.kind, vec![]))] }))),
+                Err(error) => error.clone(),
+            };
+            library.simulation.record("Dir", "file.read_dir", encode_arguments(&[directory.clone(), path(p)]), encode_value(&output), context)?;
+            Ok(entries)
+        });
+        let walked = match walked {
+            Ok(walked) => walked,
+            Err(error) => {
+                if let Some(saved) = saved { library.simulation = saved; }
+                context.trace.truncate(trace_len);
+                return Err(error);
+            }
+        };
+        return library.next_iterator(it, walked).map(Some);
+    },
     Primitive: "simd.splat" => {
                 let n = call
                     .generics

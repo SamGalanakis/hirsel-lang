@@ -78,7 +78,6 @@ impl State {
             | R::Read { directory, .. }
             | R::Write { directory, .. }
             | R::Size { directory, .. }
-            | R::Walk { directory }
             | R::ReadDir { directory, .. }
             | R::Metadata { directory, .. }
             | R::Remove { directory, .. }
@@ -220,7 +219,6 @@ fn file_completion(request: &R, error: IoError) -> C {
         R::FileWrite { .. } | R::Size { .. } => C::Size(Err(error)),
         R::ReadDir { .. } => C::Entries(Err(error)),
         R::Metadata { .. } => C::Metadata(Err(error)),
-        R::Walk { .. } => C::Paths(Err(error)),
         _ => C::Unit(Err(error)),
     }
 }
@@ -320,7 +318,6 @@ pub(crate) fn cancellation_result(request: &R, cause: u32) -> Option<C> {
         | R::Read { .. }
         | R::Write { .. }
         | R::Size { .. }
-        | R::Walk { .. }
         | R::ReadDir { .. }
         | R::Metadata { .. }
         | R::Remove { .. }

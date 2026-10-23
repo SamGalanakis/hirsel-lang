@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 mod free;
 mod remote;
 mod runners;
+mod walk;
 pub(crate) use remote::{CancelHandle, ExternalCancel, RemoteRunners, wire as remote_wire};
 pub(crate) use runners::RunnerContext;
 
@@ -1620,8 +1621,9 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
             },
-            "file.walk" => R::Walk {
+            "file.walk" => R::ReadDir {
                 directory: self.id(&a[0])?,
+                path: String::new(),
             },
             "file.read_dir" => R::ReadDir {
                 directory: self.id(&a[0])?,
@@ -1774,6 +1776,16 @@ impl HostLibrary {
                 Err(e) => file_error(e),
             },
             C::Entries(r) => match r {
+                Ok(entries) if name == "file.walk" => ok(hirsel_interp::library::walk::iterator(
+                    a[0].clone(),
+                    entries
+                        .into_iter()
+                        .map(|e| hirsel_interp::library::walk::Entry {
+                            path: e.path,
+                            kind: e.kind as u32,
+                        })
+                        .collect(),
+                )),
                 Ok(entries) => ok(sequence(
                     BuiltinType::List,
                     entries.into_iter().map(|entry| Value::Record {
@@ -1783,15 +1795,6 @@ impl HostLibrary {
                             Some(variant(entry.kind as u32, vec![])),
                         ],
                     }),
-                )),
-                Err(e) => file_error(e),
-            },
-            C::Paths(r) => match r {
-                Ok(paths) => ok(sequence(
-                    BuiltinType::Iter,
-                    paths
-                        .into_iter()
-                        .map(|p| ok(hirsel_interp::library::path(&p))),
                 )),
                 Err(e) => file_error(e),
             },
@@ -2738,6 +2741,12 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let route = operation.index >> HOST_ROUTE_SHIFT;
         operation.index &= (1 << HOST_ROUTE_SHIFT) - 1;
         let name = operation.name;
+        if name == "iter.next"
+            && hirsel_interp::library::walk::directory(&call.arguments[0])
+                .is_some_and(|directory| self.id(directory).is_ok())
+        {
+            return self.walk_next(call, cx, None).map(Some);
+        }
         if self.free.is_some()
             && self.free_ready.is_none()
             && let Some(request) = self.free_request(name, call.arguments)?

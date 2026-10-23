@@ -291,7 +291,6 @@ pub fn replay_interpreter_with_fixture(
                 | Request::FileWrite { .. }
                 | Request::FileAppend { .. }
                 | Request::NarrowFile { .. }
-                | Request::Walk { .. }
                 | Request::ReadDir { .. }
                 | Request::Metadata { .. }
                 | Request::Mkdir { .. }
@@ -806,24 +805,6 @@ pub(crate) fn decode(schema: &Completion, value: hirsel_interp::Value) -> Comple
                 })
                 .collect()
         })),
-        Completion::Paths(_) => Completion::Paths(result(value).map(|v| {
-            let Value::Sequence { elements, .. } = v else {
-                panic!()
-            };
-            elements
-                .into_iter()
-                .map(|v| {
-                    let v = result(v.unwrap()).unwrap();
-                    let Value::Record { mut fields, .. } = v else {
-                        panic!()
-                    };
-                    let Value::String(p) = fields.remove(0).unwrap() else {
-                        panic!()
-                    };
-                    p
-                })
-                .collect()
-        })),
         _ => panic!("network completion must use its typed decoder"),
     }
 }
@@ -903,7 +884,6 @@ pub(crate) fn file_arguments(
             "file.narrow",
             vec![handle("Dir", *directory), handle("File", *file)],
         ),
-        Request::Walk { directory } => ("file.walk", vec![handle("Dir", *directory)]),
         Request::ReadDir { directory, path } => (
             "file.read_dir",
             vec![handle("Dir", *directory), reference::path(path)],

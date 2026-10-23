@@ -1486,7 +1486,6 @@ impl<S: Streams> RealCore<S> {
                 | Completion::Unit(Err(e))
                 | Completion::Size(Err(e))
                 | Completion::Bytes(Err(e))
-                | Completion::Paths(Err(e))
                 | Completion::Entries(Err(e))
                 | Completion::Metadata(Err(e))
                 | Completion::Watch(Err(e))
@@ -1640,69 +1639,6 @@ impl Disk {
             self.open(parent, libc::O_RDONLY | libc::O_DIRECTORY, 0)?,
             CString::new(name).map_err(|_| IoError::Fault(1))?,
         ))
-    }
-    fn entries(&self, root: &str) -> Result<(Vec<String>, Vec<String>), IoError> {
-        let base = self.base()?.try_clone().map_err(error)?;
-        let (fd, mut parents) = resolve_beneath(
-            vec![Rc::new(base)],
-            self.local(root)?,
-            libc::O_RDONLY | libc::O_DIRECTORY,
-            0,
-        )?;
-        parents.push(Rc::new(fd));
-        let meta = parents
-            .last()
-            .expect("walk root")
-            .metadata()
-            .map_err(error)?;
-        let mut work = vec![(parents, String::new(), vec![(meta.dev(), meta.ino())])];
-        let mut files = vec![];
-        let mut dirs = vec![root.into()];
-        while let Some((parents, prefix, visited)) = work.pop() {
-            let fd = parents.last().expect("pinned directory");
-            let host = format!("/proc/self/fd/{}", fd.as_raw_fd());
-            for entry in std::fs::read_dir(host).map_err(error)? {
-                let entry = entry.map_err(error)?;
-                let name = entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| IoError::Fault(1))?;
-                let ancestry = parents.clone();
-                // Classify first; O_PATH never invokes a device/FIFO's open hook.
-                // The resolver also fstatat's every component before pinning it.
-                let (child, mut ancestry) = resolve_beneath(ancestry, &name, libc::O_PATH, 0)?;
-                let rel = if prefix.is_empty() {
-                    name
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                let meta = child.metadata().map_err(error)?;
-                if meta.is_dir() {
-                    // Only active ancestors count: aliases to an ordinary subtree
-                    // are followed independently, but links back to an ancestor fail.
-                    let identity = (meta.dev(), meta.ino());
-                    if visited.contains(&identity) {
-                        return Err(IoError::Fault(1));
-                    }
-                    let mut visited = visited.clone();
-                    visited.push(identity);
-                    dirs.push(if root.is_empty() {
-                        rel.clone()
-                    } else {
-                        format!("{root}/{rel}")
-                    });
-                    ancestry.push(Rc::new(child));
-                    work.push((ancestry, rel, visited));
-                } else if meta.is_file() {
-                    files.push(rel);
-                } else {
-                    return Err(IoError::Fault(1));
-                }
-            }
-        }
-        files.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-        dirs.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-        Ok((files, dirs))
     }
 }
 impl Disk {
@@ -2336,9 +2272,6 @@ impl Storage for Disk {
         }
         entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
         Ok(entries)
-    }
-    fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError> {
-        self.entries(root).map(|(f, _)| f)
     }
 }
 /// Every directory below pinned directory `root` (tree path `path`), each pinned, without

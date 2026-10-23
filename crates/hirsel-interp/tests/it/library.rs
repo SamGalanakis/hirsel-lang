@@ -298,9 +298,9 @@ fn confined_file_tree_all_operations_and_atomic_commit() {
         ),
         ok(Value::Unit)
     );
-    let walk = unok(h.value("file.walk", vec![dir.clone()]));
+    let mut walk = unok(h.value("file.walk", vec![dir.clone()]));
     assert_eq!(
-        collection::elements(&walk, BuiltinType::Iter).unwrap(),
+        drain_walk(&mut h, &mut walk),
         vec![ok(path("a.txt")), ok(path("sub/b.txt"))]
     );
     let narrow = unok(h.value("dir.narrow", vec![dir.clone(), path("sub")]));
@@ -806,11 +806,8 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
         h.value("file.read_bytes", vec![dir.clone(), path("keep")]),
         ok(Value::Bytes(b"old".to_vec()))
     );
-    let walk = unok(h.value("file.walk", vec![dir]));
-    assert_eq!(
-        collection::elements(&walk, BuiltinType::Iter).unwrap(),
-        vec![ok(path("keep"))]
-    );
+    let mut walk = unok(h.value("file.walk", vec![dir]));
+    assert_eq!(drain_walk(&mut h, &mut walk), vec![ok(path("keep"))]);
 }
 #[test]
 fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
@@ -1718,4 +1715,167 @@ fn output_bytes_capture_partial_fault_cancellation_and_replay() {
         live.library.simulation.events,
         replay.library.simulation.events
     );
+}
+
+fn drain_walk(h: &mut Harness, walk: &mut Value) -> Vec<Value> {
+    let mut items = vec![];
+    loop {
+        let OperationResult::Complete {
+            value, arguments, ..
+        } = h
+            .try_call(
+                "iter.next",
+                vec![walk.clone()],
+                TypeKind::Tuple(vec![].into()),
+            )
+            .unwrap()
+        else {
+            panic!("walk step")
+        };
+        *walk = arguments.into_iter().find(|(i, _)| *i == 0).unwrap().1;
+        match value {
+            Value::Variant { variant: 0, .. } => break,
+            Value::Variant {
+                variant: 1,
+                mut fields,
+            } => items.push(fields.pop().unwrap().unwrap()),
+            _ => panic!("walk option"),
+        }
+    }
+    items
+}
+
+#[test]
+fn walk_stream_generated_successes_equal_the_old_eager_sort_and_skip_empty_directories() {
+    for seed in 0..8 {
+        let mut files = BTreeMap::new();
+        for name in [
+            "a-", "a.c", "a/b-", "a/b.c", "a/b/d", "a0", "é/x", "中", "z",
+        ] {
+            files.insert(format!("{seed}/{name}"), vec![]);
+        }
+        files.insert(
+            format!("{}/leaf", "deep/".repeat(32).trim_end_matches('/')),
+            vec![],
+        );
+        let expected: Vec<_> = files.keys().map(|p| ok(path(p))).collect();
+        let mut h = Harness::new(SimulationConfig {
+            files,
+            directories: [String::new(), "empty".into()].into(),
+            ..Default::default()
+        });
+        let io = h.root("Io");
+        let dir = unok(h.value("io.dir", vec![io, path("")]));
+        let mut walk = unok(h.value("file.walk", vec![dir]));
+        assert_eq!(drain_walk(&mut h, &mut walk), expected);
+    }
+}
+#[test]
+fn walk_stream_symlink_cycles_are_entries_and_targets_are_never_resolved() {
+    let mut h = Harness::new(SimulationConfig {
+        files: [("real/leaf".into(), vec![])].into(),
+        links: [
+            ("alias".into(), "real".into()),
+            ("a".into(), "b".into()),
+            ("b".into(), "a".into()),
+            ("self".into(), ".".into()),
+            ("escape".into(), "../outside".into()),
+        ]
+        .into(),
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let dir = unok(h.value("io.dir", vec![io, path("")]));
+    let mut walk = unok(h.value("file.walk", vec![dir]));
+    assert_eq!(
+        drain_walk(&mut h, &mut walk),
+        ["a", "alias", "b", "escape", "real/leaf", "self"].map(|p| ok(path(p)))
+    );
+}
+#[test]
+fn walk_stream_descendant_error_is_late_and_fused_while_root_error_is_outer() {
+    let mut h = Harness::new(SimulationConfig {
+        files: [("a".into(), vec![]), ("z/leaf".into(), vec![])].into(),
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let dir = unok(h.value("io.dir", vec![io, path("")]));
+    let mut walk = unok(h.value("file.walk", vec![dir.clone()]));
+    h.library.simulation.config.faults.insert(
+        "file.read_dir".into(),
+        [Fault::File {
+            error: simulation::FileError::PermissionDenied,
+            partial: 0,
+        }]
+        .into(),
+    );
+    let items = drain_walk(&mut h, &mut walk);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], ok(path("a")));
+    assert!(matches!(items[1], Value::Variant { variant: 1, .. }));
+    assert!(drain_walk(&mut h, &mut walk).is_empty());
+    h.library.simulation.config.faults.insert(
+        "file.walk".into(),
+        [Fault::File {
+            error: simulation::FileError::PermissionDenied,
+            partial: 0,
+        }]
+        .into(),
+    );
+    assert!(matches!(
+        h.value("file.walk", vec![dir]),
+        Value::Variant { variant: 1, .. }
+    ));
+}
+
+#[test]
+fn walk_stream_replay_refusal_preserves_cursor_faults_and_prior_events() {
+    let config = SimulationConfig {
+        files: [("z/leaf".into(), vec![])].into(),
+        faults: [(
+            "file.read_dir".into(),
+            [Fault::File {
+                error: simulation::FileError::PermissionDenied,
+                partial: 0,
+            }]
+            .into(),
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let mut live = Harness::new(config.clone());
+    let io = live.root("Io");
+    let dir = unok(live.value("io.dir", vec![io, path("")]));
+    let mut walk = unok(live.value("file.walk", vec![dir]));
+    let expected = drain_walk(&mut live, &mut walk);
+    let events = live.library.simulation.events.clone();
+    for forged in [false, true] {
+        let mut replay = Harness::new(config.clone());
+        replay.run.inputs = events.clone();
+        if forged {
+            replay.run.inputs.last_mut().unwrap().output.push(255);
+        }
+        replay.library = Library::new(&replay.run, config.clone()).unwrap();
+        let io = replay.root("Io");
+        let dir = unok(replay.value("io.dir", vec![io, path("")]));
+        let mut walk = unok(replay.value("file.walk", vec![dir]));
+        if forged {
+            let prior = replay.library.simulation.events.clone();
+            let faults = replay.library.simulation.config.faults.clone();
+            assert!(
+                replay
+                    .try_call(
+                        "iter.next",
+                        vec![walk.clone()],
+                        TypeKind::Tuple(vec![].into())
+                    )
+                    .is_err()
+            );
+            assert_eq!(replay.library.simulation.events, prior);
+            assert_eq!(replay.library.simulation.config.faults, faults);
+        } else {
+            assert_eq!(drain_walk(&mut replay, &mut walk), expected);
+            replay.library.simulation.finish_replay().unwrap();
+        }
+    }
 }

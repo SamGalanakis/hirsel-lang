@@ -64,7 +64,6 @@ pub(crate) fn fields(
             | Completion::Random(_)
             | Completion::Signal(_)
             | Completion::Checked(_)
-            | Completion::Paths(_)
             | Completion::Entries(_)
             | Completion::Metadata(_)
             | Completion::Addresses(_)

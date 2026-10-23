@@ -635,8 +635,6 @@ mod payload_tests {
             Completion::Signal(Err(SignalError::Canceled(9))),
             Completion::Checked(true),
             Completion::Checked(false),
-            Completion::Paths(Ok(vec!["a/λ".into(), "b".into()])),
-            Completion::Paths(Err(IoError::PermissionDenied)),
             Completion::Entries(Ok(vec![DirEntry {
                 path: "a/λ".into(),
                 kind: FileKind::Regular,

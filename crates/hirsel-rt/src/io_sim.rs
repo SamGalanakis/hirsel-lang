@@ -778,16 +778,37 @@ impl Storage for MemoryTree<'_> {
     }
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
         self.directory(path, 0)?;
-        let children: std::collections::BTreeSet<_> = self
-            .tree
-            .directories
-            .iter()
-            .chain(self.tree.files.keys())
-            .chain(self.tree.links.keys())
-            .chain(self.tree.metadata.keys())
-            .filter(|p| !p.is_empty() && p.rsplit_once('/').map_or("", |(p, _)| p) == path)
-            .cloned()
+        let mut children: std::collections::BTreeSet<_> =
+            hirsel_kernels::walk::direct_children(path, |bound| {
+                self.tree
+                    .directories
+                    .range(bound.to_owned()..)
+                    .next()
+                    .cloned()
+            })
+            .into_iter()
             .collect();
+        children.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+            self.tree
+                .files
+                .range(bound.to_owned()..)
+                .next()
+                .map(|(p, _)| p.clone())
+        }));
+        children.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+            self.tree
+                .links
+                .range(bound.to_owned()..)
+                .next()
+                .map(|(p, _)| p.clone())
+        }));
+        children.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+            self.tree
+                .metadata
+                .range(bound.to_owned()..)
+                .next()
+                .map(|(p, _)| p.clone())
+        }));
         children
             .into_iter()
             .map(|path| {
@@ -1065,19 +1086,6 @@ impl Storage for MemoryTree<'_> {
         self.identities.prepared.remove(from);
         self.sync_aliases();
         Ok(())
-    }
-    fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError> {
-        let prefix = if root.is_empty() {
-            String::new()
-        } else {
-            format!("{root}/")
-        };
-        Ok(self
-            .tree
-            .files
-            .keys()
-            .filter_map(|p| p.strip_prefix(&prefix).map(str::to_owned))
-            .collect())
     }
 }
 
@@ -1445,51 +1453,6 @@ impl Storage for LinkedTree<'_> {
         self.memory().rename(&from, &to)?;
         self.tree.links.remove(&to);
         Ok(())
-    }
-    fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError> {
-        let root = self.path(root, true)?;
-        if self.detached() {
-            return Ok(vec![]);
-        }
-        let mut pending = vec![(root.clone(), String::new(), vec![root.clone()])];
-        let mut files = vec![];
-        while let Some((directory, prefix, visited)) = pending.pop() {
-            let children: std::collections::BTreeSet<_> = self
-                .tree
-                .directories
-                .iter()
-                .chain(self.tree.files.keys())
-                .chain(self.tree.links.keys())
-                .filter_map(|p| {
-                    let (parent, name) = p.rsplit_once('/').unwrap_or(("", p));
-                    (parent == directory && !name.is_empty()).then(|| name.to_owned())
-                })
-                .collect();
-            for name in children {
-                // The traversal's physical ancestry remains distinct from its
-                // logical alias path, as it does in the confined host walker.
-                let relative = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                let path = self.tree.resolve(&root, &relative, true)?;
-                if self.tree.directories.contains(&path) {
-                    if visited.contains(&path) {
-                        return Err(IoError::Fault(1));
-                    }
-                    let mut visited = visited.clone();
-                    visited.push(path.clone());
-                    pending.push((path, relative, visited));
-                } else if self.tree.files.contains_key(&path) {
-                    files.push(relative);
-                } else {
-                    return Err(IoError::Fault(1));
-                }
-            }
-        }
-        files.sort();
-        Ok(files)
     }
 }
 

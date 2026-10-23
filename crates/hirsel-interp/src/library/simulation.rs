@@ -928,54 +928,31 @@ impl Simulation {
         };
         self.resolve_in(tree, directory, root, local, follow_leaf)
     }
-    pub(crate) fn walk_paths(
+    pub(crate) fn walk_entries(
         &self,
         tree: u64,
         directory: u64,
-        logical_root: &str,
-    ) -> Result<Vec<String>, FileError> {
-        let root = self.resolve_in(tree, directory, logical_root, "", true)?;
+        root: &str,
+        local: &str,
+    ) -> Result<Vec<hirsel_kernels::walk::Entry>, FileError> {
+        let physical = self.resolve_in(tree, directory, root, local, true)?;
         if self.detached_directories.contains(&directory) {
             return Ok(vec![]);
         }
-        let mut work = vec![(root.clone(), String::new(), vec![root.clone()])];
-        let mut result = Vec::new();
-        while let Some((physical, logical, ancestry)) = work.pop() {
-            let mut children = BTreeSet::new();
-            for p in self.trees[&tree]
-                .0
-                .iter()
-                .chain(self.trees[&tree].1.keys())
-                .chain(self.config.links.keys().filter(|_| tree == 0))
-            {
-                let (parent, name) = p.rsplit_once('/').unwrap_or(("", p));
-                if parent == physical && !name.is_empty() {
-                    children.insert(name.to_owned());
-                }
-            }
-            for child in children {
-                let relative = if logical.is_empty() {
-                    child
-                } else {
-                    format!("{logical}/{child}")
-                };
-                let resolved = self.resolve_path(tree, &root, &relative, true)?;
-                if self.trees[&tree].0.contains(&resolved) {
-                    if ancestry.contains(&resolved) {
-                        return Err(FileError::Fault(self.config.invalid_path_code));
-                    }
-                    let mut ancestry = ancestry.clone();
-                    ancestry.push(resolved.clone());
-                    work.push((resolved, relative, ancestry));
-                } else if self.trees[&tree].1.contains_key(&resolved) {
-                    result.push(relative);
-                } else {
-                    return Err(FileError::Fault(self.config.invalid_path_code));
-                }
-            }
-        }
-        result.sort();
-        Ok(result)
+        self.children(tree, &physical)?
+            .into_iter()
+            .map(|p| {
+                let name = p.rsplit_once('/').map_or(p.as_str(), |(_, n)| n);
+                Ok(hirsel_kernels::walk::Entry {
+                    path: if local.is_empty() {
+                        name.into()
+                    } else {
+                        format!("{local}/{name}")
+                    },
+                    kind: self.metadata(tree, &p)?.kind,
+                })
+            })
+            .collect()
     }
     pub fn grant_root(&mut self, name: &str) -> Result<Value, Error> {
         if !matches!(name, "Io" | "Args" | "Env" | "Unsafe" | "Test")

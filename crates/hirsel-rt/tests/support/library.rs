@@ -73,14 +73,41 @@ impl<A: Adapter> Library<A> {
         OptionalFile,
         |v: Option<u64>| v.map(File)
     );
-    typed!(
-        walk(directory: Dir) -> Result<Vec<String>, IoError>,
-        Request::Walk {
-            directory: directory.0
-        },
-        Paths,
-        |v| v
-    );
+    pub fn walk(&mut self, directory: Dir) -> Result<Result<Vec<String>, IoError>, AdapterError> {
+        let mut walk = hirsel_rt::kernels::walk::Walk::default();
+        let mut next = Some(String::new());
+        let mut paths = vec![];
+        loop {
+            if let Some(path) = next.take() {
+                let Completion::Entries(entries) = self.0.call(Request::ReadDir {
+                    directory: directory.0,
+                    path,
+                })?
+                else {
+                    panic!("read_dir completion")
+                };
+                let entries = match entries {
+                    Ok(entries) => entries,
+                    Err(error) => return Ok(Err(error)),
+                };
+                walk.push(
+                    entries
+                        .into_iter()
+                        .map(|e| hirsel_rt::kernels::walk::Entry {
+                            path: e.path,
+                            kind: e.kind as u32,
+                        })
+                        .collect(),
+                );
+            }
+            match walk.next_entry() {
+                Some(entry) if entry.kind == 1 => next = Some(entry.path),
+                Some(entry) if matches!(entry.kind, 0 | 2) => paths.push(entry.path),
+                Some(_) => return Ok(Err(IoError::Fault(1))),
+                None => return Ok(Ok(paths)),
+            }
+        }
+    }
     typed!(
         size(directory: Dir, path: &str) -> Result<u64, IoError>,
         Request::Size {

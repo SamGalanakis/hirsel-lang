@@ -54,7 +54,7 @@ impl super::Simulation {
             }
         }
     }
-    fn metadata(&self, tree: u64, path: &str) -> Result<FileMetadata, FileError> {
+    pub(super) fn metadata(&self, tree: u64, path: &str) -> Result<FileMetadata, FileError> {
         if tree == 0
             && let Some(meta) = self.config.metadata.get(path)
         {
@@ -87,20 +87,39 @@ impl super::Simulation {
             modified_unix_ns: None,
         })
     }
-    fn children(&self, tree: u64, path: &str) -> Result<Vec<String>, FileError> {
+    pub(super) fn children(&self, tree: u64, path: &str) -> Result<Vec<String>, FileError> {
         if self.metadata(tree, path)?.kind != 1 {
             return Err(FileError::NotDirectory);
         }
         let (dirs, files) = &self.trees[&tree];
-        let mut paths: BTreeSet<_> = dirs.iter().chain(files.keys()).cloned().collect();
+        let mut paths: BTreeSet<_> = hirsel_kernels::walk::direct_children(path, |bound| {
+            dirs.range(bound.to_owned()..).next().cloned()
+        })
+        .into_iter()
+        .collect();
+        paths.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+            files
+                .range(bound.to_owned()..)
+                .next()
+                .map(|(p, _)| p.clone())
+        }));
         if tree == 0 {
-            paths.extend(self.config.links.keys().cloned());
-            paths.extend(self.config.metadata.keys().cloned());
+            paths.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+                self.config
+                    .links
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            }));
+            paths.extend(hirsel_kernels::walk::direct_children(path, |bound| {
+                self.config
+                    .metadata
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            }));
         }
-        Ok(paths
-            .into_iter()
-            .filter(|p| !p.is_empty() && p.rsplit_once('/').map_or("", |(p, _)| p) == path)
-            .collect())
+        Ok(paths.into_iter().collect())
     }
     pub(super) fn remove_tree(
         &mut self,

@@ -23,6 +23,7 @@ pub mod race;
 mod root_trace;
 mod shared;
 mod slots;
+pub mod walk;
 
 mod cursors;
 

@@ -375,7 +375,6 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 bytes,
             } => format!("file_append {directory} {file} {}", hex(bytes)),
             Request::NarrowFile { directory, file } => format!("narrow_file {directory} {file}"),
-            Request::Walk { directory } => format!("walk {directory}"),
             Request::ReadDir { directory, path } => {
                 format!("read_dir {directory} {}", hex(path.as_bytes()))
             }
@@ -497,14 +496,6 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Completion::Unit(v) => format!("unit {}", outcome(v, |()| "".into())),
             Completion::Size(v) => format!("size {}", outcome(v, u64::to_string)),
             Completion::Bytes(v) => format!("bytes {}", outcome(v, |b| hex(b))),
-            Completion::Paths(v) => format!(
-                "paths {}",
-                outcome(v, |paths| paths
-                    .iter()
-                    .map(|p| hex(p.as_bytes()))
-                    .collect::<Vec<_>>()
-                    .join(","))
-            ),
             Completion::Metadata(v) => format!("metadata {}", outcome(v, render_metadata)),
             Completion::Entries(v) => format!(
                 "entries {}",
@@ -717,9 +708,12 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     directory: number(d)?,
                     file: number(f)?,
                 },
-                ["walk", d] => Request::Walk {
-                    directory: number(d)?,
-                },
+                ["walk", ..] => {
+                    return Err(
+                        "retired Request::Walk recording; re-record with streaming file.walk"
+                            .into(),
+                    );
+                }
                 ["read_dir", d, p] => Request::ReadDir {
                     directory: number(d)?,
                     path: string(p)?,
@@ -861,13 +855,6 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 })?),
                 ["size", r @ ..] => Completion::Size(result(r, number)?),
                 ["bytes", r @ ..] => Completion::Bytes(result(r, bytes)?),
-                ["paths", r @ ..] => Completion::Paths(result(r, |v| {
-                    if v.is_empty() {
-                        Ok(vec![])
-                    } else {
-                        v.split(',').map(string).collect()
-                    }
-                })?),
                 ["metadata", r @ ..] => Completion::Metadata(result(r, parse_metadata)?),
                 ["entries", r @ ..] => Completion::Entries(result(r, |v| {
                     if v.is_empty() {

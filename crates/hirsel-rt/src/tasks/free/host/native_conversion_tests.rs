@@ -20,7 +20,7 @@ impl ConcurrentAdapter for Payloads {
     fn keys(&self, request: &Request) -> KeySet {
         KeySet::new(match request {
             Request::Net { .. } => vec![(ROOT, Mode::Shared)],
-            Request::Directory { .. } | Request::ReadDir { .. } | Request::Walk { .. } => {
+            Request::Directory { .. } | Request::ReadDir { .. } => {
                 vec![(NAMESPACE, Mode::Shared)]
             }
             Request::Resolve { .. } => vec![(Key(7), Mode::Shared)],
@@ -64,7 +64,6 @@ impl ConcurrentAdapter for Payloads {
                 path: "data".into(),
                 kind: crate::io::FileKind::Regular,
             }])),
-            Request::Walk { .. } => Completion::Paths(Ok(vec!["z".into(), "a".into()])),
             _ => panic!("unexpected conversion request"),
         })
     }
@@ -327,7 +326,7 @@ fn native_walk_conversion_sorts_paths_and_preserves_the_iterator_layout() {
                 let out = out.assume_init();
                 assert_eq!(out.tag, 0);
                 let environment = out.value.environment;
-                for expected in [Some("a"), Some("z"), None] {
+                for expected in [Some("data"), None] {
                     let mut step = crate::io::WalkOption::default();
                     assert_eq!(
                         crate::io::hirsel_rt_v2_file_walk_step(

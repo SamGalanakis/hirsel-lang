@@ -338,7 +338,6 @@ impl Registry {
             | R::NarrowDir { .. }
             | R::ReadOnlyDir { .. }
             | R::Open { .. }
-            | R::Walk { .. }
             | R::ReadDir { .. }
             | R::Metadata { .. }
             | R::Size { .. }
