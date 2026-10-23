@@ -133,3 +133,19 @@ Cranelift. The original authoring errors above remain preserved; the closure
 recipe resolves the manual-context plumbing, not the intentional error-arm rule.
 
 Contextual-error guidance and these application rewrites landed in `ea29a8642f1a465689e71ebea18e6abfa740fd34`.
+
+## Relative-host diagnostic guidance resolved (round 24)
+
+Landed in `231d4880e4e6acd59b4da5d1f95ea7c02156f363`. The historical relative-host refusal above is retained.
+A missing relative host now keeps `kind:"invalid"`, `field:"io.dirs.host"` and
+the OS cause while naming the original host, grants-file directory and attempted
+resolved candidate. It explains that relative host paths resolve relative to
+the grants file. The checked-in `host:"fixtures"` and all grant/confinement
+semantics stay unchanged. See the
+[shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for a private bad/correct pair launched from another working directory.
+
+Focused shared-parser/CLI tests cover the diagnostic, cwd independence,
+relocation, nested runner mounts, escaped paths and authority controls. This
+resolution does not claim that this example's native application matrix was
+rerun.
