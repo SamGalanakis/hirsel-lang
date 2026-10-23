@@ -1,0 +1,49 @@
+{
+  "seed": 2026102511,
+  "oracle": {
+    "project": "python/cpython",
+    "revision": "ebf955df7a89ed0c7968f79faec1de49f61ed7cb",
+    "version": "3.14.0 (main, Oct 23 2026, 08:23:33) [GCC 13.3.0]",
+    "ucd": "16.0.0",
+    "binary_sha256": "ca38f431989ad581ce522b82b497f533d73fcb3ef98609bc64c4bc6271abaf19",
+    "source_files": {
+      "Lib/test/test_str.py": "fb1df6f3c6eab3423a3d37ac70022349f9c695bc802ef619b6770573bad41cfb",
+      "Objects/unicodeobject.c": "cf6885efb5011a036d4741372cec22ef3945fb11abe01d8079917714a33addd0",
+      "Objects/unicodetype_db.h": "14ec556848551d98523554080f2d09f6d0a64c83854f43b92c51e10440af2134",
+      "Objects/unicodectype.c": "9d7a35ac40018ad087c5d2d15f8214d5831456947d858e5b5c0cd9d529e4ce61",
+      "Modules/unicodedata_db.h": "00a5ed9e602bb55e9f080333ac8cbc360352eea9de960eec69efdb0c3d68b110",
+      "Tools/unicode/makeunicodedata.py": "b48c83468d646a398278e1ea732a5c1290144daba55a846cd9fe84737ab15d4c",
+      "LICENSE": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+    }
+  },
+  "rust": {
+    "revision": "f6c1107f8be13e48465e12c0fd26e6a39fe18e4f",
+    "source_sha256": "1168c078bb4df7f9a72e502c781126760355c6a6057fcc7bd2fb5ca90022ad7d",
+    "vectors": "library/alloctests/tests/str.rs:1864-1899",
+    "role": "fixed golden structure only; Unicode 18 tables are never used"
+  },
+  "ucd": {
+    "UnicodeData.txt": "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f",
+    "SpecialCasing.txt": "8d5de354eef79f2395a54c9c7dcebbaf3d30fc962d0f85611ea97aa973a0c451",
+    "CaseFolding.txt": "6f1f9c588eb4a5c718d9e8f93b782685e5c7fec872cf05e8e6878053599e09bb",
+    "DerivedCoreProperties.txt": "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd"
+  },
+  "counts": {
+    "strings": 128,
+    "equality_pairs": 32,
+    "golden_assertions": 57,
+    "slices": 8,
+    "operation_engine_cells": 1664
+  },
+  "deviations": [],
+  "dispositions": {
+    "identical": "All raw oracle results retained separately from identical expected results; no tailoring or normalization."
+  },
+  "spec": {
+    "path": "docs/spec/std-library.md",
+    "casing": "Upper/lower combine UnicodeData simple mappings with all unconditional SpecialCasing mappings, including one-to-many expansions. Lowercase also applies Final_Sigma: U+03A3 maps to U+03C2 when preceded by a Cased character and not followed by a Cased character, ignoring Case_Ignorable characters on both sides; otherwise it maps to U+03C3. Context comes from the original input slice. These functions have no locale tailoring.",
+    "folding": "`casefold` applies the full default CaseFolding C+F mappings, excluding simple-only and Turkic mappings. `eq_ignore_case(a, b)` is `casefold(a) == casefold(b)`. Neither operation normalizes: `Stra\u00dfe` and `STRASSE` compare equal, while precomposed `\u00e9` and decomposed `e\\u{301}` require explicit normalization."
+  },
+  "boundary_exception": "Two fixed Rust ASCII-prefix witnesses have 17/18 total scalars (16/17 ASCII plus sigma); all other strings have 0\u201316. These are the explicitly required prefix boundaries, not added random scope.",
+  "vectors_sha256": "29950743d6503b9bdc43027c03cccd1e0317206c0a5f87f01bcc87fee103c3df"
+}

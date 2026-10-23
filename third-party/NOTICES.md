@@ -1692,3 +1692,15 @@ ports `unicode-rs/unicode-normalization` `src/test.rs:19-118` goldens at
 Copyright (c) 2015 The Rust Project Developers; MIT, full text above.
 Selected Unicode16 `NormalizationTest.txt` identities retain original row and
 column IDs under the Unicode license in `stdlib/unicode16/LICENSE.txt`.
+
+Unicode casing upstream fixtures: `crates/hirsel-driver/tests/fixtures/unicode-case-upstream-25/`
+adapts contextual Final_Sigma vectors from Rust `library/alloctests/tests/str.rs:1864-1899`
+at `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` (Copyright The Rust Project
+Developers, MIT, license above), and lower/upper/casefold vectors from CPython
+`Lib/test/test_str.py:892-938` at `ebf955df7a89ed0c7968f79faec1de49f61ed7cb`
+(Copyright (c) 2001 Python Software Foundation; All Rights Reserved,
+PSF-2.0 license above). The independent generated expectations use that CPython
+release's Unicode 16.0.0 mappings. Unicode data licensing remains in
+`stdlib/unicode16/LICENSE.txt`. The fixture provenance describes the local-slice,
+locale-independent full casing and default folding contract; no semantic
+adaptation of the upstream answers is applied.

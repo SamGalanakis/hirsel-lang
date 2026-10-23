@@ -1,0 +1,4698 @@
+[
+  {
+    "text": "",
+    "origins": [
+      "rust:str.rs:1865",
+      "seeded:length-0"
+    ],
+    "id": "case-000",
+    "kind": "casing",
+    "input_hex": "",
+    "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "",
+      "lower": "",
+      "casefold": ""
+    },
+    "expected": {
+      "upper": "",
+      "lower": "",
+      "casefold": ""
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "lower": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "casefold": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "text": "A\u00c9\u01c5a\u00e9 ",
+    "origins": [
+      "rust:str.rs:1866"
+    ],
+    "id": "case-001",
+    "kind": "casing",
+    "input_hex": "41c389c78561c3a920",
+    "input_sha256": "c9c0448621eee0c6e5818e078daf4bc5b5ca14b3fd5c5db48fb0fb1c00fe2883",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u00c9\u01c4A\u00c9 ",
+      "lower": "a\u00e9\u01c6a\u00e9 ",
+      "casefold": "a\u00e9\u01c6a\u00e9 "
+    },
+    "expected": {
+      "upper": "A\u00c9\u01c4A\u00c9 ",
+      "lower": "a\u00e9\u01c6a\u00e9 ",
+      "casefold": "a\u00e9\u01c6a\u00e9 "
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "17fb15aff1c9cc7bb30b50b9c2084cabca5ac2319a0ccd4d34f8390bf0459436",
+      "lower": "8f676304cf98c35b3f68ff8bf6a39ed1aed0a4109d1fec5b10ce4069ed4cd964",
+      "casefold": "8f676304cf98c35b3f68ff8bf6a39ed1aed0a4109d1fec5b10ce4069ed4cd964"
+    }
+  },
+  {
+    "text": "\u0391\u03a3",
+    "origins": [
+      "rust:str.rs:1869"
+    ],
+    "id": "case-002",
+    "kind": "casing",
+    "input_hex": "ce91cea3",
+    "input_sha256": "d39c5384d4fa6736f164ec2e8b64f3901157474d0e0ced963d59e17327f08be9",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3",
+      "lower": "\u03b1\u03c2",
+      "casefold": "\u03b1\u03c3"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3",
+      "lower": "\u03b1\u03c2",
+      "casefold": "\u03b1\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d39c5384d4fa6736f164ec2e8b64f3901157474d0e0ced963d59e17327f08be9",
+      "lower": "aa3d98ae3da0cad0af2e5fd13271d47c4687edea23e9cb91eee8e89cc565d8d9",
+      "casefold": "5794db746cadd92223b9bf1e257842dfd0444ed8c4e2e5d6a6bfeac6cfb388cd"
+    }
+  },
+  {
+    "text": "\u0391'\u03a3",
+    "origins": [
+      "rust:str.rs:1870"
+    ],
+    "id": "case-003",
+    "kind": "casing",
+    "input_hex": "ce9127cea3",
+    "input_sha256": "1155db7e1fc57902b487f45699d678f31f9a8d44323331e5123e35f6382948cf",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391'\u03a3",
+      "lower": "\u03b1'\u03c2",
+      "casefold": "\u03b1'\u03c3"
+    },
+    "expected": {
+      "upper": "\u0391'\u03a3",
+      "lower": "\u03b1'\u03c2",
+      "casefold": "\u03b1'\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "1155db7e1fc57902b487f45699d678f31f9a8d44323331e5123e35f6382948cf",
+      "lower": "0d146f4532a029d7c725a6e2d3ee23b64963c45c2d388089813db5e8705661b3",
+      "casefold": "dfec4766a1fc11dffbaf8b999419af154403df99861d9b00f27e261907a597b4"
+    }
+  },
+  {
+    "text": "\u0391''\u03a3",
+    "origins": [
+      "rust:str.rs:1871"
+    ],
+    "id": "case-004",
+    "kind": "casing",
+    "input_hex": "ce912727cea3",
+    "input_sha256": "c55329ebf777a384f419f85b0c9fabd6838269bf4fcf51239c7d091bc5fae650",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391''\u03a3",
+      "lower": "\u03b1''\u03c2",
+      "casefold": "\u03b1''\u03c3"
+    },
+    "expected": {
+      "upper": "\u0391''\u03a3",
+      "lower": "\u03b1''\u03c2",
+      "casefold": "\u03b1''\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c55329ebf777a384f419f85b0c9fabd6838269bf4fcf51239c7d091bc5fae650",
+      "lower": "efa340748aae4b17391105f1b6d16a7d2adb8a4920669c246480aae016a5b6ae",
+      "casefold": "56925a4e1995ebf480e246fbedff6db4250039c50f18974f7e814f3175a794ff"
+    }
+  },
+  {
+    "text": "\u0391\u03a3 \u0391",
+    "origins": [
+      "rust:str.rs:1873"
+    ],
+    "id": "case-005",
+    "kind": "casing",
+    "input_hex": "ce91cea320ce91",
+    "input_sha256": "23d645f2881a71a8e404dfe79d818dc171cab7a2bc2449f1b0679be74746b223",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3 \u0391",
+      "lower": "\u03b1\u03c2 \u03b1",
+      "casefold": "\u03b1\u03c3 \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3 \u0391",
+      "lower": "\u03b1\u03c2 \u03b1",
+      "casefold": "\u03b1\u03c3 \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "23d645f2881a71a8e404dfe79d818dc171cab7a2bc2449f1b0679be74746b223",
+      "lower": "6a936d443e16faaf40016a8d85b06b3a608e0327c4eac262c8fe4f8fc842c3f2",
+      "casefold": "18070e8aa0cad57c9bd9339d502aa17e67ff3d00268fc2e00456cbd2c13e37ec"
+    }
+  },
+  {
+    "text": "\u0391'\u03a3 \u0391",
+    "origins": [
+      "rust:str.rs:1874"
+    ],
+    "id": "case-006",
+    "kind": "casing",
+    "input_hex": "ce9127cea320ce91",
+    "input_sha256": "9d4ec83ca0aa4a0cfd4f9295f4882d072a8d372b0b89acbe33a6e87b2440585d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391'\u03a3 \u0391",
+      "lower": "\u03b1'\u03c2 \u03b1",
+      "casefold": "\u03b1'\u03c3 \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391'\u03a3 \u0391",
+      "lower": "\u03b1'\u03c2 \u03b1",
+      "casefold": "\u03b1'\u03c3 \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "9d4ec83ca0aa4a0cfd4f9295f4882d072a8d372b0b89acbe33a6e87b2440585d",
+      "lower": "f09cc6b725949e72228145bb5c06c168d442aa160abcdedc181637a10d0c0855",
+      "casefold": "001f48bdec1da592bf5085451244e44d8a433b66bdb29cd3958acd10e9ba350f"
+    }
+  },
+  {
+    "text": "\u0391''\u03a3 \u0391",
+    "origins": [
+      "rust:str.rs:1875"
+    ],
+    "id": "case-007",
+    "kind": "casing",
+    "input_hex": "ce912727cea320ce91",
+    "input_sha256": "7415f328ae1de96a3e527d8f329da49291098a5148b68882cdd96d08d67c25cf",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391''\u03a3 \u0391",
+      "lower": "\u03b1''\u03c2 \u03b1",
+      "casefold": "\u03b1''\u03c3 \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391''\u03a3 \u0391",
+      "lower": "\u03b1''\u03c2 \u03b1",
+      "casefold": "\u03b1''\u03c3 \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7415f328ae1de96a3e527d8f329da49291098a5148b68882cdd96d08d67c25cf",
+      "lower": "a923c84c01afb0185645dceef691866ca235f7e3044d4bc2be41e1f4a3e75c18",
+      "casefold": "ccf04cda5b1477b5800280694203044b1167eca0a846fc2bec58bb8fa6880491"
+    }
+  },
+  {
+    "text": "\u0391\u03a3' \u0391",
+    "origins": [
+      "rust:str.rs:1877"
+    ],
+    "id": "case-008",
+    "kind": "casing",
+    "input_hex": "ce91cea32720ce91",
+    "input_sha256": "969f7666e2a8a4bd979d4335f09a89a150c9ca15a7931dc8900052444a4cd320",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3' \u0391",
+      "lower": "\u03b1\u03c2' \u03b1",
+      "casefold": "\u03b1\u03c3' \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3' \u0391",
+      "lower": "\u03b1\u03c2' \u03b1",
+      "casefold": "\u03b1\u03c3' \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "969f7666e2a8a4bd979d4335f09a89a150c9ca15a7931dc8900052444a4cd320",
+      "lower": "110676d0c0d8b3c559e9acfa6c64b36b6c9dc65a4661cf4b42fa9eca7a2ad74a",
+      "casefold": "a4980987bed7ff40738d1717732e3b9611d4b372d24d33b50f3ab4d7da14b0f9"
+    }
+  },
+  {
+    "text": "\u0391\u03a3'' \u0391",
+    "origins": [
+      "rust:str.rs:1878"
+    ],
+    "id": "case-009",
+    "kind": "casing",
+    "input_hex": "ce91cea3272720ce91",
+    "input_sha256": "e88635f087e0243000cae046074c5c35d4dcbb0ff1b839245640bae38c089733",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3'' \u0391",
+      "lower": "\u03b1\u03c2'' \u03b1",
+      "casefold": "\u03b1\u03c3'' \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3'' \u0391",
+      "lower": "\u03b1\u03c2'' \u03b1",
+      "casefold": "\u03b1\u03c3'' \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "e88635f087e0243000cae046074c5c35d4dcbb0ff1b839245640bae38c089733",
+      "lower": "b96453c558d33eb5e177f15b13c42fe4d0d089ce482be71f0463ec4399d6f7e8",
+      "casefold": "f628d4e9b68e49897408a59217acc52c0054d25ac6d6835d63efcc0445757af2"
+    }
+  },
+  {
+    "text": "\u0391'\u03a3' \u0391",
+    "origins": [
+      "rust:str.rs:1880"
+    ],
+    "id": "case-010",
+    "kind": "casing",
+    "input_hex": "ce9127cea32720ce91",
+    "input_sha256": "52a6a6b4b81a5229ced05778c8a3f72fb4980e34f0a49d644ecb54a9f8623244",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391'\u03a3' \u0391",
+      "lower": "\u03b1'\u03c2' \u03b1",
+      "casefold": "\u03b1'\u03c3' \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391'\u03a3' \u0391",
+      "lower": "\u03b1'\u03c2' \u03b1",
+      "casefold": "\u03b1'\u03c3' \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "52a6a6b4b81a5229ced05778c8a3f72fb4980e34f0a49d644ecb54a9f8623244",
+      "lower": "523b9fcc2986f499dcd28f9c29272a7521d901564ac8564ef78b9356809c700f",
+      "casefold": "f95806ad03233b3473ffd6ca97a968cd78791911cdc31418d0a17af7eb9ea5a9"
+    }
+  },
+  {
+    "text": "\u0391''\u03a3'' \u0391",
+    "origins": [
+      "rust:str.rs:1881"
+    ],
+    "id": "case-011",
+    "kind": "casing",
+    "input_hex": "ce912727cea3272720ce91",
+    "input_sha256": "09ccdd0fe09490785764f997c584be9d95a60b4f21bc111c90975a9f6d74e308",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391''\u03a3'' \u0391",
+      "lower": "\u03b1''\u03c2'' \u03b1",
+      "casefold": "\u03b1''\u03c3'' \u03b1"
+    },
+    "expected": {
+      "upper": "\u0391''\u03a3'' \u0391",
+      "lower": "\u03b1''\u03c2'' \u03b1",
+      "casefold": "\u03b1''\u03c3'' \u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "09ccdd0fe09490785764f997c584be9d95a60b4f21bc111c90975a9f6d74e308",
+      "lower": "8cf6f59077dc807933b5e623a4b36c6415d1b12b0a2134aa8bc4d94eefd93b62",
+      "casefold": "06fe17e21c6c296c5bc6fa4fac920ee309bda48164769c9c34c2a09602bef214"
+    }
+  },
+  {
+    "text": "\u0391 \u03a3",
+    "origins": [
+      "rust:str.rs:1883"
+    ],
+    "id": "case-012",
+    "kind": "casing",
+    "input_hex": "ce9120cea3",
+    "input_sha256": "6264ddd69e87168351986f2417010d3ddbdbe0bf12e5b26ee22c6ba7e174c249",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391 \u03a3",
+      "lower": "\u03b1 \u03c3",
+      "casefold": "\u03b1 \u03c3"
+    },
+    "expected": {
+      "upper": "\u0391 \u03a3",
+      "lower": "\u03b1 \u03c3",
+      "casefold": "\u03b1 \u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "6264ddd69e87168351986f2417010d3ddbdbe0bf12e5b26ee22c6ba7e174c249",
+      "lower": "7ad1eb77af1f198792603d1ddae22c94d76b02a70d9f9e293c053a64ddb6a409",
+      "casefold": "7ad1eb77af1f198792603d1ddae22c94d76b02a70d9f9e293c053a64ddb6a409"
+    }
+  },
+  {
+    "text": "\u0391 '\u03a3",
+    "origins": [
+      "rust:str.rs:1884"
+    ],
+    "id": "case-013",
+    "kind": "casing",
+    "input_hex": "ce912027cea3",
+    "input_sha256": "f779547430527e1aa513a1d0308aa8d5b42ee52e603d9548e62e5473e9f22f01",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391 '\u03a3",
+      "lower": "\u03b1 '\u03c3",
+      "casefold": "\u03b1 '\u03c3"
+    },
+    "expected": {
+      "upper": "\u0391 '\u03a3",
+      "lower": "\u03b1 '\u03c3",
+      "casefold": "\u03b1 '\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f779547430527e1aa513a1d0308aa8d5b42ee52e603d9548e62e5473e9f22f01",
+      "lower": "7511786bc8a89da82e2a91a60abfa5f083c87b1cc2aee45166a9b9edde7bdb14",
+      "casefold": "7511786bc8a89da82e2a91a60abfa5f083c87b1cc2aee45166a9b9edde7bdb14"
+    }
+  },
+  {
+    "text": "\u0391 ''\u03a3",
+    "origins": [
+      "rust:str.rs:1885"
+    ],
+    "id": "case-014",
+    "kind": "casing",
+    "input_hex": "ce91202727cea3",
+    "input_sha256": "c42e1200df280d95dae9e1b6664f3460a6da4515b0b78d96f52a07514ccb8196",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391 ''\u03a3",
+      "lower": "\u03b1 ''\u03c3",
+      "casefold": "\u03b1 ''\u03c3"
+    },
+    "expected": {
+      "upper": "\u0391 ''\u03a3",
+      "lower": "\u03b1 ''\u03c3",
+      "casefold": "\u03b1 ''\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c42e1200df280d95dae9e1b6664f3460a6da4515b0b78d96f52a07514ccb8196",
+      "lower": "83972d2842d0ce5fbe1cdd8e4d0ccd976fdf2767e6a669ee5b5acd0d676dfb1a",
+      "casefold": "83972d2842d0ce5fbe1cdd8e4d0ccd976fdf2767e6a669ee5b5acd0d676dfb1a"
+    }
+  },
+  {
+    "text": "\u03a3",
+    "origins": [
+      "rust:str.rs:1887",
+      "cpython:test_str.py:904",
+      "cpython:test_str.py:919",
+      "cpython:test_str.py:934"
+    ],
+    "id": "case-015",
+    "kind": "casing",
+    "input_hex": "cea3",
+    "input_sha256": "8cd5c75b003f49970f977a2511e5c6fb5040990319791b8cd2f0cc005a2a4b39",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3",
+      "lower": "\u03c3",
+      "casefold": "\u03c3"
+    },
+    "expected": {
+      "upper": "\u03a3",
+      "lower": "\u03c3",
+      "casefold": "\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8cd5c75b003f49970f977a2511e5c6fb5040990319791b8cd2f0cc005a2a4b39",
+      "lower": "ff59ed1e562b056aea9bfdf757bada8c1eb638b10b75bfc7835beca4c2db0360",
+      "casefold": "ff59ed1e562b056aea9bfdf757bada8c1eb638b10b75bfc7835beca4c2db0360"
+    }
+  },
+  {
+    "text": "'\u03a3",
+    "origins": [
+      "rust:str.rs:1888"
+    ],
+    "id": "case-016",
+    "kind": "casing",
+    "input_hex": "27cea3",
+    "input_sha256": "10bfe64ed7a4a1a25c2d52b467ac6740a097c5ab80da72644d8e12919e162fe6",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "'\u03a3",
+      "lower": "'\u03c3",
+      "casefold": "'\u03c3"
+    },
+    "expected": {
+      "upper": "'\u03a3",
+      "lower": "'\u03c3",
+      "casefold": "'\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "10bfe64ed7a4a1a25c2d52b467ac6740a097c5ab80da72644d8e12919e162fe6",
+      "lower": "ad17730ed5c236b6a1f400cb069853ce6439fa740fc095e392974b84fcd5cde2",
+      "casefold": "ad17730ed5c236b6a1f400cb069853ce6439fa740fc095e392974b84fcd5cde2"
+    }
+  },
+  {
+    "text": "''\u03a3",
+    "origins": [
+      "rust:str.rs:1889"
+    ],
+    "id": "case-017",
+    "kind": "casing",
+    "input_hex": "2727cea3",
+    "input_sha256": "657b1f2d49aeea210796979a5b70a75c12b31854a1dbd5d5beaaee16bff98b93",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "''\u03a3",
+      "lower": "''\u03c3",
+      "casefold": "''\u03c3"
+    },
+    "expected": {
+      "upper": "''\u03a3",
+      "lower": "''\u03c3",
+      "casefold": "''\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "657b1f2d49aeea210796979a5b70a75c12b31854a1dbd5d5beaaee16bff98b93",
+      "lower": "b33b15c6b8da845148633d7bb5ab2c8a5b875d078459ce050ca3f9dbd2f05fc9",
+      "casefold": "b33b15c6b8da845148633d7bb5ab2c8a5b875d078459ce050ca3f9dbd2f05fc9"
+    }
+  },
+  {
+    "text": "\u0391\u03a3\u0391",
+    "origins": [
+      "rust:str.rs:1891"
+    ],
+    "id": "case-018",
+    "kind": "casing",
+    "input_hex": "ce91cea3ce91",
+    "input_sha256": "82f3dd61e4bbd6f5cc3cb8a58b8193463a5ea3aa71ed9fad207d393b0762831c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3\u0391",
+      "lower": "\u03b1\u03c3\u03b1",
+      "casefold": "\u03b1\u03c3\u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3\u0391",
+      "lower": "\u03b1\u03c3\u03b1",
+      "casefold": "\u03b1\u03c3\u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "82f3dd61e4bbd6f5cc3cb8a58b8193463a5ea3aa71ed9fad207d393b0762831c",
+      "lower": "015c964f2d6639dfa1a0c5b3d7a633ce29e1a11f871b37003765548b13598501",
+      "casefold": "015c964f2d6639dfa1a0c5b3d7a633ce29e1a11f871b37003765548b13598501"
+    }
+  },
+  {
+    "text": "\u0391\u03a3'\u0391",
+    "origins": [
+      "rust:str.rs:1892"
+    ],
+    "id": "case-019",
+    "kind": "casing",
+    "input_hex": "ce91cea327ce91",
+    "input_sha256": "34c5bd8e06b1ffa1ecfcd8e6c81731c904a3f3d5717b30527afe9aa4badb91c4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3'\u0391",
+      "lower": "\u03b1\u03c3'\u03b1",
+      "casefold": "\u03b1\u03c3'\u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3'\u0391",
+      "lower": "\u03b1\u03c3'\u03b1",
+      "casefold": "\u03b1\u03c3'\u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "34c5bd8e06b1ffa1ecfcd8e6c81731c904a3f3d5717b30527afe9aa4badb91c4",
+      "lower": "41f6855c70dfdd2ec76c056951c933ec8ccdf5e919e4ee57188613c37868a3f1",
+      "casefold": "41f6855c70dfdd2ec76c056951c933ec8ccdf5e919e4ee57188613c37868a3f1"
+    }
+  },
+  {
+    "text": "\u0391\u03a3''\u0391",
+    "origins": [
+      "rust:str.rs:1893"
+    ],
+    "id": "case-020",
+    "kind": "casing",
+    "input_hex": "ce91cea32727ce91",
+    "input_sha256": "e0e1873444c87999c8c4e39c393b066fcd0fbebf0b55afc3342c873c742f647d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u03a3''\u0391",
+      "lower": "\u03b1\u03c3''\u03b1",
+      "casefold": "\u03b1\u03c3''\u03b1"
+    },
+    "expected": {
+      "upper": "\u0391\u03a3''\u0391",
+      "lower": "\u03b1\u03c3''\u03b1",
+      "casefold": "\u03b1\u03c3''\u03b1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "e0e1873444c87999c8c4e39c393b066fcd0fbebf0b55afc3342c873c742f647d",
+      "lower": "0df3c0dd540ea6e88597670f2062d2beeaa93dede09191ec805d95ccbf009cd4",
+      "casefold": "0df3c0dd540ea6e88597670f2062d2beeaa93dede09191ec805d95ccbf009cd4"
+    }
+  },
+  {
+    "text": "abcdefghijklmno\u03a3",
+    "origins": [
+      "rust:str.rs:1897"
+    ],
+    "id": "case-021",
+    "kind": "casing",
+    "input_hex": "6162636465666768696a6b6c6d6e6fcea3",
+    "input_sha256": "92e04f64f8fb24a393e148139d0f96fbec3835fbd3634377550869688bb67d4e",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ABCDEFGHIJKLMNO\u03a3",
+      "lower": "abcdefghijklmno\u03c2",
+      "casefold": "abcdefghijklmno\u03c3"
+    },
+    "expected": {
+      "upper": "ABCDEFGHIJKLMNO\u03a3",
+      "lower": "abcdefghijklmno\u03c2",
+      "casefold": "abcdefghijklmno\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d283dfefe3c7e248cc953141eb156471b8e2791b432404b596f76de7985f359a",
+      "lower": "1b2c5437564e8d302e59d61d6d09cf1f3107245bfd42b405bdad68286dddac4a",
+      "casefold": "964a5b43d391bd8fec07fa1862f24b3ea293e7f1e4658f4233485e389879c58e"
+    }
+  },
+  {
+    "text": "abcdefghijklmnop\u03a3",
+    "origins": [
+      "rust:str.rs:1898"
+    ],
+    "id": "case-022",
+    "kind": "casing",
+    "input_hex": "6162636465666768696a6b6c6d6e6f70cea3",
+    "input_sha256": "16c8574c6f3e93eaf63db4d38dd0c06272932fd84c765c7b1c6ae6ad47da1dc8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ABCDEFGHIJKLMNOP\u03a3",
+      "lower": "abcdefghijklmnop\u03c2",
+      "casefold": "abcdefghijklmnop\u03c3"
+    },
+    "expected": {
+      "upper": "ABCDEFGHIJKLMNOP\u03a3",
+      "lower": "abcdefghijklmnop\u03c2",
+      "casefold": "abcdefghijklmnop\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "a593650a13d3260c1dcdb4fdd734944ed46b5896771ea41fbe62229bb37fd83d",
+      "lower": "713178b6b17889ce3528e417c59fbe5893e18824332ed7b37d25cfafffc60280",
+      "casefold": "9e5b4be75d80f024cb2361766a7f15591cfb75913f80baee2d1081007745e6e9"
+    }
+  },
+  {
+    "text": "abcdefghijklmnopq\u03a3",
+    "origins": [
+      "rust:str.rs:1899"
+    ],
+    "id": "case-023",
+    "kind": "casing",
+    "input_hex": "6162636465666768696a6b6c6d6e6f7071cea3",
+    "input_sha256": "a9c2173b4cc202d2a53be1baaff587e798caddad3221405bd5c5e7d0e2c8b149",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ABCDEFGHIJKLMNOPQ\u03a3",
+      "lower": "abcdefghijklmnopq\u03c2",
+      "casefold": "abcdefghijklmnopq\u03c3"
+    },
+    "expected": {
+      "upper": "ABCDEFGHIJKLMNOPQ\u03a3",
+      "lower": "abcdefghijklmnopq\u03c2",
+      "casefold": "abcdefghijklmnopq\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "bab4d0d65c098dcd7d1b5fe08ac55e2588e0c5f11988b3d2bd47dca209ec79c6",
+      "lower": "12f9ad2c454d75900921623fd835a12d61f5b66f78d005f8ccb35b07eb855f5b",
+      "casefold": "3163f6ab41c3bf603f7c59e36b8a381dbbbfaefa46066f6869a555406602d9dd"
+    }
+  },
+  {
+    "text": "\ud801\udc27",
+    "origins": [
+      "cpython:test_str.py:894"
+    ],
+    "id": "case-024",
+    "kind": "casing",
+    "input_hex": "f09090a7",
+    "input_sha256": "1148076f625f207d4b62256dcbd443382022ecbbcdc452b8c5488a5134c891a0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud801\udc27",
+      "lower": "\ud801\udc4f",
+      "casefold": "\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "\ud801\udc27",
+      "lower": "\ud801\udc4f",
+      "casefold": "\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "1148076f625f207d4b62256dcbd443382022ecbbcdc452b8c5488a5134c891a0",
+      "lower": "9cbf0308eee24163693c755608e808eab3a63dbaaf72957f5f40ee81780268b6",
+      "casefold": "9cbf0308eee24163693c755608e808eab3a63dbaaf72957f5f40ee81780268b6"
+    }
+  },
+  {
+    "text": "\ud801\udc27\ud801\udc27",
+    "origins": [
+      "cpython:test_str.py:895"
+    ],
+    "id": "case-025",
+    "kind": "casing",
+    "input_hex": "f09090a7f09090a7",
+    "input_sha256": "7ff431617e57fe4c1b1233e4f3346ccb9cfe63f7b52b6d5c4539c5ab4da2275a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7ff431617e57fe4c1b1233e4f3346ccb9cfe63f7b52b6d5c4539c5ab4da2275a",
+      "lower": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23",
+      "casefold": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23"
+    }
+  },
+  {
+    "text": "\ud801\udc27\ud801\udc4f",
+    "origins": [
+      "cpython:test_str.py:897",
+      "cpython:test_str.py:928"
+    ],
+    "id": "case-026",
+    "kind": "casing",
+    "input_hex": "f09090a7f090918f",
+    "input_sha256": "15a78bc174939c418ab1ae0ba266ed10628c35fd0ffe96a609c92f4bc0b3dc8a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7ff431617e57fe4c1b1233e4f3346ccb9cfe63f7b52b6d5c4539c5ab4da2275a",
+      "lower": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23",
+      "casefold": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23"
+    }
+  },
+  {
+    "text": "X\ud801\udc27x\ud801\udc4f",
+    "origins": [
+      "cpython:test_str.py:899",
+      "cpython:test_str.py:930"
+    ],
+    "id": "case-027",
+    "kind": "casing",
+    "input_hex": "58f09090a778f090918f",
+    "input_sha256": "fd0baa70a3a3b6811000b812c1d9e03dd8e407a99d8e331c50516d3dfafd33e1",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "X\ud801\udc27X\ud801\udc27",
+      "lower": "x\ud801\udc4fx\ud801\udc4f",
+      "casefold": "x\ud801\udc4fx\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "X\ud801\udc27X\ud801\udc27",
+      "lower": "x\ud801\udc4fx\ud801\udc4f",
+      "casefold": "x\ud801\udc4fx\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "251a9a173aa48febc5815603dae5b83d02f26c1c3593f1b56e86ba0fac6f4f06",
+      "lower": "b67caaea0ab2756737d776221808a2e3b5cf7b40ad71a25e51c6ad928d21244e",
+      "casefold": "b67caaea0ab2756737d776221808a2e3b5cf7b40ad71a25e51c6ad928d21244e"
+    }
+  },
+  {
+    "text": "\ufb01",
+    "origins": [
+      "cpython:test_str.py:901",
+      "cpython:test_str.py:918",
+      "cpython:test_str.py:932"
+    ],
+    "id": "case-028",
+    "kind": "casing",
+    "input_hex": "efac81",
+    "input_sha256": "b6554cce8a93f1c8818280e2a768116a79216ad5501a85357d233409db87d340",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FI",
+      "lower": "\ufb01",
+      "casefold": "fi"
+    },
+    "expected": {
+      "upper": "FI",
+      "lower": "\ufb01",
+      "casefold": "fi"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "68915d5a1b08021e1fbbcdfa910e526c6c87c414972e55c4419bd336b1d32e80",
+      "lower": "b6554cce8a93f1c8818280e2a768116a79216ad5501a85357d233409db87d340",
+      "casefold": "b4bdc848109722a383d0a972c6eb859f2abd29565b8c4cc7199e7c9eb708f1b7"
+    }
+  },
+  {
+    "text": "\u0130",
+    "origins": [
+      "cpython:test_str.py:902",
+      "cpython:test_str.py:933"
+    ],
+    "id": "case-029",
+    "kind": "casing",
+    "input_hex": "c4b0",
+    "input_sha256": "a65018cffe8e0ed3f3112a79326e4c9718dc498a1f18a3a72f2f77c792c48b70",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0130",
+      "lower": "i\u0307",
+      "casefold": "i\u0307"
+    },
+    "expected": {
+      "upper": "\u0130",
+      "lower": "i\u0307",
+      "casefold": "i\u0307"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "a65018cffe8e0ed3f3112a79326e4c9718dc498a1f18a3a72f2f77c792c48b70",
+      "lower": "fbbdb347060082cf4e72cdc5f02679dd809ebf4e6c601933e858d954a65f5e73",
+      "casefold": "fbbdb347060082cf4e72cdc5f02679dd809ebf4e6c601933e858d954a65f5e73"
+    }
+  },
+  {
+    "text": "\u0345\u03a3",
+    "origins": [
+      "cpython:test_str.py:905",
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-030",
+    "kind": "casing",
+    "input_hex": "cd85cea3",
+    "input_sha256": "c7fd0482a9c305cdcaee112e276fd927720a4490675836ba0afc99b0efc638e4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0399\u03a3",
+      "lower": "\u0345\u03c3",
+      "casefold": "\u03b9\u03c3"
+    },
+    "expected": {
+      "upper": "\u0399\u03a3",
+      "lower": "\u0345\u03c3",
+      "casefold": "\u03b9\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7527e5da2c80d23cfaf24e0fb66de208fd48be7308d9462267822bc8a631080a",
+      "lower": "9f81e69da893c1772d07bf64de061b311bfe6ec192c9220bffe32f2ef4944877",
+      "casefold": "a24eb7cd4f8c1b8b4106f8eb76c859b6487bdd4b4dbc643d711ad8bad693b616"
+    }
+  },
+  {
+    "text": "A\u0345\u03a3",
+    "origins": [
+      "cpython:test_str.py:906",
+      "cpython:test_str.py:908",
+      "cpython:test_str.py:920"
+    ],
+    "id": "case-031",
+    "kind": "casing",
+    "input_hex": "41cd85cea3",
+    "input_sha256": "598500e2bc5dcd22cea7e0f343b70c1f47fbb8346c39bbf8aaf7c43e19af8bd8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u0399\u03a3",
+      "lower": "a\u0345\u03c2",
+      "casefold": "a\u03b9\u03c3"
+    },
+    "expected": {
+      "upper": "A\u0399\u03a3",
+      "lower": "a\u0345\u03c2",
+      "casefold": "a\u03b9\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b3523b10817dbc2ecb4777d9dfa5ac125bf7e14964cce3e6fe42bfe9f995d038",
+      "lower": "a22fc8e309769ed50d2ba3f60338d8aa8642b4d8f3bc522ee9028e33ad81ed0d",
+      "casefold": "1b700188c51f8c255846d860f638febc0e037d00baa595362a4486a552444895"
+    }
+  },
+  {
+    "text": "A\u0345\u03a3a",
+    "origins": [
+      "cpython:test_str.py:907"
+    ],
+    "id": "case-032",
+    "kind": "casing",
+    "input_hex": "41cd85cea361",
+    "input_sha256": "a4791a22540cdbdf111b43481dd64722dcb87fd60329cf97c44cca3f0482b7f8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u0399\u03a3A",
+      "lower": "a\u0345\u03c3a",
+      "casefold": "a\u03b9\u03c3a"
+    },
+    "expected": {
+      "upper": "A\u0399\u03a3A",
+      "lower": "a\u0345\u03c3a",
+      "casefold": "a\u03b9\u03c3a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "72bd2095ca9f2608f1b434105f47049e6f2595e4f23cd4696e5248a03cd4994d",
+      "lower": "71f8d8c024a11a8bcb62c522f33db64c4d2a3cb6d972cda70a12c4dbce7acc43",
+      "casefold": "abf44d59946fe9c6ac9f98e9fa5c07ace6d09ee4c9594b8779d40c955346bb44"
+    }
+  },
+  {
+    "text": "A\u03a3\u0345",
+    "origins": [
+      "cpython:test_str.py:909"
+    ],
+    "id": "case-033",
+    "kind": "casing",
+    "input_hex": "41cea3cd85",
+    "input_sha256": "a053809f9bcc332807c4e7b32f495e8cabda5343647709f77b6551a29ec65cce",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u03a3\u0399",
+      "lower": "a\u03c2\u0345",
+      "casefold": "a\u03c3\u03b9"
+    },
+    "expected": {
+      "upper": "A\u03a3\u0399",
+      "lower": "a\u03c2\u0345",
+      "casefold": "a\u03c3\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "aae180e0cc6a1f635063b27b3ed30988655e4d611ce07e7fcd0f37a5b37adbe0",
+      "lower": "e53645f71d945b543053f3109acd07a467c61c2d9baafe559c6029f3b2e290c4",
+      "casefold": "2dd74a6ca5face6e45afbfe7e981aee6adbaab55b30e873bb20dc57917f16e38"
+    }
+  },
+  {
+    "text": "\u03a3\u0345 ",
+    "origins": [
+      "cpython:test_str.py:910"
+    ],
+    "id": "case-034",
+    "kind": "casing",
+    "input_hex": "cea3cd8520",
+    "input_sha256": "f5cd75852312484b75bd3a095f6d6e46b5b35405780c75f18505862145b5acdc",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3\u0399 ",
+      "lower": "\u03c3\u0345 ",
+      "casefold": "\u03c3\u03b9 "
+    },
+    "expected": {
+      "upper": "\u03a3\u0399 ",
+      "lower": "\u03c3\u0345 ",
+      "casefold": "\u03c3\u03b9 "
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "775aded42cabb0eaf805b602b6db99a9bb99cf7af27e922ef21ed1a14bf8e627",
+      "lower": "1e1b1da7cfaeab4376b79fac916cc63a74d08b69ab6961c85178a3e3754cca6b",
+      "casefold": "696306fb80324d51de3eae822f00d552f0519e3f98790b1d5f9b6fde75df4230"
+    }
+  },
+  {
+    "text": "\ud9ff\udffe",
+    "origins": [
+      "cpython:test_str.py:911",
+      "cpython:test_str.py:937"
+    ],
+    "id": "case-035",
+    "kind": "casing",
+    "input_hex": "f28fbfbe",
+    "input_sha256": "abb2e70de0eb4cf65757427ff1a9b40b649321abde97c84f0e79f23e0dcf7898",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud9ff\udffe",
+      "lower": "\ud9ff\udffe",
+      "casefold": "\ud9ff\udffe"
+    },
+    "expected": {
+      "upper": "\ud9ff\udffe",
+      "lower": "\ud9ff\udffe",
+      "casefold": "\ud9ff\udffe"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "abb2e70de0eb4cf65757427ff1a9b40b649321abde97c84f0e79f23e0dcf7898",
+      "lower": "abb2e70de0eb4cf65757427ff1a9b40b649321abde97c84f0e79f23e0dcf7898",
+      "casefold": "abb2e70de0eb4cf65757427ff1a9b40b649321abde97c84f0e79f23e0dcf7898"
+    }
+  },
+  {
+    "text": "\u2177",
+    "origins": [
+      "cpython:test_str.py:912",
+      "cpython:test_str.py:938"
+    ],
+    "id": "case-036",
+    "kind": "casing",
+    "input_hex": "e285b7",
+    "input_sha256": "c68b4def889ec01b8da9dc0ff8b2d45795dcbaf0603ed16d20fa552b6be8af0d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u2167",
+      "lower": "\u2177",
+      "casefold": "\u2177"
+    },
+    "expected": {
+      "upper": "\u2167",
+      "lower": "\u2177",
+      "casefold": "\u2177"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "bb15e9e3c2fd7f841177a2f917d7cad4f5fd0da9ddc76e20a4831175fbb3dea6",
+      "lower": "c68b4def889ec01b8da9dc0ff8b2d45795dcbaf0603ed16d20fa552b6be8af0d",
+      "casefold": "c68b4def889ec01b8da9dc0ff8b2d45795dcbaf0603ed16d20fa552b6be8af0d"
+    }
+  },
+  {
+    "text": "hello",
+    "origins": [
+      "cpython:test_str.py:915"
+    ],
+    "id": "case-037",
+    "kind": "casing",
+    "input_hex": "68656c6c6f",
+    "input_sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "HELLO",
+      "lower": "hello",
+      "casefold": "hello"
+    },
+    "expected": {
+      "upper": "HELLO",
+      "lower": "hello",
+      "casefold": "hello"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "3733cd977ff8eb18b987357e22ced99f46097f31ecb239e878ae63760e83e4d5",
+      "lower": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+      "casefold": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    }
+  },
+  {
+    "text": "hELlo",
+    "origins": [
+      "cpython:test_str.py:916"
+    ],
+    "id": "case-038",
+    "kind": "casing",
+    "input_hex": "68454c6c6f",
+    "input_sha256": "6cfd87d28395c4be5c2628fe0147043f7abf7550959c4cb3d98e64a7f041c0d2",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "HELLO",
+      "lower": "hello",
+      "casefold": "hello"
+    },
+    "expected": {
+      "upper": "HELLO",
+      "lower": "hello",
+      "casefold": "hello"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "3733cd977ff8eb18b987357e22ced99f46097f31ecb239e878ae63760e83e4d5",
+      "lower": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+      "casefold": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    }
+  },
+  {
+    "text": "\u00df",
+    "origins": [
+      "cpython:test_str.py:917",
+      "cpython:test_str.py:935"
+    ],
+    "id": "case-039",
+    "kind": "casing",
+    "input_hex": "c39f",
+    "input_sha256": "cd3a7e92a9114307055e4a0583acd6549ec3bb6d7c10ecc6ce11ae3d76b3d7db",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "SS",
+      "lower": "\u00df",
+      "casefold": "ss"
+    },
+    "expected": {
+      "upper": "SS",
+      "lower": "\u00df",
+      "casefold": "ss"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "0e6fac6a3ad129a64c2b9d6eaf6680e4b5f95dcd36949dad585415b017633875",
+      "lower": "cd3a7e92a9114307055e4a0583acd6549ec3bb6d7c10ecc6ce11ae3d76b3d7db",
+      "casefold": "a31fe9656fc8d3a459e623dc8204e6d0268f8df56d734dac3ca3262edb5db883"
+    }
+  },
+  {
+    "text": "\u00b5",
+    "origins": [
+      "cpython:test_str.py:921"
+    ],
+    "id": "case-040",
+    "kind": "casing",
+    "input_hex": "c2b5",
+    "input_sha256": "5a072f1be4c3ee04849a9ad686b287d12d6a99dc4eba13c7a2ca1844e7923a0a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u039c",
+      "lower": "\u00b5",
+      "casefold": "\u03bc"
+    },
+    "expected": {
+      "upper": "\u039c",
+      "lower": "\u00b5",
+      "casefold": "\u03bc"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "2e90ea1ae84e6e4dae94c1dee456416b3c471b87a3ad172d6596618d0e3bcba3",
+      "lower": "5a072f1be4c3ee04849a9ad686b287d12d6a99dc4eba13c7a2ca1844e7923a0a",
+      "casefold": "deec86264668c4f17635c4f9346342fa3467c9448530eb0a84a1b7c3eb47d886"
+    }
+  },
+  {
+    "text": "\ud801\udc4f",
+    "origins": [
+      "cpython:test_str.py:925"
+    ],
+    "id": "case-041",
+    "kind": "casing",
+    "input_hex": "f090918f",
+    "input_sha256": "9cbf0308eee24163693c755608e808eab3a63dbaaf72957f5f40ee81780268b6",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud801\udc27",
+      "lower": "\ud801\udc4f",
+      "casefold": "\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "\ud801\udc27",
+      "lower": "\ud801\udc4f",
+      "casefold": "\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "1148076f625f207d4b62256dcbd443382022ecbbcdc452b8c5488a5134c891a0",
+      "lower": "9cbf0308eee24163693c755608e808eab3a63dbaaf72957f5f40ee81780268b6",
+      "casefold": "9cbf0308eee24163693c755608e808eab3a63dbaaf72957f5f40ee81780268b6"
+    }
+  },
+  {
+    "text": "\ud801\udc4f\ud801\udc4f",
+    "origins": [
+      "cpython:test_str.py:926"
+    ],
+    "id": "case-042",
+    "kind": "casing",
+    "input_hex": "f090918ff090918f",
+    "input_sha256": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "expected": {
+      "upper": "\ud801\udc27\ud801\udc27",
+      "lower": "\ud801\udc4f\ud801\udc4f",
+      "casefold": "\ud801\udc4f\ud801\udc4f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7ff431617e57fe4c1b1233e4f3346ccb9cfe63f7b52b6d5c4539c5ab4da2275a",
+      "lower": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23",
+      "casefold": "24266e606dab121f566767aaa972745649f7c6cff0f8d4953f7ab646c605ce23"
+    }
+  },
+  {
+    "text": "\u1fd2",
+    "origins": [
+      "cpython:test_str.py:936"
+    ],
+    "id": "case-043",
+    "kind": "casing",
+    "input_hex": "e1bf92",
+    "input_sha256": "03d0b92beb1ef2b80086d733d6eb82221367336ad28dfb52b8f8f231701219bd",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0399\u0308\u0300",
+      "lower": "\u1fd2",
+      "casefold": "\u03b9\u0308\u0300"
+    },
+    "expected": {
+      "upper": "\u0399\u0308\u0300",
+      "lower": "\u1fd2",
+      "casefold": "\u03b9\u0308\u0300"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "9a5be2cbd55bfca4656bf699b4a05f9dbcf8f5f21ed0b326c30bb310ae7adad2",
+      "lower": "03d0b92beb1ef2b80086d733d6eb82221367336ad28dfb52b8f8f231701219bd",
+      "casefold": "2308c8a0cbd5df68bc561b71d8ef92bed792387278269963cd2a7cae3ab9fb92"
+    }
+  },
+  {
+    "text": "A\u0345\u03a3\u0345A",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-044",
+    "kind": "casing",
+    "input_hex": "41cd85cea3cd8541",
+    "input_sha256": "2709b70f2da75b72f7ac6015f179b759ef99cef3010e101bebdc221a88ebe8a2",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u0399\u03a3\u0399A",
+      "lower": "a\u0345\u03c3\u0345a",
+      "casefold": "a\u03b9\u03c3\u03b9a"
+    },
+    "expected": {
+      "upper": "A\u0399\u03a3\u0399A",
+      "lower": "a\u0345\u03c3\u0345a",
+      "casefold": "a\u03b9\u03c3\u03b9a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "95f2664a10862846264f9b94433079ac8587ebc925d4d6e6cbbc0627804ee914",
+      "lower": "f370242d47df02ac6849d90dda8ef0527e9ed8d5e419e7f7d97a427a2d1a4c38",
+      "casefold": "2e1c85924f07db3f9da00db96c19967251c68ab819e4f475c27c3bbf43fb76ba"
+    }
+  },
+  {
+    "text": "A\u03a3\u0307\u200d",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-045",
+    "kind": "casing",
+    "input_hex": "41cea3cc87e2808d",
+    "input_sha256": "c946812f9f62cd3a51a293524ac5fc5954acd07cbaf76ac41ac3bd54c3d11ecd",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u03a3\u0307\u200d",
+      "lower": "a\u03c2\u0307\u200d",
+      "casefold": "a\u03c3\u0307\u200d"
+    },
+    "expected": {
+      "upper": "A\u03a3\u0307\u200d",
+      "lower": "a\u03c2\u0307\u200d",
+      "casefold": "a\u03c3\u0307\u200d"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c946812f9f62cd3a51a293524ac5fc5954acd07cbaf76ac41ac3bd54c3d11ecd",
+      "lower": "db0fde273165e3494b1005ce536d9be30f44d38b43e5222813119e34853a0433",
+      "casefold": "5e36e3eb872fc822bdbf7580253bfbd8da6079ccea342bbc0a8d84d08cc66f03"
+    }
+  },
+  {
+    "text": "1\u0345\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-046",
+    "kind": "casing",
+    "input_hex": "31cd85cea3",
+    "input_sha256": "9121b0947f18c2f9b940334558a7973eb3302a1f8817c1e8891eceb2ab99a05f",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "1\u0399\u03a3",
+      "lower": "1\u0345\u03c3",
+      "casefold": "1\u03b9\u03c3"
+    },
+    "expected": {
+      "upper": "1\u0399\u03a3",
+      "lower": "1\u0345\u03c3",
+      "casefold": "1\u03b9\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "abe0890f2bb5c881113f08d9685eea81ec0f54f7817421aa782eaaebdf371333",
+      "lower": "e2b1c8f80bc3630b3ff96ee814d3205eb7bc4eb3822c0663b9ca9232155a8417",
+      "casefold": "d7e2d4cf2c190bdca867f7c2ad4a09d39f2e0800230c6260a394a9fe78721996"
+    }
+  },
+  {
+    "text": "A\u0345\u200d\u03a3\u200d\u0345A",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-047",
+    "kind": "casing",
+    "input_hex": "41cd85e2808dcea3e2808dcd8541",
+    "input_sha256": "c05ebdb0d251bf1a0463cbb5b25a8c633d9438ff818072f8c0a7ef4d83909d1d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u0399\u200d\u03a3\u200d\u0399A",
+      "lower": "a\u0345\u200d\u03c3\u200d\u0345a",
+      "casefold": "a\u03b9\u200d\u03c3\u200d\u03b9a"
+    },
+    "expected": {
+      "upper": "A\u0399\u200d\u03a3\u200d\u0399A",
+      "lower": "a\u0345\u200d\u03c3\u200d\u0345a",
+      "casefold": "a\u03b9\u200d\u03c3\u200d\u03b9a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "86f40ec373ddd65631ba54fc40e5d31c80847a053cb1f849963c583ab37ebf35",
+      "lower": "99854011b0bc0f38a1a70c4d01d9cb0f6df6d661ac910e6a6a2b6d9322f94364",
+      "casefold": "bd47c31c21f85db9523397181e3402389f93d7b83d413e7b5d27b525917821fa"
+    }
+  },
+  {
+    "text": "A\u03a3\u200d1",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-048",
+    "kind": "casing",
+    "input_hex": "41cea3e2808d31",
+    "input_sha256": "f5998ba47d3a5e0af597c0be061fe9c551bf0b48bb3f8e8f85eaa7124b0a145b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u03a3\u200d1",
+      "lower": "a\u03c2\u200d1",
+      "casefold": "a\u03c3\u200d1"
+    },
+    "expected": {
+      "upper": "A\u03a3\u200d1",
+      "lower": "a\u03c2\u200d1",
+      "casefold": "a\u03c3\u200d1"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f5998ba47d3a5e0af597c0be061fe9c551bf0b48bb3f8e8f85eaa7124b0a145b",
+      "lower": "80a2103cefbb800389fdc59c78ccaff2e3a6e4881438b56593ee4e9b6b18fa84",
+      "casefold": "907b592b7edea0971284ec2a489d6a7d645c0ba5d8a5dfd630bc284be37c139f"
+    }
+  },
+  {
+    "text": "A\u03a3\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-049",
+    "kind": "casing",
+    "input_hex": "41cea3cea3",
+    "input_sha256": "3c447d20bd1662ea38d479954376a4e1406f16b7c9dfc9ac9adc260bb8ab9c53",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u03a3\u03a3",
+      "lower": "a\u03c3\u03c2",
+      "casefold": "a\u03c3\u03c3"
+    },
+    "expected": {
+      "upper": "A\u03a3\u03a3",
+      "lower": "a\u03c3\u03c2",
+      "casefold": "a\u03c3\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "3c447d20bd1662ea38d479954376a4e1406f16b7c9dfc9ac9adc260bb8ab9c53",
+      "lower": "f8120a24858854794632fd79672d6fadd4b2f9251b598c9290b67f6b9c9b36a7",
+      "casefold": "388ac3d4c65ca3f455c2a95c2f0279fd462570127a9726883934a48b9ed72670"
+    }
+  },
+  {
+    "text": "\u03a3A\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-050",
+    "kind": "casing",
+    "input_hex": "cea341cea3",
+    "input_sha256": "8cc37ccf27cebeed725fdc1f522886cee636bbd4f310b6bff6cc3ed93010eaa4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3A\u03a3",
+      "lower": "\u03c3a\u03c2",
+      "casefold": "\u03c3a\u03c3"
+    },
+    "expected": {
+      "upper": "\u03a3A\u03a3",
+      "lower": "\u03c3a\u03c2",
+      "casefold": "\u03c3a\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8cc37ccf27cebeed725fdc1f522886cee636bbd4f310b6bff6cc3ed93010eaa4",
+      "lower": "475061d982712704ae4283999c7fd9c5aab3f9759b06e3ea669acab68063ce40",
+      "casefold": "4f8fef24a487dac334c49e390668f4290538cfce5e2519bb6b4f6529061db2f6"
+    }
+  },
+  {
+    "text": "\u0130\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-051",
+    "kind": "casing",
+    "input_hex": "c4b0cea3",
+    "input_sha256": "8c66b164a2e4d8bbe056003268e24c40749fe25ebcf089dd61572c26d82a83b0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0130\u03a3",
+      "lower": "i\u0307\u03c2",
+      "casefold": "i\u0307\u03c3"
+    },
+    "expected": {
+      "upper": "\u0130\u03a3",
+      "lower": "i\u0307\u03c2",
+      "casefold": "i\u0307\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8c66b164a2e4d8bbe056003268e24c40749fe25ebcf089dd61572c26d82a83b0",
+      "lower": "b244255649b16768ba33084f1a54af09d47006ec3cff6ec3815a264a8d8a3fd6",
+      "casefold": "d04ef6c6d0b14b2457201930f22dde3944b0fff3e86ef6f9087b5d275f69c6a9"
+    }
+  },
+  {
+    "text": "\u00df\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-052",
+    "kind": "casing",
+    "input_hex": "c39fcea3",
+    "input_sha256": "1a6a59dfd18097c69199eaeb7e16c09ea4afa06e9b55bce82f6a4ed7eaceb557",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "SS\u03a3",
+      "lower": "\u00df\u03c2",
+      "casefold": "ss\u03c3"
+    },
+    "expected": {
+      "upper": "SS\u03a3",
+      "lower": "\u00df\u03c2",
+      "casefold": "ss\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f00c91041f0ad880b044d02a319b048cf8e6af3de89c9c923d81165194c1a15d",
+      "lower": "b1f79e8dd22c3d632216b2943dad2ed539659093b6aa4debd8664b1597c3fc21",
+      "casefold": "e3e15db027563c74b38d1423eee688ee9cc4b65d8e05c61f0cfbf59d12286eb9"
+    }
+  },
+  {
+    "text": "\u1f88\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-053",
+    "kind": "casing",
+    "input_hex": "e1be88cea3",
+    "input_sha256": "af89b923abe70f64d58b77cc4e39b0934a5517c556b1c881e0efffe1dde3df9c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f08\u0399\u03a3",
+      "lower": "\u1f80\u03c2",
+      "casefold": "\u1f00\u03b9\u03c3"
+    },
+    "expected": {
+      "upper": "\u1f08\u0399\u03a3",
+      "lower": "\u1f80\u03c2",
+      "casefold": "\u1f00\u03b9\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "e10111dbcaaa42bf9068e16053cc2799fdadb1e60032ef6ef6b06d73e97e41e1",
+      "lower": "82e5acd28c06cd14f9bfb1dcda334a56b9905cf1e833f5256e25876eb5796d96",
+      "casefold": "ca17d3f3b57d9327cf38c100bf1fbeb61bef61aa98907795cca7a6e81778f832"
+    }
+  },
+  {
+    "text": "Stra\u00dfe",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-054",
+    "kind": "casing",
+    "input_hex": "53747261c39f65",
+    "input_sha256": "58a3778c18c41726cd53c2a4c77dcbed8512f962d7e616717abee95ca41d0029",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "STRASSE",
+      "lower": "stra\u00dfe",
+      "casefold": "strasse"
+    },
+    "expected": {
+      "upper": "STRASSE",
+      "lower": "stra\u00dfe",
+      "casefold": "strasse"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b97805af0949694d12dec848dcd294fef9d063f7965c7bb955a8c5eb51a8088f",
+      "lower": "787f4770613d3824cbc89b6d5da90a123e41b07b90b45ea3738c216b14616140",
+      "casefold": "16d96952087774fee069b7585d3991b24d90c181c09b2129b4908c35baa7f0c0"
+    }
+  },
+  {
+    "text": "\u1e9e",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-055",
+    "kind": "casing",
+    "input_hex": "e1ba9e",
+    "input_sha256": "0cfba399680410bc0ccf64561f667faaa6212b0bc76f993674e9d6ee8c6e5966",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1e9e",
+      "lower": "\u00df",
+      "casefold": "ss"
+    },
+    "expected": {
+      "upper": "\u1e9e",
+      "lower": "\u00df",
+      "casefold": "ss"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "0cfba399680410bc0ccf64561f667faaa6212b0bc76f993674e9d6ee8c6e5966",
+      "lower": "cd3a7e92a9114307055e4a0583acd6549ec3bb6d7c10ecc6ce11ae3d76b3d7db",
+      "casefold": "a31fe9656fc8d3a459e623dc8204e6d0268f8df56d734dac3ca3262edb5db883"
+    }
+  },
+  {
+    "text": "\ufb03",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-056",
+    "kind": "casing",
+    "input_hex": "efac83",
+    "input_sha256": "7637de81f49ad483f0cd82b537b11be9c8e414dc3dd6724a10544679addee167",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFI",
+      "lower": "\ufb03",
+      "casefold": "ffi"
+    },
+    "expected": {
+      "upper": "FFI",
+      "lower": "\ufb03",
+      "casefold": "ffi"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "dc0210ebc84dbd28a45095c57341ba2f49f0a5f3c188796317b52b61fe0112d9",
+      "lower": "7637de81f49ad483f0cd82b537b11be9c8e414dc3dd6724a10544679addee167",
+      "casefold": "10c825a38cbf050c85d7a19982b1755e1fe93936cf696be5d7b73c98b934a9ca"
+    }
+  },
+  {
+    "text": "\ufb04",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-057",
+    "kind": "casing",
+    "input_hex": "efac84",
+    "input_sha256": "dafda6e40787cd8d6ceeb7aa8028ff634be46158d9ac4f3fd908bcbf400cbe98",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFL",
+      "lower": "\ufb04",
+      "casefold": "ffl"
+    },
+    "expected": {
+      "upper": "FFL",
+      "lower": "\ufb04",
+      "casefold": "ffl"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "a4605afd4e49a24ae7b405ee6276cde4dca7988f724aa34bcb3d297b313d37aa",
+      "lower": "dafda6e40787cd8d6ceeb7aa8028ff634be46158d9ac4f3fd908bcbf400cbe98",
+      "casefold": "e06899227dd02ac95d94ce380ebc4702f9392e7b01f8cbdb76fd7fa2c6b049f8"
+    }
+  },
+  {
+    "text": "\ufb05",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-058",
+    "kind": "casing",
+    "input_hex": "efac85",
+    "input_sha256": "621bddae39f2a376c45b5b7e9e7c8683d7c78e10153fe420ef8334c46db07fc3",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ST",
+      "lower": "\ufb05",
+      "casefold": "st"
+    },
+    "expected": {
+      "upper": "ST",
+      "lower": "\ufb05",
+      "casefold": "st"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "bb1e6c76c178daba37fbc45d1bd4baff4d47be80c22ed2715c539d36e33cc65f",
+      "lower": "621bddae39f2a376c45b5b7e9e7c8683d7c78e10153fe420ef8334c46db07fc3",
+      "casefold": "56af4bde70a47ae7d0f1ebb30e45ed336165d5c9ec00ba9a92311e33a4256d74"
+    }
+  },
+  {
+    "text": "I\u0131\u0130i",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-059",
+    "kind": "casing",
+    "input_hex": "49c4b1c4b069",
+    "input_sha256": "ab20849d759374793146f4119fe55eed8d7cef73a24e2c5ac1f5f7e1c3723dd4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "II\u0130I",
+      "lower": "i\u0131i\u0307i",
+      "casefold": "i\u0131i\u0307i"
+    },
+    "expected": {
+      "upper": "II\u0130I",
+      "lower": "i\u0131i\u0307i",
+      "casefold": "i\u0131i\u0307i"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "0138cc819afc2aaf296bc221d9783229fde4902ff740d4ce7d84e4b717640406",
+      "lower": "7394ac71989384435bf98d9e030dcf2d13315b5ae8ac5c3dbb1cb2b03fa75d95",
+      "casefold": "7394ac71989384435bf98d9e030dcf2d13315b5ae8ac5c3dbb1cb2b03fa75d95"
+    }
+  },
+  {
+    "text": "\u00e9",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-060",
+    "kind": "casing",
+    "input_hex": "c3a9",
+    "input_sha256": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u00c9",
+      "lower": "\u00e9",
+      "casefold": "\u00e9"
+    },
+    "expected": {
+      "upper": "\u00c9",
+      "lower": "\u00e9",
+      "casefold": "\u00e9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "a755f65d4e5201d92b6f264d1508ea0bec9913dd7b20a96ebde25de3cda84a84",
+      "lower": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+      "casefold": "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c"
+    }
+  },
+  {
+    "text": "e\u0301",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-061",
+    "kind": "casing",
+    "input_hex": "65cc81",
+    "input_sha256": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "E\u0301",
+      "lower": "e\u0301",
+      "casefold": "e\u0301"
+    },
+    "expected": {
+      "upper": "E\u0301",
+      "lower": "e\u0301",
+      "casefold": "e\u0301"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "ef0a931437dd85e4b2e95c16738b76b3175149e1d4b0281ec15e955fa7c41b37",
+      "lower": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6",
+      "casefold": "bf12767b0f2a56b2190075bae8169f656e3ce8d6357d4aff184bc6c7ea48f9f6"
+    }
+  },
+  {
+    "text": "\u13a0\uab70",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-062",
+    "kind": "casing",
+    "input_hex": "e18ea0eaadb0",
+    "input_sha256": "0a5695540200807cd4b3dad7f08d8f6fc6437c28249b624ccbd5f1c73fa7679f",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u13a0\u13a0",
+      "lower": "\uab70\uab70",
+      "casefold": "\u13a0\u13a0"
+    },
+    "expected": {
+      "upper": "\u13a0\u13a0",
+      "lower": "\uab70\uab70",
+      "casefold": "\u13a0\u13a0"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "846771b63e1ec4a4455f131e97e101c0a0b7a321358ac58a58e3b2051fdf2d29",
+      "lower": "363a319f33b4a9271b92925312d4b2e16c472514c031206a09cfeb2aa5459ab6",
+      "casefold": "846771b63e1ec4a4455f131e97e101c0a0b7a321358ac58a58e3b2051fdf2d29"
+    }
+  },
+  {
+    "text": "\u1c89\u1c8a",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-063",
+    "kind": "casing",
+    "input_hex": "e1b289e1b28a",
+    "input_sha256": "7a70516d42a81375404ddfd5a29b2c9d544bb0e920b0ac640ce773f14ecacffa",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1c89\u1c89",
+      "lower": "\u1c8a\u1c8a",
+      "casefold": "\u1c8a\u1c8a"
+    },
+    "expected": {
+      "upper": "\u1c89\u1c89",
+      "lower": "\u1c8a\u1c8a",
+      "casefold": "\u1c8a\u1c8a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "a4d1634d8f69f35814029d70a930c4218e3cf9289f4cf83d89051426e7bbcdde",
+      "lower": "acfe8f8d02e17784d3aef722427751e5930b9c5afd24f3ea818adeedfc7c6cec",
+      "casefold": "acfe8f8d02e17784d3aef722427751e5930b9c5afd24f3ea818adeedfc7c6cec"
+    }
+  },
+  {
+    "text": "\ud803\udd50\ud803\udd70",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-064",
+    "kind": "casing",
+    "input_hex": "f090b590f090b5b0",
+    "input_sha256": "7c98c46737c55d76310886c6e66956529fb15b14e921c14a78e9ed59050d11b0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud803\udd50\ud803\udd50",
+      "lower": "\ud803\udd70\ud803\udd70",
+      "casefold": "\ud803\udd70\ud803\udd70"
+    },
+    "expected": {
+      "upper": "\ud803\udd50\ud803\udd50",
+      "lower": "\ud803\udd70\ud803\udd70",
+      "casefold": "\ud803\udd70\ud803\udd70"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "74d37006f59f48811ffda9d2d01a11365e40936ee734b50304d267eaabc34204",
+      "lower": "21a98484107c5c116b016813fe69ec35908bbdd3dcddb347e04cb921e4b45a1d",
+      "casefold": "21a98484107c5c116b016813fe69ec35908bbdd3dcddb347e04cb921e4b45a1d"
+    }
+  },
+  {
+    "text": "\u0378",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-065",
+    "kind": "casing",
+    "input_hex": "cdb8",
+    "input_sha256": "efa4b2b545f9afb38e233be047fb08864dc71d9edc658fd5dc3cd2822ac74b88",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0378",
+      "lower": "\u0378",
+      "casefold": "\u0378"
+    },
+    "expected": {
+      "upper": "\u0378",
+      "lower": "\u0378",
+      "casefold": "\u0378"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "efa4b2b545f9afb38e233be047fb08864dc71d9edc658fd5dc3cd2822ac74b88",
+      "lower": "efa4b2b545f9afb38e233be047fb08864dc71d9edc658fd5dc3cd2822ac74b88",
+      "casefold": "efa4b2b545f9afb38e233be047fb08864dc71d9edc658fd5dc3cd2822ac74b88"
+    }
+  },
+  {
+    "text": "\u1c8b",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-066",
+    "kind": "casing",
+    "input_hex": "e1b28b",
+    "input_sha256": "4d488a651d6504b3a529c596325949f97e8ba41ceae7dcbeeb64b5def395dcff",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1c8b",
+      "lower": "\u1c8b",
+      "casefold": "\u1c8b"
+    },
+    "expected": {
+      "upper": "\u1c8b",
+      "lower": "\u1c8b",
+      "casefold": "\u1c8b"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "4d488a651d6504b3a529c596325949f97e8ba41ceae7dcbeeb64b5def395dcff",
+      "lower": "4d488a651d6504b3a529c596325949f97e8ba41ceae7dcbeeb64b5def395dcff",
+      "casefold": "4d488a651d6504b3a529c596325949f97e8ba41ceae7dcbeeb64b5def395dcff"
+    }
+  },
+  {
+    "text": "\ud838\udc30",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-067",
+    "kind": "casing",
+    "input_hex": "f09e80b0",
+    "input_sha256": "c9172689221b5285e81cecdf0b27e6c9f764bad7cd31bdb4c60254328109b8ce",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\ud838\udc30",
+      "lower": "\ud838\udc30",
+      "casefold": "\ud838\udc30"
+    },
+    "expected": {
+      "upper": "\ud838\udc30",
+      "lower": "\ud838\udc30",
+      "casefold": "\ud838\udc30"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c9172689221b5285e81cecdf0b27e6c9f764bad7cd31bdb4c60254328109b8ce",
+      "lower": "c9172689221b5285e81cecdf0b27e6c9f764bad7cd31bdb4c60254328109b8ce",
+      "casefold": "c9172689221b5285e81cecdf0b27e6c9f764bad7cd31bdb4c60254328109b8ce"
+    }
+  },
+  {
+    "text": "\u4e2d\u6587\ud83d\ude42",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-068",
+    "kind": "casing",
+    "input_hex": "e4b8ade69687f09f9982",
+    "input_sha256": "3f7e2b3029a16c844f54b308c8035842509a1a8d8a4f35a7548d2384f3b51901",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u4e2d\u6587\ud83d\ude42",
+      "lower": "\u4e2d\u6587\ud83d\ude42",
+      "casefold": "\u4e2d\u6587\ud83d\ude42"
+    },
+    "expected": {
+      "upper": "\u4e2d\u6587\ud83d\ude42",
+      "lower": "\u4e2d\u6587\ud83d\ude42",
+      "casefold": "\u4e2d\u6587\ud83d\ude42"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "3f7e2b3029a16c844f54b308c8035842509a1a8d8a4f35a7548d2384f3b51901",
+      "lower": "3f7e2b3029a16c844f54b308c8035842509a1a8d8a4f35a7548d2384f3b51901",
+      "casefold": "3f7e2b3029a16c844f54b308c8035842509a1a8d8a4f35a7548d2384f3b51901"
+    }
+  },
+  {
+    "text": "\u0000A\n\u03a3",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-069",
+    "kind": "casing",
+    "input_hex": "00410acea3",
+    "input_sha256": "402068925f8143466fdf702dfbc841062e8a727b7ef6a31faccb16fee0d15aa4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0000A\n\u03a3",
+      "lower": "\u0000a\n\u03c3",
+      "casefold": "\u0000a\n\u03c3"
+    },
+    "expected": {
+      "upper": "\u0000A\n\u03a3",
+      "lower": "\u0000a\n\u03c3",
+      "casefold": "\u0000a\n\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "402068925f8143466fdf702dfbc841062e8a727b7ef6a31faccb16fee0d15aa4",
+      "lower": "91deef957a0bb35ba8417c3ecfb280b546760eb758a5a309e25401e689d5727e",
+      "casefold": "91deef957a0bb35ba8417c3ecfb280b546760eb758a5a309e25401e689d5727e"
+    }
+  },
+  {
+    "text": "\u0130\u0130\u0130",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-070",
+    "kind": "casing",
+    "input_hex": "c4b0c4b0c4b0",
+    "input_sha256": "c3d23e53ae4471849104af70d50b305611f76f0c935684ddd7942084c86bcef5",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0130\u0130\u0130",
+      "lower": "i\u0307i\u0307i\u0307",
+      "casefold": "i\u0307i\u0307i\u0307"
+    },
+    "expected": {
+      "upper": "\u0130\u0130\u0130",
+      "lower": "i\u0307i\u0307i\u0307",
+      "casefold": "i\u0307i\u0307i\u0307"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c3d23e53ae4471849104af70d50b305611f76f0c935684ddd7942084c86bcef5",
+      "lower": "ddfa11547671c1fddf2264dd50ea2f21bc0473c2a92ec923419f925295085ef0",
+      "casefold": "ddfa11547671c1fddf2264dd50ea2f21bc0473c2a92ec923419f925295085ef0"
+    }
+  },
+  {
+    "text": "\u0390\u1fb7\ufb03",
+    "origins": [
+      "directed:context-expansion-ucd16-control"
+    ],
+    "id": "case-071",
+    "kind": "casing",
+    "input_hex": "ce90e1beb7efac83",
+    "input_sha256": "5dc731bffd6791f18f76a0ffe4a364684929a89d020c8ebcc5ad0c45ba6d78b3",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0399\u0308\u0301\u0391\u0342\u0399FFI",
+      "lower": "\u0390\u1fb7\ufb03",
+      "casefold": "\u03b9\u0308\u0301\u03b1\u0342\u03b9ffi"
+    },
+    "expected": {
+      "upper": "\u0399\u0308\u0301\u0391\u0342\u0399FFI",
+      "lower": "\u0390\u1fb7\ufb03",
+      "casefold": "\u03b9\u0308\u0301\u03b1\u0342\u03b9ffi"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f01abdd78c9ef07ca65ecaf1e0d2ef83548f8d12c3a20ab765264f07b61dcbad",
+      "lower": "5dc731bffd6791f18f76a0ffe4a364684929a89d020c8ebcc5ad0c45ba6d78b3",
+      "casefold": "dc3caf4831138d935b8904ed6bedcda89de6569fb930c136395c65f457141241"
+    }
+  },
+  {
+    "text": "\u03a3",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "A\u03a3A",
+      "start": 1,
+      "end": 3
+    },
+    "id": "case-072",
+    "kind": "casing",
+    "input_hex": "cea3",
+    "input_sha256": "8cd5c75b003f49970f977a2511e5c6fb5040990319791b8cd2f0cc005a2a4b39",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3",
+      "lower": "\u03c3",
+      "casefold": "\u03c3"
+    },
+    "expected": {
+      "upper": "\u03a3",
+      "lower": "\u03c3",
+      "casefold": "\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8cd5c75b003f49970f977a2511e5c6fb5040990319791b8cd2f0cc005a2a4b39",
+      "lower": "ff59ed1e562b056aea9bfdf757bada8c1eb638b10b75bfc7835beca4c2db0360",
+      "casefold": "ff59ed1e562b056aea9bfdf757bada8c1eb638b10b75bfc7835beca4c2db0360"
+    }
+  },
+  {
+    "text": "A\u03a3",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "1A\u03a3A",
+      "start": 1,
+      "end": 4
+    },
+    "id": "case-073",
+    "kind": "casing",
+    "input_hex": "41cea3",
+    "input_sha256": "c8b1802c0b308bcf4388dd3e372380c897d2d3894893a2a57b075d95e6003fad",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u03a3",
+      "lower": "a\u03c2",
+      "casefold": "a\u03c3"
+    },
+    "expected": {
+      "upper": "A\u03a3",
+      "lower": "a\u03c2",
+      "casefold": "a\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c8b1802c0b308bcf4388dd3e372380c897d2d3894893a2a57b075d95e6003fad",
+      "lower": "fe8cb39e3de8188636f1c9f78f85d13a535168f2a8ce39ec6002a3bb1bfee3a7",
+      "casefold": "f052cc9681d777a037fbf2f193a7bc9b33b0d70c0c2149934f5780ee129fce49"
+    }
+  },
+  {
+    "text": "\u03a3A",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "A\u03a3A1",
+      "start": 1,
+      "end": 4
+    },
+    "id": "case-074",
+    "kind": "casing",
+    "input_hex": "cea341",
+    "input_sha256": "07413a518913ef370fa68279273eea913612f848b8625314c774437144e6bf4b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3A",
+      "lower": "\u03c3a",
+      "casefold": "\u03c3a"
+    },
+    "expected": {
+      "upper": "\u03a3A",
+      "lower": "\u03c3a",
+      "casefold": "\u03c3a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "07413a518913ef370fa68279273eea913612f848b8625314c774437144e6bf4b",
+      "lower": "72bf029a4dd3e9f833c124e799057d72698a3e9bd507f5b635320d2ce7702729",
+      "casefold": "72bf029a4dd3e9f833c124e799057d72698a3e9bd507f5b635320d2ce7702729"
+    }
+  },
+  {
+    "text": "A\u0345\u03a3",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "!A\u0345\u03a3A",
+      "start": 1,
+      "end": 6
+    },
+    "id": "case-075",
+    "kind": "casing",
+    "input_hex": "41cd85cea3",
+    "input_sha256": "598500e2bc5dcd22cea7e0f343b70c1f47fbb8346c39bbf8aaf7c43e19af8bd8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "A\u0399\u03a3",
+      "lower": "a\u0345\u03c2",
+      "casefold": "a\u03b9\u03c3"
+    },
+    "expected": {
+      "upper": "A\u0399\u03a3",
+      "lower": "a\u0345\u03c2",
+      "casefold": "a\u03b9\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b3523b10817dbc2ecb4777d9dfa5ac125bf7e14964cce3e6fe42bfe9f995d038",
+      "lower": "a22fc8e309769ed50d2ba3f60338d8aa8642b4d8f3bc522ee9028e33ad81ed0d",
+      "casefold": "1b700188c51f8c255846d860f638febc0e037d00baa595362a4486a552444895"
+    }
+  },
+  {
+    "text": "\u03a3\u0345",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "A\u03a3\u0345A",
+      "start": 1,
+      "end": 5
+    },
+    "id": "case-076",
+    "kind": "casing",
+    "input_hex": "cea3cd85",
+    "input_sha256": "599fb9ade19a941208de0d23ec97b75958be7bc0c0325ed27e565816e6411f90",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a3\u0399",
+      "lower": "\u03c3\u0345",
+      "casefold": "\u03c3\u03b9"
+    },
+    "expected": {
+      "upper": "\u03a3\u0399",
+      "lower": "\u03c3\u0345",
+      "casefold": "\u03c3\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7de73ba311b759ed1610b907fedda339e27478664b48b43787e3ff9fea7f1894",
+      "lower": "4df2627c46810c4479f35b3e066394babf3524037dc2c2e8161e3942a54e3009",
+      "casefold": "34fcdd59ceb5969792fb76c2202576900fb4b970de2ac3eef7d72e8a3648dab5"
+    }
+  },
+  {
+    "text": "\u0130\u03a3",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "A\u0130\u03a3A",
+      "start": 1,
+      "end": 5
+    },
+    "id": "case-077",
+    "kind": "casing",
+    "input_hex": "c4b0cea3",
+    "input_sha256": "8c66b164a2e4d8bbe056003268e24c40749fe25ebcf089dd61572c26d82a83b0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0130\u03a3",
+      "lower": "i\u0307\u03c2",
+      "casefold": "i\u0307\u03c3"
+    },
+    "expected": {
+      "upper": "\u0130\u03a3",
+      "lower": "i\u0307\u03c2",
+      "casefold": "i\u0307\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8c66b164a2e4d8bbe056003268e24c40749fe25ebcf089dd61572c26d82a83b0",
+      "lower": "b244255649b16768ba33084f1a54af09d47006ec3cff6ec3815a264a8d8a3fd6",
+      "casefold": "d04ef6c6d0b14b2457201930f22dde3944b0fff3e86ef6f9087b5d275f69c6a9"
+    }
+  },
+  {
+    "text": "\u00df\u03a3",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "A\u00df\u03a3A",
+      "start": 1,
+      "end": 5
+    },
+    "id": "case-078",
+    "kind": "casing",
+    "input_hex": "c39fcea3",
+    "input_sha256": "1a6a59dfd18097c69199eaeb7e16c09ea4afa06e9b55bce82f6a4ed7eaceb557",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "SS\u03a3",
+      "lower": "\u00df\u03c2",
+      "casefold": "ss\u03c3"
+    },
+    "expected": {
+      "upper": "SS\u03a3",
+      "lower": "\u00df\u03c2",
+      "casefold": "ss\u03c3"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f00c91041f0ad880b044d02a319b048cf8e6af3de89c9c923d81165194c1a15d",
+      "lower": "b1f79e8dd22c3d632216b2943dad2ed539659093b6aa4debd8664b1597c3fc21",
+      "casefold": "e3e15db027563c74b38d1423eee688ee9cc4b65d8e05c61f0cfbf59d12286eb9"
+    }
+  },
+  {
+    "text": "",
+    "origins": [
+      "slice:original-context-is-local"
+    ],
+    "slice": {
+      "container": "AA",
+      "start": 1,
+      "end": 1
+    },
+    "id": "case-079",
+    "kind": "casing",
+    "input_hex": "",
+    "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "",
+      "lower": "",
+      "casefold": ""
+    },
+    "expected": {
+      "upper": "",
+      "lower": "",
+      "casefold": ""
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "lower": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "casefold": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "text": "\u1fe4",
+    "origins": [
+      "seeded:length-1"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:111:U+1FE4"
+    ],
+    "id": "case-080",
+    "kind": "casing",
+    "input_hex": "e1bfa4",
+    "input_sha256": "3757e84a9945182907682b933e7cb58e1de7f7c9fa8f2912c5b46e5309a8872b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a1\u0313",
+      "lower": "\u1fe4",
+      "casefold": "\u03c1\u0313"
+    },
+    "expected": {
+      "upper": "\u03a1\u0313",
+      "lower": "\u1fe4",
+      "casefold": "\u03c1\u0313"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "6d448160d528c1bb09fc318798517144d1189f220181566876e5672fb3b45e40",
+      "lower": "3757e84a9945182907682b933e7cb58e1de7f7c9fa8f2912c5b46e5309a8872b",
+      "casefold": "c74b23e6eae0c567dff887009d7d4d060f7523956c13d6abf18da448d1fed0f2"
+    }
+  },
+  {
+    "text": "\u1f80\ud801\udc1f",
+    "origins": [
+      "seeded:length-2"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:130:U+1F80",
+      "CaseFolding.txt:1402:U+1041F:C"
+    ],
+    "id": "case-081",
+    "kind": "casing",
+    "input_hex": "e1be80f090909f",
+    "input_sha256": "8096ee142b9e8d8a7ab1c5c57cda1fbd47fb8e3ef1e776390f3397c8a8a9968a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f08\u0399\ud801\udc1f",
+      "lower": "\u1f80\ud801\udc47",
+      "casefold": "\u1f00\u03b9\ud801\udc47"
+    },
+    "expected": {
+      "upper": "\u1f08\u0399\ud801\udc1f",
+      "lower": "\u1f80\ud801\udc47",
+      "casefold": "\u1f00\u03b9\ud801\udc47"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "0c0e9b9db4b92e3fc9e79c406705663b95d0a041b7ef120cbb8a058dc35f4eb1",
+      "lower": "53ef9fd3ea8dd0af4c4c612ee5e7e51b656953945c40618d14933e1860cfcee4",
+      "casefold": "aefa90ac447d3e1f97ec69b431aabae53ac856e8eb43aac7d918ec8c358a109c"
+    }
+  },
+  {
+    "text": "\ufb00\uab8b\ufb15",
+    "origins": [
+      "seeded:length-3"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:73:U+FB00",
+      "CaseFolding.txt:1279:U+AB8B:C",
+      "SpecialCasing.txt:84:U+FB15"
+    ],
+    "id": "case-082",
+    "kind": "casing",
+    "input_hex": "efac80eaae8befac95",
+    "input_sha256": "75f32182ca3845978e78bbadcd4f95ad044effd35c0a10ff43f1b1e4951ee5ea",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FF\u13bb\u0544\u053b",
+      "lower": "\ufb00\uab8b\ufb15",
+      "casefold": "ff\u13bb\u0574\u056b"
+    },
+    "expected": {
+      "upper": "FF\u13bb\u0544\u053b",
+      "lower": "\ufb00\uab8b\ufb15",
+      "casefold": "ff\u13bb\u0574\u056b"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "dcf04fe03fd69dd40f2df559dd5ff1d9dfb86529e00c9bfc2d432562e0befe3a",
+      "lower": "75f32182ca3845978e78bbadcd4f95ad044effd35c0a10ff43f1b1e4951ee5ea",
+      "casefold": "9d1545da6805b6599376965facb1d74e05fd07f0b2ba0cdb7e9a867a011cfafd"
+    }
+  },
+  {
+    "text": "\u1fab\u1f83\u1fa8\u1f90",
+    "origins": [
+      "seeded:length-4"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:173:U+1FAB",
+      "CaseFolding.txt:839:U+1F83:F",
+      "SpecialCasing.txt:170:U+1FA8",
+      "CaseFolding.txt:860:U+1F90:F"
+    ],
+    "id": "case-083",
+    "kind": "casing",
+    "input_hex": "e1beabe1be83e1bea8e1be90",
+    "input_sha256": "a647767b99a05d6cced75aecafb9ec8e7f86038a247a6a2ffdd0375d1d84a615",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6b\u0399\u1f0b\u0399\u1f68\u0399\u1f28\u0399",
+      "lower": "\u1fa3\u1f83\u1fa0\u1f90",
+      "casefold": "\u1f63\u03b9\u1f03\u03b9\u1f60\u03b9\u1f20\u03b9"
+    },
+    "expected": {
+      "upper": "\u1f6b\u0399\u1f0b\u0399\u1f68\u0399\u1f28\u0399",
+      "lower": "\u1fa3\u1f83\u1fa0\u1f90",
+      "casefold": "\u1f63\u03b9\u1f03\u03b9\u1f60\u03b9\u1f20\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "4981930d7c8d754c64c985bb65c3a3adfe092422857169921b27d8045106277c",
+      "lower": "8ebc9fa7106fba8a77be06ea1bac1f74adb0d30559b3a6c720faa3167e3014f8",
+      "casefold": "d8e2ed8ebc3051ed4c7f1ab891a8b5bfefd4db4d5b60fcf457a1bcd99d3f8c6a"
+    }
+  },
+  {
+    "text": "\ufb04\ud801\udcb9\ufb15\u0400\u1f80",
+    "origins": [
+      "seeded:length-5"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:77:U+FB04",
+      "CaseFolding.txt:1420:U+104B9:C",
+      "SpecialCasing.txt:84:U+FB15",
+      "CaseFolding.txt:364:U+0400:C",
+      "SpecialCasing.txt:130:U+1F80"
+    ],
+    "id": "case-084",
+    "kind": "casing",
+    "input_hex": "efac84f09092b9efac95d080e1be80",
+    "input_sha256": "b7d6257e4b8a054cea342037a20e7225e41faae78ff8be58e06866d7f3597ca8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFL\ud801\udcb9\u0544\u053b\u0400\u1f08\u0399",
+      "lower": "\ufb04\ud801\udce1\ufb15\u0450\u1f80",
+      "casefold": "ffl\ud801\udce1\u0574\u056b\u0450\u1f00\u03b9"
+    },
+    "expected": {
+      "upper": "FFL\ud801\udcb9\u0544\u053b\u0400\u1f08\u0399",
+      "lower": "\ufb04\ud801\udce1\ufb15\u0450\u1f80",
+      "casefold": "ffl\ud801\udce1\u0574\u056b\u0450\u1f00\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "28ccfd9b9a53406e6aec3aa810135513b892601eafc09b9ef3165106903739de",
+      "lower": "7d870b9d3cccd089793706ce1ee981de84a8ed3f73d82d441dba34355828263e",
+      "casefold": "51093a99836d0c2ef65272017911b71d46f5e903a4ef3c3df8a5ed37e6f83f2e"
+    }
+  },
+  {
+    "text": "\u1fa5\ua73e\u1faa\u1e12\u1f85\u03a7",
+    "origins": [
+      "seeded:length-6"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:167:U+1FA5",
+      "CaseFolding.txt:1175:U+A73E:C",
+      "SpecialCasing.txt:172:U+1FAA",
+      "CaseFolding.txt:662:U+1E12:C",
+      "SpecialCasing.txt:135:U+1F85",
+      "CaseFolding.txt:330:U+03A7:C"
+    ],
+    "id": "case-085",
+    "kind": "casing",
+    "input_hex": "e1bea5ea9cbee1beaae1b892e1be85cea7",
+    "input_sha256": "9537895ff00761c545b134322af565ece73522583c54a60890242a5f09928534",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6d\u0399\ua73e\u1f6a\u0399\u1e12\u1f0d\u0399\u03a7",
+      "lower": "\u1fa5\ua73f\u1fa2\u1e13\u1f85\u03c7",
+      "casefold": "\u1f65\u03b9\ua73f\u1f62\u03b9\u1e13\u1f05\u03b9\u03c7"
+    },
+    "expected": {
+      "upper": "\u1f6d\u0399\ua73e\u1f6a\u0399\u1e12\u1f0d\u0399\u03a7",
+      "lower": "\u1fa5\ua73f\u1fa2\u1e13\u1f85\u03c7",
+      "casefold": "\u1f65\u03b9\ua73f\u1f62\u03b9\u1e13\u1f05\u03b9\u03c7"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "2a0f9454ad3016e1609fea4151275559f338ef02a70ae0ecca6e57dd7bd41df6",
+      "lower": "b5b5627493d9e92683430bd4c9ea25ed15140be24c457484c5674bd94947fc53",
+      "casefold": "b6c31f6beebf26b6027a94a2c1aacd00483c2d21b0a0e9c1dc317200beb0ac4f"
+    }
+  },
+  {
+    "text": "\ufb03\u042f\u1fad\u1c82\u1f88\ud803\udc92\u1ff2",
+    "origins": [
+      "seeded:length-7"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:76:U+FB03",
+      "CaseFolding.txt:411:U+042F:C",
+      "SpecialCasing.txt:175:U+1FAD",
+      "CaseFolding.txt:599:U+1C82:C",
+      "SpecialCasing.txt:138:U+1F88",
+      "CaseFolding.txt:1500:U+10C92:C",
+      "SpecialCasing.txt:191:U+1FF2"
+    ],
+    "id": "case-086",
+    "kind": "casing",
+    "input_hex": "efac83d0afe1beade1b282e1be88f090b292e1bfb2",
+    "input_sha256": "f0270a14117911f3be9c6191d72db9fabc4c2c79bc997574ae673c2ee2dff521",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFI\u042f\u1f6d\u0399\u041e\u1f08\u0399\ud803\udc92\u1ffa\u0399",
+      "lower": "\ufb03\u044f\u1fa5\u1c82\u1f80\ud803\udcd2\u1ff2",
+      "casefold": "ffi\u044f\u1f65\u03b9\u043e\u1f00\u03b9\ud803\udcd2\u1f7c\u03b9"
+    },
+    "expected": {
+      "upper": "FFI\u042f\u1f6d\u0399\u041e\u1f08\u0399\ud803\udc92\u1ffa\u0399",
+      "lower": "\ufb03\u044f\u1fa5\u1c82\u1f80\ud803\udcd2\u1ff2",
+      "casefold": "ffi\u044f\u1f65\u03b9\u043e\u1f00\u03b9\ud803\udcd2\u1f7c\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "23eaa7a7e5151face1ee52f5313cd2e11e67f4ef368e7c6c2d6966b99c399e0f",
+      "lower": "3c8d8fdec022e1c3a23f2ebc586b06baff19742fdb164d21e378fd6fd44401b3",
+      "casefold": "eafac2ba271774660dbcfe6aaf6707685028ce9b4a6347a705f27ab4dff9a0b9"
+    }
+  },
+  {
+    "text": "\u1faf\u0418\u1f86\u10ae\u1f86\u1f08\ufb02\u017d",
+    "origins": [
+      "seeded:length-8"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:177:U+1FAF",
+      "CaseFolding.txt:388:U+0418:C",
+      "SpecialCasing.txt:136:U+1F86",
+      "CaseFolding.txt:565:U+10AE:C",
+      "SpecialCasing.txt:136:U+1F86",
+      "CaseFolding.txt:784:U+1F08:C",
+      "SpecialCasing.txt:75:U+FB02",
+      "CaseFolding.txt:186:U+017D:C"
+    ],
+    "id": "case-087",
+    "kind": "casing",
+    "input_hex": "e1beafd098e1be86e182aee1be86e1bc88efac82c5bd",
+    "input_sha256": "caca5abf5730e99fb05583c9c58853a40735b612ac45679dbcdcbb57019e3427",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6f\u0399\u0418\u1f0e\u0399\u10ae\u1f0e\u0399\u1f08FL\u017d",
+      "lower": "\u1fa7\u0438\u1f86\u2d0e\u1f86\u1f00\ufb02\u017e",
+      "casefold": "\u1f67\u03b9\u0438\u1f06\u03b9\u2d0e\u1f06\u03b9\u1f00fl\u017e"
+    },
+    "expected": {
+      "upper": "\u1f6f\u0399\u0418\u1f0e\u0399\u10ae\u1f0e\u0399\u1f08FL\u017d",
+      "lower": "\u1fa7\u0438\u1f86\u2d0e\u1f86\u1f00\ufb02\u017e",
+      "casefold": "\u1f67\u03b9\u0438\u1f06\u03b9\u2d0e\u1f06\u03b9\u1f00fl\u017e"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "dfd96ef5e00575f94847ac3fd3a259151b5849b58e6398bc884c801265942711",
+      "lower": "637b695282ac3dacd1a87cf162bd87d83eb136936fe6a9e1e736d46b94e973f6",
+      "casefold": "fc76e03ce5b5afb0d96958045855694fa48faae64226dc5d38575048d5cea20b"
+    }
+  },
+  {
+    "text": "\u1f50\u054f\u1fe4\u1c85\u1ffc\u1cb6\u0149\u1e6a\u1e96",
+    "origins": [
+      "seeded:length-9"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:99:U+1F50",
+      "CaseFolding.txt:542:U+054F:C",
+      "SpecialCasing.txt:111:U+1FE4",
+      "CaseFolding.txt:602:U+1C85:C",
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:645:U+1CB6:C",
+      "SpecialCasing.txt:90:U+0149",
+      "CaseFolding.txt:706:U+1E6A:C",
+      "SpecialCasing.txt:94:U+1E96"
+    ],
+    "id": "case-088",
+    "kind": "casing",
+    "input_hex": "e1bd90d58fe1bfa4e1b285e1bfbce1b2b6c589e1b9aae1ba96",
+    "input_sha256": "c131639570bee9a86e8f9d649d045d2a3327924db6f73db5d0f46d9be800562d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a5\u0313\u054f\u03a1\u0313\u0422\u03a9\u0399\u1cb6\u02bcN\u1e6aH\u0331",
+      "lower": "\u1f50\u057f\u1fe4\u1c85\u1ff3\u10f6\u0149\u1e6b\u1e96",
+      "casefold": "\u03c5\u0313\u057f\u03c1\u0313\u0442\u03c9\u03b9\u10f6\u02bcn\u1e6bh\u0331"
+    },
+    "expected": {
+      "upper": "\u03a5\u0313\u054f\u03a1\u0313\u0422\u03a9\u0399\u1cb6\u02bcN\u1e6aH\u0331",
+      "lower": "\u1f50\u057f\u1fe4\u1c85\u1ff3\u10f6\u0149\u1e6b\u1e96",
+      "casefold": "\u03c5\u0313\u057f\u03c1\u0313\u0442\u03c9\u03b9\u10f6\u02bcn\u1e6bh\u0331"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "f77238fe078d9b3f6e9d3969502d562099431299473ce62a0f75bd46ffe55895",
+      "lower": "59ba56b51f8da72fab2e65b8318cb9dad2d564085cc4ef92fcb4e5a23055f51c",
+      "casefold": "e65a15005f0ad1bbabdc5bf6b29d6a4e729eeeca6db7319f25d22ed6cbdf30b4"
+    }
+  },
+  {
+    "text": "\ufb03\u00d8\u1f98\u022c\u1f8e\u0464\u1fe2\u01b1\u1f52\uabbc",
+    "origins": [
+      "seeded:length-10"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:76:U+FB03",
+      "CaseFolding.txt:114:U+00D8:C",
+      "SpecialCasing.txt:154:U+1F98",
+      "CaseFolding.txt:279:U+022C:C",
+      "SpecialCasing.txt:144:U+1F8E",
+      "CaseFolding.txt:414:U+0464:C",
+      "SpecialCasing.txt:109:U+1FE2",
+      "CaseFolding.txt:217:U+01B1:C",
+      "SpecialCasing.txt:100:U+1F52",
+      "CaseFolding.txt:1328:U+ABBC:C"
+    ],
+    "id": "case-089",
+    "kind": "casing",
+    "input_hex": "efac83c398e1be98c8ace1be8ed1a4e1bfa2c6b1e1bd92eaaebc",
+    "input_sha256": "b1f0f3b9613130be124c810052897b7a3099126cccc0a9d72acadc9144172509",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFI\u00d8\u1f28\u0399\u022c\u1f0e\u0399\u0464\u03a5\u0308\u0300\u01b1\u03a5\u0313\u0300\u13ec",
+      "lower": "\ufb03\u00f8\u1f90\u022d\u1f86\u0465\u1fe2\u028a\u1f52\uabbc",
+      "casefold": "ffi\u00f8\u1f20\u03b9\u022d\u1f06\u03b9\u0465\u03c5\u0308\u0300\u028a\u03c5\u0313\u0300\u13ec"
+    },
+    "expected": {
+      "upper": "FFI\u00d8\u1f28\u0399\u022c\u1f0e\u0399\u0464\u03a5\u0308\u0300\u01b1\u03a5\u0313\u0300\u13ec",
+      "lower": "\ufb03\u00f8\u1f90\u022d\u1f86\u0465\u1fe2\u028a\u1f52\uabbc",
+      "casefold": "ffi\u00f8\u1f20\u03b9\u022d\u1f06\u03b9\u0465\u03c5\u0308\u0300\u028a\u03c5\u0313\u0300\u13ec"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "6621c29f525dfe3a038eb3463af66d0fe760b7abc479af65cb3f28edd7b37f8b",
+      "lower": "9126a97b32b106b38249728f54fedcea261d3828497e70dd821a14b773f24757",
+      "casefold": "bad2364ad76e189b184d951d0a91e8629fe6f1bef314f62831615dd9f60f5d9b"
+    }
+  },
+  {
+    "text": "\u1fb2\uab93\u1fc2\u2c03\u1f56\u24b9\u1fb4\ua64e\ufb04\u1fda\ufb06",
+    "origins": [
+      "seeded:length-11"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:187:U+1FB2",
+      "CaseFolding.txt:1287:U+AB93:C",
+      "SpecialCasing.txt:189:U+1FC2",
+      "CaseFolding.txt:1012:U+2C03:C",
+      "SpecialCasing.txt:102:U+1F56",
+      "CaseFolding.txt:986:U+24B9:C",
+      "SpecialCasing.txt:188:U+1FB4",
+      "CaseFolding.txt:1132:U+A64E:C",
+      "SpecialCasing.txt:77:U+FB04",
+      "CaseFolding.txt:938:U+1FDA:C",
+      "SpecialCasing.txt:79:U+FB06"
+    ],
+    "id": "case-090",
+    "kind": "casing",
+    "input_hex": "e1beb2eaae93e1bf82e2b083e1bd96e292b9e1beb4ea998eefac84e1bf9aefac86",
+    "input_sha256": "a8edec1bc4f506baad16c1f4c9bcf98ccaf1f575ba8c4b098dfada5649264ef7",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1fba\u0399\u13c3\u1fca\u0399\u2c03\u03a5\u0313\u0342\u24b9\u0386\u0399\ua64eFFL\u1fdaST",
+      "lower": "\u1fb2\uab93\u1fc2\u2c33\u1f56\u24d3\u1fb4\ua64f\ufb04\u1f76\ufb06",
+      "casefold": "\u1f70\u03b9\u13c3\u1f74\u03b9\u2c33\u03c5\u0313\u0342\u24d3\u03ac\u03b9\ua64fffl\u1f76st"
+    },
+    "expected": {
+      "upper": "\u1fba\u0399\u13c3\u1fca\u0399\u2c03\u03a5\u0313\u0342\u24b9\u0386\u0399\ua64eFFL\u1fdaST",
+      "lower": "\u1fb2\uab93\u1fc2\u2c33\u1f56\u24d3\u1fb4\ua64f\ufb04\u1f76\ufb06",
+      "casefold": "\u1f70\u03b9\u13c3\u1f74\u03b9\u2c33\u03c5\u0313\u0342\u24d3\u03ac\u03b9\ua64fffl\u1f76st"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "acdd4490521e3203ea6befa7342c1224347be59672a9e90a700a5e6ae2c1c06c",
+      "lower": "988bc9ac6717666b596c5b3d61cdb0aa67ac3a043cb9e2c244f10e98d1e820c5",
+      "casefold": "abde6482dacaed4447f1b28e7b601b113b0c9236b31c9641267cc18a8c16c496"
+    }
+  },
+  {
+    "text": "\u1f88\ua7ab\u1f96\ua728\u1f95\ua726\u1f80H\u1f9f\ud801\udc19\ufb14\u01ea",
+    "origins": [
+      "seeded:length-12"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:138:U+1F88",
+      "CaseFolding.txt:1223:U+A7AB:C",
+      "SpecialCasing.txt:152:U+1F96",
+      "CaseFolding.txt:1165:U+A728:C",
+      "SpecialCasing.txt:151:U+1F95",
+      "CaseFolding.txt:1164:U+A726:C",
+      "SpecialCasing.txt:130:U+1F80",
+      "CaseFolding.txt:70:U+0048:C",
+      "SpecialCasing.txt:161:U+1F9F",
+      "CaseFolding.txt:1396:U+10419:C",
+      "SpecialCasing.txt:83:U+FB14",
+      "CaseFolding.txt:244:U+01EA:C"
+    ],
+    "id": "case-091",
+    "kind": "casing",
+    "input_hex": "e1be88ea9eabe1be96ea9ca8e1be95ea9ca6e1be8048e1be9ff0909099efac94c7aa",
+    "input_sha256": "e2a5753f2589bf04ff187c2730bda8302432be64888905d36ce7ee340b45f350",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f08\u0399\ua7ab\u1f2e\u0399\ua728\u1f2d\u0399\ua726\u1f08\u0399H\u1f2f\u0399\ud801\udc19\u0544\u0535\u01ea",
+      "lower": "\u1f80\u025c\u1f96\ua729\u1f95\ua727\u1f80h\u1f97\ud801\udc41\ufb14\u01eb",
+      "casefold": "\u1f00\u03b9\u025c\u1f26\u03b9\ua729\u1f25\u03b9\ua727\u1f00\u03b9h\u1f27\u03b9\ud801\udc41\u0574\u0565\u01eb"
+    },
+    "expected": {
+      "upper": "\u1f08\u0399\ua7ab\u1f2e\u0399\ua728\u1f2d\u0399\ua726\u1f08\u0399H\u1f2f\u0399\ud801\udc19\u0544\u0535\u01ea",
+      "lower": "\u1f80\u025c\u1f96\ua729\u1f95\ua727\u1f80h\u1f97\ud801\udc41\ufb14\u01eb",
+      "casefold": "\u1f00\u03b9\u025c\u1f26\u03b9\ua729\u1f25\u03b9\ua727\u1f00\u03b9h\u1f27\u03b9\ud801\udc41\u0574\u0565\u01eb"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "ac8e11e3c4745d8ed0e66dfb20fbfca0236d9b379792597d8d27d69f553fde61",
+      "lower": "cf7efa6ea24acb9772048d7bf2890cfc09c4ba08cd372d9f698b922644ee55fb",
+      "casefold": "3addc4624e2e8a8f03499e2fd23acf0d853049749ecc8ad31898cdb3be4c4099"
+    }
+  },
+  {
+    "text": "\ufb05\ud806\udcbf\u1fe7\u049a\u00df\ud801\udc0a\u1fd2\u1e06\u1f93\u1ff7\u1f99\u0190\u1f98",
+    "origins": [
+      "seeded:length-13"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:78:U+FB05",
+      "CaseFolding.txt:1586:U+118BF:C",
+      "SpecialCasing.txt:113:U+1FE7",
+      "CaseFolding.txt:437:U+049A:C",
+      "SpecialCasing.txt:65:U+00DF",
+      "CaseFolding.txt:1381:U+1040A:C",
+      "SpecialCasing.txt:105:U+1FD2",
+      "CaseFolding.txt:656:U+1E06:C",
+      "SpecialCasing.txt:149:U+1F93",
+      "CaseFolding.txt:955:U+1FF7:F",
+      "SpecialCasing.txt:155:U+1F99",
+      "CaseFolding.txt:198:U+0190:C",
+      "SpecialCasing.txt:154:U+1F98"
+    ],
+    "id": "case-092",
+    "kind": "casing",
+    "input_hex": "efac85f091a2bfe1bfa7d29ac39ff090908ae1bf92e1b886e1be93e1bfb7e1be99c690e1be98",
+    "input_sha256": "dd1ea4f7003b0507427d5baf48de8bad7158b5dabf9dd46b34664373f6a1ff6b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ST\ud806\udcbf\u03a5\u0308\u0342\u049aSS\ud801\udc0a\u0399\u0308\u0300\u1e06\u1f2b\u0399\u03a9\u0342\u0399\u1f29\u0399\u0190\u1f28\u0399",
+      "lower": "\ufb05\ud806\udcdf\u1fe7\u049b\u00df\ud801\udc32\u1fd2\u1e07\u1f93\u1ff7\u1f91\u025b\u1f90",
+      "casefold": "st\ud806\udcdf\u03c5\u0308\u0342\u049bss\ud801\udc32\u03b9\u0308\u0300\u1e07\u1f23\u03b9\u03c9\u0342\u03b9\u1f21\u03b9\u025b\u1f20\u03b9"
+    },
+    "expected": {
+      "upper": "ST\ud806\udcbf\u03a5\u0308\u0342\u049aSS\ud801\udc0a\u0399\u0308\u0300\u1e06\u1f2b\u0399\u03a9\u0342\u0399\u1f29\u0399\u0190\u1f28\u0399",
+      "lower": "\ufb05\ud806\udcdf\u1fe7\u049b\u00df\ud801\udc32\u1fd2\u1e07\u1f93\u1ff7\u1f91\u025b\u1f90",
+      "casefold": "st\ud806\udcdf\u03c5\u0308\u0342\u049bss\ud801\udc32\u03b9\u0308\u0300\u1e07\u1f23\u03b9\u03c9\u0342\u03b9\u1f21\u03b9\u025b\u1f20\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "9cc0c5470843f6dfa07fa2856cf86027ff02c4750f3a1479b8fe4b8d17de3c46",
+      "lower": "9be0cb496cf80fb7000a914075d39408de603acc722842e5f63a99d9a358f1cc",
+      "casefold": "e7eaa2b1c4d924e8f11052deaca655ebef13cc02c9897638671253fe7f47a9eb"
+    }
+  },
+  {
+    "text": "\u1ffc\ua790\u1f52\u0426\u1f82\ud806\udcb1\u1f87\u00c8\ufb02\ud801\udd8e\u1fc7\ud803\udc85\u1fac\ud83a\udd1b",
+    "origins": [
+      "seeded:length-14"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:1210:U+A790:C",
+      "SpecialCasing.txt:100:U+1F52",
+      "CaseFolding.txt:402:U+0426:C",
+      "SpecialCasing.txt:132:U+1F82",
+      "CaseFolding.txt:1572:U+118B1:C",
+      "SpecialCasing.txt:137:U+1F87",
+      "CaseFolding.txt:99:U+00C8:C",
+      "SpecialCasing.txt:75:U+FB02",
+      "CaseFolding.txt:1475:U+1058E:C",
+      "SpecialCasing.txt:195:U+1FC7",
+      "CaseFolding.txt:1487:U+10C85:C",
+      "SpecialCasing.txt:174:U+1FAC",
+      "CaseFolding.txt:1646:U+1E91B:C"
+    ],
+    "id": "case-093",
+    "kind": "casing",
+    "input_hex": "e1bfbcea9e90e1bd92d0a6e1be82f091a2b1e1be87c388efac82f090968ee1bf87f090b285e1beacf09ea49b",
+    "input_sha256": "ea049b001180ad2fedded82f40da86846b95ab74ca6d7758c763800f69023b25",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a9\u0399\ua790\u03a5\u0313\u0300\u0426\u1f0a\u0399\ud806\udcb1\u1f0f\u0399\u00c8FL\ud801\udd8e\u0397\u0342\u0399\ud803\udc85\u1f6c\u0399\ud83a\udd1b",
+      "lower": "\u1ff3\ua791\u1f52\u0446\u1f82\ud806\udcd1\u1f87\u00e8\ufb02\ud801\uddb5\u1fc7\ud803\udcc5\u1fa4\ud83a\udd3d",
+      "casefold": "\u03c9\u03b9\ua791\u03c5\u0313\u0300\u0446\u1f02\u03b9\ud806\udcd1\u1f07\u03b9\u00e8fl\ud801\uddb5\u03b7\u0342\u03b9\ud803\udcc5\u1f64\u03b9\ud83a\udd3d"
+    },
+    "expected": {
+      "upper": "\u03a9\u0399\ua790\u03a5\u0313\u0300\u0426\u1f0a\u0399\ud806\udcb1\u1f0f\u0399\u00c8FL\ud801\udd8e\u0397\u0342\u0399\ud803\udc85\u1f6c\u0399\ud83a\udd1b",
+      "lower": "\u1ff3\ua791\u1f52\u0446\u1f82\ud806\udcd1\u1f87\u00e8\ufb02\ud801\uddb5\u1fc7\ud803\udcc5\u1fa4\ud83a\udd3d",
+      "casefold": "\u03c9\u03b9\ua791\u03c5\u0313\u0300\u0446\u1f02\u03b9\ud806\udcd1\u1f07\u03b9\u00e8fl\ud801\uddb5\u03b7\u0342\u03b9\ud803\udcc5\u1f64\u03b9\ud83a\udd3d"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "302240278ad5da0fb8d377096d153f776e1c1ff592f529ee5f4b7094f72a77be",
+      "lower": "5636ab68a91566fa3f80e4fa73f8313474d9be39bbe6a213aac8c4816463a397",
+      "casefold": "625f19e55a677752395e59e65763790989f4b0f284a97a6fd5f6fd9e717216fe"
+    }
+  },
+  {
+    "text": "\u1fac\u2164\u1f98\u04f6\u1ff7\u1ca8\u0587\u0399\u1fa2\u1fb8\u1f8c\u01f7\u1ff2\u024a\u1f83",
+    "origins": [
+      "seeded:length-15"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:174:U+1FAC",
+      "CaseFolding.txt:970:U+2164:C",
+      "SpecialCasing.txt:154:U+1F98",
+      "CaseFolding.txt:483:U+04F6:C",
+      "SpecialCasing.txt:196:U+1FF7",
+      "CaseFolding.txt:631:U+1CA8:C",
+      "SpecialCasing.txt:81:U+0587",
+      "CaseFolding.txt:317:U+0399:C",
+      "SpecialCasing.txt:164:U+1FA2",
+      "CaseFolding.txt:913:U+1FB8:C",
+      "SpecialCasing.txt:142:U+1F8C",
+      "CaseFolding.txt:252:U+01F7:C",
+      "SpecialCasing.txt:191:U+1FF2",
+      "CaseFolding.txt:293:U+024A:C",
+      "SpecialCasing.txt:133:U+1F83"
+    ],
+    "id": "case-094",
+    "kind": "casing",
+    "input_hex": "e1beace285a4e1be98d3b6e1bfb7e1b2a8d687ce99e1bea2e1beb8e1be8cc7b7e1bfb2c98ae1be83",
+    "input_sha256": "6e6df9a6a65fe5a4fc702122d089f99d0aebfbbad44550e31b69f05d7c96b462",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6c\u0399\u2164\u1f28\u0399\u04f6\u03a9\u0342\u0399\u1ca8\u0535\u0552\u0399\u1f6a\u0399\u1fb8\u1f0c\u0399\u01f7\u1ffa\u0399\u024a\u1f0b\u0399",
+      "lower": "\u1fa4\u2174\u1f90\u04f7\u1ff7\u10e8\u0587\u03b9\u1fa2\u1fb0\u1f84\u01bf\u1ff2\u024b\u1f83",
+      "casefold": "\u1f64\u03b9\u2174\u1f20\u03b9\u04f7\u03c9\u0342\u03b9\u10e8\u0565\u0582\u03b9\u1f62\u03b9\u1fb0\u1f04\u03b9\u01bf\u1f7c\u03b9\u024b\u1f03\u03b9"
+    },
+    "expected": {
+      "upper": "\u1f6c\u0399\u2164\u1f28\u0399\u04f6\u03a9\u0342\u0399\u1ca8\u0535\u0552\u0399\u1f6a\u0399\u1fb8\u1f0c\u0399\u01f7\u1ffa\u0399\u024a\u1f0b\u0399",
+      "lower": "\u1fa4\u2174\u1f90\u04f7\u1ff7\u10e8\u0587\u03b9\u1fa2\u1fb0\u1f84\u01bf\u1ff2\u024b\u1f83",
+      "casefold": "\u1f64\u03b9\u2174\u1f20\u03b9\u04f7\u03c9\u0342\u03b9\u10e8\u0565\u0582\u03b9\u1f62\u03b9\u1fb0\u1f04\u03b9\u01bf\u1f7c\u03b9\u024b\u1f03\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "58e23707860f12587fad40ef7e18695a375c3d78e91a3aedb8fa28281c77b731",
+      "lower": "c51839bf23442bad892da087e600104ead4e8bacbd6f0f44cea3b13df02f8596",
+      "casefold": "fcb8ef2cbd69d30596f0b42aa549a58c67627fb9de52bebbd0fb2c04f54d2454"
+    }
+  },
+  {
+    "text": "\ufb05\u1fad\u1fa9\u1fa4\u1ff4\uab7c\u0130\u2c6f\u1fe2\u10c1\ufb00\u01a7\ufb05\u040e\u1fa4\u2c70",
+    "origins": [
+      "seeded:length-16"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:78:U+FB05",
+      "CaseFolding.txt:902:U+1FAD:F",
+      "SpecialCasing.txt:171:U+1FA9",
+      "CaseFolding.txt:888:U+1FA4:F",
+      "SpecialCasing.txt:192:U+1FF4",
+      "CaseFolding.txt:1264:U+AB7C:C",
+      "SpecialCasing.txt:69:U+0130",
+      "CaseFolding.txt:1066:U+2C6F:C",
+      "SpecialCasing.txt:109:U+1FE2",
+      "CaseFolding.txt:584:U+10C1:C",
+      "SpecialCasing.txt:73:U+FB00",
+      "CaseFolding.txt:212:U+01A7:C",
+      "SpecialCasing.txt:78:U+FB05",
+      "CaseFolding.txt:378:U+040E:C",
+      "SpecialCasing.txt:166:U+1FA4",
+      "CaseFolding.txt:1067:U+2C70:C"
+    ],
+    "id": "case-095",
+    "kind": "casing",
+    "input_hex": "efac85e1beade1bea9e1bea4e1bfb4eaadbcc4b0e2b1afe1bfa2e18381efac80c6a7efac85d08ee1bea4e2b1b0",
+    "input_sha256": "8a2c430c3caf78d63d56e043bb7547a020e672bbf2a822cb24c57586a8f33430",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ST\u1f6d\u0399\u1f69\u0399\u1f6c\u0399\u038f\u0399\u13ac\u0130\u2c6f\u03a5\u0308\u0300\u10c1FF\u01a7ST\u040e\u1f6c\u0399\u2c70",
+      "lower": "\ufb05\u1fa5\u1fa1\u1fa4\u1ff4\uab7ci\u0307\u0250\u1fe2\u2d21\ufb00\u01a8\ufb05\u045e\u1fa4\u0252",
+      "casefold": "st\u1f65\u03b9\u1f61\u03b9\u1f64\u03b9\u03ce\u03b9\u13aci\u0307\u0250\u03c5\u0308\u0300\u2d21ff\u01a8st\u045e\u1f64\u03b9\u0252"
+    },
+    "expected": {
+      "upper": "ST\u1f6d\u0399\u1f69\u0399\u1f6c\u0399\u038f\u0399\u13ac\u0130\u2c6f\u03a5\u0308\u0300\u10c1FF\u01a7ST\u040e\u1f6c\u0399\u2c70",
+      "lower": "\ufb05\u1fa5\u1fa1\u1fa4\u1ff4\uab7ci\u0307\u0250\u1fe2\u2d21\ufb00\u01a8\ufb05\u045e\u1fa4\u0252",
+      "casefold": "st\u1f65\u03b9\u1f61\u03b9\u1f64\u03b9\u03ce\u03b9\u13aci\u0307\u0250\u03c5\u0308\u0300\u2d21ff\u01a8st\u045e\u1f64\u03b9\u0252"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "5ceb5685ccf770c09a5d02f23cde7a9af01072f8d01663539b26e54901ff2413",
+      "lower": "d9e971e24fe516e586c2ec0acfcb707b70fa10d727431971f9ce193c6a9588e5",
+      "casefold": "161be8220b192dc983e613aa605aeae8036eafce76669dd0346c596b01d8a500"
+    }
+  },
+  {
+    "text": "\u1f89\u1f82\u1f8e\ua66a\u1e9a\uaba0",
+    "origins": [
+      "seeded:mix-96"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:139:U+1F89",
+      "CaseFolding.txt:838:U+1F82:F",
+      "SpecialCasing.txt:144:U+1F8E",
+      "CaseFolding.txt:1146:U+A66A:C",
+      "SpecialCasing.txt:98:U+1E9A",
+      "CaseFolding.txt:1300:U+ABA0:C"
+    ],
+    "id": "case-096",
+    "kind": "casing",
+    "input_hex": "e1be89e1be82e1be8eea99aae1ba9aeaaea0",
+    "input_sha256": "d006f5aaa024f59d815b48484d842913e70009f066821d06194221adf847394c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f09\u0399\u1f0a\u0399\u1f0e\u0399\ua66aA\u02be\u13d0",
+      "lower": "\u1f81\u1f82\u1f86\ua66b\u1e9a\uaba0",
+      "casefold": "\u1f01\u03b9\u1f02\u03b9\u1f06\u03b9\ua66ba\u02be\u13d0"
+    },
+    "expected": {
+      "upper": "\u1f09\u0399\u1f0a\u0399\u1f0e\u0399\ua66aA\u02be\u13d0",
+      "lower": "\u1f81\u1f82\u1f86\ua66b\u1e9a\uaba0",
+      "casefold": "\u1f01\u03b9\u1f02\u03b9\u1f06\u03b9\ua66ba\u02be\u13d0"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8f936a5d4eebc2d9978fd968658842c29ca744d16a0c8fce66d0216ce24e9ea1",
+      "lower": "caf7a862889b143869dc02bdd9a309248fe359f7fbdd2d23bc7f1aee88a803b8",
+      "casefold": "b6ee22569d4ac3b02d169427a11f7e582682b4290053e96954e4c30ec021fc6b"
+    }
+  },
+  {
+    "text": "\u1fa0\u10c3\ufb16",
+    "origins": [
+      "seeded:mix-97"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:162:U+1FA0",
+      "CaseFolding.txt:586:U+10C3:C",
+      "SpecialCasing.txt:85:U+FB16"
+    ],
+    "id": "case-097",
+    "kind": "casing",
+    "input_hex": "e1bea0e18383efac96",
+    "input_sha256": "4193d374d0941705927f2bb793429d169faaf96fcd31e844040bd9d4f623f425",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f68\u0399\u10c3\u054e\u0546",
+      "lower": "\u1fa0\u2d23\ufb16",
+      "casefold": "\u1f60\u03b9\u2d23\u057e\u0576"
+    },
+    "expected": {
+      "upper": "\u1f68\u0399\u10c3\u054e\u0546",
+      "lower": "\u1fa0\u2d23\ufb16",
+      "casefold": "\u1f60\u03b9\u2d23\u057e\u0576"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d4e9c6bd94978aae90387cdd9e483cf796a9e41610dc9a5a0ca2b0b253ca131b",
+      "lower": "c3a6dffd7d8bc7e0c214d41c16cb7ff9b8afa0b3a1774ccec0b3efdf14e366f4",
+      "casefold": "9e50ed17ff6c7113b71533135ba2fb2018f66804106fdf8cad1ad55cad8f6c09"
+    }
+  },
+  {
+    "text": "\u03b0\ua790\ufb13",
+    "origins": [
+      "seeded:mix-98"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:92:U+03B0",
+      "CaseFolding.txt:1210:U+A790:C",
+      "SpecialCasing.txt:82:U+FB13"
+    ],
+    "id": "case-098",
+    "kind": "casing",
+    "input_hex": "ceb0ea9e90efac93",
+    "input_sha256": "af2d898e9b2173a8596fbc8060d0537a7ed1521be6b18e633e86401322a1b21b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a5\u0308\u0301\ua790\u0544\u0546",
+      "lower": "\u03b0\ua791\ufb13",
+      "casefold": "\u03c5\u0308\u0301\ua791\u0574\u0576"
+    },
+    "expected": {
+      "upper": "\u03a5\u0308\u0301\ua790\u0544\u0546",
+      "lower": "\u03b0\ua791\ufb13",
+      "casefold": "\u03c5\u0308\u0301\ua791\u0574\u0576"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "484afeb42dcfd09d8a366dc843182c8ba1002c90f3524ec7967f31c0136d2ff6",
+      "lower": "59b46915b7f3ac556a37e61e2b4fb10e7f0bb9e62fec3824b5632efd3efbedd7",
+      "casefold": "d72448ed349d7f387b973ecde612ddf5bed9e246e2cdabf60e0ee66017ecdecc"
+    }
+  },
+  {
+    "text": "\u1f91\ud803\udc86\u1f85\u0399\u1f54\ua642\u1f84\u0226\u1f9b\u1ede\u1f89\ud803\udd5f\u1e98\ua779\u1f95\u1e7e",
+    "origins": [
+      "seeded:mix-99"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:147:U+1F91",
+      "CaseFolding.txt:1488:U+10C86:C",
+      "SpecialCasing.txt:135:U+1F85",
+      "CaseFolding.txt:317:U+0399:C",
+      "SpecialCasing.txt:101:U+1F54",
+      "CaseFolding.txt:1126:U+A642:C",
+      "SpecialCasing.txt:134:U+1F84",
+      "CaseFolding.txt:276:U+0226:C",
+      "SpecialCasing.txt:157:U+1F9B",
+      "CaseFolding.txt:767:U+1EDE:C",
+      "SpecialCasing.txt:139:U+1F89",
+      "CaseFolding.txt:1548:U+10D5F:C",
+      "SpecialCasing.txt:96:U+1E98",
+      "CaseFolding.txt:1200:U+A779:C",
+      "SpecialCasing.txt:151:U+1F95",
+      "CaseFolding.txt:716:U+1E7E:C"
+    ],
+    "id": "case-099",
+    "kind": "casing",
+    "input_hex": "e1be91f090b286e1be85ce99e1bd94ea9982e1be84c8a6e1be9be1bb9ee1be89f090b59fe1ba98ea9db9e1be95e1b9be",
+    "input_sha256": "3bbc23cfff85bae9358274aef01c77a836a89b0976a8c7fa6b6f10004509d904",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f29\u0399\ud803\udc86\u1f0d\u0399\u0399\u03a5\u0313\u0301\ua642\u1f0c\u0399\u0226\u1f2b\u0399\u1ede\u1f09\u0399\ud803\udd5fW\u030a\ua779\u1f2d\u0399\u1e7e",
+      "lower": "\u1f91\ud803\udcc6\u1f85\u03b9\u1f54\ua643\u1f84\u0227\u1f93\u1edf\u1f81\ud803\udd7f\u1e98\ua77a\u1f95\u1e7f",
+      "casefold": "\u1f21\u03b9\ud803\udcc6\u1f05\u03b9\u03b9\u03c5\u0313\u0301\ua643\u1f04\u03b9\u0227\u1f23\u03b9\u1edf\u1f01\u03b9\ud803\udd7fw\u030a\ua77a\u1f25\u03b9\u1e7f"
+    },
+    "expected": {
+      "upper": "\u1f29\u0399\ud803\udc86\u1f0d\u0399\u0399\u03a5\u0313\u0301\ua642\u1f0c\u0399\u0226\u1f2b\u0399\u1ede\u1f09\u0399\ud803\udd5fW\u030a\ua779\u1f2d\u0399\u1e7e",
+      "lower": "\u1f91\ud803\udcc6\u1f85\u03b9\u1f54\ua643\u1f84\u0227\u1f93\u1edf\u1f81\ud803\udd7f\u1e98\ua77a\u1f95\u1e7f",
+      "casefold": "\u1f21\u03b9\ud803\udcc6\u1f05\u03b9\u03b9\u03c5\u0313\u0301\ua643\u1f04\u03b9\u0227\u1f23\u03b9\u1edf\u1f01\u03b9\ud803\udd7fw\u030a\ua77a\u1f25\u03b9\u1e7f"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "977cc40bae55756873a0aba7a1738a0e8a76959548740765bc90ca93cbf71386",
+      "lower": "76d23d251b0c1f9c18fcdbaddf29218c6d2e66e6c3778c8cc0b19e44194706fb",
+      "casefold": "f4d0ff6fda52ac56b84504317673f2d4b6cc53310f6333be5c1370e87bf0e432"
+    }
+  },
+  {
+    "text": "\u1e98\ud81b\ude5a",
+    "origins": [
+      "seeded:mix-100"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:96:U+1E98",
+      "CaseFolding.txt:1613:U+16E5A:C"
+    ],
+    "id": "case-100",
+    "kind": "casing",
+    "input_hex": "e1ba98f096b99a",
+    "input_sha256": "ad1f152754836710eb43b62785d36e629488254ee83b134377273d7329a70c1c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "W\u030a\ud81b\ude5a",
+      "lower": "\u1e98\ud81b\ude7a",
+      "casefold": "w\u030a\ud81b\ude7a"
+    },
+    "expected": {
+      "upper": "W\u030a\ud81b\ude5a",
+      "lower": "\u1e98\ud81b\ude7a",
+      "casefold": "w\u030a\ud81b\ude7a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b4ebb146a1f7647cab50699eb6dfd489570800bc3e5a466b7b0b9b754dbc922f",
+      "lower": "20f585c290ab23c8154f5bd3a80cb535f6ac4c2c3bdfb41b287565ed285edcad",
+      "casefold": "462cb6939cecc5a3df34e583ebb417d4aae71c909b45e25a8d8c98f3a8ae78b4"
+    }
+  },
+  {
+    "text": "\ufb16\ud803\udc91\u1ff7\ud801\udcc0\u1e99",
+    "origins": [
+      "seeded:mix-101"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:85:U+FB16",
+      "CaseFolding.txt:1499:U+10C91:C",
+      "SpecialCasing.txt:196:U+1FF7",
+      "CaseFolding.txt:1427:U+104C0:C",
+      "SpecialCasing.txt:97:U+1E99"
+    ],
+    "id": "case-101",
+    "kind": "casing",
+    "input_hex": "efac96f090b291e1bfb7f0909380e1ba99",
+    "input_sha256": "679631744f18b28270bde4d9b73ee97d2648ad15dd393e67d283455a07812b3c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u054e\u0546\ud803\udc91\u03a9\u0342\u0399\ud801\udcc0Y\u030a",
+      "lower": "\ufb16\ud803\udcd1\u1ff7\ud801\udce8\u1e99",
+      "casefold": "\u057e\u0576\ud803\udcd1\u03c9\u0342\u03b9\ud801\udce8y\u030a"
+    },
+    "expected": {
+      "upper": "\u054e\u0546\ud803\udc91\u03a9\u0342\u0399\ud801\udcc0Y\u030a",
+      "lower": "\ufb16\ud803\udcd1\u1ff7\ud801\udce8\u1e99",
+      "casefold": "\u057e\u0576\ud803\udcd1\u03c9\u0342\u03b9\ud801\udce8y\u030a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "c52a583c6131a00d5de62fccf359777855a3531e650ba2c2b1adbb64f03424b5",
+      "lower": "418477eb9453ff9ec6ada85a61cc8dd83b278a15aa5e905d61d12ee2041be134",
+      "casefold": "89106d83f0a9731542d791f61511ad45bd64cdeadc78dcfe59fff3567144644a"
+    }
+  },
+  {
+    "text": "\u1f8c\u24c6\u1f82\u054c\u1e98\ua7aa",
+    "origins": [
+      "seeded:mix-102"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:142:U+1F8C",
+      "CaseFolding.txt:999:U+24C6:C",
+      "SpecialCasing.txt:132:U+1F82",
+      "CaseFolding.txt:539:U+054C:C",
+      "SpecialCasing.txt:96:U+1E98",
+      "CaseFolding.txt:1222:U+A7AA:C"
+    ],
+    "id": "case-102",
+    "kind": "casing",
+    "input_hex": "e1be8ce29386e1be82d58ce1ba98ea9eaa",
+    "input_sha256": "1a00b0659c01daeef971f3cb5d4482520ed90921f24deb055d87386e8b042fb8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f0c\u0399\u24c6\u1f0a\u0399\u054cW\u030a\ua7aa",
+      "lower": "\u1f84\u24e0\u1f82\u057c\u1e98\u0266",
+      "casefold": "\u1f04\u03b9\u24e0\u1f02\u03b9\u057cw\u030a\u0266"
+    },
+    "expected": {
+      "upper": "\u1f0c\u0399\u24c6\u1f0a\u0399\u054cW\u030a\ua7aa",
+      "lower": "\u1f84\u24e0\u1f82\u057c\u1e98\u0266",
+      "casefold": "\u1f04\u03b9\u24e0\u1f02\u03b9\u057cw\u030a\u0266"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "ee9cf77381a677a9f9e6003205d38bc6fa12f8fceca94b04c4e59f687f481e14",
+      "lower": "34422288adc46ab4ef280336fded0a6768dd3ed3a5e94b2935922946521a7483",
+      "casefold": "f7dbdc6a643dbc1d011cf77b98f65da345d087895992b2ee9130e84fd55a5088"
+    }
+  },
+  {
+    "text": "\u1f9d\u1f2e\u01f0\u2162\u1fe2\u2ced\u1ff2\ud801\udd74\u1fb4\u0399\u1fb6\ua68a\u1ffc\u03e6\u1fe3",
+    "origins": [
+      "seeded:mix-103"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:159:U+1F9D",
+      "CaseFolding.txt:804:U+1F2E:C",
+      "SpecialCasing.txt:93:U+01F0",
+      "CaseFolding.txt:968:U+2162:C",
+      "SpecialCasing.txt:109:U+1FE2",
+      "CaseFolding.txt:1123:U+2CED:C",
+      "SpecialCasing.txt:191:U+1FF2",
+      "CaseFolding.txt:1451:U+10574:C",
+      "SpecialCasing.txt:188:U+1FB4",
+      "CaseFolding.txt:317:U+0399:C",
+      "SpecialCasing.txt:103:U+1FB6",
+      "CaseFolding.txt:1153:U+A68A:C",
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:349:U+03E6:C",
+      "SpecialCasing.txt:110:U+1FE3"
+    ],
+    "id": "case-103",
+    "kind": "casing",
+    "input_hex": "e1be9de1bcaec7b0e285a2e1bfa2e2b3ade1bfb2f09095b4e1beb4ce99e1beb6ea9a8ae1bfbccfa6e1bfa3",
+    "input_sha256": "602ab04092e5f67fe40c62c9324253f46507deddca78afa9934e7e87186585e1",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f2d\u0399\u1f2eJ\u030c\u2162\u03a5\u0308\u0300\u2ced\u1ffa\u0399\ud801\udd74\u0386\u0399\u0399\u0391\u0342\ua68a\u03a9\u0399\u03e6\u03a5\u0308\u0301",
+      "lower": "\u1f95\u1f26\u01f0\u2172\u1fe2\u2cee\u1ff2\ud801\udd9b\u1fb4\u03b9\u1fb6\ua68b\u1ff3\u03e7\u1fe3",
+      "casefold": "\u1f25\u03b9\u1f26j\u030c\u2172\u03c5\u0308\u0300\u2cee\u1f7c\u03b9\ud801\udd9b\u03ac\u03b9\u03b9\u03b1\u0342\ua68b\u03c9\u03b9\u03e7\u03c5\u0308\u0301"
+    },
+    "expected": {
+      "upper": "\u1f2d\u0399\u1f2eJ\u030c\u2162\u03a5\u0308\u0300\u2ced\u1ffa\u0399\ud801\udd74\u0386\u0399\u0399\u0391\u0342\ua68a\u03a9\u0399\u03e6\u03a5\u0308\u0301",
+      "lower": "\u1f95\u1f26\u01f0\u2172\u1fe2\u2cee\u1ff2\ud801\udd9b\u1fb4\u03b9\u1fb6\ua68b\u1ff3\u03e7\u1fe3",
+      "casefold": "\u1f25\u03b9\u1f26j\u030c\u2172\u03c5\u0308\u0300\u2cee\u1f7c\u03b9\ud801\udd9b\u03ac\u03b9\u03b9\u03b1\u0342\ua68b\u03c9\u03b9\u03e7\u03c5\u0308\u0301"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d567b26b1e64a184dac48b3ccff221eb2c8ac0427ecbe19cf5fe497012e4bc5a",
+      "lower": "fc7094298aecb3fa3c4d5adabca6b83ba6a5b970c7fc45dd16ac1891e6060658",
+      "casefold": "a358868c83f9c02c08841627b05396b793d13d7fbe2de68371d9696751f46327"
+    }
+  },
+  {
+    "text": "\u1ffc\u0421\u1fa4\u01f1\u1fae\u0480\u1f86",
+    "origins": [
+      "seeded:mix-104"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:397:U+0421:C",
+      "SpecialCasing.txt:166:U+1FA4",
+      "CaseFolding.txt:248:U+01F1:C",
+      "SpecialCasing.txt:176:U+1FAE",
+      "CaseFolding.txt:428:U+0480:C",
+      "SpecialCasing.txt:136:U+1F86"
+    ],
+    "id": "case-104",
+    "kind": "casing",
+    "input_hex": "e1bfbcd0a1e1bea4c7b1e1beaed280e1be86",
+    "input_sha256": "2b159928b39354b5665737bec4e5a3068bf02788027cdd5f1ef6674fd5c44a88",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a9\u0399\u0421\u1f6c\u0399\u01f1\u1f6e\u0399\u0480\u1f0e\u0399",
+      "lower": "\u1ff3\u0441\u1fa4\u01f3\u1fa6\u0481\u1f86",
+      "casefold": "\u03c9\u03b9\u0441\u1f64\u03b9\u01f3\u1f66\u03b9\u0481\u1f06\u03b9"
+    },
+    "expected": {
+      "upper": "\u03a9\u0399\u0421\u1f6c\u0399\u01f1\u1f6e\u0399\u0480\u1f0e\u0399",
+      "lower": "\u1ff3\u0441\u1fa4\u01f3\u1fa6\u0481\u1f86",
+      "casefold": "\u03c9\u03b9\u0441\u1f64\u03b9\u01f3\u1f66\u03b9\u0481\u1f06\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "16a4431aa72155a240a1dcc8aa2004602b8fafa4ee8a2555ec9468026e526a17",
+      "lower": "754d3b18c9152ad437cf824e811b1a79edbc43caa72ee21aa3af874e6d87727e",
+      "casefold": "d5a6670cb149682667e41fc0b7c207190b257edcea94479c514fc04baa7639ba"
+    }
+  },
+  {
+    "text": "\u1fa6\u1ec6\u00df\u216a\ufb00\ud801\udcd3\ufb00\u24cd\u1e9a\ud83a\udd00\u1f87\u047a",
+    "origins": [
+      "seeded:mix-105"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:168:U+1FA6",
+      "CaseFolding.txt:755:U+1EC6:C",
+      "SpecialCasing.txt:65:U+00DF",
+      "CaseFolding.txt:976:U+216A:C",
+      "SpecialCasing.txt:73:U+FB00",
+      "CaseFolding.txt:1446:U+104D3:C",
+      "SpecialCasing.txt:73:U+FB00",
+      "CaseFolding.txt:1006:U+24CD:C",
+      "SpecialCasing.txt:98:U+1E9A",
+      "CaseFolding.txt:1619:U+1E900:C",
+      "SpecialCasing.txt:137:U+1F87",
+      "CaseFolding.txt:425:U+047A:C"
+    ],
+    "id": "case-105",
+    "kind": "casing",
+    "input_hex": "e1bea6e1bb86c39fe285aaefac80f0909393efac80e2938de1ba9af09ea480e1be87d1ba",
+    "input_sha256": "d55eef23b1f7b23b9af7abda423e42ec4056a766f9fd62b7afdb1b8179774219",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6e\u0399\u1ec6SS\u216aFF\ud801\udcd3FF\u24cdA\u02be\ud83a\udd00\u1f0f\u0399\u047a",
+      "lower": "\u1fa6\u1ec7\u00df\u217a\ufb00\ud801\udcfb\ufb00\u24e7\u1e9a\ud83a\udd22\u1f87\u047b",
+      "casefold": "\u1f66\u03b9\u1ec7ss\u217aff\ud801\udcfbff\u24e7a\u02be\ud83a\udd22\u1f07\u03b9\u047b"
+    },
+    "expected": {
+      "upper": "\u1f6e\u0399\u1ec6SS\u216aFF\ud801\udcd3FF\u24cdA\u02be\ud83a\udd00\u1f0f\u0399\u047a",
+      "lower": "\u1fa6\u1ec7\u00df\u217a\ufb00\ud801\udcfb\ufb00\u24e7\u1e9a\ud83a\udd22\u1f87\u047b",
+      "casefold": "\u1f66\u03b9\u1ec7ss\u217aff\ud801\udcfbff\u24e7a\u02be\ud83a\udd22\u1f07\u03b9\u047b"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "74f571791c4e3aa88cd0e54c1283f9fc75c37597d761295397431b707f883c7c",
+      "lower": "db58d764bb3faaa02671c0e7b301912806939d84f1a89557e2f72e12e580e78f",
+      "casefold": "67f97cb7d516d7b9dc7bc134f95a4a840b7222582cf94c422397ad125351ce8d"
+    }
+  },
+  {
+    "text": "\u1fac\u1fd6\u1f94\u0405",
+    "origins": [
+      "seeded:mix-106"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:174:U+1FAC",
+      "CaseFolding.txt:934:U+1FD6:F",
+      "SpecialCasing.txt:150:U+1F94",
+      "CaseFolding.txt:369:U+0405:C"
+    ],
+    "id": "case-106",
+    "kind": "casing",
+    "input_hex": "e1beace1bf96e1be94d085",
+    "input_sha256": "671d01bb0558888acb2fe6df27e5dac095ffa8c3b1f3bff9bbd6a8d0a5092cbd",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6c\u0399\u0399\u0342\u1f2c\u0399\u0405",
+      "lower": "\u1fa4\u1fd6\u1f94\u0455",
+      "casefold": "\u1f64\u03b9\u03b9\u0342\u1f24\u03b9\u0455"
+    },
+    "expected": {
+      "upper": "\u1f6c\u0399\u0399\u0342\u1f2c\u0399\u0405",
+      "lower": "\u1fa4\u1fd6\u1f94\u0455",
+      "casefold": "\u1f64\u03b9\u03b9\u0342\u1f24\u03b9\u0455"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "246c03ea4ae26ab43dda2207f497756f9ce4c4bc323fe9c0fc714979da1c7e94",
+      "lower": "e0f155b4a2dbfde9c260b57023cd822144d8b3a7f70fa49f531030f614a8615c",
+      "casefold": "e267674ea06fd1d944789ee9d6ddaea7f1e79eaace735bba56fa9203d345384f"
+    }
+  },
+  {
+    "text": "\u1fe7\ud81b\ude5a\u1fc2\ud801\udcc0\u1f8e",
+    "origins": [
+      "seeded:mix-107"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:113:U+1FE7",
+      "CaseFolding.txt:1613:U+16E5A:C",
+      "SpecialCasing.txt:189:U+1FC2",
+      "CaseFolding.txt:1427:U+104C0:C",
+      "SpecialCasing.txt:144:U+1F8E"
+    ],
+    "id": "case-107",
+    "kind": "casing",
+    "input_hex": "e1bfa7f096b99ae1bf82f0909380e1be8e",
+    "input_sha256": "2b1ac807226358b8a564defaaf2b3ee6ffd8c0fd919e37de1cbd2f417b6d97ca",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a5\u0308\u0342\ud81b\ude5a\u1fca\u0399\ud801\udcc0\u1f0e\u0399",
+      "lower": "\u1fe7\ud81b\ude7a\u1fc2\ud801\udce8\u1f86",
+      "casefold": "\u03c5\u0308\u0342\ud81b\ude7a\u1f74\u03b9\ud801\udce8\u1f06\u03b9"
+    },
+    "expected": {
+      "upper": "\u03a5\u0308\u0342\ud81b\ude5a\u1fca\u0399\ud801\udcc0\u1f0e\u0399",
+      "lower": "\u1fe7\ud81b\ude7a\u1fc2\ud801\udce8\u1f86",
+      "casefold": "\u03c5\u0308\u0342\ud81b\ude7a\u1f74\u03b9\ud801\udce8\u1f06\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "8ed1997eb751fb2652368f31c47671ed1e33f63e79dc137ba8a79cecb7734fdb",
+      "lower": "b4977d6772a0bf5d4a54b210cc7378a46c8fb67f93ff8b7ac6c4277c9b9c823c",
+      "casefold": "3647ea06c98c4c8cd3e39495b2912a79a692b1754f4e52ae8ed5d98a0202f4ff"
+    }
+  },
+  {
+    "text": "\u1f8c\ud81b\ude4b\u1f98\ud806\udcb3\u00df\ud81b\ude51\u1fc7\ua74c\u1fe3",
+    "origins": [
+      "seeded:mix-108"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:142:U+1F8C",
+      "CaseFolding.txt:1598:U+16E4B:C",
+      "SpecialCasing.txt:154:U+1F98",
+      "CaseFolding.txt:1574:U+118B3:C",
+      "SpecialCasing.txt:65:U+00DF",
+      "CaseFolding.txt:1604:U+16E51:C",
+      "SpecialCasing.txt:195:U+1FC7",
+      "CaseFolding.txt:1182:U+A74C:C",
+      "SpecialCasing.txt:110:U+1FE3"
+    ],
+    "id": "case-108",
+    "kind": "casing",
+    "input_hex": "e1be8cf096b98be1be98f091a2b3c39ff096b991e1bf87ea9d8ce1bfa3",
+    "input_sha256": "52fcc2eeb13fa9ac7ba0262d6f626612773a0ad969dc03bc23573c6a3f1c1ea6",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f0c\u0399\ud81b\ude4b\u1f28\u0399\ud806\udcb3SS\ud81b\ude51\u0397\u0342\u0399\ua74c\u03a5\u0308\u0301",
+      "lower": "\u1f84\ud81b\ude6b\u1f90\ud806\udcd3\u00df\ud81b\ude71\u1fc7\ua74d\u1fe3",
+      "casefold": "\u1f04\u03b9\ud81b\ude6b\u1f20\u03b9\ud806\udcd3ss\ud81b\ude71\u03b7\u0342\u03b9\ua74d\u03c5\u0308\u0301"
+    },
+    "expected": {
+      "upper": "\u1f0c\u0399\ud81b\ude4b\u1f28\u0399\ud806\udcb3SS\ud81b\ude51\u0397\u0342\u0399\ua74c\u03a5\u0308\u0301",
+      "lower": "\u1f84\ud81b\ude6b\u1f90\ud806\udcd3\u00df\ud81b\ude71\u1fc7\ua74d\u1fe3",
+      "casefold": "\u1f04\u03b9\ud81b\ude6b\u1f20\u03b9\ud806\udcd3ss\ud81b\ude71\u03b7\u0342\u03b9\ua74d\u03c5\u0308\u0301"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d072b06c753050be25482029d57bc16f12b3fecae6715f9d4c4eaf30a35d5024",
+      "lower": "55e3e69b48c0939152c1446dd8c4424ebe2c77d5cdd41f147ab5cef2c0e4d6a5",
+      "casefold": "8e36ae43f88951f0d0b967743e7cf9db10b4e2d2b35efe619672f8def6be80dd"
+    }
+  },
+  {
+    "text": "\ufb05\u1f3c\u1f88\u016c\u1faeZ\u1f87\u1e5a\u1f89",
+    "origins": [
+      "seeded:mix-109"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:78:U+FB05",
+      "CaseFolding.txt:810:U+1F3C:C",
+      "SpecialCasing.txt:138:U+1F88",
+      "CaseFolding.txt:177:U+016C:C",
+      "SpecialCasing.txt:176:U+1FAE",
+      "CaseFolding.txt:89:U+005A:C",
+      "SpecialCasing.txt:137:U+1F87",
+      "CaseFolding.txt:698:U+1E5A:C",
+      "SpecialCasing.txt:139:U+1F89"
+    ],
+    "id": "case-109",
+    "kind": "casing",
+    "input_hex": "efac85e1bcbce1be88c5ace1beae5ae1be87e1b99ae1be89",
+    "input_sha256": "a7bbe7d96d97f0e55d1e7dd68d1395856c30ed9696bc97efe2e9048c9e96adb5",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ST\u1f3c\u1f08\u0399\u016c\u1f6e\u0399Z\u1f0f\u0399\u1e5a\u1f09\u0399",
+      "lower": "\ufb05\u1f34\u1f80\u016d\u1fa6z\u1f87\u1e5b\u1f81",
+      "casefold": "st\u1f34\u1f00\u03b9\u016d\u1f66\u03b9z\u1f07\u03b9\u1e5b\u1f01\u03b9"
+    },
+    "expected": {
+      "upper": "ST\u1f3c\u1f08\u0399\u016c\u1f6e\u0399Z\u1f0f\u0399\u1e5a\u1f09\u0399",
+      "lower": "\ufb05\u1f34\u1f80\u016d\u1fa6z\u1f87\u1e5b\u1f81",
+      "casefold": "st\u1f34\u1f00\u03b9\u016d\u1f66\u03b9z\u1f07\u03b9\u1e5b\u1f01\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d678f4f8571b3ae81b61e9dc051af037082e7e08b2c7b9846255361389af8449",
+      "lower": "27d9784fa61e7170101ae87a2435e6aed544bee74f7ec758eb45f897b4825916",
+      "casefold": "b4b638e4b1b8906fb41a2db3653c72910b5e8c786c623ce099f0984cae1de63a"
+    }
+  },
+  {
+    "text": "\u1f97\u1e30\u1ff3\u10c2",
+    "origins": [
+      "seeded:mix-110"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:153:U+1F97",
+      "CaseFolding.txt:677:U+1E30:C",
+      "SpecialCasing.txt:182:U+1FF3",
+      "CaseFolding.txt:585:U+10C2:C"
+    ],
+    "id": "case-110",
+    "kind": "casing",
+    "input_hex": "e1be97e1b8b0e1bfb3e18382",
+    "input_sha256": "5b8ec4d3f4c42e307d013994e788889ece568029116f9f51f0ee06b60e301c8e",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f2f\u0399\u1e30\u03a9\u0399\u10c2",
+      "lower": "\u1f97\u1e31\u1ff3\u2d22",
+      "casefold": "\u1f27\u03b9\u1e31\u03c9\u03b9\u2d22"
+    },
+    "expected": {
+      "upper": "\u1f2f\u0399\u1e30\u03a9\u0399\u10c2",
+      "lower": "\u1f97\u1e31\u1ff3\u2d22",
+      "casefold": "\u1f27\u03b9\u1e31\u03c9\u03b9\u2d22"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "2bd42a0acd43712fc355dfe4b5b70c3d411da9413a879555072661464b36b732",
+      "lower": "c98cceed00880950eaa97021125b2c08180b38772a7da148d9a151bfba5716c4",
+      "casefold": "9d8338a2684e25574ed600733f06716ec1f1e66b63896887a9ebece40b818f09"
+    }
+  },
+  {
+    "text": "\ufb14\u2c1e\u1f88",
+    "origins": [
+      "seeded:mix-111"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:83:U+FB14",
+      "CaseFolding.txt:1039:U+2C1E:C",
+      "SpecialCasing.txt:138:U+1F88"
+    ],
+    "id": "case-111",
+    "kind": "casing",
+    "input_hex": "efac94e2b09ee1be88",
+    "input_sha256": "a01f9ea673a6f39b6e9b0736f05173cfbf6dedb75e6a29283175e750fd14335e",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0544\u0535\u2c1e\u1f08\u0399",
+      "lower": "\ufb14\u2c4e\u1f80",
+      "casefold": "\u0574\u0565\u2c4e\u1f00\u03b9"
+    },
+    "expected": {
+      "upper": "\u0544\u0535\u2c1e\u1f08\u0399",
+      "lower": "\ufb14\u2c4e\u1f80",
+      "casefold": "\u0574\u0565\u2c4e\u1f00\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "728a3e0b296ea5a6293eca2e3901b251e6342f99bac2c41548ca15ee4e3c7886",
+      "lower": "7a11039edc765f82a0a708bf36689146c7888307e8ba9c93fa88c4db13a53d5b",
+      "casefold": "d0442f5a72df64690ffa09b9ae791a592632ebd3b171e27803219fb67ff4e815"
+    }
+  },
+  {
+    "text": "\u1fe2\u042c\u1ff7\u04c5\u1f8d\ud83a\udd0a",
+    "origins": [
+      "seeded:mix-112"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:109:U+1FE2",
+      "CaseFolding.txt:408:U+042C:C",
+      "SpecialCasing.txt:196:U+1FF7",
+      "CaseFolding.txt:459:U+04C5:C",
+      "SpecialCasing.txt:143:U+1F8D",
+      "CaseFolding.txt:1629:U+1E90A:C"
+    ],
+    "id": "case-112",
+    "kind": "casing",
+    "input_hex": "e1bfa2d0ace1bfb7d385e1be8df09ea48a",
+    "input_sha256": "b803e0ff0737ec1f8663cecca62df4a9751f2c8c06c495c6124d3045d7919c68",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a5\u0308\u0300\u042c\u03a9\u0342\u0399\u04c5\u1f0d\u0399\ud83a\udd0a",
+      "lower": "\u1fe2\u044c\u1ff7\u04c6\u1f85\ud83a\udd2c",
+      "casefold": "\u03c5\u0308\u0300\u044c\u03c9\u0342\u03b9\u04c6\u1f05\u03b9\ud83a\udd2c"
+    },
+    "expected": {
+      "upper": "\u03a5\u0308\u0300\u042c\u03a9\u0342\u0399\u04c5\u1f0d\u0399\ud83a\udd0a",
+      "lower": "\u1fe2\u044c\u1ff7\u04c6\u1f85\ud83a\udd2c",
+      "casefold": "\u03c5\u0308\u0300\u044c\u03c9\u0342\u03b9\u04c6\u1f05\u03b9\ud83a\udd2c"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "df49ff0b0b3c2dc786c729f749a276a58f2c958e8b1e2b22b22b0cfffefe8b38",
+      "lower": "189a55aa57f1f70463b9d7cf2c6243da528b6582750524dc749434f8fa2ce33c",
+      "casefold": "5f54b6a80bac14477c2ffe3fde2f4ba8dfaa71735a265fed3c33e653700c7214"
+    }
+  },
+  {
+    "text": "\u1f54\ud806\udcb8\u1fa7\uaba5\u1fe4\ud801\udd75\ufb06\u03f9\u1fa5\u1e7e\u1f9b\ud801\udcd0",
+    "origins": [
+      "seeded:mix-113"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:101:U+1F54",
+      "CaseFolding.txt:1579:U+118B8:C",
+      "SpecialCasing.txt:169:U+1FA7",
+      "CaseFolding.txt:1305:U+ABA5:C",
+      "SpecialCasing.txt:111:U+1FE4",
+      "CaseFolding.txt:1452:U+10575:C",
+      "SpecialCasing.txt:79:U+FB06",
+      "CaseFolding.txt:359:U+03F9:C",
+      "SpecialCasing.txt:167:U+1FA5",
+      "CaseFolding.txt:716:U+1E7E:C",
+      "SpecialCasing.txt:157:U+1F9B",
+      "CaseFolding.txt:1443:U+104D0:C"
+    ],
+    "id": "case-113",
+    "kind": "casing",
+    "input_hex": "e1bd94f091a2b8e1bea7eaaea5e1bfa4f09095b5efac86cfb9e1bea5e1b9bee1be9bf0909390",
+    "input_sha256": "d9f7b87cec8297a1cbc83ec73beecfc21666ebe097a12feaae0819208cd7679d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a5\u0313\u0301\ud806\udcb8\u1f6f\u0399\u13d5\u03a1\u0313\ud801\udd75ST\u03f9\u1f6d\u0399\u1e7e\u1f2b\u0399\ud801\udcd0",
+      "lower": "\u1f54\ud806\udcd8\u1fa7\uaba5\u1fe4\ud801\udd9c\ufb06\u03f2\u1fa5\u1e7f\u1f93\ud801\udcf8",
+      "casefold": "\u03c5\u0313\u0301\ud806\udcd8\u1f67\u03b9\u13d5\u03c1\u0313\ud801\udd9cst\u03f2\u1f65\u03b9\u1e7f\u1f23\u03b9\ud801\udcf8"
+    },
+    "expected": {
+      "upper": "\u03a5\u0313\u0301\ud806\udcb8\u1f6f\u0399\u13d5\u03a1\u0313\ud801\udd75ST\u03f9\u1f6d\u0399\u1e7e\u1f2b\u0399\ud801\udcd0",
+      "lower": "\u1f54\ud806\udcd8\u1fa7\uaba5\u1fe4\ud801\udd9c\ufb06\u03f2\u1fa5\u1e7f\u1f93\ud801\udcf8",
+      "casefold": "\u03c5\u0313\u0301\ud806\udcd8\u1f67\u03b9\u13d5\u03c1\u0313\ud801\udd9cst\u03f2\u1f65\u03b9\u1e7f\u1f23\u03b9\ud801\udcf8"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "dc6768d4a7542223750dac470c74e60c4ee5ea294303419ed3baf3c9d4d87b4b",
+      "lower": "cf27fef942275e98ec083d05702234f0166870e16c283b836cb62d118a01a8b9",
+      "casefold": "5fd5bc3df900ac436897ddefc395b8313a83bbedc4762a5013976a109a2b79df"
+    }
+  },
+  {
+    "text": "\u1fc4",
+    "origins": [
+      "seeded:mix-114"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:190:U+1FC4"
+    ],
+    "id": "case-114",
+    "kind": "casing",
+    "input_hex": "e1bf84",
+    "input_sha256": "5b9688727ce33876f46d13bb8f4afa690694a6e3020af08eebe7e956d6580718",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0389\u0399",
+      "lower": "\u1fc4",
+      "casefold": "\u03ae\u03b9"
+    },
+    "expected": {
+      "upper": "\u0389\u0399",
+      "lower": "\u1fc4",
+      "casefold": "\u03ae\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "069f7a7e1fa6cb191bc4af32aa3a5ebe95354d2b8fceb2a65d1890001dafa7b3",
+      "lower": "5b9688727ce33876f46d13bb8f4afa690694a6e3020af08eebe7e956d6580718",
+      "casefold": "0d34465c0b0592a4ba013f4253ebc2008c90d41d210c663060928d379863278c"
+    }
+  },
+  {
+    "text": "\ufb05\u1ea6\u1f50\ud803\udc93\u1ffc\u1c89\u1fae\u04b0\u1fb2\ua7b6\u1ff2\u1e56\u1f83\u0174\u1e99",
+    "origins": [
+      "seeded:mix-115"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:78:U+FB05",
+      "CaseFolding.txt:739:U+1EA6:C",
+      "SpecialCasing.txt:99:U+1F50",
+      "CaseFolding.txt:1501:U+10C93:C",
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:606:U+1C89:C",
+      "SpecialCasing.txt:176:U+1FAE",
+      "CaseFolding.txt:448:U+04B0:C",
+      "SpecialCasing.txt:187:U+1FB2",
+      "CaseFolding.txt:1232:U+A7B6:C",
+      "SpecialCasing.txt:191:U+1FF2",
+      "CaseFolding.txt:696:U+1E56:C",
+      "SpecialCasing.txt:133:U+1F83",
+      "CaseFolding.txt:181:U+0174:C",
+      "SpecialCasing.txt:97:U+1E99"
+    ],
+    "id": "case-115",
+    "kind": "casing",
+    "input_hex": "efac85e1baa6e1bd90f090b293e1bfbce1b289e1beaed2b0e1beb2ea9eb6e1bfb2e1b996e1be83c5b4e1ba99",
+    "input_sha256": "f15c7a5b2be7b05b9ad12cad2be11a2900db63af47a7dd0266c802259f532c18",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "ST\u1ea6\u03a5\u0313\ud803\udc93\u03a9\u0399\u1c89\u1f6e\u0399\u04b0\u1fba\u0399\ua7b6\u1ffa\u0399\u1e56\u1f0b\u0399\u0174Y\u030a",
+      "lower": "\ufb05\u1ea7\u1f50\ud803\udcd3\u1ff3\u1c8a\u1fa6\u04b1\u1fb2\ua7b7\u1ff2\u1e57\u1f83\u0175\u1e99",
+      "casefold": "st\u1ea7\u03c5\u0313\ud803\udcd3\u03c9\u03b9\u1c8a\u1f66\u03b9\u04b1\u1f70\u03b9\ua7b7\u1f7c\u03b9\u1e57\u1f03\u03b9\u0175y\u030a"
+    },
+    "expected": {
+      "upper": "ST\u1ea6\u03a5\u0313\ud803\udc93\u03a9\u0399\u1c89\u1f6e\u0399\u04b0\u1fba\u0399\ua7b6\u1ffa\u0399\u1e56\u1f0b\u0399\u0174Y\u030a",
+      "lower": "\ufb05\u1ea7\u1f50\ud803\udcd3\u1ff3\u1c8a\u1fa6\u04b1\u1fb2\ua7b7\u1ff2\u1e57\u1f83\u0175\u1e99",
+      "casefold": "st\u1ea7\u03c5\u0313\ud803\udcd3\u03c9\u03b9\u1c8a\u1f66\u03b9\u04b1\u1f70\u03b9\ua7b7\u1f7c\u03b9\u1e57\u1f03\u03b9\u0175y\u030a"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "9decd87b760ea8b0590395eabe58f5544e4b422f51581460dc2d0ae4e4496e03",
+      "lower": "57eb77af63c455c76e9df4de342c625cd4d435f380fb59c59ad2d891eb535d0e",
+      "casefold": "77ddd0abe120c0ce656d719fd27762e655d43038e44b75912f5f6b733a8522ce"
+    }
+  },
+  {
+    "text": "\u1fa8\u01d7\u1f54\ua72c\u1fa3\u1e2c\u1f85\u13f9\u1f88\ua668\u1f8a\ud801\udc11\u1f89\u01ec",
+    "origins": [
+      "seeded:mix-116"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:170:U+1FA8",
+      "CaseFolding.txt:235:U+01D7:C",
+      "SpecialCasing.txt:101:U+1F54",
+      "CaseFolding.txt:1167:U+A72C:C",
+      "SpecialCasing.txt:165:U+1FA3",
+      "CaseFolding.txt:675:U+1E2C:C",
+      "SpecialCasing.txt:135:U+1F85",
+      "CaseFolding.txt:592:U+13F9:C",
+      "SpecialCasing.txt:138:U+1F88",
+      "CaseFolding.txt:1145:U+A668:C",
+      "SpecialCasing.txt:140:U+1F8A",
+      "CaseFolding.txt:1388:U+10411:C",
+      "SpecialCasing.txt:139:U+1F89",
+      "CaseFolding.txt:245:U+01EC:C"
+    ],
+    "id": "case-116",
+    "kind": "casing",
+    "input_hex": "e1bea8c797e1bd94ea9cace1bea3e1b8ace1be85e18fb9e1be88ea99a8e1be8af0909091e1be89c7ac",
+    "input_sha256": "25af7ceae7c00b0a5c0d575ae1be66565dd7190b458aa6ec6d9620991927de23",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f68\u0399\u01d7\u03a5\u0313\u0301\ua72c\u1f6b\u0399\u1e2c\u1f0d\u0399\u13f1\u1f08\u0399\ua668\u1f0a\u0399\ud801\udc11\u1f09\u0399\u01ec",
+      "lower": "\u1fa0\u01d8\u1f54\ua72d\u1fa3\u1e2d\u1f85\u13f9\u1f80\ua669\u1f82\ud801\udc39\u1f81\u01ed",
+      "casefold": "\u1f60\u03b9\u01d8\u03c5\u0313\u0301\ua72d\u1f63\u03b9\u1e2d\u1f05\u03b9\u13f1\u1f00\u03b9\ua669\u1f02\u03b9\ud801\udc39\u1f01\u03b9\u01ed"
+    },
+    "expected": {
+      "upper": "\u1f68\u0399\u01d7\u03a5\u0313\u0301\ua72c\u1f6b\u0399\u1e2c\u1f0d\u0399\u13f1\u1f08\u0399\ua668\u1f0a\u0399\ud801\udc11\u1f09\u0399\u01ec",
+      "lower": "\u1fa0\u01d8\u1f54\ua72d\u1fa3\u1e2d\u1f85\u13f9\u1f80\ua669\u1f82\ud801\udc39\u1f81\u01ed",
+      "casefold": "\u1f60\u03b9\u01d8\u03c5\u0313\u0301\ua72d\u1f63\u03b9\u1e2d\u1f05\u03b9\u13f1\u1f00\u03b9\ua669\u1f02\u03b9\ud801\udc39\u1f01\u03b9\u01ed"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "9c9c9a974084f049ef057a738e671fc41d88a6b81369b5808dc61aef77a8c4d2",
+      "lower": "f395906a85cf59d9d447ae2b9b12a39bf3b2481049cfa6101d475c4afc4c28c3",
+      "casefold": "a9febc215328633a42dee123a32144b98ede13fb911a38885e3ed60c479922ca"
+    }
+  },
+  {
+    "text": "\u1fa8\u1f2f\u1f89\ud801\udd88\u1fa7\u024a\u1f52\u1ca8\u0130",
+    "origins": [
+      "seeded:mix-117"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:170:U+1FA8",
+      "CaseFolding.txt:805:U+1F2F:C",
+      "SpecialCasing.txt:139:U+1F89",
+      "CaseFolding.txt:1470:U+10588:C",
+      "SpecialCasing.txt:169:U+1FA7",
+      "CaseFolding.txt:293:U+024A:C",
+      "SpecialCasing.txt:100:U+1F52",
+      "CaseFolding.txt:631:U+1CA8:C",
+      "SpecialCasing.txt:69:U+0130"
+    ],
+    "id": "case-117",
+    "kind": "casing",
+    "input_hex": "e1bea8e1bcafe1be89f0909688e1bea7c98ae1bd92e1b2a8c4b0",
+    "input_sha256": "86e69a6822b9d9e248ed2daf47e95e38d6fc0c1e019d16f86a2e524ea3a343a2",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f68\u0399\u1f2f\u1f09\u0399\ud801\udd88\u1f6f\u0399\u024a\u03a5\u0313\u0300\u1ca8\u0130",
+      "lower": "\u1fa0\u1f27\u1f81\ud801\uddaf\u1fa7\u024b\u1f52\u10e8i\u0307",
+      "casefold": "\u1f60\u03b9\u1f27\u1f01\u03b9\ud801\uddaf\u1f67\u03b9\u024b\u03c5\u0313\u0300\u10e8i\u0307"
+    },
+    "expected": {
+      "upper": "\u1f68\u0399\u1f2f\u1f09\u0399\ud801\udd88\u1f6f\u0399\u024a\u03a5\u0313\u0300\u1ca8\u0130",
+      "lower": "\u1fa0\u1f27\u1f81\ud801\uddaf\u1fa7\u024b\u1f52\u10e8i\u0307",
+      "casefold": "\u1f60\u03b9\u1f27\u1f01\u03b9\ud801\uddaf\u1f67\u03b9\u024b\u03c5\u0313\u0300\u10e8i\u0307"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "ee3926849764cf92a648f7827636e4b479fbd9cdd4bf2c49364a9be5b55af17a",
+      "lower": "b94b14849637a169c59e96b8d6b850a9fbc1fd0db00eff4fd433c39cf76325c6",
+      "casefold": "008b56df8ca152adbf7e59931ae5d66cc5ea71a6c97dee0d75b1fc38193ff591"
+    }
+  },
+  {
+    "text": "\u1ffc\u2c6b\u1ff7\u1c87\u1f80\u01f8\u1f89\u0224\u1fb7\u01d1",
+    "origins": [
+      "seeded:mix-118"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:1063:U+2C6B:C",
+      "SpecialCasing.txt:196:U+1FF7",
+      "CaseFolding.txt:604:U+1C87:C",
+      "SpecialCasing.txt:130:U+1F80",
+      "CaseFolding.txt:253:U+01F8:C",
+      "SpecialCasing.txt:139:U+1F89",
+      "CaseFolding.txt:275:U+0224:C",
+      "SpecialCasing.txt:194:U+1FB7",
+      "CaseFolding.txt:232:U+01D1:C"
+    ],
+    "id": "case-118",
+    "kind": "casing",
+    "input_hex": "e1bfbce2b1abe1bfb7e1b287e1be80c7b8e1be89c8a4e1beb7c791",
+    "input_sha256": "6966145296556de3ba242efbbf4cf0e40f3785912e8404a307c4963bc8c6416a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a9\u0399\u2c6b\u03a9\u0342\u0399\u0462\u1f08\u0399\u01f8\u1f09\u0399\u0224\u0391\u0342\u0399\u01d1",
+      "lower": "\u1ff3\u2c6c\u1ff7\u1c87\u1f80\u01f9\u1f81\u0225\u1fb7\u01d2",
+      "casefold": "\u03c9\u03b9\u2c6c\u03c9\u0342\u03b9\u0463\u1f00\u03b9\u01f9\u1f01\u03b9\u0225\u03b1\u0342\u03b9\u01d2"
+    },
+    "expected": {
+      "upper": "\u03a9\u0399\u2c6b\u03a9\u0342\u0399\u0462\u1f08\u0399\u01f8\u1f09\u0399\u0224\u0391\u0342\u0399\u01d1",
+      "lower": "\u1ff3\u2c6c\u1ff7\u1c87\u1f80\u01f9\u1f81\u0225\u1fb7\u01d2",
+      "casefold": "\u03c9\u03b9\u2c6c\u03c9\u0342\u03b9\u0463\u1f00\u03b9\u01f9\u1f01\u03b9\u0225\u03b1\u0342\u03b9\u01d2"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "bb697e6bd2994e692299a111815e2b7e12ebd75e3c8c8003063fe19af5a37e1a",
+      "lower": "b3ebffb9bdcede1ae7332318b0d10d8559db4c66dd9d8cee522a0d052e8c28a7",
+      "casefold": "d83232ad4bc837ff0afe8d72717cc3e169696b5b1480f40073f18ffc95cce8d5"
+    }
+  },
+  {
+    "text": "\u1f86",
+    "origins": [
+      "seeded:mix-119"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:136:U+1F86"
+    ],
+    "id": "case-119",
+    "kind": "casing",
+    "input_hex": "e1be86",
+    "input_sha256": "91f7e614bbdbf129d09544be1cf1392eeaec600cf96d85d36e4320d1f5a97c18",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f0e\u0399",
+      "lower": "\u1f86",
+      "casefold": "\u1f06\u03b9"
+    },
+    "expected": {
+      "upper": "\u1f0e\u0399",
+      "lower": "\u1f86",
+      "casefold": "\u1f06\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "d0af02fdc23fb8c75ea9166d74606f020db03d482b410d179396858fd2a8ce24",
+      "lower": "91f7e614bbdbf129d09544be1cf1392eeaec600cf96d85d36e4320d1f5a97c18",
+      "casefold": "3cd30be24f2d47009f5453595d7f8b75624b09a107234a5d2ddae96eea2cb4c8"
+    }
+  },
+  {
+    "text": "\ufb04\ud801\udcb3\ufb15\ud803\udd51\u1fb4\u1cbe\u1fd3\ua648\u1f93\u1c9d\u1f80\u01a6\u0390\u0230",
+    "origins": [
+      "seeded:mix-120"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:77:U+FB04",
+      "CaseFolding.txt:1414:U+104B3:C",
+      "SpecialCasing.txt:84:U+FB15",
+      "CaseFolding.txt:1534:U+10D51:C",
+      "SpecialCasing.txt:188:U+1FB4",
+      "CaseFolding.txt:651:U+1CBE:C",
+      "SpecialCasing.txt:106:U+1FD3",
+      "CaseFolding.txt:1129:U+A648:C",
+      "SpecialCasing.txt:149:U+1F93",
+      "CaseFolding.txt:620:U+1C9D:C",
+      "SpecialCasing.txt:130:U+1F80",
+      "CaseFolding.txt:211:U+01A6:C",
+      "SpecialCasing.txt:91:U+0390",
+      "CaseFolding.txt:281:U+0230:C"
+    ],
+    "id": "case-120",
+    "kind": "casing",
+    "input_hex": "efac84f09092b3efac95f090b591e1beb4e1b2bee1bf93ea9988e1be93e1b29de1be80c6a6ce90c8b0",
+    "input_sha256": "3cecf9248b85b5b51a65917408f5f8709927fe1f51fe53f9e533b5743c5d47ec",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "FFL\ud801\udcb3\u0544\u053b\ud803\udd51\u0386\u0399\u1cbe\u0399\u0308\u0301\ua648\u1f2b\u0399\u1c9d\u1f08\u0399\u01a6\u0399\u0308\u0301\u0230",
+      "lower": "\ufb04\ud801\udcdb\ufb15\ud803\udd71\u1fb4\u10fe\u1fd3\ua649\u1f93\u10dd\u1f80\u0280\u0390\u0231",
+      "casefold": "ffl\ud801\udcdb\u0574\u056b\ud803\udd71\u03ac\u03b9\u10fe\u03b9\u0308\u0301\ua649\u1f23\u03b9\u10dd\u1f00\u03b9\u0280\u03b9\u0308\u0301\u0231"
+    },
+    "expected": {
+      "upper": "FFL\ud801\udcb3\u0544\u053b\ud803\udd51\u0386\u0399\u1cbe\u0399\u0308\u0301\ua648\u1f2b\u0399\u1c9d\u1f08\u0399\u01a6\u0399\u0308\u0301\u0230",
+      "lower": "\ufb04\ud801\udcdb\ufb15\ud803\udd71\u1fb4\u10fe\u1fd3\ua649\u1f93\u10dd\u1f80\u0280\u0390\u0231",
+      "casefold": "ffl\ud801\udcdb\u0574\u056b\ud803\udd71\u03ac\u03b9\u10fe\u03b9\u0308\u0301\ua649\u1f23\u03b9\u10dd\u1f00\u03b9\u0280\u03b9\u0308\u0301\u0231"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b8f323d50cac80bb6fe2d9f4116a63ddc9b7edfabba45f4ddd6430748e711307",
+      "lower": "6f3c7609258c1eae3bfb4d9841d500e8502f662877905b69b4061addd995e632",
+      "casefold": "f0cc32162d71edee807dd2784a718a4d221c5c3ef213c17932107ed99c6cd254"
+    }
+  },
+  {
+    "text": "\u1f86\u0204\u1f95\ud803\udcb0\u1fbc\ua734\u1f84\u24ce\u00df\ud83a\udd07\u1fa7\u0230\u1f87\u01f7",
+    "origins": [
+      "seeded:mix-121"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:136:U+1F86",
+      "CaseFolding.txt:259:U+0204:C",
+      "SpecialCasing.txt:151:U+1F95",
+      "CaseFolding.txt:1530:U+10CB0:C",
+      "SpecialCasing.txt:179:U+1FBC",
+      "CaseFolding.txt:1170:U+A734:C",
+      "SpecialCasing.txt:134:U+1F84",
+      "CaseFolding.txt:1007:U+24CE:C",
+      "SpecialCasing.txt:65:U+00DF",
+      "CaseFolding.txt:1626:U+1E907:C",
+      "SpecialCasing.txt:169:U+1FA7",
+      "CaseFolding.txt:281:U+0230:C",
+      "SpecialCasing.txt:137:U+1F87",
+      "CaseFolding.txt:252:U+01F7:C"
+    ],
+    "id": "case-121",
+    "kind": "casing",
+    "input_hex": "e1be86c884e1be95f090b2b0e1bebcea9cb4e1be84e2938ec39ff09ea487e1bea7c8b0e1be87c7b7",
+    "input_sha256": "2694b98a5809500c175ce2e3c12ab26fe45407537129d0e1e891a83771fb9446",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f0e\u0399\u0204\u1f2d\u0399\ud803\udcb0\u0391\u0399\ua734\u1f0c\u0399\u24ceSS\ud83a\udd07\u1f6f\u0399\u0230\u1f0f\u0399\u01f7",
+      "lower": "\u1f86\u0205\u1f95\ud803\udcf0\u1fb3\ua735\u1f84\u24e8\u00df\ud83a\udd29\u1fa7\u0231\u1f87\u01bf",
+      "casefold": "\u1f06\u03b9\u0205\u1f25\u03b9\ud803\udcf0\u03b1\u03b9\ua735\u1f04\u03b9\u24e8ss\ud83a\udd29\u1f67\u03b9\u0231\u1f07\u03b9\u01bf"
+    },
+    "expected": {
+      "upper": "\u1f0e\u0399\u0204\u1f2d\u0399\ud803\udcb0\u0391\u0399\ua734\u1f0c\u0399\u24ceSS\ud83a\udd07\u1f6f\u0399\u0230\u1f0f\u0399\u01f7",
+      "lower": "\u1f86\u0205\u1f95\ud803\udcf0\u1fb3\ua735\u1f84\u24e8\u00df\ud83a\udd29\u1fa7\u0231\u1f87\u01bf",
+      "casefold": "\u1f06\u03b9\u0205\u1f25\u03b9\ud803\udcf0\u03b1\u03b9\ua735\u1f04\u03b9\u24e8ss\ud83a\udd29\u1f67\u03b9\u0231\u1f07\u03b9\u01bf"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "afdd072ab9d217411117f5550a5bde32eae041d119aa41ff3f2b7b1e8f48888f",
+      "lower": "99b1087d016d2e96decd82b882ccf6d0c8cc23265c24fb171ae862b647ef7ae5",
+      "casefold": "360eeb4cdd5918aab16a191d5fb851a9a7bc55ced56aef78bbd1e8fd8e715e9c"
+    }
+  },
+  {
+    "text": "\u1faf\u1fc8\ufb05",
+    "origins": [
+      "seeded:mix-122"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:177:U+1FAF",
+      "CaseFolding.txt:925:U+1FC8:C",
+      "SpecialCasing.txt:78:U+FB05"
+    ],
+    "id": "case-122",
+    "kind": "casing",
+    "input_hex": "e1beafe1bf88efac85",
+    "input_sha256": "576de7b62ec2f7e376e78535ab50668081a3182335afc1c717e76945e087e0bf",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f6f\u0399\u1fc8ST",
+      "lower": "\u1fa7\u1f72\ufb05",
+      "casefold": "\u1f67\u03b9\u1f72st"
+    },
+    "expected": {
+      "upper": "\u1f6f\u0399\u1fc8ST",
+      "lower": "\u1fa7\u1f72\ufb05",
+      "casefold": "\u1f67\u03b9\u1f72st"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "fd06739b01bc6a7003845fa2706128ab7755a9af22224803c9df62cc26ec8830",
+      "lower": "7b8f71232eec55bf1b72c1eaaf8281af797766c58eba277620ba0469a5206e64",
+      "casefold": "7230c0fe57bd439236f25e3f214728b0622a0043b61df5c39e2f9677e5d9fe92"
+    }
+  },
+  {
+    "text": "\u1fc3\u0147\u1fa6Z\u1fb4\u1fc8\u1f9a\uabae\u1fa1\ud803\udd60\u1fbc\u10a7\u1f80",
+    "origins": [
+      "seeded:mix-123"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:180:U+1FC3",
+      "CaseFolding.txt:158:U+0147:C",
+      "SpecialCasing.txt:168:U+1FA6",
+      "CaseFolding.txt:89:U+005A:C",
+      "SpecialCasing.txt:188:U+1FB4",
+      "CaseFolding.txt:925:U+1FC8:C",
+      "SpecialCasing.txt:156:U+1F9A",
+      "CaseFolding.txt:1314:U+ABAE:C",
+      "SpecialCasing.txt:163:U+1FA1",
+      "CaseFolding.txt:1549:U+10D60:C",
+      "SpecialCasing.txt:179:U+1FBC",
+      "CaseFolding.txt:558:U+10A7:C",
+      "SpecialCasing.txt:130:U+1F80"
+    ],
+    "id": "case-123",
+    "kind": "casing",
+    "input_hex": "e1bf83c587e1bea65ae1beb4e1bf88e1be9aeaaeaee1bea1f090b5a0e1bebce182a7e1be80",
+    "input_sha256": "2794c7da84ce737056a1e75da4874b3bcdcb294c05418d1d5b93d6f45f108e92",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0397\u0399\u0147\u1f6e\u0399Z\u0386\u0399\u1fc8\u1f2a\u0399\u13de\u1f69\u0399\ud803\udd60\u0391\u0399\u10a7\u1f08\u0399",
+      "lower": "\u1fc3\u0148\u1fa6z\u1fb4\u1f72\u1f92\uabae\u1fa1\ud803\udd80\u1fb3\u2d07\u1f80",
+      "casefold": "\u03b7\u03b9\u0148\u1f66\u03b9z\u03ac\u03b9\u1f72\u1f22\u03b9\u13de\u1f61\u03b9\ud803\udd80\u03b1\u03b9\u2d07\u1f00\u03b9"
+    },
+    "expected": {
+      "upper": "\u0397\u0399\u0147\u1f6e\u0399Z\u0386\u0399\u1fc8\u1f2a\u0399\u13de\u1f69\u0399\ud803\udd60\u0391\u0399\u10a7\u1f08\u0399",
+      "lower": "\u1fc3\u0148\u1fa6z\u1fb4\u1f72\u1f92\uabae\u1fa1\ud803\udd80\u1fb3\u2d07\u1f80",
+      "casefold": "\u03b7\u03b9\u0148\u1f66\u03b9z\u03ac\u03b9\u1f72\u1f22\u03b9\u13de\u1f61\u03b9\ud803\udd80\u03b1\u03b9\u2d07\u1f00\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "2359417c3b5e76e06efeb33f27fe7b4c96ce8b09572520149b3842cf821ea86b",
+      "lower": "a7a34359c5cf971cf4b6dccc0b575f977c0f6803f022ba82c90ff90e35a6cf8a",
+      "casefold": "f521d91e581641db55618d5b3d3e0a18217d7737a684e97576b561900f17298f"
+    }
+  },
+  {
+    "text": "\u1ffc\u04b4\u1fac\ud803\udc9c\u1e9a\ua694\u1fae",
+    "origins": [
+      "seeded:mix-124"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:183:U+1FFC",
+      "CaseFolding.txt:450:U+04B4:C",
+      "SpecialCasing.txt:174:U+1FAC",
+      "CaseFolding.txt:1510:U+10C9C:C",
+      "SpecialCasing.txt:98:U+1E9A",
+      "CaseFolding.txt:1158:U+A694:C",
+      "SpecialCasing.txt:176:U+1FAE"
+    ],
+    "id": "case-124",
+    "kind": "casing",
+    "input_hex": "e1bfbcd2b4e1beacf090b29ce1ba9aea9a94e1beae",
+    "input_sha256": "9b701c7ab0a0fc5dbced0c35217f9dc68c46ced0ad1eb6af26c6d733cd5d3dc4",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u03a9\u0399\u04b4\u1f6c\u0399\ud803\udc9cA\u02be\ua694\u1f6e\u0399",
+      "lower": "\u1ff3\u04b5\u1fa4\ud803\udcdc\u1e9a\ua695\u1fa6",
+      "casefold": "\u03c9\u03b9\u04b5\u1f64\u03b9\ud803\udcdca\u02be\ua695\u1f66\u03b9"
+    },
+    "expected": {
+      "upper": "\u03a9\u0399\u04b4\u1f6c\u0399\ud803\udc9cA\u02be\ua694\u1f6e\u0399",
+      "lower": "\u1ff3\u04b5\u1fa4\ud803\udcdc\u1e9a\ua695\u1fa6",
+      "casefold": "\u03c9\u03b9\u04b5\u1f64\u03b9\ud803\udcdca\u02be\ua695\u1f66\u03b9"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "46c76c4ff112ec49c9f597544e66f7b7985f208bc2287f20ce9d59db6931cdf3",
+      "lower": "3acaf5dfb63e3275383c6c094a7a8c097840356fbbca39e607dbaa8d8621de4a",
+      "casefold": "17e78b8c6d6fb5a74141336229b05568a3c18d686616b0f9c96c91df90bbe6e1"
+    }
+  },
+  {
+    "text": "\u1f90\u1fdb\u00df\u1f85\u1f94\u2c6f",
+    "origins": [
+      "seeded:mix-125"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:146:U+1F90",
+      "CaseFolding.txt:939:U+1FDB:C",
+      "SpecialCasing.txt:65:U+00DF",
+      "CaseFolding.txt:841:U+1F85:F",
+      "SpecialCasing.txt:150:U+1F94",
+      "CaseFolding.txt:1066:U+2C6F:C"
+    ],
+    "id": "case-125",
+    "kind": "casing",
+    "input_hex": "e1be90e1bf9bc39fe1be85e1be94e2b1af",
+    "input_sha256": "22735c00d73f88e741f01f2b7c0ad5ae9afb28505893c36ab3ad42b91d7d2b5c",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f28\u0399\u1fdbSS\u1f0d\u0399\u1f2c\u0399\u2c6f",
+      "lower": "\u1f90\u1f77\u00df\u1f85\u1f94\u0250",
+      "casefold": "\u1f20\u03b9\u1f77ss\u1f05\u03b9\u1f24\u03b9\u0250"
+    },
+    "expected": {
+      "upper": "\u1f28\u0399\u1fdbSS\u1f0d\u0399\u1f2c\u0399\u2c6f",
+      "lower": "\u1f90\u1f77\u00df\u1f85\u1f94\u0250",
+      "casefold": "\u1f20\u03b9\u1f77ss\u1f05\u03b9\u1f24\u03b9\u0250"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "4ffde367ce7b7eac6424b191be511dc21446415c9862794d2781f7dbdd68ecfd",
+      "lower": "b060137164d4ee74d474ba50defa2e5a0100d2fa6fbd8a96939e10ff4278adfd",
+      "casefold": "dfb630f28a9c628ad82a75caed0e41540b15a23549abb8162050fb465e61d688"
+    }
+  },
+  {
+    "text": "\u1fbc\u0418\u1faf\u1e60\u1f9c\u24c7\u1fbc\ud806\udca5\u1e99\u2c11\ufb01\u10c3\ufb06",
+    "origins": [
+      "seeded:mix-126"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:179:U+1FBC",
+      "CaseFolding.txt:388:U+0418:C",
+      "SpecialCasing.txt:177:U+1FAF",
+      "CaseFolding.txt:701:U+1E60:C",
+      "SpecialCasing.txt:158:U+1F9C",
+      "CaseFolding.txt:1000:U+24C7:C",
+      "SpecialCasing.txt:179:U+1FBC",
+      "CaseFolding.txt:1560:U+118A5:C",
+      "SpecialCasing.txt:97:U+1E99",
+      "CaseFolding.txt:1026:U+2C11:C",
+      "SpecialCasing.txt:74:U+FB01",
+      "CaseFolding.txt:586:U+10C3:C",
+      "SpecialCasing.txt:79:U+FB06"
+    ],
+    "id": "case-126",
+    "kind": "casing",
+    "input_hex": "e1bebcd098e1beafe1b9a0e1be9ce29387e1bebcf091a2a5e1ba99e2b091efac81e18383efac86",
+    "input_sha256": "c77c3b7e8e53783a0ea364f81952f9be0b55185bc5b52e4bcecb49d3eabd2fc6",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u0391\u0399\u0418\u1f6f\u0399\u1e60\u1f2c\u0399\u24c7\u0391\u0399\ud806\udca5Y\u030a\u2c11FI\u10c3ST",
+      "lower": "\u1fb3\u0438\u1fa7\u1e61\u1f94\u24e1\u1fb3\ud806\udcc5\u1e99\u2c41\ufb01\u2d23\ufb06",
+      "casefold": "\u03b1\u03b9\u0438\u1f67\u03b9\u1e61\u1f24\u03b9\u24e1\u03b1\u03b9\ud806\udcc5y\u030a\u2c41fi\u2d23st"
+    },
+    "expected": {
+      "upper": "\u0391\u0399\u0418\u1f6f\u0399\u1e60\u1f2c\u0399\u24c7\u0391\u0399\ud806\udca5Y\u030a\u2c11FI\u10c3ST",
+      "lower": "\u1fb3\u0438\u1fa7\u1e61\u1f94\u24e1\u1fb3\ud806\udcc5\u1e99\u2c41\ufb01\u2d23\ufb06",
+      "casefold": "\u03b1\u03b9\u0438\u1f67\u03b9\u1e61\u1f24\u03b9\u24e1\u03b1\u03b9\ud806\udcc5y\u030a\u2c41fi\u2d23st"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "7d8f8e3adde8f52cb4b9941dab2fed4eed2abb67f69d6374a897a4ba64aab6a3",
+      "lower": "f288285f95c60a629df1aaaf4069902cb303a4f9ac0fae5eb22535835924e874",
+      "casefold": "edf31956511ca3ba357dd0c518264277dc16bdb547e8a4d7f66b45fdd5958e20"
+    }
+  },
+  {
+    "text": "\u1fa1\ud83a\udd16",
+    "origins": [
+      "seeded:mix-127"
+    ],
+    "ucd_rows": [
+      "SpecialCasing.txt:163:U+1FA1",
+      "CaseFolding.txt:1641:U+1E916:C"
+    ],
+    "id": "case-127",
+    "kind": "casing",
+    "input_hex": "e1bea1f09ea496",
+    "input_sha256": "255a72d73ef9b41a72732bdc1d14e157999fa6d4120ba45d7ec4f7b743005e1a",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "upper": "\u1f69\u0399\ud83a\udd16",
+      "lower": "\u1fa1\ud83a\udd38",
+      "casefold": "\u1f61\u03b9\ud83a\udd38"
+    },
+    "expected": {
+      "upper": "\u1f69\u0399\ud83a\udd16",
+      "lower": "\u1fa1\ud83a\udd38",
+      "casefold": "\u1f61\u03b9\ud83a\udd38"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "upper": "b379ea455901957219428d7e9f40acf219561323b61a2b58a04782134d8f9410",
+      "lower": "fcb9afced6fec316b0ceb7312a6286e5139c1c8f200be661a6f2d75d71c09338",
+      "casefold": "7b68c69285b3e9ada0752d99a474bd55937a488eb19d9fe2cf5640da9bc6e51a"
+    }
+  },
+  {
+    "id": "eq-000",
+    "kind": "equality",
+    "a": "",
+    "b": "",
+    "input_hex": [
+      "",
+      ""
+    ],
+    "input_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-001",
+    "kind": "equality",
+    "a": "A",
+    "b": "a",
+    "input_hex": [
+      "41",
+      "61"
+    ],
+    "input_sha256": "5781569f7028c3ef9c89127881e5fba307d51bb047665db0a6ad738ec6ce23b2",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-002",
+    "kind": "equality",
+    "a": "a",
+    "b": "aa",
+    "input_hex": [
+      "61",
+      "6161"
+    ],
+    "input_sha256": "8dc345a72c301536aeaa833011ab6595ccd31560fc37063f7414b13e1777ba77",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-003",
+    "kind": "equality",
+    "a": "ABC",
+    "b": "abc",
+    "input_hex": [
+      "414243",
+      "616263"
+    ],
+    "input_sha256": "ce17003fc8ec80a03e078375c7372a0127f1c8e57da2d076e895b483e5709a06",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-004",
+    "kind": "equality",
+    "a": "AbC",
+    "b": "abd",
+    "input_hex": [
+      "416243",
+      "616264"
+    ],
+    "input_sha256": "7de0b3c64daf145908c7ee7e8eba55c4186bf67733ddcb687c02255f9c7a393b",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-005",
+    "kind": "equality",
+    "a": "\u00df",
+    "b": "ss",
+    "input_hex": [
+      "c39f",
+      "7373"
+    ],
+    "input_sha256": "3a1f4b9edc0c33091a63c79ab0f7994c2082efb3ed9a2871d40ab632aa6c6efb",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-006",
+    "kind": "equality",
+    "a": "\u1e9e",
+    "b": "SS",
+    "input_hex": [
+      "e1ba9e",
+      "5353"
+    ],
+    "input_sha256": "fb1d7bca11d070d3de1dfa6cba2a0a5e5611fb493766b8d1c70fe3656c51707d",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-007",
+    "kind": "equality",
+    "a": "Stra\u00dfe",
+    "b": "STRASSE",
+    "input_hex": [
+      "53747261c39f65",
+      "53545241535345"
+    ],
+    "input_sha256": "030b51b5b02f07a17f6864701eb55115a4be5bc0a757d26339be33acb8dddac9",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-008",
+    "kind": "equality",
+    "a": "\ufb01",
+    "b": "fi",
+    "input_hex": [
+      "efac81",
+      "6669"
+    ],
+    "input_sha256": "ddfb226703029c4abac88015a0a0c4dfdce6d5327703ac74425041ebdd88ded8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-009",
+    "kind": "equality",
+    "a": "\ufb03",
+    "b": "FFI",
+    "input_hex": [
+      "efac83",
+      "464649"
+    ],
+    "input_sha256": "5fd44a327caaea8a9e797068c4874b7d7a2b32472b328f1f16ed6ba8cd29ea66",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-010",
+    "kind": "equality",
+    "a": "\u03a3",
+    "b": "\u03c2",
+    "input_hex": [
+      "cea3",
+      "cf82"
+    ],
+    "input_sha256": "edb9a1620aaf86e1a3651da4c13ada20bd779be4b6406b74b0516f0fd05b5aa0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-011",
+    "kind": "equality",
+    "a": "\u0391\u03a3",
+    "b": "\u03b1\u03c2",
+    "input_hex": [
+      "ce91cea3",
+      "ceb1cf82"
+    ],
+    "input_sha256": "cbf2e8fc20b7255f6b165046189f84cc46c8946396fe59b67b2017986a007327",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-012",
+    "kind": "equality",
+    "a": "I",
+    "b": "i",
+    "input_hex": [
+      "49",
+      "69"
+    ],
+    "input_sha256": "ceb233117fa702f96427426b7b8769975bbf6231df0aade52c0da2757cb0c8ff",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-013",
+    "kind": "equality",
+    "a": "I",
+    "b": "\u0131",
+    "input_hex": [
+      "49",
+      "c4b1"
+    ],
+    "input_sha256": "866d76243378ab35c0b16da5ca52f7184b26900389e5c602a7cb36b79a0d5d5f",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-014",
+    "kind": "equality",
+    "a": "\u0130",
+    "b": "i",
+    "input_hex": [
+      "c4b0",
+      "69"
+    ],
+    "input_sha256": "91ad9a7dfc045ad53880ad7ea23c4e5a54b6aecda5747b9e16be1aaa64c91f31",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-015",
+    "kind": "equality",
+    "a": "\u0130",
+    "b": "i\u0307",
+    "input_hex": [
+      "c4b0",
+      "69cc87"
+    ],
+    "input_sha256": "49e73c2af06b9249c44a8014ab98e203d1dca07ad4496b4a81d95dd02152cf39",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-016",
+    "kind": "equality",
+    "a": "\u0131",
+    "b": "i",
+    "input_hex": [
+      "c4b1",
+      "69"
+    ],
+    "input_sha256": "8a576d4c6bedf976f0548272f75d3aac0e646a13d01d9a18990566dd06337720",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-017",
+    "kind": "equality",
+    "a": "\u00e9",
+    "b": "e\u0301",
+    "input_hex": [
+      "c3a9",
+      "65cc81"
+    ],
+    "input_sha256": "ea8b39add2a33e457a97abf334a4dacafb0051ec00e3f846c603cf86f2c71d87",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-018",
+    "kind": "equality",
+    "a": "\u00c9",
+    "b": "\u00e9",
+    "input_hex": [
+      "c389",
+      "c3a9"
+    ],
+    "input_sha256": "f4eb506f6e7ed5d12a33463d1d0ca05ddf380cf8fa7595325420b25a994ffbc8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-019",
+    "kind": "equality",
+    "a": "\u212a",
+    "b": "k",
+    "input_hex": [
+      "e284aa",
+      "6b"
+    ],
+    "input_sha256": "b012f1d563ea0acb7d83c968e3c5a6ff2020c81298535b24c052ec0fc30b8f93",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-020",
+    "kind": "equality",
+    "a": "\u017f",
+    "b": "S",
+    "input_hex": [
+      "c5bf",
+      "53"
+    ],
+    "input_sha256": "3495e57fbe5c782e6748db37725ba658b436c296d6cd296afe6a7f7c61509829",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-021",
+    "kind": "equality",
+    "a": "\u00b5",
+    "b": "\u03bc",
+    "input_hex": [
+      "c2b5",
+      "cebc"
+    ],
+    "input_sha256": "c689cf5543cd180f513471c2f9cbdc61348c89790c53aaca0b09d486d78fb5bc",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-022",
+    "kind": "equality",
+    "a": "\u13a0",
+    "b": "\uab70",
+    "input_hex": [
+      "e18ea0",
+      "eaadb0"
+    ],
+    "input_sha256": "1079a7c5b9eea40bfc405cb79cd9ce98318c0dd871bd88e6fb19bdd6701dcb02",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-023",
+    "kind": "equality",
+    "a": "\ud801\udc27",
+    "b": "\ud801\udc4f",
+    "input_hex": [
+      "f09090a7",
+      "f090918f"
+    ],
+    "input_sha256": "1ff1d508063f48b1dbb5f6c5069a732f7544e5f767826f4ebe14bd3104c388ec",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-024",
+    "kind": "equality",
+    "a": "\u1c89",
+    "b": "\u1c8a",
+    "input_hex": [
+      "e1b289",
+      "e1b28a"
+    ],
+    "input_sha256": "250c14f311bc9ac02221f6d5ca595a6a5e37c24904301c34321e121c67314dfa",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-025",
+    "kind": "equality",
+    "a": "\ud803\udd50",
+    "b": "\ud803\udd70",
+    "input_hex": [
+      "f090b590",
+      "f090b5b0"
+    ],
+    "input_sha256": "f96896180ad68055ffee31900fb9e73fb5fc239d6756c3b54bd305aa8c6d45d9",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-026",
+    "kind": "equality",
+    "a": "\u0378",
+    "b": "\u0378",
+    "input_hex": [
+      "cdb8",
+      "cdb8"
+    ],
+    "input_sha256": "58a8f46cf43b8dd174c6242e2e204e7f3dc90a13f5c4689cb341d21c972033ca",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-027",
+    "kind": "equality",
+    "a": "\u0378",
+    "b": "\u0379",
+    "input_hex": [
+      "cdb8",
+      "cdb9"
+    ],
+    "input_sha256": "f63e3cac2ae2b73beca96ddc365ef2fb26c8b087dde711c589b9abb53f4cc8d0",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "false"
+    },
+    "expected": {
+      "eq": "false"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    }
+  },
+  {
+    "id": "eq-028",
+    "kind": "equality",
+    "a": "A\u0000B",
+    "b": "a\u0000b",
+    "input_hex": [
+      "410042",
+      "610062"
+    ],
+    "input_sha256": "74617cd0f2365bbc0aaceeb39184a3671268dd5aea2868e2ec994a51793f84d8",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-029",
+    "kind": "equality",
+    "a": "A\nB",
+    "b": "a\nb",
+    "input_hex": [
+      "410a42",
+      "610a62"
+    ],
+    "input_sha256": "28063a4a8f9ce27788c963ae55ef4a87e54e4d7490e495c5998aae568faa7120",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-030",
+    "kind": "equality",
+    "a": "abcdefghijklmno\u03a3",
+    "b": "ABCDEFGHIJKLMNO\u03c2",
+    "input_hex": [
+      "6162636465666768696a6b6c6d6e6fcea3",
+      "4142434445464748494a4b4c4d4e4fcf82"
+    ],
+    "input_sha256": "75fd09282f0c0a04a0852a7ac3cb4c0edfca4ec022dc203bd0afe883068ed771",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  },
+  {
+    "id": "eq-031",
+    "kind": "equality",
+    "a": "abcdefghijklmnopq\u03a3",
+    "b": "ABCDEFGHIJKLMNOPQ\u03a3",
+    "input_hex": [
+      "6162636465666768696a6b6c6d6e6f7071cea3",
+      "4142434445464748494a4b4c4d4e4f5051cea3"
+    ],
+    "input_sha256": "1d7a423522b91385779249d7e589bece20b6e424046a603855f52b8751c14a65",
+    "oracle": "CPython-ebf955df-UCD16",
+    "raw": {
+      "eq": "true"
+    },
+    "expected": {
+      "eq": "true"
+    },
+    "disposition": "identical",
+    "expected_sha256": {
+      "eq": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    }
+  }
+]

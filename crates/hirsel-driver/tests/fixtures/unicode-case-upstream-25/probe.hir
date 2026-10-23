@@ -1,0 +1,32 @@
+// Inputs come from host-built literals. Expected bytes never enter these calls.
+fn emit(id: String, op: String, value: String, mut out: List[u8]) {
+  text.append(mut out, f"{id}|{op}|{string.byte_len(value)}:")
+  text.append(mut out, value)
+  text.append(mut out, "\n")
+}
+
+fn observe(id: String, value: String, mut out: List[u8]) {
+  emit(id, "upper", std@1/string.to_upper(value), mut out)
+  emit(id, "lower", std@1/string.to_lower(value), mut out)
+  emit(id, "casefold", std@1/string.casefold(value), mut out)
+}
+
+fn observe_slice(id: String, container: String, start: u64, end: u64, mut out: List[u8]) {
+  match (string.position(container, start), string.position(container, end)) {
+    (Some(a), Some(b)) => observe(id, string.slice(container, a, b), mut out),
+    _ => failure.check(false, TextInvariant()),
+  }
+}
+
+fn equality(id: String, a: String, b: String, mut out: List[u8]) {
+  emit(
+    id,
+    "eq",
+    if std@1/string.eq_ignore_case(a, b) {
+      "true"
+    } else {
+      "false"
+    },
+    mut out
+  )
+}
