@@ -655,3 +655,57 @@ fn policy_evaluator_33_cell() {
         .unwrap();
     });
 }
+
+#[test]
+#[ignore = "selected exact-capacity pool cell"]
+fn policy_evaluator_33_ordered_capacity() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (backend, width, kind) =
+            super::width_capacity_36::selection("POLICY_EVALUATOR_33_ORDERED");
+        let root = scratch("ordered");
+        let _evidence = super::width_capacity_36::Evidence(root.clone());
+        let manifest = package(&root);
+        let id = match kind.as_str() {
+            "success" => "inherited-allow",
+            "domain" => "domain-json",
+            "cancel" => "pending-cancellation",
+            _ => unreachable!(),
+        };
+        let row = cases().into_iter().find(|r| r["id"] == id).unwrap();
+        let recipe = fixture(&row, 4);
+        super::width_capacity_36::fixture_capacity(
+            &manifest,
+            &root,
+            &recipe,
+            backend,
+            width,
+            |observed, recording| {
+                assert_eq!(observed.exit_code, row["exit"].as_i64().map(|n| n as i32));
+                assert_eq!(observed.output, row["stdout"].as_str().unwrap().as_bytes());
+                assert!(observed.failures.is_empty() && !observed.blocked);
+                assert_eq!(recording.arguments, recipe.args);
+                assert_eq!(recording.tree.files, recipe.files);
+                let stderr: Vec<_> = recording
+                    .events
+                    .iter()
+                    .filter_map(|e| match &e.request {
+                        hirsel_rt::io::Request::PrintStderr { bytes, .. } => Some(bytes.as_slice()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .copied()
+                    .collect();
+                assert_eq!(stderr, row["stderr"].as_str().unwrap().as_bytes());
+                if row["pending"] == true {
+                    assert!(recording.events.iter().any(|e| matches!(
+                        (&e.request, &e.completion),
+                        (
+                            hirsel_rt::io::Request::FileRead { .. },
+                            hirsel_rt::io::Completion::Blocked { committed: false }
+                        )
+                    )));
+                }
+            },
+        );
+    });
+}

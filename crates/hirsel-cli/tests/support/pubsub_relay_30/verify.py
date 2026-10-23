@@ -10,6 +10,10 @@ cases = json.loads((root/'cases.json').read_text())
 env = {k:v for k,v in os.environ.items() if not k.startswith('HIRSEL_RT_')}
 env.update(HIRSEL_JOBS='4',HIRSEL_MEMORY_LIMIT='2G',HIRSEL_DAEMON='off',HIRSEL_RESULTS='none@1',HIRSEL_TIMING='off')
 capped=root/'capped';capped.chmod(0o755)
+selection = os.environ.get('PUBSUB_30_CELL')
+valid = {f'{case["id"]}-{backend}-{width}' for case in cases for backend in ['llvm', 'cranelift'] for width in [1,2,4]}
+valid |= {f'host-{mode}-{backend}-{width}' for mode in ['success','domain','cancel'] for backend in ['llvm','cranelift'] for width in [1,2,4]}
+assert selection is None or selection in valid, ('unknown cell', selection)
 receipts=[]
 def save(): (root/'receipts.json').write_text(json.dumps(receipts,indent=2)+'\n')
 def run(cmd, stem, timeout=20, measured=True):
@@ -35,7 +39,7 @@ def tool_seal(label):
     (root/(label+'.tools.json')).write_text(json.dumps({'cwd':os.getcwd(),'files':files},indent=2)+'\n')
 
 tool_seal('prebuild')
-vectors()
+vectors() if not os.environ.get('PUBSUB_30_CELL') else None
 binaries={}
 for backend in ['llvm','cranelift']:
     if os.environ.get('PUBSUB_30_ENGINE',backend) != backend: continue
@@ -50,6 +54,7 @@ for backend,exe in binaries.items():
     for case in cases:
         for width in [1,2,4]:
             name=f'{case["id"]}-{backend}-{width}'
+            if selection is not None and name != selection: continue
             print('PUBSUB_30_STARTED',name,flush=True)
             clients=[{'address':'0.0.0.0','port':0,'tls':'plain','steps':s} for s in case['scripts']]
             grants={'io':{'dirs':[],'stdout':'stdout.bytes@1','tasks':'tasks.cooperative@1','monotonic_clock':'clock.monotonic.ns@1','net':{'provider':'net.script@2','rules':[] if case['id']=='denied' else [{'address':'/fixture/pubsub.sock','service':'0','operation':'unix_listen'}],'peers':[],'listeners':[{'address':'/fixture/pubsub.sock','port':0,'clients':clients}]}},'placement':{'cores':width,'commit':'shared','reorder':'auto'}}
@@ -84,6 +89,7 @@ for backend,exe in binaries.items():
     for width in [1,2,4]:
         for mode in ['success','domain','cancel']:
             name=f'host-{mode}-{backend}-{width}'
+            if selection is not None and name != selection: continue
             print('PUBSUB_30_STARTED',name,flush=True)
             try:
                 receipt=host_case(exe,root,width,mode,env,capped)

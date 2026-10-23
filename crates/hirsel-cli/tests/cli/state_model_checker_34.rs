@@ -930,6 +930,7 @@ fn ordered(backend: Backend) {
     use std::os::unix::net::UnixStream;
     hirsel_engine::with_compiler_stack(|| {
         let root = root(&format!("ordered-{backend:?}-"));
+        let _evidence = super::width_capacity_36::Evidence(root.clone());
         let path = package(&root);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded.check_for_execution().unwrap();
@@ -960,6 +961,7 @@ fn ordered(backend: Backend) {
         .unwrap();
         let rows = cases();
         let mut receipts = Vec::new();
+        let mut failed = Vec::new();
         for (mode, id) in [
             ("success", "four-models"),
             ("domain", "duplicate-edge"),
@@ -969,126 +971,142 @@ fn ordered(backend: Backend) {
             let fixture = fixture(row);
             let mut previous = None;
             for width in [1, 2, 4] {
-                let dir = root.join(format!("{mode}-w{width}"));
-                fs::create_dir(&dir).unwrap();
-                let short = tempfile::tempdir().unwrap();
-                let control = short.path().join("ctl");
-                // First bind through the documented Fixture API, then re-link the
-                // same full entry with the public validated placement request.
-                let _ =
-                    link_fixture_runnable(&ready, &loaded.entry, &objects, &tools, &dir, &fixture)
-                        .unwrap();
-                let bound = hirsel_run_config::RunConfig::read_path(&dir.join("run.json")).unwrap();
-                let mut record = bound.record().clone();
-                record.placement=Some(hirsel_run_config::Placement::from_json(&serde_json::to_vec(&json!({"cores":width,"commit":"shared","reorder":"off","control":control})).unwrap()).unwrap());
-                let requested = record.validated().unwrap();
-                let runnable = link_runnable(
-                    &ready,
-                    &loaded.entry,
-                    &objects,
-                    &tools,
-                    &dir,
-                    Some(&requested),
-                )
-                .unwrap();
-                let tape = dir.join("recording");
-                let mut replies = Vec::new();
-                let launched = std::thread::scope(|scope| {
-                    let child = scope.spawn(|| {
-                        launch_fixture(
-                            &runnable,
-                            &ready.target,
-                            &tools,
-                            &dir,
-                            true,
-                            Tape::Live {
-                                record: Some(&tape),
-                                revocations: None,
-                            },
-                            &fixture,
-                        )
-                    });
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                    while !child.is_finished() && std::time::Instant::now() < deadline {
-                        if let Ok(mut connection) = UnixStream::connect(&control) {
-                            connection
-                                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
-                                .unwrap();
-                            if connection.write_all(b"{\"metrics\":true}\n").is_ok() {
-                                let mut reply = String::new();
-                                if BufReader::new(connection).read_line(&mut reply).is_ok()
-                                    && let Ok(value) = serde_json::from_str::<Value>(&reply)
-                                {
-                                    replies.push(value);
+                eprintln!("WIDTH36_STARTED {mode} {width}");
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let dir = root.join(format!("{mode}-w{width}"));
+                    fs::create_dir(&dir).unwrap();
+                    let short = tempfile::tempdir().unwrap();
+                    let control = short.path().join("ctl");
+                    // First bind through the documented Fixture API, then re-link the
+                    // same full entry with the public validated placement request.
+                    let _ = link_fixture_runnable(
+                        &ready,
+                        &loaded.entry,
+                        &objects,
+                        &tools,
+                        &dir,
+                        &fixture,
+                    )
+                    .unwrap();
+                    let bound =
+                        hirsel_run_config::RunConfig::read_path(&dir.join("run.json")).unwrap();
+                    let mut record = bound.record().clone();
+                    record.placement=Some(hirsel_run_config::Placement::from_json(&serde_json::to_vec(&json!({"cores":width,"commit":"shared","reorder":"off","control":control})).unwrap()).unwrap());
+                    let requested = record.validated().unwrap();
+                    let runnable = link_runnable(
+                        &ready,
+                        &loaded.entry,
+                        &objects,
+                        &tools,
+                        &dir,
+                        Some(&requested),
+                    )
+                    .unwrap();
+                    let tape = dir.join("recording");
+                    let mut replies = Vec::new();
+                    let launched = std::thread::scope(|scope| {
+                        let child = scope.spawn(|| {
+                            launch_fixture(
+                                &runnable,
+                                &ready.target,
+                                &tools,
+                                &dir,
+                                true,
+                                Tape::Live {
+                                    record: Some(&tape),
+                                    revocations: None,
+                                },
+                                &fixture,
+                            )
+                        });
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(5);
+                        while !child.is_finished() && std::time::Instant::now() < deadline {
+                            if let Ok(mut connection) = UnixStream::connect(&control) {
+                                connection
+                                    .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                                    .unwrap();
+                                if connection.write_all(b"{\"metrics\":true}\n").is_ok() {
+                                    let mut reply = String::new();
+                                    if BufReader::new(connection).read_line(&mut reply).is_ok()
+                                        && let Ok(value) = serde_json::from_str::<Value>(&reply)
+                                    {
+                                        replies.push(value);
+                                    }
                                 }
                             }
+                            if replies.iter().any(|m| {
+                                m["worker_phase"] == "running"
+                                    && m["width"]["requested"] == width
+                                    && m["width"]["effective"] == width
+                                    && m["width"]["pending"] == 0
+                            }) {
+                                break;
+                            }
+                            std::thread::yield_now();
                         }
-                        if replies.iter().any(|m| {
-                            m["worker_phase"] == "running"
-                                && m["width"]["requested"] == width
-                                && m["width"]["effective"] == width
-                                && m["width"]["pending"] == 0
-                        }) {
-                            break;
-                        }
-                        std::thread::yield_now();
-                    }
-                    child.join().unwrap().unwrap()
-                });
-                let capacity = replies.iter().any(|m| {
-                    m["worker_phase"] == "running"
-                        && m["width"]["requested"] == width
-                        && m["width"]["effective"] == width
-                        && m["width"]["pending"] == 0
-                });
-                receipts.push(json!({"mode":mode,"requested":width,"control":replies,"capacity":capacity,"completed":true}));
-                fs::write(
-                    root.join("receipts.json"),
-                    serde_json::to_vec_pretty(&receipts).unwrap(),
-                )
-                .unwrap();
-                assert!(
-                    capacity,
-                    "{}: exact running capacity reply missing",
-                    dir.display()
-                );
-                let observed = observe(&launched, &ready, &sites).unwrap();
-                assert_eq!(observed.exit_code, row["exit"].as_i64().map(|n| n as i32));
-                assert_eq!(observed.output, row["stdout"].as_str().unwrap().as_bytes());
-                assert!(observed.failures.is_empty());
-                assert_record(&fs::read(&tape).unwrap(), row);
-                let frozen = fs::read(&tape).unwrap();
-                let mut semantic = hirsel_rt::launch::parse_recording_bytes(&frozen).unwrap();
-                let binding = semantic.binding.as_mut().unwrap();
-                binding.admitted_at = 0;
-                binding.placement = None;
-                if let Some(previous) = &previous {
-                    assert_eq!(
-                        &semantic, previous,
-                        "full scripted semantic events differ by width"
+                        child.join().unwrap().unwrap()
+                    });
+                    let capacity = replies.iter().any(|m| {
+                        m["worker_phase"] == "running"
+                            && m["width"]["requested"] == width
+                            && m["width"]["effective"] == width
+                            && m["width"]["pending"] == 0
+                    });
+                    receipts.push(json!({"mode":mode,"requested":width,"control":replies,"capacity":capacity,"completed":true}));
+                    fs::write(
+                        root.join("receipts.json"),
+                        serde_json::to_vec_pretty(&receipts).unwrap(),
+                    )
+                    .unwrap();
+                    assert!(
+                        capacity,
+                        "{}: exact running capacity reply missing",
+                        dir.display()
                     );
-                } else {
-                    previous = Some(semantic);
+                    let observed = observe(&launched, &ready, &sites).unwrap();
+                    assert_eq!(observed.exit_code, row["exit"].as_i64().map(|n| n as i32));
+                    assert_eq!(observed.output, row["stdout"].as_str().unwrap().as_bytes());
+                    assert!(observed.failures.is_empty());
+                    assert_record(&fs::read(&tape).unwrap(), row);
+                    let frozen = fs::read(&tape).unwrap();
+                    let mut semantic = hirsel_rt::launch::parse_recording_bytes(&frozen).unwrap();
+                    let binding = semantic.binding.as_mut().unwrap();
+                    binding.admitted_at = 0;
+                    binding.placement = None;
+                    if let Some(previous) = &previous {
+                        assert_eq!(
+                            &semantic, previous,
+                            "full scripted semantic events differ by width"
+                        );
+                    } else {
+                        previous = Some(semantic);
+                    }
+                    let replay_fixture = Fixture {
+                        files: BTreeMap::new(),
+                        file_reads: BTreeMap::new(),
+                        ..fixture.clone()
+                    };
+                    let replayed = launch_fixture(
+                        &runnable,
+                        &ready.target,
+                        &tools,
+                        &dir,
+                        true,
+                        Tape::Replay(&tape),
+                        &replay_fixture,
+                    )
+                    .unwrap();
+                    assert_eq!(observe(&replayed, &ready, &sites).unwrap(), observed);
+                    assert_eq!(fs::read(&tape).unwrap(), frozen);
+                }));
+                eprintln!("WIDTH36_RESULT {mode} {width} {}", result.is_ok());
+                if result.is_err() {
+                    failed.push(format!("{mode}:{width}"));
                 }
-                let replay_fixture = Fixture {
-                    files: BTreeMap::new(),
-                    file_reads: BTreeMap::new(),
-                    ..fixture.clone()
-                };
-                let replayed = launch_fixture(
-                    &runnable,
-                    &ready.target,
-                    &tools,
-                    &dir,
-                    true,
-                    Tape::Replay(&tape),
-                    &replay_fixture,
-                )
-                .unwrap();
-                assert_eq!(observe(&replayed, &ready, &sites).unwrap(), observed);
-                assert_eq!(fs::read(&tape).unwrap(), frozen);
             }
         }
+        assert!(failed.is_empty(), "failed capacity cells: {failed:?}");
     });
 }
 #[test]

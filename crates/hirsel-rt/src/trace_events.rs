@@ -6,32 +6,25 @@ use std::path::{Path, PathBuf};
 pub(crate) const REQUIRES_ORDERED: &str =
     "canonical trace events require the FIFO cooperative task provider";
 
-/// The observer prefix belongs before run/replay arguments. It never consumes
-/// an application's trailing argument with the same spelling.
+/// Select an observer anywhere in the runtime prefix, preserving the first
+/// application word and explicit delimiter as permanent parsing boundaries.
 pub(crate) fn select(arguments: &mut Vec<OsString>) -> Result<Option<PathBuf>, String> {
-    if arguments
-        .first()
-        .is_none_or(|arg| arg != "--hirsel-trace-events")
-    {
+    let options = crate::standalone::live_options(arguments).map_err(|error| match &error {
+        hirsel_run_schema::RunRefusal::Invalid { field, detail }
+            if field == "argv" && detail == "expected a path after --hirsel-trace-events" =>
+        {
+            detail.clone()
+        }
+        _ => error.to_string(),
+    })?;
+    let Some((offset, path)) = options.trace else {
         return Ok(None);
-    }
-    let path = arguments
-        .get(1)
-        .filter(|p| !p.is_empty())
-        .ok_or("expected a path after --hirsel-trace-events")?;
-    let path = PathBuf::from(path);
-    let replay = if arguments
-        .get(2)
-        .is_some_and(|flag| flag == "--hirsel-replay-policy")
-    {
-        4
-    } else {
-        2
     };
-    if arguments
-        .get(replay)
+    if options
+        .input
+        .first()
         .is_some_and(|flag| flag == "--hirsel-replay")
-        && let Some(input) = arguments.get(replay + 1)
+        && let Some(input) = options.input.get(1)
     {
         let output =
             crate::host_paths::RecorderDestination::pin(&path).map_err(|e| e.to_string())?;
@@ -39,7 +32,7 @@ pub(crate) fn select(arguments: &mut Vec<OsString>) -> Result<Option<PathBuf>, S
             .map_err(|e| e.to_string())?;
         output.check_distinct(&input).map_err(|e| e.to_string())?;
     }
-    arguments.drain(..2);
+    arguments.drain(offset..offset + 2);
     Ok(Some(path))
 }
 

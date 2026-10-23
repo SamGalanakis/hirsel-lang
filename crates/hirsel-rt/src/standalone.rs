@@ -53,32 +53,30 @@ impl Selected {
     }
 }
 
-/// `--hirsel-replay <tape>` alone, or an optional `--hirsel-record <tape>` prefix
-/// before the ordinary launch input. Replay refuses a recording bound to other code.
+/// Select runtime options before the application boundary, in any order.
+/// Replay refuses a recording bound to other code.
 pub(crate) fn select(
-    mut arguments: Vec<OsString>,
+    arguments: Vec<OsString>,
     program: [u8; 32],
     entry: &str,
     roots: u8,
     escapes: bool,
     fueled: bool,
 ) -> Result<Selected, RunRefusal> {
-    let policy = if arguments
-        .first()
-        .is_some_and(|flag| flag == "--hirsel-replay-policy")
-    {
-        let policy = arguments
-            .get(1)
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| {
-                replay_policy_error("expected a JSON object after --hirsel-replay-policy")
-            })?;
-        let policy = replay_policy(policy)?;
-        arguments.drain(..2);
-        Some(policy)
-    } else {
-        None
-    };
+    let options = live_options(&arguments)?;
+    let policy = options
+        .replay_policy
+        .as_ref()
+        .map(|value| {
+            value
+                .to_str()
+                .ok_or_else(|| {
+                    replay_policy_error("expected a JSON object after --hirsel-replay-policy")
+                })
+                .and_then(replay_policy)
+        })
+        .transpose()?;
+    let arguments = &options.input;
     if arguments
         .first()
         .is_some_and(|flag| flag == "--hirsel-replay")
@@ -114,16 +112,8 @@ pub(crate) fn select(
     if policy.is_some() {
         return Err(replay_policy_error("requires --hirsel-replay <tape>"));
     }
-    let options = live_options(&arguments)?;
     Ok(Selected::Live {
-        run: select_run(
-            options.input.to_vec(),
-            program,
-            entry,
-            roots,
-            escapes,
-            fueled,
-        )?,
+        run: select_run(options.input, program, entry, roots, escapes, fueled)?,
         tape: options.tape,
         revocations: options.revocations,
     })
@@ -157,36 +147,113 @@ fn replay_policy(json: &str) -> Result<hirsel_run_config::Placement, RunRefusal>
     }
     hirsel_run_config::Placement::from_json(json.as_bytes())
 }
-pub(crate) struct LiveOptions<'a> {
-    pub input: &'a [OsString],
+pub(crate) struct LiveOptions {
+    pub input: Vec<OsString>,
     pub tape: Option<std::path::PathBuf>,
     pub revocations: Option<std::path::PathBuf>,
+    pub replay_policy: Option<OsString>,
+    pub trace: Option<(usize, std::path::PathBuf)>,
 }
-pub(crate) fn live_options(arguments: &[OsString]) -> Result<LiveOptions<'_>, RunRefusal> {
-    let (mut tape, mut revocations) = (None, None);
+
+fn argument_error(detail: &str) -> RunRefusal {
+    RunRefusal::Invalid {
+        field: "argv".into(),
+        detail: detail.into(),
+    }
+}
+
+// Scan only the runtime prefix. The first application word or `--` is a
+// permanent boundary, even when later application words spell runtime flags.
+pub(crate) fn live_options(arguments: &[OsString]) -> Result<LiveOptions, RunRefusal> {
+    let mut options = LiveOptions {
+        input: Vec::new(),
+        tape: None,
+        revocations: None,
+        replay_policy: None,
+        trace: None,
+    };
+    let mut selector = None;
     let mut offset = 0;
+    let mut delimiter = false;
     while let Some(flag) = arguments.get(offset) {
-        let slot = if flag == "--hirsel-record" && tape.is_none() {
-            &mut tape
-        } else if flag == "--hirsel-revocations" && revocations.is_none() {
-            &mut revocations
-        } else {
+        if flag == "--" {
+            delimiter = true;
+            offset += 1;
             break;
-        };
-        let path = arguments
+        }
+        let known = matches!(
+            flag.to_str(),
+            Some(
+                "--hirsel-run"
+                    | "--hirsel-grants"
+                    | "--hirsel-replay"
+                    | "--hirsel-record"
+                    | "--hirsel-revocations"
+                    | "--hirsel-revocation"
+                    | "--hirsel-replay-policy"
+                    | "--hirsel-trace-events"
+            )
+        );
+        if !known {
+            break;
+        }
+        let value = arguments
             .get(offset + 1)
-            .ok_or_else(|| RunRefusal::Invalid {
-                field: "argv".into(),
-                detail: "expected a path after launch option".into(),
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                argument_error(&format!("expected a path after {}", flag.to_string_lossy()))
             })?;
-        *slot = Some(std::path::PathBuf::from(path));
+        match flag.to_str().unwrap() {
+            "--hirsel-run" | "--hirsel-grants" | "--hirsel-replay" => {
+                if selector.is_some() {
+                    return Err(argument_error("duplicated or conflicting run selection"));
+                }
+                selector = Some((flag.clone(), value.clone()));
+            }
+            "--hirsel-record" => {
+                if options.tape.replace(value.into()).is_some() {
+                    return Err(argument_error("duplicated --hirsel-record"));
+                }
+            }
+            "--hirsel-revocations" | "--hirsel-revocation" => {
+                if options.revocations.replace(value.into()).is_some() {
+                    return Err(argument_error("duplicated --hirsel-revocations"));
+                }
+            }
+            "--hirsel-replay-policy" => {
+                if options.replay_policy.replace(value.clone()).is_some() {
+                    return Err(argument_error("duplicated --hirsel-replay-policy"));
+                }
+            }
+            "--hirsel-trace-events" => {
+                if options.trace.replace((offset, value.into())).is_some() {
+                    return Err(argument_error("duplicated --hirsel-trace-events"));
+                }
+            }
+            _ => unreachable!(),
+        }
         offset += 2;
     }
-    Ok(LiveOptions {
-        input: &arguments[offset..],
-        tape,
-        revocations,
-    })
+    let replay = selector
+        .as_ref()
+        .is_some_and(|(flag, _)| flag == "--hirsel-replay");
+    if replay && (options.tape.is_some() || options.revocations.is_some()) {
+        return Err(argument_error(
+            "replay conflicts with recording and revocations",
+        ));
+    }
+    if replay && (delimiter || offset != arguments.len()) {
+        return Err(argument_error(
+            "expected only replay options and --hirsel-replay <tape>",
+        ));
+    }
+    if let Some((flag, path)) = selector {
+        options.input.extend([flag, path]);
+    } else if delimiter {
+        options.input.push("--".into());
+    }
+    options.input.extend_from_slice(&arguments[offset..]);
+    Ok(options)
 }
 
 /// The compiled code a standalone launch binds its run to. An executable keeps only
@@ -279,6 +346,111 @@ fn select_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn runtime_selection(words: &[&str]) -> Result<Selected, RunRefusal> {
+        let scratch = tempfile::tempdir().unwrap();
+        let grants = scratch.path().join("grants.json");
+        std::fs::write(&grants, "{}").unwrap();
+        let words = words
+            .iter()
+            .map(|word| {
+                if *word == "GRANTS" {
+                    grants.clone().into_os_string()
+                } else {
+                    OsString::from(word)
+                }
+            })
+            .collect();
+        select(words, [1; 32], "options@1/main", ROOT_ARGS, false, false)
+    }
+
+    #[test]
+    fn runtime_options_grants_before_record_preserves_only_app_args() {
+        let Selected::Live { run, tape, .. } = runtime_selection(&[
+            "--hirsel-grants",
+            "GRANTS",
+            "--hirsel-record",
+            "tape",
+            "app",
+        ])
+        .unwrap() else {
+            panic!("live")
+        };
+        assert_eq!(tape, Some("tape".into()));
+        assert_eq!(
+            run.run().record().args.as_deref(),
+            Some(["app".to_string()].as_slice())
+        );
+    }
+    #[test]
+    fn runtime_options_record_before_grants_keeps_identity() {
+        let Selected::Live { run, tape, .. } = runtime_selection(&[
+            "--hirsel-record",
+            "tape",
+            "--hirsel-grants",
+            "GRANTS",
+            "app",
+        ])
+        .unwrap() else {
+            panic!("live")
+        };
+        let Selected::Live { run: other, .. } = runtime_selection(&[
+            "--hirsel-grants",
+            "GRANTS",
+            "--hirsel-record",
+            "tape",
+            "app",
+        ])
+        .unwrap() else {
+            panic!("live")
+        };
+        assert_eq!(tape, Some("tape".into()));
+        assert_eq!(run.run().identity(), other.run().identity());
+        assert_eq!(run.run().canonical(), other.run().canonical());
+    }
+    #[test]
+    fn runtime_options_delimiter_and_first_app_word_stop_parsing() {
+        for words in [
+            vec!["--hirsel-grants", "GRANTS", "--", "--hirsel-record", "app"],
+            vec![
+                "--hirsel-grants",
+                "GRANTS",
+                "first",
+                "--hirsel-record",
+                "app",
+            ],
+        ] {
+            let Selected::Live { run, tape, .. } = runtime_selection(&words).unwrap() else {
+                panic!("live")
+            };
+            assert!(tape.is_none());
+            let expected = if words[2] == "--" {
+                vec!["--hirsel-record", "app"]
+            } else {
+                vec!["first", "--hirsel-record", "app"]
+            };
+            assert_eq!(run.run().record().args.as_ref().unwrap(), &expected);
+        }
+    }
+    #[test]
+    fn runtime_options_duplicates_and_conflicting_inputs_are_typed_refusals() {
+        for words in [
+            vec!["--hirsel-record", "a", "--hirsel-record", "b", "--"],
+            vec!["--hirsel-grants", "GRANTS", "--hirsel-grants", "GRANTS"],
+            vec!["--hirsel-grants", "GRANTS", "--hirsel-run", "GRANTS"],
+            vec![
+                "--hirsel-revocations",
+                "a",
+                "--hirsel-revocations",
+                "b",
+                "--",
+            ],
+        ] {
+            assert!(
+                matches!(runtime_selection(&words), Err(RunRefusal::Invalid { field, .. }) if field == "argv")
+            );
+        }
+    }
 
     #[test]
     fn replay_policy_accepts_only_ordered_nonidentity_knobs() {

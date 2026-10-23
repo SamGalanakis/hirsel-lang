@@ -927,6 +927,7 @@ fn geofence_audit_34_geometry_and_output_cap_controls() {
 #[ignore = "requires deployed exact-CPU admission; coordinator owns reruns"]
 fn geofence_audit_34_ordered_capacity() {
     let root = scratch("ordered-");
+    let _evidence = super::width_capacity_36::Evidence(root.clone());
     let manifest = package(&root);
     fs::write(
         root.join("ordered.py"),

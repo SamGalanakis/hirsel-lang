@@ -1075,6 +1075,7 @@ fn assignment_planner_34_frozen_exhaustive_oracles() {
 #[ignore = "requires coordinator exact-CPU deployment; all 18 original cells remain incomplete"]
 fn assignment_planner_34_ordered_capacity() {
     let root = scratch("ordered-");
+    let _evidence = super::width_capacity_36::Evidence(root.clone());
     let path = package(&root);
     fs::write(
         root.join("ordered.py"),

@@ -192,6 +192,7 @@ fn pubsub_relay_30_native_and_real_unix() {
         .prefix("pubsub-native-")
         .tempdir_in(evidence())
         .unwrap();
+    let _evidence = super::width_capacity_36::Evidence(scratch.path().to_owned());
     let manifest = package(scratch.path());
     fs::write(
         scratch.path().join("cases.json"),

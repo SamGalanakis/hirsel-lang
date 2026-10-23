@@ -1631,7 +1631,7 @@ fn select_bound(
         return Ok(None);
     }
     crate::standalone::live_options(arguments)
-        .and_then(|options| match options.input {
+        .and_then(|options| match options.input.as_slice() {
             [flag, path] if flag == "--hirsel-run" => {
                 let run = hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))?;
                 let facts = facts(program, &run)?;
@@ -1691,6 +1691,28 @@ pub(crate) unsafe fn execute(
         // A replay performs no host effect: no admission, clock or provider.
         crate::host::Selection::Replay { run, io } => (Some(run.run().clone()), None, Some(io)),
     };
+    // Harness providers remain fixture-owned. Only an explicit validated placement
+    // opts a fixture into physical execution; ordinary semantic fixtures keep their
+    // existing dispatcher and recordings. Production selections never read this env.
+    let harness_text = |name: &str| match std::env::var(name) {
+        Ok(text) if requested.is_none() => Ok(Some(text)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not UTF-8")),
+    };
+    let fixture_run = harness_text("HIRSEL_RT_FIXTURE_RUN")?
+        .map(|path| hirsel_run_config::RunConfig::read_path(std::path::Path::new(&path)))
+        .transpose()
+        .map_err(|e| format!("fixture run: {e}"))?;
+    if let Some(run) = &fixture_run {
+        if run.identity() != launch_config.run_identity {
+            return Err("fixture run binding mismatch".into());
+        }
+    }
+    let placement_run = requested.as_ref().or_else(|| {
+        fixture_run
+            .as_ref()
+            .filter(|run| run.record().placement.is_some())
+    });
     // Validate call metadata before allocating a context or starting workers.
     let replay_call = requested
         .as_ref()
@@ -1705,7 +1727,7 @@ pub(crate) unsafe fn execute(
     let ordered = if hirsel_free::session::TestHook::from_env()?.is_some() {
         None
     } else {
-        crate::tasks::ordered::admission::Admission::prepare(requested.as_ref())?
+        crate::tasks::ordered::admission::Admission::prepare(placement_run)?
     };
     let ordered_enabled = ordered.is_some();
     let production_free = crate::free_launch::ENABLED
@@ -1882,11 +1904,6 @@ pub(crate) unsafe fn execute(
             return Err("runners run natively only under the harness launcher".into());
         }
     }
-    let harness_text = |name: &str| match std::env::var(name) {
-        Ok(text) if requested.is_none() => Ok(Some(text)),
-        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not UTF-8")),
-    };
     let runners = if production_free {
         requested
             .as_ref()
@@ -1948,14 +1965,7 @@ pub(crate) unsafe fn execute(
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
     // Only the harness selection reads fixture inputs. Production admission and RealIo
     // retain their host-file semantics even when these variables are present.
-    let fixture_run = harness_text("HIRSEL_RT_FIXTURE_RUN")?
-        .map(|path| hirsel_run_config::RunConfig::read_path(std::path::Path::new(&path)))
-        .transpose()
-        .map_err(|e| format!("fixture run: {e}"))?;
     if let Some(run) = &fixture_run {
-        if run.identity() != launch_config.run_identity {
-            return Err("fixture run binding mismatch".into());
-        }
         arguments = run.record().args.clone().unwrap_or_default();
     }
     let fixture_files = harness_text("HIRSEL_RT_FIXTURE_FILES")?
@@ -2217,7 +2227,7 @@ pub(crate) unsafe fn execute(
                                 .filter(|run| !entry.is_test() && !run.calls())
                                 .map(|run| RecordedRun {
                                     canonical: run.canonical().to_vec(),
-                                    placement: None,
+                                    placement: run.record().placement.clone(),
                                     admitted_at: 0,
                                     revocation: None,
                                     instance: None,
@@ -2245,8 +2255,7 @@ pub(crate) unsafe fn execute(
     };
     // Replay validates placement syntax but never captures topology or opens a sidecar.
     let managed = if replay.is_none() {
-        requested
-            .as_ref()
+        placement_run
             .map(|run| run.record().placement.clone().unwrap_or_default())
             .map(|placement| {
                 let reader = hirsel_run_config::managed_cores::LinuxLimits::capture()

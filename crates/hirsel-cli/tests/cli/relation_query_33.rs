@@ -721,3 +721,47 @@ fn accept(root: &Path, progress: &mut BTreeSet<String>, key: String) {
     )
     .unwrap();
 }
+
+#[test]
+#[ignore = "selected exact-capacity pool cell"]
+fn relation_query_33_ordered_capacity() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (backend, width, kind) =
+            super::width_capacity_36::selection("RELATION_QUERY_33_ORDERED");
+        let root = root("ordered");
+        let _evidence = super::width_capacity_36::Evidence(root.clone());
+        let manifest = package(&root);
+        let id = match kind.as_str() {
+            "success" => "many-to-many",
+            "domain" => "overflow",
+            "cancel" => "cancel",
+            _ => unreachable!(),
+        };
+        let row = cases().into_iter().find(|r| r["id"] == id).unwrap();
+        let recipe = fixture(&row, 4);
+        super::width_capacity_36::fixture_capacity(
+            &manifest,
+            &root,
+            &recipe,
+            backend,
+            width,
+            |observed, recording| {
+                assert_eq!(observed.exit_code, row["exit"].as_i64().map(|n| n as i32));
+                assert_eq!(observed.output, row["stdout"].as_str().unwrap().as_bytes());
+                assert!(observed.failures.is_empty() && !observed.blocked);
+                assert_eq!(recording.arguments, recipe.args);
+                assert_eq!(recording.tree.files, recipe.files);
+                verify_tape(&row, recording);
+                if row["pending"] == true {
+                    assert!(recording.events.iter().any(|e| matches!(
+                        (&e.request, &e.completion),
+                        (
+                            hirsel_rt::io::Request::FileRead { .. },
+                            hirsel_rt::io::Completion::Blocked { committed: false }
+                        )
+                    )));
+                }
+            },
+        );
+    });
+}

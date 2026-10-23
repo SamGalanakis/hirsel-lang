@@ -29,7 +29,9 @@ manifest, toolchain, cache or grants. Use help before a source operand;
 `hirsel run app.hir -- --help` passes `--help` to the application.
 Compiler flags differ from standalone launch prefixes: see the
 [native recording recipe](native-verification.md#record-remove-host-access-replay).
-For a standalone executable, `--hirsel-record` comes before `--hirsel-grants`.
+For a standalone executable, runtime options such as `--hirsel-record` and
+`--hirsel-grants` may appear in any order before the first application argument
+or `--`. The delimiter ends runtime option parsing and is omitted from Args.
 
 A single `.hir` file needs no manifest: it belongs to `standalone@0` and selects
 exactly the `std@1` shipped with the toolchain, reusing its std precheck. An exact

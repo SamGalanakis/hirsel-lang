@@ -938,3 +938,51 @@ fn route_planner_33_output_cap_and_predecessor_controls() {
         }
     });
 }
+
+#[test]
+#[ignore = "selected exact-capacity pool cell"]
+fn route_planner_33_ordered_capacity() {
+    let (backend, width, kind) = super::width_capacity_36::selection("ROUTE_PLANNER_33_ORDERED");
+    let root = scratch("ordered-");
+    let _evidence = super::width_capacity_36::Evidence(root.clone());
+    let manifest = package(&root);
+    fs::write(
+        root.join("ordered.py"),
+        include_bytes!("../support/route_planner_33/ordered.py"),
+    )
+    .unwrap();
+    let backend = match backend {
+        Backend::Llvm => "llvm",
+        Backend::Cranelift => "cranelift",
+    };
+    let binary = root.join(format!("ordered-{backend}"));
+    let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["build", "--backend", backend])
+        .arg(manifest)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    fs::write(root.join("build.stdout"), &built.stdout).unwrap();
+    fs::write(root.join("build.stderr"), &built.stderr).unwrap();
+    assert!(built.status.success(), "{built:?}");
+    let run = Command::new("python3")
+        .arg(root.join("capped"))
+        .args(["--timeout", "60", "python3"])
+        .arg(root.join("ordered.py"))
+        .arg("--binary")
+        .arg(binary)
+        .arg("--root")
+        .arg(root.join("cell"))
+        .arg("--fixture-root")
+        .arg(&root)
+        .arg("--width")
+        .arg(width.to_string())
+        .arg("--kind")
+        .arg(kind)
+        .output()
+        .unwrap();
+    fs::write(root.join("qualification.stdout"), &run.stdout).unwrap();
+    fs::write(root.join("qualification.stderr"), &run.stderr).unwrap();
+    assert!(run.status.success(), "{run:?}");
+}

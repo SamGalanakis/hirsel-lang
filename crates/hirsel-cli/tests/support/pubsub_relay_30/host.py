@@ -44,10 +44,10 @@ def host_case(exe, root, width, mode, env, capped):
         until=time.monotonic()+2
         while time.monotonic()<until:
             snapshot=control(ctl);samples.append(snapshot)
-            if snapshot.get('worker_phase')=='running' and snapshot['width']['effective']==width and snapshot['width']['pending']==0:break
+            if snapshot.get('worker_phase')=='running' and snapshot['width']['requested']==width and snapshot['width']['effective']==width and snapshot['width']['pending']==0:break
         (directory/'control.json').write_text(json.dumps(samples,indent=2))
         settled=samples[-1]
-        assert settled.get('worker_phase')=='running' and settled['width']['effective']==width and settled['width']['pending']==0, ('INCOMPLETE width',samples)
+        assert settled.get('worker_phase')=='running' and settled['width']['requested']==width and settled['width']['effective']==width and settled['width']['pending']==0, ('INCOMPLETE width',samples)
         def connect():
             peer=socket.socket(socket.AF_UNIX);peer.settimeout(2);peer.connect(str(sock));peers.append(peer);return peer
         if mode=='success':
