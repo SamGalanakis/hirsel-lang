@@ -1,0 +1,119 @@
+{
+  "seed": 2026102507,
+  "oracle": {
+    "repository": "https://github.com/toml-rs/toml",
+    "revision": "ceac6e4412420d5a5c19e4f7293ad005cf1a31b2",
+    "crate": "toml_edit 0.25.17+spec-1.1.0",
+    "features": [
+      "parse",
+      "display",
+      "unbounded"
+    ],
+    "entry": "toml_edit::Document::parse",
+    "source": [
+      "crates/toml_edit/src/parser/mod.rs:17-36",
+      "crates/toml_parser/src/parser/document.rs:18-36"
+    ],
+    "version_proof_ids": [
+      "d-escape",
+      "d-seconds",
+      "d-inline",
+      "gold-inline"
+    ],
+    "golden_checks": "Before freezing answers the independent oracle output was structurally compared to both original toml-test tagged JSON golden files. No Hirsel execution participates in generation.",
+    "binary_sha256": "cdadac34a6a3f443b1785fcb42011df03ca6d090e960fbb6f812ddb8eaff90b8",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "generator_sha256": "2ce990e689b9760353c6efb0fcbb03649525c1dbdbb39c10377c5558c61937cc",
+    "adapter_sha256": "439da26e704771949efadba1b6e466d989e7da98b37c9f39aff1ff7c108efaf0",
+    "lock_sha256": "093bc27ab1cd85839775e30dac3ee30ab8c981d4552e2c1b24692989276f3dfe"
+  },
+  "vectors": {
+    "repository": "https://github.com/toml-lang/toml-test",
+    "revision": "ff49d109861c1ad25af53f687f2aef19ab650600",
+    "files": [
+      "tests/valid/spec-1.1.0/common-0.toml",
+      "tests/valid/spec-1.1.0/common-0.json",
+      "tests/valid/inline-table/newline-comment.toml",
+      "tests/valid/inline-table/newline-comment.json"
+    ],
+    "license": "MIT; Copyright (c) 2018 TOML authors; third-party/NOTICES.md"
+  },
+  "adaptations": [
+    {
+      "ids": "every successful parse (table/array representation only)",
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `toml.parse takes a UTF-8 String`: root Table and keys in order of first definition; tagged ordered entries preserve toml_edit iteration order.",
+      "action": "Table and InlineTable both map to ordered table pairs; ArrayOfTables maps to an array of tables. Finite/signed-zero/infinite floats use binary64 bits; NaN uses explicit classification, since payload and sign are not part of the TOML contract."
+    },
+    {
+      "ids": [
+        "d-seconds",
+        "d-datetime",
+        "d-leap"
+      ],
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `toml.parse takes a UTF-8 String`: A Datetime holds the validated source spelling verbatim.",
+      "action": "Use upstream validated value spans to retain original datetime bytes, keeping canonical raw datetime output separately. Do not compare upstream canonical timestamp spelling to exact source spelling."
+    },
+    {
+      "ids": [
+        "d-float-overflow"
+      ],
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `toml.parse takes a UTF-8 String`: Floats round correctly to binary64, overflowing to infinity.",
+      "action": "toml-rs reports floating-point number overflowed; adapted expected is positive infinity, prescribed independently by this paragraph."
+    },
+    {
+      "ids": [
+        "d-depth128",
+        "d-depth129"
+      ],
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `Syntax, DuplicateKey and Nesting carry`: MAX_NESTING 128 counts tables and arrays below root; container at 129 is Nesting at its opening bracket, brace or key.",
+      "action": "Oracle uses unbounded to avoid upstream 80 recursion guard; depth128 succeeds, depth129 maps to Nesting(1,131) despite upstream success."
+    },
+    {
+      "ids": "m000..m063, d-owner-negative, d-sealed",
+      "contract": "docs/spec/std-library.md, TOML, paragraphs beginning `A header defines a table once` and `Syntax, DuplicateKey and Nesting carry`; integer overflow in `toml.parse takes a UTF-8 String`.",
+      "action": "Keep raw upstream error/span; expect exact Hirsel Syntax/DuplicateKey position from the syntactic construction and cited paragraphs, independently of Hirsel observations."
+    },
+    {
+      "ids": [
+        "d-datetime",
+        "d-leap"
+      ],
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `toml.moment converts`: Fraction digits beyond nanoseconds truncate; a leap second is InvalidValue. Paragraph beginning `toml.datetime spells`: fraction without trailing zeros.",
+      "action": "Parse spelling remains exact; moment/datetime yields 07:32:00.123456789 for the local time and InvalidValue for 23:59:60."
+    },
+    {
+      "ids": "all accepted documents",
+      "contract": "docs/spec/std-library.md, TOML, paragraph beginning `toml.stringify borrows`: scalar pairs before sections; output parses to an equal value, NaN to NaN.",
+      "action": "Readback compares maps by keys, arrays by order, datetimes by spelling and floats by bits or explicit NaN class. Initial parse observes first-definition map order separately."
+    }
+  ],
+  "bounds": {
+    "generated": 96,
+    "mutations": 64,
+    "upstream": 2,
+    "dedicated": 14,
+    "total": 176,
+    "generated_max_depth": 4
+  },
+  "reproduction": [
+    "Clone toml-rs/toml and toml-lang/toml-test at the exact revisions above.",
+    "Outside the repository, build toml_edit at that path with parse, display, unbounded; use Document::parse with the input UTF-8 bytes. unbounded disables the upstream 80-level guard only.",
+    "Recursively tag upstream Items/Values. Preserve table iteration order, decimal i64, raw f64 bits or nan, and raw datetime display; retain this raw output separately. Adapt datetime by upstream validated source span, explicit syntax positions by the cited contract, and the two listed contract deviations.",
+    "The 176 fixture rows freeze every input and oracle/adapted answer with hashes. Run the toml_upstream_25 partitions via the existing stdlib Buck2 test target."
+  ],
+  "exclusions": [
+    "source-preserving document edits",
+    "unbounded fuzzing",
+    "full upstream suite reimport",
+    "new application behavior"
+  ],
+  "hashes": {
+    "Cargo.lock": "8272c70dafa4cfdf993ec1a83f158d8929d29ce94d29b418e2a42fb2a4110535",
+    "crates/toml_edit/src/parser/mod.rs": "25897b02485976afd6a53ac1d4c1310e0c8e9f573b5ed079f30c2dad62e3a05d",
+    "crates/toml_parser/src/parser/document.rs": "a9c00e6755ea4c24e45d44b95e30713e9bd909d8a64c2418d70c7cd500477a80",
+    "tests/valid/spec-1.1.0/common-0.toml": "e04d8d4933a49de0e2edfda407bf158c362f94da0ce457163f34a39b4b093d93",
+    "tests/valid/spec-1.1.0/common-0.json": "a5fc6f2282d4127c6fd3c115fc94a4674c7efd2ae50ab8d2b1d2d6a5e6553033",
+    "tests/valid/inline-table/newline-comment.toml": "4b57e5438348a3d5aa0199557253fcba3d482685f191bfd4864b30bcdc5e4a53",
+    "tests/valid/inline-table/newline-comment.json": "a8f5276a5aab3d4cf1b1ffc3dcc50e58272c27f0c0cf43f9371e523c3956e486"
+  }
+}

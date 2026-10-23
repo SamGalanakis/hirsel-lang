@@ -1,0 +1,106 @@
+// Expected values are host-built oracle literals, never parsed as TOML.
+fn quoted(s: String, mut out: List[u8]) {
+  std@1/json.write_text_into(s, mut out)
+}
+fn encode(value: std@1/toml.Value, mut out: List[u8]) {
+  match value {
+    Text(s) => { text.append(mut out, "[\"text\","); quoted(s, mut out); text.append(mut out, "]") },
+    Integer(n) => { text.append(mut out, "[\"integer\","); quoted(f"{n}", mut out); text.append(mut out, "]") },
+    Bool(b) => text.append(mut out, f"[\"bool\",{b}]"),
+    Float(f) => {
+      text.append(mut out, "[\"float\",")
+      if f != f { quoted("nan", mut out) } else { quoted(f"{core@1/f64.bits(f)}", mut out) }
+      text.append(mut out, "]")
+    },
+    Datetime(s) => { text.append(mut out, "[\"datetime\","); quoted(s, mut out); text.append(mut out, "]") },
+    Array(items) => {
+      text.append(mut out, "[\"array\",[")
+      let mut first = true
+      for item in items {
+        if !first { text.append(mut out, ",") }
+        first = false
+        encode(item, mut out)
+      }
+      text.append(mut out, "]]")
+    },
+    Table(entries) => {
+      text.append(mut out, "[\"table\",[")
+      let mut first = true
+      for (key, item) in entries {
+        if !first { text.append(mut out, ",") }
+        first = false
+        text.append(mut out, "["); quoted(key, mut out); text.append(mut out, ",")
+        encode(item, mut out)
+        text.append(mut out, "]")
+      }
+      text.append(mut out, "]]")
+    },
+  }
+}
+fn error_text(error: std@1/toml.TomlError, mut out: List[u8]) {
+  match error {
+    Syntax(p) => text.append(mut out, f"[\"error\",\"Syntax\",{p.line},{p.column}]"),
+    DuplicateKey(p) => text.append(mut out, f"[\"error\",\"DuplicateKey\",{p.line},{p.column}]"),
+    Nesting(p) => text.append(mut out, f"[\"error\",\"Nesting\",{p.line},{p.column}]"),
+    _ => text.append(mut out, "unexpected-error"),
+  }
+}
+// Map order is observed by encode on parse; stringify's section ordering may change it.
+fn same(a: std@1/toml.Value, b: std@1/toml.Value) -> bool {
+  match a {
+    Float(x) => match b { Float(y) => (x != x && y != y) || core@1/f64.bits(x) == core@1/f64.bits(y), _ => false },
+    Array(xs) => match b {
+      Array(ys) => {
+        if list.len(xs) != list.len(ys) { return false }
+        for i in 0u64..list.len(xs) { if !same(xs[i], ys[i]) { return false } }
+        true
+      },
+      _ => false,
+    },
+    Table(xs) => match b {
+      Table(ys) => {
+        if map.len(xs) != map.len(ys) { return false }
+        for (key, x) in xs {
+          let Some(y) = map.get(ys, key) else { return false }
+          if !same(x, y) { return false }
+        }
+        true
+      },
+      _ => false,
+    },
+    _ => a == b,
+  }
+}
+fn observe(id: String, source: String, moment: u64, mut out: List[u8]) {
+  text.append(mut out, f"{id} parse ")
+  match std@1/toml.parse(unique source) {
+    Error(e) => { error_text(e, mut out); text.append(mut out, "\n") },
+    Ok(value) => {
+      encode(value, mut out)
+      text.append(mut out, f"\n{id} readback ")
+      match std@1/toml.stringify(value) {
+        Error(e) => error_text(e, mut out),
+        Ok(doc) => match std@1/toml.parse(take doc) {
+          Error(e) => error_text(e, mut out),
+          Ok(readback) => if same(value, readback) { text.append(mut out, "ok") } else { encode(readback, mut out) },
+        },
+      }
+      text.append(mut out, "\n")
+      if moment != 0 {
+        text.append(mut out, f"{id} moment ")
+        let Table(entries) = value else { text.append(mut out, "not-table\n"); return }
+        let key = if moment == 1 { "time" } else { "x" }
+        let Some(Datetime(spelling)) = map.get(entries, key) else { text.append(mut out, "not-datetime\n"); return }
+        match std@1/toml.moment(spelling) {
+          Error(InvalidValue()) => text.append(mut out, "InvalidValue"),
+          Ok(m) => match std@1/toml.datetime(m) {
+            Ok(Datetime(s)) => text.append(mut out, s),
+            _ => text.append(mut out, "datetime-error"),
+          },
+          _ => text.append(mut out, "moment-error"),
+        }
+        text.append(mut out, "\n")
+      }
+    },
+  }
+}
