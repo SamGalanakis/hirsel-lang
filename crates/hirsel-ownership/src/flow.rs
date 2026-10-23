@@ -1192,13 +1192,11 @@ impl InitialStorage {
                     // relation adds to that root (MODE-1, S2).
                     slot.value.modes.relation =
                         Relation::environment().union(&slot.value.modes.relation);
-                } else if !checker.arenas.global(&slot.value.modes.relation)
-                    && matches!(checker.graph.owner, NameSite::Item)
-                {
+                } else if !checker.arenas.global(&slot.value.modes.relation) {
                     // A taken Local argument bounds its content by that
-                    // argument, through every part that keeps its value. A
-                    // closure's own result is environment-local and cannot
-                    // name its parameters, so its frame keeps them unsourced.
+                    // argument, through every part that keeps its value.
+                    // Literal and local function results can name their own
+                    // parameters too; keep the same source proof in each frame.
                     slot.value
                         .loans
                         .insert(Kind::Bound, On::Binding(index), Site::Binding(index));
