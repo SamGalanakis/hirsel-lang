@@ -162,7 +162,8 @@ It gives no physical-capacity credit without the separate real-host controls.
 
 Commit-refusal recovery completed both native live cells and all eight replay
 players. Its known Heap adapter refusal stays INCOMPLETE. Default minimum-row
-simulation remains a separately named pending regression until executed.
+reference and checked simulation subsequently passed separate selections; it
+remains supplemental evidence for the lower bound.
 
 The fixed schema bounds compact output conservatively to28855 bytes (all
 count components independently64, largest index/number spellings,31 nodes,
@@ -197,3 +198,60 @@ recompress the same98MiB image while omitting files already excluded from the
 tar; that setup cost was unnecessary. Missing input bytes or oversized partial
 capsules remain INCOMPLETE, not smaller accepted fixtures. Test-only cost;
 owner decision-tree-35, fixed. The original600s action remains retained.
+
+
+## Final width, replay and transport boundary
+
+Producer repairs landed in 15260039 before importer recovery: the original
+standalone grants-before-record argv now works, and ordinary public Fixture
+run placement reaches managed Ordered admission. No app-side flag reordering,
+private Fixture field, runtime patch or assertion relaxation was used.
+
+All 18 physical cells passed: LLVM and Cranelift, requested widths 1/2/4,
+success/domain/real SIGINT cancellation. Each retained running controls with
+requested=effective and pending0, exact application observations, cleanup and
+replay against its own immutable tape with original host inputs unavailable.
+All 18 scripted success/domain/Pending-cancel cells passed and self-replayed.
+A separate test parsed all 18 full Recording values and compared all semantic
+fields across backends and widths, clearing only admitted_at and placement.
+Its named Buck execution passed once; it did not re-execute any application.
+Capacity evidence makes no simultaneous-execution or speedup claim.
+
+The first scripted success attempt completed runtime/replay but exceeded the
+unchanged 4MiB encoded archive cap; no exported archive or runtime acceptance
+was awarded. It remains separate from the accepted retry. The exporter now
+tries zstd, then LZMA before creating an explicitly incomplete failure capsule.
+Known image/object/runner bytes bind by SHA only when retained before readers;
+the local extractor verifies every external binding, digest, length and safe
+member path. Unknown program artifacts remain in the archive. A build/link-only
+setup retained new runner bytes without executing the app or writing a pass
+marker. This avoids repeating accepted cells for better transport. Cost:
+additional setup/storage, SHA verification and compression; no application
+runtime cost. Owner decision-tree-35, fixed; original active minutes were not
+recorded. Valid/corrupt digest and fixed-cap partial-capsule refusal controls
+are retained. No omitted capsule earned acceptance.
+
+The first tape-analysis launch left an empty log and no live producer; it is
+retained as an incomplete setup attempt. The replacement used a retained script
+and unconditional EXIT wrapper with verified live PIDs, then passed one named
+comparison test. Cost: test-launch bookkeeping only, 2 active minutes; owner
+decision-tree-35, fixed. No application cell was repeated.
+
+Final core inventory: 45 frozen cases, 90 native live passes, 180 cross-native
+replay passes, 160 interpreter tape replay passes, 42 lowered Heap differential
+passes, 80 source reference/checked workflow passes, and 24 strict negative
+tape checks. Oracle45 and both minimum-row adapters passed exact serial
+selections. These observations are separate from 36 accepted width cells and
+one full semantic tape comparison. No preexisting treelearn test existed.
+
+Exactly 33 original core identities remain incomplete: ten source interpreter
+Stops and twenty interpreter tape-replay Stops on rows-64, batch-four,
+bytes-65536, nodes-31-jobs-1 and nodes-31-jobs-4; two lowered Heap Steps Stops
+on bytes-65536 and nodes-31-jobs-4; and the commit-denied Heap typed-file-fault
+unsupported guard. All use unchanged original inputs and limits. Witnesses
+are the frozen cases plus per-engine raw receipts/tapes in lane evidence.
+The Steps obligations remain owned by decision-tree-35 with coordinator
+follow-up; native Heap provider coverage is routed to coordinator657647.
+Neither a small passing control nor native success closes an interpreter Stop.
+The overwritten initial failed toy libtest streams and the first physical
+missing archive/unproved tape remain explicit retention limitations.

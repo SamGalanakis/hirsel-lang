@@ -378,7 +378,8 @@ fn native(
     ];
     let tools = Toolchain::for_matrix(&root.join("runtime"), &matrix).unwrap();
     let scripted_width = std::env::var("DECISION_TREE_35_SCRIPTED_WIDTH").ok();
-    if scripted_width.is_none() && !accepted(root, "h-differential") {
+    let prepare_only = std::env::var_os("DECISION_TREE_35_PREPARE_ONLY").is_some();
+    if !prepare_only && scripted_width.is_none() && !accepted(root, "h-differential") {
         receipt(root, "h-differential", "started");
         for (name, result) in differential_in(
             &input,
@@ -456,6 +457,14 @@ fn native(
         runnables.len(),
         if scripted_width.is_some() { 1 } else { 2 }
     );
+    if prepare_only {
+        fs::write(
+            root.join("artifact-setup.json"),
+            json!({"prepared":true,"executed":false}).to_string(),
+        )
+        .unwrap();
+        return;
+    }
     let mut reference = None;
     for (runnable, dir) in &runnables {
         let tape = dir.join("recording.tape");
@@ -824,6 +833,9 @@ fn decision_tree_35_cell() {
                 return;
             }
         }
+        if std::env::var_os("DECISION_TREE_35_PREPARE_ONLY").is_some() {
+            return;
+        }
         if root.join("incomplete.json").exists() {
             return;
         }
@@ -1020,7 +1032,7 @@ for key,p in roots.items():
 }
 
 #[test]
-#[ignore = "scripted Ordered widths; wait for landed exact-CPU client"]
+#[ignore = "explicit scripted Ordered width qualification inventory"]
 fn decision_tree_35_scripted_ordered() {
     let case = std::env::var("DECISION_TREE_35_CASE").unwrap();
     assert!(["batch-four", "features-5", "pending-cancel"].contains(&case.as_str()));
@@ -1036,17 +1048,35 @@ fn decision_tree_35_scripted_ordered() {
 #[test]
 #[ignore = "compare retained full scripted tapes after transport verification"]
 fn decision_tree_35_scripted_tape_comparison() {
-    let root = PathBuf::from(std::env::var_os("DECISION_TREE_35_TAPES_DIR").unwrap());
+    let root = std::env::var_os("DECISION_TREE_35_TAPES_DIR").map(PathBuf::from);
+    let packed: Option<BTreeMap<String, Vec<u8>>> = if std::env::var_os(
+        "DECISION_TREE_35_TAPES_B64",
+    )
+    .is_some()
+    {
+        let decoded = Command::new("python3").args(["-c", "import base64,os,sys,zlib;sys.stdout.buffer.write(zlib.decompress(base64.b64decode(os.environ['DECISION_TREE_35_TAPES_B64'],validate=True)))"]).output().unwrap();
+        assert!(decoded.status.success(), "{decoded:?}");
+        Some(serde_json::from_slice(&decoded.stdout).unwrap())
+    } else {
+        None
+    };
+    assert!(root.is_some() || packed.is_some());
     for case in ["batch-four", "features-5", "pending-cancel"] {
         let mut expected = None;
         for (backend, directory) in [("llvm", "Llvm"), ("cranelift", "Cranelift")] {
             for width in [1, 2, 4] {
-                let tape = root
-                    .join(format!("{backend}-w{width}-{case}"))
-                    .join(case)
-                    .join(directory)
-                    .join("recording.tape");
-                let raw = fs::read(&tape).unwrap();
+                let key = format!("{backend}-w{width}-{case}");
+                let tape = root.as_ref().map(|r| {
+                    r.join(&key)
+                        .join(case)
+                        .join(directory)
+                        .join("recording.tape")
+                });
+                let raw = if let Some(packed) = &packed {
+                    packed.get(&key).unwrap().clone()
+                } else {
+                    fs::read(tape.as_ref().unwrap()).unwrap()
+                };
                 let observed = hirsel_rt::launch::parse_recording_bytes(&raw).unwrap();
                 observed.bound_run().unwrap();
                 if let Some(expected) = &expected {
@@ -1054,7 +1084,9 @@ fn decision_tree_35_scripted_tape_comparison() {
                 } else {
                     expected = Some(semantic(&observed));
                 }
-                assert_eq!(fs::read(&tape).unwrap(), raw);
+                if let Some(tape) = tape {
+                    assert_eq!(fs::read(tape).unwrap(), raw);
+                }
             }
         }
     }

@@ -51,8 +51,19 @@ Qualification commands select `decision_tree_35_simulation` or
 `decision_tree_35_native_record_replay` with `--ignored --nocapture` on CLI
 shard1. `DECISION_TREE_35_CASE` selects exact comma-separated recovery IDs;
 accepted cells must not be repeated. Physical cells additionally select backend,
-width and kind using DECISION_TREE_35_BACKEND/WIDTH/KIND. They await the landed
-exact-CPU client and verify running/effective=requested/pending0 control replies.
+width and kind using DECISION_TREE_35_BACKEND/WIDTH/KIND. Both native backends passed widths 1/2/4 for success, domain error and real
+SIGINT cancellation: 18 physical cells, each with running, effective=requested,
+pending0 controls and replay of its own tape. The 18 scripted cells also passed;
+full recording comparison across backends/widths removes only admission time
+and placement metadata. These controls prove capacity, not simultaneous
+execution or speedup.
+
+The independent oracle checks 45 frozen cases. LLVM and Cranelift each pass
+45 live workflows; cross-native replay passes 180 observations. Reference and
+checked live execution each pass 40 workflows, with five Stops each. Interpreter
+tape replay passes 160 observations with 20 Stops; lowered Heap differential
+passes 42 with two Stops and one unsupported typed file-fault case. There are
+also 24 binding/request/missing-event/extra-event refusal checks.
 
 The original 64-row, four-job, 65536-byte and 31-node workflows have retained
 1M-step interpreter Stops; see FRICTION. A default minimum-bound regression is
