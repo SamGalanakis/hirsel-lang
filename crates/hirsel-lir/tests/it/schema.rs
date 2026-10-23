@@ -1890,6 +1890,34 @@ mod instance_keys {
     }
 
     #[test]
+    fn instance_key_encoding_restores_lexical_and_selected_identities() {
+        let store = crate::support::session();
+        let owner = path("portable");
+        let key = InstanceKey::new(&owner, 7, &[], &store, None, None).unwrap();
+        let selected = key
+            .derived("selection", &[b"a", b"bc"])
+            .derived("scoped", &[b"captures", b"callers"]);
+        for original in [&key, &selected] {
+            let restored =
+                InstanceKey::from_encoding(&owner, 7, original.encoding().to_vec()).unwrap();
+            assert_eq!(&restored, original);
+            assert_eq!(restored.digest(), original.digest());
+            assert!(
+                InstanceKey::from_encoding(&path("other"), 7, original.encoding().to_vec())
+                    .is_err()
+            );
+            assert!(InstanceKey::from_encoding(&owner, 8, original.encoding().to_vec()).is_err());
+            let mut truncated = original.encoding().to_vec();
+            truncated.pop();
+            assert!(InstanceKey::from_encoding(&owner, 7, truncated).is_err());
+        }
+        assert!(InstanceKey::from_encoding(&owner, 7, vec![0; 8]).is_err());
+        let mut corrupt = selected.encoding().to_vec();
+        corrupt[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(InstanceKey::from_encoding(&owner, 7, corrupt).is_err());
+    }
+
+    #[test]
     fn instance_views_reject_foreign_type_ids_and_non_bijective_remaps() {
         let store = crate::support::session();
         let unit_ty = store.intern(Type::unit());
