@@ -503,7 +503,7 @@ pub fn run_interpreted(
                             None => execution.tooling_output,
                         };
                         let failure = match execution.outcome {
-                            Ok(outcome) => outcome_failure(&outcome),
+                            Ok(outcome) => outcome_failure(&outcome, &program.engine.sources),
                             Err(error) => Some(format!("runtime error: {error:?}")),
                         };
                         (failure, stdout, execution.race_candidates)
@@ -549,7 +549,10 @@ pub fn execute(
     run(&mut program.engine, &config, simulation)
 }
 
-pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
+pub(crate) fn outcome_failure(
+    outcome: &RunOutcome,
+    sources: &hirsel_span::SourceMap,
+) -> Option<String> {
     match outcome {
         RunOutcome::Returned(hirsel_run_schema::Returned::Ok) => None,
         RunOutcome::Returned(hirsel_run_schema::Returned::Error) => Some("returned Error".into()),
@@ -571,7 +574,24 @@ pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
                     operation,
                 },
             ..
-        } => Some(site.report(rule.as_str(), false, operation.as_ref())),
+        } => {
+            // Test and bench results are reports against this source snapshot.
+            // Resolve canonical outcome sites just as ordinary CLI diagnostics
+            // do, retaining logical paths in the outcome itself.
+            let physical = |site: &hirsel_run_schema::Site| {
+                let mut site = site.clone();
+                if let Some(file) = sources.anchors().find_map(|(_, file, _)| {
+                    let file = sources.file(file)?;
+                    (file.logical_path().to_string_lossy() == site.file).then_some(file)
+                }) {
+                    site.file = file.path.to_string_lossy().into_owned();
+                }
+                site
+            };
+            let site = physical(site);
+            let operation = operation.as_ref().map(physical);
+            Some(site.report(rule.as_str(), false, operation.as_ref()))
+        }
         outcome => Some(format!("runtime failure: {outcome:?}")),
     }
 }
@@ -670,7 +690,9 @@ pub fn bench_path(
                     .map_err(|e| format!("runtime error: {e}"))?;
                 let elapsed = start.elapsed();
                 match execution.outcome {
-                    Ok(outcome) => outcome_failure(&outcome).map_or(Ok(elapsed), Err),
+                    Ok(outcome) => {
+                        outcome_failure(&outcome, &program.engine.sources).map_or(Ok(elapsed), Err)
+                    }
                     Err(error) => Err(format!("runtime error: {error:?}")),
                 }
             });
