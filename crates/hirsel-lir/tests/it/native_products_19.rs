@@ -39,11 +39,19 @@ fn native_products_19_only_actual_validation_can_issue_a_local_output() {
         .unwrap();
     let output = output.unwrap();
     assert_eq!(output.metadata(), b"query data");
+    let trace = hirsel_lir::construction::ValueTrace::default();
+    let observe = trace.enter();
     assert!(
         cache
             .lookup(subject, policy, StageKind::Value, &environment)
             .is_some()
     );
+    assert_eq!(
+        trace.totals(),
+        hirsel_lir::construction::ValueCounts::default(),
+        "native descriptor acceptance constructs/decodes/clones/rebinds no Value"
+    );
+    drop(observe);
     assert!(
         cache
             .lookup(
@@ -604,4 +612,58 @@ fn native_products_19_source_observation_is_independent_and_scope_bound() {
             .is_some()
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn native_products_19_value_trace_tracks_real_construction_and_worker_scopes() {
+    use hirsel_lir::construction::{ValueCounts, ValueTrace};
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, _, _) = fixture.finish();
+    let request = ValueTrace::default();
+    let unrelated = ValueTrace::default();
+    let outer = request.enter();
+    let inner = unrelated.enter();
+    // Cancellation may clean scopes in either order; dropping the outer
+    // subscriber must not detach the inner or restore an expired subscriber.
+    drop(outer);
+    let _copy = unit.clone();
+    assert_eq!(unrelated.totals().cloned, 1);
+    assert_eq!(request.totals(), ValueCounts::default());
+    drop(inner);
+    let raw = unit.clone();
+    assert_eq!(request.totals(), ValueCounts::default());
+    let worker_request = request.clone();
+    std::thread::spawn(move || {
+        let _observe = worker_request.enter();
+        let _created = hirsel_lir::LirUnit::<Value>::new(raw.header.clone());
+        let copy = raw.clone();
+        assert_eq!(copy, raw);
+        let text = hirsel_codec::to_text(&copy);
+        let decoded: hirsel_lir::LirUnit<Value> = hirsel_codec::from_text(&text).unwrap();
+        let _retagged = decoded.into_stage::<Value>();
+        let (erased, layouts, abis) = hirsel_lir::objects::erased(&copy);
+        let rebound = hirsel_lir::objects::rebound(erased, &layouts, &abis).unwrap();
+        assert_eq!(rebound, copy);
+        let counts = worker_request.totals();
+        assert_eq!(counts.created, 1);
+        assert_eq!(counts.cloned, 2);
+        assert_eq!(counts.decoded, 1);
+        assert_eq!(counts.retagged, 1);
+        assert_eq!(counts.rebound, 1);
+        assert!(counts.decoded_bytes > 0 && counts.decoded_bytes <= text.len() as u64);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(
+        request.snapshot().keys().collect::<Vec<_>>(),
+        vec![&(unit.header.definition.clone(), unit.header.instance)]
+    );
+    let after = request.totals();
+    let _unobserved = unit.clone();
+    assert_eq!(
+        request.totals(),
+        after,
+        "a worker trace never leaks into its parent"
+    );
 }
