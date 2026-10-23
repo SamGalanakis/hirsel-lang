@@ -93,13 +93,13 @@ mod memcheck;
 pub mod multicore_policy;
 pub mod ordered;
 pub mod region;
-pub mod sealed_region;
 pub mod release;
 mod remote;
 mod remote_sync;
 #[cfg(feature = "diagnostic")]
 mod root_trace;
 pub mod roots;
+pub mod sealed_region;
 pub mod shared;
 pub mod stop;
 mod sync;
