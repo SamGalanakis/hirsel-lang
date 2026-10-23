@@ -1,0 +1,141 @@
+// scikit-learn 59106029 _criterion.pyx:605-688, _splitter.pyx:427-485.
+// BSD-3-Clause; see NOTICE. Exact integer arithmetic replaces float impurity.
+pub type Score {
+  numerator: u64,
+  denominator: u64,
+}
+
+pub type Choice {
+  feature: u64,
+  threshold: i64,
+  score: Score,
+}
+
+pub type Partition {
+  left: List[u64],
+  right: List[u64],
+}
+
+// N<=64 => sum(c²)<=N². Weighted-purity numerator<=N³, denominator<=N².
+// Comparing two scores uses <=N⁵=1073741824; comparison to parent <=N⁴.
+// Checked operations remain fallible even though admission proves these bounds.
+pub fn multiply(a: u64, b: u64) -> Result[u64, dataset.Problem] uses {} {
+  match std@1/u64.checked_mul(a, b) {
+    Some(n) => Ok(n),
+    None() => Error(Arithmetic()),
+  }
+}
+
+fn add(a: u64, b: u64) -> Result[u64, dataset.Problem] uses {} {
+  match std@1/u64.checked_add(a, b) {
+    Some(n) => Ok(n),
+    None() => Error(Arithmetic()),
+  }
+}
+
+fn squares(counts: List[u64]) -> Result[u64, dataset.Problem] uses {} {
+  let mut sum: u64 = 0
+  for c in counts {
+    sum = add(sum, multiply(c, c)?)?
+  }
+  Ok(sum)
+}
+
+pub fn better(a: Score, b: Score) -> Result[bool, dataset.Problem] uses {} {
+  Ok(multiply(a.numerator, b.denominator)? > multiply(b.numerator, a.denominator)?)
+}
+
+pub fn partition(
+  data: dataset.Dataset[i64],
+  indices: List[u64],
+  feature: u64,
+  threshold: i64
+) -> unique Partition uses {} {
+  let mut left: List[u64] = []
+  let mut right: List[u64] = []
+  for index in indices {
+    if data.rows[index].x[feature] <= threshold {
+      list.push(mut left, index)
+    } else {
+      list.push(mut right, index)
+    }
+  }
+  Partition(left: take left, right: take right)
+}
+
+// Sorted observations advance counts exactly once, as sklearn's criterion
+// update loop does. Equal-valued groups form one boundary, with the lower
+// observed value stored directly. No per-candidate copy of the dataset.
+type Point {
+  value: i64,
+  label_id: u64,
+}
+
+@noalloc
+fn compare(a: Point, b: Point) -> i32 uses {} {
+  if a.value < b.value {
+    -1i32
+  } else if a.value > b.value {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+fn ordered(data: dataset.Dataset[i64], indices: List[u64], feature: u64) -> unique List[
+  Point
+] uses {} {
+  let mut values: unique List[Point] = []
+  for i in indices {
+    list.push(
+      mut values,
+      Point(value: data.rows[i].x[feature], label_id: data.rows[i].label)
+    )
+  }
+  list.sort(mut values, compare)
+  take values
+}
+
+pub fn best(data: dataset.Dataset[i64], indices: List[u64], minimum: u64) -> Result[
+  Option[Choice],
+  dataset.Problem
+] uses {} {
+  let parent_counts = dataset.counts(data, indices)
+  let parent = Score(numerator: squares(parent_counts)?, denominator: list.len(indices))
+  let mut incumbent = parent
+  let mut choice: Option[Choice] = None()
+  let mut feature: u64 = 0
+  while feature < data.features {
+    let values = ordered(data, indices, feature)
+    let mut lc: List[u64] = []
+    let mut rc = copy parent_counts
+    let mut c: u64 = 0
+    while c < data.labels {
+      list.push(mut lc, 0)
+      c += 1
+    }
+    let mut pos: u64 = 0
+    while pos + 1 < list.len(values) {
+      let class_id = values[pos].label_id
+      lc[class_id] += 1
+      rc[class_id] -= 1
+      let l = pos + 1
+      let r = list.len(values) - l
+      if values[pos].value != values[pos + 1].value && l >= minimum && r >= minimum {
+        let score = Score(
+          numerator: add(multiply(squares(lc)?, r)?, multiply(squares(rc)?, l)?)?,
+          denominator: multiply(l, r)?
+        )
+        if better(score, incumbent)? {
+          incumbent = score
+          choice = Some(
+            Choice(feature: feature, threshold: values[pos].value, score: score)
+          )
+        }
+      }
+      pos += 1
+    }
+    feature += 1
+  }
+  Ok(choice)
+}

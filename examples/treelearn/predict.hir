@@ -1,0 +1,214 @@
+pub type Step {
+  node: u64,
+  feature: u64,
+  value: i64,
+  threshold: i64,
+  left: bool,
+}
+
+pub type Prediction {
+  label: u64,
+  counts: List[u64],
+  path: List[Step],
+  leaf: u64,
+}
+
+// The installed representation owns recursive children; wire indices are
+// admitted and discarded as traversal authority before constructing this tree.
+pub type Tree = Tip(u64, List[u64], u64) | Fork(u64, u64, i64, List[Tree])
+
+pub type Loaded {
+  wire: train.Model,
+  root: Tree,
+}
+
+type Visit {
+  node: u64,
+  depth: u64,
+}
+
+fn sum(counts: List[u64]) -> u64 uses {} {
+  let mut total: u64 = 0
+  for c in counts {
+    total += c
+  }
+  total
+}
+
+fn decode_counts(value: json.Value, labels: u64) -> Result[
+  unique List[u64],
+  dataset.Problem
+] uses {} {
+  let items = dataset.array(value, 4, Model())?
+  if list.len(items) != labels {
+    return Error(Model())
+  }
+  let mut out: List[u64] = []
+  for item in items {
+    list.push(mut out, dataset.bounded(item, 0, 64, Model())?)
+  }
+  if sum(out) == 0 || sum(out) > 64 {
+    return Error(Model())
+  }
+  Ok(take out)
+}
+
+fn decode_node(value: json.Value, labels: u64) -> Result[
+  unique train.Node,
+  dataset.Problem
+] uses {} {
+  let Object(fields) = value else {
+    return Error(Model())
+  }
+  let c = decode_counts(dataset.field(fields, "counts")?, labels)?
+  if map.len(fields) == 2 {
+    let label = dataset.bounded(dataset.field(fields, "leaf")?, 0, labels - 1, Model())?
+    return Ok(Leaf(take c, label))
+  }
+  let row = dataset.object(value, ["counts", "feature", "threshold", "left", "right"])?
+  let f = dataset.natural(dataset.field(row, "feature")?)?
+  let t = dataset.integer(dataset.field(row, "threshold")?)?
+  let l = dataset.natural(dataset.field(row, "left")?)?
+  let r = dataset.natural(dataset.field(row, "right")?)?
+  Ok(Branch(take c, f, t, l, r))
+}
+
+// Reject cycles, aliases, unreachable nodes, invalid depth/children/features,
+// class-count inconsistencies and wrong leaf policy before any traversal.
+pub fn validate(model: train.Model) -> Result[(), dataset.Problem] uses {} {
+  let n = list.len(model.nodes)
+  if n == 0 || n > 31 {
+    return Error(Nodes())
+  }
+  let mut seen: List[bool] = []
+  let mut i: u64 = 0
+  while i < n {
+    list.push(mut seen, false)
+    i += 1
+  }
+  let mut stack: List[Visit] = [Visit(node: 0, depth: 0)]
+  let mut visited: u64 = 0
+  while let Some(v) = list.pop(mut stack) {
+    if v.node >= n || v.depth > model.max_depth {
+      return Error(Model())
+    }
+    if seen[v.node] {
+      return Error(Model())
+    }
+    seen[v.node] = true
+    visited += 1
+    let c = train.counts(model.nodes[v.node])
+    if v.node != 0 && sum(c) < model.min_leaf {
+      return Error(Model())
+    }
+    match model.nodes[v.node] {
+      Leaf(counts, label) => {
+        if dataset.label(counts) != label {
+          return Error(Model())
+        }
+      },
+      Branch(counts, f, _, l, r) => {
+        if f >= model.features || l >= n || r >= n || l == r || v.depth == model.max_depth {
+          return Error(Model())
+        }
+        let lc = train.counts(model.nodes[l])
+        let rc = train.counts(model.nodes[r])
+        let mut label: u64 = 0
+        while label < model.labels {
+          if counts[label] != lc[label] + rc[label] {
+            return Error(Model())
+          }
+          label += 1
+        }
+        list.push(mut stack, Visit(node: r, depth: v.depth + 1))
+        list.push(mut stack, Visit(node: l, depth: v.depth + 1))
+      },
+    }
+  }
+  if visited != n {
+    return Error(Model())
+  }
+  Ok(())
+}
+
+pub fn load(value: json.Value) -> Result[unique Loaded, dataset.Problem] uses {} {
+  let row = dataset.object(
+    value,
+    ["version", "features", "labels", "max_depth", "min_leaf", "nodes"]
+  )?
+  if dataset.field(row, "version")? != Number("1") {
+    return Error(Version())
+  }
+  let f = dataset.bounded(dataset.field(row, "features")?, 1, 4, Features())?
+  let k = dataset.bounded(dataset.field(row, "labels")?, 1, 4, Labels())?
+  let depth = dataset.bounded(dataset.field(row, "max_depth")?, 0, 4, Depth())?
+  let minimum = dataset.bounded(dataset.field(row, "min_leaf")?, 1, 8, MinLeaf())?
+  let items = dataset.array(dataset.field(row, "nodes")?, 31, Nodes())?
+  let mut nodes: List[train.Node] = []
+  for item in items {
+    list.push(mut nodes, decode_node(item, k)?)
+  }
+  let model = train.Model(
+    features: f,
+    labels: k,
+    max_depth: depth,
+    min_leaf: minimum,
+    nodes: take nodes
+  )
+  validate(model)?
+  let root = assemble(model, 0)
+  Ok(Loaded(wire: take model, root: take root))
+}
+
+// Acyclic, uniquely reachable, depth<=4 was established by validate. Each
+// recursive child is owned, so the installed tree has no mutable index aliases.
+fn assemble(model: train.Model, index: u64) -> unique Tree uses {} {
+  match model.nodes[index] {
+    Leaf(tallies, label_id) => Tip(index, unique tallies, label_id),
+    Branch(_, feature, threshold, left, right) => {
+      let a = assemble(model, left)
+      let b = assemble(model, right)
+      Fork(index, feature, threshold, [take a, take b])
+    },
+  }
+}
+
+// One owned explanation builder moves down the recursive borrowed tree.
+fn descend(tree: Tree, x: List[i64], take path: unique List[Step]) -> unique Prediction uses {} {
+  match tree {
+    Tip(index, tallies, label_id) => Prediction(
+      label: label_id,
+      counts: unique tallies,
+      path: take path,
+      leaf: index
+    ),
+    Fork(index, feature, threshold, children) => {
+      let left = x[feature] <= threshold
+      let mut steps = take path
+      list.push(
+        mut steps,
+        Step(
+          node: index,
+          feature: feature,
+          value: x[feature],
+          threshold: threshold,
+          left: left
+        )
+      )
+      let child: u64 = if left {
+        0
+      } else {
+        1
+      }
+      descend(children[child], x, take steps)
+    },
+  }
+}
+
+pub fn all(model: Loaded, queries: List[List[i64]]) -> unique List[Prediction] uses {} {
+  let mut out: List[Prediction] = []
+  for x in queries {
+    list.push(mut out, descend(model.root, x, unique []))
+  }
+  take out
+}

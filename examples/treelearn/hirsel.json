@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "treelearn",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "dataset"
+      ],
+      "path": "dataset.hir"
+    },
+    {
+      "module": [
+        "split"
+      ],
+      "path": "split.hir"
+    },
+    {
+      "module": [
+        "train"
+      ],
+      "path": "train.hir"
+    },
+    {
+      "module": [
+        "predict"
+      ],
+      "path": "predict.hir"
+    },
+    {
+      "module": [
+        "store"
+      ],
+      "path": "store.hir"
+    }
+  ]
+}

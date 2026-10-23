@@ -1,0 +1,81 @@
+pub type Node = Leaf(List[u64], u64) | Branch(List[u64], u64, i64, u64, u64)
+
+pub type Model {
+  features: u64,
+  labels: u64,
+  max_depth: u64,
+  min_leaf: u64,
+  nodes: List[Node],
+}
+
+type Work {
+  slot: u64,
+  depth: u64,
+  indices: List[u64],
+}
+
+pub fn counts(node: Node) -> List[u64] in node uses {} {
+  match node {
+    Leaf(c, _) => c,
+    Branch(c, _, _, _, _) => c,
+  }
+}
+
+// Bounded explicit DFS, with unique owned partitions. No recursive call stack
+// or shared mutable dataset. Child slots are reserved together before descent.
+pub fn build(specimen: dataset.Training) -> Result[unique Model, dataset.Problem] uses {} {
+  let mut indices: List[u64] = []
+  let mut i: u64 = 0
+  while i < list.len(specimen.data.rows) {
+    list.push(mut indices, i)
+    i += 1
+  }
+  let initial = dataset.counts(specimen.data, indices)
+  let initial_label = dataset.label(initial)
+  let mut nodes: List[Node] = [Leaf(take initial, initial_label)]
+  let mut stack: List[Work] = [Work(slot: 0, depth: 0, indices: take indices)]
+  while let Some(work) = list.pop(mut stack) {
+    let c = dataset.counts(specimen.data, work.indices)
+    let prediction = dataset.label(c)
+    if c[prediction] == list.len(work.indices) || work.depth == specimen.max_depth {
+      continue
+    }
+    let Some(choice) = split.best(specimen.data, work.indices, specimen.min_leaf)? else {
+      continue
+    }
+    if list.len(nodes) > 29 {
+      return Error(Nodes())
+    }
+    let parts = split.partition(
+      specimen.data,
+      work.indices,
+      choice.feature,
+      choice.threshold
+    )
+    let l = list.len(nodes)
+    let lc = dataset.counts(specimen.data, parts.left)
+    let rc = dataset.counts(specimen.data, parts.right)
+    let left_label = dataset.label(lc)
+    let right_label = dataset.label(rc)
+    list.push(mut nodes, Leaf(take lc, left_label))
+    list.push(mut nodes, Leaf(take rc, right_label))
+    nodes[work.slot] = Branch(take c, choice.feature, choice.threshold, l, l + 1)
+    list.push(
+      mut stack,
+      Work(slot: l + 1, depth: work.depth + 1, indices: unique parts.right)
+    )
+    list.push(
+      mut stack,
+      Work(slot: l, depth: work.depth + 1, indices: unique parts.left)
+    )
+  }
+  Ok(
+    Model(
+      features: specimen.data.features,
+      labels: specimen.data.labels,
+      max_depth: specimen.max_depth,
+      min_leaf: specimen.min_leaf,
+      nodes: take nodes
+    )
+  )
+}

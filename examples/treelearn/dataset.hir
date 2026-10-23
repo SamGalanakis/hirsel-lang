@@ -1,0 +1,204 @@
+pub const INPUT_BYTES: u64 = 65536
+
+pub const OUTPUT_BYTES: u64 = 32768
+
+pub type Problem = Shape | Version | Rows | Features | Labels | Queries | Depth | MinLeaf | Numeric | Nodes | Model | Arithmetic | Jobs | Usage | Grant | Read | Write | InputLimit | OutputLimit | CanceledInput
+
+pub type Row[T] {
+  x: List[T],
+  label: u64,
+}
+
+pub type Dataset[T] {
+  rows: List[Row[T]],
+  features: u64,
+  labels: u64,
+}
+
+pub type Training {
+  data: Dataset[i64],
+  max_depth: u64,
+  min_leaf: u64,
+  queries: List[List[i64]],
+}
+
+pub fn code(problem: Problem) -> String uses {} {
+  match problem {
+    Shape() => "shape",
+    Version() => "version",
+    Rows() => "rows",
+    Features() => "features",
+    Labels() => "labels",
+    Queries() => "queries",
+    Depth() => "depth",
+    MinLeaf() => "min_leaf",
+    Numeric() => "numeric",
+    Nodes() => "nodes",
+    Model() => "model",
+    Arithmetic() => "arithmetic",
+    Jobs() => "jobs",
+    Usage() => "usage",
+    Grant() => "grant",
+    Read() => "read",
+    Write() => "write",
+    InputLimit() => "input_limit",
+    OutputLimit() => "output_limit",
+    CanceledInput() => "canceled",
+  }
+}
+
+pub fn object(value: json.Value, keys: List[String]) -> Result[
+  Map[String, json.Value],
+  Problem
+] in value uses {} {
+  let Object(entries) = value else {
+    return Error(Shape())
+  }
+  if map.len(entries) != list.len(keys) {
+    return Error(Shape())
+  }
+  for key in keys {
+    if map.get(entries, key) == None() {
+      return Error(Shape())
+    }
+  }
+  Ok(entries)
+}
+
+pub fn field(entries: Map[String, json.Value], key: String) -> Result[
+  json.Value,
+  Problem
+] in entries uses {} {
+  match map.get(entries, key) {
+    Some(value) => Ok(take value),
+    None() => Error(Shape()),
+  }
+}
+
+pub fn array(value: json.Value, cap: u64, error: Problem) -> Result[
+  List[json.Value],
+  Problem
+] in value uses {} {
+  let Array(items) = value else {
+    return Error(Shape())
+  }
+  if list.len(items) > cap {
+    return Error(error)
+  }
+  Ok(items)
+}
+
+pub fn natural(value: json.Value) -> Result[u64, Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Numeric())
+  }
+  match u64.parse(text) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Numeric()),
+  }
+}
+
+pub fn bounded(value: json.Value, low: u64, high: u64, error: Problem) -> Result[
+  u64,
+  Problem
+] uses {} {
+  let n = natural(value)?
+  if n < low || n > high {
+    return Error(error)
+  }
+  Ok(n)
+}
+
+pub fn integer(value: json.Value) -> Result[i64, Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Numeric())
+  }
+  let Ok(n) = i64.parse(text) else {
+    return Error(Numeric())
+  }
+  if n < -10000 || n > 10000 {
+    return Error(Numeric())
+  }
+  Ok(n)
+}
+
+pub fn vector(value: json.Value, features: u64) -> Result[unique List[i64], Problem] uses {} {
+  let items = array(value, 4, Features())?
+  if list.len(items) != features {
+    return Error(Features())
+  }
+  let mut out: List[i64] = []
+  for item in items {
+    list.push(mut out, integer(item)?)
+  }
+  Ok(take out)
+}
+
+pub fn queries(value: json.Value, features: u64) -> Result[
+  unique List[List[i64]],
+  Problem
+] uses {} {
+  let items = array(value, 16, Queries())?
+  let mut out: List[List[i64]] = []
+  for item in items {
+    list.push(mut out, vector(item, features)?)
+  }
+  Ok(take out)
+}
+
+pub fn training(value: json.Value) -> Result[unique Training, Problem] uses {} {
+  let row = object(
+    value,
+    ["features", "labels", "max_depth", "min_leaf", "rows", "queries"]
+  )?
+  let features = bounded(field(row, "features")?, 1, 4, Features())?
+  let labels = bounded(field(row, "labels")?, 1, 4, Labels())?
+  let depth = bounded(field(row, "max_depth")?, 0, 4, Depth())?
+  let minimum = bounded(field(row, "min_leaf")?, 1, 8, MinLeaf())?
+  let items = array(field(row, "rows")?, 64, Rows())?
+  if list.len(items) == 0 {
+    return Error(Rows())
+  }
+  let mut rows: List[Row[i64]] = []
+  for item in items {
+    let fields = object(item, ["x", "label"])?
+    let x = vector(field(fields, "x")?, features)?
+    let label_id = bounded(field(fields, "label")?, 0, labels - 1, Labels())?
+    list.push(mut rows, Row(x: take x, label: label_id))
+  }
+  let q = queries(field(row, "queries")?, features)?
+  Ok(
+    Training(
+      data: Dataset(rows: take rows, features: features, labels: labels),
+      max_depth: depth,
+      min_leaf: minimum,
+      queries: take q
+    )
+  )
+}
+
+pub fn counts[T](data: Dataset[T], indices: List[u64]) -> unique List[u64] uses {} {
+  let mut out: List[u64] = []
+  let mut c: u64 = 0
+  while c < data.labels {
+    list.push(mut out, 0)
+    c += 1
+  }
+  for i in indices {
+    out[data.rows[i].label] += 1
+  }
+  take out
+}
+
+// Strict > retains the smallest ID in a count tie.
+pub fn label(tallies: List[u64]) -> u64 uses {} {
+  let mut best: u64 = 0
+  let mut i: u64 = 1
+  while i < list.len(tallies) {
+    if tallies[i] > tallies[best] {
+      best = i
+    }
+    i += 1
+  }
+  best
+}

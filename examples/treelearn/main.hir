@@ -1,0 +1,151 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  training: bool,
+  root: Path,
+  specimen: Path,
+  output: Path,
+  jobs: u64,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, dataset.Problem] {
+  let count = arg.len(args)
+  if count != 5 && count != 6 {
+    return Error(Usage())
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  if command != "train" && command != "predict" {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(specimen) = arg.path(args, 2) else {
+    return Error(Usage())
+  }
+  let Ok(output) = arg.path(args, 3) else {
+    return Error(Usage())
+  }
+  let Ok(text) = arg.text(args, 4) else {
+    return Error(Usage())
+  }
+  let Ok(jobs) = u64.parse(text) else {
+    return Error(Jobs())
+  }
+  if jobs < 1 || jobs > 4 {
+    return Error(Jobs())
+  }
+  if count == 6 && arg.text(args, 5) != Ok("--interruptible") {
+    return Error(Usage())
+  }
+  Ok(
+    Options(
+      training: command == "train",
+      root: root,
+      specimen: specimen,
+      output: output,
+      jobs: jobs,
+      interruptible: count == 6
+    )
+  )
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[
+  unique Bytes,
+  dataset.Problem
+] {
+  let bytes = store.read(d, options.specimen)?
+  let jobs = store.parse(take bytes, options.training)?
+  let mut results: List[store.ResultRow] = []
+  let mut index: u64 = 0
+  while index < list.len(jobs) {
+    let mut batch: List[store.Job] = []
+    while index < list.len(jobs) && list.len(batch) < options.jobs {
+      list.push(mut batch, unique jobs[index])
+      index += 1
+    }
+    // Explicit owned results return in add order. Shared specimen views remain
+    // immutable within the task scope; only this parent publishes the report.
+    let partial = task.map_all(tasks, take batch, 1, store.compute)?
+    for outcome in take partial {
+      list.push(mut results, take outcome)
+    }
+  }
+  store.report(results)
+}
+
+fn interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  unique Bytes,
+  dataset.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Bytes, dataset.Problem] {
+      let mut pending: TaskSet[Result[unique Bytes, dataset.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[unique Bytes, dataset.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[unique Bytes, dataset.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(CanceledInput())
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      take outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[(), dataset.Problem] {
+  let options = arguments(args)?
+  let Ok(d) = io.dir(rt, options.root) else {
+    return Error(Grant())
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  let report = if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(d, tasks, signals, options)?
+  } else {
+    execute(d, tasks, options)?
+  }
+  store.publish(d, options.output, report)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  let Ok(stdout) = io.stdout(rt) else {
+    return Ok(process.exit_code(3u8))
+  }
+  let Ok(stderr) = io.stderr(rt) else {
+    return Ok(process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(()) => {
+      out.write(stdout, b"published\n")?
+      Ok(process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(stderr, f"treelearn: {dataset.code(problem)}\n")?
+      Ok(process.exit_code(2u8))
+    },
+  }
+}

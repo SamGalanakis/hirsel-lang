@@ -1,0 +1,167 @@
+pub type Job {
+  training: bool,
+  value: json.Value,
+}
+
+pub type ResultRow {
+  model: predict.Loaded,
+  predictions: List[predict.Prediction],
+}
+
+fn number(n: u64) -> unique json.Value uses {} {
+  Number(f"{n}")
+}
+
+fn encode_counts(counts: List[u64]) -> unique json.Value uses {} {
+  let mut items: List[json.Value] = []
+  for n in counts {
+    list.push(mut items, number(n))
+  }
+  Array(take items)
+}
+
+pub fn encode_model(model: train.Model) -> unique json.Value uses {} {
+  let mut nodes: List[json.Value] = []
+  for node in model.nodes {
+    let mut row: Map[String, json.Value] = map.empty()
+    map.insert(mut row, "counts", encode_counts(train.counts(node)))
+    match node {
+      Leaf(_, label) => map.insert(mut row, "leaf", number(label)),
+      Branch(_, feature, threshold, left, right) => {
+        map.insert(mut row, "feature", number(feature))
+        map.insert(mut row, "threshold", Number(f"{threshold}"))
+        map.insert(mut row, "left", number(left))
+        map.insert(mut row, "right", number(right))
+      },
+    }
+    list.push(mut nodes, Object(take row))
+  }
+  let mut row: Map[String, json.Value] = map.empty()
+  map.insert(mut row, "features", number(model.features))
+  map.insert(mut row, "labels", number(model.labels))
+  map.insert(mut row, "max_depth", number(model.max_depth))
+  map.insert(mut row, "min_leaf", number(model.min_leaf))
+  map.insert(mut row, "version", number(1))
+  map.insert(mut row, "nodes", Array(take nodes))
+  Object(take row)
+}
+
+// Training output is serialized and parsed back through the public load path,
+// so prediction never relies on a privileged producer bypassing validation.
+pub fn compute(job: Job) -> Result[ResultRow, dataset.Problem] uses {} {
+  if job.training {
+    let specimen = dataset.training(job.value)?
+    let built = train.build(specimen)?
+    let encoded = encode_model(built)
+    let Ok(bytes) = json.stringify(encoded) else {
+      return Error(Shape())
+    }
+    let Ok(decoded) = json.parse(take bytes) else {
+      return Error(Shape())
+    }
+    let loaded = predict.load(decoded)?
+    let predictions = predict.all(loaded, specimen.queries)
+    return Ok(ResultRow(model: take loaded, predictions: take predictions))
+  }
+  let row = dataset.object(job.value, ["model", "queries"])?
+  let model = predict.load(dataset.field(row, "model")?)?
+  let queries = dataset.queries(dataset.field(row, "queries")?, model.wire.features)?
+  let predictions = predict.all(model, queries)
+  Ok(ResultRow(model: take model, predictions: take predictions))
+}
+
+pub fn parse(take data: Bytes, training: bool) -> Result[
+  unique List[Job],
+  dataset.Problem
+] uses {} {
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Shape())
+  }
+  let Ok(value) = json.parse(take source) else {
+    return Error(Shape())
+  }
+  let row = dataset.object(value, ["version", "jobs"])?
+  if dataset.field(row, "version")? != Number("1") {
+    return Error(Version())
+  }
+  let items = dataset.array(dataset.field(row, "jobs")?, 4, Jobs())?
+  if list.len(items) == 0 {
+    return Error(Jobs())
+  }
+  let mut jobs: List[Job] = []
+  for item in items {
+    list.push(mut jobs, Job(training: training, value: unique item))
+  }
+  Ok(take jobs)
+}
+
+fn encode_prediction(prediction: predict.Prediction) -> unique json.Value uses {} {
+  let mut path: List[json.Value] = []
+  for step in prediction.path {
+    let mut row: Map[String, json.Value] = map.empty()
+    map.insert(mut row, "node", number(step.node))
+    map.insert(mut row, "feature", number(step.feature))
+    map.insert(mut row, "value", Number(f"{step.value}"))
+    map.insert(mut row, "threshold", Number(f"{step.threshold}"))
+    map.insert(mut row, "left", Bool(step.left))
+    list.push(mut path, Object(take row))
+  }
+  let mut row: Map[String, json.Value] = map.empty()
+  map.insert(mut row, "label", number(prediction.label))
+  map.insert(mut row, "counts", encode_counts(prediction.counts))
+  map.insert(mut row, "path", Array(take path))
+  map.insert(mut row, "leaf", number(prediction.leaf))
+  Object(take row)
+}
+
+pub fn report(results: List[ResultRow]) -> Result[unique Bytes, dataset.Problem] uses {} {
+  let mut jobs: List[json.Value] = []
+  for outcome in results {
+    let mut predictions: List[json.Value] = []
+    for p in outcome.predictions {
+      list.push(mut predictions, encode_prediction(p))
+    }
+    let mut row: Map[String, json.Value] = map.empty()
+    map.insert(mut row, "model", encode_model(outcome.model.wire))
+    map.insert(mut row, "predictions", Array(take predictions))
+    list.push(mut jobs, Object(take row))
+  }
+  let mut row: Map[String, json.Value] = map.empty()
+  map.insert(mut row, "version", number(1))
+  map.insert(mut row, "jobs", Array(take jobs))
+  let mut output: List[u8] = []
+  let Ok(()) = json.stringify_into(Object(take row), mut output) else {
+    return Error(Shape())
+  }
+  list.push(mut output, 10)
+  if list.len(output) > dataset.OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  Ok(bytes.from_list(take output))
+}
+
+pub fn read(d: Dir, name: Path) -> Result[unique Bytes, dataset.Problem] {
+  let Ok(handle) = file.open(d, name) else {
+    return Error(Read())
+  }
+  let mut f = take handle
+  match file.read_all_bounded(d, mut f, dataset.INPUT_BYTES) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(InputLimit()),
+    Error(File(_)) => Error(Read()),
+  }
+}
+
+pub fn publish(d: Dir, name: Path, data: Bytes) -> Result[(), dataset.Problem] {
+  let Ok(handle) = file.create_atomic(d, name) else {
+    return Error(Write())
+  }
+  let mut f = take handle
+  if let Error(_) = file.write_all(d, mut f, data) {
+    return Error(Write())
+  }
+  if let Error(_) = file.commit(d, take f) {
+    return Error(Write())
+  }
+  Ok(())
+}
