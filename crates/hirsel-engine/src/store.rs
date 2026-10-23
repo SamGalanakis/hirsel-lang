@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 mod dir;
+mod request;
+pub use request::RequestStore;
 pub use dir::{DirStore, GcReport};
 
 /// Stable logical address plus explicit source inputs. The address does not
