@@ -178,7 +178,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_from_bytes(
         start,
         length,
     };
-    let tag = u32::from(std::str::from_utf8(unsafe { bytes(value) }).is_err());
+    let tag = u32::from(simdutf8::basic::from_utf8(unsafe { bytes(value) }).is_err());
     unsafe {
         out.write(StringResult {
             tag,

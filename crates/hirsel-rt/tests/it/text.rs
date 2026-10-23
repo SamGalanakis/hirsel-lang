@@ -220,13 +220,18 @@ fn a_runtime_bytes_list_holds_its_items_and_releases_every_owner() {
 #[test]
 fn from_bytes_transfers_the_same_nonzero_slice_on_both_utf8_outcomes() {
     for ctx in [Ctx::production(), Ctx::diagnostic()] {
+        let valid = [b"prefix".as_slice(), "🦀".repeat(33).as_bytes(), b"TAIL"].concat();
+        let invalid = [b"prefix".as_slice(), &vec![0x80; 132], b"TAIL"].concat();
         for (bytes, start, length, tag) in [
             (b"prefix\xc3\xa9TAIL".as_slice(), 6, 2, 0),
             (b"prefix\xffTAIL".as_slice(), 6, 1, 1),
             (b"prefixTAIL".as_slice(), 6, 0, 0),
+            (valid.as_slice(), 6, 132, 0),
+            (invalid.as_slice(), 6, 132, 1),
         ] {
             unsafe {
                 let source = allocate_bytes(ctx.0, bytes);
+                let allocations = ctx.stats().backing_allocations;
                 let mut out = std::mem::MaybeUninit::uninit();
                 assert_eq!(
                     hirsel_rt_v2_string_from_bytes(
@@ -245,6 +250,7 @@ fn from_bytes_transfers_the_same_nonzero_slice_on_both_utf8_outcomes() {
                     (tag, source.owner, source.start + start, length)
                 );
                 assert_eq!((*source.owner).count, 1);
+                assert_eq!(ctx.stats().backing_allocations, allocations);
                 assert_eq!(ctx.stats().live_blocks, 1);
                 release(&ctx, out.value.owner);
             }

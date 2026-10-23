@@ -254,7 +254,15 @@ fn all_engines(name: &str, source: Option<&str>, failure: bool, campaign: bool) 
         native::Configuration {
             options: options.clone(),
             engine: native::Engine::Native {
-                opt: native::OptLevel::Speed,
+                opt: native::OptLevel::None,
+                partition: native::Partition::Whole,
+                runtime: native::Runtime::Diagnostic,
+            },
+        },
+        native::Configuration {
+            options: options.clone(),
+            engine: native::Engine::Native {
+                opt: native::OptLevel::Default,
                 partition: native::Partition::Whole,
                 runtime: native::Runtime::Diagnostic,
             },
@@ -287,8 +295,8 @@ fn all_engines(name: &str, source: Option<&str>, failure: bool, campaign: bool) 
         );
         count += 1;
     }
-    assert_eq!(count, 2);
-    eprintln!("{name}: interpreter + checked H + LLVM + Cranelift agree");
+    assert_eq!(count, 3);
+    eprintln!("{name}: interpreter + checked H + LLVM O0/O2 + Cranelift agree");
 }
 
 fn composition(view: &str) {
@@ -379,4 +387,9 @@ fn existing_wrong_source_and_stale_positions_reject_statically() {
             }
         }
     });
+}
+
+#[test]
+fn complete_buffer_simd_boundaries_all_engines() {
+    with_compiler_stack(|| all_engines("simd-boundaries", None, false, false));
 }
