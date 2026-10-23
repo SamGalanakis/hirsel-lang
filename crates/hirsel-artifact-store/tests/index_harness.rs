@@ -7,6 +7,9 @@ mod group;
 mod index;
 mod pack {
     pub(crate) struct EpochLease(pub(crate) std::path::PathBuf);
+    pub(crate) fn index_benchmark_epoch(root: &std::path::Path) -> std::io::Result<EpochLease> {
+        Ok(EpochLease(root.to_owned()))
+    }
     impl EpochLease {
         pub(crate) fn root(&self) -> &std::path::Path {
             &self.0

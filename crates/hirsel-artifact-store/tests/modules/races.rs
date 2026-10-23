@@ -89,8 +89,49 @@ fn cooperating_child() {
         write(&root, &[entry(id)]);
         return;
     }
+    if mode.starts_with("gc-") {
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".pack-lock"))
+            .unwrap();
+        // SAFETY: valid owned fd, finite nonblocking lock attempt.
+        let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if mode == "gc-reader-gap" {
+            assert_eq!(result, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        } else {
+            assert_eq!(result, 0);
+            let live: Vec<_> = current_layer_ids_locked(&root)
+                .unwrap()
+                .iter()
+                .map(|id| {
+                    let mut name = String::from("L-");
+                    use std::fmt::Write;
+                    for byte in id.0 {
+                        write!(name, "{byte:02x}").unwrap();
+                    }
+                    name
+                })
+                .collect();
+            for path in fs::read_dir(root.join("index")).unwrap().flatten() {
+                let name = path.file_name().to_string_lossy().into_owned();
+                if name.starts_with("L-") && !live.contains(&name) {
+                    fs::remove_file(path.path()).unwrap();
+                }
+            }
+        }
+        return;
+    }
     let stale = load_pinned(&root).unwrap();
-    let delta = build(&root, &[entry(id)]).unwrap();
+    let mut record = entry(if mode == "overwrite" { 1 } else { id });
+    if mode == "overwrite" {
+        record.location.offset = id as u32 * 64;
+    }
+    let delta = build(&root, &[record]).unwrap();
     let mut socket = UnixStream::connect(root.join("barrier")).unwrap();
     socket
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -99,7 +140,7 @@ fn cooperating_child() {
     let mut go = [0];
     socket.read_exact(&mut go).unwrap();
     assert_eq!(go, [1]);
-    assert_eq!(find(&stale, entry(id).key), None);
+    assert_eq!(find(&stale, record.key), None);
     assert!(matches!(
         publish_delta(&root, delta, &EpochLease(root.clone())).unwrap(),
         PublishOutcome::Published { .. }
@@ -233,4 +274,72 @@ fn concurrently_appended_identical_output_cannot_create_duplicate_descriptors() 
     for n in [1, 2] {
         assert_eq!(find(&pin, entry(n).key), Some(entry(n).location));
     }
+}
+
+#[test]
+fn multiprocess_gc_cannot_enter_reader_open_gap_and_unlinked_pin_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    let path = root.to_owned();
+    observe_pin(move || {
+        let out = child(&path, "gc-reader-gap", 0).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    });
+    let old = load_pinned(root).unwrap();
+    write(root, &[entry(2)]);
+    assert!(matches!(
+        compact(root, budget()).unwrap(),
+        CompactOutcome::Published { layers: 1, .. }
+    ));
+    let out = child(root, "gc-unlisted", 0).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_dir(root.join("index"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("L-"))
+            .count(),
+        1
+    );
+    assert_eq!(find(&old, entry(1).key), Some(entry(1).location));
+    assert_eq!(find(&old, entry(2).key), None);
+    let current = load_pinned(root).unwrap();
+    for id in [1, 2] {
+        assert_eq!(find(&current, entry(id).key), Some(entry(id).location));
+    }
+}
+
+#[test]
+fn multiprocess_same_address_precedence_follows_publication_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let listener = UnixListener::bind(root.join("barrier")).unwrap();
+    let mut a = child(root, "overwrite", 1).spawn().unwrap();
+    let mut b = child(root, "overwrite", 2).spawn().unwrap();
+    let mut connections = [accept(&listener), accept(&listener)];
+    let mut expected = entry(1).location;
+    for socket in &mut connections {
+        let mut id = [0];
+        socket.read_exact(&mut id).unwrap();
+        expected.offset = u32::from(id[0]) * 64;
+        socket.write_all(&[1]).unwrap();
+        let mut done = [0];
+        socket.read_exact(&mut done).unwrap();
+        assert_eq!(done, [2]);
+    }
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    assert_eq!(
+        find(&load_pinned(root).unwrap(), entry(1).key),
+        Some(expected)
+    );
 }

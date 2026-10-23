@@ -20,11 +20,16 @@ const MAX_LAYERS: usize = 8;
 #[cfg(test)]
 thread_local! {
     static COMPACT_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static PIN_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 /// Deterministic test barrier after selection, with the publication lock free.
 #[cfg(test)]
 pub(crate) fn observe_compaction(callback: impl FnOnce() + 'static) {
     COMPACT_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(callback)));
+}
+#[cfg(test)]
+pub(crate) fn observe_pin(callback: impl FnOnce() + 'static) {
+    PIN_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(callback)));
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -149,6 +154,13 @@ pub(crate) fn load_pinned(root: &Path) -> io::Result<PinnedGeneration> {
         return Ok(PinnedGeneration::default());
     };
     let manifest = Manifest::read(root)?;
+    #[cfg(test)]
+    PIN_OBSERVER.with(|slot| {
+        let callback = slot.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
     match pin(root, &manifest) {
         Ok(pin) => Ok(pin),
         Err(e)
@@ -374,3 +386,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
 #[cfg(test)]
 #[path = "index/policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "index/microbench.rs"]
+mod microbench;

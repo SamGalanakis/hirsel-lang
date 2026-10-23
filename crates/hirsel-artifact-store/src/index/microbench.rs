@@ -1,6 +1,6 @@
 //! Manual measured hook into the exact production index source. Input files
 //! are the retained study fixtures; setup and measured operations are separate.
-use crate::{index::*, pack::EpochLease};
+use crate::{index::*, pack::index_benchmark_epoch};
 use hirsel_syntax::ContentHash;
 use std::io::{Read, Seek, SeekFrom};
 use std::{
@@ -85,12 +85,10 @@ fn publish_entries(path: &Path, header: usize) -> Vec<Entry> {
     entries
 }
 fn write(root: &Path, entries: &[Entry]) {
-    let result = publish_delta(
-        root,
-        build(root, entries).unwrap(),
-        &EpochLease(root.to_owned()),
-    )
-    .unwrap();
+    fs::create_dir_all(root).unwrap();
+    let epoch = index_benchmark_epoch(root).unwrap();
+    let delta = build(root, entries).unwrap();
+    let result = publish_delta(root, delta, &epoch).unwrap();
     assert!(
         matches!(result, PublishOutcome::Published { .. }),
         "{result:?}"
