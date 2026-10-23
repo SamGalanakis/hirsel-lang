@@ -1,0 +1,18 @@
+// An external parent cancels the real app entry during its configuration read.
+// No gateway logic is replaced and no Canceled completion is injected.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let output = io.stdout(rt)?
+  let Ok(now) = clock.monotonic(c) else { return Ok(()) }
+  let Some(at) = instant.checked_add(c, now, 1000000) else { return Ok(()) }
+  let bounded = task.scope_until(tasks, Deadline(clock: c, at: at), fn(s: Scope) -> process.ExitCode {
+    rpcgate@1/main(rt, args)
+  })
+  match bounded {
+    Expired(_) => {},
+    Finished(_) => failure.check(false, Arithmetic()),
+  }
+  let _ = out.print(output, "parent-canceled\n")
+  Ok(())
+}

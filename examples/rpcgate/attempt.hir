@@ -1,0 +1,161 @@
+pub type Problem = Wire(wire.InputError) | Network(NetError) | Lost | UnknownOutcome | Busy | Clock(
+  time.SleepError
+) | Schedule(schedule.ScheduleError)
+
+pub type Context {
+  net: Net,
+  tasks: Tasks,
+  clock: MonotonicClock,
+  random: Random,
+  state: report.State,
+}
+
+// Fixed-size identity space: never use a client's untrusted ID upstream.
+pub fn identity(client: u64, request: u64, number: u64) -> String uses {} {
+  f"c{client}r{request}a{number}"
+}
+
+pub fn retryable(problem: Problem) -> bool uses {} {
+  match problem {
+    Lost() => true,
+    Network(ConnectionRefused()) => true,
+    Network(ConnectionReset()) => true,
+    Network(ConnectionAborted()) => true,
+    Network(BrokenPipe()) => true,
+    Network(TimedOut()) => true,
+    _ => false,
+  }
+}
+
+pub fn status(problem: Problem) -> String uses {} {
+  match problem {
+    Wire(_) => "protocol",
+    Lost() => "transport",
+    UnknownOutcome() => "unknown_outcome",
+    Busy() => "busy",
+    Network(Canceled(DeadlineExceeded())) => "deadline",
+    Network(Canceled(_)) => "canceled",
+    Network(NotGranted()) => "not_granted",
+    Network(_) => "transport",
+    Clock(Wait(Canceled(_))) => "canceled",
+    _ => "clock",
+  }
+}
+
+fn receive(n: Net, mut stream: Stream of n) -> Result[Bytes, Problem] {
+  match wire.receive(n, mut stream) {
+    Ok(payload) => Ok(take payload),
+    Error(Input(error)) => Error(Wire(take error)),
+    Error(Network(error)) => Error(Network(take error)),
+    Error(Eof()) => Error(Lost()),
+  }
+}
+
+// One connection belongs to one attempt. It is dropped before the caller can
+// start a retry. A late reply cannot reach the next connection or match its ID.
+fn exchange[T](
+  n: Net,
+  endpoint: config.Route,
+  payload: Bytes,
+  upstream_id: String,
+  decode: fn(json.Value) -> Result[T, wire.InputError] uses {}
+) -> Result[wire.Envelope[Result[T, String]], Problem] {
+  let frame = localrpc@1/model.frame(payload) ? protocol
+  let mut stream = net.unix_connect(n, endpoint.socket)?
+  // Any transport failure after connect on an unsafe endpoint has unknown outcome:
+  // write_all does not promise rollback of a partial externally visible write.
+  if let Error(error) = net.write_all(n, mut stream, frame) {
+    if !endpoint.idempotent {
+      return Error(UnknownOutcome())
+    }
+    return Error(Network(take error))
+  }
+  let reply = match receive(n, mut stream) {
+    Ok(bytes) => take bytes,
+    Error(error) => {
+      if !endpoint.idempotent && retryable(error) {
+        return Error(UnknownOutcome())
+      }
+      if !endpoint.idempotent {
+        if let Network(Canceled(_)) = error {
+          return Error(UnknownOutcome())
+        }
+      }
+      return Error(take error)
+    },
+  }
+  Ok(wire.reply(reply, upstream_id, decode)?)
+}
+
+pub fn run[T, R](
+  context: Context,
+  target: config.Route,
+  incoming: wire.Envelope[T],
+  client: u64,
+  request: u64,
+  encode: fn(T, mut List[u8]) -> () uses {},
+  decode: fn(json.Value) -> Result[R, wire.InputError] uses {}
+) -> Result[wire.Envelope[Result[R, String]], Problem] {
+  let start = clock.monotonic(context.clock) ? clock_error
+  let mut policy = schedule.max_attempts(schedule.exponential(10000000, 2), 3)
+  let mut number = 1u64
+  while number <= 3 {
+    let upstream_id = identity(client, request, number)
+    let payload = wire.encode_request(target.method, upstream_id, incoming.body, encode)?
+    let credit = capacity(context)?
+    let index = report.begin(context.state, client, request, number)
+    let outcome = exchange(context.net, target, payload, upstream_id, decode)
+    // Explicit scope ends the attempt credit before sleeping or retrying.
+    release(take credit)
+    match take outcome {
+      Ok(reply) => {
+        let label = match reply.body {
+          Ok(_) => "ok",
+          Error(_) => "application_error",
+        }
+        report.finish(context.state, index, label)
+        // Decode validated the attempt ID. Return only the downstream ID.
+        return Ok(wire.reidentify(take reply, incoming.id))
+      },
+      Error(error) => {
+        report.finish(context.state, index, status(error))
+        if !target.idempotent || !retryable(error) || number == 3 {
+          return Error(take error)
+        }
+        let Some(delay) = schedule.next(
+          context.clock,
+          context.random,
+          mut policy,
+          start
+        )? else {
+          return Error(take error)
+        }
+        time.sleep(context.clock, delay)?
+        number += 1
+      },
+    }
+  }
+  Error(Lost())
+}
+
+fn release(take credit: report.Credit) -> () {}
+
+fn protocol(error: localrpc@1/model.InputError) -> Problem uses {} {
+  Wire(Protocol(unique error))
+}
+
+fn clock_error(error: ClockError) -> Problem uses {} {
+  Clock(Wait(Clock(unique error)))
+}
+
+// Requests keep one of sixteen credits while waiting for an upstream slot.
+// The same request deadline interrupts this timer and forbids a later connect.
+fn capacity(context: Context) -> Result[report.Credit, Problem] {
+  while true {
+    if let Some(credit) = report.reserve(context.state, true) {
+      return Ok(take credit)
+    }
+    time.sleep(context.clock, time.Duration(nanoseconds: 10000000))?
+  }
+  Error(Busy())
+}

@@ -1,0 +1,141 @@
+pub type AppError = Input(config.Invalid) | Config(config.ReadError) | Network(NetError) | Grant(
+  GrantError
+) | Output(OutputError) | Clock(time.SleepError)
+
+fn serve(
+  context: attempt.Context,
+  manifest: config.Manifest,
+  n: Net,
+  socket: Path,
+  output: Stdout
+) -> Result[u8, AppError] {
+  let state = context.state
+  let clock = context.clock
+  let until = time.deadline(
+    clock,
+    time.Duration(nanoseconds: int.widen(manifest.session_ms) * 1000000)
+  )?
+  let bounded = task.scope_until(
+    context.tasks,
+    Deadline(clock: clock, at: until),
+    fn(s: Scope) -> Result[u64, AppError] {
+      let mut clients = 0u64
+      let mut listener = net.unix_listen(n, socket)?
+      out.print(output, "{\"listening\":true}\n")?
+      let mut pending: TaskSet[Result[(), AppError]] of s = task.set(s)
+      // Finite invocation: total clients, not an unbounded accept queue.
+      while clients < manifest.clients {
+        let (stream, _) = match net.accept(n, mut listener) {
+          Ok(pair) => take pair,
+          Error(Canceled(_)) => {
+            task.cancel_all(s, take pending)
+            return Ok(clients)
+          },
+          Error(e) => {
+            task.cancel_all(s, take pending)
+            return Error(Network(take e))
+          },
+        }
+        let index = clients
+        let owned_manifest = unique manifest
+        task.add(
+          s,
+          mut pending,
+          task.async(
+            s,
+            fn() -> Result[(), AppError] {
+              route.session(context, take owned_manifest, n, take stream, index)
+              Ok(())
+            }
+          )
+        )
+        clients += 1
+      }
+      let _ = task.all(s, take pending)?
+      Ok(clients)
+    }
+  )
+  let (clients, expired) = match bounded {
+    Finished(value) => (value?, false),
+    Expired(value) => (value?, true),
+  }
+  report.shutdown(state, output, clients, expired)?
+  Ok(
+    if expired {
+      1u8
+    } else {
+      0u8
+    }
+  )
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[u8, AppError] {
+  if arg.len(args) == 1 {
+    if arg.text(args, 0) == Ok("--help") {
+      out.print(
+        output,
+        "usage: rpcgate check FILE | serve FILE SOCKET\nFILE: basename in config grant; max8 routes/clients,16 in-flight,2048 frame bytes,64 requests/client,3 attempts.\n"
+      )?
+      return Ok(0u8)
+    }
+  }
+  if arg.len(args) < 2 || arg.len(args) > 3 {
+    return Error(Input(Usage()))
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(Input(Usage()))
+  }
+  let Ok(file) = arg.text(args, 1) else {
+    return Error(Input(Usage()))
+  }
+  if mode != "check" && mode != "serve" {
+    return Error(Input(Usage()))
+  }
+  if mode == "check" && arg.len(args) != 2 || mode == "serve" && arg.len(args) != 3 {
+    return Error(Input(Usage()))
+  }
+  let manifest = config.load(rt, file)?
+  if mode == "check" {
+    out.print(output, f"{{\"checked\":true,\"routes\":{list.len(manifest.routes)}}}\n")?
+    return Ok(0u8)
+  }
+  let Ok(socket) = arg.text(args, 2) else {
+    return Error(Input(Usage()))
+  }
+  if !config.socket_path(socket) {
+    return Error(Input(Config()))
+  }
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let context = attempt.Context(
+    net: n,
+    tasks: tasks,
+    clock: c,
+    random: io.random(rt)?,
+    state: report.create(tasks, manifest.jobs)
+  )
+  serve(context, manifest, n, path.of(take socket), output)
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  let code = match execute(rt, args, output) {
+    Ok(code) => code,
+    Error(Input(_)) => {
+      let _ = out.print(output, "{\"error\":\"usage\"}\n")
+      2u8
+    },
+    Error(Config(Invalid(_))) => {
+      let _ = out.print(output, "{\"error\":\"config\"}\n")
+      2u8
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      3u8
+    },
+  }
+  process.exit_code(code)
+}

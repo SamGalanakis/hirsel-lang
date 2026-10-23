@@ -1,0 +1,152 @@
+// Pending-call registration and terminal cleanup port Go net/rpc/client.go:71-169.
+// Tokens return capacity on every exit, like Tokio bounded::Permit's drop.
+pub type Record {
+  client: u64,
+  request: u64,
+  attempt: u64,
+  status: String,
+}
+
+pub type Ledger {
+  requests: u64,
+  attempts: u64,
+  rows: List[Record],
+}
+
+pub type State {
+  tasks: Tasks,
+  ledger: Mutex[Ledger],
+  jobs: u64,
+}
+
+pub resource type Credit {
+  state: State,
+  upstream: bool,
+}
+drop(token) {
+  let state = token.state
+  let upstream = token.upstream
+  mutex.with(
+    state.tasks,
+    state.ledger,
+    fn(mut board: unique Ledger) -> () uses {} {
+      if upstream {
+        board.attempts -= 1
+      } else {
+        board.requests -= 1
+      }
+    }
+  )
+}
+
+pub fn create(tasks: Tasks, jobs: u64) -> State {
+  State(
+    tasks: tasks,
+    ledger: mutex.create(tasks, unique Ledger(requests: 0, attempts: 0, rows: [])),
+    jobs: jobs
+  )
+}
+
+pub fn reserve(state: State, upstream: bool) -> Option[Credit] {
+  let cap = state.jobs
+  let accepted = mutex.with(
+    state.tasks,
+    state.ledger,
+    fn(mut board: unique Ledger) -> bool uses {} {
+      if upstream {
+        if board.attempts >= cap {
+          return false
+        }
+        board.attempts += 1
+      } else {
+        if board.requests >= config.MAX_IN_FLIGHT {
+          return false
+        }
+        board.requests += 1
+      }
+      true
+    }
+  )
+  if accepted {
+    Some(Credit(state: state, upstream: upstream))
+  } else {
+    None()
+  }
+}
+
+pub fn begin(state: State, client: u64, request: u64, attempt: u64) -> u64 {
+  mutex.with(
+    state.tasks,
+    state.ledger,
+    fn(mut board: unique Ledger) -> u64 uses {} {
+      let index = list.len(board.rows)
+      // 8 clients * 64 requests * (3 attempts + one refusal record).
+      if index < 2048 {
+        list.push(
+          mut board.rows,
+          Record(client: client, request: request, attempt: attempt, status: "running")
+        )
+      }
+      index
+    }
+  )
+}
+
+pub fn finish(state: State, index: u64, status: String) -> () {
+  mutex.with(
+    state.tasks,
+    state.ledger,
+    fn(mut board: unique Ledger) -> () uses {} {
+      if index < list.len(board.rows) {
+        board.rows[index].status = unique status
+      }
+    }
+  )
+}
+
+@noalloc
+fn compare(a: Record, b: Record) -> i32 uses {} {
+  let x = a.client * 256 + a.request * 4 + a.attempt
+  let y = b.client * 256 + b.request * 4 + b.attempt
+  if x < y {
+    -1
+  } else {
+    if x > y {
+      1
+    } else {
+      0
+    }
+  }
+}
+
+pub fn shutdown(state: State, output: Stdout, clients: u64, expired: bool) -> Result[
+  (),
+  OutputError
+] {
+  let mut rows = mutex.with(
+    state.tasks,
+    state.ledger,
+    fn(mut board: unique Ledger) -> unique List[Record] uses {} {
+      // Called only after the outer scope joined all sessions and attempts.
+      failure.check(board.requests == 0 && board.attempts == 0, Arithmetic())
+      unique board.rows
+    }
+  )
+  list.sort(mut rows, compare)
+  for row in rows {
+    let status = if row.status == "running" {
+      "canceled"
+    } else {
+      row.status
+    }
+    let mut bytes: List[u8] = []
+    text.append(
+      mut bytes,
+      f"{{\"client\":{row.client},\"request\":{row.request},\"attempt\":{row.attempt},\"status\":"
+    )
+    json.write_text_into(status, mut bytes)
+    text.append(mut bytes, "}\n")
+    out.write(output, bytes.from_list(take bytes))?
+  }
+  out.print(output, f"{{\"clients\":{clients},\"expired\":{expired}}}\n")
+}

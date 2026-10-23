@@ -1,0 +1,16 @@
+{
+  "args": [
+    "check",
+    "routes.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "config",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  }
+}

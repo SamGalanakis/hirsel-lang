@@ -1,0 +1,45 @@
+{
+  "args": [
+    "serve",
+    "routes.json",
+    "/tmp/rpcgate.sock"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "config",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ],
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "random": "random.splitmix64@1",
+    "net": {
+      "provider": "net.stream@1",
+      "rules": [
+        {
+          "address": "/tmp/rpcgate.sock",
+          "service": "0",
+          "operation": "unix_listen"
+        },
+        {
+          "address": "/tmp/rpcgate-arith.sock",
+          "service": "0",
+          "operation": "unix_connect"
+        },
+        {
+          "address": "/tmp/rpcgate-echo.sock",
+          "service": "0",
+          "operation": "unix_connect"
+        }
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

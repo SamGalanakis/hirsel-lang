@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "rpcgate",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "config.hir",
+      "module": [
+        "config"
+      ]
+    },
+    {
+      "path": "wire.hir",
+      "module": [
+        "wire"
+      ]
+    },
+    {
+      "path": "route.hir",
+      "module": [
+        "route"
+      ]
+    },
+    {
+      "path": "attempt.hir",
+      "module": [
+        "attempt"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../localrpc/hirsel.json",
+      "package": {
+        "name": "localrpc",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

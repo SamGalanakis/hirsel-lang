@@ -1,0 +1,269 @@
+// Reuse localrpc's capped incremental decoder and four-byte BE framing.
+pub type InputError = Protocol(localrpc@1/model.InputError) | Shape | Id | Limit
+
+pub type ReadError = Input(InputError) | Network(NetError) | Eof
+
+// Both directions retain the identity independently of their typed body.
+pub type Envelope[T] {
+  id: String,
+  body: T,
+}
+
+pub type Numbers {
+  a: i64,
+  b: i64,
+}
+
+pub type Incoming = Arithmetic(String, Envelope[Numbers]) | Textual(
+  String,
+  Envelope[String]
+)
+
+pub fn value(payload: Bytes) -> Result[json.Value, InputError] uses {} {
+  if bytes.len(payload) > localrpc@1/model.MAX_FRAME {
+    return Error(Limit())
+  }
+  let Ok(text) = string.from_bytes(unique payload) else {
+    return Error(Shape())
+  }
+  let Ok(parsed) = json.parse(take text) else {
+    return Error(Shape())
+  }
+  Ok(take parsed)
+}
+
+pub fn field(object: json.Value, key: String) -> Result[String, InputError] uses {} {
+  let Some(Text(text)) = json_access.member(object, key) else {
+    return Error(Shape())
+  }
+  Ok(unique text)
+}
+
+fn integer(object: json.Value, key: String) -> Result[i64, InputError] uses {} {
+  let Some(Number(raw)) = json_access.member(object, key) else {
+    return Error(Shape())
+  }
+  let Ok(n) = i64.parse(raw) else {
+    return Error(Shape())
+  }
+  Ok(n)
+}
+
+pub fn request(payload: Bytes) -> Result[Incoming, InputError] uses {} {
+  let parsed = value(payload)?
+  let Some(members) = json_access.as_object(parsed) else {
+    return Error(Shape())
+  }
+  if map.len(members) != 3 {
+    return Error(Shape())
+  }
+  let id = field(parsed, "id")?
+  let method = field(parsed, "method")?
+  if string.byte_len(id) == 0 || string.byte_len(id) > 64 || string.byte_len(method) == 0 || string.byte_len(
+    method
+  ) > 32 {
+    return Error(Id())
+  }
+  let Some(args) = json_access.member(parsed, "args") else {
+    return Error(Shape())
+  }
+  if let Text(text) = args {
+    if string.byte_len(text) > 512 {
+      return Error(Limit())
+    }
+    return Ok(Textual(take method, Envelope(id: take id, body: unique text)))
+  }
+  let Some(fields) = json_access.as_object(args) else {
+    return Error(Shape())
+  }
+  if map.len(fields) != 2 {
+    return Error(Shape())
+  }
+  let a = integer(args, "a")?
+  let b = integer(args, "b")?
+  Ok(Arithmetic(take method, Envelope(id: take id, body: Numbers(a: a, b: b))))
+}
+
+pub fn identity(incoming: Incoming) -> String uses {} {
+  match incoming {
+    Arithmetic(_, item) => unique item.id,
+    Textual(_, item) => unique item.id,
+  }
+}
+
+pub fn method_name(incoming: Incoming) -> String uses {} {
+  match incoming {
+    Arithmetic(method, _) => unique method,
+    Textual(method, _) => unique method,
+  }
+}
+
+pub fn encode_request[T](
+  method: String,
+  id: String,
+  body: T,
+  encode: fn(T, mut List[u8]) -> () uses {}
+) -> Result[Bytes, InputError] uses {} {
+  let mut output: List[u8] = []
+  text.append(mut output, "{\"id\":")
+  json.write_text_into(id, mut output)
+  text.append(mut output, ",\"method\":")
+  json.write_text_into(method, mut output)
+  text.append(mut output, ",\"args\":")
+  encode(body, mut output)
+  text.append(mut output, "}")
+  let payload = bytes.from_list(take output)
+  if bytes.len(payload) > localrpc@1/model.MAX_FRAME {
+    return Error(Limit())
+  }
+  Ok(take payload)
+}
+
+pub fn numbers(item: Numbers, mut output: List[u8]) -> () uses {} {
+  text.append(mut output, f"{{\"a\":{item.a},\"b\":{item.b}}}")
+}
+
+pub fn text_body(item: String, mut output: List[u8]) -> () uses {} {
+  json.write_text_into(item, mut output)
+}
+
+pub fn number_body(item: i64, mut output: List[u8]) -> () uses {} {
+  i64.format_into(item, mut output)
+}
+
+pub fn reply[T](
+  payload: Bytes,
+  expected: String,
+  decode: fn(json.Value) -> Result[T, InputError] uses {}
+) -> Result[Envelope[Result[T, String]], InputError] uses {} {
+  let parsed = value(payload)?
+  let Some(fields) = json_access.as_object(parsed) else {
+    return Error(Shape())
+  }
+  if map.len(fields) != 2 {
+    return Error(Shape())
+  }
+  let id = field(parsed, "id")?
+  if id != expected {
+    return Error(Id())
+  }
+  if let Some(error) = json_access.member(parsed, "error") {
+    let Some(parts) = json_access.as_object(error) else {
+      return Error(Shape())
+    }
+    if map.len(parts) != 1 {
+      return Error(Shape())
+    }
+    let code = field(error, "code")?
+    if string.byte_len(code) == 0 || string.byte_len(code) > 64 {
+      return Error(Limit())
+    }
+    return Ok(Envelope(id: take id, body: Error(take code)))
+  }
+  let Some(body) = json_access.member(parsed, "result") else {
+    return Error(Shape())
+  }
+  Ok(Envelope(id: take id, body: Ok(decode(body)?)))
+}
+
+pub fn as_number(item: json.Value) -> Result[i64, InputError] uses {} {
+  let Number(raw) = item else {
+    return Error(Shape())
+  }
+  let Ok(n) = i64.parse(raw) else {
+    return Error(Shape())
+  }
+  Ok(n)
+}
+
+pub fn as_text(item: json.Value) -> Result[String, InputError] uses {} {
+  let Text(text) = item else {
+    return Error(Shape())
+  }
+  if string.byte_len(text) > 512 {
+    return Error(Limit())
+  }
+  Ok(unique text)
+}
+
+pub fn encode_reply[T](
+  item: Envelope[Result[T, String]],
+  encode: fn(T, mut List[u8]) -> () uses {}
+) -> Result[Bytes, InputError] uses {} {
+  let mut output: List[u8] = []
+  text.append(mut output, "{\"id\":")
+  json.write_text_into(item.id, mut output)
+  match item.body {
+    Ok(body) => {
+      text.append(mut output, ",\"result\":")
+      encode(body, mut output)
+    },
+    Error(code) => {
+      text.append(mut output, ",\"error\":{\"code\":")
+      json.write_text_into(code, mut output)
+      text.append(mut output, "}")
+    },
+  }
+  text.append(mut output, "}")
+  Ok(localrpc@1/model.frame(bytes.from_list(take output))?)
+}
+
+pub fn error_frame(id: String, code: String) -> Result[Bytes, InputError] uses {} {
+  let item: Envelope[Result[String, String]] = Envelope(
+    id: unique id,
+    body: Error(unique code)
+  )
+  encode_reply(item, text_body)
+}
+
+pub fn receive(n: Net, mut stream: Stream of n) -> Result[Bytes, ReadError] {
+  let mut state = localrpc@1/model.decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = net.read(n, mut stream, mut chunk, localrpc@1/model.remaining(state))?
+    if count == 0 {
+      // EOF before any reply is transport loss; a partial frame is malformed.
+      localrpc@1/model.finish(state) ? protocol_read
+      return Error(Eof())
+    }
+    for byte in chunk {
+      if let Some(payload) = localrpc@1/model.push(mut state, byte) ? protocol_read {
+        return Ok(take payload)
+      }
+    }
+  }
+  Error(Eof())
+}
+
+pub fn receive_half(n: Net, mut reader: ReadHalf of n) -> Result[Bytes, ReadError] {
+  let mut state = localrpc@1/model.decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = read_half.read(
+      n,
+      mut reader,
+      mut chunk,
+      localrpc@1/model.remaining(state)
+    )?
+    if count == 0 {
+      localrpc@1/model.finish(state) ? protocol_read
+      return Error(Eof())
+    }
+    for byte in chunk {
+      if let Some(payload) = localrpc@1/model.push(mut state, byte) ? protocol_read {
+        return Ok(take payload)
+      }
+    }
+  }
+  Error(Eof())
+}
+
+fn protocol_read(error: localrpc@1/model.InputError) -> ReadError uses {} {
+  Input(Protocol(unique error))
+}
+
+// Consume the complete typed reply while replacing the transport correlation ID.
+pub fn reidentify[T](take item: Envelope[T], id: String) -> Envelope[T] uses {} {
+  let Envelope(id: _, body: body) = take item
+  Envelope(id: unique id, body: take body)
+}

@@ -1,0 +1,287 @@
+pub type Reply {
+  frame: unique Bytes,
+  credit: Option[report.Credit],
+}
+
+pub type SessionError = Input(wire.InputError) | Read(wire.ReadError) | Network(
+  NetError
+) | Channel(ChannelError) | Clock(ClockError) | DeadlineRange
+
+fn failure(id: String, code: String) -> Bytes uses {} {
+  // Fixed bounded error arms and already-validated IDs always fit one frame.
+  match wire.error_frame(id, code) {
+    Ok(frame) => take frame,
+    Error(_) => b"",
+  }
+}
+
+fn dispatch(
+  context: attempt.Context,
+  manifest: config.Manifest,
+  incoming: wire.Incoming,
+  client: u64,
+  request: u64
+) -> Bytes {
+  let id = wire.identity(incoming)
+  let method = wire.method_name(incoming)
+  let Some(target) = config.lookup(manifest, method) else {
+    let index = report.begin(context.state, client, request, 0)
+    report.finish(context.state, index, "unknown_method")
+    return failure(id, "unknown_method")
+  }
+  let outcome: Result[Bytes, attempt.Problem] = match incoming {
+    Arithmetic(_, item) => {
+      match attempt.run(
+        context,
+        target,
+        item,
+        client,
+        request,
+        wire.numbers,
+        wire.as_number
+      ) {
+        Ok(reply) => match wire.encode_reply(reply, wire.number_body) {
+          Ok(frame) => Ok(take frame),
+          Error(e) => Error(Wire(take e)),
+        },
+        Error(e) => Error(take e),
+      }
+    },
+    Textual(_, item) => {
+      match attempt.run(
+        context,
+        target,
+        item,
+        client,
+        request,
+        wire.text_body,
+        wire.as_text
+      ) {
+        Ok(reply) => match wire.encode_reply(reply, wire.text_body) {
+          Ok(frame) => Ok(take frame),
+          Error(e) => Error(Wire(take e)),
+        },
+        Error(e) => Error(take e),
+      }
+    },
+  }
+  match take outcome {
+    Ok(frame) => take frame,
+    Error(e) => failure(id, attempt.status(e)),
+  }
+}
+
+fn bounded(
+  context: attempt.Context,
+  c: MonotonicClock,
+  at: Instant of c,
+  manifest: config.Manifest,
+  incoming: wire.Incoming,
+  client: u64,
+  request: u64
+) -> Bytes {
+  let id = wire.identity(incoming)
+  let ambiguous = match config.lookup(manifest, wire.method_name(incoming)) {
+    Some(target) => !target.idempotent,
+    None() => false,
+  }
+  match task.scope_until(
+    context.tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Bytes {
+      dispatch(context, manifest, incoming, client, request)
+    }
+  ) {
+    Finished(frame) => take frame,
+    Expired(_) => failure(
+      id,
+      if ambiguous {
+        "unknown_outcome"
+      } else {
+        "deadline"
+      }
+    ),
+  }
+}
+
+fn send(tasks: Tasks, mut sender: Sender[Reply], take item: Reply) -> () {
+  let _ = channel.send(tasks, mut sender, take item)
+}
+
+fn read_requests(
+  context: attempt.Context,
+  manifest: config.Manifest,
+  n: Net,
+  take reader: ReadHalf of n,
+  take sender: Sender[Reply],
+  client: u64
+) -> Result[(), SessionError] {
+  task.scope(
+    context.tasks,
+    fn(s: Scope) -> Result[(), SessionError] {
+      let mut input = take reader
+      let mut output = take sender
+      let mut pending: TaskSet[Result[(), SessionError]] of s = task.set(s)
+      let mut ids: List[String] = []
+      let mut request = 0u64
+      while request < config.MAX_REQUESTS {
+        let payload = match wire.receive_half(n, mut input) {
+          Ok(data) => take data,
+          Error(Eof()) => {
+            task.cancel_all(s, take pending)
+            return Ok(())
+          },
+          Error(error) => {
+            task.cancel_all(s, take pending)
+            return Error(Read(take error))
+          },
+        }
+        let incoming = match wire.request(payload) {
+          Ok(item) => take item,
+          Error(error) => {
+            task.cancel_all(s, take pending)
+            return Error(Input(take error))
+          },
+        }
+        let id = wire.identity(incoming)
+        let mut duplicate = false
+        for seen in ids {
+          if seen == id {
+            duplicate = true
+          }
+        }
+        if duplicate {
+          send(
+            context.tasks,
+            mut output,
+            Reply(frame: unique failure(id, "duplicate_id"), credit: None())
+          )
+          request += 1
+          continue
+        }
+        list.push(mut ids, unique id)
+        let Some(credit) = report.reserve(context.state, false) else {
+          let index = report.begin(context.state, client, request, 0)
+          report.finish(context.state, index, "busy")
+          send(
+            context.tasks,
+            mut output,
+            Reply(frame: unique failure(id, "busy"), credit: None())
+          )
+          request += 1
+          continue
+        }
+        // Freeze one absolute deadline at admission, before spawning any work.
+        let c = context.clock
+        let now = clock.monotonic(c)?
+        let Some(at) = instant.checked_add(c, now, manifest.request_ms * 1000000) else {
+          task.cancel_all(s, take pending)
+          return Error(DeadlineRange())
+        }
+        let endpoint = sender.dup(context.tasks, output)
+        let owned_table = unique manifest
+        let owned = unique incoming
+        let request_index = request
+        let handle = task.async(
+          s,
+          fn() -> Result[(), SessionError] {
+            let item = take owned
+            let local_manifest = take owned_table
+            let frame = bounded(
+              context,
+              c,
+              at,
+              local_manifest,
+              item,
+              client,
+              request_index
+            )
+            let mut response_sender = take endpoint
+            send(
+              context.tasks,
+              mut response_sender,
+              Reply(frame: unique frame, credit: Some(take credit))
+            )
+            Ok(())
+          }
+        )
+        task.add(s, mut pending, take handle)
+        request += 1
+      }
+      // Request65 is not read. Drain all admitted requests at the cap.
+      let _ = task.all(s, take pending)?
+      Ok(())
+    }
+  )
+}
+
+fn write_replies(
+  tasks: Tasks,
+  n: Net,
+  take writer: WriteHalf of n,
+  take receiver: Receiver[Reply]
+) -> Result[(), SessionError] {
+  let mut output = take writer
+  let mut input = take receiver
+  let mut count = 0u64
+  while count < config.MAX_REQUESTS {
+    let item = match channel.receive(tasks, mut input) {
+      Ok(reply) => take reply,
+      Error(Closed()) => return Ok(()),
+      Error(error) => return Error(Channel(take error)),
+    }
+    write_half.write_all(n, mut output, item.frame)?
+    // Dropping item returns request credit after delivery, including errors.
+    count += 1
+  }
+  Ok(())
+}
+
+pub fn session(
+  context: attempt.Context,
+  manifest: config.Manifest,
+  n: Net,
+  take stream: Stream of n,
+  client: u64
+) -> () {
+  let (read, write) = net.split(n, take stream)
+  task.scope(
+    context.tasks,
+    fn(s: Scope) -> () {
+      let (sender, receiver): (Sender[Reply], Receiver[Reply]) = channel.open(
+        context.tasks
+      )
+      let mut pending: TaskSet[Result[(), SessionError]] of s = task.set(s)
+      let owned_manifest = unique manifest
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[(), SessionError] {
+            read_requests(
+              context,
+              take owned_manifest,
+              n,
+              take read,
+              take sender,
+              client
+            )
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[(), SessionError] {
+            write_replies(context.tasks, n, take write, take receiver)
+          }
+        )
+      )
+      // EOF/error from reader or writer cancels and joins the entire request tree.
+      let _ = task.all(s, take pending)
+    }
+  )
+}

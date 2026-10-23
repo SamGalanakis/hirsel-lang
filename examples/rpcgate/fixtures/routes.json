@@ -1,0 +1,18 @@
+{
+  "jobs": 4,
+  "clients": 2,
+  "request_ms": 1000,
+  "session_ms": 10000,
+  "routes": [
+    {
+      "method": "Arith.Add",
+      "socket": "/tmp/rpcgate-arith.sock",
+      "idempotent": true
+    },
+    {
+      "method": "echo",
+      "socket": "/tmp/rpcgate-echo.sock",
+      "idempotent": true
+    }
+  ]
+}

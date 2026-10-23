@@ -1,0 +1,158 @@
+// Bounded, immutable routing input. No network authority is used during check.
+pub const MAX_BYTES: u64 = 4096
+
+pub const MAX_ROUTES: u64 = 8
+
+pub const MAX_CLIENTS: u64 = 8
+
+pub const MAX_REQUESTS: u64 = 64
+
+pub const MAX_IN_FLIGHT: u64 = 16
+
+pub type Invalid = Config | Usage
+
+pub type ReadError = Invalid(Invalid) | File(FileError) | Grant(GrantError)
+
+pub type Route {
+  method: String,
+  socket: Path,
+  idempotent: bool,
+}
+
+pub type Manifest {
+  routes: List[Route],
+  jobs: u64,
+  clients: u64,
+  request_ms: u64,
+  session_ms: u64,
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  if string.byte_len(name) == 0 || string.byte_len(name) > 128 || name == "." || name == ".." {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == b'/' || byte == b'\\' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn socket_path(name: String) -> bool uses {} {
+  if string.byte_len(name) < 2 || string.byte_len(name) > 100 || !string.starts_with(
+    name,
+    "/"
+  ) || string.contains(name, "\0") {
+    return false
+  }
+  let Ok(normal) = path.normalize(path.of(unique name)) else {
+    return false
+  }
+  path.text(normal) == name
+}
+
+fn positive(fields: Map[String, json.Value], key: String, cap: u64) -> Result[
+  u64,
+  Invalid
+] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else {
+    return Error(Config())
+  }
+  let Ok(value) = u64.parse(raw) else {
+    return Error(Config())
+  }
+  if value == 0 || value > cap {
+    return Error(Config())
+  }
+  Ok(value)
+}
+
+pub fn decode(take data: Bytes) -> Result[Manifest, Invalid] uses {} {
+  if bytes.len(data) > MAX_BYTES {
+    return Error(Config())
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Config())
+  }
+  let Ok(Object(fields)) = json.parse(take source) else {
+    return Error(Config())
+  }
+  if map.len(fields) != 5 {
+    return Error(Config())
+  }
+  let jobs = positive(fields, "jobs", 4)?
+  let clients = positive(fields, "clients", MAX_CLIENTS)?
+  let request_ms = positive(fields, "request_ms", 3000)?
+  let session_ms = positive(fields, "session_ms", 15000)?
+  let Some(Array(entries)) = map.get(fields, "routes") else {
+    return Error(Config())
+  }
+  if list.len(entries) == 0 || list.len(entries) > MAX_ROUTES {
+    return Error(Config())
+  }
+  let mut routes: List[Route] = []
+  for entry in entries {
+    let Object(route_fields) = entry else {
+      return Error(Config())
+    }
+    if map.len(route_fields) != 3 {
+      return Error(Config())
+    }
+    let Some(Text(method)) = map.get(route_fields, "method") else {
+      return Error(Config())
+    }
+    let Some(Text(socket)) = map.get(route_fields, "socket") else {
+      return Error(Config())
+    }
+    let Some(Bool(safe)) = map.get(route_fields, "idempotent") else {
+      return Error(Config())
+    }
+    if string.byte_len(method) == 0 || string.byte_len(method) > 32 || !socket_path(
+      socket
+    ) {
+      return Error(Config())
+    }
+    for old in routes {
+      if old.method == method {
+        return Error(Config())
+      }
+    }
+    list.push(
+      mut routes,
+      Route(method: unique method, socket: path.of(unique socket), idempotent: safe)
+    )
+  }
+  Ok(
+    Manifest(
+      routes: take routes,
+      jobs: jobs,
+      clients: clients,
+      request_ms: request_ms,
+      session_ms: session_ms
+    )
+  )
+}
+
+pub fn load(rt: Io, name: String) -> Result[Manifest, ReadError] {
+  if !filename(name) {
+    return Error(Invalid(Usage()))
+  }
+  let dir = io.dir(rt, path.of("config"))?
+  let mut input = file.open(dir, path.of(unique name))?
+  let data = match file.read_all_bounded(dir, mut input, MAX_BYTES) {
+    Ok(raw) => take raw,
+    Error(Limit()) => return Error(Invalid(Config())),
+    Error(File(error)) => return Error(File(take error)),
+  }
+  Ok(decode(take data)?)
+}
+
+pub fn lookup(manifest: Manifest, method: String) -> Option[Route] uses {} {
+  for entry in manifest.routes {
+    if entry.method == method {
+      return Some(unique entry)
+    }
+  }
+  None()
+}
