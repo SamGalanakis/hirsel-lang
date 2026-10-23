@@ -20,6 +20,7 @@ pub type RealIo = RealCore<LocalStreams>;
 /// `RealCore<SendStreams>` is `Send`; non-Send custom streams remain home-affine.
 pub struct RealCore<S: Streams> {
     file_reads: crate::io_sim::ScriptedFileReads,
+    file_faults: crate::io_sim::ScriptedFileFaults,
     state: State,
     disk: Disk,
     tape: Vec<Event>,
@@ -270,6 +271,14 @@ impl<S: Streams> RealCore<S> {
             self.set_cooperative(Default::default());
         }
     }
+    /// Script errors only for snapshot/test.dir requests; production storage ignores them.
+    pub(crate) fn set_file_fault_script(
+        &mut self,
+        scripts: hirsel_run_schema::FileFaults,
+    ) -> Result<(), String> {
+        self.file_faults = crate::io_sim::ScriptedFileFaults::new(scripts)?;
+        Ok(())
+    }
     /// Exact name grants and their admission snapshots; no later ambient lookup.
     pub fn set_env(&mut self, env: BTreeMap<String, Option<String>>) {
         self.state.env = env;
@@ -450,6 +459,7 @@ impl RealIo {
             current: 0,
             signal_delivered: false,
             file_reads: Default::default(),
+            file_faults: Default::default(),
         })
     }
 }
@@ -1327,6 +1337,10 @@ impl<S: Streams> RealCore<S> {
             && self.file_reads.blocked(&self.state, &request)
         {
             return Err(AdapterError::Blocked);
+        }
+        // Pending is checked first; neither parks nor task cancellation consume a script.
+        if fault.is_none() {
+            fault = self.file_faults.take(&self.state, &request)?;
         }
         self.disk.partial = None;
         let before = self.state.stdout.len();
@@ -2985,6 +2999,7 @@ impl RealIo {
         }
         let Self {
             file_reads,
+            file_faults,
             streams,
             state,
             disk,
@@ -3021,6 +3036,7 @@ impl RealIo {
         });
         let core = RealCore {
             file_reads,
+            file_faults,
             streams: SendStreams {
                 output,
                 input,

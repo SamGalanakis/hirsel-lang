@@ -381,6 +381,10 @@ impl RunConfig {
             (None, LaunchKind::Main | LaunchKind::Test) => {}
             _ => return Err(invalid("call", "a call member exactly for a call launch")),
         }
+        if let Some(scripts) = &record.inputs.fixture_file_faults {
+            hirsel_run_schema::validate_file_faults(scripts)
+                .map_err(|e| invalid("inputs.fixture_file_faults", &e))?;
+        }
         if let Some(scheduler) = &record.inputs.scheduler {
             provider("inputs.scheduler.algorithm", &scheduler.algorithm)?;
             if scheduler.version == 0 {

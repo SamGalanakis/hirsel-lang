@@ -198,3 +198,15 @@ Five new test identities extend the base CLI harness492 to497. All five identiti
 executed nonzero focused selections; exact per-cell results above take precedence
 over aggregate harness exits. Source is1198 lines across main95/manifest232/
 chunk131/store113/snapshot349/restore278, with no unrelated app/std changes.
+
+Additional qualification (`native-file-faults-33`, 2026-10-23): the owner-approved
+immutable `durable-provider-fault` case now uses the public typed
+`Fixture.file_faults` queue: `file.put_new`, three requested bytes (`abc`),
+`FileFault(39)`, zero partial effects. Both LLVM and Cranelift full-main runs
+executed and returned the original exit2/chunk_publish oracle without publishing
+a snapshot. Each original new recording replayed through both natives and the
+public reference/checked adapters (eight replays), with the original20M bound.
+The old successful controls and original unrun receipts were preserved. The
+separate `snapshot-provider-fault` native cells remain unmigrated and unrun;
+provider support alone gives them no execution credit. Raw tapes, source hashes
+and per-cell receipts are external under `hirsel-briefs/native-file-faults-33/`.

@@ -1410,6 +1410,19 @@ impl State {
         }
         if matches!(
             request,
+            Request::FileRead { .. }
+                | Request::Read { .. }
+                | Request::Open { .. }
+                | Request::Create { .. }
+                | Request::OpenAppend { .. }
+                | Request::CreateAtomic { .. }
+                | Request::Commit { .. }
+        ) && fault.is_some_and(|f| f.partial != 0 && !matches!(f.error, IoError::Canceled(_)))
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        if matches!(
+            request,
             Request::ReadDirPage { .. }
                 | Request::Metadata { .. }
                 | Request::Mkdir { .. }

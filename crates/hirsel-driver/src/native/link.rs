@@ -1159,6 +1159,8 @@ pub fn link_fixture_runnable(
     fixture: &super::Fixture,
 ) -> Result<Runnable, NativeError> {
     use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
+    hirsel_run_schema::validate_file_faults(&fixture.file_faults)
+        .map_err(|e| NativeError::new(StageName::Link, e))?;
     if !matches!(program.launches.get(entry), Some(LaunchKind::Main(_))) {
         return link_runnable(program, entry, objects, toolchain, dir, None);
     }
@@ -1170,6 +1172,8 @@ pub fn link_fixture_runnable(
         hirsel_run_config::RunConfig::for_program(revision, hirsel_run_schema::LaunchKind::Main);
     record.inputs = program.launch.clone();
     record.inputs.fault_seed = fixture.fault_seed;
+    record.inputs.fixture_file_faults =
+        (!fixture.file_faults.is_empty()).then(|| fixture.file_faults.clone());
     record.args = Some(fixture.args.clone());
     record.env = fixture.env.clone();
     record.io = Some(IoGrants {
@@ -2242,6 +2246,19 @@ pub fn launch_fixture(
             ));
         }
     }
+    hirsel_run_schema::validate_file_faults(&fixture.file_faults)
+        .map_err(|e| NativeError::new(StageName::Launch, e))?;
+    // Replay consumes recorded inputs without a live script; an explicitly supplied
+    // script must still match the one bound at link time.
+    let bound_faults = run.record().inputs.fixture_file_faults.as_ref();
+    if (!matches!(tape, Tape::Replay(_)) || !fixture.file_faults.is_empty())
+        && bound_faults.cloned().unwrap_or_default() != fixture.file_faults
+    {
+        return Err(NativeError::new(
+            StageName::Launch,
+            "fixture file faults must match link_fixture_runnable",
+        ));
+    }
     if let Tape::Replay(path) = tape {
         let recording = hirsel_rt::host_launch::read_recording(path)
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
@@ -2522,8 +2539,12 @@ fn launch_impl(
         signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
         stdout: output.stdout,
         stderr: output.stderr,
+        // A late replay refusal can leave an existing, empty observation file.
+        // Retain its exact diagnostic alongside any valid stdout prefix.
         record: std::fs::read_to_string(&record)
-            .or_else(|_| std::fs::read_to_string(&refusal))
+            .ok()
+            .filter(|record| !record.is_empty())
+            .or_else(|| std::fs::read_to_string(&refusal).ok())
             .unwrap_or_default(),
     })
 }

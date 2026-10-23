@@ -717,10 +717,19 @@ impl Library {
         let canceled = (name != "file.narrow")
             .then(|| self.tasks.canceled())
             .flatten();
-        if let Some(f) = canceled
-            .map(Fault::Canceled)
-            .or_else(|| self.simulation.fault(name))
-        {
+        let fault = match canceled {
+            Some(cause) => Some(Fault::Canceled(cause)),
+            None => self.simulation.file_fault(
+                name,
+                match name {
+                    "file.write_bytes" | "file.write_all" | "file.put_new" => {
+                        Some(bytes(arg(a, 2)?)?.len() as u64)
+                    }
+                    _ => None,
+                },
+            )?,
+        };
+        if let Some(f) = fault {
             // Cancellation has no effects. Other faults may commit a prefix.
             if let Fault::Fault { partial, .. } | Fault::File { partial, .. } = &f
                 && *partial > 0

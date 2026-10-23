@@ -145,7 +145,20 @@ fn fixture(case: &Value) -> hirsel_driver::native::Fixture {
             },
         );
     }
+    let file_faults = if case["id"] == "durable-provider-fault" {
+        std::collections::BTreeMap::from([(
+            hirsel_run_schema::FileOperation::PutNew,
+            std::collections::VecDeque::from([hirsel_run_schema::FileFault {
+                requested: Some(3),
+                error: Some(hirsel_run_schema::FileFaultError::Fault(39)),
+                partial: 0,
+            }]),
+        )])
+    } else {
+        Default::default()
+    };
     hirsel_driver::native::Fixture {
+        file_faults,
         args: case["args"]
             .as_array()
             .unwrap()
@@ -180,7 +193,10 @@ fn scripted(boundaries: bool) {
             let id = case["id"].as_str().unwrap();
             let fixture = fixture(&case);
             let mut world: SimulationConfig = (&fixture).into();
-            if let Some(operation) = case["fault"].as_str() {
+            if let Some(operation) = case["fault"]
+                .as_str()
+                .filter(|_| fixture.file_faults.is_empty())
+            {
                 world.faults.insert(
                     operation.into(),
                     [hirsel_interp::library::simulation::Fault::Fault {
@@ -456,9 +472,9 @@ fn chunk_backup_31_scripted_native_record_replay() {
         }
         for case in cases {
             let id = case["id"].as_str().unwrap();
-            if case["fault"].is_string() {
+            if case["fault"].is_string() && case["id"] != "durable-provider-fault" {
                 eprintln!(
-                    "CHUNK_BACKUP_31_INCOMPLETE {id} native: Fixture has no file fault queue"
+                    "CHUNK_BACKUP_31_INCOMPLETE {id} native: immutable case not migrated to typed file fault queue"
                 );
                 continue;
             }

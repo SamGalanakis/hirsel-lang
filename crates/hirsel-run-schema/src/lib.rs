@@ -8,6 +8,10 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 
+mod file_faults;
+pub use file_faults::{
+    FileFault, FileFaultError, FileFaults, FileOperation, take_file_fault, validate_file_faults,
+};
 mod file_reads;
 mod path;
 pub use file_reads::{FileReadScript, FileReadiness};
@@ -163,6 +167,9 @@ pub enum LaunchKind {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Inputs {
+    /// Test snapshot scripts bound into recording identity; never host injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture_file_faults: Option<FileFaults>,
     pub hash_seed: u64,
     pub random_seed: u64,
     pub test_seed: u64,

@@ -2111,7 +2111,12 @@ pub(crate) unsafe fn execute(
             // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
             // configuration): no mount and no projection.
             None => match if let Some((files, mounts)) = fixture_files {
-                RealIo::fixture(files, mounts, sinks.stdout.clone()).map_err(std::io::Error::other)
+                RealIo::fixture(files, mounts, sinks.stdout.clone())
+                    .map(|mut io| {
+                        io.set_stderr(sinks.stderr.clone());
+                        io
+                    })
+                    .map_err(std::io::Error::other)
             } else {
                 std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
                     || {
@@ -2143,6 +2148,13 @@ pub(crate) unsafe fn execute(
                         let scripts = serde_json::from_str(&text)
                             .map_err(|e| format!("file read script: {e}"))?;
                         io.set_file_read_script(scripts);
+                    }
+                    if let Some(scripts) = fixture_run
+                        .as_ref()
+                        .and_then(|run| run.record().inputs.fixture_file_faults.clone())
+                    {
+                        io.set_file_fault_script(scripts)
+                            .map_err(|e| format!("file fault script: {e}"))?;
                     }
                     io.set_net_rules(net_rules.clone());
                     if let Some(env) = &env {

@@ -367,6 +367,8 @@ pub struct Fixture {
     pub mounts: std::collections::BTreeMap<String, hirsel_run_schema::Access>,
     /// Simulation-only regular-file readiness, shared with SimulationConfig.
     pub file_reads: std::collections::BTreeMap<String, hirsel_run_schema::FileReadScript>,
+    /// Ordered snapshot-only file inputs; byte counts are checked before consumption.
+    pub file_faults: hirsel_run_schema::FileFaults,
     /// The negative output-grant fixture, shared by every engine.
     pub deny_output: bool,
     pub monotonic: Option<u64>,
@@ -402,6 +404,7 @@ impl Default for Fixture {
             files: Default::default(),
             mounts: hirsel_engine::SimulationConfig::default().mounts,
             file_reads: Default::default(),
+            file_faults: Default::default(),
             deny_output: false,
             monotonic: None,
             net: None,
@@ -425,6 +428,7 @@ impl From<&Fixture> for hirsel_engine::SimulationConfig {
             files: fixture.files.clone(),
             mounts: fixture.mounts.clone(),
             file_reads: fixture.file_reads.clone(),
+            file_faults: fixture.file_faults.clone(),
             net: fixture.net.clone(),
             process: fixture.process.clone(),
             signals: fixture.signals.clone(),
@@ -562,6 +566,10 @@ pub fn differential_in(
             .as_ref()
             .map_err(Clone::clone)
             .and_then(|program| match configuration.engine {
+                Engine::Heap { .. } if !fixture.file_faults.is_empty() => Err(NativeError::new(
+                    StageName::Heap,
+                    "file faults require reference/checked simulation or native snapshot providers",
+                )),
                 Engine::Heap { campaign: true } => {
                     super::heap_campaign_in(program, entry, &sites, &world)
                         .map(|run| run.observation)

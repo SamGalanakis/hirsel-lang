@@ -56,6 +56,59 @@ impl ScriptedFileReads {
         self.0.wrote(*tree, &path)
     }
 }
+/// Snapshot-only operation queues. Production requests cannot consume an entry.
+#[derive(Default)]
+pub(crate) struct ScriptedFileFaults(hirsel_run_schema::FileFaults);
+impl ScriptedFileFaults {
+    pub(crate) fn new(scripts: hirsel_run_schema::FileFaults) -> Result<Self, String> {
+        hirsel_run_schema::validate_file_faults(&scripts)?;
+        Ok(Self(scripts))
+    }
+    pub(crate) fn take(
+        &mut self,
+        state: &State,
+        request: &Request,
+    ) -> Result<Option<Fault>, AdapterError> {
+        use hirsel_run_schema::{FileFaultError as E, FileOperation as O};
+        if !state.is_fake_request(request) || state.preflight(request)?.is_some() {
+            return Ok(None);
+        }
+        let (op, count) = match request {
+            Request::Open { .. } => (O::Open, None),
+            Request::Create { .. } => (O::Create, None),
+            Request::OpenAppend { .. } => (O::OpenAppend, None),
+            Request::FileRead { max, .. } => (O::Read, Some(*max)),
+            Request::Read { .. } => (O::ReadBytes, None),
+            Request::FileWrite { bytes, .. } => (O::Write, Some(bytes.len() as u64)),
+            Request::FileAppend { bytes, .. } => (O::Append, Some(bytes.len() as u64)),
+            Request::Write { bytes, .. } => (O::WriteBytes, Some(bytes.len() as u64)),
+            Request::CreateAtomic { .. } => (O::CreateAtomic, None),
+            Request::WriteAll { bytes, .. } => (O::WriteAll, Some(bytes.len() as u64)),
+            Request::Commit { .. } => (O::Commit, None),
+            Request::Sync { .. } => (O::Sync, None),
+            Request::PutNew { bytes, .. } => (O::PutNew, Some(bytes.len() as u64)),
+            _ => return Ok(None),
+        };
+        let step = hirsel_run_schema::take_file_fault(&mut self.0, op, count)
+            .map_err(AdapterError::Unsupported)?;
+        Ok(step.and_then(|step| {
+            step.error.map(|error| Fault {
+                partial: step.partial as usize,
+                error: match error {
+                    E::Fault(code) => IoError::Fault(code),
+                    E::Canceled(cause) => IoError::Canceled(cause),
+                    E::NotFound => IoError::NotFound,
+                    E::PermissionDenied => IoError::PermissionDenied,
+                    E::AlreadyExists => IoError::AlreadyExists,
+                    E::IsDirectory => IoError::IsDirectory,
+                    E::NotDirectory => IoError::NotDirectory,
+                    E::DirectoryNotEmpty => IoError::DirectoryNotEmpty,
+                    E::CrossDevice => IoError::CrossDevice,
+                },
+            })
+        }))
+    }
+}
 /// Binary replay keeps one shared buffer and only the current/previous decoded
 /// event. Advancing releases payload allocations instead of retaining a second
 /// owned copy of every event in the tape.

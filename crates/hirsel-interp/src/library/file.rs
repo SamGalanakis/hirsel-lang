@@ -106,10 +106,17 @@ impl Library {
         let fault = if denied || wrong_mode {
             None
         } else {
-            self.tasks
-                .canceled()
-                .map(Fault::Canceled)
-                .or_else(|| self.simulation.fault(name))
+            match self.tasks.canceled() {
+                Some(cause) => Some(Fault::Canceled(cause)),
+                None => self.simulation.file_fault(
+                    name,
+                    match name {
+                        "file.read" => Some(integer_u64(arg(a, 3)?)?),
+                        "file.write" | "file.append" => Some(bytes(arg(a, 2)?)?.len() as u64),
+                        _ => None,
+                    },
+                )?,
+            }
         };
         // A FileRead request is (directory, file, max), as in the host/native
         // protocol. The caller's accumulated output buffer is not an input.

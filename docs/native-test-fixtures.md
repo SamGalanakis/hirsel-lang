@@ -98,3 +98,58 @@ only these cases with:
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-front-shard-1 -- \
   --test-arg=native_harness_gaps_30 --test-arg=--nocapture
 ```
+
+`Fixture.file_faults` adds ordered queues keyed by `FileOperation`. Supported
+operations are `file.open`, `file.create`, `file.open_append`, `file.read`,
+`file.read_bytes`, `file.write`, `file.append`, `file.write_bytes`,
+`file.create_atomic`, `file.write_all`, `file.commit`, `file.sync`, and
+`file.put_new`. These are snapshot provider inputs, never host errno. Close/drop
+is ordinary cleanup and cannot be faulted. No readiness behavior changes.
+
+Every byte operation (`read`, the four writes and `put_new`) requires `requested`
+with the exact read maximum or supplied byte length. Other operations require
+`None`. Request mismatches refuse before consuming an entry or applying effects.
+A `FileFault` with `error: None` passes one ordinary operation; otherwise it
+returns the selected `FileFaultError`, preserving its code or CancelCause ordinal
+(0 Requested, 1 Parent, 2 ChildFailed, 3 DeadlineExceeded). Only `write`, `append`,
+`write_bytes` and `write_all` accept a nonzero `partial`: exactly that prefix
+is applied before the error. Reads leave the buffer and position unchanged on
+error; use a pass entry before a later read error. Cancellation has zero effects.
+
+Empty queues, missing/unexpected request counts, oversized/unsupported partials,
+invalid causes and overlapping typed/legacy simulation queues are admission
+errors. Queue exhaustion restores normal provider behavior. Pending reads,
+real task cancellation, and calls rejected by authority/mode/path preflight do
+not consume entries. Unused entries (for paths the app never visits) are allowed.
+Scripts are bound in `inputs.fixture_file_faults` of the test run record. A live
+launch must match the link recipe; replay needs no live files or script.
+
+This executable full-main example is covered by `native_file_faults_33`:
+
+```text
+pub fn main(rt: Io, args: Args) -> Result[(), FileError] {
+  let d = io.dir(rt, arg.path(args, 0u64)? argument_error)?
+  let mut f = file.create_atomic(d, path.of("old"))?
+  file.write_all(d, mut f, b"new")?
+  failure.check(file.commit(d, take f) == Error(PermissionDenied()), Arithmetic())
+  failure.check(file.read_bytes(d, path.of("old"))? == b"old", Arithmetic())
+  Ok(())
+}
+@noalloc
+fn argument_error(e: ArgError) -> FileError uses {} { FileFault(9u32) }
+```
+
+Supply Args `["output"]`, an RW `output` mount, initial `output/old = b"old"`,
+and `file_faults = BTreeMap::from([(FileOperation::Commit,
+VecDeque::from([FileFault { requested: None,
+error: Some(FileFaultError::PermissionDenied), partial: 0 }]))])`.
+Commit refusal consumes the AtomicFile and removes its temporary, preserving the
+old target. A failed `put_new` script runs before publication; this fixture does
+not model errors after a completed but non-durable publication. Such an outcome
+is never evidence of rollback.
+
+Live full-main fixtures also capture stderr. A replay that emits a valid stdout
+or stderr prefix and then finds unused events exits3 and returns its exact
+refusal through `Launched.record`; `observe_run` classifies it as
+`Observed::Refused`, including when the observation file was created empty.
+The file-fault regression checks the retained prefix and the exact event count.

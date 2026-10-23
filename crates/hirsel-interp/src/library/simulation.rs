@@ -112,6 +112,7 @@ pub struct SimulationConfig {
     pub files: BTreeMap<String, Vec<u8>>,
     /// Simulation-only readiness gates by resolved opened-file path; empty by default.
     pub file_reads: BTreeMap<String, FileReadScript>,
+    pub file_faults: hirsel_run_schema::FileFaults,
     pub file_aliases: BTreeMap<String, String>,
     pub directories: BTreeSet<String>,
     pub links: BTreeMap<String, String>,
@@ -169,6 +170,7 @@ impl Default for SimulationConfig {
             stdin: Vec::new(),
             files: BTreeMap::new(),
             file_reads: BTreeMap::new(),
+            file_faults: Default::default(),
             file_aliases: BTreeMap::new(),
             directories: [String::new()].into_iter().collect(),
             links: BTreeMap::new(),
@@ -513,6 +515,14 @@ impl Simulation {
         .map_err(|error| invalid(format!("simulation environment: {error}")))?;
         // Validate snapshot entry names before granting anything. Link targets
         // remain data and are checked at the confined operation boundary.
+        hirsel_run_schema::validate_file_faults(&config.file_faults).map_err(invalid)?;
+        if config
+            .file_faults
+            .keys()
+            .any(|op| config.faults.contains_key(op.name()))
+        {
+            return Err(invalid("overlapping legacy and typed file fault queues"));
+        }
         let mut files = BTreeMap::new();
         for (path, data) in std::mem::take(&mut config.files) {
             let path = confined_relative("", &path)
@@ -1102,6 +1112,46 @@ impl Simulation {
     }
     pub(crate) fn advance_monotonic(&mut self, ticks: u64) {
         self.config.monotonic = self.config.monotonic.max(ticks);
+    }
+    pub(crate) fn file_fault(
+        &mut self,
+        name: &str,
+        requested: Option<u64>,
+    ) -> Result<Option<Fault>, Error> {
+        use hirsel_run_schema::FileFaultError as E;
+        let op = self
+            .config
+            .file_faults
+            .keys()
+            .find(|op| op.name() == name)
+            .copied();
+        let Some(op) = op else {
+            return Ok(self.fault(name));
+        };
+        let step = hirsel_run_schema::take_file_fault(&mut self.config.file_faults, op, requested)
+            .map_err(invalid)?;
+        Ok(step.and_then(|step| {
+            step.error.map(|error| match error {
+                E::Canceled(cause) => Fault::Canceled(cause),
+                E::Fault(code) => Fault::Fault {
+                    code,
+                    partial: step.partial as usize,
+                },
+                error => Fault::File {
+                    error: match error {
+                        E::NotFound => FileError::NotFound,
+                        E::PermissionDenied => FileError::PermissionDenied,
+                        E::AlreadyExists => FileError::AlreadyExists,
+                        E::IsDirectory => FileError::IsDirectory,
+                        E::NotDirectory => FileError::NotDirectory,
+                        E::DirectoryNotEmpty => FileError::DirectoryNotEmpty,
+                        E::CrossDevice => FileError::CrossDevice,
+                        _ => unreachable!(),
+                    },
+                    partial: step.partial as usize,
+                },
+            })
+        }))
     }
     pub(crate) fn fault(&mut self, op: &str) -> Option<Fault> {
         self.config.faults.get_mut(op).and_then(VecDeque::pop_front)
