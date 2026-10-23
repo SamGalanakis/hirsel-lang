@@ -167,3 +167,115 @@ impl SourceRecipe {
         Ok((instances, current))
     }
 }
+
+/// One native library request, with the captured environment named by content
+/// rather than a requiring unit's transient LayoutId. This is discovery data;
+/// the query owner must accept the requiring product and current read witnesses
+/// before decoding it. Restore builds no source or library Value.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryRecipe {
+    schema: u32,
+    definition: DefPath,
+    encoding: Vec<u8>,
+    body: u32,
+    actuals: Actuals,
+    callable: hirsel_types::TypeId,
+    shape: hirsel_rc::effects::Shape,
+    environment: Option<hirsel_syntax::ContentHash>,
+    finalizer: bool,
+}
+impl LibraryRecipe {
+    pub fn capture(
+        instances: &Instances,
+        id: InstanceId,
+        table: &hirsel_lir::LayoutTable,
+    ) -> Result<Self, String> {
+        let InstanceRole::Library { body, finalizer } = instances.roles[id.index()] else {
+            return Err("source instance is not a library recipe".into());
+        };
+        let view = instances.view(id);
+        Ok(Self {
+            schema: 1,
+            definition: view.key.definition().clone(),
+            encoding: view.key.encoding().to_vec(),
+            body: u32::try_from(body).map_err(|_| "library recipe body limit")?,
+            actuals: instances.actuals[id.index()].clone(),
+            callable: instances.callables[id.index()],
+            shape: view.owner.into(),
+            environment: instances.environments[id.index()]
+                .map(|layout| hirsel_lir::LayoutKeys::rooted(table, layout).0),
+            finalizer,
+        })
+    }
+    pub fn key(&self) -> Result<InstanceKey, String> {
+        InstanceKey::from_encoding(&self.definition, 0, self.encoding.clone())
+            .map_err(|e| format!("library recipe key: {e:?}"))
+    }
+    pub fn encode(&self, records: &NativeRecords, engine: &QueryEngine) -> Result<Vec<u8>, String> {
+        records
+            .encode(engine, self)
+            .ok_or_else(|| "library recipe encoding failed".into())
+    }
+    pub fn decode(
+        records: &NativeRecords,
+        engine: &QueryEngine,
+        bytes: &[u8],
+    ) -> Result<Self, String> {
+        let recipe: Self = records
+            .decode(engine, bytes)
+            .ok_or("library recipe decoding failed")?;
+        if recipe.schema != 1 {
+            return Err("library recipe schema differs".into());
+        }
+        recipe.key()?;
+        Ok(recipe)
+    }
+    pub fn restore(
+        &self,
+        program: &Program,
+        layouts: &mut LayoutBuilder<'_>,
+    ) -> Result<(Instances, InstanceId), String> {
+        let body = hirsel_rc::library::BODIES
+            .get(self.body as usize)
+            .ok_or("library recipe body no longer registered")?;
+        let declared = (body.path)();
+        if declared != self.definition
+            && (declared != hirsel_rc::library::native_path("operation_value")
+                || !program.operations.contains_key(&self.definition)
+                || !hirsel_rc::library::value::forwards(&self.definition))
+        {
+            return Err("library recipe body differs from selected implementation".into());
+        }
+        let keys = hirsel_lir::LayoutKeys::new(layouts.table());
+        let environment = self
+            .environment
+            .map(|key| {
+                keys.all()
+                    .iter()
+                    .position(|candidate| candidate.0 == key)
+                    .map(|position| hirsel_lir::LayoutId(position as u32))
+                    .ok_or("library recipe environment is not in its reached layout products")
+            })
+            .transpose()?;
+        let request = hirsel_rc::library::Request {
+            body: self.body as usize,
+            path: self.definition.clone(),
+            actuals: self.actuals.clone(),
+            callable: self.callable,
+            shape: self.shape.into(),
+            environment,
+            finalizer: self.finalizer,
+        };
+        if request
+            .key(&program.types, layouts)
+            .map_err(|e| format!("library recipe actuals: {e:?}"))?
+            != self.key()?
+        {
+            return Err("library recipe actuals differ from selected instance key".into());
+        }
+        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+        let id = hirsel_rc::library::instantiate(layouts, &mut instances, request)
+            .map_err(|e| format!("library recipe registration: {e:?}"))?;
+        Ok((instances, id))
+    }
+}
