@@ -796,6 +796,23 @@ impl QueryEngine {
                 return entry.result();
             }
         }
+        // Read the complete previous action before invoking normalization or
+        // reconstructing its private view. Active cycles retain the ordinary
+        // provisional-group/reentrant path and are never restored as settled.
+        if !self
+            .active
+            .contains(&(definition.clone(), QueryKind::Signature))
+        {
+            self.active
+                .insert((definition.clone(), QueryKind::Signature));
+            let stored = self.load_signature(definition);
+            self.active
+                .remove(&(definition.clone(), QueryKind::Signature));
+            if let Some(entry) = stored {
+                self.signatures.insert(id, entry.clone());
+                return entry.result();
+            }
+        }
         self.start(definition, QueryKind::Signature)?;
         let candidates = self.definition_items(definition)?;
         let declarations = self.frozen_declarations();
@@ -834,6 +851,7 @@ impl QueryEngine {
         let mut entry = self.finish(key, text, reads, result.map(shared_output), observed);
         entry.covered = covered;
         let entry = Arc::new(entry);
+        self.store_signature(definition, &entry)?;
         keep(
             &mut self.signatures,
             &mut self.graph,
