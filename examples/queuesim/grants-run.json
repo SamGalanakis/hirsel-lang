@@ -10,7 +10,7 @@
     "dirs": [
       {
         "path": "input",
-        "host": "examples/queuesim/fixtures",
+        "host": "fixtures",
         "access": "read"
       }
     ]
