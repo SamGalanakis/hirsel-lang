@@ -109,3 +109,4 @@ mod yaml_upstream_25;
 mod msgpack_upstream_25;
 mod utf8_stream_histories_26;
 mod text_view_bounds_26;
+mod regex_subject_borrow_25;

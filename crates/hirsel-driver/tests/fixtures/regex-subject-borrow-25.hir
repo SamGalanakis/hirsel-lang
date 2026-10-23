@@ -1,0 +1,78 @@
+// Seed20261023; old25a5017a materializing implementation oracle.
+
+fn borrow_put_span(mut out: List[u64], span: Option[Span]) -> () uses {} {
+ match span {
+  None() => core@1/list.push(mut out, 0),
+  Some(s) => { core@1/list.push(mut out, 1); core@1/list.push(mut out,s.start); core@1/list.push(mut out,s.end) },
+ }
+}
+fn borrow_put_captures(mut out: List[u64], caps: Captures) -> () uses {} {
+ core@1/list.push(mut out,core@1/list.len(caps.spans))
+ for span in caps.spans { borrow_put_span(mut out,span) }
+}
+fn borrow_results(pattern: String, src: String) -> List[u64] uses {} {
+ let mut out: List[u64] = []
+ let re = match compile(pattern, 10000) {
+  Ok(re) => re,
+  Error(_) => { core@1/list.push(mut out,999); return take out },
+ }
+ for budget in [0u64,1,8,32,128,1024,1000000,18446744073709551615] {
+  match find(re,src,budget) {
+   Error(_) => core@1/list.push(mut out,2),
+   Ok(span) => { core@1/list.push(mut out,3);borrow_put_span(mut out,span) },
+  }
+  match find_all(re,src,100,budget) {
+   Error(_) => core@1/list.push(mut out,2),
+   Ok(spans) => { core@1/list.push(mut out,core@1/list.len(spans)+3);for span in spans { borrow_put_span(mut out,Some(span)) } },
+  }
+  match find_captures(re,src,budget) {
+   Error(_) => core@1/list.push(mut out,2),
+   Ok(None()) => core@1/list.push(mut out,0),
+   Ok(Some(c)) => { core@1/list.push(mut out,3);borrow_put_captures(mut out,c) },
+  }
+  match find_all_captures(re,src,100,budget) {
+   Error(_) => core@1/list.push(mut out,2),
+   Ok(caps) => { core@1/list.push(mut out,core@1/list.len(caps)+3);for c in caps { borrow_put_captures(mut out,c) } },
+  }
+  match replace_all(re,src,"☃${1}-$0-$$",budget) {
+   Error(_) => core@1/list.push(mut out,2),
+   Ok(value) => { let bytes=core@1/string.as_bytes(value);core@1/list.push(mut out,core@1/bytes.len(bytes)+3);for b in bytes {core@1/list.push(mut out,core@1/int.widen(b))} },
+  }
+ }
+ // Query each original scalar boundary with context preserved, including EOF.
+ let mut work=18446744073709551615u64
+ let Ok(subject)=make_subject(src,mut work) else {return [998u64]}
+ let mut byte=0u64
+ let mut scalar=0u64
+ for c in core@1/string.scalars(src) {
+  let Ok((span,caps))=pike_find_from(re,subject,byte,true,mut work) else {return [997u64]}
+  borrow_put_span(mut out,span);borrow_put_captures(mut out,caps)
+  byte+=scalar_width(c);scalar+=1
+ }
+ let Ok((span,caps))=pike_find_from(re,subject,byte,true,mut work) else {return [997u64]}
+ borrow_put_span(mut out,span);borrow_put_captures(mut out,caps)
+ take out
+}
+
+fn borrow_view_edges() -> Result[(), u64] uses {} {
+  let whole = "before-aé☃😀-after"
+  let Some(first) = core@1/string.position(whole, 7) else { return Error(1009) }
+  let Some(last) = core@1/string.position(whole, 17) else { return Error(1010) }
+  let src = core@1/string.slice(whole, first, last)
+  let mut work = 5u64
+  let Ok(subject) = make_subject(src, mut work) else { return Error(1000) }
+  if work != 0 || subject_len(subject) != 10 || subject.ascii { return Error(1001) }
+  if subject_scalar(subject, 0) != 'a' || subject_scalar(subject, 1) != 'é' || subject_scalar(subject, 3) != '☃' || subject_scalar(subject, 6) != '😀' { return Error(1002) }
+  if subject_before(subject, 10) != 6 || subject_before(subject, 6) != 3 || subject_before(subject, 3) != 1 || subject_before(subject, 1) != 0 { return Error(1003) }
+  let Ok(re) = compile("(?P<x>.)", 100) else { return Error(1004) }
+  let invalid = Captures(spans: [Some(Span(start: 2, end: 3))])
+  let mut dst: List[u8] = []
+  match expand(re, mut dst, "$0", src, invalid, 1000) { Error(InvalidCaptures()) => (), _ => return Error(1005), }
+  let mut empty_work = 1u64
+  let Ok(empty) = make_subject("", mut empty_work) else { return Error(1006) }
+  if !empty.ascii || empty_work != 0 || subject_next(empty, 0) != 1 { return Error(1007) }
+  let mut short = 4u64
+  match make_subject(src, mut short) { Error(WorkLimit()) => (), _ => return Error(1008), }
+  if short != 0 { return Error(1011) }
+  Ok(())
+}
