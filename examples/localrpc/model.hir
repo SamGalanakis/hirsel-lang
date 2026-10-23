@@ -1,0 +1,236 @@
+// Header/body structure: tokio-util length_delimited.rs:504-568, ce685ee6.
+// MIT, Copyright (c) Tokio contributors. See README.md for license and deviations.
+pub const MAX_FRAME: u64 = 2048
+
+pub const MAX_REQUESTS: u64 = 8
+
+pub type InputError = FrameLimit | EmptyFrame | TruncatedHeader | TruncatedBody | Utf8 | Json | Shape | TextLimit | ResponseMismatch | Usage
+
+pub type Phase = Header | Body(u64)
+
+pub type Decoder {
+  phase: Phase,
+  data: List[u8],
+}
+
+pub type Request = Ping(String) | Normalize(String, String) | Unknown(String, String)
+
+pub type Response = Pong(String) | Normalized(String, String) | UnknownMethod(
+  String,
+  String
+)
+
+pub fn decoder() -> Decoder uses {} {
+  Decoder(phase: Header(), data: [])
+}
+
+pub fn remaining(state: Decoder) -> u64 uses {} {
+  match state.phase {
+    Header() => 4 - list.len(state.data),
+    Body(length) => length - list.len(state.data),
+  }
+}
+
+// One byte transition makes packet boundaries irrelevant. Length is checked
+// before allocating/accumulating any body. A completed frame resets the header.
+pub fn push(mut state: Decoder, byte: u8) -> Result[Option[Bytes], InputError] uses {} {
+  list.push(mut state.data, byte)
+  match state.phase {
+    Header() => {
+      if list.len(state.data) == 4 {
+        let header = bytes.from_list(unique state.data)
+        let Ok(word) = binary.read_u32(header, 0, BigEndian()) else {
+          return Error(TruncatedHeader())
+        }
+        let length: u64 = int.widen(word)
+        if length > MAX_FRAME {
+          return Error(FrameLimit())
+        }
+        if length == 0 {
+          return Error(EmptyFrame())
+        }
+        state.data = []
+        state.phase = Body(length)
+      }
+      Ok(None())
+    },
+    Body(length) => {
+      if list.len(state.data) == length {
+        let payload = replace(mut state.data, [])
+        state.phase = Header()
+        return Ok(Some(bytes.from_list(take payload)))
+      }
+      Ok(None())
+    },
+  }
+}
+
+pub fn finish(state: Decoder) -> Result[(), InputError] uses {} {
+  match state.phase {
+    Header() => if list.len(state.data) == 0 {
+      Ok(())
+    } else {
+      Error(TruncatedHeader())
+    },
+    Body(_) => Error(TruncatedBody()),
+  }
+}
+
+pub fn frame(payload: Bytes) -> Result[Bytes, InputError] uses {} {
+  let length = bytes.len(payload)
+  if length > MAX_FRAME {
+    return Error(FrameLimit())
+  }
+  if length == 0 {
+    return Error(EmptyFrame())
+  }
+  let mut output: List[u8] = []
+  binary.append_u32(int.narrow(length), BigEndian(), mut output)
+  bytes.append(mut output, payload)
+  Ok(bytes.from_list(take output))
+}
+
+fn value(payload: Bytes) -> Result[json.Value, InputError] uses {} {
+  if bytes.len(payload) > MAX_FRAME {
+    return Error(FrameLimit())
+  }
+  let Ok(text) = string.from_bytes(unique payload) else {
+    return Error(Utf8())
+  }
+  let Ok(parsed) = json.parse(take text) else {
+    return Error(Json())
+  }
+  Ok(take parsed)
+}
+
+fn field(object: json.Value, key: String) -> Result[String, InputError] uses {} {
+  let Some(member) = json_access.member(object, key) else {
+    return Error(Shape())
+  }
+  let Some(text) = json_access.as_text(member) else {
+    return Error(Shape())
+  }
+  Ok(unique text)
+}
+
+pub fn request(payload: Bytes) -> Result[Request, InputError] uses {} {
+  let parsed = value(payload)?
+  let id = field(parsed, "id")?
+  let method = field(parsed, "method")?
+  if string.byte_len(id) == 0 || string.byte_len(id) > 64 || string.byte_len(method) == 0 || string.byte_len(
+    method
+  ) > 32 {
+    return Error(Shape())
+  }
+  let Some(members) = json_access.as_object(parsed) else {
+    return Error(Shape())
+  }
+  if method == "normalize" {
+    if map.len(members) != 3 {
+      return Error(Shape())
+    }
+    let text = field(parsed, "text")?
+    if string.byte_len(text) > 512 {
+      return Error(TextLimit())
+    }
+    return Ok(Normalize(take id, take text))
+  }
+  if map.len(members) != 2 {
+    return Error(Shape())
+  }
+  if method == "ping" {
+    Ok(Ping(take id))
+  } else {
+    Ok(Unknown(take id, take method))
+  }
+}
+
+pub fn answer(incoming: Request) -> Response uses {} {
+  match incoming {
+    Ping(id) => Pong(unique id),
+    Normalize(id, text) => Normalized(unique id, string.ascii_lower(string.trim(text))),
+    Unknown(id, method) => UnknownMethod(unique id, unique method),
+  }
+}
+
+pub fn encode(reply: Response) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  text.append(mut output, "{\"id\":")
+  match reply {
+    Pong(id) => {
+      json.write_text_into(id, mut output)
+      text.append(mut output, ",\"result\":\"pong\"}")
+    },
+    Normalized(id, text) => {
+      json.write_text_into(id, mut output)
+      text.append(mut output, ",\"result\":")
+      json.write_text_into(text, mut output)
+      text.append(mut output, "}")
+    },
+    UnknownMethod(id, method) => {
+      json.write_text_into(id, mut output)
+      text.append(mut output, ",\"error\":{\"code\":\"unknown_method\",\"method\":")
+      json.write_text_into(method, mut output)
+      text.append(mut output, "}}")
+    },
+  }
+  bytes.from_list(take output)
+}
+
+pub fn response(payload: Bytes, sent: Request) -> Result[Response, InputError] uses {} {
+  let parsed = value(payload)?
+  let id = field(parsed, "id")?
+  let Some(members) = json_access.as_object(parsed) else {
+    return Error(Shape())
+  }
+  if map.len(members) != 2 {
+    return Error(Shape())
+  }
+  let expected = answer(sent)
+  // Re-encoding validates all fields and the request ID, and canonicalizes output.
+  let candidate: Response = match expected {
+    Pong(expected_id) => {
+      if id != expected_id || field(parsed, "result")? != "pong" {
+        return Error(ResponseMismatch())
+      }
+      Pong(take id)
+    },
+    Normalized(expected_id, text) => {
+      if id != expected_id || field(parsed, "result")? != text {
+        return Error(ResponseMismatch())
+      }
+      Normalized(take id, copy text)
+    },
+    UnknownMethod(expected_id, method) => {
+      let Some(error) = json_access.member(parsed, "error") else {
+        return Error(Shape())
+      }
+      let Some(error_members) = json_access.as_object(error) else {
+        return Error(Shape())
+      }
+      if map.len(error_members) != 2 || id != expected_id || field(error, "code")? != "unknown_method" || field(
+        error,
+        "method"
+      )? != method {
+        return Error(ResponseMismatch())
+      }
+      UnknownMethod(take id, copy method)
+    },
+  }
+  Ok(take candidate)
+}
+
+pub fn error_name(error: InputError) -> String uses {} {
+  match error {
+    FrameLimit() => "frame_limit",
+    EmptyFrame() => "empty_frame",
+    TruncatedHeader() => "truncated_header",
+    TruncatedBody() => "truncated_body",
+    Utf8() => "utf8",
+    Json() => "json",
+    Shape() => "shape",
+    TextLimit() => "text_limit",
+    ResponseMismatch() => "response_mismatch",
+    Usage() => "usage",
+  }
+}

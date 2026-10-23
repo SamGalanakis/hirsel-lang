@@ -1,0 +1,68 @@
+// Tokio length_delimited.rs:102-112,147-180 at ce685ee6 (MIT).
+fn decode(chunks: List[Bytes]) -> Result[List[Bytes], model.InputError] uses {} {
+  let mut state = model.decoder()
+  let mut frames: List[Bytes] = []
+  for chunk in chunks {
+    for byte in chunk {
+      if let Some(payload) = model.push(mut state, byte)? {
+        list.push(mut frames, take payload)
+      }
+    }
+  }
+  model.finish(state)?
+  Ok(take frames)
+}
+
+pub fn main(t: Test) -> Result[(), model.InputError] {
+  test.check(t, decode([])? == [])
+  test.check(t, decode([b"\x00\x00\x00\x09abcdefghi"])? == [b"abcdefghi"])
+  test.check(
+    t,
+    decode([b"\x00\x00\x00\x09abcdefghi\x00\x00\x00\x03123\x00\x00\x00\x0bhello world"])? == [
+      b"abcdefghi",
+      b"123",
+      b"hello world"
+    ]
+  )
+  test.check(t, decode([b"\x00\x00", b"\x00\x09abc", b"defghi"])? == [b"abcdefghi"])
+  let short = b"\x00\x00\x00\x02{}"
+  for boundary in 0u64..7 {
+    let observed = decode([bytes.slice(short, 0, boundary)])
+    if boundary == 0 {
+      test.check(t, observed == Ok([]))
+    } else if boundary < 4 {
+      test.check(t, observed == Error(TruncatedHeader()))
+    } else if boundary < 6 {
+      test.check(t, observed == Error(TruncatedBody()))
+    } else {
+      test.check(t, observed == Ok([b"{}"]))
+    }
+  }
+  test.check(t, decode([b"\x00\x00\x00\x00"]) == Error(EmptyFrame()))
+  test.check(t, decode([b"\x00\x00\x08\x01"]) == Error(FrameLimit()))
+  test.check(t, decode([b"\xff\xff\xff\xff"]) == Error(FrameLimit()))
+  test.check(t, model.frame(b"abc")? == b"\x00\x00\x00\x03abc")
+  test.check(t, model.request(b"\xff") == Error(Utf8()))
+  test.check(t, model.request(b"{") == Error(Json()))
+  test.check(
+    t,
+    model.encode(model.answer(model.request(b"{\"id\":\"a\",\"method\":\"ping\"}")?)) == b"{\"id\":\"a\",\"result\":\"pong\"}"
+  )
+  test.check(
+    t,
+    model.encode(
+      model.answer(
+        model.request(
+          b"{\"id\":\"a\",\"method\":\"normalize\",\"text\":\"  HELLO  WORLD \\n\"}"
+        )?
+      )
+    ) == b"{\"id\":\"a\",\"result\":\"hello  world\"}"
+  )
+  test.check(
+    t,
+    model.encode(
+      model.answer(model.request(b"{\"id\":\"a\",\"method\":\"summarize\"}")?)
+    ) == b"{\"id\":\"a\",\"error\":{\"code\":\"unknown_method\",\"method\":\"summarize\"}}"
+  )
+  Ok(())
+}

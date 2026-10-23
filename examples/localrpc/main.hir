@@ -1,0 +1,122 @@
+pub type AppError = Input(model.InputError) | Network(NetError) | Grant(GrantError) | Output(
+  OutputError
+)
+
+fn receive(n: Net, mut stream: Stream of n) -> Result[Option[Bytes], AppError] {
+  let mut state = model.decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = net.read(n, mut stream, mut chunk, model.remaining(state))?
+    if count == 0 {
+      model.finish(state)?
+      return Ok(None())
+    }
+    for byte in chunk {
+      if let Some(payload) = model.push(mut state, byte)? {
+        return Ok(Some(take payload))
+      }
+    }
+  }
+  Ok(None())
+}
+
+fn configure(n: Net, mut stream: Stream of n) -> Result[(), AppError] {
+  net.set_read_timeout(n, mut stream, Nanos(2000000000u64))?
+  net.set_write_timeout(n, mut stream, Nanos(2000000000u64))?
+  Ok(())
+}
+
+fn serve(n: Net, socket: Path, output: Stdout) -> Result[u64, AppError] {
+  let mut listener = net.unix_listen(n, socket)?
+  out.print(output, "{\"listening\":true}\n")?
+  let (connected, _) = net.accept(n, mut listener)?
+  let mut stream = take connected
+  configure(n, mut stream)?
+  let mut count = 0u64
+  while count < model.MAX_REQUESTS {
+    let Some(payload) = receive(n, mut stream)? else {
+      return Ok(count)
+    }
+    let request = model.request(payload)?
+    let reply = model.frame(model.encode(model.answer(request)))?
+    net.write_all(n, mut stream, reply)?
+    count += 1
+  }
+  Ok(count)
+}
+
+fn call(n: Net, socket: Path, payload: Bytes, sent: model.Request) -> Result[
+  Bytes,
+  AppError
+] {
+  let frame = model.frame(payload)?
+  let mut stream = net.unix_connect(n, socket)?
+  configure(n, mut stream)?
+  net.write_all(n, mut stream, frame)?
+  net.shutdown(n, mut stream, Write())?
+  let Some(reply) = receive(n, mut stream)? else {
+    return Error(Input(TruncatedHeader()))
+  }
+  Ok(model.encode(model.response(reply, sent)?))
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[(), AppError] {
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.print(
+          output,
+          "usage: localrpc serve SOCKET | call SOCKET REQUEST\n4-byte big-endian length + UTF-8 JSON; max 2048 bytes, 8 requests.\n"
+        )?
+        return Ok(())
+      }
+    }
+  }
+  if arg.len(args) < 2 || arg.len(args) > 3 {
+    return Error(Input(Usage()))
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(Input(Usage()))
+  }
+  let Ok(socket) = arg.path(args, 1) else {
+    return Error(Input(Usage()))
+  }
+  if mode == "serve" && arg.len(args) == 2 {
+    let n = io.net(rt)?
+    let count = serve(n, socket, output)?
+    out.print(output, f"{{\"served\":{count}}}\n")?
+    return Ok(())
+  }
+  if mode == "call" && arg.len(args) == 3 {
+    let Ok(request) = arg.text(args, 2) else {
+      return Error(Input(Usage()))
+    }
+    // Reject local invalid input before requesting a network capability.
+    let payload = string.as_bytes(request)
+    let sent = model.request(payload)?
+    let n = io.net(rt)?
+    out.write(output, call(n, socket, payload, sent)?)?
+    out.print(output, "\n")?
+    return Ok(())
+  }
+  Error(Input(Usage()))
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  match execute(rt, args, output) {
+    Ok(()) => process.SUCCESS,
+    Error(Input(error)) => {
+      match out.print(output, f"{{\"error\":\"{model.error_name(error)}\"}}\n") {
+        Ok(()) => process.exit_code(2u8),
+        Error(_) => process.exit_code(3u8),
+      }
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      process.exit_code(3u8)
+    },
+  }
+}
