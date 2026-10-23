@@ -17,6 +17,7 @@ pub mod native;
 mod network;
 pub mod observation_view;
 pub mod requests;
+pub mod resident;
 mod pipeline;
 pub mod serve;
 pub mod session;

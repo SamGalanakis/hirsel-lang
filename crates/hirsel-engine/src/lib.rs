@@ -48,6 +48,7 @@ mod adapters;
 mod facts;
 pub use adapters::*;
 pub mod loader_inputs;
+pub mod requests;
 mod package;
 pub use store::release_shared_caches;
 mod policy;
