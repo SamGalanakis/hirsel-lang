@@ -194,6 +194,7 @@ impl Plane {
     fn at(self, logical: usize) -> usize {
         self.start + (logical / BLOCK) * STRIDE + logical % BLOCK
     }
+    #[inline]
     fn write(self, output: &mut [u8], mut offset: usize, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let n = bytes.len().min(BLOCK - offset % BLOCK);
@@ -248,7 +249,14 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     }
     let mut dictionary = Vec::new();
     dictionary.try_reserve_exact(rows).map_err(|_| input())?;
-    dictionary.extend(entries.iter().map(|entry| entry.location.segment));
+    // Real packs commonly contribute adjacent records. Eliminate adjacent
+    // repeats before sorting, without assuming that nonadjacent IDs are equal
+    // or that input segment IDs arrive in dictionary order.
+    for entry in entries {
+        if dictionary.last() != Some(&entry.location.segment) {
+            dictionary.push(entry.location.segment);
+        }
+    }
     dictionary.sort_unstable();
     dictionary.dedup();
     let (planes, len, blocks) = layout(rows, dictionary.len()).ok_or_else(input)?;
@@ -277,6 +285,7 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     put32(&mut bytes, 72, len as u32);
     put32(&mut bytes, 76, blocks as u32);
     let mut next_bucket = 0;
+    let mut last_segment = None;
     for (i, entry) in entries.iter().enumerate() {
         let b = bucket(entry.key, bytes[25]);
         while next_bucket <= b {
@@ -286,9 +295,13 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
         planes[1].write(&mut bytes, i, &[entry.key.digest.0[2]]);
         planes[2].write(&mut bytes, i * 33, &key_bytes(entry.key));
         let mut locator = [0; 12];
-        let segment = dictionary
-            .binary_search(&entry.location.segment)
-            .map_err(|_| input())?;
+        let segment = match last_segment {
+            Some((id, index)) if id == entry.location.segment => index,
+            _ => dictionary
+                .binary_search(&entry.location.segment)
+                .map_err(|_| input())?,
+        };
+        last_segment = Some((entry.location.segment, segment));
         put32(&mut locator, 0, segment as u32);
         put32(&mut locator, 4, entry.location.offset / 8);
         put32(&mut locator, 8, entry.location.len);
@@ -400,6 +413,7 @@ impl Layer {
     pub(super) fn rows(&self) -> usize {
         self.rows
     }
+    #[inline]
     fn check_block(&self, j: usize, k: usize) -> bool {
         let plane = self.planes[j];
         let Some(status) = self.blocks.get(plane.status + k) else {
@@ -428,10 +442,25 @@ impl Layer {
             != BAD
             && good
     }
+    #[inline]
     fn read<const N: usize>(&self, j: usize, mut offset: usize) -> Option<[u8; N]> {
         let plane = self.planes[j];
         if offset.checked_add(N)? > plane.len {
             return None;
+        }
+        // Fixed-size copies are the common path. A row that crosses a trailer
+        // still checks both CRC blocks and gathers below.
+        if N <= BLOCK - offset % BLOCK {
+            if !self.check_block(j, offset / BLOCK) {
+                return None;
+            }
+            let physical = plane.at(offset);
+            return self
+                .backing
+                .bytes()
+                .get(physical..physical + N)?
+                .try_into()
+                .ok();
         }
         let mut out = [0; N];
         let mut filled = 0;
@@ -448,6 +477,7 @@ impl Layer {
         }
         Some(out)
     }
+    #[inline]
     pub(super) fn key(&self, row: usize) -> Option<Key> {
         if row >= self.rows {
             return None;
@@ -483,6 +513,15 @@ impl Layer {
     }
     pub(super) fn entry(&self, row: usize) -> Option<Entry> {
         let key = self.key(row)?;
+        Some(Entry {
+            key,
+            location: self.location(row)?,
+        })
+    }
+    fn location(&self, row: usize) -> Option<Location> {
+        if row >= self.rows {
+            return None;
+        }
         let bytes = self.read::<12>(3, row.checked_mul(12)?)?;
         let segment = u32_at(&bytes, 0)? as usize;
         if segment >= self.segments {
@@ -493,7 +532,7 @@ impl Layer {
             offset: u32_at(&bytes, 4)?.checked_mul(8)?,
             len: u32_at(&bytes, 8)?,
         };
-        valid_location(location).then_some(Entry { key, location })
+        valid_location(location).then_some(location)
     }
     pub(super) fn find(&self, key: Key) -> Option<Location> {
         let b = bucket(key, self.radix);
@@ -511,7 +550,7 @@ impl Layer {
             while matches != 0 {
                 let row = start + matches.trailing_zeros() as usize;
                 if self.key(row)? == key {
-                    return self.entry(row).map(|e| e.location);
+                    return self.location(row);
                 }
                 matches &= matches - 1;
             }

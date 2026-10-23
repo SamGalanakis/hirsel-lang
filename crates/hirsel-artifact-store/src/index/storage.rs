@@ -172,6 +172,7 @@ impl Mapping {
             ))
         }
     }
+    #[inline]
     pub(super) fn bytes(&self) -> &[u8] {
         #[cfg(unix)]
         // SAFETY: this owner retains exactly len immutable mapped bytes.
