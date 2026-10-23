@@ -1,0 +1,98 @@
+//! Request lifetimes over the shared query runtime. A fresh host uses exactly
+//! the same selection and completion path. Hot products, mappings, admission,
+//! dependency validation and deterministic transactions belong to the engine.
+use hirsel_engine::requests::{OutputReadiness, RequestEngine, SelectedRequest};
+use hirsel_engine::runtime::{QueryRuntime, RequestId};
+use std::sync::{Arc, Mutex};
+use std::task::Poll;
+
+/// Transport-owned host. Keeping this alive retains the engine's shared handles,
+/// without retaining a second program, verdict, output or invalidation cache.
+pub struct Host<E> {
+    engine: E,
+}
+
+impl<E: RequestEngine> Host<E> {
+    pub fn new(engine: E) -> Self {
+        Self { engine }
+    }
+
+    pub fn request(
+        &mut self,
+        request: &E::Request,
+    ) -> Result<RequestLease<E::Runtime, E::Readiness>, E::Error> {
+        let SelectedRequest {
+            runtime,
+            roots,
+            output,
+        } = self.engine.select(request)?;
+        let id = runtime
+            .lock()
+            .expect("query runtime poisoned")
+            .request(&roots);
+        Ok(RequestLease {
+            runtime,
+            output,
+            active: Some(id),
+        })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum RequestError<E> {
+    /// Runtime-owned immutable diagnostics. A failed query never runs readiness.
+    Query(hirsel_artifact_store::Reference),
+    Output(E),
+}
+
+/// A queued/live consumer owns this lease until output readiness or cancellation.
+/// Dropping it cancels only this request; the shared runtime owns coalesced work.
+#[must_use = "dropping a request lease cancels the request"]
+pub struct RequestLease<R: QueryRuntime, O> {
+    runtime: Arc<Mutex<R>>,
+    output: O,
+    active: Option<RequestId>,
+}
+
+impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
+    /// The transport drives this when work can advance. After Ready the lease
+    /// is terminal, like a completed Future; polling it again is a caller error.
+    pub fn poll(&mut self) -> Poll<Result<O::Output, RequestError<O::Error>>> {
+        let id = self.active.expect("request already completed");
+        let result = self
+            .runtime
+            .lock()
+            .expect("query runtime poisoned")
+            .poll(id);
+        match result {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(result) => {
+                self.active = None;
+                Poll::Ready(match result {
+                    Ok(products) => self.output.ready(&products).map_err(RequestError::Output),
+                    Err(diagnostics) => Err(RequestError::Query(diagnostics)),
+                })
+            }
+        }
+    }
+
+    /// Forward the host's explicit allowance to the one retention authority.
+    /// Live products/mappings remain owned by the runtime and its consumers.
+    pub fn evict_to(&mut self, retained_bytes: u64) {
+        self.runtime
+            .lock()
+            .expect("query runtime poisoned")
+            .evict_to(retained_bytes);
+    }
+}
+
+impl<R: QueryRuntime, O> Drop for RequestLease<R, O> {
+    fn drop(&mut self) {
+        if let Some(id) = self.active.take() {
+            self.runtime
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .cancel(id);
+        }
+    }
+}
