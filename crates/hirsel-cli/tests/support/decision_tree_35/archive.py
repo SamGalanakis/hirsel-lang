@@ -12,6 +12,10 @@ external=[]
 for p in sorted(root.rglob('*')):
     if p.is_file() and (p.relative_to(root).parts[0]=='closure' or '/runtime/runners/' in str(p)):
         external.append(dict(path=str(p.relative_to(root)),sha256=hashlib.sha256(p.read_bytes()).hexdigest(),bytes=p.stat().st_size))
+if (root/'consumer-inputs.json').exists():
+    for row in json.loads((root/'consumer-inputs.json').read_text()):
+        if row['name']!='cell':
+            external.append(dict(path='consumer/'+row['name']+'/'+row['path'].lstrip('/'),sha256=row['sha256'],bytes=row['bytes']))
 (root/'external-inputs.json').write_text(json.dumps(external,indent=2)+'\n')
 excluded={r['path'] for r in external}
 buf=io.BytesIO()

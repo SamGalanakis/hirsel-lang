@@ -15,7 +15,7 @@ b=json.loads(source['input'])
 if a.kind=='domain':b['jobs'][1]['features']=5
 text=json.dumps(b,separators=(',',':'));text+=' '*(65536-len(text))
 assert len(text)==65536
-(data/'workflow.json').write_text(text);(data/'model.json').write_bytes(b'old\n')
+(data/'workflow.json').write_text(text);(data/'model.json').write_bytes(b'old\n');(r/'initial-model.bytes').write_bytes(b'old\n')
 binary=a.binary.resolve()
 control=r/'ctl';tape=r/'recording';trace=r/'trace.jsonl'
 words=['train','data','workflow.json','model.json','4']+(['--interruptible'] if a.kind=='cancel' else [])
@@ -26,7 +26,7 @@ lib=ctypes.CDLL(None,use_errno=True);notify=lib.inotify_init1(os.O_CLOEXEC|os.O_
 assert lib.inotify_add_watch(notify,os.fsencode(r),0x102)>=0
 assert lib.inotify_add_watch(notify,os.fsencode(data),0x20)>=0
 cmd=[str(binary.resolve()),'--hirsel-grants',str(r/'grants.json'),'--hirsel-record',str(tape),'--hirsel-trace-events',str(trace),*words]
-(r/'consumer-before.json').write_text(json.dumps(dict(argv=cmd,environment={k:v for k,v in os.environ.items() if k.startswith('HIRSEL_')},files={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [binary,pathlib.Path(__file__),r/'grants.json',data/'workflow.json']}),indent=2))
+(r/'consumer-before.json').write_text(json.dumps(dict(argv=cmd,environment={k:v for k,v in os.environ.items() if k.startswith('HIRSEL_')},files={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [binary,pathlib.Path(__file__),r/'grants.json',data/'workflow.json',data/'model.json',r/'initial-model.bytes']}),indent=2))
 child=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE);pidfd=os.pidfd_open(child.pid)
 samples=[];opened=False;ready=False;sent=False;deadline=time.monotonic()+45
 while child.poll() is None and time.monotonic()<deadline:
