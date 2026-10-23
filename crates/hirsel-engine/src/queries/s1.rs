@@ -43,9 +43,11 @@ pub(crate) struct ValidatedEvaluation {
     definition: DefinitionRef,
     ty: hirsel_types::TypeId,
     site: Span,
+    acceptance: Option<hirsel_validate::AcceptedArtifact>,
 }
 
 pub(crate) struct EvaluationOutcome {
+    pub(crate) acceptance: Option<hirsel_validate::AcceptedArtifact>,
     pub(crate) value: DependencyProduct<(hirsel_interp::Value, hirsel_types::TypeId)>,
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
 }
@@ -80,16 +82,19 @@ impl ValidatedEvaluation {
         verify: Verify,
         site: Span,
     ) -> Result<Self, QueryError> {
-        if verify == Verify::On {
+        let acceptance = if verify == Verify::On {
             crate::comptime::validate_evaluation(
                 snapshot.expect("verification requires a frozen snapshot"),
                 &prepared.definition,
                 prepared.signature,
                 verify,
                 prepared.origin.as_ref(),
-            )?;
-        }
+            )?
+        } else {
+            None
+        };
         Ok(Self {
+            acceptance,
             definition: Arc::new(prepared.definition),
             ty: prepared.ty,
             site,
@@ -133,6 +138,7 @@ impl ValidatedEvaluation {
             _ => (Err(QueryError::NotImplemented), Reads::empty()),
         };
         EvaluationOutcome {
+            acceptance: self.acceptance,
             value: DependencyProduct { result, reads },
             limit: product.limit,
         }

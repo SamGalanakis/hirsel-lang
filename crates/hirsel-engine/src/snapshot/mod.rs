@@ -273,7 +273,10 @@ impl SignatureSnapshot {
         definition: &hirsel_tir::Definition,
         signature: SignatureRef,
         origin: Option<&(hirsel_span::Anchor, DefPath, u32)>,
-    ) -> hirsel_validate::Validation {
+    ) -> (
+        hirsel_validate::Validation,
+        Option<hirsel_validate::AcceptedArtifact>,
+    ) {
         let views = self.validation_with(&definition.path.path().0.package, signature);
         if let Some(cache) = &self.verifier {
             let artifact =
@@ -282,7 +285,7 @@ impl SignatureSnapshot {
                         .filter(|(expected, _, _)| *expected == anchor)
                         .map(|(_, path, occurrence)| (path.clone(), *occurrence))
                 });
-            let (report, ran) = hirsel_validate::validate_cached(
+            let (report, ran, acceptance) = hirsel_validate::validate_with_receipt(
                 &artifact,
                 &views,
                 self.verifier_policy,
@@ -292,10 +295,13 @@ impl SignatureSnapshot {
             if ran {
                 hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
             }
-            report
+            (report, acceptance)
         } else {
             hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
-            hirsel_validate::validate(definition, &self.types, &views, &mut vec![])
+            (
+                hirsel_validate::validate(definition, &self.types, &views, &mut vec![]),
+                None,
+            )
         }
     }
     /// Resolve a provider lookup as the engine's provider does: a path naming

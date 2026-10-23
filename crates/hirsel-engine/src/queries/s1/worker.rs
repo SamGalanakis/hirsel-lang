@@ -456,6 +456,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 executed: Reads::empty(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
                 validation: None,
+                acceptance: None,
             });
         }
         loop {
@@ -561,6 +562,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 executed: product.reads,
                 depth,
                 validation: None,
+                acceptance: None,
             });
         if self.pending.len() == pending_start
             && let Ok(value) = &result
@@ -761,6 +763,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 executed: product.reads,
                 depth,
                 validation: None,
+                acceptance: None,
             });
         if self.pending.len() == pending_start
             && let Ok(value) = &result

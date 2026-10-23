@@ -217,6 +217,7 @@ pub struct QueryEngine {
     /// Open evaluation frames: each collects the complete reads of what it
     /// executes or materializes (execution closure by union).
     pub(crate) execution_stack: Vec<ReadsBuilder>,
+    pub(crate) evaluation_acceptance: Vec<Option<Vec<hirsel_validate::AcceptedArtifact>>>,
     pub(crate) evaluation_validation: Vec<Option<BTreeMap<hirsel_syntax::PackageId, ContentHash>>>,
     active: BTreeSet<(DefPath, QueryKind)>,
     /// The runtime types compile-time evaluation runs with, and the epoch of
@@ -464,6 +465,7 @@ impl QueryEngine {
         }
         let snapshot = self.signature_snapshot();
         crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify, None)
+            .map(|_| ())
     }
     pub fn new(environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
         Self::new_with_hold_bytes(
@@ -539,6 +541,7 @@ impl QueryEngine {
             foreign_threads: BTreeMap::new(),
             execution_stack: vec![],
             evaluation_validation: vec![],
+            evaluation_acceptance: vec![],
             active: BTreeSet::new(),
             comptime_runtime: None,
             source_growth: Default::default(),
