@@ -1,7 +1,7 @@
 # Propkit friction and verification
 
-Application base: `ff3886a3b2e1dec2912efca90e4d995fa38f070a`. No compiler,
-runtime or std code was changed. The six modules contain 1,279 formatted Hirsel
+Application base: `ff3886a3b2e1dec2912efca90e4d995fa38f070a`. This application lane changed no compiler,
+runtime or std code. The six modules contain 1,279 formatted Hirsel
 lines: main205, strategy183, shrink133, runner228, replay282, properties248.
 
 ## Verification disposition
@@ -47,7 +47,7 @@ external under `/workspace/code/hirsel-briefs/property-kit-31/`.
 | Named callable passed to a unique callback position; MODE-2. Generic map inferred `Strategy[unique Sample]`; LANG-2/MODE-2 | Fresh owning function literals and an explicit `Strategy[Sample]` result annotation preserve exact nested contracts. Intended. | Small closure environments; ~10min; app; check-05 |
 | Task return carrying String-bearing record/errors; MODE-4 | Explicit `Result[unique Option[Record], unique ReplayError]` owns both paths. Inert/copyable bounds restrict strategy/shrink seams. Intended. | Bounded unique candidates; ~10min; app; check-05..09 |
 | Weak `number()->Result[u64,ReplayError]` propagated into unique error return; source accepted, V constructor-field/sendable-receipt refusal | Under prefix contracts this should reject MODE-2. Strengthen helper's error header. V remains correct; source-checker repair belongs to generic-loop-matrix-31. | No extra copy/allocation; ~15min; owner generic-loop-matrix-31; witnesses/decode.hir, decode-2.log; original v-app-07 |
-| Generic `unique state.frontier[0]` then `replace(mut state.current, take candidate)`; source accepted, V replacement/BorrowedMove/InvalidResultSource | Move/remove the owned frontier candidate instead. Same order; explicit ownership avoids the failing path. Original is still an owner obligation. | Avoids candidate copy; ~10min; owner replace-unique-copy-31; witnesses/replace-min.hir and log, semantic-03 |
+| Generic `unique state.frontier[0]` then `replace(mut state.current, take candidate)`; source accepted, V replacement/BorrowedMove/InvalidResultSource | A generic unique copy retains Local sources and cannot enter core replace’s fixed Global receiver. Move/remove the owned candidate instead. The source rejection was fixed in 90c7bd12; V and the lifetime contract were already correct. | Avoids candidate copy; ~10min; owner replace-unique-copy-31, FIXED by 90c7bd122097196183bc1f3894640aa2cdb54e74; witnesses/replace-min.hir and log, semantic-03 |
 | Mutable generic tree captured in scoped reductions callback; source accepted, V closure-sendability | Borrow through a separate reductions helper. It still invokes the real callback; original stateful witness remains unresolved. | One ordinary helper call; ~10min; owner generic-loop-matrix-31 after capture-lane routing; witnesses/scoped-state/ and run.log, semantic-04 |
 | Stored `Source[T].draw` returning `Result[unique T,...]`; source accepted, V call-result refusal | Public borrowed generic `strategy.draw` preserves the callback result contract. The helper positive and full app pass; no V relaxation. | One ordinary helper call; ~10min; owner generic-loop-matrix-31; immutable call-result-v2-646701.hir/.hir.json/.log and helper twin |
 | Mutable report captured from outside task scope; CLO-1 | Construct report inside the scope. Intended borrowed-capture restriction. Chosen unique case is recovered via `Shared.thaw`, with deterministic redraw fallback. | No unbounded state; ~5min; app; draft-07 / check-08 |
