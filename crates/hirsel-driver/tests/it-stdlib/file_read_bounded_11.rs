@@ -250,12 +250,19 @@ fn filesystem_boundaries_cursor_requests_and_cross_engine_replay() {
                     .events
                     .iter()
                     .filter_map(|e| match (&e.request, &e.completion) {
-                        (Request::FileRead { max, .. }, Completion::Bytes(Ok(bytes))) => {
-                            Some((*max, bytes.len() as u64))
-                        }
+                        (
+                            Request::FileRead { max, .. },
+                            Completion::Bytes(Ok(bytes))
+                            | Completion::FileInput(hirsel_rt::io::FileInput::Bytes(bytes)),
+                        ) => Some((*max, bytes.len() as u64)),
                         _ => None,
                     })
                     .collect();
+                assert!(
+                    !reads.is_empty(),
+                    "row {row} engine {engine}: missing caller read: {:?}",
+                    record.events
+                );
                 let mut remaining = *limit;
                 for (index, (max, count)) in reads[..reads.len() - 1].iter().enumerate() {
                     assert_eq!(
