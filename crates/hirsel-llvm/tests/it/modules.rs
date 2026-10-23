@@ -1,5 +1,6 @@
 mod arena_bump;
 mod compile;
+mod crc_mask_canonicalize_28;
 mod diverging;
 mod emit;
 mod glue;

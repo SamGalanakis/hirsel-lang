@@ -526,7 +526,13 @@ pub(crate) fn int_arith<'m>(
     if mode == ArithMode::Wrapping {
         let value = match op {
             BinaryOp::Add => b.binary(BinOp::Add, left, right),
-            BinaryOp::Sub => b.binary(BinOp::Sub, left, right),
+            BinaryOp::Sub => {
+                let result = b.binary(BinOp::Sub, left, right);
+                if !signed {
+                    b.module().mark_unsigned_wrapping_sub(result);
+                }
+                result
+            }
             BinaryOp::Mul => b.binary(BinOp::Mul, left, right),
             BinaryOp::Shl => b.binary(BinOp::Shl, left, right),
             BinaryOp::Shr => b.binary(if signed { BinOp::AShr } else { BinOp::LShr }, left, right),

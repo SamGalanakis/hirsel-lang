@@ -242,6 +242,15 @@ fn optimize(
             message,
         })?;
     }
+    if opt != OptLevel::None && module.has_unsigned_wrapping_sub() {
+        module
+            .run_passes(
+                "function(sroa),cgscc(inline),function(sroa,early-cse,simplifycfg)",
+                machine,
+            )
+            .map_err(|message| CodegenError::Passes { message })?;
+        module.canonicalize_wrapping_masks();
+    }
     module
         .run_passes(pipeline(opt), machine)
         .map_err(|message| CodegenError::Passes { message })?;

@@ -43,6 +43,8 @@ use hirsel_lir::layout_types::TargetSpec;
 
 use crate::LlvmVersion;
 
+mod masks;
+
 /// The version of the libLLVM the loader resolved for this process.
 pub(crate) fn loaded_version() -> LlvmVersion {
     let (mut major, mut minor, mut patch) = (0, 0, 0);
