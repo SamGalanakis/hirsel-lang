@@ -105,6 +105,9 @@ impl HostLibrary {
                     None => Ok(None),
                 };
             }
+            _ if matches!(host_route(name), HostRoute::Telemetry) => {
+                return self.telemetry_request(name, a);
+            }
             _ if matches!(host_route(name), HostRoute::Process) => {
                 if matches!(name, "io.process" | "proc.narrow") {
                     self.process_projection_request(name, a)?

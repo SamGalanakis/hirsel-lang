@@ -2074,3 +2074,88 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         },
     );
 }
+
+#[test]
+fn f1_telemetry_spans_replay_without_an_identity_or_export_provider() {
+    f1_corpus_matrix_with_io(
+        "telemetry-spans",
+        r#"pub type E = Grant(GrantError) | Capture(TelemetryError) | Output(OutputError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let t = io.telemetry(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let mut zero: List[u8] = []
+  for i in 0u64..25u64 { list.push(mut zero, 0u8) }
+  let root = capture.begin(t, bytes.from_list(take zero), b"root") ? Capture
+  let context = capture.context(t, root)
+  failure.check(bytes.len(context) == 25u64, Arithmetic())
+  failure.check(match capture.begin(t, b"", b"invalid") { Error(InvalidParent()) => true, _ => false }, Arithmetic())
+  capture.event(t, root, b"root event") ? Capture
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let parent = unique context
+    let child = task.async(s, fn() -> Result[(), E] {
+      let owned_parent = take parent
+      let span = capture.begin(t, owned_parent, b"child") ? Capture
+      let mine = capture.context(t, span)
+      failure.check(bytes.len(mine) == 25u64 && mine != owned_parent, Arithmetic())
+      capture.event(t, span, b"child event") ? Capture
+      capture.finish(t, take span, b"success") ? Capture
+      Ok(())
+    })
+    capture.log(t, b"interleaved log") ? Capture
+    capture.measure(t, b"measurement") ? Capture
+    task.await(s, take child)
+  })?
+  let abandoned = capture.begin(t, context, b"abandoned") ? Capture
+  failure.check(bytes.len(capture.context(t, abandoned)) == 25u64, Arithmetic())
+  capture.finish(t, take root, b"done") ? Capture
+  out.print(out, f"{std@1/hex.encode(context)}\n") ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"telemetry":{"provider":"telemetry.capture@1"}}),
+    );
+}
+
+#[test]
+fn f1_telemetry_payload_refusals_and_canceled_calls_replay_exactly() {
+    let source = r#"pub type E = Grant(GrantError) | Capture(TelemetryError)
+fn parent() -> Bytes uses {} {
+  let zero: Inline[u8, 25] = [0u8; 25]
+  bytes.from_inline(zero)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let t = io.telemetry(rt) ? Grant
+  let initial = parent()
+  let span = capture.begin(t, initial, b"root") ? Capture
+  let large = b"OVERSIZED"
+  failure.check(match capture.event(t, span, large) { Error(TooLarge()) => true, _ => false }, Arithmetic())
+  failure.check(match capture.log(t, large) { Error(TooLarge()) => true, _ => false }, Arithmetic())
+  failure.check(match capture.measure(t, large) { Error(TooLarge()) => true, _ => false }, Arithmetic())
+  failure.check(match capture.begin(t, b"", large) { Error(TooLarge()) => true, _ => false }, Arithmetic())
+  failure.check(match capture.finish(t, take span, large) { Error(TooLarge()) => true, _ => false }, Arithmetic())
+  let (sender, receiver): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  task.scope(tasks, fn(s: Scope) {
+    let mut tx = take sender
+    let child = task.async(s, fn() -> bool {
+      let mut rx = take receiver
+      let _ = channel.receive(tasks, mut rx)
+      let mine = match capture.begin(t, parent(), b"after cancellation") { Ok(value) => take value, Error(_) => return false }
+      let logged = capture.log(t, b"still observed") == Ok(())
+      let ended = capture.finish(t, take mine, b"done") == Ok(())
+      logged && ended
+    })
+    task.cancel(s, child)
+    let _ = channel.send(tasks, mut tx, true)
+    failure.check(task.await(s, take child), Arithmetic())
+  })
+  Ok(())
+}
+"#.replace("OVERSIZED", &"x".repeat(65_537));
+    f1_corpus_matrix_with_io(
+        "telemetry-refusals",
+        &source,
+        |_| serde_json::json!({"tasks":"tasks.free@1","dirs":[],"telemetry":{"provider":"telemetry.null@1","seed":0}}),
+    );
+}

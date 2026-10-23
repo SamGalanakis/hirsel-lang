@@ -582,6 +582,71 @@ impl HostLibrary {
             Err(e) => file_error(e),
         }))
     }
+    /// Payload checks precede host phases. A refused finish still closes its span.
+    fn telemetry_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
+        use hirsel_rt::telemetry::kernel;
+        if name == "io.telemetry" {
+            return Ok(Some(R::Telemetry { io: 1 }));
+        }
+        let telemetry = self.id(&a[0])?;
+        if name == "capture.context" {
+            return Ok(None);
+        }
+        if name == "capture.begin" {
+            let (parent, spec) = (bytes(&a[1])?, bytes(&a[2])?);
+            return Ok(kernel::bounded(&[&spec])
+                .and_then(|()| kernel::parent(&parent).map(|_| ()))
+                .ok()
+                .map(|()| R::TelemetryBegin {
+                    telemetry,
+                    parent,
+                    spec,
+                }));
+        }
+        let span = if matches!(name, "capture.event" | "capture.finish") {
+            Some(self.id(&a[1])?)
+        } else {
+            None
+        };
+        let payload = bytes(&a[if span.is_some() { 2 } else { 1 }])?;
+        if kernel::bounded(&[&payload]).is_err() {
+            return Ok(if name == "capture.finish" {
+                let span = span.unwrap();
+                if self.free_ready.is_none()
+                    && self
+                        .free
+                        .as_ref()
+                        .is_some_and(|codec| codec.span_context(telemetry, span).is_none())
+                {
+                    return Err(invalid());
+                }
+                Some(R::Close { handle: span })
+            } else {
+                None
+            });
+        }
+        Ok(Some(match name {
+            "capture.event" => R::TelemetryEvent {
+                telemetry,
+                span: span.unwrap(),
+                payload,
+            },
+            "capture.finish" => R::TelemetryFinish {
+                telemetry,
+                span: span.unwrap(),
+                status: payload,
+            },
+            "capture.log" => R::TelemetryLog { telemetry, payload },
+            "capture.measure" => R::TelemetryMeasure { telemetry, payload },
+            _ => return Err(invalid()),
+        }))
+    }
+    fn telemetry_context(&mut self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        match &self.free {
+            Some(codec) => codec.span_context(telemetry, span),
+            None => self.io.adapter().telemetry_context(telemetry, span),
+        }
+    }
     /// Telemetry on the run's host provider: the runtime checks, draws or replays span
     /// identities and records every accepted observation. A refused payload issues nothing
     /// and is no scheduling point; neither is reading a span's context.
@@ -606,9 +671,7 @@ impl HostLibrary {
             "capture.context" => {
                 let span = self.id(&a[1])?;
                 Value::Bytes(
-                    self.io
-                        .adapter()
-                        .telemetry_context(telemetry, span)
+                    self.telemetry_context(telemetry, span)
                         .ok_or_else(invalid)?,
                 )
             }
@@ -620,12 +683,8 @@ impl HostLibrary {
                     return Ok(OperationResult::returned(refused(refusal)));
                 }
                 self.yield_now = true;
-                let C::Span { handle, .. } = self.host(R::TelemetryBegin {
-                    telemetry,
-                    parent,
-                    spec,
-                })?
-                else {
+                let request = self.telemetry_request(name, a)?.ok_or_else(invalid)?;
+                let C::Span { handle, .. } = self.host(request)? else {
                     return Err(invalid());
                 };
                 ok(self.handle(handle, "Span"))
@@ -636,39 +695,25 @@ impl HostLibrary {
                     _ => None,
                 };
                 let payload = bytes(&a[if span.is_some() { 2 } else { 1 }])?;
-                let request = match (kernel::bounded(&[&payload]), name) {
-                    (Err(refusal), "capture.finish") => {
-                        // A refused status abandons the taken span, as its drop would.
-                        if self
-                            .io
-                            .adapter()
-                            .telemetry_context(telemetry, span.unwrap())
-                            .is_none()
+                if let Err(refusal) = kernel::bounded(&[&payload]) {
+                    if name == "capture.finish" {
+                        // Free validated the owner before its checked Close. The
+                        // Ended observation has already removed the derived context.
+                        if self.free_ready.is_none()
+                            && self.telemetry_context(telemetry, span.unwrap()).is_none()
                         {
                             return Err(invalid());
                         }
+                        let request = self.telemetry_request(name, a)?.ok_or_else(invalid)?;
                         self.forget_handle(&a[1]);
-                        self.host(R::Close {
-                            handle: span.unwrap(),
-                        })?;
-                        return Ok(OperationResult::returned(refused(refusal)));
+                        if self.host(request)? != C::Unit(Ok(())) {
+                            return Err(invalid());
+                        }
                     }
-                    (Err(refusal), _) => return Ok(OperationResult::returned(refused(refusal))),
-                    (Ok(()), "capture.event") => R::TelemetryEvent {
-                        telemetry,
-                        span: span.unwrap(),
-                        payload,
-                    },
-                    (Ok(()), "capture.finish") => R::TelemetryFinish {
-                        telemetry,
-                        span: span.unwrap(),
-                        status: payload,
-                    },
-                    (Ok(()), "capture.log") => R::TelemetryLog { telemetry, payload },
-                    (Ok(()), "capture.measure") => R::TelemetryMeasure { telemetry, payload },
-                    _ => return Err(invalid()),
-                };
+                    return Ok(OperationResult::returned(refused(refusal)));
+                }
                 self.yield_now = true;
+                let request = self.telemetry_request(name, a)?.ok_or_else(invalid)?;
                 if self.host(request)? != C::Unit(Ok(())) {
                     return Err(invalid());
                 }

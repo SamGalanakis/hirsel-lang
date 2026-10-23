@@ -10,6 +10,7 @@ pub struct Codec {
     authorities: requests::Authorities,
     initial_env: bool,
     namespace_coupled: bool,
+    spans: native::SpanState,
 }
 
 fn error(stop: Stop) -> String {
@@ -64,13 +65,28 @@ impl Codec {
                 authorities,
                 initial_env,
                 namespace_coupled,
+                spans: Default::default(),
             },
             Session::replay(bytes).map_err(|e| e.to_string())?,
         )))
     }
 
+    /// Derived from checked begin observations, with the native owner checks.
+    pub fn span_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.spans.context(telemetry, span)
+    }
     /// Exact native key footprint, including bound namespace and Net domains.
     pub fn keys(&self, request: &Request) -> Result<Vec<(String, bool)>, String> {
+        if let Request::TelemetryEvent {
+            telemetry, span, ..
+        }
+        | Request::TelemetryFinish {
+            telemetry, span, ..
+        } = request
+            && !self.spans.valid(*telemetry, *span)
+        {
+            return Err("unknown native telemetry span owner".into());
+        }
         let keys = native::request_keys_with_domains(
             request,
             |word| self.handles.identity(word),
@@ -268,6 +284,10 @@ impl Call {
                             )
                             .map_err(|e| e.to_string())?;
                     }
+                    codec
+                        .spans
+                        .observe(&self.request, &observed.0)
+                        .map_err(error)?;
                     let blocked = matches!(observed.0, Err(AdapterError::Blocked));
                     if blocked {
                         session

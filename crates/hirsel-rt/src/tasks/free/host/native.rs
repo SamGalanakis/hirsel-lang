@@ -512,7 +512,7 @@ pub(crate) unsafe fn convert_result<T>(
 #[derive(Default)]
 pub(crate) struct Spans(std::sync::Mutex<SpanState>);
 #[derive(Default)]
-struct SpanState {
+pub(super) struct SpanState {
     issued: crate::telemetry::Issued,
     rows: std::collections::BTreeMap<u64, (u64, Vec<u8>)>,
 }
@@ -537,23 +537,72 @@ pub(crate) fn span_valid(ctx: *mut TaskCtx, telemetry: u64, span: u64) -> bool {
         .0
         .lock()
         .unwrap()
-        .rows
-        .get(&span)
-        .is_some_and(|(owner, _)| *owner == telemetry)
+        .valid(telemetry, span)
 }
-
 pub(crate) fn span_context(ctx: *mut TaskCtx, telemetry: u64, span: u64) -> Option<Vec<u8>> {
     unsafe { (*ctx).run_ref() }
         .free_native_spans
         .0
         .lock()
         .unwrap()
-        .rows
-        .get(&span)
-        .filter(|(owner, _)| *owner == telemetry)
-        .map(|(_, bytes)| bytes.clone())
+        .context(telemetry, span)
 }
-
+impl SpanState {
+    pub(super) fn valid(&self, telemetry: u64, span: u64) -> bool {
+        self.rows
+            .get(&span)
+            .is_some_and(|(owner, _)| *owner == telemetry)
+    }
+    pub(super) fn context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.rows
+            .get(&span)
+            .filter(|(owner, _)| *owner == telemetry)
+            .map(|(_, bytes)| bytes.clone())
+    }
+    pub(super) fn observe(
+        &mut self,
+        request: &Request,
+        completion: &Result<Completion, AdapterError>,
+    ) -> Stopped<()> {
+        match (request, completion) {
+            (
+                Request::TelemetryBegin {
+                    telemetry, parent, ..
+                },
+                Ok(Completion::Span {
+                    handle,
+                    trace,
+                    span,
+                }),
+            ) => {
+                let parent_trace = crate::telemetry::kernel::parent(parent)
+                    .map_err(|_| Stop::Diverged("invalid telemetry parent".into()))?;
+                if self.rows.contains_key(handle) || !self.issued.admits(parent_trace, trace, span)
+                {
+                    return Err(Stop::Diverged(
+                        "invalid or repeated native span identity".into(),
+                    ));
+                }
+                self.issued.accept(parent_trace, *trace, *span);
+                self.rows.insert(
+                    *handle,
+                    (
+                        *telemetry,
+                        crate::telemetry::kernel::context(trace, span, parent),
+                    ),
+                );
+            }
+            (
+                Request::TelemetryFinish { span, .. } | Request::Close { handle: span },
+                Ok(Completion::Unit(Ok(()))),
+            ) => {
+                self.rows.remove(span);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
 /// Apply derived span state once per Ended, using the same initialized
 /// completion and parent bytes live and in replay. No host query or phase.
 pub(super) fn observe_span(
@@ -564,53 +613,12 @@ pub(super) fn observe_span(
     if !enabled(ctx) {
         return Ok(());
     }
-    match (request, completion) {
-        (
-            Request::TelemetryBegin {
-                telemetry, parent, ..
-            },
-            Ok(Completion::Span {
-                handle,
-                trace,
-                span,
-            }),
-        ) => {
-            let parent_trace = crate::telemetry::kernel::parent(parent)
-                .map_err(|_| Stop::Diverged("invalid telemetry parent".into()))?;
-            let mut state = unsafe { (*ctx).run_ref() }
-                .free_native_spans
-                .0
-                .lock()
-                .unwrap();
-            if state.rows.contains_key(handle) || !state.issued.admits(parent_trace, trace, span) {
-                return Err(Stop::Diverged(
-                    "invalid or repeated native span identity".into(),
-                ));
-            }
-            state.issued.accept(parent_trace, *trace, *span);
-            state.rows.insert(
-                *handle,
-                (
-                    *telemetry,
-                    crate::telemetry::kernel::context(trace, span, parent),
-                ),
-            );
-        }
-        (
-            Request::TelemetryFinish { span, .. } | Request::Close { handle: span },
-            Ok(Completion::Unit(Ok(()))),
-        ) => {
-            unsafe { (*ctx).run_ref() }
-                .free_native_spans
-                .0
-                .lock()
-                .unwrap()
-                .rows
-                .remove(span);
-        }
-        _ => {}
-    }
-    Ok(())
+    unsafe { (*ctx).run_ref() }
+        .free_native_spans
+        .0
+        .lock()
+        .unwrap()
+        .observe(request, completion)
 }
 
 #[cfg(test)]
