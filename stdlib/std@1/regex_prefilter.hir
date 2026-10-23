@@ -264,45 +264,19 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) 
   None()
 }
 
-// Safe initial admission from DESIGN: 64*(n+2)^2*(m+1)^2*(s+1)*(r+1)*65.
-// Per boundary there are <=m seeds; first-arrival dedup expands <=m PCs,
-// pushes <=2m epsilon edges, and processes <=m consuming PCs. Slot copying
-// costs <=s each; an acceptance costs <=4*(r+13) for the current fold table
-// (maximum orbit 4, binary-search depth 12). Include <=n+2 restarts, subject
-// construction, queue/slot initialization, capture materialization and public
-// iteration. The factors strictly dominate their sum. Overflow rejects.
-// No callback or output expansion is admitted. The remaining work is private;
-// admitted operations provably succeed under the unchanged logical budget.
+// Engine eligibility depends only on the compiled pattern and cache capacity.
+// Finite logical budgets retain exact PikeVM accounting. The maximum budget
+// selects the accelerated operation; input length never changes this decision.
 fn prefix_admitted(re: Regex, source: String, capture: bool, work: u64) -> bool uses {} {
   prefix_work_bound(re, source, capture, work) != 0
 }
 
-// Zero declines; the returned bound covers all legacy pure matching work.
+// The maximum value is the accelerated-operation marker, including replacement
+// debt. No subject-size product, overflow test or input-size cutoff is used.
 fn prefix_work_bound(re: Regex, source: String, capture: bool, work: u64) -> u64 uses {} {
-  let n = core@1/bytes.len(core@1/string.as_bytes(source))
-  if !re.prefilter.enabled || n < 64 || n > 1000000 {
-    return 0
-  }
-  let m = core@1/list.len(re.code)
-  let s = if capture {
-    core@1/list.len(re.names) * 2
+  if work == 18446744073709551615 && core@1/list.len(re.code) <= 512 {
+    18446744073709551615u64
   } else {
     0u64
   }
-  let mut r = 0u64
-  for inst in re.code {
-    let size = core@1/list.len(inst.ranges)
-    if size > r {
-      r = size
-    }
-  }
-  let mut bound = 64u64
-  let factors: List[u64] = [n + 2, n + 2, m + 1, m + 1, s + 1, r + 1, 65u64]
-  for factor in factors {
-    if factor > work / bound {
-      return 0
-    }
-    bound *= factor
-  }
-  bound
 }

@@ -3,8 +3,7 @@
 // util/determinize/mod.rs:350-490, hybrid/search.rs:13-210,
 // hybrid/regex.rs:442-505, hybrid/dfa.rs:2119-2171,3460-3729.
 // Copyright 2014 The Rust Project Developers; MIT, third-party/NOTICES.md.
-// Unlike upstream, one full cache permanently quits this operation. All keys,
-// transitions, intern buckets and DFS scratch occupy one unique primitive slab.
+// Keys, transitions, intern buckets and DFS scratch occupy one primitive slab.
 // No cache handle or partially determined match escapes to a public caller.
 type DfaCache {
   data: unique List[u64],
@@ -19,13 +18,18 @@ type DfaCache {
   scalar_fallback: bool,
   misses: u64,
   fallbacks: u64,
+  resume_at: u64,
+  scalar_steps: u64,
+  scalar_forward_steps: u64,
+  used: u64,
+  clears: u64,
+  states: u64,
+  searched: u64,
 }
 
 type DfaResult = DfaMatch(Span) | DfaMiss | DfaQuit
 
-// Admission reuses prefix_admitted's checked whole-pure-operation proof.
-// The prefilter plan is an eligibility constraint for this first integration;
-// nullable/unsupported plans and small/uncertain budgets retain the scalar VM.
+// Pattern-only eligibility; assertions and nullable patterns are supported.
 // The public 2 MiB ceiling includes allocator metadata. This implementation
 // uses <=512 KiB payload, leaving >1 MiB for size-class/header rounding and
 // scalar metadata. reserve is issued once from an empty unique list; length
@@ -54,7 +58,8 @@ fn dfa_cache(re: Regex, enabled: bool, limit: u64) -> DfaCache uses {} {
   }
   DfaCache(data: take data, size: m, seen: seen, stack: stack,
     ready: ready, next: next, buckets: buckets, limit: cap,
-    disabled: disabled, scalar_fallback: false, misses: 0, fallbacks: 0)
+    disabled: disabled, scalar_fallback: false, misses: 0, fallbacks: 0,
+    resume_at: 0, scalar_steps: 0, scalar_forward_steps: 0, used: initial, clears: 0, states: 0, searched: 0)
 }
 
 fn dfa_category(byte: u64) -> u64 uses {} {
@@ -105,6 +110,16 @@ fn dfa_closure(re: VmProgram, pc: u64, left: u64, right: u64,
   false
 }
 
+// Reuse previously allocated state slots after a clear, without a list copy.
+fn dfa_push(mut cache: DfaCache, value: u64) uses {} {
+  if cache.used < core@1/list.len(cache.data) {
+    cache.data[cache.used] = value
+  } else {
+    core@1/list.push(mut cache.data, value)
+  }
+  cache.used += 1
+}
+
 // Intern the ordered next-PC vector and the context/direction/pending flags.
 // Chained hash buckets and state keys also reside in the same slab.
 fn dfa_intern(mut cache: DfaCache, count: u64, flags: u64) -> u64 uses {} {
@@ -128,40 +143,60 @@ fn dfa_intern(mut cache: DfaCache, count: u64, flags: u64) -> u64 uses {} {
     }
     state = cache.data[state]
   }
-  let used = core@1/list.len(cache.data)
   let needed = 132 + count
-  if needed > cache.limit - used {
-    cache.disabled = true
-    return 0
+  if needed > cache.limit - cache.used {
+    // regex-automata hybrid/dfa.rs:2360-2426,2457-2465;
+    // meta/wrappers.rs:586-587: three clears, ten searched bytes per state.
+    if cache.clears >= 3 && cache.searched / 10 < cache.states {
+      cache.disabled = true
+      return 0
+    }
+    let initial = cache.buckets + 1024
+    if needed > cache.limit - initial {
+      cache.disabled = true
+      return 0
+    }
+    // Keep allocation and the pending key; old interned IDs become invalid.
+    cache.used = initial
+    i = 0
+    while i < 1024 {
+      cache.data[cache.buckets + i] = 0
+      i += 1
+    }
+    cache.clears += 1
+    cache.states = 0
+    cache.searched = 0
   }
+  let used = cache.used
   state = used
   let chain = cache.data[bucket]
-  core@1/list.push(mut cache.data, chain)
-  core@1/list.push(mut cache.data, flags)
-  core@1/list.push(mut cache.data, count)
+  dfa_push(mut cache, chain)
+  dfa_push(mut cache, flags)
+  dfa_push(mut cache, count)
   i = 0
   while i < 129 {
-    core@1/list.push(mut cache.data, 0u64)
+    dfa_push(mut cache, 0u64)
     i += 1
   }
   i = 0
   while i < count {
     let pc = cache.data[cache.next + i]
-    core@1/list.push(mut cache.data, pc)
+    dfa_push(mut cache, pc)
     i += 1
   }
   cache.data[bucket] = state
+  cache.states += 1
   state
 }
 
 // Reverse closure traverses the transposed Thompson graph. All paths matter:
 // after the forward priority decision, earliest start is longest reverse span.
-fn dfa_reverse_closure(re: VmProgram, state: u64, left: u64, right: u64,
+fn dfa_reverse_closure(re: VmProgram, seeds: u64, left: u64, right: u64,
   mut cache: DfaCache, mut count: u64) -> bool uses {} {
   let mut depth = 0u64
   let mut i = 0u64
-  while i < cache.data[state + 2] {
-    cache.data[cache.stack + depth] = cache.data[state + 132 + i]
+  while i < seeds {
+    cache.data[cache.stack + depth] = cache.data[cache.next + i]
     depth += 1
     i += 1
   }
@@ -221,7 +256,8 @@ fn dfa_transition(re: VmProgram, state: u64, byte: u64, mut cache: DfaCache) -> 
   let mut count = 0u64
   let mut matched = false
   if reverse {
-    matched = dfa_reverse_closure(re, state, left, right, mut cache, mut count)
+    let seeds = dfa_frontier(state, mut cache)
+    matched = dfa_reverse_closure(re, seeds, left, right, mut cache, mut count)
   } else {
     i = 0
     while !matched && i < cache.data[state + 2] {
@@ -260,10 +296,12 @@ fn dfa_transition(re: VmProgram, state: u64, byte: u64, mut cache: DfaCache) -> 
   }
   let stop = byte == 128 || next_count == 0 && (reverse || matched || pending)
   let next_flags = category + (if reverse { 8u64 } else if pending || matched { 4u64 } else { 0u64 })
+  let generation = cache.clears
   let next_state = dfa_intern(mut cache, next_count, next_flags)
   if next_state == 0 { return 0 }
   let transition = next_state * 4 + (if matched { 1u64 } else { 0u64 }) + (if stop { 2u64 } else { 0u64 })
-  cache.data[state + 3 + byte] = transition
+  // The source ID is invalid after clearing; only the pending key survives.
+  if generation == cache.clears { cache.data[state + 3 + byte] = transition }
   transition
 }
 
@@ -273,74 +311,183 @@ fn dfa_byte(subject: Input, at: u64) -> u64 uses {} {
   if cp >= 128 { 129u64 } else { cp }
 }
 
+// Save the ordered Thompson frontier before a runtime quit. No start offsets
+// are needed until the reverse search resolves the winning match's start.
+fn dfa_frontier(state: u64, mut cache: DfaCache) -> u64 uses {} {
+  let count = cache.data[state + 2]
+  let mut i = 0u64
+  while i < count {
+    cache.data[cache.next + i] = cache.data[state + 132 + i]
+    i += 1
+  }
+  count
+}
+
+// Incremental ordered Pike step, using the same bounded PC/closure scratch as
+// determinization. The current position, frontier and pending match survive a
+// quit. This scalar path also handles Unicode, without rescanning the prefix.
+// regex-automata hybrid/search.rs:80-110 (quit position), util/determinize/
+// mod.rs:350-490 (ordered frontier); hybrid/search.rs:340-470 (reverse).
+fn dfa_scalar_step(re: VmProgram, subject: Input, cursor: u64, reverse: bool,
+  pending: bool, seeds: u64, mut cache: DfaCache) -> (u64, bool, bool) uses {} {
+  cache.scalar_steps += 1
+  if !reverse { cache.scalar_forward_steps += 1 }
+  let left = if cursor == 0 { 0u64 } else { dfa_category(dfa_byte(subject, cursor - 1)) }
+  let right = dfa_category(dfa_byte(subject, cursor))
+  let mut i = 0u64
+  while i < cache.size {
+    cache.data[cache.seen + i] = 0
+    i += 1
+  }
+  let mut count = 0u64
+  let mut matched = false
+  if reverse {
+    matched = dfa_reverse_closure(re, seeds, left, right, mut cache, mut count)
+  } else {
+    i = 0
+    while !matched && i < seeds {
+      let pc = cache.data[cache.next + i]
+      matched = dfa_closure(re, pc, left, right, mut cache, mut count)
+      i += 1
+    }
+    if !matched && !pending {
+      matched = dfa_closure(re, re.entry, left, right, mut cache, mut count)
+    }
+  }
+  let eof = if reverse { cursor == 0 } else { cursor == core@1/list.len(subject.scalars) }
+  let mut next_count = 0u64
+  i = 0
+  while !eof && i < count {
+    let pc = cache.data[cache.ready + i]
+    let inst = re.code[pc]
+    if inst.kind == 11 { break }
+    let c = subject.scalars[if reverse { cursor - 1 } else { cursor }]
+    let mut work = 18446744073709551615u64
+    let Ok(accepted) = accepts(inst, c, mut work) else { return (0, matched, true) }
+    if accepted {
+      cache.data[cache.next + next_count] = if reverse { pc } else { inst.x }
+      next_count += 1
+    }
+    i += 1
+  }
+  (next_count, matched, eof || next_count == 0 && (reverse || pending || matched))
+}
+
 fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache: DfaCache) -> DfaResult uses {} {
   if cache.disabled { return DfaQuit() }
   let program = vm_program(re)
   let previous = if start == 0 { 128u64 } else { dfa_byte(subject, start - 1) }
-  if previous > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
   let mut state = dfa_intern(mut cache, 0, dfa_category(previous))
   if state == 0 { return DfaQuit() }
   let mut cursor = start
   let mut end: Option[u64] = None()
+  let mut scalar = previous > 128
+  let mut seeds = 0u64
+  if scalar { cache.disabled = true; cache.scalar_fallback = true; cache.fallbacks += 1; cache.resume_at = cursor }
   while true {
-    // Start-state prefilter seam (hybrid/search.rs:50-90). There can be no
-    // earlier active thread or pending match when this candidate is sought.
-    if re.prefilter.enabled && cache.data[state + 2] == 0 && cache.data[state + 1] % 8 < 4 {
-      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else {
-        return DfaMiss()
-      }
+    // A prefilter is optional and can skip only with no active thread/match.
+    if !scalar && re.prefilter.enabled && cache.data[state + 2] == 0 && end == None() {
+      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else { return DfaMiss() }
       cursor = candidate.scalar
-      let preceding = match candidate.previous {
-        Some(c) => {
-          let cp: u64 = core@1/int.widen(core@1/char.to_u32(c))
-          if cp >= 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
-          cp
-        },
-        None() => 128u64,
-      }
+      let preceding = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
       state = dfa_intern(mut cache, 0, dfa_category(preceding))
-      if state == 0 { return DfaQuit() }
+      if state == 0 || preceding > 128 {
+        scalar = true
+        cache.disabled = true
+        cache.scalar_fallback = true
+        cache.fallbacks += 1
+        cache.resume_at = cursor
+        seeds = 0
+      }
     }
     let byte = dfa_byte(subject, cursor)
-    if byte > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
-    let transition = dfa_transition(program, state, byte, mut cache)
-    if transition == 0 { return DfaQuit() }
-    if transition % 2 == 1 { end = Some(cursor) }
-    if transition % 4 >= 2 { break }
-    state = transition / 4
+    let transition = if scalar || byte > 128 { 0u64 } else {
+      // hybrid/search.rs:63-70,95-110: keep known transitions in the loop.
+      let hit = cache.data[state + 3 + byte]
+      if hit != 0 { hit } else { dfa_transition(program, state, byte, mut cache) }
+    }
+    let mut matched = false
+    let mut stop = false
+    if transition == 0 {
+      if !scalar {
+        seeds = dfa_frontier(state, mut cache)
+        scalar = true
+        cache.disabled = true
+        cache.scalar_fallback = true
+        cache.fallbacks += 1
+        cache.resume_at = cursor
+      }
+      let (count, hit, dead) = dfa_scalar_step(program, subject, cursor, false, end != None(), seeds, mut cache)
+      seeds = count
+      matched = hit
+      stop = dead
+    } else {
+      matched = transition % 2 == 1
+      stop = transition % 4 >= 2
+      state = transition / 4
+      cache.searched += 1
+    }
+    if matched { end = Some(cursor) }
+    if stop { break }
     cursor += 1
   }
   let Some(end_at) = end else { return DfaMiss() }
-  if end_at == start {
-    return DfaMatch(Span(start: subject.offsets[start], end: subject.offsets[end_at]))
-  }
+  if end_at == start { return DfaMatch(Span(start: subject.offsets[start], end: subject.offsets[end_at])) }
   let right = dfa_byte(subject, end_at)
-  if right > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
-  // The compiler's sole accept instruction is PC zero.
   cache.data[cache.next] = 0
-  state = dfa_intern(mut cache, 1, 8 + dfa_category(right))
-  if state == 0 { return DfaQuit() }
+  seeds = 1
+  if !scalar {
+    state = dfa_intern(mut cache, 1, 8 + dfa_category(right))
+    if state == 0 || right > 128 {
+      scalar = true
+      cache.disabled = true
+      cache.scalar_fallback = true
+      cache.fallbacks += 1
+      cache.resume_at = end_at
+    }
+  }
   cursor = end_at
   let mut found: Option[u64] = None()
   while true {
     let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
-    if byte > 128 { cache.disabled = true; cache.scalar_fallback = true; return DfaQuit() }
-    let transition = dfa_transition(program, state, byte, mut cache)
-    if transition == 0 { return DfaQuit() }
-    if transition % 2 == 1 { found = Some(cursor) }
-    if cursor == start || transition % 4 >= 2 { break }
-    state = transition / 4
+    let transition = if scalar || byte > 128 { 0u64 } else {
+      // hybrid/search.rs:63-70,95-110: keep known transitions in the loop.
+      let hit = cache.data[state + 3 + byte]
+      if hit != 0 { hit } else { dfa_transition(program, state, byte, mut cache) }
+    }
+    let mut matched = false
+    let mut stop = false
+    if transition == 0 {
+      if !scalar {
+        seeds = dfa_frontier(state, mut cache)
+        scalar = true
+        cache.disabled = true
+        cache.scalar_fallback = true
+        cache.fallbacks += 1
+        cache.resume_at = cursor
+      }
+      let (count, hit, dead) = dfa_scalar_step(program, subject, cursor, true, false, seeds, mut cache)
+      seeds = count
+      matched = hit
+      stop = dead
+    } else {
+      matched = transition % 2 == 1
+      stop = transition % 4 >= 2
+      state = transition / 4
+      cache.searched += 1
+    }
+    if matched { found = Some(cursor) }
+    if cursor == start || stop { break }
     cursor -= 1
   }
   match found {
     Some(from) => DfaMatch(Span(start: subject.offsets[from], end: subject.offsets[end_at])),
-    None() => { cache.disabled = true; cache.scalar_fallback = true; DfaQuit() },
+    None() => DfaMiss(),
   }
 }
 
-// Meta seam: only whole-operation admission may bypass exact VM charges.
-// A quit is inconclusive even after a tentative match. No VM budget is
-// consumed speculatively, so fallback uses the original lower bound/checkpoint.
+// Finite work budgets use the exact ordered VM. An accelerated search which
+// quits mid-stream completes from its saved frontier inside dfa_search.
 fn find_from(re: Regex, subject: Input, start: u64, admitted: bool, haystack: Bytes,
   mut cache: DfaCache, mut work: u64) -> Result[(Option[Span], Captures), MatchError] uses {} {
   if admitted && !cache.disabled {
@@ -350,9 +497,6 @@ fn find_from(re: Regex, subject: Input, start: u64, admitted: bool, haystack: By
       DfaQuit() => { cache.disabled = true; cache.fallbacks += 1 },
     }
   }
-  // Unicode/unsupported quits retain the landed prefix-assisted scalar path.
-  // Fullness keeps strict raw replay, including on later searches in this
-  // operation. Neither route uses the tentative match or quit position.
   if admitted && cache.scalar_fallback && re.prefilter.enabled {
     return find_from_prefilter(re, subject, start, false, true, haystack, mut work)
   }

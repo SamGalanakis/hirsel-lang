@@ -18,7 +18,7 @@ fn dfa_test_case(pattern: String, src: String) -> bool uses {} {
       DfaMatch(span) => if expected != Some(span) { return false },
       DfaMiss() => if expected != None() { return false },
       DfaQuit() => {
-        // Unicode gives up and remains disabled for the operation.
+        // Only pattern/cache ineligibility can quit before a search now.
         if !cache.disabled || ascii_only { return false }
       },
     }
@@ -81,8 +81,8 @@ pub fn dfa_test_main() -> Result[(), DfaTestFailure] uses {} {
   Ok(())
 }
 
-// Fill the forward cache, then forbid any new state: the anchored reverse
-// initializer must quit. Replay the exact original search twice on this cache.
+// Fill the forward cache, then force the reverse initializer to clear it.
+// The match and repeated searches must survive reuse of the same allocation.
 fn dfa_forced_quits() -> bool uses {} {
   let Ok(re) = compile("a+", 100) else { return false }
   let mut work = 1000000u64
@@ -98,7 +98,7 @@ fn dfa_forced_quits() -> bool uses {} {
   }
   cache.limit = core@1/list.len(cache.data)
   let previous_misses = cache.misses
-  if dfa_search(re, subject, 0, b"aaa", mut cache) != DfaQuit() || !cache.disabled || cache.scalar_fallback || cache.misses != previous_misses { return false }
+  if dfa_search(re, subject, 0, b"aaa", mut cache) != DfaMatch(Span(start: 0, end: 3)) || cache.clears == 0 || cache.misses < previous_misses { return false }
   let mut repeat = 0u64
   while repeat < 2 {
     let mut retry = work
@@ -115,7 +115,7 @@ fn dfa_forced_quits() -> bool uses {} {
   if second % 2 != 1 { return false }
   pending.limit = core@1/list.len(pending.data)
   let Ok(other) = make_subject("axq", mut work) else { return false }
-  if dfa_search(alternate, other, 0, b"axq", mut pending) != DfaQuit() || pending.scalar_fallback { return false }
+  if dfa_search(alternate, other, 0, b"axq", mut pending) != DfaMatch(Span(start: 0, end: 1)) { return false }
   let Ok((answer, _)) = find_from(alternate, other, 0, true, b"axq", mut pending, mut work) else { return false }
   answer == Some(Span(start: 0, end: 1))
 }
@@ -227,11 +227,12 @@ fn dfa_scalar_retry() -> bool uses {} {
     let mut cache = dfa_cache(re, true, 65024)
     let starts: List[u64] = [0, 65, 72, 80]
     for start in starts {
+      let disabled_before = cache.disabled
       let mut retry_work = work
       let got = find_from(re, subject, start, true, haystack, mut cache, mut retry_work)
       let mut expected_work = work
       let expected = find_from_prefilter(re, subject, start, false, true, haystack, mut expected_work)
-      if got != expected || retry_work != expected_work || !cache.disabled || !cache.scalar_fallback { return false }
+      if got != expected || disabled_before && retry_work != expected_work || !cache.disabled || !cache.scalar_fallback { return false }
       let mut low_work = 100u64
       let low = find_from(re, subject, start, false, haystack, mut cache, mut low_work)
       let mut oracle_work = 100u64

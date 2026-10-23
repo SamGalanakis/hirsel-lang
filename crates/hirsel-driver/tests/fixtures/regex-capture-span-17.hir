@@ -369,10 +369,10 @@ fn traced_replace_accelerated[T](
         (None(), Captures(spans: []))
       },
       DfaQuit() => {
-        if bound != 0 {
+        if bound != 0 && bound != 18446744073709551615 {
           replacement_resolve(re, source_input, pending, mode != 1, mut work)?
-          bound = 0
         }
+        bound = 0
         pike_find_from(re, source_input, pos, mode != 1, mut work)?
       },
     }
@@ -418,7 +418,7 @@ fn traced_replace_accelerated[T](
         )?
         append_bytes(mut dst, bytes, 0, core@1/bytes.len(bytes), mut work)?
       } else {
-        if bound != 0 {
+        if bound != 0 && bound != 18446744073709551615 {
           replacement_resolve(re, source_input, pending, true, mut work)?
           bound = 0
         }

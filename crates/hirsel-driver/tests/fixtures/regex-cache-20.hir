@@ -1,0 +1,164 @@
+// regex-automata 80b9d14e hybrid/dfa.rs:2360-2465; regression.toml:98-112.
+@serializable
+pub type CacheFailure { stage: u64 }
+
+fn cache_case(pattern: String, src: String, capacity: u64) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else { return false }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else { return false }
+  let mut cache = dfa_cache(re, true, capacity)
+  let mut start = 0u64
+  while start <= core@1/list.len(subject.scalars) {
+    let mut expected_work = work
+    let expected = pike_find_from(re, subject, start, false, mut expected_work)
+    let actual = find_from(re, subject, start, true, core@1/string.as_bytes(src), mut cache, mut work)
+    if actual != expected { return false }
+    start += 1
+  }
+  true
+}
+
+pub fn cache_small() -> Result[(), CacheFailure] uses {} {
+  let vectors: List[(String, String)] = [
+    ("", ""), ("", "☃"), ("a*", "aaa"), ("a*?", "aaa"),
+    ("a|ab", "ab"), ("ab|a", "ab"), ("a.*z|a", "axq"),
+    ("a.*z|a", "axz"), ("(?i)a.*z|a", "a☃z"),
+    ("(abcdefg|abcdefgh)", "__abcdefgh"), ("(?i)kelvin|longs", "__Kelvin longſ"),
+    ("(?m)^a*$", "a\naaa"), ("\\b[0-9]+\\b", "β123 123β 123"),
+    ("[^a]*a", "☃aa"), ("(?s:.)*", "\na☃"), ("a+?b|a+", "aaaa")
+  ]
+  for (pattern, src) in vectors {
+    if !cache_case(pattern, src, 65024) || !cache_case(pattern, src, 1) || !cache_case(pattern, src, 1500) { return Error(CacheFailure(stage: 1)) }
+  }
+  let log_patterns: List[String] = [
+    " [5][0-9]{2} | [4][0-9]{2} ",
+    "(?i)bot|crawler|scanner|spider|indexing|crawl|robot|spider",
+    "(?i)etc/passwd|wp-admin|\\.\\./",
+    "\\d+\\.\\d+\\.\\d+\\.35",
+    "/api/[^ \"]+",
+    "POST [^ ]* HTTP",
+    "(?i)/login|/signin",
+    "(?i)get|post|put",
+    "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+    "password=[^&\\s\"]+",
+    "token=[^&\\s\"]+|api[_-]?key=[^&\\s\"]+",
+    "session[_-]?id=[^&\\s\"]+",
+    "\\[\\d+/\\w+/\\d+:1[3-7]:\\d+:\\d+ [+\\-]\\d+\\]"
+  ]
+  for pattern in log_patterns {
+    if !cache_case(pattern, "192.168.1.35 - [1/Oct/2023:15:55:36 +0000] POST /api/users HTTP 500 scanner token=abc password=secret jane@example.com session_id=sess", 65024) { return Error(CacheFailure(stage: 7)) }
+  }
+  if !cache_case("\\{\\{(.*?)\\}\\}", "{{ FIRST_NAME1 }} {{TITLE}} {other}", 65024) { return Error(CacheFailure(stage: 8)) }
+  // Deterministic randomized syntax and subjects, including nullability,
+  // priority, folded classes, assertions and non-ASCII scalar continuation.
+  let atoms: List[String] = ["a", "b", ".", "[ab]", "[^b]", "(?i:k)", "\\b", "a*?", "b+", "(?:a|ab)"]
+  let chars: List[String] = ["a", "b", "k", "K", "☃", " ", "\n"]
+  let mut random = 20261023u64
+  for sample in 0u64..48 {
+    random = (random * 1664525 + 1013904223) % 4294967296
+    let mut bytes: List[u8] = []
+    text.append(mut bytes, atoms[random % 10])
+    text.append(mut bytes, "|")
+    random = (random * 1664525 + 1013904223) % 4294967296
+    text.append(mut bytes, atoms[random % 10])
+    let pattern = text.finish_valid(take bytes)
+    let mut data: List[u8] = []
+    for i in 0u64..5 {
+      random = (random * 1664525 + 1013904223) % 4294967296
+      text.append(mut data, chars[random % 7])
+    }
+    let src = text.finish_valid(take data)
+    if !cache_case(pattern, src, 1600) { return Error(CacheFailure(stage: 2)) }
+  }
+  // Force repeated efficient clears with a two-state cache; then force a
+  // runtime efficiency quit. Both complete from the current frontier.
+  let Ok(re) = compile("[ab]*z", 100) else { return Error(CacheFailure(stage: 3)) }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject("ababababababababababababababababababababz", mut work) else { return Error(CacheFailure(stage: 3)) }
+  let mut cache = dfa_cache(re, true, 1450)
+  let answer = find_from(re, subject, 0, true, b"ababababababababababababababababababababz", mut cache, mut work)
+  let mut oracle_work = work
+  if answer != pike_find_from(re, subject, 0, false, mut oracle_work) || cache.clears == 0 { return Error(CacheFailure(stage: 3)) }
+  let Ok(thrash) = compile("[ab]*a[ab]{6}", 100) else { return Error(CacheFailure(stage: 30)) }
+  let mut noisy: List[u8] = []
+  for i in 0u64..128 {
+    random = (random * 1664525 + 1013904223) % 4294967296
+    core@1/list.push(mut noisy, if random / 65536 % 2 == 0 { 97u8 } else { 98u8 })
+  }
+  let noise = text.finish_valid(take noisy)
+  let Ok(subject3) = make_subject(noise, mut work) else { return Error(CacheFailure(stage: 30)) }
+  let mut thrashing = dfa_cache(thrash, true, 65024)
+  thrashing.limit = thrashing.buckets + 1024 + 2 * (132 + thrashing.size)
+  let actual3 = find_from(thrash, subject3, 0, true, core@1/string.as_bytes(noise), mut thrashing, mut work)
+  oracle_work = work
+  if actual3 != pike_find_from(thrash, subject3, 0, false, mut oracle_work) || thrashing.clears != 3 || thrashing.fallbacks != 1 || thrashing.resume_at == 0 || thrashing.scalar_forward_steps >= 128 { return Error(CacheFailure(stage: 31)) }
+  // A Unicode quit after a scanned prefix must not replay that prefix.
+  let Ok(unicode) = compile("a.*z|a", 100) else { return Error(CacheFailure(stage: 4)) }
+  let src = "________a☃z"
+  let Ok(subject2) = make_subject(src, mut work) else { return Error(CacheFailure(stage: 4)) }
+  let mut fallback = dfa_cache(unicode, true, 65024)
+  let got = dfa_search(unicode, subject2, 0, core@1/string.as_bytes(src), mut fallback)
+  if got != DfaMatch(Span(start: 8, end: 13)) { return Error(CacheFailure(stage: 40)) }
+  if fallback.fallbacks != 1 { return Error(CacheFailure(stage: 41)) }
+  if fallback.resume_at < 8 { return Error(CacheFailure(stage: 42)) }
+  if fallback.scalar_forward_steps != 3 { return Error(CacheFailure(stage: 43)) }
+  // Finite budgets keep exact old errors, including maximal finite values.
+  let budgets: List[u64] = [0,1,8,9,100,18446744073709551614]
+  for budget in budgets {
+    if prefix_admitted(re, "", false, budget) { return Error(CacheFailure(stage: 5)) }
+  }
+  let Ok(maximal) = compile("a{511}", 1000) else { return Error(CacheFailure(stage: 9)) }
+  let Ok(oversized) = compile("a{512}", 1000) else { return Error(CacheFailure(stage: 9)) }
+  if !prefix_admitted(maximal, "", false, 18446744073709551615) || prefix_admitted(oversized, "", false, 18446744073709551615) { return Error(CacheFailure(stage: 9)) }
+  let refused = dfa_cache(oversized, true, 18446744073709551615)
+  if !refused.disabled || core@1/list.len(refused.data) != 0 { return Error(CacheFailure(stage: 9)) }
+  let malformed: List[String] = ["(", "[", "a{18446744073709551616}", "(?=a)"]
+  for pattern in malformed { if let Ok(_) = compile(pattern, 1000) { return Error(CacheFailure(stage: 6)) } }
+  Ok(())
+}
+
+pub fn cache_large() -> Result[(), CacheFailure] uses {} {
+  let mut patterns: List[String] = ["(?i)bot|crawler|scanner|spider|indexing|crawl|robot|spider", "abcdefg|abcdefgh", "a+b|a+c"]
+  let branches: List[String] = ["a+b", "a+c", "abcdefg", "abcdefh"]
+  let mut random = 20261023u64
+  for sample in 0u64..3 {
+    let mut pattern_data: List[u8] = []
+    random = (random * 1664525 + 1013904223) % 4294967296
+    text.append(mut pattern_data, branches[random / 65536 % 4])
+    text.append(mut pattern_data, "|")
+    random = (random * 1664525 + 1013904223) % 4294967296
+    text.append(mut pattern_data, branches[random / 65536 % 4])
+    core@1/list.push(mut patterns, text.finish_valid(take pattern_data))
+  }
+  let mut length = 840832u64
+  for pattern in patterns {
+    let Ok(re) = compile(pattern, 1000) else { return Error(CacheFailure(stage: 10)) }
+    let mut data: List[u8] = []
+    for i in 0u64..length {
+      random = (random * 1664525 + 1013904223) % 4294967296
+      core@1/list.push(mut data, if random / 65536 % 2 == 0 { 120u8 } else { 121u8 })
+    }
+    length = 1000001
+    text.append(mut data, "bot abcdefgh aaac")
+    let src = text.finish_valid(take data)
+    if !prefix_admitted(re, src, false, 18446744073709551615) { return Error(CacheFailure(stage: 10)) }
+    let mut work = 18446744073709551615u64
+    let Ok(subject) = make_subject(src, mut work) else { return Error(CacheFailure(stage: 11)) }
+    let mut cache = dfa_cache(re, true, 65024)
+    let got = find_from(re, subject, 0, true, core@1/string.as_bytes(src), mut cache, mut work)
+    let mut expected_work = work
+    if got != pike_find_from(re, subject, 0, false, mut expected_work) || cache.fallbacks != 0 || cache.disabled || cache.misses == 0 { return Error(CacheFailure(stage: 12)) }
+  }
+  Ok(())
+}
+pub fn reverse_probe() -> Result[(), u64] uses {} {
+  let Ok(re) = compile("abcdefg|a.*b", 100) else { return Error(1) }
+  let src = "☃__ab"
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else { return Error(2) }
+  let mut cache = dfa_cache(re, true, 65024)
+  let actual = dfa_search(re, subject, 0, core@1/string.as_bytes(src), mut cache)
+  if actual != DfaMatch(Span(start: 5, end: 7)) { return Error(3) }
+  if cache.fallbacks != 1 || cache.scalar_forward_steps != 0 { return Error(4) }
+  Ok(())
+}

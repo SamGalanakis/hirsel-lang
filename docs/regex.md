@@ -2,7 +2,16 @@
 
 `std@1/regex` ports Go regexp's ordered Thompson/Pike engine at
 `ebe2feefc400f813aefdc8a036e66d2619da6649`. Compilation and matching remain
-ordinary Hirsel source, with explicit stacks and no backtracking or host hooks.
+ordinary Hirsel source, with explicit stacks and no host hooks.
+
+At the maximum work budget, searches use a bounded lazy DFA for compiled
+programs up to 512 instructions. Admission depends on the pattern and cache
+capacity. Subject length never disables it. The cache reuses its allocation on
+clearing; after three clears, fewer than ten searched bytes per cached state
+triggers scalar continuation from the current ordered frontier. A reverse search
+recovers the leftmost start after the forward priority decision, including when
+the scalar continuation handles Unicode. Finite work budgets use the ordered
+PikeVM to preserve its exact logical charge and `WorkLimit()` behavior.
 
 `compile(pattern, max_instructions)` uses Go's default Perl-style matching
 behavior. `compile_flags(pattern, flags, max_instructions)` accepts a `Flags`
@@ -67,8 +76,8 @@ budget, including subject decoding and output copying.
   Lookaround and backreferences remain unsupported, as in Go regexp.
 - Go has fixed parser count/height limits and several optimized execution paths.
   Hirsel retains checked u64 counts, explicit stacks, caller instruction limits,
-  deterministic work limits and a single ordered Pike VM to bound resources and
-  avoid backtracking. Counts beyond Go's fixed 1000 cap may compile if they fit
+  deterministic work limits and an ordered Pike VM for budgeted operations.
+  Maximum-budget searches additionally use the lazy DFA described above. Counts beyond Go's fixed 1000 cap may compile if they fit
   the supplied instruction limit; very deep noncapturing groups remain valid.
 - SimpleFold uses a materialized sorted scalar-pair table, with Go's ASCII fast
   path, rather than runtime Upper/Lower lookup plus a special orbit table. All
