@@ -464,12 +464,17 @@ fn persisted_evaluation(
     value: &crate::comptime::EvaluatedConstant,
 ) -> Option<crate::comptime::EvaluatedConstant> {
     let mut canonical = value.clone();
+    canonical.executed = persisted_execution_reads(&value.executed, value.acceptance.as_ref())?;
+    Some(canonical)
+}
+fn persisted_execution_reads(
+    executed: &Reads,
+    acceptance: Option<&hirsel_validate::ExecutionReceipt>,
+) -> Option<Reads> {
     let mut reads = Vec::new();
-    for (read, digest) in value.executed.iter() {
+    for (read, digest) in executed.iter() {
         if let ReadKey::ValidationUniverse(package) = read {
-            if !value
-                .acceptance
-                .as_ref()?
+            if !acceptance?
                 .contexts()
                 .iter()
                 .any(|(id, observed)| *id == package.id() && observed == digest)
@@ -480,8 +485,7 @@ fn persisted_evaluation(
             reads.push((read.clone(), *digest));
         }
     }
-    canonical.executed = Reads::from_vec(reads).ok()?;
-    Some(canonical)
+    Reads::from_vec(reads).ok()
 }
 fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
     ContentHash::of_parts(
@@ -1423,9 +1427,12 @@ impl QueryEngine {
         reads: &Reads,
         mut record: GenerationRecord,
     ) -> Result<(), QueryError> {
+        let Some(reads) = persisted_execution_reads(reads, record.acceptance.as_ref()) else {
+            return Ok(());
+        };
         if self.result_store.is_none()
             || !self.s1.failure_is_own()
-            || !self.portable_lower_reads(path, reads, &record.staged)
+            || !self.portable_lower_reads(path, &reads, &record.staged)
             || !self.store_staged_selections(&record.staged)?
         {
             return Ok(());
@@ -1457,7 +1464,7 @@ impl QueryEngine {
                 .pending_store_checks
                 .remove(&(DefId::intern(path), QueryKind::Generate)),
         }
-        .write(reads, payload)
+        .write(&reads, payload)
     }
     pub(super) fn load_lower(
         &mut self,

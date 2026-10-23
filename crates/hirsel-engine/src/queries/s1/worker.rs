@@ -315,13 +315,22 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
     }
     fn finish_acceptance(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
+        let receipt =
+            self.finish_execution_acceptance(result.as_ref().ok().map(|value| &value.executed));
+        if let Ok(value) = result {
+            value.acceptance = receipt;
+        }
+    }
+    fn finish_execution_acceptance(
+        &mut self,
+        reads: Option<&Reads>,
+    ) -> Option<hirsel_validate::ExecutionReceipt> {
         let proofs = self
             .acceptance
             .pop()
             .expect("worker evaluation acceptance frame");
-        if let Ok(value) = result {
-            let mut contexts: Vec<_> = value
-                .executed
+        if let Some(reads) = reads {
+            let mut contexts: Vec<_> = reads
                 .iter()
                 .filter_map(|(read, digest)| match read {
                     ReadKey::ValidationUniverse(package) => Some((package.id(), *digest)),
@@ -329,10 +338,11 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 })
                 .collect();
             contexts.sort_unstable();
-            value.acceptance = proofs
+            return proofs
                 .as_ref()
                 .and_then(|proofs| hirsel_validate::ExecutionReceipt::compose(&contexts, proofs));
         }
+        None
     }
     pub(super) fn capture<T>(
         &mut self,
@@ -894,6 +904,13 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             if let Some(hit) = hit {
                 self.replay_generator(&hit.text.depth, site)?;
                 self.merge(&hit.text.reads);
+                if let Some(receipt) = &hit.text.acceptance {
+                    for artifact in receipt.artifacts() {
+                        self.record_acceptance(Some(artifact.clone()));
+                    }
+                } else {
+                    self.acceptance.fill(None);
+                }
                 self.replay_staged_requests(&hit.requests);
                 return Ok(());
             }
@@ -904,6 +921,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let pending_start = self.pending.len();
         let selection_start = self.selections.len();
         let mut metadata = None;
+        self.acceptance
+            .push((self.source.inputs().verify == Verify::On).then(Vec::new));
         let product = self.capture(|worker| {
             worker.implementation(path);
             worker.signature(path)?;
@@ -939,6 +958,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             prepared.input.decode(result)
         });
         let depth = self.stack.composed(self.depth_limit(), false);
+        let acceptance = self.finish_execution_acceptance(Some(&product.reads));
         self.merge(&product.reads);
         let result = product.result;
         if self.pending.len() == pending_start
@@ -953,6 +973,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 depth: depth.clone(),
                 products,
                 detail,
+                acceptance,
+                staged: self.staged_requests_since(selection_start),
             };
             if result.is_ok() {
                 self.shared
