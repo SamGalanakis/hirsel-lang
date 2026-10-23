@@ -87,3 +87,62 @@ executor with the evidence destination reachable (no topology overrides):
 These tests require the exact running control reply (effective=requested,
 pending=0), actual cancellation and identical full scripted semantic tapes
 across widths, except documented admission/placement metadata. Free is off.
+
+Native original cells on the pre-fixture-repair runtime: 92 differential backend
+agreements; 92 immutable recordings; 184 cross-backend replays and 168 interpreter
+replays passed; 16 original oversized interpreter replay identities stopped at
+Steps1M. Binding/request/missing-event/extra-event controls passed on all four
+engines for both backend tapes (32 controls). 52 raw live stderr cells exposed
+the native-file-faults-33 omission (recorded stderr was correct); these original
+witnesses remain archived. Native02 hit the unchanged 10-minute action timeout
+with 64 agreements and 63 completed groups. Native03 recovered only unfinished
+groups using the executor environment. No cap increase. All 92 original native
+models, including cap/one-over vectors, completed; no source/V disagreement.
+
+The fixture repair 593792b7/c6ebee19 is now on main. New consumers require exact
+raw stderr and the launcher's public nonempty refusal record; the old local
+refusal-record fallback was removed. Historical tapes keep their original runtime
+identity and are not retaped under a new identity. Supplementary full-main fault
+fixtures use only the documented public FileFaults: open, read, atomic create,
+partial write-all and commit errors. Their original output target must survive,
+and all temporary handles must be cleaned up. Qualification pending below.
+
+Evidence setup limitation: initial prepare generation preceded the first complete
+source seal. Generation-01 records that partial setup seal honestly. Subsequent
+application consumers retain source/build-input inventories and actual compiler,
+std image, runtime/linker/helper bytes before application execution. This is not
+an all-green claim for a retrospectively sealed setup action. Owner: lane process.
+
+Final focused qualification (after the shared fixture repair): all 52 affected
+raw live stderr cells passed with exact status/output/stderr. Five file-fault
+workflows produced 10 reference/checked passes and 10 native agreements, 10 new
+immutable tapes and 40 four-engine replays; the complete simulated output tree
+preserved its original target, with no leaked temporary. Both native backends
+passed the report byte-cap and trace-cap exact/one-over helper test. The affected
+refusal paths were requalified on two new self-loop tapes, with 32 four-engine
+binding/request/missing-event/extra-event controls and eight successful replays.
+Old tapes and original omission witnesses remain retained, not replaced.
+
+The first post-repair std-image reader lost its remote connection during the
+coordinator's authorized scheduler restart: zero test bodies ran (action digest
+53402532acfe9d49a756f655bd54154bc5db2c70e57787231f371b2c58639246:142).
+An already-launched retry and the remaining affected consumers passed after
+ordinary-pool recovery. No local fallback or resource-cap increase. Original
+infrastructure failure and distinct successful retry are both archived.
+
+Example grant adaptation (1 active minute; intended rule): original host path
+`examples/statecheck/fixtures` would be resolved beneath the grants file's own
+directory. Corrected it to `fixtures`, following main's documented grants-file
+base. No app runtime/copy cost; source-only configuration correction, no compiler
+bug. The output host `.` intentionally places the default report next to the
+manifest. Owner: application; fixed.
+
+Open acceptance cells: 8 original direct interpreter Steps1M cells (cap-states,
+cap-edges, over-edges, cap-input, each reference/checked); 16 corresponding
+interpreter replay cells (four cases × two native tapes × two interpreters),
+owned by application qualification. Original complete fixtures, source sites and
+fixed budgets remain in support cases and archived receipts. Also the 18
+physical Ordered capacity cells listed above, owned by exact-CPU deployment.
+No native fixture fault, stderr or refusal obligation remains owner-blocked.
+Five active Rust tests and two ignored deployment tests were added. No std,
+language rule or compiler/runtime implementation was changed by this lane.

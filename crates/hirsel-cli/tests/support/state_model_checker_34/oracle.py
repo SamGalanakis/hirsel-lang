@@ -150,6 +150,10 @@ def vectors():
 
 def validate(g, text):
     lines=text.splitlines(); root=g['initial']; a=closure(g,True)
+    original=closure(g,False)
+    reached=list(map(int,lines[1].split()[1:]))
+    assert len(reached)==len(set(reached))
+    assert set(reached)=={i for i in range(len(original)) if i==root or original[root][i]}
     n=len(g['states']); active={i for i in range(n) if i not in g['terminal'] and (root==i or a[root][i])}
     comp=list(map(int,lines[2].split()[1:]));assert len(comp)==n
     for i in range(n):

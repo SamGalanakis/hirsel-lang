@@ -88,7 +88,9 @@ fn tool_inputs(root: &Path) -> BTreeMap<PathBuf, String> {
     )
     .unwrap();
     let config: BTreeMap<_, _> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("HIRSEL_") || k.starts_with("LLVM_"))
+        .filter(|(k, _)| {
+            k.starts_with("HIRSEL_") || k.starts_with("LLVM_") || k.starts_with("STATECHECK_")
+        })
         .collect();
     fs::write(
         root.join("actual-config.json"),
@@ -100,6 +102,19 @@ fn tool_inputs(root: &Path) -> BTreeMap<PathBuf, String> {
 
 fn cases() -> Vec<Value> {
     serde_json::from_str(include_str!("../support/state_model_checker_34/cases.json")).unwrap()
+}
+fn fault_cases() -> Vec<Value> {
+    serde_json::from_str(include_str!(
+        "../support/state_model_checker_34/faults.json"
+    ))
+    .unwrap()
+}
+fn native_cases() -> Vec<Value> {
+    if std::env::var_os("STATECHECK_FAULTS_ONLY").is_some() {
+        fault_cases()
+    } else {
+        cases()
+    }
 }
 fn root(label: &str) -> PathBuf {
     // Explicit host executor is required for archival runs. Refuse an ephemeral
@@ -141,6 +156,10 @@ fn package(root: &Path) -> PathBuf {
         (
             "oracle.py",
             include_str!("../support/state_model_checker_34/oracle.py"),
+        ),
+        (
+            "faults.json",
+            include_str!("../support/state_model_checker_34/faults.json"),
         ),
         ("capped", include_str!("../../../../tools/capped")),
         (
@@ -212,6 +231,9 @@ fn fixture(row: &Value) -> Fixture {
             )
             .unwrap(),
         );
+    }
+    if !row["faults"].is_null() {
+        fixture.file_faults = serde_json::from_value(row["faults"].clone()).unwrap();
     }
     fixture
 }
@@ -304,6 +326,21 @@ fn assert_record(bytes: &[u8], row: &Value) {
                 hirsel_rt::io::Completion::Unit(Ok(()))
             )
         ));
+    } else if !row["faults"].is_null() {
+        assert!(
+            record.events.iter().any(|e| e.fault.is_some()),
+            "the scripted fault was actually consumed"
+        );
+        assert!(
+            !publications.iter().any(|e| matches!(
+                (&e.request, &e.completion),
+                (
+                    hirsel_rt::io::Request::Commit { .. },
+                    hirsel_rt::io::Completion::Unit(Ok(()))
+                )
+            )),
+            "failed publication cannot commit"
+        );
     } else {
         assert!(
             publications.is_empty(),
@@ -512,7 +549,7 @@ fn state_model_checker_34_native_full_entry_replay() {
             Vec::new()
         };
         let raw_only = std::env::var_os("STATECHECK_RAW_STDERR_ONLY").is_some();
-        for row in cases()
+        for row in native_cases()
             .iter()
             .filter(|r| selected(r) && (!raw_only || r["stderr"] != ""))
         {
@@ -615,16 +652,13 @@ fn state_model_checker_34_native_full_entry_replay() {
                     )
                     .unwrap();
                     assert_eq!(observe(&recorded, &ready, &sites).unwrap(), expected);
-                    let raw_stderr = child_stderr(&recorded.stderr);
-                    if raw_stderr != row["stderr"].as_str().unwrap().as_bytes() {
-                        assert!(raw_stderr.is_empty(), "unexpected raw live stderr");
-                        receipts.push(json!({"case":row["id"],"dir":dir,"raw_live_stderr":"INCOMPLETE shared native-file-faults-33 omission","expected":row["stderr"],"actual":raw_stderr,"passed":false}));
-                        fs::write(
-                            &receipts_path,
-                            serde_json::to_vec_pretty(&receipts).unwrap(),
-                        )
-                        .unwrap();
-                    }
+                    fs::write(dir.join("raw-record.stderr"), &recorded.stderr).unwrap();
+                    fs::write(dir.join("raw-record.stdout"), &recorded.stdout).unwrap();
+                    assert_eq!(
+                        child_stderr(&recorded.stderr),
+                        row["stderr"].as_str().unwrap().as_bytes(),
+                        "exact raw live stderr"
+                    );
                     fs::write(
                         dir.join("record-passed"),
                         b"complete semantic observation and stderr verified",
@@ -801,17 +835,16 @@ fn state_model_checker_34_native_full_entry_replay() {
                                 Err(error) => {
                                     assert!(error.message.contains(diagnostic), "{kind}: {error}")
                                 }
-                                Ok(mut refused) => {
-                                    if refused.record.is_empty() {
-                                        let raw =
-                                            fs::read_to_string(replay_dir.join("refusal")).unwrap();
-                                        fs::write(
-                                            replay_dir.join(format!("{kind}-retained-refusal")),
-                                            &raw,
-                                        )
-                                        .unwrap();
-                                        refused.record = raw;
-                                    }
+                                Ok(refused) => {
+                                    assert!(
+                                        !refused.record.is_empty(),
+                                        "public launcher must retain refusal"
+                                    );
+                                    fs::write(
+                                        replay_dir.join(format!("{kind}-retained-refusal")),
+                                        &refused.record,
+                                    )
+                                    .unwrap();
                                     assert_eq!(
                                         refused.exit,
                                         Some(3),
@@ -1067,4 +1100,71 @@ fn state_model_checker_34_ordered_llvm() {
 #[ignore = "exact CPU deploy owned by @agentlang-24; capacity requires running control replies"]
 fn state_model_checker_34_ordered_cranelift() {
     ordered(Backend::Cranelift);
+}
+
+#[test]
+fn state_model_checker_34_file_faults_reference_checked() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = root("fault-simulation-");
+        let path = package(&root);
+        let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut receipts = Vec::new();
+        for row in fault_cases() {
+            let recipe = fixture(&row);
+            let world = SimulationConfig::from(&recipe);
+            let mut previous = None;
+            for checked in [false, true] {
+                let execution = if checked {
+                    hirsel_engine::run_observed_checked_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        world.clone(),
+                        1_000_000,
+                    )
+                } else {
+                    hirsel_engine::run_observed_snapshot_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        world.clone(),
+                        1_000_000,
+                    )
+                }
+                .unwrap_or_else(|e| panic!("{e}"));
+                let observed = execution
+                    .observation
+                    .unwrap_or_else(|| panic!("INCOMPLETE {:?}", execution.outcome));
+                assert_eq!(observed.exit_code, Some(2));
+                assert!(
+                    observed.output.is_empty()
+                        && observed.failures.is_empty()
+                        && observed.blocked.is_none()
+                );
+                let state = observed.final_state.as_ref().unwrap();
+                assert_eq!(state.stderr, row["stderr"].as_str().unwrap().as_bytes());
+                assert_eq!(
+                    state.trees[&0].1, world.files,
+                    "fault must preserve old target and release temporary"
+                );
+                if let Some(previous) = &previous {
+                    assert_eq!(&observed, previous);
+                }
+                previous = Some(observed);
+                receipts.push(json!({"case":row["id"],"engine":if checked {"checked-h"} else {"reference"},"passed":true}));
+                fs::write(
+                    root.join("receipts.json"),
+                    serde_json::to_vec_pretty(&receipts).unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(receipts.len(), 10);
+    });
 }

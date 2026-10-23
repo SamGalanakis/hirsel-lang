@@ -63,3 +63,24 @@ JSON, collections, bounded I/O, task scopes and immutable sharing use std.
 The six modules separate lifecycle, schema, generic visitors/BFS/owned parents,
 iterative SCC/cycles, property/task orchestration and checked atomic reports.
 See REFERENCES.md for pinned prior art and FRICTION.md for qualification.
+
+The example grants resolve host paths relative to this grants file and write
+`report.txt` next to it. Run from the repository root with:
+
+```sh
+hirsel run examples/statecheck/hirsel.json --grants examples/statecheck/grants-run.json
+```
+
+The focused CLI module has seven tests: five active and two explicitly ignored
+physical-capacity obligations. Archival runs require `-c hirsel.tests=host` so
+`/workspace/code/hirsel-briefs/state-model-checker-34/` is reachable. To select
+cases, pass `-- --env STATECHECK_CASE=ID,...` to Buck's test executor; shell
+environment variables are not forwarded. Full-main source, input, native tapes,
+raw streams, actual tool bytes and per-cell receipts are retained there.
+
+Original qualification: 84/92 interpreter cells and 92/92 native cells passed;
+eight original interpreter cap cells and sixteen corresponding tape replay cells
+stop at Steps1M. Five additional provider-error workflows passed on all four
+engines. Raw stderr recovery and strict replay refusal controls pass on the
+landed public fixture repair. Width 1/2/4 capacity remains deployment-blocked;
+see FRICTION.md for exact cells, owners, resource limits and recovery history.

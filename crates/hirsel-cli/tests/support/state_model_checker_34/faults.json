@@ -1,0 +1,97 @@
+[
+  {
+    "id": "fault-open",
+    "input": "{\"version\":1,\"models\":[{\"id\":\"g\",\"states\":[{\"id\":\"s0\"}],\"edges\":[],\"initial\":0,\"terminal\":[0],\"forbidden\":[]}]}",
+    "jobs": 1,
+    "exit": 2,
+    "stdout": "",
+    "stderr": "statecheck: file\n",
+    "faults": {
+      "file.open": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-read",
+    "input": "{\"version\":1,\"models\":[{\"id\":\"g\",\"states\":[{\"id\":\"s0\"}],\"edges\":[],\"initial\":0,\"terminal\":[0],\"forbidden\":[]}]}",
+    "jobs": 1,
+    "exit": 2,
+    "stdout": "",
+    "stderr": "statecheck: file\n",
+    "faults": {
+      "file.read": [
+        {
+          "requested": 4096,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-create",
+    "input": "{\"version\":1,\"models\":[{\"id\":\"g\",\"states\":[{\"id\":\"s0\"}],\"edges\":[],\"initial\":0,\"terminal\":[0],\"forbidden\":[]}]}",
+    "jobs": 1,
+    "exit": 2,
+    "stdout": "",
+    "stderr": "statecheck: file\n",
+    "faults": {
+      "file.create_atomic": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-partial-write",
+    "input": "{\"version\":1,\"models\":[{\"id\":\"g\",\"states\":[{\"id\":\"s0\"}],\"edges\":[],\"initial\":0,\"terminal\":[0],\"forbidden\":[]}]}",
+    "jobs": 1,
+    "exit": 2,
+    "stdout": "",
+    "stderr": "statecheck: file\n",
+    "faults": {
+      "file.write_all": [
+        {
+          "requested": 88,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 3
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-commit",
+    "input": "{\"version\":1,\"models\":[{\"id\":\"g\",\"states\":[{\"id\":\"s0\"}],\"edges\":[],\"initial\":0,\"terminal\":[0],\"forbidden\":[]}]}",
+    "jobs": 1,
+    "exit": 2,
+    "stdout": "",
+    "stderr": "statecheck: file\n",
+    "faults": {
+      "file.commit": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  }
+]

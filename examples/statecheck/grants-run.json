@@ -11,7 +11,7 @@
     "dirs": [
       {
         "path": "input",
-        "host": "examples/statecheck/fixtures",
+        "host": "fixtures",
         "access": "read"
       },
       {
