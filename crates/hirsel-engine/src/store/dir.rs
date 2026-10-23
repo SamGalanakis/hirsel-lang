@@ -114,6 +114,9 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
+    fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
+        Some(hirsel_artifact_store::Store::new(self.root.clone()))
+    }
     fn lookup_product(&self, address: super::Address) -> Option<super::Association> {
         std::iter::once(&self.root)
             .chain(&self.read_only)
