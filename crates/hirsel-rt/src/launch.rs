@@ -2026,6 +2026,11 @@ pub(crate) unsafe fn execute(
                         // so replay interleaves them with the other parked requests.
                         io.set_cooperative(crate::readiness::Readiness::default());
                     }
+                    if let Some(text) = harness_text("HIRSEL_RT_FILE_READS")? {
+                        let scripts = serde_json::from_str(&text)
+                            .map_err(|e| format!("file read script: {e}"))?;
+                        io.set_file_read_script(scripts);
+                    }
                     io.set_net_rules(net_rules.clone());
                     if let Some(env) = &env {
                         io.set_env(env.clone());

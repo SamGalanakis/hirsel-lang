@@ -22,6 +22,7 @@ pub struct Library {
     pub(super) channels: super::channels::Channels,
     pub(super) synchronizers: super::synchronization::Synchronizers,
     pub(super) network_waits: std::collections::BTreeMap<u64, super::net::NetworkWait>,
+    pub(super) file_waits: std::collections::BTreeMap<u64, Vec<Value>>,
     /// Parked `watcher.next` calls: watcher, Dir and recorded input.
     pub(super) watch_waits: std::collections::BTreeMap<u64, (u64, u64, Vec<u8>)>,
     pub(super) timers: super::timers::Timers,
@@ -55,6 +56,7 @@ impl Library {
             channels: Default::default(),
             synchronizers: Default::default(),
             network_waits: Default::default(),
+            file_waits: Default::default(),
             watch_waits: Default::default(),
             timers: Default::default(),
             signals: Default::default(),
@@ -162,7 +164,7 @@ impl Library {
             name,
             "file.read" | "file.seek" | "file.write" | "file.append" | "file.sync"
         ) {
-            return self.file_stream(name, call.arguments, context).map(Some);
+            return self.file_stream_call(name, call, context).map(Some);
         }
         let a = &*call.arguments;
         if name == "random.bytes" {
@@ -1079,6 +1081,7 @@ impl Library {
                 self.simulation.replace_identity(tree, &p);
                 let identity = self.simulation.file_identity(tree, &p).unwrap();
                 self.simulation.durable_write(tree, identity, 0, &data);
+                self.simulation.file_readiness.wrote(tree, &p);
                 Ok(ok(Value::Unit))
             }
             "file.put_new" => {
@@ -1277,6 +1280,34 @@ impl Library {
         }
         if self.network_waits.contains_key(&token) {
             return self.poll_network(token, context);
+        }
+        if let Some(mut arguments) = self.file_waits.remove(&token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+            match self.file_stream("file.read", &mut arguments, context) {
+                Ok(Some(mut result)) => {
+                    // Cancellation returns the buffer unchanged. A successful read
+                    // already moved it into its writeback.
+                    if let OperationResult::Complete {
+                        arguments: updates, ..
+                    } = &mut result
+                        && !matches!(arguments[2], Value::Unit)
+                    {
+                        updates.push((2, std::mem::replace(&mut arguments[2], Value::Unit)));
+                    }
+                    return Ok(Some(result));
+                }
+                Ok(None) => {
+                    self.file_waits.insert(token, arguments);
+                    return Ok(None);
+                }
+                Err(error) => {
+                    if let Some(saved) = saved {
+                        self.simulation = saved;
+                    }
+                    self.file_waits.insert(token, arguments);
+                    return Err(error);
+                }
+            }
         }
         if self.runners.waits_on(token) {
             return self.poll_runner(token, context);

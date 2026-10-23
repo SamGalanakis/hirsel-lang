@@ -407,6 +407,7 @@ pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
         Request::ReadStdin { .. }
+            | Request::FileRead { .. }
             | Request::SleepUntil { .. }
             | Request::SignalWait { .. }
             | Request::ProcessRun { .. }

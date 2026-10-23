@@ -19,6 +19,7 @@ pub type RealIo = RealCore<LocalStreams>;
 /// Real host authority, providers and recording state, parameterized by stream ownership.
 /// `RealCore<SendStreams>` is `Send`; non-Send custom streams remain home-affine.
 pub struct RealCore<S: Streams> {
+    file_reads: crate::io_sim::ScriptedFileReads,
     state: State,
     disk: Disk,
     tape: Vec<Event>,
@@ -259,6 +260,16 @@ impl RealIo {
     }
 }
 impl<S: Streams> RealCore<S> {
+    /// Fixture-only regular-file readiness. Host files are never gated.
+    pub fn set_file_read_script(
+        &mut self,
+        scripts: BTreeMap<String, hirsel_run_schema::FileReadScript>,
+    ) {
+        self.file_reads = crate::io_sim::ScriptedFileReads::new(scripts);
+        if self.cooperative.is_none() {
+            self.set_cooperative(Default::default());
+        }
+    }
     /// Exact name grants and their admission snapshots; no later ambient lookup.
     pub fn set_env(&mut self, env: BTreeMap<String, Option<String>>) {
         self.state.env = env;
@@ -427,6 +438,7 @@ impl RealIo {
             signal_waits: BTreeMap::new(),
             current: 0,
             signal_delivered: false,
+            file_reads: Default::default(),
         })
     }
 }
@@ -932,7 +944,8 @@ impl<S: Streams> Adapter for RealCore<S> {
         }
         let network =
             crate::net::is_net_request(&request) || matches!(request, Request::Close { .. });
-        let scripted = self.state.scripted(&request);
+        let scripted =
+            self.state.scripted(&request) || self.file_reads.blocked(&self.state, &request);
         if !parks {
             let result = self.perform(request);
             if network && let Some((readiness, _)) = &self.cooperative {
@@ -1290,6 +1303,12 @@ impl<S: Streams> RealCore<S> {
         } else {
             self.fault.take()
         };
+        if fault.is_none()
+            && self.state.preflight(&request)?.is_none()
+            && self.file_reads.blocked(&self.state, &request)
+        {
+            return Err(AdapterError::Blocked);
+        }
         self.disk.partial = None;
         let before = self.state.stdout.len();
         let stderr_before = self.state.stderr.len();
@@ -1557,6 +1576,13 @@ impl<S: Streams> RealCore<S> {
                 self.disk.files.remove(handle);
             }
             _ => {}
+        }
+        if self
+            .file_reads
+            .completed(&self.state, &request, &completion)
+            && let Some((readiness, _)) = &self.cooperative
+        {
+            readiness.progressed();
         }
         if self.retain_history || !self.journal.absent() {
             self.record(Event {
@@ -2889,6 +2915,7 @@ impl RealIo {
             return Err(self);
         }
         let Self {
+            file_reads,
             streams,
             state,
             disk,
@@ -2924,6 +2951,7 @@ impl RealIo {
             HomeJournal::Local(_) => unreachable!(),
         });
         let core = RealCore {
+            file_reads,
             streams: SendStreams {
                 output,
                 input,

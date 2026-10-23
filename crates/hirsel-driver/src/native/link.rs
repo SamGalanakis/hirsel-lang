@@ -2190,6 +2190,12 @@ fn launch_impl(
     if fixture.deny_output {
         command.env("HIRSEL_RT_DENY_OUTPUT", "1");
     }
+    if !fixture.file_reads.is_empty() {
+        command.env(
+            "HIRSEL_RT_FILE_READS",
+            serde_json::to_string(&fixture.file_reads).unwrap(),
+        );
+    }
     if let Some(ticks) = fixture.monotonic {
         command.env("HIRSEL_RT_VIRTUAL_CLOCK", ticks.to_string());
     }

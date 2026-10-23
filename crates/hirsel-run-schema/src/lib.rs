@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 
+mod file_reads;
 mod path;
+pub use file_reads::{FileReadScript, FileReadiness};
 pub mod tape;
 pub use path::confined_relative;
 

@@ -362,6 +362,8 @@ fn same_options(a: &Options, b: &Options) -> bool {
 /// Deterministic providers selected explicitly by a semantic fixture, never a host grant.
 #[derive(Clone, Debug, Default)]
 pub struct Fixture {
+    /// Simulation-only regular-file readiness, shared with SimulationConfig.
+    pub file_reads: std::collections::BTreeMap<String, hirsel_run_schema::FileReadScript>,
     /// The negative output-grant fixture, shared by every engine.
     pub deny_output: bool,
     pub monotonic: Option<u64>,
@@ -423,6 +425,7 @@ pub fn differential_in(
     fixture: &Fixture,
 ) -> Vec<(String, Outcome)> {
     let world = super::HeapWorld {
+        file_reads: fixture.file_reads.clone(),
         deny_output: fixture.deny_output,
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),

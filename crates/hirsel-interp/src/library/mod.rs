@@ -4,7 +4,7 @@ pub mod float;
 pub mod integer;
 pub mod simulation;
 pub mod string;
-pub use simulation::{Simulation, SimulationConfig};
+pub use simulation::{FileReadScript, Simulation, SimulationConfig};
 mod codec;
 mod dictionaries;
 mod dispatch;

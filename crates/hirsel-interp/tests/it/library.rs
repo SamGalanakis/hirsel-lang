@@ -1989,3 +1989,87 @@ fn accumulated_file_reads_replay_exactly_and_preserve_shared_prefixes() {
         replay.library.simulation.events
     );
 }
+
+#[test]
+fn pending_file_read_keeps_accumulated_storage_through_poll_and_release() {
+    let mut h = Harness::new(SimulationConfig {
+        files: [("input".into(), vec![1, 2])].into(),
+        file_reads: [(
+            "input".into(),
+            FileReadScript::AfterWrite {
+                path: "release".into(),
+            },
+        )]
+        .into(),
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let dir = unok(h.value("io.dir", vec![io, path("")]));
+    let file = unok(h.value("file.open", vec![dir.clone(), path("input")]));
+    let mut storage = Vec::with_capacity(8);
+    storage.push(Some(Value::Integer(n(Primitive::U8, 9))));
+    let pointer = storage.as_ptr();
+    let buffer = Value::Sequence {
+        kind: BuiltinType::List,
+        elements: storage.into(),
+        arena: None,
+    };
+    let OperationResult::Park { token, .. } = h.call(
+        "file.read",
+        vec![dir.clone(), file, buffer, u64_value(2)],
+        TypeKind::Tuple(vec![].into()),
+    ) else {
+        panic!("read never parked")
+    };
+    let pending_size = h.library.simulation.events.last().unwrap().input.len();
+    let poll = |h: &mut Harness| {
+        h.library
+            .poll(
+                token,
+                &mut OperationContext {
+                    trace_mode: Default::default(),
+                    anchor: None,
+                    configuration: &h.run,
+                    sources: &h.sources,
+                    stdout: &mut h.stdout,
+                    trace: &mut h.trace,
+                },
+            )
+            .unwrap()
+    };
+    assert!(poll(&mut h).is_none());
+    assert!(poll(&mut h).is_none());
+    assert_eq!(
+        h.value(
+            "file.write_bytes",
+            vec![dir, path("release"), Value::Bytes(vec![])]
+        ),
+        ok(Value::Unit)
+    );
+    let Some(OperationResult::Complete {
+        value,
+        mut arguments,
+        ..
+    }) = poll(&mut h)
+    else {
+        panic!("read never released")
+    };
+    assert_eq!(value, ok(u64_value(2)));
+    assert_eq!(
+        pending_size,
+        h.library.simulation.events.last().unwrap().input.len()
+    );
+    let buffer = arguments.remove(0).1;
+    let Value::Sequence { elements, .. } = &buffer else {
+        panic!("read buffer")
+    };
+    assert_eq!(
+        elements.as_ptr(),
+        pointer,
+        "parked read cloned accumulated bytes"
+    );
+    assert_eq!(collection::len(&buffer).unwrap(), 3);
+    assert_eq!(elements[0], Some(Value::Integer(n(Primitive::U8, 9))));
+    assert_eq!(elements[1], Some(Value::Integer(n(Primitive::U8, 1))));
+    assert_eq!(elements[2], Some(Value::Integer(n(Primitive::U8, 2))));
+}

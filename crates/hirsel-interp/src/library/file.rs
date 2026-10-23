@@ -4,16 +4,74 @@ use super::{
     dispatch::*,
     simulation::{Fault, Grant},
 };
-use crate::{Error, Integer, OperationContext, OperationResult, Value, invalid};
+use crate::{Error, Integer, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_types::{BuiltinType, Primitive};
 
 impl Library {
+    pub(super) fn file_stream_call(
+        &mut self,
+        name: &str,
+        call: OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if let Some(result) = self.file_stream(name, call.arguments, context)? {
+            return Ok(result);
+        }
+        let token = self.next_callback;
+        self.next_callback += 1;
+        let file = self.simulation.id(arg(call.arguments, 1)?, "File")?;
+        let anchor = context
+            .anchor()
+            .cloned()
+            .unwrap_or(crate::observation::Anchor {
+                definition: call.path.clone().into(),
+                body: hirsel_tir::BodyId(0),
+                cleanup: None,
+                site: call.site,
+            });
+        self.simulation.record(
+            "Dir",
+            "file.read.pending",
+            encode_arguments(&[
+                call.arguments[0].clone(),
+                call.arguments[1].clone(),
+                call.arguments[3].clone(),
+            ]),
+            vec![],
+            context,
+        )?;
+        // Own the exclusive buffer while parked, as a completed read owns its
+        // writeback. Polls must not clone accumulated bytes or force COW.
+        let arguments = call
+            .arguments
+            .iter_mut()
+            .enumerate()
+            .map(|(index, value)| {
+                if index == 2 {
+                    std::mem::replace(value, Value::Unit)
+                } else {
+                    value.clone()
+                }
+            })
+            .collect();
+        self.file_waits.insert(token, arguments);
+        Ok(OperationResult::Park {
+            token,
+            wait: crate::BlockedWait {
+                spawn_path: self.tasks.path(),
+                anchor,
+                kind: name.into(),
+                targets: vec![file],
+            },
+        })
+    }
+
     pub(super) fn file_stream(
         &mut self,
         name: &str,
         a: &mut [Value],
         context: &mut OperationContext<'_>,
-    ) -> Result<OperationResult, Error> {
+    ) -> Result<Option<OperationResult>, Error> {
         let (tree, _, dir) = self.simulation.directory(arg(a, 0)?)?;
         let id = self.simulation.id(arg(a, 1)?, "File")?;
         let Some(Grant::File {
@@ -37,6 +95,14 @@ impl Library {
         let wrong_mode = (writing && !writable)
             || (name == "file.read" && writable)
             || (name == "file.seek" && integer_u64(arg(a, 2)?)? > i64::MAX as u64);
+        if name == "file.read"
+            && !wrong_mode
+            && !stale
+            && self.tasks.canceled().is_none()
+            && self.simulation.file_readiness.blocked(tree, &open)
+        {
+            return Ok(None);
+        }
         let fault = if denied || wrong_mode {
             None
         } else {
@@ -145,16 +211,16 @@ impl Library {
                 ))
             }));
             updates.push((2, buffer));
-            return Ok(OperationResult::Complete {
+            return Ok(Some(OperationResult::Complete {
                 value: ok(u64_value(n as u64)),
                 arguments: updates,
                 consumed: vec![],
                 released: vec![],
-            });
+            }));
         };
         self.simulation
             .record("Dir", name, request, encode_value(&value), context)?;
-        Ok(OperationResult::returned(value))
+        Ok(Some(OperationResult::returned(value)))
     }
 }
 fn integer_u64(value: &Value) -> Result<u64, Error> {

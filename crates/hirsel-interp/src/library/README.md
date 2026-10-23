@@ -247,3 +247,17 @@ ordinary mutable rows and copyable V. After a successful read-only lookup it
 prepares detached entry storage without invalidating the hash index or ordinals.
 The arena-charge wrapper runs before publishing that owner or entering the
 callback. A miss bypasses preparation and charge entirely.
+
+`SimulationConfig.file_reads` maps resolved opened regular-file paths to
+`hirsel_interp::library::FileReadScript` (also in `hirsel_run_schema`). `Pending`
+parks every `file.read` until cancellation. `AfterWrite { path }` parks until a
+successful `file.write_bytes` to that trigger path in the same simulated tree;
+a preceding write also releases it. Empty scripts preserve ordinary reads.
+Gates retain the opened path across rename, do not consume bytes or faults while
+parked, and do not bypass argument/authority checks or cancellation. They apply
+to incremental `file.read`, not the separate whole-file `file.read_bytes` call.
+The interpreter records `file.read.pending` before suspension and the ordinary
+completion after readiness/cancellation. Native fixture `Fixture.file_reads`
+uses the same gates for `test.dir` snapshot trees and records existing
+`Blocked`/`Ready` events; `SimIo` replays without a script. Host descriptors are
+never gated and the runtime ABI and tape schema are unchanged.

@@ -1215,6 +1215,12 @@ impl State {
     pub(crate) fn is_fake_request(&self, request: &Request) -> bool {
         self.fake_tree(request).is_some()
     }
+    pub(crate) fn fake_file_stale(&self, directory: u64, file: u64) -> bool {
+        self.fake_directories
+            .get(&directory)
+            .and_then(|tree| self.fake_files.get(tree))
+            .is_some_and(|files| files.is_stale(file))
+    }
     fn fake_tree(&self, request: &Request) -> Option<u64> {
         let directory = match request {
             Request::NarrowDir { directory, .. }

@@ -1,6 +1,7 @@
 //! Explicit deterministic capability implementations; no host I/O or entropy.
 use crate::{Error, OperationContext, TraceEvent, Value, invalid};
 use hirsel_run_schema::Access;
+pub use hirsel_run_schema::FileReadScript;
 use hirsel_run_schema::confined_relative;
 use hirsel_syntax::DefPath;
 use hirsel_tir::{CapabilityEvent, RunConfiguration};
@@ -109,6 +110,8 @@ pub struct SimulationConfig {
     pub env: BTreeMap<String, Option<String>>,
     pub stdin: Vec<u8>,
     pub files: BTreeMap<String, Vec<u8>>,
+    /// Simulation-only readiness gates by resolved opened-file path; empty by default.
+    pub file_reads: BTreeMap<String, FileReadScript>,
     pub file_aliases: BTreeMap<String, String>,
     pub directories: BTreeSet<String>,
     pub links: BTreeMap<String, String>,
@@ -165,6 +168,7 @@ impl Default for SimulationConfig {
             env: BTreeMap::new(),
             stdin: Vec::new(),
             files: BTreeMap::new(),
+            file_reads: BTreeMap::new(),
             file_aliases: BTreeMap::new(),
             directories: [String::new()].into_iter().collect(),
             links: BTreeMap::new(),
@@ -264,6 +268,7 @@ pub(crate) enum Grant {
 }
 #[derive(Clone, Debug)]
 pub struct Simulation {
+    pub(super) file_readiness: hirsel_run_schema::FileReadiness,
     pub(super) net_worlds: BTreeMap<u64, super::net::World>,
     pub(super) net_streams: BTreeMap<u64, super::net::ScriptStream>,
     pub(super) process_worlds: BTreeMap<u64, super::process::World>,
@@ -560,6 +565,7 @@ impl Simulation {
             super::process::configured_world(config.process.as_ref())?;
         let root_trace = config.trace_roots.then(Default::default);
         let mut simulation = Self {
+            file_readiness: hirsel_run_schema::FileReadiness::new(config.file_reads.clone()),
             root_trace,
             net_worlds,
             net_streams: BTreeMap::new(),

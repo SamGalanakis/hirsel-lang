@@ -24,6 +24,7 @@ mod signals;
 /// logical handles numbered as the runtime's adapter numbers them.
 #[derive(Clone)]
 struct Io {
+    file_reads: hirsel_run_schema::FileReadiness,
     deny_output: bool,
     next: u64,
     test_seed: u64,
@@ -93,6 +94,7 @@ impl Io {
         world: &HeapWorld,
     ) -> Result<Self, NativeError> {
         let mut io = Self::new();
+        io.file_reads = hirsel_run_schema::FileReadiness::new(world.file_reads.clone());
         io.deny_output = world.deny_output;
         io.test_seed = test_seed;
         io.monotonic = world.monotonic;
@@ -124,6 +126,7 @@ impl Io {
     }
     fn new() -> Self {
         Self {
+            file_reads: Default::default(),
             next: IO_HANDLE + 1,
             test_seed: 0,
             stdout: Vec::new(),
@@ -1013,6 +1016,8 @@ impl Io {
                     position,
                     writable,
                     contents,
+                    tree,
+                    path,
                     ..
                 }) = self.grants.get_mut(file)
                 else {
@@ -1023,6 +1028,9 @@ impl Io {
                 }
                 if *writable || self.stale.contains(file) {
                     return Some(OpOutcome::Value(io_error(1)));
+                }
+                if self.file_reads.blocked(*tree, path) {
+                    return Some(OpOutcome::Pending);
                 }
                 let mut bytes = match buffer {
                     OpValue::Elements {
@@ -1623,6 +1631,7 @@ impl Io {
                                 .1
                                 .insert(path.clone(), bytes.clone());
                             self.permissions.remove(&(tree, path.clone()));
+                            self.file_reads.wrote(tree, &path);
                             let identity = std::sync::Arc::new(());
                             self.files.insert((tree, path), identity.clone());
                             self.durable_write(tree, &identity, 0, bytes);
@@ -2168,6 +2177,7 @@ fn observation(
 /// What a launch grants H's model beyond its entry's handles.
 #[derive(Clone, Debug, Default)]
 pub struct HeapWorld {
+    pub file_reads: BTreeMap<String, hirsel_run_schema::FileReadScript>,
     /// Deny stdout and stderr projection for a negative grant fixture.
     pub deny_output: bool,
     /// A monotonic clock (`io.monotonic_clock`), whose virtual reading starts here, as the

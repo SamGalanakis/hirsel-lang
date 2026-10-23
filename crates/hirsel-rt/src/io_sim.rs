@@ -2,6 +2,60 @@
 use crate::handles::Handles;
 use crate::io::*;
 use crate::watch::WatchEvent;
+pub use hirsel_run_schema::FileReadScript;
+
+/// Fixture readiness for snapshot files. Existing Blocked/Ready events replay it.
+#[derive(Default)]
+pub(crate) struct ScriptedFileReads(hirsel_run_schema::FileReadiness);
+impl ScriptedFileReads {
+    pub(crate) fn new(scripts: std::collections::BTreeMap<String, FileReadScript>) -> Self {
+        Self(hirsel_run_schema::FileReadiness::new(scripts))
+    }
+    pub(crate) fn blocked(&self, state: &State, request: &Request) -> bool {
+        let Request::FileRead {
+            directory, file, ..
+        } = request
+        else {
+            return false;
+        };
+        let Some(tree) = state.fake_directories.get(directory) else {
+            return false;
+        };
+        if state.fake_file_stale(*directory, *file) {
+            return false;
+        }
+        let Some(crate::handles::Grant::File { path, .. }) = state.handles.rows.get(file) else {
+            return false;
+        };
+        self.0.blocked(*tree, path)
+    }
+    pub(crate) fn completed(
+        &mut self,
+        state: &State,
+        request: &Request,
+        completion: &Completion,
+    ) -> bool {
+        let (
+            Request::Write {
+                directory, path, ..
+            },
+            Completion::Unit(Ok(())),
+        ) = (request, completion)
+        else {
+            return false;
+        };
+        let Some(tree) = state.fake_directories.get(directory) else {
+            return false;
+        };
+        let Ok(root) = state.directory(*directory) else {
+            return false;
+        };
+        let Ok(path) = state.fake_trees[tree].resolve(&root, path, false) else {
+            return false;
+        };
+        self.0.wrote(*tree, &path)
+    }
+}
 /// Binary replay keeps one shared buffer and only the current/previous decoded
 /// event. Advancing releases payload allocations instead of retaining a second
 /// owned copy of every event in the tape.
@@ -74,6 +128,8 @@ pub struct SimIo {
     waits: crate::readiness::WaitLog,
     /// The parked waits that are sent runner calls: only a callee's end delivers them.
     runner_waits: std::collections::BTreeSet<u64>,
+    /// Scripted regular-file waits also have no source when their release never occurs.
+    file_waits: std::collections::BTreeSet<u64>,
     /// The recorded run instance (RUN-11).
     pub(crate) instance: Option<[u8; 16]>,
 }
@@ -125,6 +181,7 @@ impl SimIo {
             roots: Default::default(),
             waits: Default::default(),
             runner_waits: Default::default(),
+            file_waits: Default::default(),
             instance: None,
         }
     }
@@ -283,6 +340,7 @@ impl Adapter for SimIo {
     fn finish(&mut self, token: u64) {
         self.waits.finish(token);
         self.runner_waits.remove(&token);
+        self.file_waits.remove(&token);
     }
     fn parked(&mut self, token: u64) {
         self.waits.parked(token);
@@ -349,10 +407,13 @@ impl Adapter for SimIo {
         let Some(Request::Ready { wait, points }) =
             self.tape.get(self.position)?.map(|event| &event.request)
         else {
-            // The recording ended with only sent runner calls parked: their callees never
-            // ended, so the replayed run blocks as the recorded one did (RUN-12).
+            // Sent runner calls and scripted snapshot reads can end a recording still
+            // parked: their source never arrived, so replay blocks as the recording did.
             if self.position == self.tape.len()
-                && self.waits.tokens().all(|t| self.runner_waits.contains(&t))
+                && self
+                    .waits
+                    .tokens()
+                    .all(|t| self.runner_waits.contains(&t) || self.file_waits.contains(&t))
             {
                 return Ok(false);
             }
@@ -400,6 +461,9 @@ impl Adapter for SimIo {
             self.waits.park(committed);
             if matches!(request, Request::RunnerCall(_)) {
                 self.runner_waits.insert(self.waits.current());
+            }
+            if matches!(request, Request::FileRead { .. }) && self.state.is_fake_request(&request) {
+                self.file_waits.insert(self.waits.current());
             }
             return Err(AdapterError::Blocked);
         }
@@ -510,6 +574,9 @@ pub(crate) struct FileIdentities {
     stale: std::collections::BTreeSet<u64>,
 }
 impl FileIdentities {
+    pub(crate) fn is_stale(&self, file: u64) -> bool {
+        self.stale.contains(&file)
+    }
     pub(crate) fn new(tree: &Tree) -> Self {
         let mut files = Self::default();
         for path in tree.regular_paths() {
