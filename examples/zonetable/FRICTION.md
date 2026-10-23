@@ -79,3 +79,5 @@ core `string.from_bytes(take data)` and manifest-registered `time.format`.
 The original attempts remain historical evidence. The production calls, required
 annotations, ownership copies and application adapters remain valid. This is
 documentation navigation for existing APIs, with no alias or resolver change.
+
+Addressed by the executable recipe documentation landed in `36879d8e307bb032944a618df036327bff837fe5`.
