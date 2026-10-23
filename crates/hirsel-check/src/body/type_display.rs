@@ -84,6 +84,29 @@ impl Checker<'_, '_> {
         actual: TypeId,
         expected: TypeId,
     ) {
+        // Binary RHS checking can reject before `binary` sees both rows. The
+        // expected site's whole-expression span identifies its operator, while
+        // the checked left row and actual RHS row establish operand identity.
+        // This error-only lookup also covers a block's propagated tail context.
+        let addition_left = self
+            .input
+            .syntax
+            .tree
+            .expressions
+            .iter()
+            .find_map(|expression| match expression.kind {
+                ast::ExprKind::Binary {
+                    op: ast::BinaryOp::Add,
+                    left,
+                    ..
+                } if expression.origin.span == span => self.values.get(&left).copied(),
+                _ => None,
+            });
+        if let Some(left) = addition_left
+            && self.string_addition_error(rule.clone(), span, left, actual)
+        {
+            return;
+        }
         let payload = self
             .shared_payload(actual)
             .filter(|payload| shape_equal(self.types, *payload, expected).unwrap_or(false));

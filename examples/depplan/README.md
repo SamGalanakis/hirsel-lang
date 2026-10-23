@@ -36,6 +36,11 @@ prerequisites are deduplicated. Unknown JSON fields follow the shipped record
 decoder policy: they are ignored, but their bytes and syntax still count.
 Duplicate JSON object keys, invalid UTF-8, malformed JSON and trailing values fail.
 
+Output lines use `f"{encoded}\n"`. String `+` is unsupported; f-strings are the
+intended language form. For two String bindings, `f"{left}{right}"` or
+`std@1/string.concat(left, right)` appends their text with `std@1` selected.
+Other types need supported formatting or an explicit String conversion.
+
 Success writes one compact JSON object plus LF to stdout, with no stderr.
 `release.json` yields exactly:
 

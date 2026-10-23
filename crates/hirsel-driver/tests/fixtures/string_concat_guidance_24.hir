@@ -1,0 +1,38 @@
+// Rust alloc String value oracle: string.rs:378-385, revision
+// f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. Hirsel keeps + unsupported.
+fn operand(mut calls: u64, expected: u64, value: String) -> unique String {
+  if calls != expected { return "wrong order" }
+  calls += 1
+  unique value
+}
+pub fn main() -> Result[(), String] {
+  for (left, right, expected) in [
+    ("", "", ""),
+    ("", "text", "text"),
+    ("text", "", "text"),
+    ("{\"", "\"}", "{\"\"}"),
+    ("雪", "🐑", "雪🐑"),
+    ("text", "\n", "text\n"),
+    ("12345", "2", "123452"),
+  ] {
+    if f"{left}{right}" != expected { return Error("f-string value") }
+    if std@1/string.concat(left, right) != expected { return Error("concat value") }
+  }
+  let left = "12345"
+  let right = "2"
+  let joined = f"{left}{right}"
+  if f"{joined}{right}" != "1234522" { return Error("f-string oracle") }
+  if std@1/string.concat(std@1/string.concat(left, right), right) != "1234522" { return Error("concat oracle") }
+  let text = "{\"雪🐑\"}"
+  if f"{text}\n" != "{\"雪🐑\"}\n" { return Error("newline recipe") }
+  if f"{{\"{text}\"}}" != "{\"{\"雪🐑\"}\"}" { return Error("escaped text") }
+  let mut calls = 0u64
+  let formatted = f"{operand(mut calls, 0, "雪")}{operand(mut calls, 1, "\n")}"
+  if formatted != "雪\n" || calls != 2 { return Error("f-string evaluations") }
+  calls = 0
+  let concatenated = std@1/string.concat(operand(mut calls, 0, "雪"), operand(mut calls, 1, "\n"))
+  if concatenated != "雪\n" || calls != 2 { return Error("concat evaluations") }
+  if 20u64 + 22u64 != 42u64 { return Error("integer addition") }
+  if 1.5f64 + 2.5f64 != 4.0f64 { return Error("float addition") }
+  Ok(())
+}

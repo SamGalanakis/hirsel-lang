@@ -68,3 +68,4 @@ mod contextual_error_guidance_24;
 mod grant_base_guidance_24;
 mod walk_stream;
 mod json_hook_guidance_24;
+mod string_concat_guidance_24;

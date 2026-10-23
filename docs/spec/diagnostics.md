@@ -95,6 +95,21 @@ instantiate or transport a written sendability requirement is MODE-4 at the call
 receiving flow; the diagnostic identifies the qualified requirement and, when relevant, the
 signature's copying permission or invariant mutable contract that prevents preserving it.
 
+## String addition
+
+`String + String` remains LANG-7 at the complete binary expression. If either
+resolved operand is the primitive `String`, the diagnostic names both operand
+types and gives complete f-string constructions, including `f"{text}\n"` for
+appending a newline. With `std@1` selected, it also offers
+`std@1/string.concat(left, right)` for String bindings. Without that dependency,
+help first explains how to select `std@1`, which f-strings require. Mixed operands
+require explicit conversion of the non-String value; arbitrary types do not gain
+implicit formatting. An earlier mixed-operand mismatch retains its existing rule
+(including SEM-1 or SEM-2 for a numeric left operand) and primary span while
+adding the same guidance. Nominal lookalikes and invalid prerequisites do not establish
+a String operand. This producer-specific help replaces the typical match advice
+in both human and JSON output, without an automatic source replacement.
+
 ## Sequence prefixes
 
 Missing sequence context is LANG-2. An empty sequence cites the whole `[]` and

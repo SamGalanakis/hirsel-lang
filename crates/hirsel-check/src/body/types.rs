@@ -2051,6 +2051,61 @@ impl Checker<'_, '_> {
             },
         )
     }
+    /// Report only from resolved operand rows, before recovery erases either.
+    pub(super) fn string_addition_error(
+        &mut self,
+        rule: RuleId,
+        span: Span,
+        a: TypeId,
+        b: TypeId,
+    ) -> bool {
+        if self.invalid(a) || self.invalid(b) || self.bottom(a) || self.bottom(b) {
+            return false;
+        }
+        let strings =
+            [a, b].map(|ty| matches!(self.kind(ty), TypeKind::Primitive(Primitive::String)));
+        if strings.contains(&true) {
+            let mut diagnostic = Diagnostic::error(
+                rule,
+                span,
+                format!(
+                    "operator `+` is not defined for operands `{}` and `{}`",
+                    self.type_spelling(a),
+                    self.type_spelling(b),
+                ),
+            );
+            // A qualified lookup respects the selected package graph, including
+            // negative reads. Never infer String or std availability from spelling.
+            let path = ast::Path {
+                package: Some(ast::PackageId {
+                    name: "std".into(),
+                    version: "1".into(),
+                }),
+                segments: vec![Symbol::intern("string"), Symbol::intern("concat")],
+            };
+            let lookup = self.provider.lookup(self.input.context, &path);
+            let concat_available = lookup.result.is_ok();
+            std::sync::Arc::make_mut(&mut self.body.resolution.reads).push(
+                DependencyRead::ProviderLookup {
+                    context: self.input.context.clone(),
+                    package: path.package,
+                    segments: vec!["string".into(), "concat".into()],
+                    output: lookup,
+                },
+            );
+            if strings != [true, true] {
+                diagnostic.notes.push("convert the non-String operand explicitly to String first; f-string holes do not implicitly format arbitrary types".into());
+            }
+            diagnostic.notes.push(if concat_available {
+                "help: for String bindings `left` and `right`, use `f\"{left}{right}\"` or `std@1/string.concat(left, right)`; to append a newline to String `text`, use `f\"{text}\\n\"`".into()
+            } else {
+                "help: select std@1 in the manifest's dependencies to use f-strings; then, for String bindings `left` and `right`, use `f\"{left}{right}\"`; to append a newline to String `text`, use `f\"{text}\\n\"`".into()
+            });
+            self.diagnostics.push(diagnostic);
+            return true;
+        }
+        false
+    }
     pub(super) fn binary(
         &mut self,
         id: ast::ExprId,
@@ -2062,6 +2117,11 @@ impl Checker<'_, '_> {
         let a = self.value(left);
         let b = self.value(right);
         if self.invalid(a) || self.invalid(b) {
+            return Ok(self.error());
+        }
+        if op == Add
+            && self.string_addition_error(const { RuleId::of("LANG-7") }, self.span(id), a, b)
+        {
             return Ok(self.error());
         }
         if !self.compatible(a, b) {
