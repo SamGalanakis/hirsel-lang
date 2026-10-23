@@ -1,7 +1,7 @@
 use hirsel_driver::*;
 use hirsel_engine::store::{Action, MemStore, ResultStore};
 use hirsel_engine::*;
-use hirsel_rc::instance::{Actuals, DiscoveryContext};
+use hirsel_rc::instance::Actuals;
 use hirsel_syntax::ContentHash;
 use native::queries::ready::{EMISSION_CONTEXT_DOMAIN, ReadyMiss, ReadyQueries, ReadySourceFacts};
 use std::sync::Arc;
@@ -17,13 +17,17 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
             .add("ready-query.hir", "pub fn main()->u64{1u64}".into())
             .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
-        let input = engine.export_native_input().unwrap();
-        let input = engine.import_native_input(input).unwrap();
-        let mut program = native::program(&input);
-        let context = DiscoveryContext::of(&program).unwrap();
+        let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), transport.clone());
+        let mut declarations = native::queries::declarations::NativeDeclarations::collect(
+            &mut engine,
+            &mut discovery,
+            &[],
+        )
+        .unwrap();
+        assert!(declarations.program.definitions.is_empty());
         let main = entry_path(&default_context());
-        let body = program.definitions[&main].clone();
-        let source = engine.native_definition_product(&main).unwrap();
+        let body = declarations.body(&mut engine, &main).unwrap();
+        let source = &declarations.sources[&main];
         let source_observation = source
             .lower
             .as_ref()
@@ -35,8 +39,8 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
             body.clone(),
         );
         let weak = Arc::downgrade(&body);
-        program.definitions.clear();
-        drop(input);
+        let program = declarations.program;
+        let context = declarations.context;
         drop(engine);
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &program.owners);

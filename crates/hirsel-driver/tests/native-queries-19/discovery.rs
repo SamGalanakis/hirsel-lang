@@ -320,3 +320,74 @@ fn native_discovery_cache_forced_lower_uses_fresh_verifier_output() {
         assert!(result.product.is_some());
     });
 }
+
+#[test]
+fn native_declarations_match_snapshot_inputs_and_refuse_implicit_growth() {
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let mut engine = native_engine(EDGES).with_result_store(store.clone());
+        let snapshot = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(snapshot).unwrap();
+        let expected = native::program(&validated);
+        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+        let actual = native::queries::declarations::NativeDeclarations::collect(
+            &mut engine,
+            &mut cache,
+            &[],
+        )
+        .unwrap();
+        assert!(actual.program.definitions.is_empty());
+        assert_eq!(actual.program.binders, expected.binders);
+        assert_eq!(actual.program.revisions, expected.revisions);
+        assert_eq!(actual.program.instance_bodies, expected.instance_bodies);
+        assert_eq!(
+            actual.program.signatures.keys().collect::<Vec<_>>(),
+            expected.signatures.keys().collect::<Vec<_>>()
+        );
+        for (path, signature) in &expected.signatures {
+            assert_eq!(
+                actual.program.signatures[path].fingerprint,
+                signature.fingerprint
+            );
+        }
+        assert_eq!(
+            actual.program.constants.keys().collect::<Vec<_>>(),
+            expected.constants.keys().collect::<Vec<_>>()
+        );
+        // Same session, so Debug compares the exact typed/anchor fields without
+        // introducing another type or source codec. Order is per source owner.
+        let mut expected_requirements: Vec<_> = expected
+            .requirements
+            .iter()
+            .map(|edge| format!("{edge:?}"))
+            .collect();
+        let mut actual_requirements: Vec<_> = actual
+            .context
+            .requirements
+            .values()
+            .flatten()
+            .map(|edge| format!("{edge:?}"))
+            .collect();
+        expected_requirements.sort();
+        actual_requirements.sort();
+        assert_eq!(actual_requirements, expected_requirements);
+        assert_eq!(
+            format!("{:?}", actual.program.owners),
+            format!("{:?}", expected.owners)
+        );
+
+        let mut growing = native_engine(FINALIZER_GROWING).with_result_store(store.clone());
+        let mut cache = NativeDiscoveryCache::new(growing.types().clone(), store);
+        let error = native::queries::declarations::NativeDeclarations::collect(
+            &mut growing,
+            &mut cache,
+            &[],
+        )
+        .err()
+        .expect("native implicit finalizer growth must still refuse");
+        assert!(
+            format!("{error:?}").contains("instance expansion grows through an implicit instance")
+        );
+    });
+}

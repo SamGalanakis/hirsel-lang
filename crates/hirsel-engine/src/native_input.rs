@@ -196,33 +196,10 @@ impl QueryEngine {
         if crate::queries::has_errors(&diagnostics) {
             return Err(QueryError::Diagnostics(diagnostics));
         }
-        // Registry constants, and the selected source constants in their
-        // initialization order.
-        let items: std::collections::BTreeSet<_> = self.item_paths().into_iter().collect();
-        let mut constant_definitions = self.constant_definitions()?;
-        constant_definitions.retain(|path| paths.contains(path) || !items.contains(path));
-        for path in &constant_definitions {
-            if !constants.contains_key(path) {
-                constants.insert(path.clone(), self.materialize_value(path)?);
-            }
-        }
-        for (path, constant) in &self.staged_constants {
-            if paths.contains(&constant.owner) {
-                signatures.insert(path.clone(), constant.signature.clone());
-            }
-        }
-        for ((path, arguments), value) in &self.staged_values {
-            if self
-                .staged_constants
-                .get(path)
-                .is_some_and(|c| paths.contains(&c.owner))
-            {
-                constants.insert(
-                    hirsel_tir::constant_instance_path(path, arguments),
-                    value.value.clone(),
-                );
-            }
-        }
+        let static_inputs = self.native_static_inputs_with(&paths, constants)?;
+        let constants = static_inputs.constants;
+        let constant_definitions = static_inputs.definitions;
+        signatures.extend(static_inputs.generated_signatures);
         for (path, source) in &mut source_owners {
             source.generated = self.generated_source(path).cloned();
         }

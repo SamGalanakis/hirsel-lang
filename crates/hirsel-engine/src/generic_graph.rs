@@ -191,6 +191,27 @@ impl InstanceGraph {
         })
     }
 }
+/// Requirements of registry and generated constant values that have no
+/// ordinary source-definition product. Reuses the exact native collector.
+pub(crate) fn native_materialized(
+    types: &TypeInterner,
+    values: impl IntoIterator<Item = (DefPath, Materialized)>,
+    binder: &mut dyn FnMut(&DefPath) -> Result<Option<SiteRef>, QueryError>,
+) -> Result<InstanceGraph, QueryError> {
+    let mut collector = Collector {
+        types,
+        binder,
+        edges: vec![],
+        store_start: 0,
+    };
+    for (path, value) in values {
+        collector.materialized(&path, None, &value)?;
+    }
+    Ok(InstanceGraph {
+        edges: collector.edges,
+    })
+}
+
 /// Miss-only requirements of one native definition product. This reads only
 /// the supplied owner's body/value/representation and compact callee binders.
 /// It grants no source or native validation authority.

@@ -34,10 +34,20 @@ pub struct NativeSourceRoots {
     pub registry_revision: ContentHash,
     pub operations: BTreeMap<OperationKey, OperationRecord>,
     pub builtins: BTreeMap<DefPath, SignatureRef>,
+    /// CT-5 selected declaration/actual/path metadata, without TIR bodies.
+    pub instance_bodies: hirsel_tir::InstanceBodies,
     pub sources: SourceMap,
     pub foreign_links: Vec<LinkInput>,
     pub foreign_unreplayable: bool,
     pub foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
+}
+
+/// Required constant initialization inputs, separate from source root lookup.
+/// Materialized values are ordinary source-query products, never native IR.
+pub struct NativeStaticInputs {
+    pub constants: BTreeMap<DefPath, Materialized>,
+    pub definitions: Vec<DefPath>,
+    pub generated_signatures: BTreeMap<DefPath, SignatureRef>,
 }
 
 /// Miss-only expansion of one declaration. The source body stays shared for
@@ -66,7 +76,8 @@ impl QueryEngine {
         }
         let registry = registry::BuiltinRegistry::shared();
         Ok(NativeSourceRoots {
-            definitions: paths.into_iter().collect(),
+            definitions: paths.iter().cloned().collect(),
+            instance_bodies: self.instance_bodies(&paths),
             environment: self.environment.clone(),
             registry_revision: registry.revision(),
             operations: registry.operation_inventory(),
@@ -75,6 +86,80 @@ impl QueryEngine {
             foreign_links: self.foreign_links.clone(),
             foreign_unreplayable: self.foreign_unreplayable,
             foreign_threads: self.foreign_threads.clone(),
+        })
+    }
+
+    /// Demand required registry/source constants in their existing initialization
+    /// order, including selected generic generated values. No NativeInput or
+    /// source Definition collection is constructed by this operation.
+    pub fn native_static_inputs(
+        &mut self,
+        selected: &std::collections::BTreeSet<DefPath>,
+    ) -> Result<NativeStaticInputs, QueryError> {
+        self.native_static_inputs_with(selected, BTreeMap::new())
+    }
+    pub(crate) fn native_static_inputs_with(
+        &mut self,
+        selected: &std::collections::BTreeSet<DefPath>,
+        mut constants: BTreeMap<DefPath, Materialized>,
+    ) -> Result<NativeStaticInputs, QueryError> {
+        let items: std::collections::BTreeSet<_> = self.item_paths().into_iter().collect();
+        let mut definitions = self.constant_definitions()?;
+        definitions.retain(|path| selected.contains(path) || !items.contains(path));
+        for path in &definitions {
+            if !constants.contains_key(path) {
+                constants.insert(path.clone(), self.materialize_value(path)?);
+            }
+        }
+        let generated_signatures = self
+            .staged_constants
+            .iter()
+            .filter(|(_, constant)| selected.contains(&constant.owner))
+            .map(|(path, constant)| (path.clone(), constant.signature.clone()))
+            .collect();
+        for ((path, arguments), value) in &self.staged_values {
+            if self
+                .staged_constants
+                .get(path)
+                .is_some_and(|constant| selected.contains(&constant.owner))
+            {
+                constants.insert(
+                    hirsel_tir::constant_instance_path(path, arguments),
+                    value.value.clone(),
+                );
+            }
+        }
+        Ok(NativeStaticInputs {
+            constants,
+            definitions,
+            generated_signatures,
+        })
+    }
+
+    /// Implicit requirements of static values not already observed by an
+    /// ordinary source-definition query (registry and generated constants).
+    pub fn native_static_requirements(
+        &mut self,
+        inputs: &NativeStaticInputs,
+        selected: &std::collections::BTreeSet<DefPath>,
+        source_constants: &std::collections::BTreeSet<DefPath>,
+    ) -> Result<InstanceGraph, QueryError> {
+        let types = self.types.clone();
+        let values = inputs
+            .constants
+            .iter()
+            .filter(|(path, _)| !source_constants.contains(*path))
+            .map(|(path, value)| (path.clone(), value.clone()));
+        crate::generic_graph::native_materialized(&types, values, &mut |callee| {
+            if !selected.contains(callee) {
+                return Ok(None);
+            }
+            Ok(Some(
+                self.parse_definition(callee)?
+                    .value
+                    .owner()
+                    .site(hirsel_types::NameSite::Item),
+            ))
         })
     }
 

@@ -1,0 +1,195 @@
+//! Demand declaration assembly over source products. This boundary owns no
+//! Definition or Value collection and never exports a NativeInput snapshot.
+use super::*;
+use hirsel_core_contract::OperationId;
+use hirsel_engine::{
+    InstanceGraph, NativeDefinitionProduct, NativeDiscoveryCache, NativeSourceRoots, QueryEngine,
+    QueryError,
+};
+use hirsel_rc::instance::{DiscoveryContext, Program};
+use hirsel_syntax::DefPath;
+use hirsel_types::NameSite;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Compact current inputs for source/instance misses. Required source roots and
+/// GEN-5 remain the engine's policy; native demand does not prune diagnostics.
+pub struct NativeDeclarations {
+    pub roots: NativeSourceRoots,
+    pub program: Program,
+    pub context: DiscoveryContext,
+    pub sources: BTreeMap<DefPath, NativeDefinitionProduct>,
+    pub discoveries: Vec<ProductRef>,
+    pub constant_definitions: Vec<DefPath>,
+}
+impl NativeDeclarations {
+    /// Demand one original source body and apply the same independent CT-5
+    /// uses check as snapshot import. No body enters the declaration registry.
+    pub fn body(
+        &mut self,
+        engine: &mut QueryEngine,
+        path: &DefPath,
+    ) -> Result<hirsel_tir::DefinitionRef, QueryError> {
+        let source = self
+            .sources
+            .get_mut(path)
+            .ok_or_else(|| invalid(format!("missing native source declaration {path}")))?;
+        let (definition, output) = engine.native_definition_body_with_output(source)?;
+        let violations = hirsel_validate::validate_instance_uses(
+            &self.program.types,
+            &self.program.instance_bodies,
+            path,
+            &definition,
+        );
+        if !violations.is_empty() {
+            return Err(invalid(format!("invalid instance bodies: {violations:?}")));
+        }
+        source.lower = output;
+        Ok(definition)
+    }
+
+    pub fn collect(
+        engine: &mut QueryEngine,
+        cache: &mut NativeDiscoveryCache,
+        requested: &[DefPath],
+    ) -> Result<Self, QueryError> {
+        let roots = engine.native_source_roots(requested)?;
+        let selected: BTreeSet<_> = roots.definitions.iter().cloned().collect();
+        let environment = &roots.environment;
+        // Request environment only. Per-definition/private/body dependencies
+        // belong to individual query actions, never a whole-program digest.
+        let input = hirsel_lir::stage::InputIdentity {
+            interface_version: environment.interface_version,
+            digest: ContentHash::of_parts(
+                "hirsel.native.environment.v1",
+                [
+                    environment.interface_version.to_le_bytes().as_slice(),
+                    environment.compiler_version.as_bytes(),
+                    environment.spec_hash.0.as_slice(),
+                    environment.package_manifest_hash.0.as_slice(),
+                    environment.builtin_signatures_hash.0.as_slice(),
+                    roots.registry_revision.0.as_slice(),
+                ],
+            ),
+        };
+        let mut program = Program {
+            input,
+            types: engine.types().clone(),
+            memo: Arc::new(hirsel_types::TypeMemo::new()),
+            definitions: BTreeMap::new(),
+            signatures: roots.builtins.clone(),
+            revisions: BTreeMap::new(),
+            binders: BTreeMap::new(),
+            operations: roots
+                .operations
+                .keys()
+                .map(|key| {
+                    (
+                        key.definition.clone(),
+                        OperationId {
+                            definition: key.definition.clone(),
+                            declaration_digest: key.declaration_digest,
+                        },
+                    )
+                })
+                .collect(),
+            requirements: Vec::new(),
+            owners: Default::default(),
+            constants: BTreeMap::new(),
+            instance_bodies: roots.instance_bodies.clone(),
+        };
+        for (path, signature) in &program.signatures {
+            crate::native::adapt::add_owner(&mut program.owners, path, signature, None);
+        }
+        let mut context = DiscoveryContext::default();
+        let mut sources = BTreeMap::new();
+        let mut discoveries = Vec::new();
+        let mut graph = InstanceGraph::default();
+        let mut source_constants = BTreeSet::new();
+        for path in &roots.definitions {
+            let product = cache.definition(engine, path, &selected)?;
+            if let Some(declaration) =
+                super::source::source_declaration(&product).map_err(invalid)?
+            {
+                context.sources.insert(path.clone(), declaration);
+            }
+            if let Some(product) = product.product {
+                discoveries.push(product);
+            }
+            graph
+                .edges
+                .extend(product.requirements.edges.iter().cloned());
+            context.requirements.insert(
+                path.clone(),
+                product
+                    .requirements
+                    .edges
+                    .iter()
+                    .map(crate::native::adapt::requirement)
+                    .collect(),
+            );
+            let source = product.source;
+            program
+                .signatures
+                .insert(path.clone(), source.signature.clone());
+            program
+                .revisions
+                .insert(path.clone(), source.source.implementation_revision);
+            program.binders.insert(
+                path.clone(),
+                source.source.syntax.owner().site(NameSite::Item),
+            );
+            crate::native::adapt::add_owner(
+                &mut program.owners,
+                path,
+                &source.signature,
+                source.representation.as_ref(),
+            );
+            if let Some(value) = &source.constant {
+                source_constants.insert(path.clone());
+                program.constants.insert(path.clone(), value.clone());
+            }
+            sources.insert(path.clone(), source);
+        }
+        let statics = engine.native_static_inputs(&selected)?;
+        let extra = engine.native_static_requirements(&statics, &selected, &source_constants)?;
+        for edge in &extra.edges {
+            context
+                .requirements
+                .entry(edge.owner.clone())
+                .or_default()
+                .push(crate::native::adapt::requirement(edge));
+        }
+        graph.edges.extend(extra.edges);
+        if let Some(site) = graph.growing_sites(engine.types()).first() {
+            return Err(invalid(format!(
+                "instance expansion grows through an implicit instance at {site:?} (spec #87)"
+            )));
+        }
+        program.constants.extend(statics.constants);
+        program.signatures.extend(statics.generated_signatures);
+        let executable = context.sources.keys().cloned().collect();
+        let violations = hirsel_validate::validate_instance_catalog(
+            &program.types,
+            &program.instance_bodies,
+            &program.signatures,
+            &executable,
+        );
+        if !violations.is_empty() {
+            return Err(invalid(format!("invalid instance bodies: {violations:?}")));
+        }
+        Ok(Self {
+            roots,
+            program,
+            context,
+            sources,
+            discoveries,
+            constant_definitions: statics.definitions,
+        })
+    }
+}
+fn invalid(message: impl Into<String>) -> QueryError {
+    QueryError::Operational(hirsel_types::OperationalFailure {
+        operation: "native declarations".into(),
+        message: message.into(),
+    })
+}
