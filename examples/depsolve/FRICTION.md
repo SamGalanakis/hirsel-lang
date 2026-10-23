@@ -123,3 +123,11 @@ recordings from another cwd plus six reference/LLVM/Cranelift replays with the
 private mounted fixture directory unavailable (8 additional cells). The grant
 file is copied unchanged, preserving its relative `host:fixtures` behavior.
 These smoke receipts are separate from the 98/294 matrix counts above.
+
+Resolution of the empty-builder workaround: `unique-empty-builder-29` landed
+`4a4b9377674f6ed5be734030abc81f3c362466f8`. The original form was legal;
+ownership and V lost independently proved consuming-loop item uniqueness.
+The owner validated the exact witness and shrink/forgery controls across four
+engines. The table's open disposition describes the original qualification pin;
+the compiler defect is now fixed. This app retains its tested bounded-copy
+workaround, with no new engine campaign or ownership-rule change.
