@@ -235,6 +235,48 @@ pub fn heap_charge_with(
             }};
         }
         match (&row.kind, value) {
+            (
+                TypeKind::Builtin {
+                    kind: BuiltinType::SortedMap,
+                    arguments,
+                },
+                Value::Record { definition, fields },
+            ) if definition.is_core("SortedMap") => {
+                let types = type_arguments(arguments);
+                let [key, item, comparator] = types.as_slice() else {
+                    return Err(mismatch());
+                };
+                let [Some(order), Some(entries)] = fields.as_slice() else {
+                    return Err(mismatch());
+                };
+                if !matches!(
+                    entries,
+                    Value::Sequence {
+                        kind: BuiltinType::Array,
+                        ..
+                    }
+                ) {
+                    return Err(mismatch());
+                }
+                // The wrapper is inline. Its comparator is an independent
+                // owned field; its entry array is the semantic allocation.
+                // In particular an arena tag on the array does not exempt
+                // an ordinary heap comparator environment from evacuation.
+                let pair = runtime
+                    .types
+                    .intern(hirsel_types::Type::with_kind(TypeKind::Tuple(
+                        vec![*key, *item].into(),
+                    )));
+                let array =
+                    runtime
+                        .types
+                        .intern(hirsel_types::Type::with_kind(TypeKind::Builtin {
+                            kind: BuiltinType::Array,
+                            arguments: vec![hirsel_types::GenericArgument::Type(pair)].into(),
+                        }));
+                push!(0, order, *comparator, scope.clone());
+                push!(1, entries, array, scope.clone());
+            }
             (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(_) | Value::ArenaBytes { .. })
             | (
                 TypeKind::Primitive(Primitive::String),

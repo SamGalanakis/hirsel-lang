@@ -19,3 +19,4 @@ mod scalars;
 mod structural;
 mod query_suspension;
 mod ownership_trace;
+mod arena_inventory_breadth_33;
