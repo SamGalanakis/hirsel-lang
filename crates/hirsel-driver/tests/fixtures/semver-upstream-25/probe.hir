@@ -1,0 +1,30 @@
+// The host supplies input literals; independent expected data never enters semver.
+fn observe(id: String, a: String, b: String, dialect: u8, mut out: List[u8]) {
+  text.append(mut out, id)
+  if dialect == 2 {
+    let left = std@1/semver.parse(a)
+    let right = std@1/semver.parse(b)
+    let av = match left { Ok(_) => "ok", Error(_) => "error" }
+    let bv = match right { Ok(_) => "ok", Error(_) => "error" }
+    text.append(mut out, f"|a={av}|b={bv}|c=")
+    match (left, right) {
+      (Ok(x), Ok(y)) => text.append(mut out, f"{std@1/semver.compare(x, y)}"),
+      _ => text.append(mut out, "na"),
+    }
+  } else {
+    let version = std@1/semver.parse(a)
+    let requirement = if dialect == 0 {
+      std@1/semver.parse_cargo(b)
+    } else {
+      std@1/semver.parse_npm(b)
+    }
+    let av = match version { Ok(_) => "ok", Error(_) => "error" }
+    let bv = match requirement { Ok(_) => "ok", Error(_) => "error" }
+    text.append(mut out, f"|v={av}|r={bv}|m=")
+    match (version, requirement) {
+      (Ok(v), Ok(r)) => text.append(mut out, f"{std@1/semver.matches(r, v)}"),
+      _ => text.append(mut out, "na"),
+    }
+  }
+  text.append(mut out, "\n")
+}

@@ -99,3 +99,4 @@ mod toml_upstream_25;
 mod decimal_upstream_25;
 mod time_zone_upstream_25;
 mod csv_upstream_25;
+mod semver_upstream_25;

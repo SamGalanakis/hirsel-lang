@@ -1,0 +1,39 @@
+{
+  "seed": 2026102512,
+  "counts": {
+    "cargo": 96,
+    "npm": 96,
+    "order": 32
+  },
+  "pins": {
+    "dtolnay": "280ebcb6edac3aa4cdc545dbff8a26c5ac4861fe",
+    "node": "6e05b7637396ac66522cff8731f07cfe0ef49a29"
+  },
+  "options": {
+    "loose": false,
+    "includePrerelease": false,
+    "coercion": false
+  },
+  "projection": "Each row emits ID, independent parse acceptance for both inputs and satisfaction/precedence or na. Syntax-error Results are completed observations. No diagnostic text or offset equivalence is claimed.",
+  "spec": "docs/spec/std-library.md#semantic-versions",
+  "dispositions": {
+    "identical": "Upstream result unchanged.",
+    "strict-version": "Semantic versions paragraph beginning `parse is strict`: version input has no v or whitespace. Cargo oracle determines its acceptance independently.",
+    "npm-numeric-domain": "Paragraph beginning `parse_cargo reads`: numbers are u64 rather than JavaScript 2^53. Exact numeric/universal requirement controls use the Cargo result on identical input; ordering uses cmp_precedence. No truncation or JS Number conversion.",
+    "build-precedence": "Paragraph beginning `parse is strict`: build metadata has no precedence. dtolnay cmp_precedence, not Ord, is the version oracle."
+  },
+  "upstream_files": {
+    "ref-semver-rs/src/eval.rs": "292eac9472c92db20fcd3a864c5598f55a2f5554008af8f704ff975fcf40dd74",
+    "ref-semver-rs/tests/test_version_req.rs": "edb7440c14655a77af2dfed4ea8eebbd9b637947c46f33164a2b66b62f75d464",
+    "ref-semver-rs/tests/test_version.rs": "bca3dccc0add95f657ebb1e37d9d7ff2235b5a151dafe1c8335a1190ea02af2e",
+    "ref-node-semver/classes/range.js": "a6544485aa8575aa9854c67e2caa67726815de18a482d0ceb8a1003244de3bc1",
+    "ref-node-semver/test/fixtures/range-include.js": "7dfe7676a3d2f4f2ee79ef5063f8bfa2c6b2eacff1a6c1184c2cca9b2c380537",
+    "ref-node-semver/test/fixtures/comparisons.js": "bd632ee8a596cd04fae4752a290322a5e27e0c143356001bde4bc9e66b717509"
+  },
+  "licenses": "dtolnay MIT, node-semver ISC; third-party/NOTICES.md",
+  "vectors_sha256": "18da3520bf542ee871667dbb9d5d85fd2e848850b1c6e6578b0ab5af0e769917",
+  "spec_paragraphs": [
+    "`parse` is strict, as dtolnay/semver: `major.minor.patch` in u64 without\nleading zeros, then an optional `-` prerelease of dot-separated nonempty\n`[0-9A-Za-z-]` identifiers (numeric ones without leading zeros) and an optional\n`+` build of the same identifiers (leading zeros allowed). There is no leading\n`v` or whitespace. Errors carry byte offsets: `Syntax` at the unexpected\ncharacter or the end, `LeadingZero` and `Overflow` at the number's start;\n`Empty()` is the empty string. `compare` is SemVer precedence: numbers, then\nprereleases, where a release is greater than any prerelease and identifiers\ncompare in turn, numeric by value and below alphanumeric ones in ASCII order,\na longer list winning a tie. Build metadata has no precedence, so `compare` can\nbe 0 for versions `==` tells apart. `Version` formats through `@format`.",
+    "`parse_cargo` reads a Cargo requirement into one set: comparators separated by\ncommas, each `=`, `>`, `>=`, `<`, `<=`, `~`, `^` or nothing (caret) before a\nversion whose minor and patch may be absent or `*`, `x` or `X`; spaces may\nsurround operators and commas, build metadata is ignored, and a lone wildcard\nmust be the only comparator. `parse_npm` reads a node-semver range without the\nloose and includePrerelease options: `||` separates sets, each a hyphen range\n`a - b` or comparators separated by whitespace (`<`, `<=`, `>`, `>=`, `=` or\nnothing before an x-range such as `1`, `1.x` or `*`, `~`, `~>` or `^`), with an\noptional `v` before versions; as in node-semver, every `+` and build\nidentifiers are first deleted from a set's text wherever they stand. Each comparator desugars to Exact, GreaterEq,\nGreater, Less and LessEq comparators of full versions exactly as node-semver's\n`Range` does (`^1.2` is `>=1.2.0, <2.0.0-0`, `>=0.0.0` is dropped, an\nunsatisfiable comparator `<0.0.0-0` stands for its whole set, and so on); numbers\nare u64 rather than JavaScript's 2^53. `req_to_string` spells a `Req` as\ndtolnay/semver displays one: comparators joined by `, `, `*` for an empty set,\nsets joined by ` || `."
+  ]
+}
