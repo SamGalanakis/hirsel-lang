@@ -109,11 +109,15 @@ fn receive_endpoint_diagnostic_19_real_count_conflict_keeps_copy_advice() {
                 "message": "this operation requires a unique value: `xs` lost its deep uniqueness, but a unique value is required",
                 "primary": "need(take xs)",
                 "secondary": [
+                    ["copy xs", "this copy ended the owner's nested uniqueness"],
                     ["take xs", "parameter mode requirement"],
                     ["copy xs", "provided: copying `xs` shares counted storage reachable from `xs`"],
                     ["need", "required: this requires a unique value (MODE-2)"]
                 ],
-                "notes": ["help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage."]
+                "notes": [
+                    "Use `unique element` for an explicit deep unique copy before passing it to the unique receiver. Alternatively, end or drop the snapshot before the loop and use an ordinary `mut` receiver; a counted copy ends static uniqueness for the rest of its owner's scope.",
+                    "help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage."
+                ]
             }),
         );
     });
