@@ -209,7 +209,9 @@ impl NativeDiscoveryCache {
         self.counts.misses += 1;
         let body = if crate::queries::generation::executable(&source.source.syntax) {
             self.counts.body_demands += 1;
-            Some(engine.native_definition_body(&source)?)
+            let (body, output) = engine.native_definition_body_with_output(&source)?;
+            source.lower = output;
+            Some(body)
         } else {
             None
         };
@@ -226,9 +228,8 @@ impl NativeDiscoveryCache {
             },
         )?;
         let contracts = body.as_ref().map(|d| NativeBodyContracts::of(d));
-        // A cold Lower miss may just have minted V's source envelope. Publish
-        // against that exact settled identity, never against its earlier absence.
-        source = engine.native_definition_product(path)?;
+        // Publish against the exact V-issued output returned by the completed
+        // Lower demand, including under forced recomputation. No lookup replay.
         let record = Record {
             definition: path.clone(),
             contracts: contracts.clone(),

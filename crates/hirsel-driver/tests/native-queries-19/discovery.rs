@@ -262,3 +262,40 @@ fn native_discovery_cache_type_only_respects_forced_recomputation() {
         );
     });
 }
+
+#[test]
+fn native_discovery_cache_forced_lower_uses_fresh_verifier_output() {
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone())
+            .with_verify_store(store::VerifyStore::Recompute);
+        let file = engine
+            .sources
+            .add("forced.hir", "pub fn main()->u64{1u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let main = path("main");
+        let selected = engine
+            .native_source_roots(&[])
+            .unwrap()
+            .definitions
+            .into_iter()
+            .collect();
+        assert!(engine.verified_lower_output(&main).unwrap().is_none());
+        let mut queries = NativeDiscoveryCache::new(engine.types().clone(), store);
+        let result = queries.definition(&mut engine, &main, &selected).unwrap();
+        assert_eq!(queries.counts.hits, 0);
+        assert_eq!(queries.counts.body_demands, 1);
+        assert_eq!(engine.recompute_count(&main, QueryKind::Lower), 1);
+        let output = result
+            .source
+            .lower
+            .as_ref()
+            .expect("actual Lower returns V output");
+        assert!(engine.materialize_verified_lower_output(output).is_some());
+        assert!(engine.verified_lower_output(&main).unwrap().is_none());
+        assert!(result.product.is_some());
+    });
+}

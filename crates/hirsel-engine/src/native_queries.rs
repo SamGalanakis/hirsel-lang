@@ -147,19 +147,29 @@ impl QueryEngine {
         &mut self,
         product: &NativeDefinitionProduct,
     ) -> Result<DefinitionRef, QueryError> {
+        self.native_definition_body_with_output(product)
+            .map(|(body, _)| body)
+    }
+
+    /// Complete one ordinary Lower demand and retain V's own output from that
+    /// completion. A forced recomputation has no cached receipt to look up;
+    /// returning the fresh token avoids a second lookup and depth replay.
+    pub fn native_definition_body_with_output(
+        &mut self,
+        product: &NativeDefinitionProduct,
+    ) -> Result<
+        (
+            DefinitionRef,
+            Option<hirsel_validate::VerifiedDefinitionOutput>,
+        ),
+        QueryError,
+    > {
         self.check_native_definition_product(product)?;
-        let path = &product.definition;
-        if let Some(output) = self.verified_lower_output(path)?
-            && product.lower.as_ref().is_some_and(|old| old == &output)
-            && let Some(definition) = self.materialize_verified_lower_output(&output)
-        {
-            return Ok(definition);
-        }
-        let lowered = self.lower_to_tir(path)?;
+        let (lowered, output) = self.lower_to_tir_with_verified_output(&product.definition)?;
         if crate::queries::has_errors(&lowered.diagnostics) {
             return Err(QueryError::Diagnostics(lowered.diagnostics));
         }
-        Ok(lowered.value)
+        Ok((lowered.value, output))
     }
 
     fn check_native_definition_product(
