@@ -1,0 +1,220 @@
+// Parent owns file/state and task sets; each worker owns exactly one Child.
+pub type Error = State(state.Fault) | Plan(plan.Error) | Report(report.Error) | Clock | Wait
+
+pub type Completion {
+  slot: u64,
+  code: i32,
+  reason: u64,
+}
+
+pub type Totals {
+  admitted: u64,
+  skipped: u64,
+  failed: u64,
+}
+
+fn fault(slot: u64, error: ProcessError) -> Completion uses {} {
+  let reason = match error {
+    Canceled(_) => 2u64,
+    TimedOut() => 3u64,
+    _ => 4u64,
+  }
+  Completion(slot: slot, code: -1, reason: reason)
+}
+
+fn status(done: Completion) -> String uses {} {
+  if done.reason == 2 {
+    "canceled"
+  } else if done.reason == 3 {
+    "deadline"
+  } else if done.reason == 4 {
+    "spawn_error"
+  } else if done.code == 0 {
+    "success"
+  } else {
+    "failed"
+  }
+}
+
+fn job(
+  p: Proc,
+  clock: MonotonicClock,
+  take cmd: unique Command,
+  slot: u64,
+  milliseconds: u64
+) -> Completion {
+  let Ok(start) = clock.monotonic(clock) else {
+    return Completion(slot: slot, code: -1, reason: 4)
+  }
+  let Some(at) = instant.checked_add(clock, start, milliseconds * 1000000) else {
+    return Completion(slot: slot, code: -1, reason: 4)
+  }
+  let mut child = match proc.spawn(p, take cmd) {
+    Ok(c) => take c,
+    Error(e) => return fault(slot, e),
+  }
+  child.close_stdin(p, mut child)
+  // wait drains both pipes concurrently and consumes/reaps the handle on every path.
+  match child.wait(p, take child, Some(Deadline(clock: clock, at: at))) {
+    Ok(Exited(code)) => Completion(slot: slot, code: code, reason: 0),
+    Ok(Signaled(code)) => Completion(slot: slot, code: code, reason: 1),
+    Error(e) => fault(slot, e),
+  }
+}
+
+// A batch contains at most sixteen coalesced occurrences. Admission order is
+// calendar time then declaration order; completion output is completion order.
+fn batch(
+  s: Scope,
+  p: Proc,
+  clock: MonotonicClock,
+  d: Dir,
+  config: plan.Config,
+  mut book: state.Book,
+  items: List[plan.Scheduled[u64]],
+  limit: u64,
+  output: Stdout
+) -> Result[Totals, Error] {
+  let mut members: TaskSet[Completion] of s = task.set(s)
+  let mut active = 0u64
+  let mut next = 0u64
+  let mut admitted = 0u64
+  let mut skipped = 0u64
+  let mut failed = 0u64
+  while next < list.len(items) || active != 0 {
+    while next < list.len(items) && active < config.parallel && admitted < limit {
+      if let Error(_) = task.check_canceled(s) {
+        break
+      }
+      let item = items[next]
+      let slot = item.item
+      // This durable barrier must finish before the task can call proc.spawn.
+      if let Error(e) = state.admit(d, mut book, item) {
+        task.cancel_all(s, take members)
+        return Error(State(e))
+      }
+      let cmd = plan.command(config.jobs[slot])
+      let milliseconds = config.jobs[slot].deadline_ms
+      let h = task.async(
+        s,
+        fn() -> Completion {
+          job(p, clock, take cmd, slot, milliseconds)
+        }
+      )
+      task.add(s, mut members, take h)
+      next += 1
+      admitted += 1
+      skipped += item.skipped
+      active += 1
+    }
+    if active == 0 {
+      break
+    }
+    let Some(ticket) = task.await_any(s, members) else {
+      break
+    }
+    let done = task.await_at(s, mut members, ticket)
+    active -= 1
+    if done.reason != 0 || done.code != 0 {
+      failed += 1
+    }
+    // Cancellation may refuse this write. The durable admitted row survives
+    // and becomes uncertain at restart; a failed write never invents success.
+    if let Error(e) = state.complete(d, mut book, done.slot, status(done), done.code) {
+      task.cancel_all(s, take members)
+      return Error(State(e))
+    }
+    let mut missed = 0u64
+    for item in items {
+      if item.item == done.slot {
+        missed = item.skipped
+      }
+    }
+    if let Error(e) = report.occurrence(output, book.rows[done.slot], missed) {
+      task.cancel_all(s, take members)
+      return Error(Report(e))
+    }
+    if admitted == limit && active == 0 {
+      break
+    }
+  }
+  task.cancel_all(s, take members)
+  Ok(Totals(admitted: admitted, skipped: skipped, failed: failed))
+}
+
+pub fn session(
+  scope: Scope,
+  p: Proc,
+  wall: WallClock,
+  clock: MonotonicClock,
+  d: Dir,
+  config: plan.Config,
+  mut book: state.Book,
+  until: i128,
+  max_runs: u64,
+  output: Stdout
+) -> Result[Totals, Error] {
+  let mut admitted = 0u64
+  let mut skipped = 0u64
+  let mut failed = 0u64
+  while admitted < max_runs {
+    let now = match clock.wall(wall) {
+      Ok(n) => n,
+      Error(_) => return Error(Clock()),
+    }
+    if int.widen(now) >= until {
+      break
+    }
+    // Widen before subtracting: even opposite i64 endpoints cannot overflow.
+    let gap: i128 = int.widen(now) - int.widen(book.seen_ns)
+    if book.refused || gap > 86400000000000i128 {
+      book.refused = true
+      state.save(d, book)?
+      return Error(Plan(Domain("catchup_reset_required")))
+    }
+    if now > book.seen_ns {
+      book.seen_ns = now
+    }
+    let current = int.div_floor(book.seen_ns, 60000000000i64)
+    let decision = plan.due(config, state.cursors(book), current)?
+    let done = batch(
+      scope,
+      p,
+      clock,
+      d,
+      config,
+      mut book,
+      decision.items,
+      max_runs - admitted,
+      output
+    )?
+    admitted += done.admitted
+    skipped += done.skipped
+    failed += done.failed
+    state.save(d, book)?
+    if admitted >= max_runs {
+      break
+    }
+    // At most one second between wall samples. Monotonic waits cannot regress
+    // when wall time moves backward; high-water cursors prevent duplicates.
+    let sample = match clock.monotonic(clock) {
+      Ok(n) => n,
+      Error(_) => return Error(Clock()),
+    }
+    let left = until - int.widen(now)
+    let delay: u64 = int.narrow(
+      if left < 1000000000i128 {
+        left
+      } else {
+        1000000000i128
+      }
+    )
+    let Some(at) = instant.checked_add(clock, sample, delay) else {
+      return Error(Clock())
+    }
+    if let Error(_) = clock.sleep_until(clock, at) {
+      return Error(Wait())
+    }
+  }
+  Ok(Totals(admitted: admitted, skipped: skipped, failed: failed))
+}

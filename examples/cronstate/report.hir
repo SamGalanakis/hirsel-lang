@@ -1,0 +1,129 @@
+// JSON lines have stable field/array order and explicit uncertainty.
+pub type Error = Output(OutputError) | Json(json.JsonError)
+
+pub type Outcome {
+  id: String,
+  at: String,
+  status: String,
+  code: i32,
+  skipped: u64,
+}
+
+pub type Summary {
+  event: String,
+  admitted: u64,
+  uncertain: u64,
+  skipped: u64,
+  failed: u64,
+}
+
+fn outcome_json(value: Outcome) -> json.Value uses {} = comptime derive.json_value(
+  shape(Outcome)
+)
+
+fn summary_json(value: Summary) -> json.Value uses {} = comptime derive.json_value(
+  shape(Summary)
+)
+
+pub fn line(output: Stdout, value: json.Value) -> Result[(), Error] {
+  let text = json.stringify(value)?
+  out.print(output, f"{text}\n")?
+  Ok(())
+}
+
+type Checked {
+  event: String,
+  jobs: u64,
+}
+
+type Upcoming {
+  id: String,
+  next: String,
+}
+
+type Restart {
+  event: String,
+  uncertain: u64,
+}
+
+type Problem {
+  error: String,
+}
+
+fn checked_json(value: Checked) -> json.Value uses {} = comptime derive.json_value(
+  shape(Checked)
+)
+
+fn upcoming_json(value: Upcoming) -> json.Value uses {} = comptime derive.json_value(
+  shape(Upcoming)
+)
+
+fn restart_json(value: Restart) -> json.Value uses {} = comptime derive.json_value(
+  shape(Restart)
+)
+
+fn problem_json(value: Problem) -> json.Value uses {} = comptime derive.json_value(
+  shape(Problem)
+)
+
+pub fn checked(output: Stdout, count: u64) -> Result[(), Error] {
+  line(output, checked_json(Checked(event: "checked", jobs: count)))
+}
+
+pub fn upcoming(output: Stdout, rows: List[plan.Scheduled[String]]) -> Result[(), Error] {
+  for row in rows {
+    let at = match spec.spelling(row.at) {
+      Ok(s) => take s,
+      Error(_) => "out_of_range",
+    }
+    line(output, upcoming_json(Upcoming(id: unique row.item, next: take at)))?
+  }
+  Ok(())
+}
+
+pub fn occurrence(output: Stdout, row: state.Row, skipped: u64) -> Result[(), Error] {
+  let at = match spec.spelling(row.at) {
+    Ok(s) => take s,
+    Error(_) => "out_of_range",
+  }
+  line(
+    output,
+    outcome_json(
+      Outcome(
+        id: unique row.id,
+        at: take at,
+        status: unique row.status,
+        code: row.code,
+        skipped: skipped
+      )
+    )
+  )
+}
+
+pub fn summary(output: Stdout, admitted: u64, uncertain: u64, skipped: u64, failed: u64) -> Result[
+  (),
+  Error
+] {
+  line(
+    output,
+    summary_json(
+      Summary(
+        event: "stopped",
+        admitted: admitted,
+        uncertain: uncertain,
+        skipped: skipped,
+        failed: failed
+      )
+    )
+  )
+}
+
+pub fn restart(output: Stdout, count: u64) -> Result[(), Error] {
+  line(output, restart_json(Restart(event: "restart", uncertain: count)))
+}
+
+pub fn problem(errors: Stderr, kind: String) -> Result[(), Error] {
+  let text = json.stringify(problem_json(Problem(error: unique kind)))?
+  err.print(errors, f"{text}\n")?
+  Ok(())
+}

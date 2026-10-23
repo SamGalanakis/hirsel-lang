@@ -1,0 +1,2430 @@
+[
+  {
+    "id": "check",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [
+      {
+        "event": "checked",
+        "jobs": 1
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "check-empty",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": []
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [
+      {
+        "event": "checked",
+        "jobs": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-quarter-hour",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0/15 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T14:45:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-09T15:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-range",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "20-35/15 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T15:45:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-09T16:20:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-midnight",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "*/15 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T23:46:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-10T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-year",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-12-31T23:59:45Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2013-01-01T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-leap",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 29 2 *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T23:35:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2016-02-29T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-dom-or-dow",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 1,15 * 0",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-06-14T00:00:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-06-15T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-star-and",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 * * 1",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-15T00:00:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-16T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-stepped-star",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 */2 * 0",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-14T00:00:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-15T00:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-list",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "1,5-7/2,3 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T15:01:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-09T15:03:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "next-order",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "30 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "b",
+          "cron": "0 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "c",
+          "cron": "0 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T14:45:00Z"
+    ],
+    "rows": [
+      {
+        "id": "b",
+        "next": "2012-07-09T15:00:00Z"
+      },
+      {
+        "id": "c",
+        "next": "2012-07-09T15:00:00Z"
+      },
+      {
+        "id": "a",
+        "next": "2012-07-09T15:30:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-zero",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "*/0 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-negative",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "-1 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-range-back",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "5-3 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-high",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "60 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-descriptor",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "@daily",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-seconds",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 * * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-name",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 * jan *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-zone",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "TZ=Europe/Berlin * * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "invalid-empty-list",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": ", * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "cron",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "horizon",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0 0 31 2 *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2024-01-01T00:00:00Z"
+    ],
+    "rows": [],
+    "error": "horizon",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "run-success",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "run-failure",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "fail"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "failed",
+        "code": 7,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 1
+      }
+    ],
+    "error": null,
+    "exit": 1,
+    "steps": 1000000
+  },
+  {
+    "id": "run-refused",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "spawn_error",
+        "code": -1,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 1
+      }
+    ],
+    "error": null,
+    "exit": 1,
+    "steps": 1000000,
+    "deny": "spawn"
+  },
+  {
+    "id": "run-missing",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "spawn_error",
+        "code": -1,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 1
+      }
+    ],
+    "error": null,
+    "exit": 1,
+    "steps": 1000000,
+    "missing_child": true
+  },
+  {
+    "id": "equal-time",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "b",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "2"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "b",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 2,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "uncertain",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "event": "restart",
+        "uncertain": 1
+      }
+    ],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "admitted",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "completed-restart",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "catchup",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:03:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-01T00:03:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 2
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 2,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000,
+    "wall": 180000000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "gap-over",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-02T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "catchup_reset_required",
+    "exit": 2,
+    "steps": 1000000,
+    "wall": 86400000000001,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "refusal-retained",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "catchup_reset_required",
+    "exit": 2,
+    "steps": 1000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": true,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "malformed-state",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_json",
+    "exit": 2,
+    "steps": 1000000,
+    "prior": "{"
+  },
+  {
+    "id": "state-binding",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_binding",
+    "exit": 2,
+    "steps": 1000000,
+    "prior": {
+      "version": 1,
+      "config": "wrong",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "locked",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_locked",
+    "exit": 3,
+    "steps": 1000000,
+    "lock": true
+  },
+  {
+    "id": "state-denied",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_file",
+    "exit": 3,
+    "steps": 1000000,
+    "deny": "state"
+  },
+  {
+    "id": "write-denied",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_file",
+    "exit": 3,
+    "steps": 1000000,
+    "fault": "file.create"
+  },
+  {
+    "id": "sync-denied",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_file",
+    "exit": 3,
+    "steps": 1000000,
+    "fault": "file.sync"
+  },
+  {
+    "id": "max-runs-over",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "33"
+    ],
+    "rows": [],
+    "error": "max_runs",
+    "exit": 3,
+    "steps": 1000000
+  },
+  {
+    "id": "deadline-over",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 3001
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "deadline",
+    "exit": 3,
+    "steps": 1000000
+  },
+  {
+    "id": "jobs-over",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "0",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "1",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "2",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "3",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "4",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "5",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "6",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "7",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "8",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "9",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "10",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "11",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "12",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "13",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "14",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "15",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "16",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "job_limit",
+    "exit": 3,
+    "steps": 1000000
+  },
+  {
+    "id": "duplicate-id",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "duplicate_id",
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "config-bytes-65536",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [
+      {
+        "event": "checked",
+        "jobs": 1
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 10000000,
+    "raw_size": 65536
+  },
+  {
+    "id": "config-bytes-65537",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "config_bytes",
+    "exit": 3,
+    "steps": 10000000,
+    "raw_size": 65537
+  },
+  {
+    "id": "argv-bytes-4096",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [
+      {
+        "event": "checked",
+        "jobs": 1
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 10000000
+  },
+  {
+    "id": "argv-bytes-4097",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "check",
+      "schedule.json"
+    ],
+    "rows": [],
+    "error": "argv_bytes",
+    "exit": 3,
+    "steps": 10000000
+  },
+  {
+    "id": "state-bytes-131072",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 20000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    },
+    "state_size": 131072
+  },
+  {
+    "id": "state-bytes-131073",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "state_bytes",
+    "exit": 3,
+    "steps": 20000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    },
+    "state_size": 131073
+  },
+  {
+    "id": "capacity-4",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "0",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "1",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "2",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "3",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "4"
+    ],
+    "rows": [
+      {
+        "id": "0",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "1",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "2",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "3",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 4,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 10000000
+  },
+  {
+    "id": "capacity-16",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "0",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "1",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "2",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "3",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "4",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "5",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "6",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "7",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "8",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "9",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "10",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "11",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "12",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "13",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "14",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        },
+        {
+          "id": "15",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "16"
+    ],
+    "rows": [
+      {
+        "id": "0",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "1",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "2",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "3",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "4",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "5",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "6",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "7",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "8",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "9",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "10",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "11",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "12",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "13",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "14",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "id": "15",
+        "at": "1970-01-01T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 16,
+        "uncertain": 0,
+        "skipped": 0,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 10000000
+  },
+  {
+    "id": "pending-config",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:02Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000,
+    "pending": true
+  },
+  {
+    "id": "backward-clock",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:00:01Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000,
+    "wall": -60000000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 180000000000,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 3,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "uncertain-future",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-01T00:01:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "event": "restart",
+        "uncertain": 1
+      },
+      {
+        "id": "a",
+        "at": "1970-01-01T00:01:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 0
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 1,
+        "skipped": 0,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000,
+    "wall": 60000000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "admitted",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "gap-exact",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1970-01-02T00:00:02Z",
+      "1"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "at": "1970-01-02T00:00:00Z",
+        "status": "success",
+        "code": 0,
+        "skipped": 1439
+      },
+      {
+        "event": "stopped",
+        "admitted": 1,
+        "uncertain": 0,
+        "skipped": 1439,
+        "failed": 0
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 20000000,
+    "wall": 86400000000000,
+    "prior": {
+      "version": 1,
+      "config": "{\"version\":1,\"parallel\":4,\"jobs\":[{\"id\":\"a\",\"cron\":\"* * * * *\",\"program\":\"/fixture/child\",\"argv\":[\"ok\"],\"deadline_ms\":1000}]}",
+      "seen_ns": 0,
+      "refused": false,
+      "rows": [
+        {
+          "id": "a",
+          "at": 0,
+          "status": "success",
+          "code": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "large-step",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "0/18446744073709551615 * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "next",
+      "schedule.json",
+      "2012-07-09T15:45:00Z"
+    ],
+    "rows": [
+      {
+        "id": "a",
+        "next": "2012-07-09T16:00:00Z"
+      }
+    ],
+    "error": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "past-until",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1969-12-31T23:59:59Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000
+  },
+  {
+    "id": "past-until-pending",
+    "config": {
+      "version": 1,
+      "parallel": 4,
+      "jobs": [
+        {
+          "id": "a",
+          "cron": "* * * * *",
+          "program": "/fixture/child",
+          "argv": [
+            "ok"
+          ],
+          "deadline_ms": 1000
+        }
+      ]
+    },
+    "args": [
+      "run",
+      "schedule.json",
+      "1969-12-31T23:59:59Z",
+      "1"
+    ],
+    "rows": [],
+    "error": "run_until",
+    "exit": 1,
+    "steps": 1000000,
+    "pending": true,
+    "already_expired": true
+  }
+]

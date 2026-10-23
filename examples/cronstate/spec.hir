@@ -1,0 +1,224 @@
+// Port of robfig/cron parser.go:236-363 and spec.go:58-188, bc59245f.
+// MIT; LICENSES/robfig-cron.txt. Numeric five-field UTC; no seconds or zones.
+pub const MINUTE_NS: i128 = 60000000000
+
+pub type Error = Invalid | Horizon
+
+pub type Field {
+  bits: u64,
+  star: bool,
+}
+
+pub type Cron {
+  minute: Field,
+  hour: Field,
+  dom: Field,
+  month: Field,
+  dow: Field,
+}
+
+fn number(word: String) -> Result[u64, Error] uses {} {
+  if string.byte_len(word) == 0 || string.byte_len(word) > 256 {
+    return Error(Invalid())
+  }
+  let mut n = 0u64
+  for b in string.as_bytes(word) {
+    if b < 48u8 || b > 57u8 {
+      return Error(Invalid())
+    }
+    let Some(shifted) = u64.checked_mul(n, 10u64) else {
+      return Error(Invalid())
+    }
+    let digit: u64 = int.widen(b - 48u8)
+    let Some(value) = u64.checked_add(shifted, digit) else {
+      return Error(Invalid())
+    }
+    n = value
+  }
+  Ok(n)
+}
+
+pub fn field(word: String, low: u64, high: u64) -> Result[Field, Error] uses {} {
+  let mut bits = 0u64
+  let mut star = false
+  if string.byte_len(word) == 0 || string.byte_len(word) > 256 {
+    return Error(Invalid())
+  }
+  for part in string.split(unique word, ",") {
+    let slash = string.split(unique part, "/")
+    if list.len(slash) > 2 {
+      return Error(Invalid())
+    }
+    let step = if list.len(slash) == 2 {
+      number(slash[1])?
+    } else {
+      1u64
+    }
+    if step == 0 {
+      return Error(Invalid())
+    }
+    let ends = string.split(unique slash[0], "-")
+    if list.len(ends) > 2 {
+      return Error(Invalid())
+    }
+    let mut begin = low
+    let mut end = high
+    let wildcard = ends[0] == "*"
+    if wildcard {
+      if list.len(ends) != 1 {
+        return Error(Invalid())
+      }
+    } else {
+      begin = number(ends[0])?
+      end = if list.len(ends) == 2 {
+        number(ends[1])?
+      } else if list.len(slash) == 2 {
+        high
+      } else {
+        begin
+      }
+    }
+    if begin < low || end > high || begin > end {
+      return Error(Invalid())
+    }
+    // robfig clears the DOM/DOW star bit for */N when N > 1.
+    if wildcard && step == 1 {
+      star = true
+    }
+    let mut i = begin
+    while i <= end {
+      bits |= 1u64 << i
+      if step > end - i {
+        break
+      }
+      i += step
+    }
+  }
+  Ok(Field(bits: bits, star: star))
+}
+
+pub fn parse(text: String) -> Result[Cron, Error] uses {} {
+  if string.byte_len(text) > 256 {
+    return Error(Invalid())
+  }
+  let fields = string.split_ascii_whitespace(unique text)
+  if list.len(fields) != 5 {
+    return Error(Invalid())
+  }
+  Ok(
+    Cron(
+      minute: field(fields[0], 0, 59)?,
+      hour: field(fields[1], 0, 23)?,
+      dom: field(fields[2], 1, 31)?,
+      month: field(fields[3], 1, 12)?,
+      dow: field(fields[4], 0, 6)?
+    )
+  )
+}
+
+fn has(f: Field, n: u64) -> bool uses {} {
+  f.bits & 1u64 << n != 0
+}
+
+fn weekday(d: time.Date) -> u64 uses {} {
+  match date.weekday(d) {
+    Sunday() => 0,
+    Monday() => 1,
+    Tuesday() => 2,
+    Wednesday() => 3,
+    Thursday() => 4,
+    Friday() => 5,
+    Saturday() => 6,
+  }
+}
+
+fn day_matches(s: Cron, d: time.Date) -> bool uses {} {
+  let dom = has(s.dom, int.widen(date.day(d)))
+  let dow = has(s.dow, weekday(d))
+  if s.dom.star || s.dow.star {
+    dom && dow
+  } else {
+    dom || dow
+  }
+}
+
+pub fn minute(value: time.Timestamp) -> Result[i64, Error] uses {} {
+  let n: Option[i64] = int.try_narrow(int.div_floor(value.unix_nanoseconds, MINUTE_NS))
+  match n {
+    Some(value_minute) => Ok(value_minute),
+    None() => Error(Invalid()),
+  }
+}
+
+pub fn utc(text: String) -> Result[time.Timestamp, Error] uses {} {
+  if string.byte_len(text) > 30 || !string.ends_with(text, "Z") {
+    return Error(Invalid())
+  }
+  match time.parse(text) {
+    Ok(t) => Ok(t),
+    Error(_) => Error(Invalid()),
+  }
+}
+
+pub fn spelling(n: i64) -> Result[unique String, Error] uses {} {
+  match time.to_string(time.Timestamp(unix_nanoseconds: int.widen(n) * MINUTE_NS)) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error(Invalid()),
+  }
+}
+
+// Month/day/hour/minute jumps revalidate earlier fields after every carry.
+// There is no minute-by-minute search through a five-year gap.
+pub fn next(s: Cron, after: i64) -> Result[i64, Error] uses {} {
+  if after < -1036120320i64 || after >= 4223371680i64 {
+    return Error(Invalid())
+  }
+  let Some(mut_n) = i64.checked_add(after, 1i64) else {
+    return Error(Invalid())
+  }
+  let mut n = mut_n
+  let Some(initial) = date.from_epoch_days(int.div_floor(n, 1440i64)) else {
+    return Error(Invalid())
+  }
+  let limit = date.year(initial) + 5
+  while true {
+    let days = int.div_floor(n, 1440i64)
+    let Some(d) = date.from_epoch_days(days) else {
+      return Error(Horizon())
+    }
+    if date.year(d) > limit || date.year(d) > 9999 {
+      return Error(Horizon())
+    }
+    if !has(s.month, int.widen(date.month(d))) {
+      let Some(first) = date.new(date.year(d), date.month(d), 1u8) else {
+        return Error(Invalid())
+      }
+      let Ok(new_date) = date.add_months(first, 1i64, Clamp()) else {
+        return Error(Horizon())
+      }
+      n = date.to_epoch_days(new_date) * 1440
+      continue
+    }
+    if !day_matches(s, d) {
+      n = (days + 1) * 1440
+      continue
+    }
+    let clock_minute = int.mod(n, 1440i64)
+    let hour: u64 = int.narrow(clock_minute / 60)
+    if !has(s.hour, hour) {
+      n = n - clock_minute % 60 + 60
+      continue
+    }
+    let current: u64 = int.narrow(clock_minute % 60)
+    if !has(s.minute, current) {
+      let mut candidate = current + 1
+      while candidate < 60 && !has(s.minute, candidate) {
+        candidate += 1
+      }
+      n += int.narrow(candidate - current)
+      continue
+    }
+    return Ok(n)
+  }
+  Error(Horizon())
+}

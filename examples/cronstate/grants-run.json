@@ -1,0 +1,40 @@
+{
+  "args": [
+    "run",
+    "schedule.json",
+    "2026-10-23T12:00:00Z",
+    "1"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "dirs": [
+      {
+        "path": "config",
+        "host": "fixtures",
+        "access": "read"
+      },
+      {
+        "path": "state",
+        "host": "state",
+        "access": "read_write"
+      }
+    ],
+    "tasks": "tasks.cooperative@1",
+    "wall_clock": "clock.wall.unix_ns@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "process": {
+      "provider": "process.spawn@1",
+      "rules": [
+        {
+          "program": "/usr/bin/true"
+        }
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

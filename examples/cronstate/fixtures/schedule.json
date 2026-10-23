@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "parallel": 4,
+  "jobs": [
+    {
+      "id": "minute",
+      "cron": "* * * * *",
+      "program": "/usr/bin/true",
+      "argv": [],
+      "deadline_ms": 1000
+    }
+  ]
+}

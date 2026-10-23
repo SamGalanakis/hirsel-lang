@@ -1,0 +1,207 @@
+// Single-writer versioned snapshot; persistence boundaries precede process effects.
+pub const MAX_BYTES: u64 = 131072
+
+pub type Fault = Invalid(String) | Resource(String) | Files(FileError)
+
+pub type Row {
+  id: String,
+  at: i64,
+  status: String,
+  code: i32,
+}
+
+pub type Book {
+  version: u64,
+  config: String,
+  seen_ns: i64,
+  refused: bool,
+  rows: List[Row],
+}
+
+// The lease's lexical lifetime includes all children and final publication.
+pub resource type Lease {
+  directory: Dir,
+}
+drop(lease) {
+  let _ = file.remove_dir(lease.directory, path.of("owner.lock"))
+}
+
+pub fn acquire(d: Dir) -> Result[Lease, Fault] {
+  file.mkdir(d, path.of("owner.lock")) ? Files
+  Ok(Lease(directory: d))
+}
+
+pub fn unlock(d: Dir) -> Result[(), Fault] {
+  file.remove_dir(d, path.of("owner.lock")) ? Files
+  Ok(())
+}
+
+fn row_from_json(value: json.Value) -> Result[unique Row, String] uses {} = comptime derive.from_json(
+  shape(Row)
+)
+
+fn row_to_json(value: Row) -> json.Value uses {} = comptime derive.json_value(
+  shape(Row)
+)
+
+fn from_json(value: json.Value) -> Result[unique Book, String] uses {} = comptime derive.from_json(
+  shape(Book)
+)
+
+fn to_json(value: Book) -> json.Value uses {} = comptime derive.json_value(shape(Book))
+
+pub fn empty(config: plan.Config, key: String, now: i64) -> unique Book uses {} {
+  let baseline = int.div_floor(now, 60000000000i64) - 1
+  let mut rows: List[Row] = []
+  for job in config.jobs {
+    list.push(mut rows, Row(id: unique job.id, at: baseline, status: "idle", code: 0))
+  }
+  Book(version: 1, config: unique key, seen_ns: now, refused: false, rows: take rows)
+}
+
+pub fn decode(take data: unique Bytes, config: plan.Config, key: String) -> Result[
+  unique Book,
+  Fault
+] uses {} {
+  if bytes.len(data) > MAX_BYTES {
+    return Error(Resource("state_bytes"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Invalid("state_utf8"))
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Invalid("state_json"))
+  }
+  let Object(fields) = value else {
+    return Error(Invalid("state_shape"))
+  }
+  if map.len(fields) != 5 {
+    return Error(Invalid("state_fields"))
+  }
+  let Some(Array(rows)) = json_access.member(value, "rows") else {
+    return Error(Invalid("state_shape"))
+  }
+  if list.len(rows) > plan.MAX_JOBS {
+    return Error(Resource("state_rows"))
+  }
+  for row in rows {
+    let Object(row_fields) = row else {
+      return Error(Invalid("state_row"))
+    }
+    if map.len(row_fields) != 4 {
+      return Error(Invalid("state_row"))
+    }
+  }
+  let Ok(book) = from_json(value) else {
+    return Error(Invalid("state_shape"))
+  }
+  if book.version != 1 || book.config != key || list.len(book.rows) != list.len(
+    config.jobs
+  ) {
+    return Error(Invalid("state_binding"))
+  }
+  let high = int.div_floor(book.seen_ns, 60000000000i64)
+  for i in 0u64..list.len(book.rows) {
+    let row = book.rows[i]
+    if row.id != config.jobs[i].id || row.at > high || row.at < -1036120320i64 {
+      return Error(Invalid("state_row"))
+    }
+    if row.status != "idle" && row.status != "admitted" && row.status != "uncertain" && row.status != "success" && row.status != "failed" && row.status != "canceled" && row.status != "deadline" && row.status != "spawn_error" {
+      return Error(Invalid("state_status"))
+    }
+    if row.status != "idle" {
+      let Ok(cron) = spec.parse(config.jobs[i].cron) else {
+        return Error(Invalid("state_binding"))
+      }
+      let Ok(at) = spec.next(cron, row.at - 1) else {
+        return Error(Invalid("state_occurrence"))
+      }
+      if at != row.at {
+        return Error(Invalid("state_occurrence"))
+      }
+    }
+  }
+  Ok(unique book)
+}
+
+pub fn load(d: Dir, config: plan.Config, key: String, now: i64) -> Result[
+  unique Book,
+  Fault
+] {
+  let size = match file.size(d, path.of("state.json")) {
+    Ok(size) => size,
+    Error(NotFound()) => return Ok(empty(config, key, now)),
+    Error(e) => return Error(Files(e)),
+  }
+  if size > MAX_BYTES {
+    return Error(Resource("state_bytes"))
+  }
+  let mut f = file.open(d, path.of("state.json")) ? Files
+  let data = match file.read_all_bounded(d, mut f, MAX_BYTES) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Resource("state_bytes")),
+    Error(File(e)) => return Error(Files(e)),
+  }
+  decode(take data, config, key)
+}
+
+// Sync staged bytes+listing, rename within the same directory, then sync the
+// published file+listing. A successful rename by itself is not durable.
+pub fn save(d: Dir, book: Book) -> Result[(), Fault] {
+  let Ok(text) = json.stringify(to_json(book)) else {
+    return Error(Invalid("state_encode"))
+  }
+  if string.byte_len(text) > MAX_BYTES {
+    return Error(Resource("state_bytes"))
+  }
+  {
+    let mut staged = file.create(d, path.of("pending.json")) ? Files
+    file.append(d, mut staged, string.as_bytes(text)) ? Files
+    file.sync(d, mut staged) ? Files
+  }
+  file.rename(d, path.of("pending.json"), path.of("state.json")) ? Files
+  let mut published = file.open(d, path.of("state.json")) ? Files
+  file.sync(d, mut published) ? Files
+  Ok(())
+}
+
+pub fn recover(mut book: Book) -> u64 uses {} {
+  let mut count = 0u64
+  for i in 0u64..list.len(book.rows) {
+    if book.rows[i].status == "admitted" {
+      book.rows[i].status = "uncertain"
+      count += 1
+    }
+  }
+  count
+}
+
+pub fn cursors(book: Book) -> unique List[i64] uses {} {
+  let mut rows: List[i64] = []
+  for row in book.rows {
+    list.push(mut rows, row.at)
+  }
+  take rows
+}
+
+pub fn admit(d: Dir, mut book: Book, item: plan.Scheduled[u64]) -> Result[(), Fault] {
+  if item.at <= book.rows[item.item].at {
+    return Error(Invalid("duplicate_occurrence"))
+  }
+  book.rows[item.item].at = item.at
+  book.rows[item.item].status = "admitted"
+  book.rows[item.item].code = 0
+  save(d, book)
+}
+
+pub fn complete(d: Dir, mut book: Book, slot: u64, status: String, code: i32) -> Result[
+  (),
+  Fault
+] {
+  if book.rows[slot].status != "admitted" {
+    return Error(Invalid("completion_without_admit"))
+  }
+  book.rows[slot].status = unique status
+  book.rows[slot].code = code
+  save(d, book)
+}

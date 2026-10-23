@@ -1,0 +1,285 @@
+pub type Error = Report(report.Error)
+
+const HELP: String = "cronstate check CONFIG | next CONFIG UTC | run CONFIG UNTIL MAX_RUNS | reset CONFIG | unlock\nUTC numeric five-field cron. Mount config (read) and state (read_write).\n16 jobs; 4 children; 32 admissions; deadline <=3000ms; explicit stale-lock recovery.\nExit 0 success, 1 job/stop, 2 invalid/reset-required, 3 resource/capability.\n"
+
+fn invalid(errors: Stderr, kind: String, code: u8) -> Result[
+  std@1/process.ExitCode,
+  Error
+] {
+  report.problem(errors, kind)?
+  Ok(std@1/process.exit_code(code))
+}
+
+fn plan_error(errors: Stderr, e: plan.Error) -> Result[std@1/process.ExitCode, Error] {
+  match e {
+    Domain(kind) => invalid(errors, kind, 2u8),
+    Resource(kind) => invalid(errors, kind, 3u8),
+  }
+}
+
+fn state_error(errors: Stderr, e: state.Fault) -> Result[std@1/process.ExitCode, Error] {
+  match e {
+    Invalid(kind) => invalid(errors, kind, 2u8),
+    Resource(kind) => invalid(errors, kind, 3u8),
+    Files(AlreadyExists()) => invalid(errors, "state_locked", 3u8),
+    Files(_) => invalid(errors, "state_file", 3u8),
+  }
+}
+
+fn load_config(rt: Io, name: String) -> Result[unique plan.Config, plan.Error] {
+  if string.byte_len(name) > 256 || name == "" || string.starts_with(name, "/") || string.contains(
+    name,
+    ".."
+  ) || string.contains(name, "\0") {
+    return Error(Domain("config_path"))
+  }
+  let Ok(d) = io.dir(rt, path.of("config")) else {
+    return Error(Resource("config_grant"))
+  }
+  // Metadata check before allocating; bounded streaming read also handles a
+  // concurrently grown file without accepting a silent truncated prefix.
+  let Ok(size) = file.size(d, path.of(name)) else {
+    return Error(Resource("config_read"))
+  }
+  if size > plan.CONFIG_BYTES {
+    return Error(Resource("config_bytes"))
+  }
+  let Ok(mut_f) = file.open(d, path.of(name)) else {
+    return Error(Resource("config_read"))
+  }
+  let mut f = take mut_f
+  let data = match file.read_all_bounded(d, mut f, plan.CONFIG_BYTES) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Resource("config_bytes")),
+    Error(_) => return Error(Resource("config_read")),
+  }
+  plan.decode(take data)
+}
+
+fn execute(rt: Io, args: Args, output: Stdout, errors: Stderr) -> Result[
+  std@1/process.ExitCode,
+  Error
+] {
+  let count = arg.len(args)
+  if count == 0 {
+    return invalid(errors, "usage", 2u8)
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return invalid(errors, "usage", 2u8)
+  }
+  if mode == "--help" && count == 1 {
+    report.line(output, Text(HELP))?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if mode == "unlock" && count == 1 {
+    let Ok(d) = io.dir(rt, path.of("state")) else {
+      return invalid(errors, "state_grant", 3u8)
+    }
+    if let Error(e) = state.unlock(d) {
+      return state_error(errors, e)
+    }
+    report.line(output, Text("unlocked; operator asserts previous owner stopped"))?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if !(mode == "check" && count == 2 || mode == "next" && count == 3 || mode == "run" && count == 4 || mode == "reset" && count == 2) {
+    return invalid(errors, "usage", 2u8)
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return invalid(errors, "config_path", 2u8)
+  }
+  let config = match load_config(rt, name) {
+    Ok(c) => take c,
+    Error(e) => return plan_error(errors, e),
+  }
+  if mode == "check" {
+    report.checked(output, list.len(config.jobs))?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if mode == "next" {
+    let Ok(text) = arg.text(args, 2) else {
+      return invalid(errors, "utc", 2u8)
+    }
+    let Ok(t) = spec.utc(text) else {
+      return invalid(errors, "utc", 2u8)
+    }
+    let Ok(after) = spec.minute(t) else {
+      return invalid(errors, "utc", 2u8)
+    }
+    let rows = match plan.upcoming(config, after) {
+      Ok(rows) => take rows,
+      Error(e) => return plan_error(errors, e),
+    }
+    report.upcoming(output, rows)?
+    return Ok(std@1/process.SUCCESS)
+  }
+  let Ok(wall) = io.wall_clock(rt) else {
+    return invalid(errors, "wall_grant", 3u8)
+  }
+  let Ok(now) = clock.wall(wall) else {
+    return invalid(errors, "clock", 3u8)
+  }
+  let Ok(d) = io.dir(rt, path.of("state")) else {
+    return invalid(errors, "state_grant", 3u8)
+  }
+  let lease = match state.acquire(d) {
+    Ok(lease) => take lease,
+    Error(e) => return state_error(errors, e),
+  }
+  let key = match plan.identity(config) {
+    Ok(k) => take k,
+    Error(e) => return plan_error(errors, e),
+  }
+  if mode == "reset" {
+    if let Error(e) = state.save(d, state.empty(config, key, now)) {
+      return state_error(errors, e)
+    }
+    report.line(output, Text("reset; previous admission history discarded"))?
+    return Ok(std@1/process.SUCCESS)
+  }
+  let mut book = match state.load(d, config, key, now) {
+    Ok(b) => take b,
+    Error(e) => return state_error(errors, e),
+  }
+  let uncertain = state.recover(mut book)
+  if let Error(e) = state.save(d, book) {
+    return state_error(errors, e)
+  }
+  if uncertain != 0 {
+    report.restart(output, uncertain)?
+  }
+  // Persist refused state before considering the run-until/max-runs stop.
+  if book.refused || int.widen(now) - int.widen(book.seen_ns) > 86400000000000i128 {
+    book.refused = true
+    if let Error(e) = state.save(d, book) {
+      return state_error(errors, e)
+    }
+    return invalid(errors, "catchup_reset_required", 2u8)
+  }
+  let Ok(text) = arg.text(args, 2) else {
+    return invalid(errors, "until", 2u8)
+  }
+  let Ok(until) = spec.utc(text) else {
+    return invalid(errors, "until", 2u8)
+  }
+  let Ok(max_text) = arg.text(args, 3) else {
+    return invalid(errors, "max_runs", 2u8)
+  }
+  let Ok(max_runs) = u64.parse(max_text) else {
+    return invalid(errors, "max_runs", 2u8)
+  }
+  if max_runs == 0 || max_runs > 32 {
+    return invalid(errors, "max_runs", 3u8)
+  }
+  let remaining = until.unix_nanoseconds - int.widen(now)
+  if remaining <= 0 {
+    report.summary(output, 0, uncertain, 0, 0)?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if remaining > 86400000000000i128 {
+    return invalid(errors, "session_bound", 3u8)
+  }
+  let Ok(clock) = io.monotonic_clock(rt) else {
+    return invalid(errors, "monotonic_grant", 3u8)
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return invalid(errors, "tasks_grant", 3u8)
+  }
+  let Ok(p) = io.process(rt) else {
+    return invalid(errors, "process_grant", 3u8)
+  }
+  let completed = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[run.Totals, run.Error] {
+      let mut owned = unique book
+      run.session(
+        s,
+        p,
+        wall,
+        clock,
+        d,
+        config,
+        mut owned,
+        until.unix_nanoseconds,
+        max_runs,
+        output
+      )
+    }
+  )
+  let totals = match take completed {
+    Ok(t) => t,
+    Error(State(e)) => return state_error(errors, e),
+    Error(Plan(e)) => return plan_error(errors, e),
+    Error(Report(e)) => return Error(Report(e)),
+    Error(_) => return invalid(errors, "clock_wait", 3u8),
+  }
+  report.summary(output, totals.admitted, uncertain, totals.skipped, totals.failed)?
+  Ok(
+    if totals.failed == 0 {
+      std@1/process.SUCCESS
+    } else {
+      std@1/process.FAILURE
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, Error] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 4 {
+    if let Ok(mode) = arg.text(args, 0) {
+      if mode == "run" {
+        let Ok(text) = arg.text(args, 2) else {
+          return invalid(errors, "until", 2u8)
+        }
+        let Ok(until) = spec.utc(text) else {
+          return invalid(errors, "until", 2u8)
+        }
+        let Ok(wall) = io.wall_clock(rt) else {
+          return invalid(errors, "wall_grant", 3u8)
+        }
+        let Ok(now) = clock.wall(wall) else {
+          return invalid(errors, "clock", 3u8)
+        }
+        let delta = until.unix_nanoseconds - int.widen(now)
+        if delta > 86400000000000i128 {
+          return invalid(errors, "session_bound", 3u8)
+        }
+        let Ok(clock) = io.monotonic_clock(rt) else {
+          return invalid(errors, "monotonic_grant", 3u8)
+        }
+        let Ok(tasks) = io.tasks(rt) else {
+          return invalid(errors, "tasks_grant", 3u8)
+        }
+        let Ok(start) = clock.monotonic(clock) else {
+          return invalid(errors, "clock", 3u8)
+        }
+        let wait_ns: u64 = if delta <= 0 {
+          0u64
+        } else {
+          int.narrow(delta)
+        }
+        let Some(at) = instant.checked_add(clock, start, wait_ns) else {
+          return invalid(errors, "clock", 3u8)
+        }
+        let bounded = task.scope_until(
+          tasks,
+          Deadline(clock: clock, at: at),
+          fn(s: Scope) -> Result[std@1/process.ExitCode, Error] {
+            execute(rt, args, output, errors)
+          }
+        )
+        return match take bounded {
+          Finished(value) => take value,
+          // Scope exit has canceled and joined jobs and dropped the lease.
+          // A durable admitted row is reconciled as uncertain on restart.
+          Expired(_) => invalid(errors, "run_until", 1u8),
+        }
+      }
+    }
+  }
+  execute(rt, args, output, errors)
+}

@@ -1,0 +1,34 @@
+// Supplemental boundary cuts exercise the actual state module. Full main-entry
+// workflow receipts remain separate; these are not engine substitutes.
+pub fn crash_trial(t: Test) -> Result[(), state.Fault] {
+  let d = test.dir(t, [])
+  let config = plan.Config(version: 1, parallel: 1, jobs: [plan.Job(id: "a", cron: "* * * * *", program: "/fixture/child", argv: [], deadline_ms: 1000)])
+  let key = match plan.identity(config) { Ok(text) => take text, Error(_) => return Error(Invalid("fixture")) }
+  let mut book = state.empty(config, key, 0i64)
+  state.save(d, book)?
+  test.crash(t, d, 0u64)
+  let initial = state.load(d, config, key, 0i64)?
+  test.check(t, initial.rows[0].status == "idle")
+  let item = plan.Scheduled(at: 0i64, item: 0u64, skipped: 0u64)
+  state.admit(d, mut book, item)?
+  // Crash after the durable admit, before process launch: conservatively uncertain.
+  test.crash(t, d, 1u64)
+  let mut recovered = state.load(d, config, key, 0i64)?
+  test.check(t, recovered.rows[0].status == "admitted")
+  test.check(t, state.recover(mut recovered) == 1u64)
+  state.save(d, recovered)?
+  test.crash(t, d, 2u64)
+  let uncertain = state.load(d, config, key, 0i64)?
+  test.check(t, uncertain.rows[0].status == "uncertain")
+  test.check(t, uncertain.rows[0].at == 0i64)
+  // A separate admitted occurrence completes before the next cut.
+  let mut future = state.empty(config, key, 60000000000i64)
+  state.admit(d, mut future, plan.Scheduled(at: 1i64, item: 0u64, skipped: 0u64))?
+  state.complete(d, mut future, 0u64, "success", 0i32)?
+  test.crash(t, d, 3u64)
+  let completed = state.load(d, config, key, 60000000000i64)?
+  test.check(t, completed.rows[0].status == "success")
+  test.check(t, completed.rows[0].at == 1i64)
+  test.log(t, "durable idle/admitted/uncertain/completed boundaries")
+  Ok(())
+}

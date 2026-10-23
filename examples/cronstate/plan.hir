@@ -1,0 +1,230 @@
+// Pure bounded validation and calendar admission decisions.
+pub const CONFIG_BYTES: u64 = 65536
+
+pub const MAX_JOBS: u64 = 16
+
+pub type Error = Domain(String) | Resource(String)
+
+pub type Job {
+  id: String,
+  cron: String,
+  program: String,
+  argv: List[String],
+  deadline_ms: u64,
+}
+
+pub type Config {
+  version: u64,
+  parallel: u64,
+  jobs: List[Job],
+}
+
+pub type Scheduled[T] {
+  at: i64,
+  item: T,
+  skipped: u64,
+}
+
+pub type Due {
+  items: List[Scheduled[u64]],
+  through: i64,
+}
+
+fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+  shape(Job)
+)
+
+fn job_to_json(value: Job) -> json.Value uses {} = comptime derive.json_value(
+  shape(Job)
+)
+
+fn from_json(value: json.Value) -> Result[unique Config, String] uses {} = comptime derive.from_json(
+  shape(Config)
+)
+
+pub fn to_json(value: Config) -> json.Value uses {} = comptime derive.json_value(
+  shape(Config)
+)
+
+pub fn identity(config: Config) -> Result[unique String, Error] uses {} {
+  match json.stringify(to_json(config)) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Domain("config_json")),
+  }
+}
+
+pub fn id_valid(id: String) -> bool uses {} {
+  if string.byte_len(id) == 0 || string.byte_len(id) > 64 {
+    return false
+  }
+  for b in string.as_bytes(id) {
+    if !(b >= 65u8 && b <= 90u8 || b >= 97u8 && b <= 122u8 || b >= 48u8 && b <= 57u8 || b == 95u8 || b == 45u8) {
+      return false
+    }
+  }
+  true
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Config, Error] uses {} {
+  if bytes.len(data) > CONFIG_BYTES {
+    return Error(Resource("config_bytes"))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Domain("config_utf8"))
+  }
+  let Ok(value) = json.parse(take source) else {
+    return Error(Domain("config_json"))
+  }
+  let Object(fields) = value else {
+    return Error(Domain("config_shape"))
+  }
+  if map.len(fields) != 3 {
+    return Error(Domain("config_fields"))
+  }
+  let Some(Array(jobs)) = json_access.member(value, "jobs") else {
+    return Error(Domain("config_shape"))
+  }
+  if list.len(jobs) > MAX_JOBS {
+    return Error(Resource("job_limit"))
+  }
+  for job in jobs {
+    let Object(job_fields) = job else {
+      return Error(Domain("job_shape"))
+    }
+    if map.len(job_fields) != 5 {
+      return Error(Domain("job_fields"))
+    }
+    let Some(Array(argv)) = json_access.member(job, "argv") else {
+      return Error(Domain("argv"))
+    }
+    if list.len(argv) > 64 {
+      return Error(Resource("argv_count"))
+    }
+  }
+  let Ok(config) = from_json(value) else {
+    return Error(Domain("config_shape"))
+  }
+  if config.version != 1 {
+    return Error(Domain("config_version"))
+  }
+  if config.parallel == 0 || config.parallel > 4 {
+    return Error(Resource("parallel"))
+  }
+  let mut seen: List[String] = []
+  for job in config.jobs {
+    if !id_valid(job.id) {
+      return Error(Domain("job_id"))
+    }
+    for id in seen {
+      if id == job.id {
+        return Error(Domain("duplicate_id"))
+      }
+    }
+    list.push(mut seen, unique job.id)
+    if job.deadline_ms == 0 || job.deadline_ms > 3000 {
+      return Error(Resource("deadline"))
+    }
+    let mut size = string.byte_len(job.program) + 1
+    if size > 4096 {
+      return Error(Resource("argv_bytes"))
+    }
+    for word in job.argv {
+      let add = string.byte_len(word) + 1
+      if add > 4096 - size {
+        return Error(Resource("argv_bytes"))
+      }
+      size += add
+      if string.contains(word, "\0") {
+        return Error(Domain("argv_nul"))
+      }
+    }
+    let Ok(normal) = path.normalize(path.of(job.program)) else {
+      return Error(Domain("program"))
+    }
+    if !string.starts_with(job.program, "/") || job.program == "/" || path.text(normal) != job.program || string.contains(
+      job.program,
+      "\0"
+    ) {
+      return Error(Domain("program"))
+    }
+    if let Error(_) = spec.parse(job.cron) {
+      return Error(Domain("cron"))
+    }
+  }
+  Ok(unique config)
+}
+
+// Used for scheduled job indices and named next-occurrence rows. Equal times
+// remain in declaration order; payloads are never compared.
+pub fn ordered[T: copyable](take input: List[Scheduled[T]]) -> unique List[Scheduled[T]] uses {} {
+  let mut remaining = unique input
+  let mut output: List[Scheduled[T]] = []
+  while list.len(remaining) != 0 {
+    let mut first = 0u64
+    for i in 1u64..list.len(remaining) {
+      if remaining[i].at < remaining[first].at {
+        first = i
+      }
+    }
+    list.push(mut output, list.remove(mut remaining, first))
+  }
+  unique output
+}
+
+pub fn upcoming(config: Config, after: i64) -> Result[
+  unique List[Scheduled[String]],
+  Error
+] uses {} {
+  let mut rows: List[Scheduled[String]] = []
+  for job in config.jobs {
+    let Ok(cron) = spec.parse(job.cron) else {
+      return Error(Domain("cron"))
+    }
+    let Ok(at) = spec.next(cron, after) else {
+      return Error(Domain("horizon"))
+    }
+    list.push(mut rows, Scheduled(at: at, item: unique job.id, skipped: 0))
+  }
+  Ok(ordered(take rows))
+}
+
+pub fn due(config: Config, cursors: List[i64], now: i64) -> Result[Due, Error] uses {} {
+  let mut items: List[Scheduled[u64]] = []
+  for i in 0u64..list.len(config.jobs) {
+    let Ok(cron) = spec.parse(config.jobs[i].cron) else {
+      return Error(Domain("cron"))
+    }
+    let mut cursor = cursors[i]
+    let mut count = 0u64
+    let mut latest = cursor
+    // Caller rejects downtime >24h before this count: <=1441 candidates/job.
+    while cursor < now {
+      let Ok(at) = spec.next(cron, cursor) else {
+        break
+      }
+      if at > now {
+        break
+      }
+      latest = at
+      cursor = at
+      count += 1
+      if count > 1441 {
+        return Error(Resource("catchup_bound"))
+      }
+    }
+    if count != 0 {
+      list.push(mut items, Scheduled(at: latest, item: i, skipped: count - 1))
+    }
+  }
+  Ok(Due(items: ordered(take items), through: now))
+}
+
+pub fn command(job: Job) -> unique Command uses {} {
+  Command(
+    program: path.of(unique job.program),
+    args: unique job.argv,
+    dir: None(),
+    env: Some([]),
+    own_group: false
+  )
+}

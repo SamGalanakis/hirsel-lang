@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "cronstate",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "spec.hir",
+      "module": [
+        "spec"
+      ]
+    },
+    {
+      "path": "plan.hir",
+      "module": [
+        "plan"
+      ]
+    },
+    {
+      "path": "state.hir",
+      "module": [
+        "state"
+      ]
+    },
+    {
+      "path": "run.hir",
+      "module": [
+        "run"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}
