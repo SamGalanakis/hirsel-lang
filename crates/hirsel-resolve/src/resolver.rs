@@ -806,6 +806,21 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 self.exported = false;
                 if !matches!(self.view, ResolveView::Header) {
                     self.expr(value, expected);
+                } else if let ExprKind::Path(path) =
+                    &self.syntax.tree.expressions[value.0 as usize].kind
+                {
+                    // A constant alias target is declaration metadata. Resolve
+                    // its manifest identity without reading the target's
+                    // signature: alias cycles are checked by GEN-6 later.
+                    let path = path.clone();
+                    let span = self.syntax.tree.expressions[value.0 as usize].origin.span;
+                    match self.lookup(&path, span) {
+                        Ok(definition) => self
+                            .output
+                            .expressions
+                            .push((value, ResolvedName::Definition(definition))),
+                        Err(error) => self.lookup_diagnostic(&error, &path, span),
+                    }
                 }
             }
             ItemKind::Type {

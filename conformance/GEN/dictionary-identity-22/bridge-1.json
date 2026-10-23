@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "bridge",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "bridge-1.source",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "dict",
+        "version": "1"
+      },
+      "manifest": "dict-1.json",
+      "expose": [
+        {
+          "head": "base",
+          "module": []
+        }
+      ]
+    }
+  ]
+}

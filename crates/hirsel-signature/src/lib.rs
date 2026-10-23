@@ -1482,6 +1482,36 @@ impl Normalizer<'_, '_> {
                 return Ok(d.clone());
             }
         }
+        // Header paths without a TypeExprId (dictionary alias initializers,
+        // brands and authority names) still have exact manifest lookup reads.
+        // Reuse them before provider lookup, which cannot expand exposed heads.
+        let resolved = self
+            .input
+            .resolution
+            .reads
+            .iter()
+            .rev()
+            .find_map(|read| match read {
+                DependencyRead::Lookup {
+                    context,
+                    package,
+                    segments,
+                    result: Ok(definition),
+                    ..
+                } if context == self.input.context
+                    && package == &p.package
+                    && segments
+                        .iter()
+                        .map(String::as_str)
+                        .eq(p.segments.iter().map(|s| s.as_str())) =>
+                {
+                    Some(definition.clone())
+                }
+                _ => None,
+            });
+        if let Some(definition) = resolved {
+            return Ok(definition);
+        }
         self.provider.lookup(self.input.context, p).result
     }
     /// A SER-1 proof expands every nominal representation its schema reaches, not
@@ -2375,37 +2405,7 @@ impl Normalizer<'_, '_> {
                     continue;
                 }
             }
-            // Authority paths have no TypeExprId. Reuse the resolved header's
-            // manifest lookup so dependency exposures keep their exact identity;
-            // provider-only lookup does not resolve exposed package heads.
-            let resolved = self
-                .input
-                .resolution
-                .reads
-                .iter()
-                .rev()
-                .find_map(|read| match read {
-                    DependencyRead::Lookup {
-                        context,
-                        package,
-                        segments,
-                        result: Ok(definition),
-                        ..
-                    } if context == self.input.context
-                        && package == &p.package
-                        && segments
-                            .iter()
-                            .map(String::as_str)
-                            .eq(p.segments.iter().map(|s| s.as_str())) =>
-                    {
-                        Some(definition.clone())
-                    }
-                    _ => None,
-                });
-            let d = match resolved {
-                Some(definition) => definition,
-                None => self.definition(p, None)?,
-            };
+            let d = self.definition(p, None)?;
             let item = &self.input.syntax.item;
             if d == item.definition
                 && item

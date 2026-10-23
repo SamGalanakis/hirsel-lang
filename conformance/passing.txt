@@ -1,4 +1,8 @@
 
+GEN/GEN-6-package-cycle-bad.hir
+GEN/GEN-6-package-identity-distinct-bad.hir
+GEN/GEN-6-package-identity-run.hir
+GEN/GEN-6-package-identity-version-bad.hir
 LANG/LANG-15-cursor-diagnostics-16-invalid.hir
 LANG/LANG-15-cursor-diagnostics-16-run.hir
 conformance/CAP/CAP-1-acquire-net-result-run.hir

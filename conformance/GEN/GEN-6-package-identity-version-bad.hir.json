@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "GEN-6-package-identity-version-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "dict",
+        "version": "1"
+      },
+      "manifest": "dictionary-identity-22/dict-1.json",
+      "expose": [
+        {
+          "head": "original",
+          "module": []
+        }
+      ]
+    },
+    {
+      "package": {
+        "name": "dict",
+        "version": "2"
+      },
+      "manifest": "dictionary-identity-22/dict-2.json",
+      "expose": [
+        {
+          "head": "other_version",
+          "module": []
+        }
+      ]
+    },
+    {
+      "package": {
+        "name": "bridge",
+        "version": "1"
+      },
+      "manifest": "dictionary-identity-22/bridge-1.json",
+      "expose": [
+        {
+          "head": "bridge",
+          "module": []
+        }
+      ]
+    },
+    {
+      "package": {
+        "name": "relay",
+        "version": "1"
+      },
+      "manifest": "dictionary-identity-22/relay-1.json",
+      "expose": [
+        {
+          "head": "relay",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

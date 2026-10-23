@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "relay",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "relay-1.source",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "bridge",
+        "version": "1"
+      },
+      "manifest": "bridge-1.json",
+      "expose": [
+        {
+          "head": "via",
+          "module": []
+        }
+      ]
+    }
+  ]
+}

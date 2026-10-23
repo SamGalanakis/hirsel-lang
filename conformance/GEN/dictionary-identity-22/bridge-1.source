@@ -1,0 +1,3 @@
+pub const FIRST: Order[u32] = base.FIRST
+
+pub const LEFT: dict@1/Op = base.LEFT

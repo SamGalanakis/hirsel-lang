@@ -110,3 +110,4 @@ mod package_head_22;
 mod nominal_authority_22;
 mod visibility_boundary_22;
 mod signature_recovery_22;
+mod dictionary_identity_22;

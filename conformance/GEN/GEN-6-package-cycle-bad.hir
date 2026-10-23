@@ -1,0 +1,6 @@
+// rule: GEN-6
+// expect: reject GEN-6 at line 5
+// twin: GEN/GEN-6-package-identity-run.hir
+pub fn main() {
+  let _ = cycle.FIRST
+}

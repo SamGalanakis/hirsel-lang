@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "app",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "failure.source",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "dict",
+        "version": "1"
+      },
+      "manifest": "dict-1.json",
+      "expose": [
+        {
+          "head": "original",
+          "module": []
+        }
+      ]
+    },
+    {
+      "package": {
+        "name": "relay",
+        "version": "1"
+      },
+      "manifest": "relay-1.json",
+      "expose": [
+        {
+          "head": "relay",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

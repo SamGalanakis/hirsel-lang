@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "dict",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "dict-1.source",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

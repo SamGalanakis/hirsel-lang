@@ -1,0 +1,16 @@
+// rule: GEN-6
+// expect: run
+// boundary: aliases across two packages preserve the terminal Order brand.
+fn count(value: SortedMap[u32, u8] of original.FIRST) -> u64 uses {} {
+  sorted_map.len(bridge.FIRST, value)
+}
+
+pub fn main() -> Result[(), u8] {
+  let value: SortedMap[u32, u8] of relay.FIRST = sorted_map.empty(relay.FIRST)
+  let size = count(value)
+  if size == 0 {
+    Ok(())
+  } else {
+    Error(1u8)
+  }
+}

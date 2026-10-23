@@ -1,0 +1,11 @@
+pub fn main() -> Result[(), u8] {
+  let alias = relay.LEFT
+  let second = original.RIGHT
+  if alias.small(7, 9) != 7 { return Error(1u8) }
+  if second.small(7, 9) != 9 { return Error(2u8) }
+  if alias.wide(4294967297, 4294967299) != 4294967297 { return Error(3u8) }
+  if second.wide(4294967297, 4294967299) != 4294967299 { return Error(4u8) }
+  if alias.two([2u8, 3u8]) != [2u8, 3u8] { return Error(5u8) }
+  if second.three([4u8, 5u8, 6u8]) != [4u8, 5u8, 6u8] { return Error(6u8) }
+  { let _ = 1u32 / second.small(1, 0); Ok(()) }
+}

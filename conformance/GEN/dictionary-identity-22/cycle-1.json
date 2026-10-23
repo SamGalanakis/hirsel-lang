@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "cycle",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "cycle-1.source",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}
