@@ -1,0 +1,30 @@
+pub type AppError = Grant(GrantError) | File(FileError) | Proc(ProcessError) | Output(OutputError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let output = io.stdout(rt)?Grant
+  let d = io.dir(rt, path.of("data"))?File
+  let payload = file.read_bytes(d, path.of("payload"))?File
+  let p = io.process(rt)?Grant
+  let tasks = io.tasks(rt)?Grant
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    let Ok(value) = arg.text(args, i) else { return Ok(()) }
+    list.push(mut argv, unique value)
+  }
+  let input = shared.freeze(take argv)
+  task.scope(tasks, fn(s: Scope) -> () {
+    for i in 0u64..3u64 {
+      let command = unique shared.with(input, fn(words: List[String]) -> unique Command {
+        Command(program: path.of("/fixture/child"), args: unique words, dir: Some(d), env: Some([("KEY", "value")]), own_group: false)
+      })
+      let job = task.async(s, fn() -> bool {
+        let Ok(handle) = proc.spawn(p, take command) else { return false }
+        let mut child = take handle
+        let _ = child.close_stdin(p, mut child)
+        child.wait(p, take child, None()) == Ok(Exited(0))
+      })
+      failure.check(task.await(s, take job), Arithmetic())
+    }
+  })
+  out.write(output, payload)?Output
+  Ok(())
+}

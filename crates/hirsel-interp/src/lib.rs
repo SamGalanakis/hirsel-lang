@@ -361,6 +361,10 @@ operation_boundary! {
     /// A callee run whose provider stops it at its place's crash point itself, before one
     /// of its requests (`sim@1` on a host), instead of the execution counting suspensions.
     fn stops_itself(&self) -> bool { false }
+    /// Exact replay cannot issue cleanup requests after an artificial evaluator cut:
+    /// the recording describes the uninterrupted run. Stop at the guard instead.
+    /// Other providers retain their ordinary tooling cleanup.
+    fn stop_at_tooling_limit(&self) -> bool { false }
     }
     mutable {
     /// Execute an id returned by this provider's `resolve`. The default retains

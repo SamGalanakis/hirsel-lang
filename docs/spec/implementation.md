@@ -49,7 +49,10 @@ outcome: completion with its exit status, a language failure with its rule and s
 effects. Every other engine, configuration and compilation topology must produce the same
 observation for the same program and run configuration. Tooling limits (evaluator step and
 call-depth guards, budgets) are reported as non-comparable tooling outcomes, never as
-language results.
+language results. During exact host-tape replay, an evaluator guard stops before
+cleanup: that cleanup is absent from the uninterrupted recording. The guard remains a
+non-comparable tooling outcome; completed replay still requires exact requests and full
+tape consumption.
 
 ## Checked execution
 

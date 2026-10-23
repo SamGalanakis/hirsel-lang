@@ -845,6 +845,11 @@ pub(crate) fn execute_frames(
                                     }
                                     tooling = Some(limit);
                                 }
+                                if operations.stop_at_tooling_limit() {
+                                    execution.outcome =
+                                        Outcome::ToolingLimit(tooling.take().unwrap());
+                                    return Ok(Step::Finished);
+                                }
                                 frame.ending = Some(crate::resources::Ending::Failed);
                                 for (i, value) in arguments.into_iter().enumerate().rev() {
                                     if function.parameters.get(i).is_some_and(|p| {
@@ -1926,6 +1931,10 @@ pub(crate) fn execute_frames(
                         .push(TraceEvent::ToolingLimit(limit.clone()));
                 }
                 tooling = Some(limit);
+            }
+            if operations.stop_at_tooling_limit() {
+                execution.outcome = Outcome::ToolingLimit(tooling.take().unwrap());
+                return Ok(Step::Finished);
             }
             frame.ending = Some(crate::resources::Ending::Failed);
             if let Some(id) = cleanup {

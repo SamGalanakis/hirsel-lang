@@ -691,6 +691,27 @@ pub fn replay_observations(
     observed.ok_or_else(|| ToolError::Runtime("replay produced no semantic observation".into()))
 }
 
+/// Replay the same bound host tape with the interpreter's checked memory model.
+/// Tooling stops remain non-comparable and cannot produce an observation.
+pub fn replay_observations_checked(
+    path: &Path,
+    tape: &Path,
+    max_steps: Option<u64>,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        run_loaded_on_host_with_checks(
+            program,
+            HostLaunch::Replay(tape),
+            max_steps,
+            Some(&mut observed),
+            None,
+            true,
+        )
+    })?;
+    observed.ok_or_else(|| ToolError::Runtime("replay produced no semantic observation".into()))
+}
+
 fn run_path_on_host_observed(
     path: &Path,
     launch: HostLaunch<'_>,
@@ -712,6 +733,17 @@ pub(crate) fn run_loaded_on_host(
     max_steps: Option<u64>,
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
+) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
+    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false)
+}
+
+fn run_loaded_on_host_with_checks(
+    program: &mut LoadedProgram,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
+    cancel: Option<network::ExternalCancel>,
+    checked: bool,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
@@ -742,10 +774,12 @@ pub(crate) fn run_loaded_on_host(
         hash_seed: run.record().inputs.hash_seed,
         inputs: vec![],
     };
-    let mut runtime = program
-        .engine
-        .runtime_types()
-        .map_err(|e| program.error(e))?;
+    let mut runtime = if checked {
+        program.engine.checked_runtime_types()
+    } else {
+        program.engine.runtime_types()
+    }
+    .map_err(|e| program.error(e))?;
     runtime.trace_mode = hirsel_interp::TraceMode::Effects;
     // A replay re-applies the recorded budgets, so it stops where the run stopped.
     if let Some(budgets) = run.budgets() {
@@ -889,6 +923,7 @@ pub(crate) fn run_loaded_on_host(
     }
     if let network::HostIo::Replay(io) = &mut operations.io
         && !operations.library.native_free()
+        && !matches!(execution.outcome, hirsel_interp::Outcome::ToolingLimit(_))
     {
         io.finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;

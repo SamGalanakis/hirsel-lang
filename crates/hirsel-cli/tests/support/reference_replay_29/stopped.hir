@@ -1,0 +1,9 @@
+pub type AppError = Grant(GrantError) | File(FileError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let d = io.dir(rt, path.of("data"))?File
+  let held = file.open(d, path.of("payload"))?File
+  let mut count = 0u64
+  while count < 1000u64 { count += 1 }
+  let _ = file.read_bytes(d, path.of("payload"))?File
+  Ok(())
+}

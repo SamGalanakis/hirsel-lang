@@ -2446,6 +2446,9 @@ fn host_route(name: &str) -> HostRoute {
     }
 }
 impl hirsel_interp::OperationsAdapter for HostLibrary {
+    fn stop_at_tooling_limit(&self) -> bool {
+        matches!(self.io, HostIo::Replay(_))
+    }
     fn resume(
         &mut self,
         continuation: u64,
