@@ -1,0 +1,36 @@
+// rule: MEM-4
+// expect: run
+
+fn fits(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[SortedMap[u64, Bytes] of u64.order] {
+      let mut root: SortedMap[u64, Bytes] of u64.order in a = sorted_map.empty(
+        u64.order
+      )
+      sorted_map.insert(u64.order, mut root, 7u64, copy_to(heap, b"abc"))
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: SortedMap[u64, Bytes] of u64.order) -> u64 {
+          match sorted_map.get(u64.order, view, 7u64) {
+            Some(value) => bytes.len(value),
+            None() => 0u64,
+          }
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(18u64) == 0u64, Bounds())
+  failure.check(fits(19u64) == 3u64, Bounds())
+  Ok(())
+}

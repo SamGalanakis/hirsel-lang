@@ -73,8 +73,8 @@ impl Storage {
         if !needs_recording(value, replace) {
             return Ok(());
         }
-        let mut pending = vec![(Vec::<usize>::new(), ty, false)];
-        while let Some((path, ty, exit)) = pending.pop() {
+        let mut pending = vec![(Vec::<usize>::new(), ty, false, replace)];
+        while let Some((path, ty, exit, replace_here)) = pending.pop() {
             let current = at_mut(value, &path)?;
             if !exit {
                 // Independent frozen contents are not retained ordinary edges.
@@ -82,19 +82,19 @@ impl Storage {
                     continue;
                 }
                 // Existing children already own their retained outgoing edges.
-                if (!path.is_empty() || !replace)
-                    && current
-                        .arena_storage()
-                        .is_some_and(|s| s.logical_block.is_some())
-                {
+                if !replace_here && current.enrolled_arena_block() {
                     continue;
                 }
                 let children = children(runtime, ty, current)?;
-                pending.push((path.clone(), ty, true));
+                // Inline wrappers do not own a semantic block. A mutation
+                // refreshes their first allocated descendants (SortedMap's
+                // entry array, for example), then stops at that block boundary.
+                let replace_children = replace_here && !current.is_block();
+                pending.push((path.clone(), ty, true, replace_here));
                 for (index, ty) in children.into_iter().rev() {
                     let mut child = path.clone();
                     child.push(index);
-                    pending.push((child, ty, false));
+                    pending.push((child, ty, false, replace_children));
                 }
                 continue;
             }
@@ -105,7 +105,7 @@ impl Storage {
                 continue;
             };
             let (arena, previous) = (tag.arena, tag.logical_block);
-            if previous.is_some() && !(replace && path.is_empty()) {
+            if previous.is_some() && !replace_here {
                 continue;
             }
             let inventory = self
@@ -297,10 +297,10 @@ impl Storage {
 }
 
 fn needs_recording(value: &Value, replace: bool) -> bool {
-    let mut pending = vec![(value, true)];
-    while let Some((value, root)) = pending.pop() {
+    let mut pending = vec![(value, replace)];
+    while let Some((value, replace_here)) = pending.pop() {
         if let Some(storage) = value.arena_storage().filter(|_| value.is_block()) {
-            if storage.logical_block.is_none() || root && replace {
+            if storage.logical_block.is_none() || replace_here {
                 return true;
             }
             continue;
@@ -311,7 +311,7 @@ fn needs_recording(value: &Value, replace: bool) -> bool {
                 .into_iter()
                 .flatten()
                 .flatten()
-                .map(|value| (value, false)),
+                .map(|child| (child, replace_here && !value.is_block())),
         );
     }
     false
@@ -476,12 +476,7 @@ fn children(
             kind: BuiltinType::SortedMap,
             arguments,
         } => {
-            let [
-                GenericArgument::Type(key),
-                GenericArgument::Type(item),
-                GenericArgument::Type(comparator),
-                ..,
-            ] = arguments.as_ref()
+            let [GenericArgument::Type(key), GenericArgument::Type(item)] = arguments.as_ref()
             else {
                 return Err(invalid("retained SortedMap arguments"));
             };
@@ -496,7 +491,15 @@ fn children(
                     kind: BuiltinType::Array,
                     arguments: vec![GenericArgument::Type(pair)].into(),
                 }));
-            present(vec![*comparator, entries])
+            // SortedMap[K,V] stores the declared Order[K] dictionary plus its
+            // entry array. The dictionary is not a third generic actual.
+            let comparator = runtime
+                .types
+                .intern(hirsel_types::Type::with_kind(TypeKind::Named {
+                    definition: hirsel_syntax::DefPath::core("Order").into(),
+                    arguments: vec![GenericArgument::Type(*key)].into(),
+                }));
+            present(vec![comparator, entries])
         }
         TypeKind::Builtin {
             kind: BuiltinType::Map,
@@ -803,8 +806,8 @@ mod sorted_tests {
     use crate::value::{ArenaStorage, NamedFunction};
     use hirsel_types::{Primitive, Type, TypeInterner};
     #[test]
-    fn sealed_regions_33_sorted_map_records_the_entry_array_type() {
-        let runtime = RuntimeTypes::new(TypeInterner::new(None));
+    fn sealed_regions_33_sorted_mutation_refreshes_the_typed_entry_array() {
+        let mut runtime = RuntimeTypes::new(TypeInterner::new(None));
         let number = runtime
             .types
             .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
@@ -836,35 +839,44 @@ mod sorted_tests {
                 foreign: None,
             },
         )));
+        let order = hirsel_syntax::DefPath::core("Order");
+        let representation = runtime.types.intern(Type::with_kind(TypeKind::Record(
+            vec![hirsel_types::Field {
+                growable: false,
+                name: "compare".into(),
+                ty: comparator,
+            }]
+            .into(),
+        )));
+        runtime.nominals.push(crate::aggregate::Nominal {
+            definition: order.clone(),
+            resource: false,
+            distinct: false,
+            finalizer: None,
+            fields: 1,
+            representation: Some(representation),
+        });
         let ty = runtime.types.intern(Type::with_kind(TypeKind::Builtin {
             kind: BuiltinType::SortedMap,
-            arguments: vec![
-                GenericArgument::Type(number),
-                GenericArgument::Type(bytes),
-                GenericArgument::Type(comparator),
-            ]
-            .into(),
+            arguments: vec![GenericArgument::Type(number), GenericArgument::Type(bytes)].into(),
         }));
         let entries = Value::Sequence {
             kind: BuiltinType::Array,
-            elements: vec![Some(Value::Tuple(vec![
-                Some(Value::Integer(
-                    crate::Integer::new(Primitive::U64, 7).unwrap(),
-                )),
-                Some(Value::Bytes(b"abc".to_vec())),
-            ]))]
-            .into(),
+            elements: vec![].into(),
             arena: Some(ArenaStorage::fresh(1, 16)),
         };
         let mut root = Value::Record {
             definition: hirsel_syntax::DefPath::core("SortedMap").into(),
             fields: vec![
-                Some(Value::FunctionReference(Box::new(NamedFunction {
-                    definition: hirsel_syntax::DefPath::core("compare"),
-                    arguments: vec![],
-                    types: runtime.types.clone(),
-                    ty: comparator,
-                }))),
+                Some(Value::Record {
+                    definition: order.into(),
+                    fields: vec![Some(Value::FunctionReference(Box::new(NamedFunction {
+                        definition: hirsel_syntax::DefPath::core("compare"),
+                        arguments: vec![],
+                        types: runtime.types.clone(),
+                        ty: comparator,
+                    })))],
+                }),
                 Some(entries),
             ],
         };
@@ -880,6 +892,16 @@ mod sorted_tests {
         storage
             .record(&runtime, ty, &mut root, &source, false)
             .unwrap();
+        let entry = root.fields_mut().unwrap()[1].as_mut().unwrap();
+        entry.fields_mut().unwrap().push(Some(Value::Tuple(vec![
+            Some(Value::Integer(
+                crate::Integer::new(Primitive::U64, 7).unwrap(),
+            )),
+            Some(Value::Bytes(b"abc".to_vec())),
+        ])));
+        storage
+            .record(&runtime, ty, &mut root, &source, true)
+            .unwrap();
         let inventory = storage.take(1).unwrap();
         assert_eq!(inventory.entries().len(), 1);
         let entry = inventory.entries().values().next().unwrap();
@@ -891,7 +913,7 @@ mod sorted_tests {
             }
         ));
         assert_eq!(entry.outgoing_heap, Charge::Bytes(3));
-        assert_eq!(entry.payload.source, source);
+        assert_eq!(entry.payload.source, source.below(&[1]).unwrap());
     }
 }
 

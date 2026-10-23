@@ -1,0 +1,31 @@
+// rule: MEM-4
+// expect: run
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let got = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let r: Region[u64] = arena.with(
+        fn(a: Arena) -> Region[u64] {
+          let root: u64 = 7u64
+          arena.seal(take a, take root)
+        }
+      )
+      let child = task.async(
+        s,
+        fn() -> u64 {
+          let mut owned = take r
+          region.with(
+            mut owned,
+            fn(view: u64) -> u64 {
+              view
+            }
+          )
+        }
+      )
+      task.await(s, take child)
+    }
+  )
+  failure.check(got == 7u64, Bounds())
+  Ok(())
+}

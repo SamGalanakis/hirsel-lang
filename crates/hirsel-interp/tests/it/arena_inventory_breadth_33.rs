@@ -18,14 +18,21 @@ fn sorted(capture: bool) -> (RuntimeTypes, TypeId, TypeId, Value, PlacementRecei
     let mut types = Types::default();
     let word = types.p(Primitive::U64);
     let bytes = types.p(Primitive::Bytes);
-    let callable = types.function(&[], word, Multiplicity::Many, 0);
+    let comparison = types.p(Primitive::I32);
+    let callable = types.function(
+        &[
+            (hirsel_syntax::PassingMode::Borrow, word),
+            (hirsel_syntax::PassingMode::Borrow, word),
+        ],
+        comparison,
+        Multiplicity::Many,
+        0,
+    );
+    let order = DefPath::core("Order");
+    let order_shape = types.record(&[callable]);
     let sorted = types.builtin(
         BuiltinType::SortedMap,
-        vec![
-            GenericArgument::Type(word),
-            GenericArgument::Type(bytes),
-            GenericArgument::Type(callable),
-        ],
+        vec![GenericArgument::Type(word), GenericArgument::Type(bytes)],
     );
     let pair = types.tuple(&[word, bytes]);
     let array = types.builtin(BuiltinType::Array, vec![GenericArgument::Type(pair)]);
@@ -68,24 +75,33 @@ fn sorted(capture: bool) -> (RuntimeTypes, TypeId, TypeId, Value, PlacementRecei
     };
     let value = Value::Record {
         definition: DefId::intern(&DefPath::core("SortedMap")),
-        fields: vec![Some(comparator), Some(entries)],
+        fields: vec![
+            Some(Value::Record {
+                definition: DefId::intern(&order),
+                fields: vec![Some(comparator)],
+            }),
+            Some(entries),
+        ],
     };
     let mut receipt = PlacementReceipt::default();
     for path in [vec![1], vec![1, 0, 1], vec![1, 1, 1]] {
         receipt.blocks.insert(path, BlockPlacement::Heap);
     }
     if capture {
-        receipt.blocks.insert(vec![0], BlockPlacement::Heap);
         receipt.blocks.insert(vec![0, 0], BlockPlacement::Heap);
-        receipt.captures.insert(vec![0], vec![bytes]);
+        receipt.blocks.insert(vec![0, 0, 0], BlockPlacement::Heap);
+        receipt.captures.insert(vec![0, 0], vec![bytes]);
     }
-    (
-        RuntimeTypes::new(types.store),
-        sorted,
-        array,
-        value,
-        receipt,
-    )
+    let mut runtime = RuntimeTypes::new(types.store);
+    runtime.nominals.push(Nominal {
+        definition: order,
+        resource: false,
+        distinct: false,
+        finalizer: None,
+        fields: 1,
+        representation: Some(order_shape),
+    });
+    (runtime, sorted, array, value, receipt)
 }
 
 #[test]
@@ -153,7 +169,7 @@ fn arena_sorted_entries_do_not_hide_heap_comparator_or_double_charge_array() {
     );
     let mut foreign = receipt;
     foreign.blocks.insert(
-        vec![0],
+        vec![0, 0],
         BlockPlacement::Arena {
             arena: 8,
             block: LogicalBlockId(10),

@@ -1,0 +1,53 @@
+// rule: MEM-4
+// expect: run
+fn post_seal_failure() {
+  failure.check(false, Arithmetic())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let built: unique Bytes = unique b"abc"
+  let sentinel: Shared[Bytes] = shared.freeze(take built)
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let r = arena.with(
+        fn(outer: Arena) -> Region[List[Shared[Bytes]]] {
+          let root: List[Shared[Bytes]] in outer = [copy sentinel]
+          arena.with(
+            fn(inner: Arena) -> Region[List[Shared[Bytes]]] {
+              let owned = arena.seal(take outer, take root)
+              let marker: List[u64] in inner = [1u64]
+              failure.check(marker[0] == 1u64, Bounds())
+              post_seal_failure()
+              owned
+            }
+          )
+        }
+      )
+    }
+  )
+  match status {
+    Ok(_) => failure.check(false, Bounds()),
+    Error(caught) => {
+      failure.check(caught.rule == "SEM-1", Bounds())
+      failure.check(caught.site.line == 4u64, Bounds())
+      failure.check(
+        caught.site.definition == "standalone@0/post_seal_failure",
+        Bounds()
+      )
+      failure.check(list.len(caught.spawn) == 0u64, Bounds())
+      match caught.kind {
+        Check() => {},
+        _ => failure.check(false, Bounds()),
+      }
+      failure.check(caught.cause == None(), Bounds())
+    },
+  }
+  let released = match shared.thaw(take sentinel) {
+    Ok(data) => data == b"abc",
+    Error(root) => false,
+  }
+  failure.check(released, Bounds())
+  Ok(())
+}

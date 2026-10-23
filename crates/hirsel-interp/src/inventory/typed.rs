@@ -243,7 +243,7 @@ pub fn heap_charge_with(
                 Value::Record { definition, fields },
             ) if definition.is_core("SortedMap") => {
                 let types = type_arguments(arguments);
-                let [key, item, comparator] = types.as_slice() else {
+                let [key, item] = types.as_slice() else {
                     return Err(mismatch());
                 };
                 let [Some(order), Some(entries)] = fields.as_slice() else {
@@ -274,7 +274,14 @@ pub fn heap_charge_with(
                             kind: BuiltinType::Array,
                             arguments: vec![hirsel_types::GenericArgument::Type(pair)].into(),
                         }));
-                push!(0, order, *comparator, scope.clone());
+                let comparator =
+                    runtime
+                        .types
+                        .intern(hirsel_types::Type::with_kind(TypeKind::Named {
+                            definition: hirsel_syntax::DefPath::core("Order").into(),
+                            arguments: vec![hirsel_types::GenericArgument::Type(*key)].into(),
+                        }));
+                push!(0, order, comparator, scope.clone());
                 push!(1, entries, array, scope.clone());
             }
             (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(_) | Value::ArenaBytes { .. })

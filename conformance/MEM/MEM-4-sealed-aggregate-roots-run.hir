@@ -1,0 +1,143 @@
+// rule: MEM-4
+// expect: run
+type Item = Empty | Values(xs: List[u64])
+
+type Root {
+  tag: u64,
+  items: List[Item],
+  extra: box Item,
+}
+
+type Wrap[T] {
+  value: T,
+}
+
+distinct type Whole(root: Root)
+
+fn size(item: Item) -> u64 {
+  match item {
+    Empty() => 0u64,
+    Values(xs: xs) => list.len(xs),
+  }
+}
+
+fn boxed(item: box Item) -> u64 {
+  match item {
+    Empty() => 0u64,
+    Values(xs: xs) => list.len(xs),
+  }
+}
+
+fn score(root: Root) -> u64 {
+  root.tag + size(root.items[0]) + size(root.items[1]) + boxed(root.extra)
+}
+
+fn plain() -> u64 {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[Root] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Empty(), Values(xs: copy xs)]
+      let extra: (box Item) in a = box Values(xs: copy xs)
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = take payload
+      arena.seal(take a, take root)
+    }
+  )
+  region.with(
+    mut r,
+    fn(view: Root) -> u64 {
+      score(view)
+    }
+  )
+}
+
+fn swapped() -> u64 {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[Root] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Values(xs: copy xs), Empty()]
+      let extra: (box Item) in a = box Empty()
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = take payload
+      arena.seal(take a, take root)
+    }
+  )
+  region.with(
+    mut r,
+    fn(view: Root) -> u64 {
+      score(view)
+    }
+  )
+}
+
+fn tuple() -> u64 {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[(Root, u64)] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Empty(), Values(xs: copy xs)]
+      let extra: (box Item) in a = box Values(xs: copy xs)
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = (take payload, 1u64)
+      arena.seal(take a, take root)
+    }
+  )
+  region.with(
+    mut r,
+    fn(view: (Root, u64)) -> u64 {
+      {
+        let (value, extra) = view
+        score(value) + extra
+      }
+    }
+  )
+}
+
+fn generic() -> u64 {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[Wrap[Root]] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Empty(), Values(xs: copy xs)]
+      let extra: (box Item) in a = box Values(xs: copy xs)
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = Wrap(value: take payload)
+      arena.seal(take a, take root)
+    }
+  )
+  region.with(
+    mut r,
+    fn(view: Wrap[Root]) -> u64 {
+      score(view.value)
+    }
+  )
+}
+
+fn nominal() -> u64 {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[Whole] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Empty(), Values(xs: copy xs)]
+      let extra: (box Item) in a = box Values(xs: copy xs)
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = Whole(take payload)
+      arena.seal(take a, take root)
+    }
+  )
+  region.with(
+    mut r,
+    fn(view: Whole) -> u64 {
+      {
+        let Whole(value) = view
+        score(value)
+      }
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(plain() == 13u64, Bounds())
+  failure.check(swapped() == 11u64, Bounds())
+  failure.check(tuple() == 14u64, Bounds())
+  failure.check(generic() == 13u64, Bounds())
+  failure.check(nominal() == 13u64, Bounds())
+  Ok(())
+}

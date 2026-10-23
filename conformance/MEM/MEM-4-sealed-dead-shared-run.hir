@@ -1,0 +1,30 @@
+// rule: MEM-4
+// expect: run
+fn retain(take sentinel: Shared[Bytes]) -> Shared[Bytes] {
+  let r = arena.with(
+    fn(a: Arena) -> Region[u64] {
+      let dead: List[Shared[Bytes]] in a = [copy sentinel]
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  match shared.thaw(take sentinel) {
+    Error(root) => take root,
+    Ok(data) => {
+      failure.check(false, Bounds())
+      shared.freeze(take data)
+    },
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let built: unique Bytes = unique b"abc"
+  let sentinel: Shared[Bytes] = shared.freeze(take built)
+  let last = retain(take sentinel)
+  let released = match shared.thaw(take last) {
+    Ok(data) => data == b"abc",
+    Error(root) => false,
+  }
+  failure.check(released, Bounds())
+  Ok(())
+}

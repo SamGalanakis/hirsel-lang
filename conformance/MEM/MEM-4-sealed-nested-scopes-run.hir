@@ -1,0 +1,27 @@
+// rule: MEM-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut r = arena.with(
+    fn(outer: Arena) -> Region[List[u64]] {
+      let root: List[u64] in outer = [7u64]
+      arena.with(
+        fn(inner: Arena) -> Region[List[u64]] {
+          let owned = arena.seal(take outer, take root)
+          let marker: List[u64] in inner = [1u64]
+          failure.check(marker[0] == 1u64, Bounds())
+          owned
+        }
+      )
+    }
+  )
+  failure.check(
+    region.with(
+      mut r,
+      fn(view: List[u64]) -> u64 {
+        view[0]
+      }
+    ) == 7u64,
+    Bounds()
+  )
+  Ok(())
+}
