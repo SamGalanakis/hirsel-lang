@@ -1218,7 +1218,7 @@ fn find_from_prefilter(
   haystack: Bytes,
   mut work: u64
 ) -> Result[(Option[Span], Captures), MatchError] uses {} {
-  if !accelerated {
+  if !accelerated || !re.prefilter.enabled {
     return pike_find_from(re, subject, start, capture, mut work)
   }
   let program = vm_program(re)

@@ -35,6 +35,13 @@ for unnamed groups. Duplicate names are allowed, as in Go.
 input progression as `find_all`, including suppression of empty matches
 immediately following an accepted match. A zero match limit returns immediately.
 
+Empty matches use original UTF-8 character boundaries on every search path,
+including after the lazy DFA continues through Unicode or disables its cache.
+For example, `""` on `"☃"` returns `[0,0]` and `[3,3]`; `\B` on `"δ"`
+returns `[0,0]` and `[2,2]`. Prefix scanning is used only when compilation
+produced an eligible prefix plan; otherwise fallback searches retain every
+scalar position, including the end of the input.
+
 `replace_all(re, src, replacement, work_limit)` expands `$0`, `$1`, `${name}`
 and `$$`. Names are maximal: `$1x` names `1x`; `${1}x` means capture one followed
 by `x`. Missing or unmatched groups expand to empty text. Malformed dollar

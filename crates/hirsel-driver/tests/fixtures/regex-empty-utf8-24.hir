@@ -1,0 +1,264 @@
+pub fn empty_snowman() -> Result[(), ()] {
+  let Ok(re) = compile("", 10000) else {
+    return Error(())
+  }
+  let expected = [
+    Captures(spans: [Some(Span(start: 0, end: 0))]),
+    Captures(spans: [Some(Span(start: 3, end: 3))])
+  ]
+  failure.check(
+    find_all_captures(re, "☃", 100, 18446744073709551615) == Ok(expected),
+    TextInvariant()
+  )
+  Ok(())
+}
+
+pub fn nonword_delta() -> Result[(), ()] {
+  let Ok(re) = compile("\\B", 10000) else {
+    return Error(())
+  }
+  let expected = [
+    Captures(spans: [Some(Span(start: 0, end: 0))]),
+    Captures(spans: [Some(Span(start: 2, end: 2))])
+  ]
+  failure.check(
+    find_all_captures(re, "δ", 100, 18446744073709551615) == Ok(expected),
+    TextInvariant()
+  )
+  Ok(())
+}
+
+// regex-automata 80b9d14e4be9f0b703a742d11c064abce05f210b,
+// util/empty.rs:132-147,187-264: every engine must return character boundaries.
+// Hirsel searches scalar positions, so compare original UTF-8 byte spans at
+// every scalar start, including EOF, with both fresh and continued caches.
+fn empty_utf8_case(pattern: String, src: String) -> bool uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    return false
+  }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return false
+  }
+  let data = core@1/string.as_bytes(src)
+  if pattern == "(abcdefg|abcdefgh)" && !re.prefilter.enabled {
+    return false
+  }
+  let mut cache = dfa_cache(re, true, 65024)
+  let mut small = dfa_cache(re, true, 1500)
+  let mut fallback = dfa_cache(re, false, 1)
+  let mut scratch = capture_scratch()
+  scratch.plan = capture_plan(re)
+  scratch.prepared = true
+  for start in 0u64..core@1/list.len(subject.scalars) + 1 {
+    let Ok((span, captures)) = pike_find_from(re, subject, start, true, mut work) else {
+      return false
+    }
+    let mut fresh = dfa_cache(re, true, 65024)
+    if find_from(re, subject, start, true, data, mut fresh, mut work) != Ok(
+      (span, Captures(spans: []))
+    ) {
+      return false
+    }
+    if find_from(re, subject, start, true, data, mut small, mut work) != Ok(
+      (span, Captures(spans: []))
+    ) {
+      return false
+    }
+    if capture_find_from(
+      re,
+      subject,
+      start,
+      true,
+      data,
+      mut cache,
+      mut scratch,
+      mut work
+    ) != Ok((span, copy captures)) {
+      return false
+    }
+    if capture_find_from(
+      re,
+      subject,
+      start,
+      true,
+      data,
+      mut fallback,
+      mut scratch,
+      mut work
+    ) != Ok((span, copy captures)) {
+      return false
+    }
+    // Exercise the prefilter seam even when the prefix plan declined a
+    // nullable pattern. Operation admission is independent of prefix admission.
+    if find_from_prefilter(re, subject, start, true, true, data, mut work) != Ok(
+      (span, copy captures)
+    ) {
+      return false
+    }
+    if let Some(found) = span {
+      if !boundary(data, found.start) || !boundary(data, found.end) {
+        return false
+      }
+      if capture_pike(re, subject, found, mut scratch) != captures {
+        return false
+      }
+      if capture_backtrack(re, subject, found, mut scratch) != captures {
+        return false
+      }
+      if core@1/list.len(scratch.plan) != 0 && capture_onepass(
+        re,
+        subject,
+        found,
+        mut scratch
+      ) != captures {
+        return false
+      }
+    }
+  }
+  if pattern == "" && (cache.fallbacks == 0 || core@1/list.len(scratch.plan) == 0) {
+    return false
+  }
+  // Finite budgets select the original PikeVM. This checks complete sequences,
+  // suppression of overlapping empty hits and adjacent UTF-8 empty boundaries.
+  let limit = 18446744073709551615u64
+  let oracle = limit - 1
+  if find(re, src, limit) != find(re, src, oracle) {
+    return false
+  }
+  if find_captures(re, src, limit) != find_captures(re, src, oracle) {
+    return false
+  }
+  for count in [0u64, 1, 100] {
+    if find_all(re, src, count, limit) != find_all(re, src, count, oracle) {
+      return false
+    }
+    if find_all_captures(re, src, count, limit) != find_all_captures(
+      re,
+      src,
+      count,
+      oracle
+    ) {
+      return false
+    }
+  }
+  if replace_all_literal(re, src, "_", limit) != replace_all_literal(
+    re,
+    src,
+    "_",
+    oracle
+  ) {
+    return false
+  }
+  if replace_all(re, src, "[$0]", limit) != replace_all(re, src, "[$0]", oracle) {
+    return false
+  }
+  if replace_all_func(re, src, (), empty_utf8_callback, limit) != replace_pike(
+    re,
+    src,
+    "",
+    2,
+    (),
+    empty_utf8_callback,
+    limit
+  ) {
+    return false
+  }
+  true
+}
+
+fn empty_utf8_callback(state: (), src: String, captures: Captures) -> String uses {} {
+  let Some(span) = captures.spans[0] else {
+    return "absent"
+  }
+  // Subjects are short; two ASCII letters encode the exact callback span.
+  let mut data: List[u8] = []
+  core@1/list.push(mut data, core@1/int.narrow(65 + span.start))
+  core@1/list.push(mut data, core@1/int.narrow(65 + span.end))
+  text.finish_valid(take data)
+}
+
+fn empty_utf8_partition(partition: u64) -> Result[(), ()] uses {} {
+  let patterns: List[String] = [
+    "",
+    "\\b",
+    "\\B",
+    "^",
+    "$",
+    "a*",
+    "(?:)",
+    "a|",
+    "|a",
+    "(a*)",
+    "(a|aa)*",
+    "(?:|δ)",
+    "(?m)^|$",
+    "(a*?)",
+    "(a?)*",
+    "(δ|)"
+  ]
+  for i in 0u64..core@1/list.len(patterns) {
+    if i % 4 == partition {
+      for src in ["aδ☃😀aa", "δ☃😀a\na"] {
+        core@1/failure.check(empty_utf8_case(patterns[i], src), TextInvariant())
+      }
+    }
+  }
+  // Positive prefix admission exercises both the optional candidate scanner
+  // and its Unicode continuation alongside nullable, prefix-ineligible cases.
+  if partition == 0 {
+    for pattern in ["(abcdefg|abcdefgh)", "(?i)abcdefg"] {
+      core@1/failure.check(empty_utf8_case(pattern, "δ☃😀abcdefgh"), TextInvariant())
+    }
+  }
+  let atoms: List[String] = ["", "\\b", "\\B", "^", "$", "a*", "(?:)", "δ*"]
+  let chars: List[String] = ["a", "δ", "☃", "😀", "\n", "_", " ", "a"]
+  let mut seed = 20261025u64
+  for sample in 0u64..24 {
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let a = atoms[seed / 256 % 8]
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let b = atoms[seed / 256 % 8]
+    let pattern = match sample % 3 {
+      0 => f"({a})|({b})",
+      1 => f"(?:{a})|",
+      _ => f"({a})?({b})?",
+    }
+    let mut data: List[u8] = []
+    text.append(mut data, "aδ☃😀")
+    for n in 0u64..2 {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      text.append(mut data, chars[seed / 256 % 8])
+    }
+    if sample % 4 == partition {
+      core@1/failure.check(
+        empty_utf8_case(pattern, text.finish_valid(take data)),
+        TextInvariant()
+      )
+    }
+  }
+  Ok(())
+}
+
+pub fn empty_utf8_0() -> Result[(), ()] uses {} {
+  empty_utf8_partition(0)
+}
+
+pub fn empty_utf8_1() -> Result[(), ()] uses {} {
+  empty_utf8_partition(1)
+}
+
+pub fn empty_utf8_2() -> Result[(), ()] uses {} {
+  empty_utf8_partition(2)
+}
+
+pub fn empty_utf8_3() -> Result[(), ()] uses {} {
+  empty_utf8_partition(3)
+}
+
+pub fn empty_utf8_all() -> Result[(), ()] uses {} {
+  for partition in 0u64..4 {
+    empty_utf8_partition(partition)?
+  }
+  Ok(())
+}
