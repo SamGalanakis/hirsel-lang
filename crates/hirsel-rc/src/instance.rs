@@ -15,8 +15,8 @@
 //! one instance.
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_layout::instance::{
-    ActualBinder, CallableConvention, CaptureView, InstanceKey, InstanceKeyError, InstanceView,
-    ParameterView, Substitution,
+    ActualBinder, CallableConvention, CaptureView, InstanceDeclaration, InstanceKey,
+    InstanceKeyError, InstanceView, ParameterView, Substitution,
 };
 use hirsel_layout::layout::{LayoutBuilder, Owners};
 use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbiId};
@@ -207,7 +207,8 @@ pub struct Instances {
     /// directly, and captures/storage of these lexical names are unnecessary.
     pub elided: HashMap<InstanceId, std::collections::HashSet<hirsel_tir::LocalId>>,
     by_key: HashMap<InstanceKey, InstanceId>,
-    producers: HashMap<(DefPath, BodyId, hirsel_tir::LocalId), Option<Producer>>,
+    function_entries: BTreeMap<DefPath, BodyId>,
+    producers: BTreeMap<DefPath, HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>>>,
 }
 
 /// One ordinary data parameter of a statically bound nested function.
@@ -218,6 +219,107 @@ pub struct DirectCapture {
 }
 
 impl Instances {
+    /// An empty demand registry owns no source bodies or native Values.
+    pub fn new(types: Arc<TypeInterner>, memo: Arc<TypeMemo>) -> Self {
+        Self {
+            types,
+            memo,
+            views: Vec::new(),
+            roles: Vec::new(),
+            callables: Vec::new(),
+            abis: Vec::new(),
+            actuals: Vec::new(),
+            environments: Vec::new(),
+            data_environments: HashMap::new(),
+            data_locals: HashMap::new(),
+            direct_captures: HashMap::new(),
+            direct_calls: HashMap::new(),
+            elided: HashMap::new(),
+            by_key: HashMap::new(),
+            function_entries: BTreeMap::new(),
+            producers: BTreeMap::new(),
+        }
+    }
+
+    /// Register a source callable from its compact declaration and concrete
+    /// actuals. Only a subsequent miss may attach its demanded source body.
+    pub fn register_function(
+        &mut self,
+        program: &Program,
+        declaration: Arc<InstanceDeclaration>,
+        entry: BodyId,
+        actuals: Actuals,
+        layouts: &mut dyn crate::library::builder::Layouts,
+    ) -> Result<(InstanceId, bool), InstanceError> {
+        let path = &declaration.definition;
+        let signature = program
+            .signatures
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingSignature(path.clone()))?;
+        let SignatureKind::Function(function) = &signature.kind else {
+            return Err(InstanceError::Malformed(format!(
+                "{path:?} is called but is not a function"
+            )));
+        };
+        if !Arc::ptr_eq(&self.types, &program.types)
+            || declaration.signature != signature.fingerprint
+            || entry.0 >= declaration.body_count
+        {
+            return Err(InstanceError::Malformed(format!(
+                "{path:?}: stale or foreign instance declaration"
+            )));
+        }
+        let key = key_of(&self.types, path, entry, &actuals, None, None)?;
+        if let Some(id) = self.get(&key) {
+            return Ok((id, false));
+        }
+        let callable = instantiate_function(
+            &self.types,
+            &self.memo,
+            function,
+            hirsel_types::Modes::global(),
+            &actuals,
+        )
+        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        let substitution = actuals.substitution(path)?;
+        let parameters = parameter_views(&self.types, callable);
+        let view = InstanceView::from_declaration(
+            key,
+            declaration,
+            entry,
+            CallableShape::Definition,
+            substitution,
+            parameters,
+            Vec::new(),
+            false,
+        );
+        self.push(
+            layouts,
+            view,
+            InstanceRole::Function,
+            callable,
+            actuals,
+            CallableShape::Definition,
+            None,
+        )
+    }
+
+    /// Attach one demanded implementation and index its lexical producers once
+    /// per source owner. Other source bodies are neither traversed nor retained.
+    pub fn attach_definition(
+        &mut self,
+        id: InstanceId,
+        definition: DefinitionRef,
+    ) -> Result<(), InstanceError> {
+        self.views[id.index()].attach_definition(definition.clone())?;
+        let path = definition.path.path();
+        if !self.producers.contains_key(path) {
+            let producers = lexical_producers(&self.types, &definition);
+            self.producers.insert(path.clone(), producers);
+        }
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.views.len()
     }
@@ -250,11 +352,15 @@ impl Instances {
         definition: &DefPath,
         actuals: &Actuals,
     ) -> Result<InstanceId, InstanceError> {
-        let def = program
-            .definitions
+        if !program.signatures.contains_key(definition) {
+            return Err(InstanceError::MissingSignature(definition.clone()));
+        }
+        let entry = self
+            .function_entries
             .get(definition)
-            .ok_or_else(|| InstanceError::MissingDefinition(definition.clone()))?;
-        let key = key_of(&self.types, definition, def.entry, actuals, None, None)?;
+            .copied()
+            .ok_or_else(|| InstanceError::MissingInstance(definition.clone()))?;
+        let key = key_of(&self.types, definition, entry, actuals, None, None)?;
         self.get(&key)
             .ok_or_else(|| InstanceError::MissingInstance(definition.clone()))
     }
@@ -306,6 +412,19 @@ impl Instances {
             abi
         };
         view.caller_destination = layouts.table().fn_abis[abi.0 as usize].destination;
+        if role == InstanceRole::Function {
+            if self
+                .function_entries
+                .get(view.key.definition())
+                .is_some_and(|b| *b != view.body)
+            {
+                return Err(InstanceError::Malformed(
+                    "function entry declaration changed".into(),
+                ));
+            }
+            self.function_entries
+                .insert(view.key.definition().clone(), view.body);
+        }
         let id = InstanceId(self.views.len() as u32);
         self.by_key.insert(view.key.clone(), id);
         self.views.push(view);
@@ -604,6 +723,7 @@ struct Expander<'p, 'l, 'o> {
     by_owner: BTreeMap<&'p DefPath, Vec<&'p Requirement>>,
     /// Nominal instances already visited (recursive representations).
     nominals: std::collections::HashSet<InstanceKey>,
+    declarations: BTreeMap<DefPath, (BodyId, Arc<InstanceDeclaration>)>,
 }
 
 /// Expand every instance the program executes.
@@ -626,26 +746,11 @@ pub fn expand(
     let mut e = Expander {
         program,
         layouts,
-        out: Instances {
-            types: program.types.clone(),
-            memo: program.memo.clone(),
-            views: Vec::new(),
-            roles: Vec::new(),
-            callables: Vec::new(),
-            abis: Vec::new(),
-            actuals: Vec::new(),
-            environments: Vec::new(),
-            data_environments: HashMap::new(),
-            data_locals: HashMap::new(),
-            direct_captures: HashMap::new(),
-            direct_calls: HashMap::new(),
-            elided: HashMap::new(),
-            by_key: HashMap::new(),
-            producers: lexical_producers(program),
-        },
+        out: Instances::new(program.types.clone(), program.memo.clone()),
         queue: VecDeque::new(),
         by_owner,
         nominals: Default::default(),
+        declarations: BTreeMap::new(),
     };
     for (path, signature) in &program.signatures {
         if !program.definitions.contains_key(path) {
@@ -738,6 +843,10 @@ impl Expander<'_, '_, '_> {
             environment,
         )?;
         if fresh {
+            if !self.out.roles[id.index()].is_library() {
+                let definition = self.out.view(id).definition()?.clone();
+                self.out.attach_definition(id, definition)?;
+            }
             self.queue.push_back(id);
         }
         Ok(id)
@@ -745,50 +854,35 @@ impl Expander<'_, '_, '_> {
 
     /// The entry-body instance of a function definition.
     fn function(&mut self, path: &DefPath, actuals: Actuals) -> Result<InstanceId, InstanceError> {
-        let signature = self.signature(path)?.clone();
-        let SignatureKind::Function(function) = &signature.kind else {
-            return Err(InstanceError::Malformed(format!(
-                "{path:?} is called but is not a function"
-            )));
-        };
-        let definition = self
-            .program
-            .definitions
-            .get(path)
-            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
-            .clone();
-        let program = self.program;
-        let key = key_of(&program.types, path, definition.entry, &actuals, None, None)?;
-        if let Some(&id) = self.out.by_key.get(&key) {
-            return Ok(id);
+        if !self.declarations.contains_key(path) {
+            let definition = self
+                .program
+                .definitions
+                .get(path)
+                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?;
+            self.declarations.insert(
+                path.clone(),
+                (
+                    definition.entry,
+                    Arc::new(InstanceDeclaration::of(definition)),
+                ),
+            );
         }
-        let callable = instantiate_function(
-            &program.types,
-            &program.memo,
-            function,
-            hirsel_types::Modes::global(),
-            &actuals,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let parameters = parameter_views(&program.types, callable);
-        let view = InstanceView::from_definition(
-            key,
-            definition.clone(),
-            definition.entry,
-            CallableShape::Definition,
-            actuals.substitution(path)?,
-            parameters,
-            Vec::new(),
-            false,
-        );
-        self.insert(
-            view,
-            InstanceRole::Function,
-            callable,
-            actuals,
-            CallableShape::Definition,
-            None,
-        )
+        let (entry, declaration) = self.declarations[path].clone();
+        let (id, fresh) =
+            self.out
+                .register_function(self.program, declaration, entry, actuals, self.layouts)?;
+        if fresh {
+            let definition = self
+                .program
+                .definitions
+                .get(path)
+                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
+                .clone();
+            self.out.attach_definition(id, definition)?;
+            self.queue.push_back(id);
+        }
+        Ok(id)
     }
 
     /// A nominal instance: its finalizer, if it declares one, and the
@@ -1406,149 +1500,147 @@ enum ProducerSource {
 /// paths once. Instance ancestry selects actuals later; generic binder
 /// identities never enter an ordinal-only lookup.
 fn lexical_producers(
-    program: &Program,
-) -> HashMap<(DefPath, BodyId, hirsel_tir::LocalId), Option<Producer>> {
-    let types = &*program.types;
+    types: &TypeInterner,
+    definition: &hirsel_tir::Definition,
+) -> HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>> {
     let mut out = HashMap::new();
-    for (path, definition) in &program.definitions {
-        let mut sources = HashMap::new();
-        let mut creators = HashMap::new();
-        for (b, body) in definition.bodies.iter().enumerate() {
-            let owner = BodyId(b as u32);
-            for (r, value) in body.rvalues.iter().enumerate() {
-                if let Rvalue::Closure { body: child, .. } = value {
-                    creators
-                        .entry(*child)
-                        .and_modify(|p| *p = None)
-                        .or_insert(Some((owner, hirsel_tir::RvalueId(r as u32))));
-                }
-            }
-            for instruction in body.blocks.iter().flat_map(|b| &b.instructions) {
-                let hirsel_tir::InstructionKind::Assign { destination, value } = instruction.kind
-                else {
-                    continue;
-                };
-                let d = &body.places[destination.0 as usize];
-                if !d.projection.is_empty() || !generic_function(types, d.ty) {
-                    continue;
-                }
-                let source = match &body.rvalues[value.0 as usize] {
-                    Rvalue::Closure { .. } => Some(ProducerSource::Literal(Producer {
-                        owner,
-                        value,
-                        ty: d.ty,
-                        empty: false,
-                    })),
-                    Rvalue::Use(operand) => {
-                        let p = &body.places[operand.place.0 as usize];
-                        p.projection
-                            .is_empty()
-                            .then_some(ProducerSource::Alias(owner, p.root))
-                    }
-                    _ => None,
-                };
-                sources
-                    .entry((owner, d.root))
+    let mut sources = HashMap::new();
+    let mut creators = HashMap::new();
+    for (b, body) in definition.bodies.iter().enumerate() {
+        let owner = BodyId(b as u32);
+        for (r, value) in body.rvalues.iter().enumerate() {
+            if let Rvalue::Closure { body: child, .. } = value {
+                creators
+                    .entry(*child)
                     .and_modify(|p| *p = None)
-                    .or_insert(source);
+                    .or_insert(Some((owner, hirsel_tir::RvalueId(r as u32))));
             }
         }
-        for (b, body) in definition.bodies.iter().enumerate() {
-            let owner = BodyId(b as u32);
-            let Some(Some((parent, value))) = creators.get(&owner).copied() else {
+        for instruction in body.blocks.iter().flat_map(|b| &b.instructions) {
+            let hirsel_tir::InstructionKind::Assign { destination, value } = instruction.kind
+            else {
                 continue;
             };
-            let parent_body = &definition.bodies[parent.0 as usize];
-            let Rvalue::Closure { captures, .. } = &parent_body.rvalues[value.0 as usize] else {
-                unreachable!();
-            };
-            for ((local, row), operand) in body
-                .locals
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.storage == Storage::Capture)
-                .zip(captures)
-            {
-                if !generic_function(types, row.ty) {
-                    continue;
-                }
-                let p = &parent_body.places[operand.place.0 as usize];
-                sources.insert(
-                    (owner, hirsel_tir::LocalId(local as u32)),
+            let d = &body.places[destination.0 as usize];
+            if !d.projection.is_empty() || !generic_function(types, d.ty) {
+                continue;
+            }
+            let source = match &body.rvalues[value.0 as usize] {
+                Rvalue::Closure { .. } => Some(ProducerSource::Literal(Producer {
+                    owner,
+                    value,
+                    ty: d.ty,
+                    empty: false,
+                })),
+                Rvalue::Use(operand) => {
+                    let p = &body.places[operand.place.0 as usize];
                     p.projection
                         .is_empty()
-                        .then_some(ProducerSource::Alias(parent, p.root)),
-                );
-            }
-        }
-        let mut resolved = HashMap::new();
-        for &start in sources.keys() {
-            let mut at = start;
-            let mut visited = std::collections::HashSet::new();
-            let result = loop {
-                if let Some(&result) = resolved.get(&at) {
-                    break result;
+                        .then_some(ProducerSource::Alias(owner, p.root))
                 }
-                if !visited.insert(at) {
-                    break None;
-                }
-                match sources.get(&at).copied().flatten() {
-                    Some(ProducerSource::Literal(producer)) => break Some(producer),
-                    Some(ProducerSource::Alias(body, local)) => at = (body, local),
-                    None => break None,
-                }
+                _ => None,
             };
-            for key in visited {
-                resolved.insert(key, result);
+            sources
+                .entry((owner, d.root))
+                .and_modify(|p| *p = None)
+                .or_insert(source);
+        }
+    }
+    for (b, body) in definition.bodies.iter().enumerate() {
+        let owner = BodyId(b as u32);
+        let Some(Some((parent, value))) = creators.get(&owner).copied() else {
+            continue;
+        };
+        let parent_body = &definition.bodies[parent.0 as usize];
+        let Rvalue::Closure { captures, .. } = &parent_body.rvalues[value.0 as usize] else {
+            unreachable!();
+        };
+        for ((local, row), operand) in body
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.storage == Storage::Capture)
+            .zip(captures)
+        {
+            if !generic_function(types, row.ty) {
+                continue;
+            }
+            let p = &parent_body.places[operand.place.0 as usize];
+            sources.insert(
+                (owner, hirsel_tir::LocalId(local as u32)),
+                p.projection
+                    .is_empty()
+                    .then_some(ProducerSource::Alias(parent, p.root)),
+            );
+        }
+    }
+    let mut resolved = HashMap::new();
+    for &start in sources.keys() {
+        let mut at = start;
+        let mut visited = std::collections::HashSet::new();
+        let result = loop {
+            if let Some(&result) = resolved.get(&at) {
+                break result;
+            }
+            if !visited.insert(at) {
+                break None;
+            }
+            match sources.get(&at).copied().flatten() {
+                Some(ProducerSource::Literal(producer)) => break Some(producer),
+                Some(ProducerSource::Alias(body, local)) => at = (body, local),
+                None => break None,
+            }
+        };
+        for key in visited {
+            resolved.insert(key, result);
+        }
+    }
+    // An environment containing only other static generic names needs
+    // no runtime data either. Propagate ordinary-data requirements over
+    // reverse edges; cycles of function names alone remain empty.
+    let literals: HashMap<_, _> = resolved
+        .values()
+        .copied()
+        .flatten()
+        .map(|p| ((p.owner, p.value), p))
+        .collect();
+    let mut dependents: HashMap<_, Vec<_>> = HashMap::new();
+    let mut nonempty = std::collections::HashSet::new();
+    let mut queue = VecDeque::new();
+    for (&key, producer) in &literals {
+        let body = &definition.bodies[producer.owner.0 as usize];
+        let Rvalue::Closure { captures, .. } = &body.rvalues[producer.value.0 as usize] else {
+            unreachable!();
+        };
+        for operand in captures {
+            let place = &body.places[operand.place.0 as usize];
+            let dependency = generic_function(types, place.ty)
+                .then(|| {
+                    resolved
+                        .get(&(producer.owner, place.root))
+                        .copied()
+                        .flatten()
+                })
+                .flatten();
+            if let Some(p) = dependency {
+                dependents.entry((p.owner, p.value)).or_default().push(key);
+            } else if nonempty.insert(key) {
+                queue.push_back(key);
             }
         }
-        // An environment containing only other static generic names needs
-        // no runtime data either. Propagate ordinary-data requirements over
-        // reverse edges; cycles of function names alone remain empty.
-        let literals: HashMap<_, _> = resolved
-            .values()
-            .copied()
-            .flatten()
-            .map(|p| ((p.owner, p.value), p))
-            .collect();
-        let mut dependents: HashMap<_, Vec<_>> = HashMap::new();
-        let mut nonempty = std::collections::HashSet::new();
-        let mut queue = VecDeque::new();
-        for (&key, producer) in &literals {
-            let body = &definition.bodies[producer.owner.0 as usize];
-            let Rvalue::Closure { captures, .. } = &body.rvalues[producer.value.0 as usize] else {
-                unreachable!();
-            };
-            for operand in captures {
-                let place = &body.places[operand.place.0 as usize];
-                let dependency = generic_function(types, place.ty)
-                    .then(|| {
-                        resolved
-                            .get(&(producer.owner, place.root))
-                            .copied()
-                            .flatten()
-                    })
-                    .flatten();
-                if let Some(p) = dependency {
-                    dependents.entry((p.owner, p.value)).or_default().push(key);
-                } else if nonempty.insert(key) {
-                    queue.push_back(key);
-                }
+    }
+    while let Some(key) = queue.pop_front() {
+        for &dependent in dependents.get(&key).into_iter().flatten() {
+            if nonempty.insert(dependent) {
+                queue.push_back(dependent);
             }
         }
-        while let Some(key) = queue.pop_front() {
-            for &dependent in dependents.get(&key).into_iter().flatten() {
-                if nonempty.insert(dependent) {
-                    queue.push_back(dependent);
-                }
-            }
+    }
+    for ((body, local), mut producer) in resolved {
+        if let Some(p) = &mut producer {
+            p.empty = !nonempty.contains(&(p.owner, p.value));
         }
-        for ((body, local), mut producer) in resolved {
-            if let Some(p) = &mut producer {
-                p.empty = !nonempty.contains(&(p.owner, p.value));
-            }
-            out.insert((path.clone(), body, local), producer);
-        }
+        out.insert((body, local), producer);
     }
     out
 }
@@ -1563,7 +1655,8 @@ fn nested_function(
     let view = instances.view(instance);
     let Some(producer) = instances
         .producers
-        .get(&(view.key.definition().clone(), view.body, local))
+        .get(view.key.definition())
+        .and_then(|owner| owner.get(&(view.body, local)))
         .copied()
         .flatten()
     else {
