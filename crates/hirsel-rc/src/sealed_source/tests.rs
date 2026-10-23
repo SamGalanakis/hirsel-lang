@@ -236,3 +236,95 @@ fn semantic_source_33_ambiguous_reaching_producers_fail_closed() {
         ))
     );
 }
+
+// Extractor controls only: the call blocks are built directly, independently
+// of candidate LIR. V acceptance is outside this helper's test boundary.
+fn call_transport(
+    projected: bool,
+    indirect: bool,
+    usage: UseKind,
+) -> Result<Vec<SourcePayload>, SourceError> {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+    let mut body = body(&[tuple, tuple], 1);
+    let place = if projected {
+        body.places.push(Place {
+            loan: None,
+            binding: None,
+            root: LocalId(0),
+            projection: vec![Projection::Field(0)].into(),
+            ty: scalar,
+        });
+        PlaceId(2)
+    } else {
+        PlaceId(0)
+    };
+    let value = Operand { place, usage };
+    body.blocks[0].terminator = Terminator::Call {
+        callee: if indirect {
+            Callee::Indirect {
+                forward_caller: false,
+                value: value.clone(),
+                arguments: vec![],
+            }
+        } else {
+            Callee::Definition {
+                path: hirsel_syntax::DefPath::core("source_mutation_control"),
+                arguments: vec![],
+            }
+        },
+        arguments: if indirect {
+            vec![]
+        } else {
+            vec![CallArgument {
+                parameter: hirsel_types::ParamId(0),
+                value,
+            }]
+        },
+        returns: None,
+        on_failure: CleanupId(0),
+    };
+    assign(
+        &mut body,
+        1,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(0),
+            }],
+            destination: Destination::Heap,
+        },
+    );
+    extract(&types, &body, &[0])
+}
+
+#[test]
+fn semantic_source_33_mut_call_invalidates_old_root_producer() {
+    assert!(matches!(
+        call_transport(false, false, UseKind::Mut),
+        Err(SourceError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn semantic_source_33_projected_mut_call_invalidates_whole_root_producer() {
+    assert!(matches!(
+        call_transport(true, false, UseKind::Mut),
+        Err(SourceError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn semantic_source_33_mut_indirect_call_invalidates_old_environment_producer() {
+    assert!(matches!(
+        call_transport(false, true, UseKind::Mut),
+        Err(SourceError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn semantic_source_33_borrow_call_preserves_source_producer() {
+    assert!(call_transport(false, false, UseKind::Borrow).is_ok());
+}

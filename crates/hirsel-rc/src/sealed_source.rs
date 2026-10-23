@@ -234,16 +234,37 @@ pub fn payloads(
             }
         }
         if let Terminator::Call {
-            returns: Some(returned),
+            callee,
+            arguments,
+            returns,
             ..
-        } = block.terminator
+        } = &block.terminator
         {
-            let local = context.local(returned.destination)?;
-            definitions[local].push(Definition::Call(context.anchor(
-                block_id,
-                block.instructions.len(),
-                block.span,
-            )));
+            // A mut argument can replace a whole value or a projected field.
+            // Until reaching versions are transported, no old producer of its
+            // storage root can authorize a semantic payload. Include indirect
+            // callable mutation and diverging calls (which have no result).
+            let callable = match callee {
+                hirsel_tir::Callee::Indirect { value, .. } => Some(value),
+                hirsel_tir::Callee::Definition { .. } => None,
+            };
+            for operand in arguments.iter().map(|a| &a.value).chain(callable) {
+                if operand.usage == hirsel_types::UseKind::Mut {
+                    let local = context.place(operand.place)?.root.0 as usize;
+                    definitions
+                        .get_mut(local)
+                        .ok_or(SourceError::Malformed("mutated source local"))?
+                        .push(Definition::Unknown);
+                }
+            }
+            if let Some(returned) = returns {
+                let local = context.local(returned.destination)?;
+                definitions[local].push(Definition::Call(context.anchor(
+                    block_id,
+                    block.instructions.len(),
+                    block.span,
+                )));
+            }
         }
     }
     let mut result = vec![];
