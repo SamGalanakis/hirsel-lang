@@ -2,6 +2,10 @@
 //! of these descriptors grants verifier or native-validator authority.
 use hirsel_artifact_store::{Action, Address, Reference};
 use std::task::Poll;
+mod budget;
+mod scheduler;
+pub use budget::{MemoryReservation, ProcessBudget};
+pub use scheduler::{AdmittedRuntime, RuntimeErrors, RuntimeEvent, RuntimeStats};
 
 /// Logical address, independent of source revision, worker or request order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
