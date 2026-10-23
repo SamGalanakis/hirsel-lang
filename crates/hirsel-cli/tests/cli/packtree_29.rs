@@ -76,12 +76,21 @@ fn scripted(caps: bool) {
             inputs: vec![],
         };
         let rows: Vec<Value> = if caps {
+            for (name, source) in [
+                (
+                    "vectors.py",
+                    include_str!("../support/packtree_29/vectors.py"),
+                ),
+                (
+                    "oracle.py",
+                    include_str!("../support/packtree_29/oracle.py"),
+                ),
+            ] {
+                fs::write(tmp.path().join(name), source).unwrap();
+            }
             let generated = Command::new("python3")
                 .env("PYTHONDONTWRITEBYTECODE", "1")
-                .arg(
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/support/packtree_29/vectors.py"),
-                )
+                .arg(tmp.path().join("vectors.py"))
                 .output()
                 .unwrap();
             assert!(
