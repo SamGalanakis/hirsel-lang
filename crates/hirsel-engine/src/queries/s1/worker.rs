@@ -212,6 +212,7 @@ impl TaskShared {
 
 struct Lowered {
     definition: DefinitionRef,
+    verification: Option<Arc<hirsel_validate::VerifiedDefinition>>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     reads: Reads,
     depth: DepthEvidence<Span>,
@@ -380,20 +381,32 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     pub(super) fn lower_root(
         &mut self,
         path: &DefPath,
-    ) -> DependencyProduct<(QueryOutput<DefinitionRef>, DepthEvidence<Span>)> {
+    ) -> DependencyProduct<(
+        QueryOutput<DefinitionRef>,
+        DepthEvidence<Span>,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    )> {
         self.lower_root_with(path, |output| output)
     }
     pub(super) fn check_lower_root(
         &mut self,
         path: &DefPath,
-    ) -> DependencyProduct<(QueryOutput<()>, DepthEvidence<Span>)> {
+    ) -> DependencyProduct<(
+        QueryOutput<()>,
+        DepthEvidence<Span>,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    )> {
         self.lower_root_with(path, discard_lowered_output)
     }
     fn lower_root_with<T>(
         &mut self,
         path: &DefPath,
         finish: impl FnOnce(QueryOutput<DefinitionRef>) -> QueryOutput<T>,
-    ) -> DependencyProduct<(QueryOutput<T>, DepthEvidence<Span>)> {
+    ) -> DependencyProduct<(
+        QueryOutput<T>,
+        DepthEvidence<Span>,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    )> {
         self.limit = None;
         self.phase = Some(QueryKind::Lower);
         self.stack.begin_requests();
@@ -404,7 +417,9 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let depth = self.stack.finish_requests(self.depth_limit());
         self.lowered.clear();
         DependencyProduct {
-            result: product.result.map(|output| (finish(output), depth)),
+            result: product
+                .result
+                .map(|(output, verification)| (finish(output), depth, verification)),
             reads: product.reads,
         }
     }
@@ -1040,19 +1055,25 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     fn validate_lowered(
         &mut self,
         path: &DefPath,
-        definition: &hirsel_tir::Definition,
-    ) -> Result<Option<hirsel_validate::AcceptedArtifact>, QueryError> {
+        definition: &DefinitionRef,
+    ) -> Result<
+        (
+            Option<hirsel_validate::AcceptedArtifact>,
+            Option<Arc<hirsel_validate::VerifiedDefinition>>,
+        ),
+        QueryError,
+    > {
         self.phase = Some(QueryKind::Lower);
         let inputs = self.source.inputs();
         if inputs.verify == Verify::Off {
-            return Ok(None);
+            return Ok((None, None));
         }
         let mut reads = ReadsBuilder::new();
         FrozenProvider::new(&inputs.snapshot, path.0.package.clone(), &mut reads)
             .validation_universe();
         self.merge(&reads.finish().expect("one immutable validation universe"));
         let _time = timings::phase(Phase::Verify);
-        let (report, ran, acceptance) = inputs
+        let (report, ran, acceptance, verification) = inputs
             .snapshot
             .validate_source_artifact(definition, |anchor| self.source.anchor_owner(anchor));
         self.record_acceptance(acceptance.clone());
@@ -1067,7 +1088,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             return Err(error);
         }
         if report.violations.is_empty() {
-            Ok(acceptance)
+            Ok((acceptance, verification.map(Arc::new)))
         } else {
             Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "TIR validation".into(),
@@ -1076,21 +1097,30 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
     }
     pub(super) fn lower(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        let output = self.lower_output(path)?;
+        let (output, _) = self.lower_output(path)?;
         // Executing a cached artifact observes its signature dependencies just
         // as executing a freshly lowered body does. A scalar receipt produced
         // outside execution need not already carry ExecutedSignature reads.
         self.execution_signatures(&output.dependencies);
         Ok(output.value)
     }
-    fn lower_output(&mut self, path: &DefPath) -> Result<QueryOutput<DefinitionRef>, QueryError> {
+    fn lower_output(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<
+        (
+            QueryOutput<DefinitionRef>,
+            Option<Arc<hirsel_validate::VerifiedDefinition>>,
+        ),
+        QueryError,
+    > {
         if let Some((output, reads, depth)) = self.source.cached_lowering(path) {
             self.merge(&reads);
-            self.validate_lowered(path, &output.value)?;
+            let (_, verification) = self.validate_lowered(path, &output.value)?;
             self.stack
                 .replay_requests(&depth)
                 .map_err(|site| self.overflow(site))?;
-            return Ok(output);
+            return Ok((output, verification));
         }
         let key = MemoKey::new(QueryKind::Lower, DefId::intern(path));
         if let Some(hit) = self.lowered.get(&key).cloned() {
@@ -1101,11 +1131,14 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             self.record_acceptance(hit.acceptance.clone());
             self.registrations.extend(hit.registrations.iter().cloned());
             self.replay_selections(&hit.requests);
-            return Ok(QueryOutput {
-                value: hit.definition.clone(),
-                diagnostics: hit.diagnostics.clone(),
-                dependencies: hit.dependencies.clone(),
-            });
+            return Ok((
+                QueryOutput {
+                    value: hit.definition.clone(),
+                    diagnostics: hit.diagnostics.clone(),
+                    dependencies: hit.dependencies.clone(),
+                },
+                hit.verification.clone(),
+            ));
         }
         self.lowered.demand_evicted(&key);
         self.lower_work
@@ -1154,7 +1187,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 },
                 &signature,
             )?;
-            let acceptance = worker.validate_lowered(path, &output.value)?;
+            let definition = Arc::new(output.value);
+            let (acceptance, verification) = worker.validate_lowered(path, &definition)?;
             if has_errors(&output.diagnostics) {
                 return Err(QueryError::Diagnostics(output.diagnostics));
             }
@@ -1168,17 +1202,19 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             }
             dependencies.extend(output.dependencies);
             Ok((
-                Arc::new(output.value),
+                definition,
                 output.diagnostics,
                 dependencies,
                 acceptance,
+                verification,
             ))
         });
         let depth = self.stack.finish_requests(self.depth_limit());
         self.merge(&product.reads);
-        let (definition, diagnostics, dependencies, acceptance) = product.result?;
+        let (definition, diagnostics, dependencies, acceptance, verification) = product.result?;
         let held = Arc::new(Lowered {
             definition: definition.clone(),
+            verification: verification.clone(),
             acceptance,
             reads: product.reads,
             depth,
@@ -1200,11 +1236,14 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 &held.dependencies,
             ));
         self.lowered.hold(key, held, bytes);
-        Ok(QueryOutput {
-            value: definition,
-            diagnostics,
-            dependencies,
-        })
+        Ok((
+            QueryOutput {
+                value: definition,
+                diagnostics,
+                dependencies,
+            },
+            verification,
+        ))
     }
 }
 impl<S: TirSource + ?Sized> ComptimeValueSource for TaskWorker<'_, S> {

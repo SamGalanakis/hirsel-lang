@@ -795,6 +795,7 @@ mod tests {
             covered: vec![],
             depth: None,
             acceptance: None,
+            verification: Default::default(),
             selections: vec![],
             consistent: true,
         };

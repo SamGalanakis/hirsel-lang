@@ -150,7 +150,7 @@ fn nominal_authority_22_owner_views_and_client_access() {
             let snapshot = program.engine.signature_snapshot();
             for package in ["owner", "client"] {
                 let views = snapshot.validation(&path(package, "probe").0.package);
-                let (view, _) = views.view(public.definition).unwrap();
+                let view = views.view(public.definition).unwrap().signature();
                 assert!(
                     check_view(program.engine.types(), public.definition, view, views)
                         .error

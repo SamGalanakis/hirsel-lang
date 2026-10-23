@@ -5,14 +5,12 @@ use crate::memo::{HoldStats, Retention, retained_lower_entry_bytes};
 
 pub(super) struct LowerReceipt {
     entry: Entry<()>,
-    verdict: Option<Vec<hirsel_validate::VRead>>,
-    /// Worker check facts carry their complete independently observed V
-    /// universe in Reads. They contain no portable or executable TIR.
-    validated_universe: bool,
+    verdict: Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    retained_artifact: bool,
 }
 impl LowerReceipt {
     pub(super) fn retained_artifact(&self) -> bool {
-        !self.validated_universe
+        self.retained_artifact
     }
 }
 impl std::ops::Deref for LowerReceipt {
@@ -35,6 +33,7 @@ impl Entry<hirsel_tir::DefinitionRef> {
             covered: self.covered.clone(),
             depth: self.depth.clone(),
             acceptance: self.acceptance.clone(),
+            verification: std::sync::Mutex::new(self.verification.lock().unwrap().clone()),
             selections: self.selections.clone(),
             consistent: self.consistent,
         }
@@ -121,8 +120,8 @@ impl QueryEngine {
             self.lowered.get(&id).map(|entry| {
                 Arc::new(LowerReceipt {
                     entry: entry.lower_receipt(),
-                    verdict: self.lower_verdicts.get(&id).map(|(_, reads)| reads.clone()),
-                    validated_universe: false,
+                    verdict: entry.verification.lock().unwrap().clone(),
+                    retained_artifact: true,
                 })
             })
         });
@@ -142,15 +141,15 @@ impl QueryEngine {
         let Ok(output) = receipt.result() else {
             return Ok(false);
         };
-        if self.verify == Verify::On && !receipt.validated_universe {
-            let Some(reads) = &receipt.verdict else {
+        if self.verify == Verify::On {
+            let Some(evidence) = &receipt.verdict else {
                 return Ok(false);
             };
             let snapshot = self.signature_snapshot();
-            if !reads
-                .iter()
-                .all(|read| hirsel_validate::read_holds(read, snapshot.validation(&path.0.package)))
-            {
+            if !evidence.environment_holds(
+                self.source_verification_policy(),
+                snapshot.validation(&path.0.package),
+            ) {
                 return Ok(false);
             }
         }
@@ -180,11 +179,17 @@ impl QueryEngine {
         {
             return false;
         }
-        let validated_universe = self.verify == Verify::On && outcome.reads.iter().any(|(key, _)| {
-            matches!(key, ReadKey::ValidationUniverse(package) if package.id() == path.0.package)
-        });
-        if self.verify == Verify::On && !validated_universe {
-            return false;
+        if self.verify == Verify::On {
+            let Some(evidence) = &outcome.verification else {
+                return false;
+            };
+            let snapshot = self.signature_snapshot();
+            if !evidence.environment_holds(
+                snapshot.source_verification_policy(),
+                snapshot.validation(&path.0.package),
+            ) {
+                return false;
+            }
         }
         let Ok(text) = self.key_text(path, QueryKind::Lower) else {
             return false;
@@ -208,7 +213,6 @@ impl QueryEngine {
             durability,
         );
         self.lowered.remove(&id);
-        self.lower_verdicts.remove(&id);
         self.lower_holds.forget(&key);
         self.lower_receipts.insert(
             id,
@@ -220,11 +224,12 @@ impl QueryEngine {
                     covered: vec![],
                     depth: outcome.depth.clone(),
                     acceptance: None,
+                    verification: Default::default(),
                     selections: vec![],
                     consistent: true,
                 },
-                verdict: None,
-                validated_universe,
+                verdict: outcome.verification.clone(),
+                retained_artifact: false,
             }),
         );
         true
@@ -258,7 +263,12 @@ impl QueryEngine {
         self.lower_receipts.remove(&id);
         let weight = retained_lower_entry_bytes(
             &entry,
-            self.lower_verdicts.get(&id).map(|(_, reads)| reads),
+            entry
+                .verification
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|e| e.reads()),
         );
         let evicted = self.lower_holds.hold(entry.memo.key, (), weight);
         self.evict_lowerings(evicted);
@@ -276,14 +286,14 @@ impl QueryEngine {
 
     fn evict_lowerings(&mut self, keys: Vec<MemoKey>) {
         for key in keys {
-            let verdict = self.lower_verdicts.remove(&key.def).map(|(_, reads)| reads);
             if let Some(entry) = self.lowered.remove(&key.def) {
+                let verdict = entry.verification.lock().unwrap().clone();
                 self.lower_receipts.insert(
                     key.def,
                     Arc::new(LowerReceipt {
                         entry: entry.lower_receipt(),
                         verdict,
-                        validated_universe: false,
+                        retained_artifact: true,
                     }),
                 );
             }
