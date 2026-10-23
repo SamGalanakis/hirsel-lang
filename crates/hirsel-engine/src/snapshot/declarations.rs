@@ -86,6 +86,39 @@ impl PartialEq for Row {
     }
 }
 
+/// Syntax-free declaration inputs. A file's parse product can retain these
+/// heads without retaining token tapes, expression arenas or type tables.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DeclarationHead {
+    pub(crate) definition: DefId,
+    pub(crate) kind: u8,
+    pub(crate) visibility: Visibility,
+    pub(crate) name: Span,
+    pub(crate) header: ContentHash,
+    pub(crate) body: ContentHash,
+}
+impl DeclarationHead {
+    pub(crate) fn capture(sources: &SourceMap, syntax: &ItemSyntax) -> Self {
+        let item = &syntax.item;
+        Self {
+            definition: DefId::intern(&item.definition),
+            kind: match &item.kind {
+                ItemKind::Function { .. } => 0,
+                ItemKind::Const { .. } => 1,
+                ItemKind::Type {
+                    body: TypeBody::Alias(_),
+                    ..
+                } => 2,
+                ItemKind::Type { .. } => 3,
+            },
+            visibility: item.visibility,
+            name: item.name_span,
+            header: header_hash(sources, syntax),
+            body: syntax.text_hash,
+        }
+    }
+}
+
 /// The compact row as the std image holds it. A site names this row's
 /// definition, so only its span needs storage. The image's existing definition
 /// table owns the path; neither decoding nor session adoption rebuilds it.
@@ -408,52 +441,52 @@ impl DeclarationIndex {
         candidates: Option<&[Arc<ItemSyntax>]>,
         sources: &SourceMap,
     ) {
-        let row = candidates.filter(|c| !c.is_empty()).map(|candidates| {
+        let heads: Vec<_> = candidates
+            .into_iter()
+            .flatten()
+            .map(|syntax| {
+                (
+                    DeclarationHead::capture(sources, syntax),
+                    logical(sources, syntax),
+                )
+            })
+            .collect();
+        self.set_heads(path, &heads);
+    }
+    /// Rebuild one row from ordinary parse heads in candidate order. No syntax
+    /// materialization or semantic/type decoding is required by the namespace.
+    pub(crate) fn set_heads(&mut self, path: &DefPath, heads: &[(DeclarationHead, Vec<u8>)]) {
+        let row = heads.first().map(|(first, _)| {
             work::count(work::Counter::ModuleDeclarationRows);
-            let first = &candidates[0].item;
-            let last = &candidates[candidates.len() - 1].item;
+            let last = &heads.last().unwrap().0;
             let metadata = DefinitionMetadata {
                 public: last.visibility != Visibility::Private,
-                alias: matches!(
-                    last.kind,
-                    ItemKind::Type {
-                        body: TypeBody::Alias(_),
-                        ..
-                    }
-                ),
+                alias: last.kind == 2,
             };
-            let headers: Vec<ContentHash> =
-                candidates.iter().map(|c| header_hash(sources, c)).collect();
-            let mut parts = vec![(candidates.len() as u64).to_le_bytes().to_vec()];
-            for (candidate, header) in candidates.iter().zip(headers.iter()) {
-                parts.push(logical(sources, candidate));
-                parts.push(header.0.to_vec());
+            let mut parts = vec![(heads.len() as u64).to_le_bytes().to_vec()];
+            for (head, logical) in heads {
+                parts.push(logical.clone());
+                parts.push(head.header.0.to_vec());
             }
-            let kind = match &first.kind {
-                ItemKind::Function { .. } => 0,
-                ItemKind::Const { .. } => 1,
-                ItemKind::Type {
-                    body: TypeBody::Alias(_),
-                    ..
-                } => 2,
-                ItemKind::Type { .. } => 3,
-            };
             let public = first.visibility != Visibility::Private;
             Arc::new(Row::from(RowImage {
-                definition: DefId::intern(&first.definition),
-                types: matches!(first.kind, ItemKind::Type { .. }),
+                definition: first.definition,
+                types: first.kind >= 2,
                 visibility: first.visibility,
-                span: first.name_span,
+                span: first.name,
                 metadata,
-                site_spans: candidates.iter().map(|c| c.item.name_span).collect(),
-                headers,
+                site_spans: heads.iter().map(|(head, _)| head.name).collect(),
+                headers: heads.iter().map(|(head, _)| head.header).collect(),
                 candidates: ContentHash::of_parts(
                     "hirsel.declaration-candidates.v1",
                     parts.iter().map(Vec::as_slice),
                 ),
                 identity: lanes(ContentHash::of_parts(
                     "hirsel.manifest.identity.v2",
-                    [path.fingerprint().0.as_slice(), &[u8::from(public), kind]],
+                    [
+                        path.fingerprint().0.as_slice(),
+                        &[u8::from(public), first.kind],
+                    ],
                 )),
             }))
         });

@@ -1,6 +1,7 @@
 use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod candidate_products;
+pub(crate) mod catalog;
 pub use candidate_products::CheckedProducts;
 mod arm_fixes;
 mod frontier;
@@ -238,7 +239,6 @@ pub struct QueryEngine {
     /// references establish provenance without retaining old memo generations.
     pub(crate) snapshot_sources:
         hirsel_syntax::DefMap<std::sync::Weak<Entry<hirsel_types::SignatureRef>>>,
-    /// Successful durable view receipts, candidates for the next snapshot.
     /// Signatures published or retired outside declaration indexing (S1).
     pub(crate) snapshot_inputs_revision: u64,
     /// The session's one type interner (design §1(a)), over the core rows.
@@ -252,6 +252,7 @@ pub struct QueryEngine {
     s1_lower_work: hirsel_syntax::DefMap<S1LowerWork>,
     /// The std image whose package's checked products this engine reads.
     image: Option<image::AdoptedImage>,
+    catalog: catalog::Catalog,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
     /// Interpretation refuses to enter a definition outside its entry's
@@ -554,6 +555,7 @@ impl QueryEngine {
             scalar_validation_runs: Default::default(),
             s1_lower_work: Default::default(),
             image: None,
+            catalog: Default::default(),
             unavailable: None,
             last_phase: None,
             closure_assertions: cfg!(debug_assertions),
@@ -701,7 +703,17 @@ impl QueryEngine {
         definition: &DefPath,
         kind: QueryKind,
     ) -> Result<ContentHash, QueryError> {
-        let text = if let Some(inputs) = self.image_inputs(definition) {
+        let text = if let Some(body) = self.catalog.body(definition) {
+            if kind == QueryKind::Signature {
+                let headers = self.declarations.headers(definition).unwrap_or_default();
+                ContentHash::of_parts(
+                    "hirsel.signature.inputs.v2",
+                    headers.iter().map(|h| h.0.as_slice()),
+                )
+            } else {
+                body
+            }
+        } else if let Some(inputs) = self.image_inputs(definition) {
             if kind == QueryKind::Signature {
                 inputs.header
             } else {
@@ -875,6 +887,7 @@ impl QueryEngine {
             items: &self.items,
             declarations: &self.declarations,
             image: self.image.as_ref().map(|adopted| &*adopted.image),
+            catalog: &self.catalog,
         }
     }
     /// A failed signature's key: its own content and what it read.
@@ -978,7 +991,16 @@ impl QueryEngine {
     /// items this snapshot dropped stay adoptable until the next index, for a
     /// definition moving to another file.
     fn index(&mut self, file: &mut SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
+        self.prepare_catalog_edit(file.file)?;
         self.release_image(&context.package)?;
+        let new_paths: BTreeSet<_> = file
+            .items
+            .iter()
+            .map(|item| item.item.definition.clone())
+            .collect();
+        for path in new_paths {
+            self.materialize_catalog(&path)?;
+        }
         self.comptime_runtime = None;
         let source_path = self.sources.file(file.file).unwrap().path.clone();
         // Every snapshot of this source, each at its own FileId.

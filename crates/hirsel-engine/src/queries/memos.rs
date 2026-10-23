@@ -330,9 +330,7 @@ impl ReadSource for QueryEngine {
         self.cited_value(path)
     }
     fn candidates(&self, owner: &DefPath) -> Option<ContentHash> {
-        self.items
-            .contains_key(owner)
-            .then(|| self.candidates_value(owner))
+        self.declared(owner).then(|| self.candidates_value(owner))
     }
     fn environment(&self) -> ContentHash {
         self.environment_value()
