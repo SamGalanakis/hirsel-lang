@@ -3,7 +3,7 @@ use hirsel_engine::store::{Action, MemStore, ResultStore};
 use hirsel_engine::*;
 use hirsel_rc::instance::{Actuals, DiscoveryContext};
 use hirsel_syntax::ContentHash;
-use native::queries::ready::{EMISSION_CONTEXT_DOMAIN, ReadyMiss, ReadyQueries};
+use native::queries::ready::{EMISSION_CONTEXT_DOMAIN, ReadyMiss, ReadyQueries, ReadySourceFacts};
 use std::sync::Arc;
 
 #[test]
@@ -109,6 +109,12 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
         let mut options = native::Options::new(target.clone());
         options.validation = native::Validation::Ready;
         let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
+        let source_facts = ReadySourceFacts::for_instance(&instances, id);
+        let source_bytes = source_facts.encode().unwrap();
+        let source_facts = ReadySourceFacts::decode(&source_bytes).unwrap();
+        assert_eq!(source_facts.encode().unwrap(), source_bytes);
+        drop(instances);
+        assert!(weak.upgrade().is_none());
         let environment = hirsel_lir::validate::NativeEnvironment {
             target: &target,
             manifest: &manifest,
@@ -118,8 +124,7 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
         let miss = |value| ReadyMiss {
             value,
             options: &options,
-            instances: &instances,
-            instance: id,
+            source: &source_facts,
             finalizers: &finalizers,
             inputs: &inputs,
             additional_abis: &[],

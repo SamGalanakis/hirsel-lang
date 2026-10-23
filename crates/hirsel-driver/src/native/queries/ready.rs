@@ -50,14 +50,88 @@ fn record(product: &ReadyProduct) -> ReadyRecord {
     )
 }
 
+/// Compact callable facts captured with an instance's source discovery.
+/// These are ordinary descriptor data, bound to the accepted instance's
+/// discovery output and current source observations by the query owner.
+/// Ready does not need the source body or an Instances registry to use them.
+#[derive(Clone, Debug)]
+pub struct ReadySourceFacts {
+    origin: hirsel_layout::instance::InstanceKey,
+    parameters: u32,
+    noalloc: bool,
+    unique: Vec<u32>,
+}
+impl ReadySourceFacts {
+    pub fn for_instance(instances: &Instances, id: InstanceId) -> Self {
+        let proofs = hirsel_rc::insert::Proofs::for_instance(instances, id);
+        Self {
+            origin: instances.view(id).key.clone(),
+            parameters: instances.view(id).parameters.len() as u32,
+            noalloc: proofs.noalloc,
+            unique: proofs.unique,
+        }
+    }
+
+    /// Portable metadata only; no TypeId, LayoutId or retained source body.
+    pub fn encode(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(&(
+            1u32,
+            self.origin.definition(),
+            self.origin.body(),
+            self.origin.encoding(),
+            self.parameters,
+            self.noalloc,
+            &self.unique,
+        ))
+        .map_err(|e| e.to_string())
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        let (schema, definition, body, encoding, parameters, noalloc, unique): (
+            u32,
+            hirsel_syntax::DefPath,
+            u32,
+            Vec<u8>,
+            u32,
+            bool,
+            Vec<u32>,
+        ) = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if schema != 1
+            || unique.windows(2).any(|w| w[0] >= w[1])
+            || unique.iter().any(|&p| p >= parameters)
+        {
+            return Err("noncanonical Ready source facts".into());
+        }
+        let origin =
+            hirsel_layout::instance::InstanceKey::from_encoding(&definition, body, encoding)
+                .map_err(|e| format!("Ready source origin: {e:?}"))?;
+        Ok(Self {
+            origin,
+            parameters,
+            noalloc,
+            unique,
+        })
+    }
+    fn local(&self, regions: bool) -> LocalRcFacts {
+        LocalRcFacts {
+            placement: hirsel_rc::placement::Options {
+                regions,
+                noalloc: self.noalloc,
+            },
+            proofs: hirsel_rc::insert::Proofs {
+                noalloc: self.noalloc,
+                unique: self.unique.clone(),
+            },
+        }
+    }
+}
+
 /// Inputs borrowed only for a demanded Ready transformation. The caller has
 /// accepted the Value product and settled its arena/scoped/optimizer reads;
 /// the complete action binds those outputs and the exact local source facts.
 pub struct ReadyMiss<'a> {
     pub value: hirsel_lir::LirUnit<Value>,
     pub options: &'a crate::native::Options,
-    pub instances: &'a Instances,
-    pub instance: InstanceId,
+    pub source: &'a ReadySourceFacts,
     pub finalizers: &'a hirsel_rc::cleanup::Finalizers,
     pub inputs: &'a Inputs<'a>,
     pub additional_abis: &'a [hirsel_lir::FnAbiId],
@@ -155,9 +229,7 @@ impl ReadyQueries {
         action: Action,
         miss: ReadyMiss<'_>,
     ) -> Result<(ValidatedUnit<Ready>, Arc<ReadyProduct>), String> {
-        if !key
-            .instance
-            .is_same_or_derived_from(&miss.instances.view(miss.instance).key)
+        if !key.instance.is_same_or_derived_from(&miss.source.origin)
             || miss.value.header.definition != *key.instance.definition()
             || miss.value.header.instance != key.instance.digest()
             || miss.value.header.target != key.target_abi
@@ -187,14 +259,7 @@ impl ReadyQueries {
         let previous = self
             .lookup_inner(key, action, &environment)
             .map(|p| p.product.record);
-        let facts = LocalRcFacts {
-            placement: hirsel_rc::placement::Options::for_instance(
-                miss.options.regions,
-                miss.instances,
-                miss.instance,
-            ),
-            proofs: hirsel_rc::insert::Proofs::for_instance(miss.instances, miss.instance),
-        };
+        let facts = miss.source.local(miss.options.regions);
         let context = ValidationContext::new(inputs);
         context
             .preflight()
