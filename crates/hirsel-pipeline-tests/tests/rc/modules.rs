@@ -57,3 +57,4 @@ mod native_peekable_address_18;
 mod native_scoped_view_18;
 mod native_noalloc_list_19;
 mod unique_copy_nested_20;
+mod word_primitives_21;

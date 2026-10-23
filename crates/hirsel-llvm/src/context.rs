@@ -460,6 +460,11 @@ impl<'context> Module<'context> {
         ty(unsafe { LLVMIntTypeInContext(self.context.raw, bits) })
     }
 
+    pub(crate) fn vector_type<'m>(&'m self, element: Type<'m>, lanes: u32) -> Type<'m> {
+        // SAFETY: the scalar element type belongs to this live context.
+        ty(unsafe { LLVMVectorType(element.raw, lanes) })
+    }
+
     pub(crate) fn f32_type(&self) -> Type<'_> {
         // SAFETY: as above.
         ty(unsafe { LLVMFloatTypeInContext(self.context.raw) })

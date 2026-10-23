@@ -90,6 +90,12 @@ bytes.from_list	085214666081030ac924e2ea1567e489c7214d3dcaad5ed82c444708cf5bf789
 bytes.len	fa0e8671cc4dd70b0bbda1f14bc23a0de11472f89953d2fd476e3ad20821db44	0:b:n->n
 bytes.replace_range	19e02e44aa00db2cc0a65a58123414bc555dabcbf5c255e064e2ba6f1da9a638	0:m:n;1:b:n;2:b:n->n
 bytes.slice	b6b07b214f11813abf7aae794a6704cfe2837f8253660bc3d23332b4377595aa	0:b:n;1:b:n;2:b:n->n
+bytes.try_read_u16_be	8a22ed6cdb0db29f70daff994543470983a2cbbac4bf141f3a7b01b9f5cf653d	0:b:n;1:b:n->n
+bytes.try_read_u16_le	2937c550fe43c849ec94fd31e3f837ab05536d7871b74830eaff7fb0000b2ed9	0:b:n;1:b:n->n
+bytes.try_read_u32_be	358321b50a4ae4e56f169e65bab6719c7f4ab83319b5ed3c4669eaad3e76de75	0:b:n;1:b:n->n
+bytes.try_read_u32_le	9a0ccfdeac6b1629f7592112183e92481f065678d2a5b5646d73bff5a08e9514	0:b:n;1:b:n->n
+bytes.try_read_u64_be	8d3b19ff12dce1aa9b797c02d0a3936a59fb8b5b4c27009efaa48c2e53a45f06	0:b:n;1:b:n->n
+bytes.try_read_u64_le	41f6b88d26df1e76a5cf6e6297872b3d8a379d24de7774f5075ff0d2a799f00b	0:b:n;1:b:n->n
 capture.begin	e8d6cfbcd7f0a299adba33580f7d83ec57b1febe2a401a1b66c82b1d3147b9f2	0:b:n;1:b:n;2:b:n->n
 capture.context	97016bf321b85d0451e506b252d4a83432b82185a28c0ca8f5ef7d52b222568f	0:b:n;1:b:n->n
 capture.event	df75aa8d8d24fad06f605f46eb468f84639ac0daf54f820c1a96dce026392f24	0:b:n;1:b:n;2:b:n->n
@@ -281,7 +287,11 @@ shared.thaw	d456b0fe4b81276574c45b8ad1b651deb3a38e71c60da7727c45b31ac034267d	0:t
 shared.with	816ddee9d7def7e95919216c846c3498ee49e2ddbeda92027a6018af8550920e	0:b:[0];1:b:a->[1]
 signal.wait	45eccf9fcc6b1fd2287586f85987383bbaec70a80804af0c66ebffa90384e860	0:b:n;1:b:n->n
 simd.add	643acb31e872f7eba8e6366bbc12fa4f16d4dbd54b24658112b50de8fb762c71	0:b:n;1:b:n->n
+simd.bit_or	e777a2309190028d8da5d1a3b7c509727fc15da6350f759065070eb40f231d59	0:b:n;1:b:n->n
+simd.bitmask	3a6d97d6b73e1fdd5fcfaadda0845bf4f82f69ffdc322c7f8ecdcb519bddc8ec	0:b:n->n
+simd.eq_bytes	d522d41304fb673fc58a8add6d6edc39603b665f5e290ca4e12176337be98751	0:b:n;1:b:n->n
 simd.splat	857923c26b030be9ab8d9a18fed088913b911ab3caeab6d2bb89118eb86d4304	0:b:n->n
+simd.try_load_bytes	b33f1ffec52984c92699b3e062f25ca21073755ab7379d029a03b40d1dc6d18c	0:b:n;1:b:n->n
 slots.empty	063e36f93c359df1b25a282056055c57f31686b54e5eb7b783c8c05b9e0d680c	->[0]
 slots.get	94dc0dba495d67521ff49c4727cad0ea9f30e3a26c2b232e897b57446cd5d83f	0:b:[0];1:b:n->[0]
 slots.insert	2a1265b6a4d516a9866e77a103caaa32ca6e148db52ad3e2652060f8ec142c5c	0:m:[0];1:t:[0]->n

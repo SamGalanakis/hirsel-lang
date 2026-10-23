@@ -1189,6 +1189,15 @@ impl<S: Stage> Checker<'_, '_, S> {
         }
     }
 
+    fn byte_slice(&self, value: ValueId) -> bool {
+        matches!(self.cx.layouts.get(self.layout_of(value)).map(|r| &r.kind),
+            Some(LayoutKind::Slice { element }) if self.cx.layouts.get(*element).is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::U8)))
+    }
+    fn byte_vector(&self, value: ValueId, n: u8) -> bool {
+        (1..=64).contains(&n)
+            && matches!(self.cx.layouts.get(self.layout_of(value)).map(|r| &r.kind),
+            Some(LayoutKind::Simd { element, lanes }) if *lanes == u32::from(n) && self.cx.layouts.get(*element).is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::U8)))
+    }
     fn scalar(&self, value: ValueId) -> Option<ScalarKind> {
         match self.ty(value).repr {
             ValueRepr::Scalar(k) => Some(k),
@@ -1868,6 +1877,64 @@ impl<S: Stage> Checker<'_, '_, S> {
                         .is_some_and(|a| a.sequential_element);
                 if !flat || self.scalar(result) != Some(ScalarKind::U64) {
                     self.add(site, K::Type("flat element end"));
+                }
+                self.fresh_holding(site, result);
+            }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                width,
+                ..
+            } => {
+                if !self.byte_slice(bytes)
+                    || self.scalar(offset) != Some(ScalarKind::U64)
+                    || self.scalar(result) != Some(width.scalar())
+                    || self.scalar(valid) != Some(ScalarKind::Bool)
+                    || !matches!(
+                        self.cx.unit.values[bytes.index()].holding,
+                        Holding::Borrowed(_)
+                    )
+                {
+                    self.add(site, K::Type("total byte read"));
+                }
+                self.fresh_holding(site, result);
+                self.fresh_holding(site, valid);
+            }
+            Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                lanes,
+            } => {
+                if !self.byte_slice(bytes)
+                    || self.scalar(offset) != Some(ScalarKind::U64)
+                    || self.scalar(valid) != Some(ScalarKind::Bool)
+                    || !self.byte_vector(result, lanes)
+                    || !matches!(
+                        self.cx.unit.values[bytes.index()].holding,
+                        Holding::Borrowed(_)
+                    )
+                {
+                    self.add(site, K::Type("total byte vector read"));
+                }
+                self.fresh_holding(site, result);
+                self.fresh_holding(site, valid);
+            }
+            Inst::ByteVector { result, op, lanes } => {
+                let output = match op {
+                    crate::ir::ByteVectorOp::Bitmask { .. } => {
+                        self.scalar(result) == Some(ScalarKind::U64)
+                    }
+                    _ => self.byte_vector(result, lanes),
+                };
+                if !(1..=64).contains(&lanes)
+                    || !output
+                    || op.operands().iter().any(|&v| !self.byte_vector(v, lanes))
+                {
+                    self.add(site, K::Type("byte vector operation"));
                 }
                 self.fresh_holding(site, result);
             }
@@ -4458,6 +4525,12 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
             addend,
             ..
         } => out.extend([op(left), op(right), op(addend)]),
+        Inst::BytesRead { bytes, offset, .. } | Inst::BytesVectorRead { bytes, offset, .. } => {
+            out.extend([op(bytes), op(offset)])
+        }
+        Inst::ByteVector { op: operation, .. } => {
+            out.extend(operation.operands().into_iter().map(op))
+        }
         Inst::Check { condition, .. } => out.push(op(condition)),
         Inst::SliceView {
             value, start, end, ..

@@ -98,6 +98,9 @@ impl StageKind {
             | Opcode::SliceView
             | Opcode::FlatLength
             | Opcode::FlatNext
+            | Opcode::BytesRead
+            | Opcode::BytesVectorRead
+            | Opcode::ByteVector
             | Opcode::SeqLen
             | Opcode::SeqCapacity
             | Opcode::SeqReserve

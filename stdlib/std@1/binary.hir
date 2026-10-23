@@ -16,48 +16,43 @@ pub type ReadError {
   offset: u64,
 }
 
-@noalloc
-fn read_word(data: Bytes, offset: u64, order: ByteOrder, width: u64) -> Result[
-  u64,
-  ReadError
-] uses {} {
-  let length = core@1/bytes.len(data)
-  if offset > length {
-    return Error(ReadError(offset: offset))
-  }
-  if width > length - offset {
-    return Error(ReadError(offset: offset))
-  }
-  let mut value = 0u64
-  let mut i = 0u64
-  while i < width {
-    let shift = match order {
-      LittleEndian() => i * 8,
-      BigEndian() => (width - 1 - i) * 8,
-    }
-    let byte: u64 = core@1/int.widen(data[offset + i])
-    value = value | byte << shift
-    i = i + 1
-  }
-  Ok(value)
-}
-
-/// Read two bytes at any offset, or return the requested offset on truncation.
+/// Read 2 bytes at any offset, preserving the requested offset on truncation.
 @noalloc
 pub fn read_u16(data: Bytes, offset: u64, order: ByteOrder) -> Result[u16, ReadError] uses {} {
-  Ok(core@1/int.narrow(read_word(data, offset, order, 2)?))
+  let value = match order {
+    LittleEndian() => core@1/bytes.try_read_u16_le(data, offset),
+    BigEndian() => core@1/bytes.try_read_u16_be(data, offset),
+  }
+  match value {
+    Some(word) => Ok(word),
+    None() => Error(ReadError(offset: offset)),
+  }
 }
 
-/// Read four bytes at any offset, or return the requested offset on truncation.
+/// Read 4 bytes at any offset, preserving the requested offset on truncation.
 @noalloc
 pub fn read_u32(data: Bytes, offset: u64, order: ByteOrder) -> Result[u32, ReadError] uses {} {
-  Ok(core@1/int.narrow(read_word(data, offset, order, 4)?))
+  let value = match order {
+    LittleEndian() => core@1/bytes.try_read_u32_le(data, offset),
+    BigEndian() => core@1/bytes.try_read_u32_be(data, offset),
+  }
+  match value {
+    Some(word) => Ok(word),
+    None() => Error(ReadError(offset: offset)),
+  }
 }
 
-/// Read eight bytes at any offset, or return the requested offset on truncation.
+/// Read 8 bytes at any offset, preserving the requested offset on truncation.
 @noalloc
 pub fn read_u64(data: Bytes, offset: u64, order: ByteOrder) -> Result[u64, ReadError] uses {} {
-  read_word(data, offset, order, 8)
+  let value = match order {
+    LittleEndian() => core@1/bytes.try_read_u64_le(data, offset),
+    BigEndian() => core@1/bytes.try_read_u64_be(data, offset),
+  }
+  match value {
+    Some(word) => Ok(word),
+    None() => Error(ReadError(offset: offset)),
+  }
 }
 
 @preserves_unique(out)

@@ -2,6 +2,54 @@ use super::*;
 use crate::PassError;
 
 impl Inline for Importer<'_> {
+    fn primitive(&mut self, primitive: hirsel_types::Primitive) -> R<LayoutId> {
+        let ty = self.types.intern(hirsel_types::Type::with_kind(
+            hirsel_types::TypeKind::Primitive(primitive),
+        ));
+        self.tir_layout(ty)
+    }
+    fn checked_option(&mut self, layout: LayoutId, valid: ValueId, value: ValueId) -> R<ValueId> {
+        let definition = self.symbol(SymbolKind::Type, &DefPath::core("Option"), None);
+        let some = self.block(BlockKind::Body);
+        let none = self.block(BlockKind::Body);
+        let done = self.block(BlockKind::Body);
+        let yes = self.edge(some, vec![]);
+        let no = self.edge(none, vec![]);
+        self.terminate(Terminator::Branch {
+            condition: valid,
+            yes,
+            no,
+        });
+        self.current = some;
+        let some_value = self.construct_inline(
+            layout,
+            layout,
+            ConstructorKind::Variant {
+                definition,
+                variant: 1,
+            },
+            &[value],
+        )?;
+        let e = self.edge(done, vec![some_value]);
+        self.terminate(Terminator::Jump(e));
+        self.current = none;
+        let none_value = self.construct_inline(
+            layout,
+            layout,
+            ConstructorKind::Variant {
+                definition,
+                variant: 0,
+            },
+            &[],
+        )?;
+        let e = self.edge(done, vec![none_value]);
+        self.terminate(Terminator::Jump(e));
+        self.current = done;
+        let ty = self.intern(layout);
+        let result = self.fresh(ty);
+        self.out.blocks[done.index()].params.push(result);
+        Ok(result)
+    }
     fn construct_inline(
         &mut self,
         layout: LayoutId,

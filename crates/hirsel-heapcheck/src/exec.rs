@@ -26,6 +26,7 @@ use hirsel_lir::runtime_abi::{self, FREE_POISON, UNINIT_POISON};
 use hirsel_lir::stage::Stage;
 use std::collections::BTreeMap;
 
+mod byte_ops;
 mod codec;
 mod compare;
 mod flat;
@@ -4245,6 +4246,22 @@ impl<'p, S: Stage> Machine<'p, S> {
                     },
                 )?;
             }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                width,
+                endian,
+            } => self.byte_word(f, result, valid, bytes, offset, width, endian)?,
+            Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                lanes,
+            } => self.byte_vector_read(f, result, valid, bytes, offset, lanes)?,
+            Inst::ByteVector { result, op, lanes } => self.byte_vector_op(f, result, op, lanes)?,
             Inst::SeqLen { result, value } => {
                 let layout = self.value_type(unit, value)?.layout;
                 let count = match (self.read_use(f, value)?, &self.record(layout)?.kind) {

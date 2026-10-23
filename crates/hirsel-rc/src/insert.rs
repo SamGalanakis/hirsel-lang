@@ -2002,6 +2002,8 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::ScalarUnary { result, .. }
             | Inst::CopyValue { result, .. }
             | Inst::Copy { result, .. } => self.create(st, result),
+            Inst::BytesRead { result, valid, .. } | Inst::BytesVectorRead { result, valid, .. } => { self.create(st, result); self.create(st, valid); }
+            Inst::ByteVector { result, .. } => self.create(st, result),
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 self.create(st, result);
                 if let Some(flag) = flag {
@@ -3671,6 +3673,29 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             } => {
                 *result = map(*result);
                 *operand = map(*operand);
+            }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            }
+            | Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            } => {
+                *result = map(*result);
+                *valid = map(*valid);
+                *bytes = map(*bytes);
+                *offset = map(*offset);
+            }
+            Inst::ByteVector { result, op, .. } => {
+                *result = map(*result);
+                op.map_values(map);
             }
             Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }

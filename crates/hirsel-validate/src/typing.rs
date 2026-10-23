@@ -128,7 +128,9 @@ pub(super) fn signature_valid(t: &TypeInterner, s: &Signature) -> bool {
             source,
             destination,
         } => declarations.get(*source).is_some() && declarations.get(*destination).is_some(),
-        SchemaConstraint::PositiveSize(p) => declarations.get(*p).is_some(),
+        SchemaConstraint::PositiveSize(p) | SchemaConstraint::ByteVectorSize(p) => {
+            declarations.get(*p).is_some()
+        }
     }) {
         return false;
     }

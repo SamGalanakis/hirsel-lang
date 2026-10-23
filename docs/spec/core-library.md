@@ -33,6 +33,19 @@ fails, no exchange occurs. It is a lowered intrinsic: its call becomes
 TIR `Replace`, with no runtime operation. Lowered intrinsics have checked core
 declarations but are exempt from runtime dispatch and operation manifests.
 
+Byte reads `bytes.try_read_u16/32/64_le/be` return `Some(word)` exactly when
+`offset <= len && width <= len - offset`; otherwise they return `None()` without
+reading memory. Reads use exactly the requested bytes and allow unaligned offsets.
+The suffix selects wire byte order independently of host order. They allocate
+nothing and require no capability. Ordinary indexing retains MEM-14 failures.
+
+Byte-vector operations require a constant lane count in 1..=64. `try_load_bytes`
+uses the same total range rule, reading exactly n bytes. `eq_bytes` produces
+0xff for equal lanes and 0 for unequal lanes; `bit_or` ORs each pair of bytes.
+`bitmask` extracts each lane's high bit into bit i for lane i, with all unused
+bits zero. Existing Simd types, structural equality and checked addition retain
+their rules.
+
 ## The ledger
 
 ```text
@@ -295,6 +308,12 @@ N fn string.positions(s: String) -> PositionView of s in s
 N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
+N fn bytes.try_read_u16_le(data: Bytes, offset: u64) -> Option[u16]
+N fn bytes.try_read_u16_be(data: Bytes, offset: u64) -> Option[u16]
+N fn bytes.try_read_u32_le(data: Bytes, offset: u64) -> Option[u32]
+N fn bytes.try_read_u32_be(data: Bytes, offset: u64) -> Option[u32]
+N fn bytes.try_read_u64_le(data: Bytes, offset: u64) -> Option[u64]
+N fn bytes.try_read_u64_be(data: Bytes, offset: u64) -> Option[u64]
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()
 @preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()
@@ -326,6 +345,10 @@ fn sorted_map.get[K, V: copyable](by: Order[K], m: SortedMap[K, V] of by, key: K
 fn sorted_map.remove[K, V](by: Order[K], mut m: unique SortedMap[K, V] of by, key: K) -> unique Option[V]
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]
+N fn simd.try_load_bytes[n: size](data: Bytes, offset: u64) -> Option[Simd[u8, n]]
+N fn simd.eq_bytes[n: size](a: Simd[u8, n], b: Simd[u8, n]) -> Simd[u8, n]
+N fn simd.bit_or[n: size](a: Simd[u8, n], b: Simd[u8, n]) -> Simd[u8, n]
+N fn simd.bitmask[n: size](a: Simd[u8, n]) -> u64
 
 // RUN-1..14, CAP-1/2, CONC-2/3/8, DET-1
 N fn io.runner(rt: Io, name: String) -> Result[Runner, GrantError]

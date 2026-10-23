@@ -7207,3 +7207,4 @@ conformance/MODE/MODE-2-nested-copy-element-dropped-run.hir
 conformance/MODE/MODE-2-nested-copy-element-no-copy-run.hir
 conformance/MODE/MODE-2-nested-copy-element-ordinary-run.hir
 conformance/MODE/MODE-2-nested-copy-element-repair-run.hir
+conformance/SEM/SEM-3-word-primitives-21-run.hir

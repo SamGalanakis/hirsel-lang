@@ -369,6 +369,37 @@ impl FnEmitter<'_, '_, '_> {
                 let end = self.b.ins().iadd(start, extent);
                 self.define1(result, end)
             }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                width,
+                endian,
+            } => self.read_byte_word(
+                result,
+                valid,
+                bytes,
+                offset,
+                width.bytes(),
+                endian == ByteOrder::Big,
+            ),
+            Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                lanes,
+            } => self.read_byte_vector(result, valid, bytes, offset, lanes),
+            Inst::ByteVector { result, op, lanes } => match op {
+                ByteVectorOp::Eq { left, right } => {
+                    self.byte_vector_binary(result, left, right, lanes, true)
+                }
+                ByteVectorOp::Or { left, right } => {
+                    self.byte_vector_binary(result, left, right, lanes, false)
+                }
+                ByteVectorOp::Bitmask { value } => self.byte_vector_mask(result, value, lanes),
+            },
             Inst::SeqLen { result, value } => {
                 let count = match self.layout(self.value_type(value)?.layout)?.kind {
                     LayoutKind::Block { .. } | LayoutKind::Box { .. } => {

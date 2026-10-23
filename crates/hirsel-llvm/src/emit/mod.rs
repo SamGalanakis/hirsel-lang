@@ -55,6 +55,7 @@ use hirsel_lir::debug::Profile;
 mod bindings;
 mod blocks;
 mod bounded;
+mod byte_ops;
 mod callables;
 mod calls;
 mod constants;

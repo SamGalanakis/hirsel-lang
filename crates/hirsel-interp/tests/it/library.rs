@@ -1719,3 +1719,47 @@ fn output_bytes_capture_partial_fault_cancellation_and_replay() {
         replay.library.simulation.events
     );
 }
+
+// Independent native Rust fixed-array oracle; invalid offsets include U64_MAX.
+#[test]
+fn word_primitives_21_all_widths_endians_and_offsets() {
+    let mut h = Harness::new(Default::default());
+    for len in 0..=40usize {
+        let data: Vec<u8> = (0..len).map(|i| (i * 53 + 129) as u8).collect();
+        for offset in (0..=32u64).chain([u64::MAX]) {
+            for (width, kind) in [
+                (2, Primitive::U16),
+                (4, Primitive::U32),
+                (8, Primitive::U64),
+            ] {
+                for be in [false, true] {
+                    let expected = if offset <= len as u64 && width <= len as u64 - offset {
+                        let bytes = &data[offset as usize..offset as usize + width as usize];
+                        let bits = match (width, be) {
+                            (2, false) => u16::from_le_bytes(bytes.try_into().unwrap()) as u128,
+                            (2, true) => u16::from_be_bytes(bytes.try_into().unwrap()) as u128,
+                            (4, false) => u32::from_le_bytes(bytes.try_into().unwrap()) as u128,
+                            (4, true) => u32::from_be_bytes(bytes.try_into().unwrap()) as u128,
+                            (8, false) => u64::from_le_bytes(bytes.try_into().unwrap()) as u128,
+                            (8, true) => u64::from_be_bytes(bytes.try_into().unwrap()) as u128,
+                            _ => unreachable!(),
+                        };
+                        some(Value::Integer(Integer::new(kind, bits).unwrap()))
+                    } else {
+                        none()
+                    };
+                    let name = format!(
+                        "bytes.try_read_u{}_{}",
+                        width * 8,
+                        if be { "be" } else { "le" }
+                    );
+                    assert_eq!(
+                        h.value(&name, vec![Value::Bytes(data.clone()), u64_value(offset)]),
+                        expected,
+                        "{name} len={len} at={offset}"
+                    );
+                }
+            }
+        }
+    }
+}

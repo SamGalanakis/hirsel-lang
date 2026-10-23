@@ -48,3 +48,57 @@ pub fn from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {} {
   }
   core@1/bytes.from_list(take out)
 }
+
+/// Read an unaligned 16-bit little-endian word without allocating.
+@noalloc
+pub fn read_u16_le(data: Bytes, offset: u64) -> Result[u16, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u16_le(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}
+
+/// Read an unaligned 16-bit big-endian word without allocating.
+@noalloc
+pub fn read_u16_be(data: Bytes, offset: u64) -> Result[u16, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u16_be(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}
+
+/// Read an unaligned 32-bit little-endian word without allocating.
+@noalloc
+pub fn read_u32_le(data: Bytes, offset: u64) -> Result[u32, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u32_le(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}
+
+/// Read an unaligned 32-bit big-endian word without allocating.
+@noalloc
+pub fn read_u32_be(data: Bytes, offset: u64) -> Result[u32, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u32_be(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}
+
+/// Read an unaligned 64-bit little-endian word without allocating.
+@noalloc
+pub fn read_u64_le(data: Bytes, offset: u64) -> Result[u64, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u64_le(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}
+
+/// Read an unaligned 64-bit big-endian word without allocating.
+@noalloc
+pub fn read_u64_be(data: Bytes, offset: u64) -> Result[u64, binary.ReadError] uses {} {
+  match core@1/bytes.try_read_u64_be(data, offset) {
+    Some(word) => Ok(word),
+    None() => Error(binary.ReadError(offset: offset)),
+  }
+}

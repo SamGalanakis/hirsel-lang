@@ -2099,6 +2099,31 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.borrow(site, st, cr, right);
                 self.create(site, st, cr, result);
             }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            }
+            | Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            } => {
+                self.borrow(site, st, cr, bytes);
+                self.borrow(site, st, cr, offset);
+                self.create(site, st, cr, result);
+                self.create(site, st, cr, valid);
+            }
+            Inst::ByteVector { result, op, .. } => {
+                for v in op.operands() {
+                    self.borrow(site, st, cr, v);
+                }
+                self.create(site, st, cr, result);
+            }
             Inst::IsUnique { result, value }
             | Inst::IsWritable { result, value }
             | Inst::SeqLen { result, value }

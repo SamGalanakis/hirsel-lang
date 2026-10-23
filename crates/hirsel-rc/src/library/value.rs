@@ -38,11 +38,17 @@ fn length(path: &DefPath) -> bool {
 /// Whether the value of operation `path`, which has no library body, is this
 /// body: every operation a call realises, and the lengths.
 pub fn forwards(path: &DefPath) -> bool {
-    super::inline_lowering(path).is_none() || length(path) || path.is_core("string.as_bytes")
+    super::inline_lowering(path).is_none()
+        || length(path)
+        || path.is_core("string.as_bytes")
+        || super::word_bytes::supports(path)
 }
 
 pub(super) fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let path = cx.path.clone();
+    if super::word_bytes::supports(&path) {
+        return super::word_bytes::forward(cx);
+    }
     if path.is_core("string.as_bytes") {
         let mut b = Body::new(cx)?;
         let source = b.parameters[0];

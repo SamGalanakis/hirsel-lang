@@ -1080,6 +1080,37 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let end = self.builder.binary(BinOp::Add, start, extent);
                 self.define(result, end)
             }
+            Inst::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                width,
+                endian,
+            } => self.read_byte_word(
+                result,
+                valid,
+                bytes,
+                offset,
+                width.bytes(),
+                endian == ByteOrder::Big,
+            ),
+            Inst::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                lanes,
+            } => self.read_byte_vector(result, valid, bytes, offset, lanes),
+            Inst::ByteVector { result, op, lanes } => match op {
+                ByteVectorOp::Eq { left, right } => {
+                    self.byte_vector_binary(result, left, right, lanes, true)
+                }
+                ByteVectorOp::Or { left, right } => {
+                    self.byte_vector_binary(result, left, right, lanes, false)
+                }
+                ByteVectorOp::Bitmask { value } => self.byte_vector_mask(result, value, lanes),
+            },
             Inst::SeqLen { result, value } => {
                 let count = if let Some(length) = self.preserved_lengths[value.index()] {
                     length

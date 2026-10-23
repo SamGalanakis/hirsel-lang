@@ -246,6 +246,9 @@ fn observes_payload(inst: &Inst) -> bool {
         inst,
         Inst::Address { .. }
             | Inst::SeqLen { .. }
+            | Inst::BytesRead { .. }
+            | Inst::BytesVectorRead { .. }
+            | Inst::ByteVector { .. }
             | Inst::SeqCapacity { .. }
             | Inst::Compare { .. }
             | Inst::Hash { .. }

@@ -475,6 +475,10 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         | Inst::Reset { value, .. }
         | Inst::Forget { value }
         | Inst::RegionPublish { value } => vec![value],
+        Inst::BytesRead { bytes, offset, .. } | Inst::BytesVectorRead { bytes, offset, .. } => {
+            vec![bytes, offset]
+        }
+        Inst::ByteVector { op, .. } => op.operands(),
         Inst::Unary { operand, .. }
         | Inst::Convert { operand, .. }
         | Inst::ScalarUnary { operand, .. } => vec![operand],

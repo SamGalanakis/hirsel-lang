@@ -14,6 +14,7 @@
 hirsel_guard::install!();
 
 mod bounded;
+mod byte_ops;
 mod compare;
 mod construction;
 mod data;

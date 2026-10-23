@@ -45,6 +45,12 @@ fn publish(
 pub(super) fn schema(name: &str) -> Vec<SchemaConstraint> {
     use ScalarDomain::*;
     use SchemaConstraint::*;
+    if matches!(
+        name,
+        "simd.try_load_bytes" | "simd.eq_bytes" | "simd.bit_or" | "simd.bitmask"
+    ) {
+        return vec![ByteVectorSize(SizeParameterRef::bound(SizeParamId(0)))];
+    }
     let domains = match name {
         "int.widen" | "int.try_narrow" | "int.narrow" | "int.truncate" => {
             vec![

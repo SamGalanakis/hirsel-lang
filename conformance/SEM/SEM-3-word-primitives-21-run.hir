@@ -1,0 +1,213 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/bytes.read_u16_le(b"\x01\x02", 0u64) == Ok(513u16),
+    TextInvariant()
+  )
+  let r_16_le_1: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_le(
+    b"\x01\x02",
+    1u64
+  )
+  failure.check(
+    r_16_le_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_16_le_2: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_le(
+    b"\x01\x02",
+    2u64
+  )
+  failure.check(
+    r_16_le_2 == Error(std@1/binary.ReadError(offset: 2u64)),
+    TextInvariant()
+  )
+  let r_16_le_18446744073709551615: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_le(
+    b"\x01\x02",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_16_le_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u16_le(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u16_be(b"\x01\x02", 0u64) == Ok(258u16),
+    TextInvariant()
+  )
+  let r_16_be_1: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_be(
+    b"\x01\x02",
+    1u64
+  )
+  failure.check(
+    r_16_be_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_16_be_2: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_be(
+    b"\x01\x02",
+    2u64
+  )
+  failure.check(
+    r_16_be_2 == Error(std@1/binary.ReadError(offset: 2u64)),
+    TextInvariant()
+  )
+  let r_16_be_18446744073709551615: Result[u16, std@1/binary.ReadError] = std@1/bytes.read_u16_be(
+    b"\x01\x02",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_16_be_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u16_be(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u32_le(b"\x01\x02\x03\x04", 0u64) == Ok(67305985u32),
+    TextInvariant()
+  )
+  let r_32_le_1: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_le(
+    b"\x01\x02\x03\x04",
+    1u64
+  )
+  failure.check(
+    r_32_le_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_32_le_4: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_le(
+    b"\x01\x02\x03\x04",
+    4u64
+  )
+  failure.check(
+    r_32_le_4 == Error(std@1/binary.ReadError(offset: 4u64)),
+    TextInvariant()
+  )
+  let r_32_le_18446744073709551615: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_le(
+    b"\x01\x02\x03\x04",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_32_le_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u32_le(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u32_be(b"\x01\x02\x03\x04", 0u64) == Ok(16909060u32),
+    TextInvariant()
+  )
+  let r_32_be_1: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_be(
+    b"\x01\x02\x03\x04",
+    1u64
+  )
+  failure.check(
+    r_32_be_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_32_be_4: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_be(
+    b"\x01\x02\x03\x04",
+    4u64
+  )
+  failure.check(
+    r_32_be_4 == Error(std@1/binary.ReadError(offset: 4u64)),
+    TextInvariant()
+  )
+  let r_32_be_18446744073709551615: Result[u32, std@1/binary.ReadError] = std@1/bytes.read_u32_be(
+    b"\x01\x02\x03\x04",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_32_be_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u32_be(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u64_le(b"\x01\x02\x03\x04\x05\x06\x07\x08", 0u64) == Ok(
+      578437695752307201u64
+    ),
+    TextInvariant()
+  )
+  let r_64_le_1: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_le(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    1u64
+  )
+  failure.check(
+    r_64_le_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_64_le_8: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_le(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    8u64
+  )
+  failure.check(
+    r_64_le_8 == Error(std@1/binary.ReadError(offset: 8u64)),
+    TextInvariant()
+  )
+  let r_64_le_18446744073709551615: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_le(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_64_le_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u64_le(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u64_be(b"\x01\x02\x03\x04\x05\x06\x07\x08", 0u64) == Ok(
+      72623859790382856u64
+    ),
+    TextInvariant()
+  )
+  let r_64_be_1: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_be(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    1u64
+  )
+  failure.check(
+    r_64_be_1 == Error(std@1/binary.ReadError(offset: 1u64)),
+    TextInvariant()
+  )
+  let r_64_be_8: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_be(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    8u64
+  )
+  failure.check(
+    r_64_be_8 == Error(std@1/binary.ReadError(offset: 8u64)),
+    TextInvariant()
+  )
+  let r_64_be_18446744073709551615: Result[u64, std@1/binary.ReadError] = std@1/bytes.read_u64_be(
+    b"\x01\x02\x03\x04\x05\x06\x07\x08",
+    18446744073709551615u64
+  )
+  failure.check(
+    r_64_be_18446744073709551615 == Error(
+      std@1/binary.ReadError(offset: 18446744073709551615u64)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.read_u64_be(b"", 0u64) == Error(std@1/binary.ReadError(offset: 0u64)),
+    TextInvariant()
+  )
+  Ok(())
+}

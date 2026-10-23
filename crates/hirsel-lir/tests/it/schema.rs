@@ -1044,6 +1044,44 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         result: v(55),
         address: a(0),
     });
+    for (width, endian) in [
+        (BytesWidth::U16, ByteOrder::Little),
+        (BytesWidth::U32, ByteOrder::Big),
+        (BytesWidth::U64, ByteOrder::Little),
+    ] {
+        insts.push(Inst::BytesRead {
+            result: v(1),
+            valid: v(2),
+            bytes: v(3),
+            offset: v(4),
+            width,
+            endian,
+        });
+    }
+    insts.push(Inst::BytesVectorRead {
+        result: v(1),
+        valid: v(2),
+        bytes: v(3),
+        offset: v(4),
+        lanes: 17,
+    });
+    for op in [
+        ByteVectorOp::Eq {
+            left: v(2),
+            right: v(3),
+        },
+        ByteVectorOp::Or {
+            left: v(2),
+            right: v(3),
+        },
+        ByteVectorOp::Bitmask { value: v(2) },
+    ] {
+        insts.push(Inst::ByteVector {
+            result: v(1),
+            op,
+            lanes: 17,
+        });
+    }
     insts.push(Inst::SeqLen {
         result: v(56),
         value: v(2),

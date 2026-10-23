@@ -170,6 +170,10 @@ fn encode_signature(
                     e.generic_reference(*source);
                     e.generic_reference(*destination);
                 }
+                SchemaConstraint::ByteVectorSize(parameter) => {
+                    e.tag("byte-vector-size");
+                    e.generic_reference(*parameter);
+                }
                 SchemaConstraint::PositiveSize(parameter) => {
                     e.tag("positive-size");
                     e.generic_reference(*parameter);

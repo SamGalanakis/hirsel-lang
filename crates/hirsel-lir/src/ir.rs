@@ -305,6 +305,59 @@ pub struct AddressInfo {
     pub ty: LirTypeId,
 }
 
+/// Closed widths for total scalar byte reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum BytesWidth {
+    U16,
+    U32,
+    U64,
+}
+impl BytesWidth {
+    pub const fn bytes(self) -> u32 {
+        match self {
+            Self::U16 => 2,
+            Self::U32 => 4,
+            Self::U64 => 8,
+        }
+    }
+    pub const fn scalar(self) -> crate::layout_types::ScalarKind {
+        use crate::layout_types::ScalarKind;
+        match self {
+            Self::U16 => ScalarKind::U16,
+            Self::U32 => ScalarKind::U32,
+            Self::U64 => ScalarKind::U64,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ByteOrder {
+    Little,
+    Big,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ByteVectorOp {
+    Eq { left: ValueId, right: ValueId },
+    Or { left: ValueId, right: ValueId },
+    Bitmask { value: ValueId },
+}
+impl ByteVectorOp {
+    pub fn operands(self) -> Vec<ValueId> {
+        match self {
+            Self::Eq { left, right } | Self::Or { left, right } => vec![left, right],
+            Self::Bitmask { value } => vec![value],
+        }
+    }
+    pub fn map_values(&mut self, mut map: impl FnMut(ValueId) -> ValueId) {
+        match self {
+            Self::Eq { left, right } | Self::Or { left, right } => {
+                *left = map(*left);
+                *right = map(*right);
+            }
+            Self::Bitmask { value } => *value = map(*value),
+        }
+    }
+}
+
 /// Scalar unary operations; ownership requests never reach LIR as operators.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum UnaryOp {
@@ -678,6 +731,33 @@ pub enum Inst {
     SeqLen {
         result: ValueId,
         value: ValueId,
+    },
+    /// Total, exact-width read from borrowed Bytes. Invalid iff
+    /// !(offset <= len && width <= len-offset): valid=false and result=0,
+    /// with no data load. No allocation, failure, ownership or capability effect.
+    BytesRead {
+        result: ValueId,
+        valid: ValueId,
+        bytes: ValueId,
+        offset: ValueId,
+        width: BytesWidth,
+        endian: ByteOrder,
+    },
+    /// The same total rule for exactly lanes bytes, 1..=64. Failure yields
+    /// canonical zero lanes. The existing Simd layout is unchanged.
+    BytesVectorRead {
+        result: ValueId,
+        valid: ValueId,
+        bytes: ValueId,
+        offset: ValueId,
+        lanes: u8,
+    },
+    /// Pure byte equality (0xff/0), bitwise OR, or lane-high-bit extraction.
+    /// Lane 0 maps to bit 0; unused high bits are zero. 1..=64 lanes only.
+    ByteVector {
+        result: ValueId,
+        op: ByteVectorOp,
+        lanes: u8,
     },
     /// How many elements the block's storage holds without growing: a Plain
     /// u64, at least its count. Zero-sized elements report u64::MAX.
@@ -1797,6 +1877,10 @@ impl Inst {
             | Inst::RegionReserve { result, .. }
             | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => vec![result],
+            Inst::BytesRead { result, valid, .. } | Inst::BytesVectorRead { result, valid, .. } => {
+                vec![result, valid]
+            }
+            Inst::ByteVector { result, .. } => vec![result],
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 std::iter::once(result).chain(flag).collect()
             }
@@ -1880,6 +1964,9 @@ impl Inst {
             | Inst::FlatLength { .. }
             | Inst::FlatNext { .. }
             | Inst::SeqLen { .. }
+            | Inst::BytesRead { .. }
+            | Inst::BytesVectorRead { .. }
+            | Inst::ByteVector { .. }
             | Inst::SeqCapacity { .. }
             | Inst::SeqReserve { .. }
             | Inst::SeqSetLen { .. }
@@ -1959,6 +2046,9 @@ impl Inst {
             | Inst::FlatLength { .. }
             | Inst::FlatNext { .. }
             | Inst::SeqLen { .. }
+            | Inst::BytesRead { .. }
+            | Inst::BytesVectorRead { .. }
+            | Inst::ByteVector { .. }
             | Inst::SeqCapacity { .. }
             | Inst::SeqReserve { .. }
             | Inst::SeqSetLen { .. }
@@ -2093,6 +2183,30 @@ impl Inst {
             } => {
                 f(R::Value(result));
                 f(R::Value(operand));
+            }
+            Self::BytesRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            }
+            | Self::BytesVectorRead {
+                result,
+                valid,
+                bytes,
+                offset,
+                ..
+            } => {
+                for v in [result, valid, bytes, offset] {
+                    f(R::Value(v));
+                }
+            }
+            Self::ByteVector { result, op, .. } => {
+                f(R::Value(result));
+                for v in op.operands() {
+                    f(R::Value(v));
+                }
             }
             Self::IsUnique { result, value }
             | Self::IsWritable { result, value }
@@ -3036,6 +3150,9 @@ snapshot_enum!(Inst {
     FlatLength { result, address },
     FlatNext { result, address },
     SeqLen { result, value },
+    BytesRead { result, valid, bytes, offset, width, endian },
+    BytesVectorRead { result, valid, bytes, offset, lanes },
+    ByteVector { result, op, lanes },
     SeqCapacity { result, value },
     SeqReserve { address, capacity, version },
     SeqSetLen { address, len, version },
@@ -3351,3 +3468,7 @@ impl<S: Stage> hirsel_codec::Snapshot for LirUnit<S> {
         Ok(unit)
     }
 }
+
+snapshot_enum!(BytesWidth { U16, U32, U64 });
+snapshot_enum!(ByteOrder { Little, Big });
+snapshot_enum!(ByteVectorOp { Eq { left, right }, Or { left, right }, Bitmask { value } });

@@ -778,6 +778,7 @@ snapshot_enum!(SchemaConstraint {
     CompleteRangeFits { source, destination },
     DestinationNoWider { source, destination },
     PositiveSize(p),
+    ByteVectorSize(p),
     NoallocDrop(p)
 } in Cx);
 /// A recursive type group member's key follows the schema only when present,

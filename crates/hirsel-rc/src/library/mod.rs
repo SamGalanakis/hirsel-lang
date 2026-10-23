@@ -35,6 +35,7 @@ pub mod sync;
 pub mod tasks;
 pub mod value;
 pub mod views;
+pub mod word_bytes;
 
 use crate::PassError;
 use crate::import::ImportCx;
@@ -178,6 +179,16 @@ pub struct InlineLowering {
 }
 
 pub const INLINE: &[&InlineLowering] = &[
+    &word_bytes::U16_LE,
+    &word_bytes::U16_BE,
+    &word_bytes::U32_LE,
+    &word_bytes::U32_BE,
+    &word_bytes::U64_LE,
+    &word_bytes::U64_BE,
+    &word_bytes::LOAD,
+    &word_bytes::EQ,
+    &word_bytes::OR,
+    &word_bytes::MASK,
     &arena::HEAP,
     &bytes::FROM_LIST,
     &bytes::TEXT_FINISH,
@@ -272,7 +283,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 28;
+pub const REVISION: u32 = 29;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

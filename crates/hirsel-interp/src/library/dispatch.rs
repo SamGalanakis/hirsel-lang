@@ -2180,6 +2180,66 @@ primary_operations! { library, call, context, name, a, value;
         Value::Unit
     },
     Primitive: "string.as_bytes" => Value::Bytes(text(arg(a, 0)?)?.as_bytes().to_vec()),
+    Primitive: "bytes.try_read_u16_le" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 2 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..2 { word |= u128::from(data[offset as usize + i]) << (i * 8); }
+            some(Value::Integer(Integer::new(Primitive::U16, word).unwrap()))
+        } else { none() }
+    },
+    Primitive: "bytes.try_read_u16_be" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 2 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..2 { word |= u128::from(data[offset as usize + i]) << ((2 - 1 - i) * 8); }
+            some(Value::Integer(Integer::new(Primitive::U16, word).unwrap()))
+        } else { none() }
+    },
+    Primitive: "bytes.try_read_u32_le" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 4 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..4 { word |= u128::from(data[offset as usize + i]) << (i * 8); }
+            some(Value::Integer(Integer::new(Primitive::U32, word).unwrap()))
+        } else { none() }
+    },
+    Primitive: "bytes.try_read_u32_be" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 4 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..4 { word |= u128::from(data[offset as usize + i]) << ((4 - 1 - i) * 8); }
+            some(Value::Integer(Integer::new(Primitive::U32, word).unwrap()))
+        } else { none() }
+    },
+    Primitive: "bytes.try_read_u64_le" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 8 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..8 { word |= u128::from(data[offset as usize + i]) << (i * 8); }
+            some(Value::Integer(Integer::new(Primitive::U64, word).unwrap()))
+        } else { none() }
+    },
+    Primitive: "bytes.try_read_u64_be" => {
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && 8 <= len - offset {
+            let mut word = 0u128;
+            for i in 0..8 { word |= u128::from(data[offset as usize + i]) << ((8 - 1 - i) * 8); }
+            some(Value::Integer(Integer::new(Primitive::U64, word).unwrap()))
+        } else { none() }
+    },
     Primitive: "bytes.len" => u64_value(bytes(arg(a, 0)?)?.len() as u64),
     Primitive: "bytes.replace_range" => {
         let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing replacement arguments"))?;
@@ -2327,6 +2387,38 @@ primary_operations! { library, call, context, name, a, value;
                 ));
             },
     Primitive: "iter.next" => return library.next_iterator(arg(a, 0)?.clone()).map(Some),
+    Primitive: "simd.try_load_bytes" => {
+        let n = byte_vector_size(&call.generics)?;
+        let data = bytes(arg(a, 0)?)?;
+        let offset = int(arg(a, 1)?)?.bits() as u64;
+        let len = data.len() as u64;
+        if offset <= len && n as u64 <= len - offset {
+            let lanes: Vec<_> = data[offset as usize..offset as usize+n].iter()
+                .map(|&b| Value::Integer(Integer::new(Primitive::U8, b.into()).unwrap())).collect();
+            some(collection::sequence(BuiltinType::Simd, lanes))
+        } else { none() }
+    },
+    Primitive: "simd.eq_bytes" | "simd.bit_or" => {
+        let n = byte_vector_size(&call.generics)?;
+        let x = collection::elements(arg(a, 0)?, BuiltinType::Simd)?;
+        let y = collection::elements(arg(a, 1)?, BuiltinType::Simd)?;
+        if x.len() != n || y.len() != n { return Err(invalid("byte SIMD width")); }
+        let equal = call.path.0.name == "eq_bytes";
+        let lanes = x.iter().zip(&y).map(|(x,y)| {
+            let (x,y) = (int(x)?.bits(), int(y)?.bits());
+            let bits = if equal { if x == y { 255 } else { 0 } } else { x | y };
+            Ok(Value::Integer(Integer::new(Primitive::U8, bits).unwrap()))
+        }).collect::<Result<Vec<_>, Error>>()?;
+        collection::sequence(BuiltinType::Simd, lanes)
+    },
+    Primitive: "simd.bitmask" => {
+        let n = byte_vector_size(&call.generics)?;
+        let x = collection::elements(arg(a, 0)?, BuiltinType::Simd)?;
+        if x.len() != n { return Err(invalid("byte SIMD width")); }
+        let mut mask = 0u64;
+        for (i, lane) in x.iter().enumerate() { mask |= (((int(lane)?.bits() >> 7) & 1) as u64) << i; }
+        u64_value(mask)
+    },
     Primitive: "simd.splat" => {
                 let n = call
                     .generics
@@ -2383,6 +2475,13 @@ primary_operations! { library, call, context, name, a, value;
     Primitive: "sorted_map.empty" => super::callbacks::sorted(arg(a, 0)?.clone(), vec![]),
     Primitive: "sorted_map.insert" => return library.sorted_insert(a).map(Some),
     ; finish Ok(Some(OperationResult::returned(value)))
+}
+
+fn byte_vector_size(generics: &[GenericArgument]) -> Result<usize, Error> {
+    match generics {
+        [GenericArgument::Size(hirsel_types::Size::Constant(n @ 1..=64))] => Ok(*n as usize),
+        _ => Err(invalid("byte SIMD width must be a constant in 1..=64")),
+    }
 }
 
 pub(super) fn parent(path: &str) -> &str {

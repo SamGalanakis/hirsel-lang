@@ -104,6 +104,8 @@ pub enum SchemaConstraint {
         destination: TypeParameterRef,
     },
     PositiveSize(SizeParameterRef),
+    /// A fixed byte-vector operation supports only concrete widths 1..=64.
+    ByteVectorSize(SizeParameterRef),
     NoallocDrop(TypeParameterRef),
 }
 /// Registry-selected identities; same-spelled user declarations do not satisfy these roles.
@@ -239,6 +241,18 @@ pub fn schema_failure(
                 };
                 (!valid).then(|| (const { hirsel_diag::RuleId::of("SEM-1") },"integer operation requires valid sized integer arguments and conversion widths"))
             }
+            SchemaConstraint::ByteVectorSize(parameter) => (!matches!(
+                (parameter.binder() == GenericBinder::Bound(0))
+                    .then(|| arguments.get(parameter.parameter().0 as usize))
+                    .flatten(),
+                Some(GenericArgument::Size(Size::Constant(1..=64)))
+            ))
+            .then(|| {
+                (
+                    const { hirsel_diag::RuleId::of("MEM-8") },
+                    "byte SIMD lane count must be a constant in 1..=64",
+                )
+            }),
             SchemaConstraint::PositiveSize(parameter) => matches!(
                 (parameter.binder() == GenericBinder::Bound(0))
                     .then(|| arguments.get(parameter.parameter().0 as usize))

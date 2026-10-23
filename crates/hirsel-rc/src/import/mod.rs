@@ -988,6 +988,8 @@ pub struct ImportCx<'i> {
 
 /// The importer operations an inline lowering is built from.
 trait Inline {
+    fn primitive(&mut self, primitive: hirsel_types::Primitive) -> R<LayoutId>;
+    fn checked_option(&mut self, layout: LayoutId, valid: ValueId, value: ValueId) -> R<ValueId>;
     fn operand(&mut self, operand: &tir::Operand) -> R<ValueId>;
     fn read_field(&mut self, value: ValueId, field: u32) -> R<ValueId>;
     fn place_address(&mut self, place: tir::PlaceId) -> R<(AddressId, ValueId)>;
@@ -1033,6 +1035,17 @@ trait Inline {
 }
 
 impl ImportCx<'_> {
+    pub fn primitive(&mut self, primitive: hirsel_types::Primitive) -> R<LayoutId> {
+        self.im.primitive(primitive)
+    }
+    pub fn checked_option(
+        &mut self,
+        layout: LayoutId,
+        valid: ValueId,
+        value: ValueId,
+    ) -> R<ValueId> {
+        self.im.checked_option(layout, valid, value)
+    }
     pub fn read_field(&mut self, value: ValueId, field: u32) -> R<ValueId> {
         self.im.read_field(value, field)
     }
