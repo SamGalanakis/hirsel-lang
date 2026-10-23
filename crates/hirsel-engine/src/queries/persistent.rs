@@ -819,16 +819,7 @@ impl QueryEngine {
         let variant = self.stored_variant(path, QueryKind::Summary)?;
         let record: PublicationRecord = self.decode_record(&variant.payload)?;
         let id = DefId::intern(path);
-        let (owner, shape) = self
-            .snapshot(path)
-            .ok()
-            .map(|syntax| {
-                (
-                    syntax.owner(),
-                    super::catalog::LexicalShape::capture(&syntax),
-                )
-            })
-            .or_else(|| self.catalog.lexical(path))?;
+        let (owner, shape) = self.lexical_shape(path)?;
         if record.summary.definition != id
             || record.summary.summary.owner != id
             || record.summary.text != self.key_text(path, QueryKind::Summary).ok()?
@@ -1817,10 +1808,10 @@ impl QueryEngine {
         let key = self.store_key(path, QueryKind::SourceAudit)?;
         let variant = self.stored_variant(path, QueryKind::SourceAudit)?;
         let record: AuditRecord = self.decode_record(&variant.payload)?;
-        let syntax = self.snapshot(path).ok()?;
+        let (_, shape) = self.lexical_shape(path)?;
         let audit = &record.products.audit;
         if audit.definition != *path
-            || audit.implementation_revision != syntax.text_hash
+            || Some(audit.implementation_revision) != self.implementation_hash(path)
             || !self.portable_lower_reads(path, &variant.reads, &record.selections)
             || record.depth.first.len() != self.depth_limit() as usize + 1
             || record
@@ -1835,7 +1826,7 @@ impl QueryEngine {
                 .chain(&audit.invocations)
                 .map(|(id, _)| id)
                 .chain(record.products.materialized.iter().map(|(id, _)| id))
-                .any(|id| syntax.tree.expressions.get(id.0 as usize).is_none())
+                .any(|id| !shape.valid_site(hirsel_types::NameSite::Expression(*id)))
             || self.signature_output(path).ok()?.value.fingerprint != audit.signature
         {
             return None;
