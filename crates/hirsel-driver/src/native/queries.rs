@@ -7,6 +7,7 @@ use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
 pub mod graph;
+pub mod ready;
 pub mod source;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;
@@ -373,30 +374,26 @@ type ReadyRecord = (
 
 /// Ordinary descriptor publication, after the native query has obtained its
 /// own authority. It does not manufacture any native receipt or stage seal.
-pub(crate) fn publish_ready_descriptor(
+pub(crate) fn publish_ready_record(
     store: &dyn hirsel_engine::store::ResultStore,
-    product: &ReadyProduct,
+    address: hirsel_artifact_store::Address,
+    action: hirsel_artifact_store::Action,
+    value: &ReadyRecord,
 ) -> Result<ProductRef, String> {
-    let optimizer: Vec<_> = product
-        .optimizer_reads
-        .iter()
-        .map(|p| (p.address.0, p.record))
-        .collect();
-    let bytes = serde_json::to_vec(&(
-        product.debug,
-        product.ready,
-        product.layout_closure,
-        product.emission_context,
-        product.unit_summary,
-        optimizer,
-    ))
-    .map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let expected = READY_RECORD_DOMAIN
+        .reference(&bytes)
+        .ok_or("Ready descriptor exceeds record limit")?;
     let record = store
         .put_content(READY_RECORD_DOMAIN, &bytes)
         .ok_or("Ready descriptor publication failed")?;
-    store.associate_product(product.product.address, product.product.action, record);
+    if record != expected {
+        return Err("Ready descriptor content identity differs".into());
+    }
+    store.associate_product(address, action, record);
     Ok(ProductRef {
+        address,
+        action,
         record,
-        ..product.product
     })
 }

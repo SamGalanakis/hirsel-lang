@@ -48,6 +48,30 @@ pub struct InstanceKey {
     digest: ContentHash,
 }
 
+struct InstanceAtoms<'a>(&'a [u8]);
+impl<'a> InstanceAtoms<'a> {
+    fn next(&mut self) -> Result<&'a [u8], InstanceKeyError> {
+        let (prefix, rest) = self
+            .0
+            .split_at_checked(8)
+            .ok_or(InstanceKeyError::Encoding)?;
+        let len = usize::try_from(u64::from_le_bytes(prefix.try_into().unwrap()))
+            .map_err(|_| InstanceKeyError::Encoding)?;
+        let (atom, rest) = rest
+            .split_at_checked(len)
+            .ok_or(InstanceKeyError::Encoding)?;
+        self.0 = rest;
+        Ok(atom)
+    }
+    fn number(&mut self) -> Result<u64, InstanceKeyError> {
+        Ok(u64::from_le_bytes(
+            self.next()?
+                .try_into()
+                .map_err(|_| InstanceKeyError::Encoding)?,
+        ))
+    }
+}
+
 impl PartialEq for InstanceKey {
     fn eq(&self, other: &Self) -> bool {
         self.digest == other.digest && self.encoding == other.encoding
@@ -142,6 +166,26 @@ impl InstanceKey {
     pub fn digest(&self) -> ContentHash {
         self.digest
     }
+    /// Whether this selected implementation retains the exact complete origin
+    /// instance, including its type/size actuals and lexical body. This checks
+    /// ordinary identity framing and grants no validation authority.
+    pub fn is_same_or_derived_from(&self, origin: &Self) -> bool {
+        let mut encoding = self.encoding();
+        loop {
+            if encoding == origin.encoding() {
+                return true;
+            }
+            let mut atoms = InstanceAtoms(encoding);
+            if atoms.next().ok() != Some(b"hirsel.derived-instance.v1".as_slice()) {
+                return false;
+            }
+            let Ok(parent) = atoms.next() else {
+                return false;
+            };
+            encoding = parent;
+        }
+    }
+
     /// Restore ordinary address metadata using the existing length-framed
     /// encoding. Recompute symbol identity rather than accepting a saved digest.
     /// This checks framing and the lexical owner, not source/native authority.
@@ -150,34 +194,11 @@ impl InstanceKey {
         body: u32,
         encoding: Vec<u8>,
     ) -> Result<Self, InstanceKeyError> {
-        struct Atoms<'a>(&'a [u8]);
-        impl<'a> Atoms<'a> {
-            fn next(&mut self) -> Result<&'a [u8], InstanceKeyError> {
-                let (prefix, rest) = self
-                    .0
-                    .split_at_checked(8)
-                    .ok_or(InstanceKeyError::Encoding)?;
-                let len = usize::try_from(u64::from_le_bytes(prefix.try_into().unwrap()))
-                    .map_err(|_| InstanceKeyError::Encoding)?;
-                let (atom, rest) = rest
-                    .split_at_checked(len)
-                    .ok_or(InstanceKeyError::Encoding)?;
-                self.0 = rest;
-                Ok(atom)
-            }
-            fn number(&mut self) -> Result<u64, InstanceKeyError> {
-                Ok(u64::from_le_bytes(
-                    self.next()?
-                        .try_into()
-                        .map_err(|_| InstanceKeyError::Encoding)?,
-                ))
-            }
-        }
         let mut current = encoding.as_slice();
         let mut derived = Vec::new();
         let mut digest;
         loop {
-            let mut atoms = Atoms(current);
+            let mut atoms = InstanceAtoms(current);
             match atoms.next()? {
                 b"hirsel.derived-instance.v1" => {
                     let parent = atoms.next()?;

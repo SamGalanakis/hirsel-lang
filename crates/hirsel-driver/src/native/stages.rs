@@ -526,6 +526,23 @@ pub(crate) fn lower_local_unit(
     inputs: &Inputs<'_>,
     validation: &hirsel_lir::validate::ValidationContext<'_>,
 ) -> Result<ValidatedUnit<Ready>, NativeError> {
+    let raw = lower_local_raw(unit, options, facts, finalizers, inputs, validation)?;
+    let ready = seal(StageName::Ready, || validation.validate(raw, inputs))?;
+    super::emit::check_unit_runtime_calls(ready.unit(), inputs.layouts, inputs.manifest)?;
+    Ok(ready)
+}
+
+/// The sole local placement/RC/Reuse/Ready transformation. The enclosing query
+/// performs independent final C and publication at its own completion boundary.
+/// Harnesses retain the same intermediate stage checkpoints.
+pub(crate) fn lower_local_raw(
+    unit: LirUnit<hirsel_lir::stage::Value>,
+    options: &Options,
+    facts: &LocalRcFacts,
+    finalizers: &Finalizers,
+    inputs: &Inputs<'_>,
+    validation: &hirsel_lir::validate::ValidationContext<'_>,
+) -> Result<LirUnit<Ready>, NativeError> {
     let table = inputs.layouts;
     let definition = unit.header.definition.clone();
     let fail = |stage, message: String| NativeError::of(stage, &definition, message);
@@ -581,8 +598,6 @@ pub(crate) fn lower_local_unit(
         hirsel_rc::ready::ready_indexed(reused, finalizers, validation.index())
     })
     .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-    let ready = seal(StageName::Ready, || validation.validate(ready, inputs))?;
-    super::emit::check_unit_runtime_calls(ready.unit(), table, inputs.manifest)?;
     Ok(ready)
 }
 
