@@ -220,3 +220,4 @@ mod sealed_region_pending_33;
 mod sealed_region_task_cuts_33;
 mod sealed_region_send_33;
 mod sealed_region_capture_cuts_33;
+mod sealed_region_entry_33;
