@@ -100,6 +100,7 @@ fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
         DropStep::Finalize
         | DropStep::ColumnsReverse(_)
         | DropStep::Thaw { .. }
+        | DropStep::ReleaseSealed { .. }
         | DropStep::ReleaseReceipt { .. } => false,
         // A Shared root's release is a runtime call under the root count contract.
         DropStep::Release { .. }
@@ -219,7 +220,8 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
             | DropStep::RepeatReverse {
                 element: layout, ..
             } => inline(*layout, seen),
-            DropStep::ReleaseReceipt { .. }
+            DropStep::ReleaseSealed { .. }
+            | DropStep::ReleaseReceipt { .. }
             | DropStep::Finalize
             | DropStep::Environment { .. }
             | DropStep::CloseHandle { .. }
@@ -721,6 +723,9 @@ impl<'m, 'g> Walk<'m, 'g> {
                 let arguments = [self.context, handle, self.anchor, self.operation_site];
                 self.accumulate(self.builder.call(self.runtime.close_handle, &arguments));
                 Ok(())
+            }
+            DropStep::ReleaseSealed { .. } => {
+                invalid("sealed owner drop requires linked runtime emission")
             }
             DropStep::ReleaseReceipt { .. } => {
                 invalid("receipt metadata drop requires linked runtime emission")

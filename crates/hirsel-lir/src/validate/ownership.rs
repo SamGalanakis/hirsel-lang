@@ -2131,6 +2131,40 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.borrow(site, st, cr, value);
                 self.create(site, st, cr, result);
             }
+            Inst::SealArena {
+                result,
+                grant,
+                root,
+                ..
+            } => {
+                self.borrow(site, st, cr, grant);
+                self.consume(site, st, cr, root);
+                self.create(site, st, cr, result);
+            }
+            Inst::BorrowSealedRoot {
+                result,
+                owner,
+                loan,
+                ..
+            } => {
+                if st.loans[loan.index()] != Tri::Yes {
+                    self.err(site, K::OutsideLoan(result));
+                }
+                self.borrow(site, st, cr, owner);
+                self.create(site, st, cr, result);
+            }
+            Inst::ArenaInventory {
+                arena,
+                value,
+                previous,
+                ..
+            } => {
+                self.borrow(site, st, cr, arena);
+                self.borrow(site, st, cr, value);
+                if let Some(previous) = previous {
+                    self.borrow(site, st, cr, previous);
+                }
+            }
             // Both move the whole owned value into a new representation.
             Inst::Freeze { result, value } | Inst::Thaw { result, value } => {
                 self.consume(site, st, cr, value);

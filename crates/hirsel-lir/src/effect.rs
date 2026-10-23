@@ -180,6 +180,9 @@ opcodes!(
     Isolate,
     Unreachable,
     InvariantFault,
+    SealArena,
+    BorrowSealedRoot,
+    ArenaInventory,
 );
 
 impl Inst {
@@ -249,6 +252,9 @@ impl Inst {
             Self::RegionReserve { .. } => Opcode::RegionReserve,
             Self::RegionPublish { .. } => Opcode::RegionPublish,
             Self::RegionExit { .. } => Opcode::RegionExit,
+            Self::SealArena { .. } => Opcode::SealArena,
+            Self::BorrowSealedRoot { .. } => Opcode::BorrowSealedRoot,
+            Self::ArenaInventory { .. } => Opcode::ArenaInventory,
             Self::ArenaOpen { .. } => Opcode::ArenaOpen,
             Self::ArenaToken { .. } => Opcode::ArenaToken,
             Self::FinalizeBegin { .. } => Opcode::FinalizeBegin,

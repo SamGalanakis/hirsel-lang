@@ -79,6 +79,8 @@ ids!(
     ScopeId,
     /// A SER-2 codec plan in `SideTables::codecs` (LIR schema revision 29).
     CodecId,
+    /// A typed sealed-storage descriptor in SideTables::seal_descriptors.
+    SealDescriptorId,
 );
 
 /// A typed range in one of the unit's pools.
@@ -1083,6 +1085,33 @@ pub enum Inst {
         feature: UnavailableFeature,
         anchor: SourceAnchorId,
     },
+    /// Atomic entered-body seal transition: success consumes grant and root,
+    /// publishes one owner and disarms storage cleanup; failure publishes none.
+    SealArena {
+        result: ValueId,
+        grant: ValueId,
+        root: ValueId,
+        shape: SealDescriptorId,
+        failure: FailureId,
+        origin: SourceAnchorId,
+    },
+    /// Read-only root view for an existing exclusive invocation loan.
+    BorrowSealedRoot {
+        result: ValueId,
+        owner: ValueId,
+        loan: LoanId,
+        shape: SealDescriptorId,
+    },
+    /// Retained semantic allocation event. COW has a fresh source allocation
+    /// identity; growth replaces previous storage without adding an allocation.
+    ArenaInventory {
+        arena: ValueId,
+        allocation: SourceAnchorId,
+        value: ValueId,
+        shape: SealDescriptorId,
+        previous: Option<ValueId>,
+    },
+
 }
 
 /// A control edge with its block arguments.
@@ -1581,34 +1610,14 @@ pub struct SideTables {
     pub codecs: Vec<crate::codec::CodecPlan>,
     /// MEM-3 logical types and complete physical access, independently validated.
     pub structural: Vec<crate::structural_access::AccessPlan>,
-    /// None leaves ordinary side-table bytes and hashes unchanged.
+    /// None preserves the ordinary side-table identity.
     pub receipt_entry: Option<ReceiptEntry>,
+    pub seal_descriptors: Vec<crate::sealed::SealDescriptor>,
 }
 
 impl std::hash::Hash for SideTables {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let Self {
-            calls,
-            constructs,
-            closures,
-            constants,
-            symbols,
-            operations,
-            loans,
-            failures,
-            edges,
-            masks,
-            regions,
-            arenas,
-            shared,
-            task_domains,
-            source_anchors,
-            cleanup_anchors,
-            init_flags,
-            codecs,
-            structural,
-            receipt_entry,
-        } = self;
+        let Self { calls, constructs, closures, constants, symbols, operations, loans, failures, edges, masks, regions, arenas, shared, task_domains, source_anchors, cleanup_anchors, init_flags, codecs, structural, receipt_entry, seal_descriptors } = self;
         calls.hash(state);
         constructs.hash(state);
         closures.hash(state);
@@ -1628,10 +1637,8 @@ impl std::hash::Hash for SideTables {
         init_flags.hash(state);
         codecs.hash(state);
         structural.hash(state);
-        if let Some(entry) = receipt_entry {
-            "hirsel.receipt-entry.v1".hash(state);
-            entry.hash(state);
-        }
+        if let Some(entry) = receipt_entry { "hirsel.receipt-entry.v1".hash(state); entry.hash(state); }
+        if !seal_descriptors.is_empty() { seal_descriptors.hash(state); }
     }
 }
 
@@ -1848,6 +1855,7 @@ pub enum Ref {
     TaskDomain(TaskDomainId),
     Scope(ScopeId),
     Codec(CodecId),
+    SealDescriptor(SealDescriptorId),
     Values(PoolRange<ValueId>),
     Addresses(PoolRange<AddressId>),
     Projections(PoolRange<ProjectionStep>),
@@ -1907,6 +1915,8 @@ impl Inst {
             | Inst::TokenNone { result }
             | Inst::RegionEnter { result, .. }
             | Inst::RegionReserve { result, .. }
+            | Inst::SealArena { result, .. }
+            | Inst::BorrowSealedRoot { result, .. }
             | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => vec![result],
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
@@ -1942,6 +1952,7 @@ impl Inst {
             | Inst::Release { .. }
             | Inst::Dispose { .. }
             | Inst::RegionPublish { .. }
+            | Inst::ArenaInventory { .. }
             | Inst::RegionExit { .. }
             | Inst::Defuse { .. }
             | Inst::FinalizeBegin { .. }
@@ -1976,6 +1987,7 @@ impl Inst {
             | Inst::Reuse { failure, .. }
             | Inst::RegionReserve { failure, .. }
             | Inst::RegionExit { failure, .. }
+            | Inst::SealArena { failure, .. }
             | Inst::FrameEnter { failure } => Some(failure),
             Inst::Const { .. }
             | Inst::FunctionRef { .. }
@@ -2023,6 +2035,8 @@ impl Inst {
             | Inst::RegionPublish { .. }
             | Inst::ArenaOpen { .. }
             | Inst::ArenaToken { .. }
+            | Inst::ArenaInventory { .. }
+            | Inst::BorrowSealedRoot { .. }
             | Inst::Defuse { .. }
             | Inst::FinalizeBegin { .. }
             | Inst::FinalizeEnd { .. }
@@ -2055,6 +2069,7 @@ impl Inst {
             | Inst::Reuse { failure, .. }
             | Inst::RegionReserve { failure, .. }
             | Inst::RegionExit { failure, .. }
+            | Inst::SealArena { failure, .. }
             | Inst::FrameEnter { failure } => Some(failure),
             Inst::Const { .. }
             | Inst::FunctionRef { .. }
@@ -2102,6 +2117,8 @@ impl Inst {
             | Inst::RegionPublish { .. }
             | Inst::ArenaOpen { .. }
             | Inst::ArenaToken { .. }
+            | Inst::ArenaInventory { .. }
+            | Inst::BorrowSealedRoot { .. }
             | Inst::Defuse { .. }
             | Inst::FinalizeBegin { .. }
             | Inst::FinalizeEnd { .. }
@@ -2473,6 +2490,47 @@ impl Inst {
             | Self::RegionPublish { value }
             | Self::Dispose { token: value }
             | Self::TokenNone { result: value } => f(R::Value(value)),
+            Self::SealArena {
+                result,
+                grant,
+                root,
+                shape,
+                failure,
+                origin,
+            } => {
+                f(R::Value(result));
+                f(R::Value(grant));
+                f(R::Value(root));
+                f(R::SealDescriptor(shape));
+                f(R::Failure(failure));
+                f(R::SourceAnchor(origin));
+            }
+            Self::BorrowSealedRoot {
+                result,
+                owner,
+                loan,
+                shape,
+            } => {
+                f(R::Value(result));
+                f(R::Value(owner));
+                f(R::Loan(loan));
+                f(R::SealDescriptor(shape));
+            }
+            Self::ArenaInventory {
+                arena,
+                allocation,
+                value,
+                shape,
+                previous,
+            } => {
+                f(R::Value(arena));
+                f(R::SourceAnchor(allocation));
+                f(R::Value(value));
+                f(R::SealDescriptor(shape));
+                if let Some(previous) = previous {
+                    f(R::Value(previous));
+                }
+            }
             Self::ArenaOpen { result, budget } => {
                 f(R::Value(result));
                 if let Some(budget) = budget {
@@ -2827,6 +2885,7 @@ impl<S: Stage> LirUnit<S> {
                 Ref::TaskDomain(v) => id("task domain", v.0, t.task_domains as usize),
                 Ref::Scope(v) => id("scope", v.0, self.scopes.len()),
                 Ref::Codec(v) => id("codec", v.0, t.codecs.len()),
+                Ref::SealDescriptor(v) => id("seal descriptor", v.0, t.seal_descriptors.len()),
                 Ref::Values(r) => range("values", r.start, r.len, p.values.len()),
                 Ref::Addresses(r) => range("addresses", r.start, r.len, p.addresses.len()),
                 Ref::Projections(r) => range("projections", r.start, r.len, p.projections.len()),
@@ -2887,6 +2946,11 @@ impl<S: Stage> LirUnit<S> {
             .for_each(|term| term.visit(&mut push));
         if let Some(entry) = &t.receipt_entry {
             entry.visit(&mut push);
+        }
+        for descriptor in &t.seal_descriptors {
+            descriptor
+                .layouts()
+                .for_each(|layout| push(Ref::Layout(layout)));
         }
         for call in &t.calls {
             match call.callee {
@@ -3241,6 +3305,9 @@ snapshot_enum!(Inst {
     FrameLeave,
     Unavailable { feature, anchor },
     SliceView { result, value, start, end, failure },
+    SealArena { result, grant, root, shape, failure, origin },
+    BorrowSealedRoot { result, owner, loan, shape },
+    ArenaInventory { arena, allocation, value, shape, previous },
 });
 snapshot_struct!(Edge { target, arguments });
 snapshot_struct!(SwitchArm { value, edge });
@@ -3426,7 +3493,7 @@ snapshot_struct!(SideTables {
     init_flags,
     codecs,
     structural
-} trailing_optional receipt_entry);
+} trailing_optional receipt_entry trailing_empty seal_descriptors);
 snapshot_struct!(Pools {
     values,
     addresses,

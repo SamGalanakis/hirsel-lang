@@ -2883,7 +2883,22 @@ impl<'o> LayoutBuilder<'o> {
                 record.drop = vec![DropStep::ReleaseRoot { offset: 0 }];
                 Ok(record)
             }
-            BuiltinType::Region => unavailable(None, format!("{} is M2", builtin_name(kind))),
+            BuiltinType::Region => {
+                let root = self.memory(walk, ty_at(0)?, f, true)?;
+                let (size, align) = self.pointer();
+                let mut record = self.blank(
+                    key,
+                    LayoutKind::SealedRegion { root },
+                    SizeSpec::Fixed(size),
+                    align,
+                );
+                self.words(&mut record, &[ScalarKind::Pointer]);
+                record.scan = vec![ScanStep::Uncounted { offset: 0 }];
+                record.drop = vec![DropStep::ReleaseSealed { offset: 0 }];
+                record.copy = CopyRecipe::NotCopyable;
+                record.storage = RESOURCE_STORAGE.to_vec();
+                Ok(record)
+            }
         }
     }
 
@@ -3382,6 +3397,7 @@ fn drop_offset(step: &DropStep) -> Option<u64> {
     match step {
         DropStep::Release { offset }
         | DropStep::ReleaseRoot { offset }
+        | DropStep::ReleaseSealed { offset }
         | DropStep::ReleaseReceipt { offset }
         | DropStep::Child { offset, .. }
         | DropStep::Thaw { offset, .. }

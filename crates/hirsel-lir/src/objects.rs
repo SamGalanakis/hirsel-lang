@@ -364,6 +364,22 @@ fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) 
         }
     }
     let tables = &mut unit.tables;
+    for descriptor in &mut tables.seal_descriptors {
+        f(TableId::Layout(&mut descriptor.root_layout));
+        for node in &mut descriptor.projection.nodes {
+            for layout in node.layouts_mut() {
+                f(TableId::Layout(layout));
+            }
+        }
+        for access in &mut descriptor.access {
+            f(TableId::Layout(&mut access.layout));
+            // Reuse the complete scan-reference remapper, including nested
+            // variants/columns and typed handles, without inventing a subset.
+            crate::layout_keys::scan_references_mut(&mut access.scan, &mut |layout| {
+                f(TableId::Layout(layout))
+            });
+        }
+    }
     for call in &mut tables.calls {
         f(TableId::Abi(&mut call.abi));
     }
@@ -446,6 +462,9 @@ pub fn references<S>(unit: &LirUnit<S>) -> (Vec<LayoutId>, Vec<FnAbiId>) {
     );
     for plan in &unit.tables.structural {
         layouts.extend(plan.layouts());
+    }
+    for descriptor in &unit.tables.seal_descriptors {
+        layouts.extend(descriptor.layouts());
     }
     for plan in &unit.tables.codecs {
         // Codec plans expose their reference traversal mutably; clone only the

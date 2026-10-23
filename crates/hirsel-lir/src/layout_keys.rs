@@ -16,6 +16,38 @@ use crate::layout_types::{
 };
 use hirsel_syntax::ContentHash;
 
+pub fn scan_references_mut(steps: &mut [ScanStep], f: &mut impl FnMut(&mut LayoutId)) {
+    for step in steps {
+        match step {
+            ScanStep::Inline { layout, .. } => f(layout),
+            ScanStep::Sequence { element, .. } | ScanStep::Repeat { element, .. } => f(element),
+            ScanStep::ActiveVariant { variants, .. } => {
+                for (_, steps) in variants {
+                    scan_references_mut(steps, f);
+                }
+            }
+            ScanStep::Columns(columns) => {
+                for column in &mut columns.columns {
+                    f(&mut column.layout);
+                }
+            }
+            ScanStep::Handle { ty, obtains, .. } => {
+                if let Some(ty) = ty {
+                    f(ty);
+                }
+                if let Some(obtains) = obtains {
+                    f(obtains);
+                }
+            }
+            ScanStep::Counted { .. }
+            | ScanStep::Root { .. }
+            | ScanStep::Uncounted { .. }
+            | ScanStep::SliceOwner { .. }
+            | ScanStep::Environment { .. } => {}
+        }
+    }
+}
+
 impl LayoutRecord {
     /// Every layout reference the record makes, mutably, in record order: the kind's,
     /// then the fields', the variants' fields', the scan program's and the drop
@@ -32,7 +64,7 @@ impl LayoutRecord {
             LayoutKind::Block { payload }
             | LayoutKind::Box { payload }
             | LayoutKind::Shared { payload } => f(payload),
-            LayoutKind::Frozen { value } => f(value),
+            LayoutKind::SealedRegion { root: value } | LayoutKind::Frozen { value } => f(value),
             LayoutKind::Callable {
                 environment: Some(environment),
             } => f(environment),
@@ -61,39 +93,6 @@ impl LayoutRecord {
                 f(&mut field.layout);
             }
         }
-        fn scan(steps: &mut [ScanStep], f: &mut impl FnMut(&mut LayoutId)) {
-            for step in steps {
-                match step {
-                    ScanStep::Inline { layout, .. } => f(layout),
-                    ScanStep::Sequence { element, .. } | ScanStep::Repeat { element, .. } => {
-                        f(element)
-                    }
-                    ScanStep::ActiveVariant { variants, .. } => {
-                        for (_, steps) in variants {
-                            scan(steps, f);
-                        }
-                    }
-                    ScanStep::Columns(columns) => {
-                        for column in &mut columns.columns {
-                            f(&mut column.layout);
-                        }
-                    }
-                    ScanStep::Handle { ty, obtains, .. } => {
-                        if let Some(ty) = ty {
-                            f(ty);
-                        }
-                        if let Some(obtains) = obtains {
-                            f(obtains);
-                        }
-                    }
-                    ScanStep::Counted { .. }
-                    | ScanStep::Root { .. }
-                    | ScanStep::Uncounted { .. }
-                    | ScanStep::SliceOwner { .. }
-                    | ScanStep::Environment { .. } => {}
-                }
-            }
-        }
         fn drop(steps: &mut [DropStep], f: &mut impl FnMut(&mut LayoutId)) {
             for step in steps {
                 match step {
@@ -113,13 +112,14 @@ impl LayoutRecord {
                     DropStep::Finalize
                     | DropStep::Release { .. }
                     | DropStep::ReleaseRoot { .. }
+                    | DropStep::ReleaseSealed { .. }
                     | DropStep::ReleaseReceipt { .. }
                     | DropStep::Environment { .. }
                     | DropStep::CloseHandle { .. } => {}
                 }
             }
         }
-        scan(&mut self.scan, f);
+        scan_references_mut(&mut self.scan, f);
         drop(&mut self.drop, f);
     }
 

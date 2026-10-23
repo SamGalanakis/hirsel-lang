@@ -775,6 +775,11 @@ impl FnEmitter<'_, '_, '_> {
                 self.dup_holders(place)?;
                 self.define(result, value)
             }
+            Inst::SealArena { .. }
+            | Inst::BorrowSealedRoot { .. }
+            | Inst::ArenaInventory { .. } => {
+                self.unsupported("sealed storage emission is not linked")
+            }
             Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {
                 self.invalid("an operation outside the Ready vocabulary")
             }

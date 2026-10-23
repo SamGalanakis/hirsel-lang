@@ -339,6 +339,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
                 DropStep::Finalize
                 | DropStep::Release { .. }
                 | DropStep::ReleaseRoot { .. }
+                | DropStep::ReleaseSealed { .. }
                 | DropStep::ReleaseReceipt { .. }
                 | DropStep::Environment { .. }
                 | DropStep::CloseHandle { .. } => {}
@@ -356,7 +357,9 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
         LayoutKind::Block { payload }
         | LayoutKind::Box { payload }
         | LayoutKind::Shared { payload } => take(payload, refs),
-        LayoutKind::Frozen { value } => take(value, refs),
+        LayoutKind::SealedRegion { root: value } | LayoutKind::Frozen { value } => {
+            take(value, refs)
+        }
         LayoutKind::Callable {
             environment: Some(e),
         } => take(e, refs),

@@ -133,6 +133,7 @@ impl<'a> Validator<'a> {
             LayoutKind::Block { payload }
             | LayoutKind::Box { payload }
             | LayoutKind::Shared { payload } => ids.push(*payload),
+            LayoutKind::SealedRegion { root } => ids.push(*root),
             LayoutKind::Frozen { value } => ids.push(*value),
             LayoutKind::Callable { environment } => ids.extend(*environment),
             _ => {}
@@ -250,6 +251,16 @@ impl<'a> Validator<'a> {
                         "a Shared root's payload is a Frozen value",
                     );
                 }
+            }
+            LayoutKind::SealedRegion { .. } => {
+                self.exact(&s, r, pointer, pointer_align);
+                self.wrapper(
+                    &s,
+                    r,
+                    &[ScanStep::Uncounted { offset: 0 }],
+                    &[DropStep::ReleaseSealed { offset: 0 }],
+                );
+                self.copy(&s, r, CopyRecipe::NotCopyable);
             }
             LayoutKind::Frozen { value } => self.frozen(&s, r, *value),
             LayoutKind::Slice { .. } => {
@@ -1874,7 +1885,8 @@ impl<'a> Validator<'a> {
                         | LayoutKind::Box { .. }
                         | LayoutKind::Shared { .. }
                         | LayoutKind::Header
-                        | LayoutKind::Arena => Some(ScalarKind::Pointer),
+                        | LayoutKind::Arena
+                        | LayoutKind::SealedRegion { .. } => Some(ScalarKind::Pointer),
                         _ => None,
                     }
                 };
@@ -1922,7 +1934,10 @@ impl<'a> Validator<'a> {
                     LayoutKind::Block { .. }
                     | LayoutKind::Box { .. }
                     | LayoutKind::Shared { .. }
-                    | LayoutKind::Arena => Some((vec![pointer], ScalarExtension::None)),
+                    | LayoutKind::Arena
+                    | LayoutKind::SealedRegion { .. } => {
+                        Some((vec![pointer], ScalarExtension::None))
+                    }
                     LayoutKind::Slice { .. } => Some((
                         vec![pointer, slot(ScalarKind::U64), slot(ScalarKind::U64)],
                         ScalarExtension::None,

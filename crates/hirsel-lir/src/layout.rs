@@ -449,6 +449,9 @@ pub fn shift_drop(step: &DropStep, by: u64) -> DropStep {
         DropStep::Release { offset } => DropStep::Release {
             offset: offset + by,
         },
+        DropStep::ReleaseSealed { offset } => DropStep::ReleaseSealed {
+            offset: offset + by,
+        },
         DropStep::ReleaseReceipt { offset } => DropStep::ReleaseReceipt {
             offset: offset + by,
         },
@@ -572,7 +575,8 @@ fn logical_at(table: &LayoutTable, id: LayoutId, depth: usize) -> Option<u64> {
         | LayoutKind::Handle
         | LayoutKind::HostCapability { .. }
         | LayoutKind::Path
-        | LayoutKind::Arena => LOGICAL_REFERENCE,
+        | LayoutKind::Arena
+        | LayoutKind::SealedRegion { .. } => LOGICAL_REFERENCE,
         LayoutKind::Callable { .. } | LayoutKind::Iterator { .. } => LOGICAL_CALLABLE,
         LayoutKind::Environment { .. }
         | LayoutKind::PayloadReceipt { .. }

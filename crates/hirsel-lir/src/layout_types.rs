@@ -244,6 +244,10 @@ pub enum LayoutKind {
     Shared {
         payload: LayoutId,
     },
+    /// An affine pointer-sized sealed owner with a typed read-only root.
+    SealedRegion {
+        root: LayoutId,
+    },
     /// The payload of a `Shared` root block: the frozen value inline at offset
     /// 0. Its drop program thaws the value before releasing it.
     Frozen {
@@ -523,6 +527,8 @@ pub enum DropStep {
     /// Release one `Shared` root (MEM-11) through `hirsel_rt_v2_root_release`, never the
     /// inline count edge: the root count is exact and its releases may be deferred.
     ReleaseRoot { offset: u64 },
+    /// Mechanical sealed-owner destruction, never an ordinary RC release.
+    ReleaseSealed { offset: u64 },
     /// Drop an inline child with its own layout.
     Child { offset: u64, layout: LayoutId },
     /// Drop the active variant's steps; the ordinal is read as `form`.
@@ -779,6 +785,7 @@ snapshot_enum!(LayoutKind {
     Block { payload },
     Box { payload },
     Shared { payload },
+    SealedRegion { root },
     Frozen { value },
     Slice { element },
     Opaque { owner },
@@ -873,6 +880,7 @@ snapshot_enum!(ScanStep {
     Root { offset },
 });
 snapshot_enum!(DropStep {
+    ReleaseSealed { offset },
     Finalize,
     Release { offset },
     Child { offset, layout },

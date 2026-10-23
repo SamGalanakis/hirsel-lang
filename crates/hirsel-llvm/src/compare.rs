@@ -362,6 +362,7 @@ impl<'m> Generator<'m, '_> {
             | LayoutKind::PayloadReceipt { .. }
             | LayoutKind::Shared { .. }
             | LayoutKind::Frozen { .. }
+            | LayoutKind::SealedRegion { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }
@@ -1176,6 +1177,7 @@ impl<'m> HashGenerator<'m, '_> {
             | LayoutKind::PayloadReceipt { .. }
             | LayoutKind::Shared { .. }
             | LayoutKind::Frozen { .. }
+            | LayoutKind::SealedRegion { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }

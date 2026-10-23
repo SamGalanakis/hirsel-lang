@@ -56,6 +56,7 @@ mod flow;
 mod ownership;
 mod ready;
 mod scoped_transport;
+mod sealed;
 mod structure;
 mod tokens;
 pub use scoped_transport::{
@@ -381,6 +382,8 @@ pub struct Violation {
 /// One broken obligation. Each variant names one rule.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum ViolationKind {
+    /// Typed seal descriptors, source events, or affine transfer disagree.
+    Sealed(String),
     /// Stage, version, digest or index identity (`LirUnit::check_identity`).
     Schema(String),
     /// An opcode outside the stage's vocabulary.
@@ -804,6 +807,7 @@ fn check_with_context<S: Stage>(
                 report.add(Site::UNIT, ViolationKind::Schema(error));
             }
         }
+        sealed::check(&cx, &facts, &mut report);
         ownership::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
         if strict_scoped {
@@ -1092,6 +1096,7 @@ impl<'a> Layouts<'a> {
             LayoutKind::Opaque { .. } => true,
             // Shared roots have no equality (GEN-1); a frozen payload is never a value.
             LayoutKind::Shared { .. }
+            | LayoutKind::SealedRegion { .. }
             | LayoutKind::Frozen { .. }
             | LayoutKind::Handle
             | LayoutKind::HostCapability { .. }
@@ -1150,7 +1155,7 @@ impl<'a> Layouts<'a> {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
             // Restoring counts is invisible; the release that follows is a Child.
-            DropStep::Thaw { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::Thaw { .. } | DropStep::ReleaseSealed { .. } | DropStep::ReleaseReceipt { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -1216,9 +1221,8 @@ impl<'a> Layouts<'a> {
         seen: &mut std::collections::BTreeSet<LayoutId>,
     ) -> bool {
         steps.iter().any(|step| match step {
-            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => {
-                false
-            }
+            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::ReleaseSealed { .. } => true,
             DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {

@@ -3505,6 +3505,11 @@ impl<'p, S: Stage> Machine<'p, S> {
         let unit = f.unit;
         let u = self.unit(unit);
         match *inst {
+            Inst::SealArena { .. }
+            | Inst::BorrowSealedRoot { .. }
+            | Inst::ArenaInventory { .. } => {
+                return fail(V::Unsupported, "sealed storage H adapter is not linked");
+            }
             Inst::Const { result, constant } => {
                 let data = u
                     .tables
@@ -9817,6 +9822,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let logical_path = self.ledger.path(logical_base);
                 let gated = |_: u64| dead.iter().any(|path| logical_path.starts_with(path));
                 match step {
+                    DropStep::ReleaseSealed { .. } => {
+                        return fail(V::Unsupported, "sealed storage H drop is not linked");
+                }
                     DropStep::ReleaseReceipt { .. } => {
                         return fail(
                             V::Unsupported,

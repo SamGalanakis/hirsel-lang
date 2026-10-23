@@ -201,7 +201,7 @@ impl<'a> Lay<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
-            DropStep::Thaw { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::Thaw { .. } | DropStep::ReleaseSealed { .. } | DropStep::ReleaseReceipt { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -281,10 +281,10 @@ impl<'a> Lay<'a> {
         seen: &mut BTreeSet<LayoutId>,
     ) -> bool {
         steps.iter().any(|step| match step {
-            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => {
-                false
-            }
-            DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
+            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::Thaw { .. }
+            | DropStep::ReleaseRoot { .. }
+            | DropStep::ReleaseSealed { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -910,6 +910,7 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
         Inst::Recast { result, value } if unit.values[result.index()].holding == Holding::Owned => {
             vec![value]
         }
+        Inst::SealArena { root, .. } => vec![root],
         Inst::Freeze { value, .. } | Inst::Thaw { value, .. } => vec![value],
         Inst::Dispose { token } => vec![token],
         Inst::RegionExit { mark, .. } => vec![mark],
@@ -1763,7 +1764,10 @@ impl<S: Stage> Flow<'_, S> {
             if let Some(failure) = failure {
                 let fst = match pre {
                     Some(mut f) if !after => {
-                        for v in consumed(unit, self.lay, inst) {
+                        for v in consumed(unit, self.lay, inst)
+                            .into_iter()
+                            .filter(|_| !matches!(inst, Inst::SealArena { .. }))
+                        {
                             if owns(unit, self.lay, v) {
                                 take_credit(&mut f.credits, v);
                             }
@@ -2035,6 +2039,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. }
             | Inst::Unavailable { .. }
+            | Inst::ArenaInventory { .. }
             | Inst::RegionPublish { .. }
             | Inst::FinalizeBegin { .. } => {}
             Inst::FrameEnter { failure } =>
@@ -2240,6 +2245,8 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Reuse { result, .. }
             | Inst::Weaken { result, .. }
             | Inst::Recast { result, .. }
+            | Inst::SealArena { result, .. }
+            | Inst::BorrowSealedRoot { result, .. }
             | Inst::Freeze { result, .. }
             | Inst::Thaw { result, .. }
             | Inst::Closure { result, .. } => {
@@ -3761,6 +3768,32 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *result = map(*result);
                 *reaching = map(*reaching);
             }
+            Inst::SealArena {
+                result,
+                grant,
+                root,
+                ..
+            } => {
+                *result = map(*result);
+                *grant = map(*grant);
+                *root = map(*root);
+            }
+            Inst::BorrowSealedRoot { result, owner, .. } => {
+                *result = map(*result);
+                *owner = map(*owner);
+            }
+            Inst::ArenaInventory {
+                arena,
+                value,
+                previous,
+                ..
+            } => {
+                *arena = map(*arena);
+                *value = map(*value);
+                if let Some(previous) = previous {
+                    *previous = map(*previous);
+                }
+            }
             Inst::UniqueCopy { result, value, .. }
             | Inst::IsUnique { result, value }
             | Inst::IsWritable { result, value }
@@ -5166,7 +5199,10 @@ pub(crate) fn fill_pending(
                     | Inst::RegionExit { .. } => post.clone(),
                     _ => {
                         let mut f = pre.clone();
-                        for v in consumed(&ed.unit, lay, inst) {
+                        for v in consumed(&ed.unit, lay, inst)
+                            .into_iter()
+                            .filter(|_| !matches!(inst, Inst::SealArena { .. }))
+                        {
                             if owns(&ed.unit, lay, v) {
                                 take_credit(&mut f.credits, v);
                             }

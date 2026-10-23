@@ -75,6 +75,7 @@ impl StageKind {
             Opcode::Reset | Opcode::Reuse | Opcode::Dispose | Opcode::TokenNone => {
                 rank >= StageKind::Reuse as u8
             }
+            Opcode::SealArena | Opcode::BorrowSealedRoot | Opcode::ArenaInventory => rank < StageKind::Ready as u8,
             Opcode::CopyValue => rank <= StageKind::Placed as u8,
             Opcode::Copy
             | Opcode::Const

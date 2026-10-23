@@ -295,6 +295,16 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                             &project(&old[reaching.index()], path),
                         );
                     }
+                    Inst::BorrowSealedRoot {
+                        result,
+                        owner,
+                        loan,
+                        ..
+                    } => {
+                        let roots = n[result.index()].entry(Vec::new()).or_default();
+                        roots.scoped.insert(owner);
+                        roots.referents.insert(loan);
+                    }
                     Inst::Weaken { result, value }
                     | Inst::Recast { result, value }
                     | Inst::UniqueCopy { result, value, .. }
@@ -460,7 +470,9 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         {
             let at = Site::at(BlockId(b as u32), i as u32);
             match *inst {
-                Inst::Read { .. }
+                Inst::BorrowSealedRoot { .. }
+                | Inst::ArenaInventory { .. }
+                | Inst::Read { .. }
                 | Inst::Weaken { .. }
                 | Inst::Recast { .. }
                 | Inst::Address { .. }

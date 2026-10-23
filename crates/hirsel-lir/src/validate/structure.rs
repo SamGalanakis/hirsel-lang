@@ -610,7 +610,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 // A `Shared` root is always a counted heap block (MEM-11).
                 (ValueRepr::Block, LayoutKind::Shared { .. }) => true,
                 (ValueRepr::Callable, LayoutKind::Callable { .. }) => true,
-                (ValueRepr::Handle, LayoutKind::Handle | LayoutKind::HostCapability { .. }) => true,
+                (ValueRepr::Handle, LayoutKind::Handle | LayoutKind::HostCapability { .. } | LayoutKind::SealedRegion { .. }) => true,
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
                 (ValueRepr::Scalar(ScalarKind::U64), LayoutKind::Path) => true,
                 (ValueRepr::Token, LayoutKind::Header) => true,
@@ -935,6 +935,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                     (AddressBase::Address(_), Some(base)) => base,
                     (AddressBase::Address(_), None) => break,
                 };
+                if let Root::Value(value) = addr.root {
+                    addr.frozen |= unit.instructions.iter().any(|inst| {
+                        matches!(inst,
+                        Inst::BorrowSealedRoot { result, .. } if *result == value)
+                    });
+                }
                 let steps = info.projection.get(&unit.pools.projections).unwrap_or(&[]);
                 let mut ok = true;
                 for step in steps {
@@ -2513,6 +2519,59 @@ impl<S: Stage> Checker<'_, '_, S> {
             }
             // Only `arena.with`'s library body opens an arena, at its entry,
             // so that every exit of the unit closes it.
+            Inst::SealArena {
+                result,
+                grant,
+                root,
+                shape,
+                ..
+            } => {
+                self.library_only(site, Opcode::SealArena);
+                let descriptor = &unit.tables.seal_descriptors[shape.index()];
+                let valid_owner = matches!(layouts.get(self.layout_of(result)).map(|r| &r.kind),
+                    Some(LayoutKind::SealedRegion { root: layout }) if *layout == descriptor.root_layout);
+                if self.ty(grant).repr != ValueRepr::Arena
+                    || self.layout_of(root) != descriptor.root_layout
+                    || !valid_owner
+                    || self.ty(result).repr != ValueRepr::Handle
+                {
+                    self.add(site, K::Type("sealed arena transition"));
+                }
+                self.fresh_holding(site, result);
+            }
+            Inst::BorrowSealedRoot {
+                result,
+                owner,
+                loan,
+                shape,
+            } => {
+                self.library_only(site, Opcode::BorrowSealedRoot);
+                let descriptor = &unit.tables.seal_descriptors[shape.index()];
+                let valid_owner = matches!(layouts.get(self.layout_of(owner)).map(|r| &r.kind),
+                    Some(LayoutKind::SealedRegion { root: layout }) if *layout == descriptor.root_layout);
+                if !valid_owner
+                    || self.layout_of(result) != descriptor.root_layout
+                    || unit.values[result.index()].holding != Holding::Borrowed(loan)
+                {
+                    self.add(site, K::Type("read-only sealed root loan"));
+                }
+                if !unit.tables.loans[loan.index()].mutable {
+                    self.add(site, K::Type("sealed owner requires an exclusive loan"));
+                }
+            }
+            Inst::ArenaInventory {
+                arena,
+                value,
+                shape,
+                ..
+            } => {
+                let descriptor = &unit.tables.seal_descriptors[shape.index()];
+                if self.ty(arena).repr != ValueRepr::Arena
+                    || self.layout_of(value) != descriptor.root_layout
+                {
+                    self.add(site, K::Type("semantic arena allocation event"));
+                }
+            }
             Inst::ArenaOpen { result, budget } => {
                 self.library_only(site, Opcode::ArenaOpen);
                 if site.block != Some(unit.entry) {
@@ -4444,6 +4503,17 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();
     match *inst {
+        Inst::SealArena { grant, root, .. } => out.extend([op(grant), op(root)]),
+        Inst::BorrowSealedRoot { owner, .. } => out.push(op(owner)),
+        Inst::ArenaInventory {
+            arena,
+            value,
+            previous,
+            ..
+        } => {
+            out.extend([op(arena), op(value)]);
+            out.extend(previous.map(op));
+        }
         Inst::CopyValue { value: operand, .. }
         | Inst::Unary { operand, .. }
         | Inst::Convert { operand, .. }
