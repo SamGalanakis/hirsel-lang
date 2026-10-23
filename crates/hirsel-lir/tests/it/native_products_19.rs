@@ -334,3 +334,75 @@ fn native_products_19_receipt_io_failure_retains_only_actual_process_acceptance(
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn native_products_19_derived_metadata_retains_actual_c_observations() {
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let owner = unit.header.definition.clone();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let store = Arc::new(Memory::default());
+    let cache = NativeCache::new(store.clone(), None);
+    let subject = hash("derived metadata publication");
+    let policy = hash("derived metadata policy");
+    let (_, output) = cache
+        .validate_output(subject, policy, unit, &inputs, &[])
+        .unwrap();
+    let output = output.unwrap();
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    let published = cache.publish_output(&output, b"local equations").unwrap();
+    assert_eq!(published.body(), output.body());
+    assert_eq!(published.layouts(), output.layouts());
+    assert_eq!(published.stage(), output.stage());
+    assert_eq!(published.metadata(), b"local equations");
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    let mut discharge = hirsel_lir::discharge::Discharge::default();
+    discharge.0.insert(
+        owner,
+        std::collections::BTreeSet::from([hirsel_lir::discharge::Discharged {
+            body: 0,
+            block: 0,
+            statement: 0,
+            form: hirsel_lir::discharge::Form::Integer,
+        }]),
+    );
+    let changed = NativeEnvironment {
+        discharge: Some(&discharge),
+        ..environment
+    };
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &changed)
+            .is_none()
+    );
+    let foreign = NativeCache::new(store, None);
+    assert!(
+        foreign
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+}

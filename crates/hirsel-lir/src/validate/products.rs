@@ -302,8 +302,26 @@ impl NativeCache {
         additional_abis: &[FnAbiId],
         metadata: &[u8],
     ) -> Result<(ValidatedUnit<S>, Option<NativeOutput>), Box<Rejected<S>>> {
+        let (checked, output) =
+            self.validate_output(subject, policy, unit, inputs, additional_abis)?;
+        let output = output.and_then(|output| self.publish_output(&output, metadata));
+        Ok((checked, output))
+    }
+
+    /// Run actual C once and capture its chosen body/layouts and independent
+    /// observations. The opaque output is not installed as a successful lookup
+    /// association until publish_output, so a query can first derive ordinary
+    /// local equations and discovery metadata from the checked unit.
+    pub fn validate_output<S: Stage>(
+        &self,
+        subject: ContentHash,
+        policy: ContentHash,
+        unit: LirUnit<S>,
+        inputs: &Inputs<'_>,
+        additional_abis: &[FnAbiId],
+    ) -> Result<(ValidatedUnit<S>, Option<NativeOutput>), Box<Rejected<S>>> {
         let checked = validate(unit, inputs)?;
-        let publish = || -> Option<NativeOutput> {
+        let capture = || -> Option<NativeOutput> {
             let domain = body_domain(S::KIND)?;
             let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis).ok()?;
             let body = self.put(domain, hirsel_codec::to_text(&body).as_bytes())?;
@@ -350,25 +368,43 @@ impl NativeCache {
                     .map(|id| (id.clone(), inputs.manifest.row(id).cloned()))
                     .collect(),
                 discharge: discharge_identity(inputs.discharge, &checked.unit().header.definition),
-                metadata: metadata.to_vec(),
+                metadata: Vec::new(),
             });
-            let key = address(subject, policy, S::KIND);
-            // All content first. Only this post-validation method can install
-            // a local successful association; imported bytes cannot do so.
-            if let Some(local) = &self.local {
-                let bytes = hirsel_codec::to_text(record.as_ref());
-                if let Ok(reference) = local.put(RECEIPT, bytes.as_bytes()) {
-                    let _ = local.associate(key, Action(key.0), reference);
-                }
-            }
-            self.accepted
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(key.0, record.clone());
             Some(NativeOutput { record })
         };
-        let output = publish();
+        let output = capture();
         Ok((checked, output))
+    }
+
+    /// Attach ordinary query metadata to an actual C-issued output, retaining
+    /// every independent observation verbatim. No body, target, policy, stage,
+    /// operation or discharge evidence can be replaced through this method.
+    /// Lookup still rechecks the current independent environment.
+    pub fn publish_output(&self, output: &NativeOutput, metadata: &[u8]) -> Option<NativeOutput> {
+        if output.record.lir != crate::LIR_VERSION
+            || output.record.validator != crate::VALIDATOR_VERSION
+            || body_domain(output.stage()) != Some(output.body().domain)
+            || output.layouts().domain != LAYOUTS
+        {
+            return None;
+        }
+        self.get(output.body())?;
+        self.get(output.layouts())?;
+        let mut record = (*output.record).clone();
+        record.metadata = metadata.to_vec();
+        let record = Arc::new(record);
+        let key = address(record.subject, record.policy, record.stage);
+        if let Some(local) = &self.local {
+            let bytes = hirsel_codec::to_text(record.as_ref());
+            if let Ok(reference) = local.put(RECEIPT, bytes.as_bytes()) {
+                let _ = local.associate(key, Action(key.0), reference);
+            }
+        }
+        self.accepted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.0, record.clone());
+        Some(NativeOutput { record })
     }
 
     /// Obtain portable materialization inputs from an already accepted output.
