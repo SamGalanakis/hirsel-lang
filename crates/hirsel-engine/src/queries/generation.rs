@@ -275,12 +275,17 @@ impl QueryEngine {
         let text = self.key_text(definition, QueryKind::Check)?;
         if let Some(entry) = self.checked.get(&id).cloned()
             && self.memo_valid(definition, &entry, text)
+            && self.lower_acceptance_holds(entry.acceptance.as_ref())
         {
             if let Some(depth) = &entry.depth {
                 self.depth_admit(depth, site)?;
                 self.depth_requested(depth, site);
             }
             self.merge_execution(entry.reads());
+            self.merge_lower_acceptance(entry.acceptance.as_ref(), true);
+            for (id, arguments) in &entry.staged {
+                self.record_staged_selection(*id, arguments);
+            }
             return entry.result();
         }
         timings::count(Count::Definitions);
@@ -306,6 +311,7 @@ impl QueryEngine {
             return Err(error);
         }
         self.execution_stack.push(ReadsBuilder::new());
+        self.begin_evaluation_validation();
         let timing = timings::phase(Phase::Comptime);
         let result = self.generate(definition, &snapshot, body, &signature.value, &mut reads);
         drop(timing);
@@ -315,9 +321,12 @@ impl QueryEngine {
             .pop()
             .expect("generation execution frame");
         reads.observed.merged.extend(executed);
+        let (_, acceptance, staged) = self.end_evaluation_validation();
         let key = MemoKey::new(QueryKind::Check, id);
         let mut entry = self.finish(key, text, reads.reads, result, reads.observed);
         entry.depth = Some(depth.clone());
+        entry.acceptance = acceptance;
+        entry.staged = staged;
         let entry = Arc::new(entry);
         // Its own frame is on the stack still: stored before leaving, so a
         // waiting worker finds it.
@@ -340,7 +349,43 @@ impl QueryEngine {
         let SignatureKind::Function(_) = &signature.kind else {
             return Err(QueryError::NotImplemented);
         };
-        let text = self.generated_text(definition, snapshot, body, reads)?;
+        let text = if let Some((record, observed)) = self.load_generation(definition, body) {
+            self.depth_replay_requests(&record.depth)?;
+            self.merge_execution(&observed);
+            reads.observed.merged.merge(&observed);
+            reads.reads = record.detail;
+            self.merge_lower_acceptance(record.acceptance.as_ref(), true);
+            for (id, arguments) in &record.staged {
+                self.record_staged_selection(*id, arguments);
+            }
+            record.text
+        } else {
+            self.begin_evaluation_validation();
+            let generated = self.generated_text(definition, snapshot, body, reads);
+            let (_, acceptance, staged) = self.end_evaluation_validation();
+            let generated = generated?;
+            if self.result_store.is_some() {
+                if let Some(executed) = self.execution_stack.last() {
+                    reads.observed.merged.extend(executed.clone());
+                }
+                if let Ok(observed) = self.typed_reads(definition, &reads.reads, &reads.observed) {
+                    self.store_generation(
+                        definition,
+                        &observed,
+                        persistent::GenerationRecord {
+                            owner: DefId::intern(definition),
+                            body,
+                            text: generated.clone(),
+                            detail: reads.reads.clone(),
+                            depth: self.depth_composed(false),
+                            staged,
+                            acceptance,
+                        },
+                    )?;
+                }
+            }
+            generated
+        };
         self.publish_generated_body(definition, snapshot, body, signature, text, reads)
     }
 

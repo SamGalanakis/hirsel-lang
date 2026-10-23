@@ -893,3 +893,46 @@ fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
         oracle.lower_to_tir(&root).unwrap();
     });
 }
+
+#[test]
+fn generated_source_products_require_local_completion_and_skip_generator_execution() {
+    with_compiler_stack(|| {
+        let source = "pub opaque type Hidden:plain uses {}{field:u32}\nfn text()->String{\"fn()->u32 uses {}{7u32}\"}\nfn value()->u32 uses {}=comptime Ok(codegen.body(text()))\n";
+        let path = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        seed.check_definition(&path).unwrap();
+        let expected = seed.generated_source(&path).unwrap().text.clone();
+        let mut fresh = signature_session(store.clone(), source, true);
+        fresh.adapters.modes = None; fresh.adapters.lowering = None;
+        fresh.check_definition(&path).unwrap();
+        assert_eq!(fresh.generated_source(&path).unwrap().text, expected);
+        assert_eq!(fresh.lower_adapter_calls(&definition("text")), 0, "generator helper was not executed");
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, true);
+        remote.adapters.modes = None; remote.adapters.lowering = None;
+        assert!(remote.check_definition(&path).is_err(), "producer text cannot transfer private generator completion");
+        let changed = source.replace("7u32", "9u32");
+        let mut invalid = signature_session(store.clone(), &changed, true);
+        invalid.adapters.modes = None; invalid.adapters.lowering = None;
+        assert!(invalid.check_definition(&path).is_err(), "executed helper changes invalidate text");
+        let mut private = signature_session(store.clone(), &source.replace("field:u32", "field:u64"), true);
+        private.adapters.modes = None; private.adapters.lowering = None;
+        assert!(private.check_definition(&path).is_err(), "private V universe changes invalidate text completion");
+        let off_store = Arc::new(store::MemStore::default());
+        let mut off = signature_session(off_store.clone(), source, true);
+        off.verify = Verify::Off;
+        off.check_definition(&path).unwrap();
+        let mut on = signature_session(off_store, source, true);
+        on.adapters.modes = None; on.adapters.lowering = None;
+        assert!(on.check_definition(&path).is_err(), "VerifyOff generator text cannot mint completion");
+        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        oracle.check_definition(&path).unwrap();
+        assert_eq!(oracle.generated_source(&path).unwrap().text, expected);
+    });
+}
