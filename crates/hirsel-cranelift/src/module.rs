@@ -829,6 +829,52 @@ pub fn named_launch_object(
     report: &ExitReport,
     descriptor: &[DescriptorField],
 ) -> Result<Vec<u8>, CodegenError> {
+    launch_object(
+        main_symbol,
+        target,
+        entry,
+        caller_site,
+        root_words,
+        report,
+        descriptor,
+        false,
+    )
+}
+
+/// The existing runner decoder as an independent callee replay root: it takes
+/// only its context and publishes the canonical reply through RunnerReply.
+pub fn named_callee_launch_object(
+    main_symbol: &str,
+    target: &TargetSpec,
+    entry: &str,
+    caller_site: bool,
+    root_words: &[u64],
+    report: &ExitReport,
+    descriptor: &[DescriptorField],
+) -> Result<Vec<u8>, CodegenError> {
+    launch_object(
+        main_symbol,
+        target,
+        entry,
+        caller_site,
+        root_words,
+        report,
+        descriptor,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_object(
+    main_symbol: &str,
+    target: &TargetSpec,
+    entry: &str,
+    caller_site: bool,
+    root_words: &[u64],
+    report: &ExitReport,
+    descriptor: &[DescriptorField],
+    callee_entry: bool,
+) -> Result<Vec<u8>, CodegenError> {
     let isa = isa(target, OptLevel::None)?;
     let call_conv = isa.default_call_conv();
     let builder = ObjectBuilder::new(
@@ -851,7 +897,11 @@ pub fn named_launch_object(
     let mut entry_sig = ir::Signature::new(call_conv);
     entry_sig.params.extend(std::iter::repeat_n(
         AbiParam::new(PTR),
-        3 + root_words.len() + if caller_site { 2 } else { 0 },
+        if callee_entry {
+            1
+        } else {
+            3 + root_words.len() + if caller_site { 2 } else { 0 }
+        },
     ));
     entry_sig.returns.push(AbiParam::new(types::I8).uext());
     let entry_id = module
@@ -887,19 +937,25 @@ pub fn named_launch_object(
         b.switch_to_block(block);
         let params = b.block_params(block).to_vec();
         let mut args = vec![params[0]];
-        if caller_site {
+        if !callee_entry && caller_site {
             let zero = b.ins().iconst(types::I64, 0);
             args.extend([zero, zero]);
         }
-        args.extend_from_slice(&params[1..3]);
-        for &word in root_words {
-            args.push(b.ins().iadd_imm_s(params[3], (word * 8) as i64));
+        if !callee_entry {
+            args.extend_from_slice(&params[1..3]);
+            for &word in root_words {
+                args.push(b.ins().iadd_imm_s(params[3], (word * 8) as i64));
+            }
         }
         let callee = module.declare_func_in_func(entry_id, b.func);
         // Units and glue bind in this executable/image, independently of partition.
         b.func.dfg.ext_funcs[callee].colocated = true;
         let call = b.ins().call(callee, &args);
         let status = b.inst_results(call)[0];
+        if callee_entry {
+            let zero = b.ins().iconst(types::I8, 0);
+            b.ins().store(ir::MemFlagsData::new(), zero, params[2], 0);
+        }
         let (returned, reported, done) = (b.create_block(), b.create_block(), b.create_block());
         b.ins().brif(status, done, &[], returned, &[]);
         b.switch_to_block(returned);

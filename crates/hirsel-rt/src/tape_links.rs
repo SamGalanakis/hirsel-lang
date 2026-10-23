@@ -53,11 +53,35 @@ impl<'a> Tape<'a> {
                         ));
                     }
                     if let Completion::Runner(completion) = completion {
+                        if entry.1.as_ref().is_some_and(|old| old != completion) {
+                            return Err(format!("{name}: runner call has conflicting outcomes"));
+                        }
                         entry.1 = Some(completion.clone());
                     }
                 }
-                (Request::CallReturn(outcome), _) => returned = Some(outcome.clone()),
+                (Request::CallReturn(outcome), _) => {
+                    if returned.as_ref().is_some_and(|old| old != outcome) {
+                        return Err(format!("{name}: callee has conflicting returns"));
+                    }
+                    returned = Some(outcome.clone());
+                }
                 _ => {}
+            }
+        }
+        // A bounded poll may be recorded on a spawned waiter's log, after
+        // its parent sent the call. Join by logical key, independently of
+        // per-task log traversal order.
+        for event in &recording.events {
+            if let Request::RunnerPoll { key, .. } = &event.request {
+                let entry = requests
+                    .get_mut(key)
+                    .ok_or_else(|| format!("{name}: runner poll has no issued call"))?;
+                if let Completion::Runner(completion) = &event.completion {
+                    if entry.1.as_ref().is_some_and(|old| old != completion) {
+                        return Err(format!("{name}: runner call has conflicting outcomes"));
+                    }
+                    entry.1 = Some(completion.clone());
+                }
             }
         }
         Ok(Self {

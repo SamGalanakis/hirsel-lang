@@ -129,7 +129,7 @@ impl Io {
             super::link::LaunchKind::Test => {
                 io.grants.insert(IO_HANDLE, IoGrant::Test);
             }
-            super::link::LaunchKind::Main(_) => {}
+            super::link::LaunchKind::Main(_) | super::link::LaunchKind::Call { .. } => {}
         }
         Ok(io)
     }
@@ -2104,10 +2104,12 @@ fn config(inject: Option<u64>, kind: &super::link::LaunchKind, world: &HeapWorld
         context_handles: match kind {
             super::link::LaunchKind::Zero => vec![],
             super::link::LaunchKind::Test => vec![(IO_HANDLE, "Test".into())],
-            super::link::LaunchKind::Main(roots) => roots
-                .iter()
-                .map(|root| (super::link::root_handle(*root), format!("{root:?}")))
-                .collect(),
+            super::link::LaunchKind::Main(roots) | super::link::LaunchKind::Call { roots, .. } => {
+                roots
+                    .iter()
+                    .map(|root| (super::link::root_handle(*root), format!("{root:?}")))
+                    .collect()
+            }
         },
         ..default
     }
@@ -2276,6 +2278,15 @@ pub fn run_heap_in(
     sites: &Sites<'_>,
     world: &HeapWorld,
 ) -> Result<HeapRun, NativeError> {
+    if matches!(
+        program.launches.get(entry),
+        Some(super::link::LaunchKind::Call { .. })
+    ) {
+        return Err(NativeError::new(
+            StageName::Launch,
+            "callee replay requires its canonical runner argument and reply protocol",
+        ));
+    }
     let heap = heap_program(program);
     let kind = program
         .launches
@@ -2284,7 +2295,7 @@ pub fn run_heap_in(
     let args = match kind {
         super::link::LaunchKind::Zero => vec![],
         super::link::LaunchKind::Test => vec![Arg::Handle(IO_HANDLE)],
-        super::link::LaunchKind::Main(roots) => roots
+        super::link::LaunchKind::Main(roots) | super::link::LaunchKind::Call { roots, .. } => roots
             .iter()
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),
@@ -2327,6 +2338,15 @@ pub fn heap_campaign_in(
     sites: &Sites<'_>,
     world: &HeapWorld,
 ) -> Result<HeapRun, NativeError> {
+    if matches!(
+        program.launches.get(entry),
+        Some(super::link::LaunchKind::Call { .. })
+    ) {
+        return Err(NativeError::new(
+            StageName::Launch,
+            "callee replay requires its canonical runner argument and reply protocol",
+        ));
+    }
     let heap = heap_program(program);
     let kind = program
         .launches
@@ -2335,7 +2355,7 @@ pub fn heap_campaign_in(
     let args = match kind {
         super::link::LaunchKind::Zero => vec![],
         super::link::LaunchKind::Test => vec![Arg::Handle(IO_HANDLE)],
-        super::link::LaunchKind::Main(roots) => roots
+        super::link::LaunchKind::Main(roots) | super::link::LaunchKind::Call { roots, .. } => roots
             .iter()
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),

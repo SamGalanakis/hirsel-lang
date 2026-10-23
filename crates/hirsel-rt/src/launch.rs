@@ -1516,13 +1516,19 @@ fn facts(
     } else {
         (program.digest, program.entry_name.as_str())
     };
-    crate::standalone::facts(
+    let mut facts = crate::standalone::facts(
         digest,
         entry,
         program.code.roots(),
         program.escapes(),
         program.fueled(),
-    )
+    )?;
+    // Bound executables also bind the complete run identity below. A Call
+    // record cannot select another entry or replace a main launch's record.
+    if !program.standalone() && run.record().launch == hirsel_run_schema::LaunchKind::Call {
+        facts.launch = hirsel_run_schema::LaunchKind::Call;
+    }
+    Ok(facts)
 }
 
 /// Select the run `arguments` ask for, bind it to `program`, admit it on the process's host
@@ -1685,6 +1691,13 @@ pub(crate) unsafe fn execute(
         // A replay performs no host effect: no admission, clock or provider.
         crate::host::Selection::Replay { run, io } => (Some(run.run().clone()), None, Some(io)),
     };
+    // Validate call metadata before allocating a context or starting workers.
+    let replay_call = requested
+        .as_ref()
+        .filter(|run| run.record().launch == hirsel_run_schema::LaunchKind::Call)
+        .map(|run| crate::runners::native::replay_state(program, run))
+        .transpose()?;
+    let callee_replay = replay_call.is_some();
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
     // F0's explicit test channel replaces the logical schedule and suppresses
@@ -1959,6 +1972,9 @@ pub(crate) unsafe fn execute(
     let mut real = None;
     let mut zero_recording = None;
     let mut replay = None;
+    // Preserve the admitted destination before live Free moves RealIo into
+    // its concurrent owner. Callee tapes belong beside this root tape.
+    let runner_tape = production_io.as_ref().and_then(|(_, _, tape)| tape.clone());
     let mut adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
         if production_free {
             free_session = crate::free_launch::Session::record(
@@ -2365,6 +2381,9 @@ pub(crate) unsafe fn execute(
     if unsafe { hirsel_rt_v2_ctx_create(&config, &mut ctx) } != 0 {
         return Err("the runtime configuration".into());
     }
+    unsafe {
+        (*ctx).run().runner_call = replay_call;
+    }
     let control = options.control;
     // A test's host stop from another thread (`HIRSEL_RT_STOP_AFTER_MS`), as an embedding
     // host's `RunControl::stop`: the run is hosted before its budgets take their chunks.
@@ -2445,9 +2464,11 @@ pub(crate) unsafe fn execute(
             .as_ref()
             .and_then(|m| m.request_schemas.clone()),
         entries: program.entries.clone(),
-        tape: std::env::var_os("HIRSEL_RT_TAPE")
-            .filter(|_| requested.is_none() && real.is_some())
-            .map(std::path::PathBuf::from),
+        tape: runner_tape.or_else(|| {
+            std::env::var_os("HIRSEL_RT_TAPE")
+                .filter(|_| requested.is_none() && real.is_some())
+                .map(std::path::PathBuf::from)
+        }),
         stdout: Some(sinks.stdout.clone()),
         runtime: config,
         failure_table: program.failure_table,
@@ -2630,6 +2651,15 @@ pub(crate) unsafe fn execute(
     let frame =
         unsafe { crate::stop::LaunchFrame::new(root, IO_HANDLE, ARGS_HANDLE, roots, &mut report) };
     let mut ran = unsafe { crate::stop::run_root(ctx, frame) };
+    if callee_replay && matches!(ran, Ok(STATUS_OK)) {
+        match unsafe { crate::runners::native::finish_replay(ctx) } {
+            Ok(code) => unsafe {
+                (*ctx).run().launch.as_mut().unwrap().words.result[0] = u128::from(code);
+            },
+            Err(stop) => ran = Err(stop),
+        }
+    }
+
     let mut replay_outcome = None;
     if let Some(session) = &free_session
         && session.replay_driver().is_some()

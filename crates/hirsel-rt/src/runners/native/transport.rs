@@ -3,6 +3,8 @@ use super::*;
 use std::collections::BTreeSet;
 
 pub(super) struct Spec {
+    pub request: RunnerRequest,
+    pub caller: [u8; 16],
     pub start: Start,
     pub grant: RunnerGrant,
     pub ordinal: u64,

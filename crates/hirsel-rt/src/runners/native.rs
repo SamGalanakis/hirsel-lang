@@ -24,6 +24,7 @@ pub(super) unsafe fn send(
     _spawn: bool,
 ) -> Stopped<u64> {
     let key = request.key;
+    let caller = state(ctx).instance;
     let slot = unsafe { (*ctx).run_ref().runner_home.as_deref() };
     let mut call = Call {
         task: Some(crate::tasks::current_task(ctx)),
@@ -56,6 +57,8 @@ pub(super) unsafe fn send(
                 slot.transport.prepare(
                     key,
                     Spec {
+                        request: request.clone(),
+                        caller,
                         start,
                         grant: call.grant.clone(),
                         ordinal,
@@ -182,6 +185,83 @@ pub(super) struct Reply {
 /// last worker leaves. No owning Arc is left on an abandonable task stack.
 pub(super) fn call(ctx: *mut TaskCtx) -> Option<&'static CallState> {
     unsafe { (*ctx).run_ref().runner_call.as_deref() }
+}
+
+/// A plain function reference uses the same immortal empty environment as the
+/// compiler's static function-reference thunks (descriptor index two).
+#[repr(C)]
+struct EmptyEnvironment {
+    extent: crate::alloc::Extent,
+    header: Header,
+}
+static EMPTY_ENVIRONMENT: EmptyEnvironment = EmptyEnvironment {
+    extent: crate::alloc::Extent {
+        capacity: 0,
+        align: 8,
+    },
+    header: Header {
+        count: crate::COUNT_IMMORTAL,
+        descriptor: 2 | (crate::alloc::KIND_STATIC << crate::alloc::KIND_SHIFT),
+    },
+};
+
+/// Bind an independently replayed callee to its checked function reference and
+/// owned canonical argument. No caller, grant provider or live child is created.
+pub(crate) fn replay_state(
+    program: &crate::program::Program,
+    run: &hirsel_run_config::ValidatedRun,
+) -> Result<Arc<CallState>, String> {
+    let record = run
+        .record()
+        .call
+        .as_ref()
+        .ok_or("missing callee call record")?;
+    let code = program
+        .entries
+        .iter()
+        .find(|(_, path)| path == &run.record().entry)
+        .map(|(code, _)| *code)
+        .ok_or("missing compiled callee Entry")?;
+    let argument = record.argument().map_err(|e| e.to_string())?;
+    let call = CallState {
+        entry: (code, (&EMPTY_ENVIRONMENT.header as *const Header) as usize),
+        form: record.form(),
+        argument: Mutex::new(Some(argument)),
+        reply: Mutex::new(None),
+    };
+    Ok(Arc::new(call))
+}
+
+/// After the root has returned, on home: compare the actual canonical reply
+/// against the child's tape before the ordinary finish checks full consumption.
+pub(crate) unsafe fn finish_replay(ctx: *mut TaskCtx) -> Stopped<u8> {
+    let reply = call(ctx)
+        .unwrap()
+        .reply
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or_else(|| Stop::Refused("callee returned without its reply".into()))?;
+    let returned = match reply.tag {
+        REPLY_OK => CalleeOutcome::Ok(reply.bytes),
+        REPLY_ERROR => CalleeOutcome::Err(reply.bytes),
+        REPLY_FAILED => CalleeOutcome::Failed(reply.bytes),
+        _ => return Err(Stop::refusal(AdapterError::InvalidCompletion)),
+    };
+    let completion = unsafe { Binding::get(ctx) }
+        .adapter
+        .call(Request::CallReturn(returned))
+        .map_err(Stop::refusal)?;
+    if completion != Completion::Ready {
+        return Err(Stop::refusal(AdapterError::InvalidCompletion));
+    }
+    if reply.tag == REPLY_FAILED {
+        unsafe {
+            (*ctx).failure.append_chain(reply.chain);
+        }
+        return Err(Stop::Failed);
+    }
+    Ok(u8::from(reply.tag == REPLY_ERROR))
 }
 
 /// All methods and destruction run on the admitting home thread. In
@@ -335,6 +415,44 @@ mod tests {
             panic!("a withdrawn stopped home call must never return to program code");
         }
         STATUS_OK
+    }
+
+    #[test]
+    fn callee_replay_metadata_is_validated_before_a_context_can_start() {
+        unsafe extern "C" fn root(_: *mut TaskCtx, _: *mut u8, _: *mut u8) -> u8 {
+            panic!("metadata validation must not enter code")
+        }
+        let mut program = crate::program::Program::harness(
+            crate::program::Code::Zero(root),
+            1,
+            std::ptr::null(),
+            0,
+            crate::launch::Config::default(),
+        );
+        let mut record = hirsel_run_config::RunConfig::empty(
+            [1; 32],
+            "fixture@1/child".into(),
+            hirsel_run_schema::LaunchKind::Call,
+        );
+        record.call = Some(hirsel_run_schema::CallRecord::new(
+            CallForm::Compute,
+            &hirsel_run_schema::Cause {
+                instance: [2; 16],
+                ordinal: 0,
+                digest: [3; 32],
+            },
+            &[4, 5],
+        ));
+        let run = record.validated().unwrap();
+        assert!(
+            matches!(replay_state(&program, &run), Err(e) if e == "missing compiled callee Entry")
+        );
+        program.entries.push((7, "fixture@1/child".into()));
+        let state = replay_state(&program, &run).unwrap();
+        assert_eq!(state.entry.0, 7);
+        assert_eq!(state.form, CallForm::Compute);
+        assert_eq!(state.argument.lock().unwrap().take(), Some(vec![4, 5]));
+        assert!(state.reply.lock().unwrap().is_none());
     }
 
     #[test]

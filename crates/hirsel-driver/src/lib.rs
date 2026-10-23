@@ -1032,8 +1032,14 @@ pub fn check_tapes(
 ) -> Result<hirsel_rt::tape_links::Links, Vec<String>> {
     let mut tapes = vec![];
     for path in paths {
-        let recording = hirsel_rt::host_launch::read_recording(path)
-            .map_err(|e| vec![format!("{}: {e}", path.display())])?;
+        let bytes = std::fs::read(path).map_err(|e| vec![format!("{}: {e}", path.display())])?;
+        let recording = if bytes.starts_with(hirsel_free::tape::MAGIC) {
+            hirsel_rt::free_replay::linked_recording(&bytes)
+                .map_err(|e| vec![format!("{}: {e}", path.display())])?
+        } else {
+            hirsel_rt::host_launch::read_recording(path)
+                .map_err(|e| vec![format!("{}: {e}", path.display())])?
+        };
         tapes.push((path.display().to_string(), recording));
     }
     hirsel_rt::tape_links::check(&tapes)

@@ -574,12 +574,16 @@ pub(crate) enum LaunchKind {
     Zero,
     Main(Vec<hirsel_run_config::Root>),
     Test,
+    Call {
+        roots: Vec<hirsel_run_config::Root>,
+        decoder: String,
+    },
 }
 impl LaunchKind {
     pub(crate) fn roots(&self) -> &[hirsel_run_config::Root] {
         match self {
             Self::Zero => &[],
-            Self::Main(roots) => roots,
+            Self::Main(roots) | Self::Call { roots, .. } => roots,
             Self::Test => &[hirsel_run_config::Root::Test],
         }
     }
@@ -631,6 +635,9 @@ fn entry_result(
         definition: Some(entry.clone()),
         ..NativeError::new(StageName::Launch, format!("the entry contract: {what}"))
     };
+    if let Some(LaunchKind::Call { decoder, .. }) = program.launches.get(entry) {
+        return Ok((decoder.clone(), 1, false));
+    }
     let instance = program
         .functions
         .get(entry)
@@ -1427,6 +1434,7 @@ fn launcher_object(
     let target = &program.target;
     let kind = &program.launches[entry];
     let roots = kind.roots();
+    let call_entry = matches!(kind, LaunchKind::Call { .. });
     let parameters = roots.iter().map(|_| ", ptr").collect::<String>();
     let mut loads = String::new();
     let mut arguments = String::new();
@@ -1437,17 +1445,34 @@ fn launcher_object(
         ));
         arguments.push_str(&format!(", ptr %root{index}"));
     }
-    let report = program.exit_reports.get(entry).ok_or_else(|| {
-        NativeError::new(StageName::Launch, "missing checked exit-report description")
-    })?;
+    let callee_report = super::exit_report::Report {
+        declarations: String::new(),
+        nodes: vec![hirsel_cranelift::ReportNode::default()],
+        offset: 0,
+        root: 0,
+        result: hirsel_lir::layout_types::LayoutId(0),
+        return_kind: 1,
+        success_offset: 0,
+    };
+    let report = if call_entry {
+        &callee_report
+    } else {
+        program.exit_reports.get(entry).ok_or_else(|| {
+            NativeError::new(StageName::Launch, "missing checked exit-report description")
+        })?
+    };
     let return_kind = report.return_kind;
     let success_offset = report.success_offset;
     let report_declarations = &report.declarations;
     let report_root = report.root;
     let report_offset = report.offset;
-    let result_index = registry
-        .index(report.result)
-        .ok_or_else(|| NativeError::new(StageName::Launch, "missing entry-result descriptor"))?;
+    let result_index = if call_entry {
+        0
+    } else {
+        registry
+            .index(report.result)
+            .ok_or_else(|| NativeError::new(StageName::Launch, "missing entry-result descriptor"))?
+    };
     let caller_parameters = if caller_site { ", i64, i64" } else { "" };
     let caller_arguments = if caller_site { ", i64 0, i64 0" } else { "" };
     let report_branch = if return_kind == 1 {
@@ -1455,8 +1480,18 @@ fn launcher_object(
     } else {
         " %tag = load i32, ptr %out, align 1\n %error = icmp eq i32 %tag, 1\n br i1 %error, label %report, label %done".to_owned()
     };
-    let declaration = format!(
-        r#"{report_declarations}
+    let declaration = if call_entry {
+        format!(
+            r#"declare i8 @"{symbol}"(ptr)
+define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
+ %s = call i8 @"{symbol}"(ptr %ctx)
+ store i8 0, ptr %out, align 1
+ ret i8 %s
+}}"#
+        )
+    } else {
+        format!(
+            r#"{report_declarations}
 declare void @hirsel_rt_v2_exit_report(ptr, ptr, i32, i64, ptr)
 declare i8 @"{symbol}"(ptr{caller_parameters}, ptr, ptr{parameters})
 define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
@@ -1471,7 +1506,8 @@ report:
 done:
  ret i8 %s
 }}"#
-    );
+        )
+    };
     let roots_mask = kind.mask();
     let registry_declaration = format!(
         "@\"{}\" = external constant [{} x ptr]",
@@ -1484,7 +1520,9 @@ done:
             "missing checked semantic program revision",
         )
     })?;
-    let launch = if *kind == LaunchKind::Test {
+    let launch = if call_entry {
+        hirsel_run_schema::LaunchKind::Call
+    } else if *kind == LaunchKind::Test {
         hirsel_run_schema::LaunchKind::Test
     } else {
         hirsel_run_schema::LaunchKind::Main
@@ -1516,10 +1554,18 @@ done:
                 .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?,
         );
     }
-    let default = record
-        .validated()
-        .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?;
-    let run = requested.unwrap_or(&default);
+    let default = if requested.is_none() {
+        Some(
+            record
+                .validated()
+                .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let run = requested
+        .or(default.as_ref())
+        .expect("requested or default run");
     run.check_revision(revision, launch)
         .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     if !standalone {
@@ -1638,7 +1684,12 @@ done:
             root: report_root,
             nodes: report.nodes.clone(),
         };
-        hirsel_cranelift::named_launch_object(
+        let emit = if call_entry {
+            hirsel_cranelift::named_callee_launch_object
+        } else {
+            hirsel_cranelift::named_launch_object
+        };
+        emit(
             main_symbol,
             target,
             &symbol,

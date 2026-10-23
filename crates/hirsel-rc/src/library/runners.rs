@@ -398,6 +398,37 @@ fn outcome(
     Ok(value)
 }
 
+/// The same checked decoder/catch/reply body used by RunnerSend, rooted by a
+/// native callee replay instead of an enclosing caller.
+pub fn replay_main(program: &crate::instance::Program, path: &DefPath) -> R<Request> {
+    let signature = program
+        .signatures
+        .get(path)
+        .ok_or_else(|| PassError::Malformed("missing callee signature".into()))?;
+    let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
+        return Err(PassError::Malformed("callee is not a function".into()));
+    };
+    let f = crate::instance::instantiate_function(
+        &program.types,
+        &program.memo,
+        function,
+        hirsel_types::Modes::global(),
+        &crate::instance::Actuals::none(),
+    )
+    .map_err(|e| PassError::Malformed(format!("callee callable: {e:?}")))?;
+    let send_path = DefPath::core("$intrinsic.RunnerSend");
+    let send = Request::operation(program, 0, &send_path, vec![GenericArgument::Type(f)])
+        .map_err(|e| PassError::Malformed(format!("callee send signature: {e:?}")))?;
+    let main_ty = parameter(&program.types, send.callable, 3)?;
+    let path = native_path("runner_main");
+    Ok(Request::native(
+        super::body_index(&path).expect("registered runner main"),
+        &path,
+        vec![GenericArgument::Type(f)],
+        main_ty,
+    ))
+}
+
 /// The callee's `main` for entry callable `f`: `$native.runner_main[F]`, a static
 /// `fn() -> ()`, RunnerSend's parameter 3.
 fn main_request(cx: &mut Cx<'_>, send: &Intrinsic, f: TypeId) -> R<(Direct, LayoutId)> {

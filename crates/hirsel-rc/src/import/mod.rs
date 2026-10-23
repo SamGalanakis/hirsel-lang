@@ -238,6 +238,19 @@ pub fn lower_cached(
     discharge: &Discharge,
     cache: &mut dyn ImportCache,
 ) -> Result<Lowered, LowerError> {
+    lower_cached_with_roots(program, target, flat_walk, discharge, cache, &[])
+}
+
+/// Import with explicit library roots, such as the existing runner decoder for
+/// an independently replayed callee. Roots pass through the ordinary validators.
+pub fn lower_cached_with_roots(
+    program: &Program,
+    target: &TargetSpec,
+    flat_walk: &crate::flat_walk::Options,
+    discharge: &Discharge,
+    cache: &mut dyn ImportCache,
+    roots: &[crate::library::Request],
+) -> Result<Lowered, LowerError> {
     hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeAppendExpand);
     // Results built only to be appended are built in place (append_into).
     let (fused, origins, source_owners) = crate::append_into::fuse_with_origins(program, discharge);
@@ -256,6 +269,10 @@ pub fn lower_cached(
     layouts.prepare_native_controls();
     let mut instances =
         crate::instance::expand(program, &mut layouts).map_err(LowerError::Instance)?;
+    for root in roots {
+        crate::library::instantiate(&mut layouts, &mut instances, root.clone())
+            .map_err(LowerError::Instance)?;
+    }
     let mut plans = Vec::new();
     let mut declined = Vec::new();
     let mut units: Vec<Option<LirUnit<Value>>> = Vec::new();

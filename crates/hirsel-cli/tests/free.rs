@@ -2557,3 +2557,86 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         b"refusal and cleanup\n",
     );
 }
+
+#[test]
+fn f1_runner_linked_child_tape_current_runtime_replay_and_join() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-linked-tapes");
+    let program = scratch.path("main.hir");
+    let source = r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let out = match io.stdout(rt) { Ok(v) => v, Error(_) => return Error("stdout") }
+  match out.print(out, "linked child\n") { Ok(()) => Ok(n + 1u64), Error(_) => Error("print") }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.call(runner, child, 8u64) == Ok(9u64), Arithmetic())
+  out.print(out, "linked parent\n") ? Output
+  Ok(())
+}
+"#;
+    std::fs::write(&program, source).unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    let tape = scratch.path("T");
+    let child_tape = scratch.path("T.call-0");
+    let report = scratch.path("projection");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .args(["run", "--native"])
+        .arg(&program)
+        .args(["--grants", grants, "--cores", "1", "--record"])
+        .arg(&tape)
+        .env(hirsel_rt::free_replay::Report::VAR, &report);
+    f1_permits(&mut command, 1);
+    let live = bounded_output(&mut command, &program, "linked native record");
+    assert!(live.status.success(), "{live:?}");
+    assert_eq!(live.stdout, b"linked child\nlinked parent\n");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command.args(["tapes", "check"]).arg(&tape).arg(&child_tape);
+    let joined = bounded_output(&mut command, &program, "joined Free caller and child tapes");
+    assert!(joined.status.success(), "{joined:?}");
+    assert!(
+        String::from_utf8_lossy(&joined.stdout).ends_with("tapes: 1 links checked, 0 unchecked\n"),
+        "{joined:?}"
+    );
+    let projection = std::fs::read_to_string(&report).unwrap();
+    for engine in ENGINES {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .args(engine)
+            .arg(&program)
+            .arg("--replay")
+            .arg(&tape)
+            .args(["--cores", "1"])
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let caller = bounded_output(
+            &mut command,
+            &program,
+            &format!("linked caller replay {engine:?}"),
+        );
+        assert!(caller.status.success(), "{engine:?}: {caller:?}");
+        assert_eq!(caller.stdout, b"linked parent\n");
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .args(engine)
+            .arg(&program)
+            .arg("--replay")
+            .arg(&child_tape)
+            .args(["--cores", "1"]);
+        f1_permits(&mut command, 1);
+        let child = bounded_output(
+            &mut command,
+            &program,
+            &format!("linked child replay {engine:?}"),
+        );
+        assert!(child.status.success(), "{engine:?}: {child:?}");
+        assert_eq!(child.stdout, b"linked child\n");
+    }
+}

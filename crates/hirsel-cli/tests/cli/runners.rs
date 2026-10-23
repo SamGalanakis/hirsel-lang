@@ -117,13 +117,18 @@ impl Fixture {
         ])
     }
     fn replay(&self, tape: &Path) -> Output {
-        let manifest = self.0.join("main.hir.json");
-        self.hirsel(&[
-            "run".as_ref(),
-            manifest.as_os_str(),
-            "--replay".as_ref(),
-            tape.as_os_str(),
-        ])
+        self.replay_engine(tape, &[])
+    }
+    fn replay_engine(&self, tape: &Path, engine: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(engine)
+            .arg(self.0.join("main.hir.json"))
+            .arg("--replay")
+            .arg(tape)
+            .args(["--cores", "1"])
+            .output()
+            .unwrap()
     }
     fn check(&self, ordinals: &[Option<u32>]) -> Output {
         let tapes: Vec<PathBuf> = ordinals.iter().map(|&n| self.tape(n)).collect();
@@ -174,24 +179,30 @@ fn every_tape_replays_alone_and_the_set_checks() {
         ("spawned\n", true),
     ];
     for (ordinal, (out, ok)) in expected.into_iter().enumerate() {
-        let replay = fixture.replay(&fixture.tape(Some(ordinal as u32)));
-        assert_eq!(
-            stdout(&replay),
-            out,
-            "callee {ordinal}: {}",
-            stderr(&replay)
-        );
-        assert_eq!(
-            replay.status.success(),
-            ok,
-            "callee {ordinal}: {}",
-            stderr(&replay)
-        );
-        assert!(
-            !stderr(&replay).contains("replay"),
-            "callee {ordinal}: {}",
-            stderr(&replay)
-        );
+        for engine in [
+            &[][..],
+            &["--native"][..],
+            &["--native", "--backend", "cranelift"][..],
+        ] {
+            let replay = fixture.replay_engine(&fixture.tape(Some(ordinal as u32)), engine);
+            assert_eq!(
+                stdout(&replay),
+                out,
+                "callee {ordinal}: {}",
+                stderr(&replay)
+            );
+            assert_eq!(
+                replay.status.success(),
+                ok,
+                "callee {ordinal}: {}",
+                stderr(&replay)
+            );
+            assert!(
+                !stderr(&replay).contains("replay"),
+                "callee {ordinal}: {}",
+                stderr(&replay)
+            );
+        }
     }
     let check = fixture.check(&ALL);
     assert!(check.status.success(), "{}", stderr(&check));

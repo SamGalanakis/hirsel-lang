@@ -368,3 +368,105 @@ impl Report {
             .map_err(|e| format!("Free projection report: {e}"))
     }
 }
+
+/// Inspect only runner links in a production Free tape. This does not execute
+/// phases or authorize continuation; joined checks compare canonical data.
+pub fn linked_recording(bytes: &[u8]) -> Result<crate::launch::Recording, String> {
+    use super::requests::Authority;
+    use hirsel_free::record::Record;
+    let mut header = crate::free_launch::header(bytes)?;
+    let _validated = crate::free_launch::Session::replay(bytes)?;
+    let tape = hirsel_free::tape::parse(bytes)?;
+    let mut events = Vec::new();
+    for (path, log) in &tape.logs {
+        let cut = tape.cut.get(path).ok_or("host log without a cut")?;
+        let mut requests = std::collections::BTreeMap::new();
+        let mut prepared = std::collections::BTreeSet::new();
+        let mut entered = std::collections::BTreeSet::new();
+        let mut completed = std::collections::BTreeSet::new();
+        for record in hirsel_free::record::decode(log)? {
+            match record {
+                Record::Prepared { op, .. } => {
+                    if !cut.admits(hirsel_free::phase::Progress::new(
+                        op,
+                        hirsel_free::phase::Phase::Entered,
+                    )) {
+                        return Err("host request lies beyond its cut".into());
+                    }
+                    if !entered.insert(op) {
+                        return Err("duplicate prepared host request".into());
+                    }
+                    prepared.insert(op);
+                }
+                Record::Observation { op, bytes } if prepared.remove(&op) => {
+                    let (payload, authorities): (Vec<u8>, Vec<Authority>) =
+                        crate::tape_wire::decode(&bytes)?;
+                    let request: Request = crate::tape_wire::decode(&payload)?;
+                    if matches!(
+                        request,
+                        Request::RunnerCall(_)
+                            | Request::RunnerPoll { .. }
+                            | Request::CallReturn(_)
+                    ) {
+                        if !authorities.is_empty() {
+                            return Err("runner request has physical authorities".into());
+                        }
+                        requests.insert(op, request);
+                    }
+                }
+                Record::Completion { op, bytes } => {
+                    if !cut.admits(hirsel_free::phase::Progress::new(
+                        op,
+                        hirsel_free::phase::Phase::Done,
+                    )) {
+                        return Err("host completion lies beyond its cut".into());
+                    }
+                    if !entered.contains(&op) || prepared.contains(&op) || !completed.insert(op) {
+                        return Err(
+                            "host completion without one prepared request observation".into()
+                        );
+                    }
+                    if let Some(request) = requests.remove(&op) {
+                        let envelope: Envelope = crate::tape_wire::decode(&bytes)?;
+                        envelope.validate_request(&request).map_err(error)?;
+                        if envelope.refusal.is_some()
+                            || (matches!(request, Request::CallReturn(_))
+                                && (!envelope.created.is_empty()
+                                    || envelope.output_count.is_some()
+                                    || envelope.result != Ok(Completion::Ready)))
+                        {
+                            return Err("invalid runner link completion metadata".into());
+                        }
+                        let completion = envelope
+                            .result
+                            .map_err(|e| format!("runner link completion: {e:?}"))?;
+                        events.push(crate::io::Event {
+                            request,
+                            completion,
+                            fault: None,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A partial operation still establishes its issued request, but no
+        // callee outcome can be claimed until its completion was recorded.
+        for (_, request) in requests {
+            if matches!(request, Request::CallReturn(_)) {
+                continue;
+            }
+            events.push(crate::io::Event {
+                request,
+                completion: Completion::Ready,
+                fault: None,
+            });
+        }
+    }
+    header.events = events;
+    Ok(header)
+}
+
+#[cfg(test)]
+#[path = "linked_tests.rs"]
+mod linked_tests;

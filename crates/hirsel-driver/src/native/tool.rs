@@ -234,6 +234,67 @@ pub fn run_path_native_backend_with_trace_events(
     })
 }
 
+/// Build a Call launch with the existing checked decoder, without requiring a
+/// caller in the source to instantiate it or grant the Entry reference.
+fn build_callee_replay(
+    validated: &hirsel_engine::ValidatedNativeInput,
+    entry: &hirsel_engine::DefPath,
+    options: &Options,
+) -> Result<super::ReadyProgram, NativeError> {
+    // An independent replay has no enclosing RunnerSend to require its
+    // decoder. Root the existing body explicitly, under the same validators.
+    let adapted = super::adapt::program(validated);
+    let root = hirsel_rc::library::runners::replay_main(&adapted, entry)
+        .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+    let owners =
+        hirsel_rc::library::owners(&adapted.types, &adapted.signatures).over(&adapted.owners);
+    let layouts = hirsel_layout::layout::LayoutBuilder::new(&options.target, &owners);
+    let key = root
+        .key(&adapted.types, &layouts)
+        .map_err(|e| NativeError::new(StageName::Launch, format!("callee root: {e:?}")))?;
+    let manifest = super::adapt::manifest(validated.snapshot())
+        .map_err(|e| NativeError::new(StageName::Manifest, e))?;
+    let mut program = super::stages::build_program_roots(&adapted, manifest, options, &[root])?;
+    // Bind the ordinary semantic closure first; the extra root is a library
+    // instance and acquires no source Entry authority.
+    program.bind_revisions(validated)?;
+    let signature = &adapted.signatures[entry];
+    let roots = hirsel_engine::entry_roots(
+        &adapted.types,
+        signature,
+        hirsel_run_schema::LaunchKind::Call,
+    )
+    .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+    program.launches.insert(
+        entry.clone(),
+        super::link::LaunchKind::Call {
+            roots,
+            decoder: hirsel_lir::emission::symbol_name(key.definition(), Some(&key.digest())),
+        },
+    );
+    program.revisions.insert(
+        entry.clone(),
+        validated
+            .semantic_program_revision(entry)
+            .map_err(|e| NativeError::new(StageName::Launch, format!("callee revision: {e:?}")))?,
+    );
+    if validated.unsafe_reach(entry).is_some() {
+        program.escaping.insert(entry.clone());
+    }
+    // The call's function-reference thunk is required by its checked
+    // signature, even when the source never constructs an Entry itself.
+    let instance = program.functions[entry];
+    let thunk = hirsel_lir::emission::function_thunk_name(entry, Some(&instance));
+    let unit = program
+        .summaries
+        .iter_mut()
+        .find(|s| s.definition == *entry && s.instance == instance)
+        .ok_or_else(|| NativeError::new(StageName::Launch, "missing callee unit"))?;
+    unit.glue.entries.insert((entry.clone(), Some(instance)));
+    program.entries.insert(thunk, entry.to_string());
+    Ok(program)
+}
+
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     callee_facts: hirsel_rt::program::CalleeMetadata,
@@ -263,7 +324,11 @@ fn run(
         super::Backend::Cranelift => OptLevel::None,
     };
     options.objects = super::units::selected(&target, backend, opt, false, fuel)?;
-    let mut program = build(validated, &options)?;
+    let mut program = if run.record().launch == hirsel_run_schema::LaunchKind::Call {
+        build_callee_replay(validated, entry, &options)?
+    } else {
+        build(validated, &options)?
+    };
     program.bind_callees(callee_facts)?;
     program.fuel = fuel;
     for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {

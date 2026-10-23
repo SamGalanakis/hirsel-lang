@@ -63,17 +63,73 @@ impl Home {
             .stdout
             .clone()
             .unwrap_or_else(|| crate::host::Sink::new(crate::launch::RawStdout));
-        let mut io = RealIo::from_pinned_mounts([], stdout).expect("empty callee mounts");
-        io.set_projections(projections(&grants));
-        io.set_cooperative(self.slot.transport.driver.tagged(self.tag));
-        io.clock_grants(
-            grants.monotonic_clock.is_some(),
-            grants.wall_clock.is_some(),
+        // Follow the source host's host_callee admission: the same checked
+        // callee facts, narrowed grants, cause and derived seeds bind its tape.
+        let facts = self
+            .config
+            .callees
+            .get(&spec.request.path)
+            .ok_or_else(|| Stop::Refused("missing checked callee facts".into()))?;
+        let cause = hirsel_run_schema::Cause {
+            instance: spec.caller,
+            ordinal: spec.ordinal,
+            digest: spec.request.digest,
+        };
+        let mut record = hirsel_run_config::RunConfig::empty(
+            facts.program,
+            spec.request.path.clone(),
+            hirsel_run_schema::LaunchKind::Call,
         );
-        io.set_random(
-            hirsel_run_schema::ProviderContract::RandomSplitMix64,
-            seed("random"),
+        record.call = Some(hirsel_run_schema::CallRecord::new(
+            spec.request.form,
+            &cause,
+            &spec.request.argument,
+        ));
+        record.inputs.hash_seed = seed("hash");
+        record.inputs.random_seed = seed("random");
+        record.inputs.test_seed = seed("test");
+        record.io = (spec.request.form == CallForm::Call).then_some(grants);
+        record.admission =
+            spec.grant
+                .entry
+                .admission
+                .as_ref()
+                .map(|a| hirsel_run_schema::Admission {
+                    not_before: None,
+                    expires: None,
+                    revocation: None,
+                    code: a.code.clone(),
+                });
+        let refused = |error: hirsel_run_schema::RunRefusal| {
+            Stop::Refused(format!("callee admission: {error}"))
+        };
+        let bound = record
+            .validated()
+            .map_err(refused)?
+            .bind(&hirsel_run_config::ProgramFacts {
+                program: facts.program,
+                entry: spec.request.path.clone(),
+                launch: hirsel_run_schema::LaunchKind::Call,
+                roots: if spec.request.form == CallForm::Call {
+                    vec![hirsel_run_config::Root::Io]
+                } else {
+                    vec![]
+                },
+                code: facts.reach.clone(),
+                fueled: true,
+            })
+            .map_err(refused)?;
+        let mut host = crate::host_launch::HostGrants::sharing(
+            stdout,
+            self.slot.transport.driver.tagged(self.tag),
         );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| Stop::Refused(e.to_string()))?
+            .as_nanos();
+        let now = i64::try_from(now).map_err(|e| Stop::Refused(e.to_string()))?;
+        let admitted = bound.admit(&mut host, now).map_err(refused)?;
+        let mut io = host.into_io();
         let tape = self
             .config
             .tape
@@ -84,30 +140,11 @@ impl Home {
                 name.push(format!(".call-{}", spec.ordinal));
                 std::path::PathBuf::from(name)
             });
-        if let Some(tape) = &tape {
-            let refused = |error: String| {
-                Stop::Environmental(hirsel_run_schema::Environmental::Recording(format!(
-                    "callee Io tape: {error}"
-                )))
-            };
-            let file = io
-                .prepare_recording_with_files(tape, &[])
-                .map_err(|e| refused(e.to_string()))?;
-            let tree = io.snapshot().map_err(|e| refused(format!("{e:?}")))?;
-            let record = crate::launch::Recording {
-                arguments: vec![],
-                run_identity: [0; 32],
-                hash_seed: seed("hash"),
-                random_seed: seed("random"),
-                test_seed: seed("test"),
-                binding: None,
-                tree,
-                events: vec![],
-            };
-            let writer = crate::launch::RecordingWriter::new(file, &record)
-                .map_err(|e| refused(e.to_string()))?;
-            io.record_to(writer);
-        }
+        crate::host_launch::journal(&mut io, &admitted, tape.as_deref(), &[]).map_err(|e| {
+            Stop::Environmental(hirsel_run_schema::Environmental::Recording(format!(
+                "callee Io tape: {e}"
+            )))
+        })?;
         io.discard_history();
         let io = Rc::new(RefCell::new(io));
         let binding = Box::new(Binding::new(crate::launch::Shared(io.clone())));

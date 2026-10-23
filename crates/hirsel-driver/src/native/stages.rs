@@ -581,6 +581,15 @@ pub fn build_program(
     manifest: Manifest,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
+    build_program_roots(program, manifest, options, &[])
+}
+
+pub(super) fn build_program_roots(
+    program: &Program,
+    manifest: Manifest,
+    options: &Options,
+    roots: &[hirsel_rc::library::Request],
+) -> Result<ReadyProgram, NativeError> {
     let _interval = timings::interval(Interval::Units);
     let target = &options.target;
     let import = timings::phase(Phase::Import);
@@ -602,7 +611,7 @@ pub fn build_program(
         inner: cache,
         enabled: options.scoped_specialization,
     };
-    let mut lowered = hirsel_rc::import::lower_cached(
+    let mut lowered = hirsel_rc::import::lower_cached_with_roots(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
@@ -610,6 +619,7 @@ pub fn build_program(
         },
         &options.discharge,
         &mut scoped,
+        roots,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     let discharged = timed(Phase::LirValidate, || {
