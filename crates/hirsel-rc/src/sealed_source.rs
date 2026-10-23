@@ -132,6 +132,26 @@ fn native(types: &TypeInterner, ty: TypeId) -> Result<NativeType, SourceError> {
         _ => Err(SourceError::Malformed("source operand type")),
     }
 }
+
+/// Preserve the full original rooted type identity beside the native erased
+/// axes. The completed source query supplies substituted original types; this
+/// helper reads neither candidate LIR nor a physical callable signature.
+/// A returned hash identifies data, never independently proves a profile.
+pub fn closed_storage_type(
+    types: &TypeInterner,
+    ty: TypeId,
+) -> Result<ClosedStorageType, SourceError> {
+    let native = native(types, ty)?;
+    let bytes = hirsel_types::encoding::canonical_type_encoding(types, ty)
+        .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+    Ok(ClosedStorageType {
+        ty: native,
+        source_type: hirsel_syntax::ContentHash::of_parts(
+            "hirsel.closed-storage-source-type.v1",
+            [bytes.as_slice()],
+        ),
+    })
+}
 fn literal(value: &hirsel_tir::Constant) -> PayloadLiteral {
     match value {
         hirsel_tir::Constant::Unit => PayloadLiteral::Unit,

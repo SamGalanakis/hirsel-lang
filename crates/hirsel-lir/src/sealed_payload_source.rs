@@ -5,6 +5,12 @@ use crate::ir::SourceAnchor;
 use crate::operation::NativeType;
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 
+mod profile;
+pub use profile::{
+    ClosedCapture, ClosedEnvironment, ClosedStorageCase, ClosedStorageFunction,
+    ClosedStorageProfile, ClosedStorageType, SourceStorageSelection,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum PayloadLiteral {
     Unit,
