@@ -1,0 +1,124 @@
+// image-rs 075e65d6 src/imageops/sample.rs:901-973 supplies the generic
+// view/pixel/tap structure and clamp-to-edge sampling. LICENSE-image-rs.
+// Integer sum/9 deliberately replaces floating point weighted accumulation.
+fn clamp(coordinate: u64, tap: u64, extent: u64) -> u64 {
+  if tap == 0 {
+    if coordinate == 0 {
+      0
+    } else {
+      coordinate - 1
+    }
+  } else if tap == 2 {
+    if coordinate == extent - 1 {
+      coordinate
+    } else {
+      coordinate + 1
+    }
+  } else {
+    coordinate
+  }
+}
+
+fn invert[P: plain](view: image.View, pixel: image.Pixel[P], x: u64, y: u64) -> Result[
+  P,
+  report.Problem
+] {
+  let value = image.sample(view, pixel, x, y)?
+  let mut channels: Inline[u64, 3] = [0, 0, 0]
+  for channel in 0u64..view.layout.channels {
+    channels[channel] = 255 - pixel.channel(value, channel)
+  }
+  Ok(pixel.make(channels))
+}
+
+fn blur[P: plain](view: image.View, pixel: image.Pixel[P], x: u64, y: u64) -> Result[
+  P,
+  report.Problem
+] {
+  let mut sums: Inline[u64, 3] = [0, 0, 0]
+  for dy in 0u64..3u64 {
+    let sy = clamp(y, dy, view.layout.height)
+    for dx in 0u64..3u64 {
+      let sx = clamp(x, dx, view.layout.width)
+      let value = image.sample(view, pixel, sx, sy)?
+      for channel in 0u64..view.layout.channels {
+        sums[channel] += pixel.channel(value, channel)
+      }
+    }
+  }
+  for channel in 0u64..view.layout.channels {
+    sums[channel] /= 9
+  }
+  Ok(pixel.make(sums))
+}
+
+fn row[P: plain](
+  view: image.View,
+  pixel: image.Pixel[P],
+  y: u64,
+  operation: report.Operation,
+  mut out: unique List[u8]
+) -> Result[(), report.Problem] {
+  for x in 0u64..view.layout.width {
+    let value = match operation {
+      Invert() => invert(view, pixel, x, y)?,
+      Blur() => blur(view, pixel, x, y)?,
+      Info() => return Error(Assembly()),
+    }
+    pixel.append(value, mut out)
+  }
+  Ok(())
+}
+
+// A borrowed halo reaches the whole immutable image, including neighboring
+// bands. Only the requested rows are produced; edges clamp at the image edge.
+// Each child opens its own scope for per-row cancellation checks.
+pub fn band[P: plain](
+  tasks: Tasks,
+  view: image.View,
+  pixel: image.Pixel[P],
+  first: u64,
+  end: u64,
+  operation: report.Operation
+) -> Result[unique Bytes, report.Problem] {
+  if first >= end || end > view.layout.height || end - first > 16 {
+    return Error(Assembly())
+  }
+  let Some(length) = int.checked_mul(end - first, view.layout.stride) else {
+    return Error(Codec(Overflow()))
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Bytes, report.Problem] {
+      let mut out: unique List[u8] = []
+      list.reserve(mut out, length)
+      for y in first..end {
+        match task.check_canceled(s) {
+          Ok(()) => (),
+          Error(Canceled(cause)) => return Error(Canceled(cause)),
+        }
+        row(view, pixel, y, operation, mut out)?
+      }
+      if list.len(out) != length {
+        return Error(Assembly())
+      }
+      Ok(bytes.from_list(take out))
+    }
+  )
+}
+
+pub fn render(
+  tasks: Tasks,
+  layout: image.Shape,
+  data: Bytes,
+  first: u64,
+  end: u64,
+  operation: report.Operation
+) -> Result[unique Bytes, report.Problem] {
+  let view = image.borrow_view(layout, data)?
+  if layout.channels == 1 {
+    band(tasks, view, image.GRAY, first, end, operation)
+  } else {
+    band(tasks, view, image.RGB, first, end, operation)
+  }
+}

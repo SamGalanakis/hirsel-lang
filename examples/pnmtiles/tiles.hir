@@ -1,0 +1,160 @@
+pub type Band {
+  first: u64,
+  end: u64,
+  length: u64,
+}
+
+pub fn parse_jobs(value: String) -> Result[u64, report.Problem] {
+  let Ok(count) = u64.parse(value) else {
+    return Error(Resource(Jobs()))
+  }
+  if count == 0 || count > 4 {
+    return Error(Resource(Jobs()))
+  }
+  Ok(count)
+}
+
+pub fn admit(layout: image.Shape, first: u64) -> Result[Band, report.Problem] {
+  if first >= layout.height {
+    return Error(Assembly())
+  }
+  let remaining = layout.height - first
+  let rows = if remaining < 16 {
+    remaining
+  } else {
+    16
+  }
+  let Some(end) = int.checked_add(first, rows) else {
+    return Error(Codec(Overflow()))
+  }
+  let Some(length) = int.checked_mul(rows, layout.stride) else {
+    return Error(Codec(Overflow()))
+  }
+  if length > 12288 {
+    return Error(Resource(RasterBytes()))
+  }
+  Ok(Band(first: first, end: end, length: length))
+}
+
+fn append(mut output: unique List[u8], data: Bytes, expected: u64, total: u64) -> Result[
+  (),
+  report.Problem
+] {
+  if bytes.len(data) != expected {
+    return Error(Assembly())
+  }
+  let Some(length) = int.checked_add(list.len(output), expected) else {
+    return Error(Codec(Overflow()))
+  }
+  if length > total {
+    return Error(Assembly())
+  }
+  bytes.append(mut output, data)
+  Ok(())
+}
+
+// jobs=1 is a direct serial path. The same generic kernel and row boundaries
+// are used without child task result crossing.
+fn serial(
+  tasks: Tasks,
+  layout: image.Shape,
+  source: Shared[Bytes],
+  operation: report.Operation
+) -> Result[unique Bytes, report.Problem] {
+  let mut output: unique List[u8] = []
+  list.reserve(mut output, layout.length)
+  let mut first = 0u64
+  while first < layout.height {
+    let band = admit(layout, first)?
+    let data = shared.with(
+      source,
+      fn(pixels: Bytes) -> Result[unique Bytes, report.Problem] {
+        filter.render(tasks, layout, pixels, band.first, band.end, operation)
+      }
+    )?
+    append(mut output, data, band.length, layout.length)?
+    first = band.end
+  }
+  Ok(bytes.from_list(take output))
+}
+
+// Bounded batches follow examples/parhash's TaskSet discipline. Completion
+// order discovers errors; indexed owned slots preserve row order. cancel_all
+// joins every unconsumed member before returning, including an error return.
+pub fn run(
+  tasks: Tasks,
+  layout: image.Shape,
+  take pixels: unique Bytes,
+  operation: report.Operation,
+  jobs: u64
+) -> Result[unique Bytes, report.Problem] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Resource(Jobs()))
+  }
+  pnm.check_raster(layout, pixels)?
+  let source = shared.freeze(take pixels)
+  if jobs == 1 {
+    return serial(tasks, layout, source, operation)
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Bytes, report.Problem] {
+      let mut output: unique List[u8] = []
+      list.reserve(mut output, layout.length)
+      let mut first = 0u64
+      while first < layout.height {
+        let mut pending: TaskSet[Result[unique Bytes, report.Problem]] of s = task.set(
+          s
+        )
+        let mut bands: List[Band] = []
+        let mut ordered: List[Option[unique Bytes]] = []
+        while list.len(bands) < jobs && first < layout.height {
+          let band = admit(layout, first)?
+          list.push(mut bands, band)
+          list.push(mut ordered, None())
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique Bytes, report.Problem] {
+                shared.with(
+                  source,
+                  fn(data: Bytes) -> Result[unique Bytes, report.Problem] {
+                    filter.render(tasks, layout, data, band.first, band.end, operation)
+                  }
+                )
+              }
+            )
+          )
+          first = band.end
+        }
+        while let Some(index) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, index)
+          match take joined {
+            Ok(data) => {
+              ordered[index] = Some(take data)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        let mut index = 0u64
+        for slot in take ordered {
+          match take slot {
+            Some(data) => append(mut output, data, bands[index].length, layout.length)?,
+            None() => return Error(Assembly()),
+          }
+          index += 1
+        }
+      }
+      if list.len(output) != layout.length {
+        return Error(Assembly())
+      }
+      Ok(bytes.from_list(take output))
+    }
+  )
+}

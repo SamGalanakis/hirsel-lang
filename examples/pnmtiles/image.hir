@@ -1,0 +1,150 @@
+// Checked layout and offset decisions are independent of file/task authority.
+pub type Shape {
+  width: u64,
+  height: u64,
+  channels: u64,
+  stride: u64,
+  length: u64,
+}
+
+pub type View {
+  layout: Shape,
+  data: Bytes,
+}
+
+pub type Rgb {
+  red: u8,
+  green: u8,
+  blue: u8,
+}
+
+// A pixel dictionary is the algorithm seam, instantiated as u8 and Rgb.
+// Reading and writing a pixel are pure, and a plain P cannot retain the input.
+pub type Pixel[P: plain] {
+  read: fn(Bytes, u64) -> P uses {},
+  channel: fn(P, u64) -> u64 uses {},
+  make: fn(Inline[u64, 3]) -> P uses {},
+  append: fn(P, mut unique List[u8]) -> () uses {},
+}
+
+pub fn checked_layout(width: u64, height: u64, channels: u64) -> Result[
+  Shape,
+  report.Problem
+] {
+  if width == 0 || height == 0 || width > 256 || height > 256 {
+    return Error(Codec(Dimensions()))
+  }
+  if channels != 1 && channels != 3 {
+    return Error(Unsupported())
+  }
+  let Some(stride) = int.checked_mul(width, channels) else {
+    return Error(Codec(Overflow()))
+  }
+  let Some(length) = int.checked_mul(stride, height) else {
+    return Error(Codec(Overflow()))
+  }
+  if length > 196608 {
+    return Error(Resource(RasterBytes()))
+  }
+  Ok(
+    Shape(
+      width: width,
+      height: height,
+      channels: channels,
+      stride: stride,
+      length: length
+    )
+  )
+}
+
+pub fn borrow_view(layout: Shape, data: Bytes) -> Result[View, report.Problem] in data {
+  if bytes.len(data) != layout.length {
+    return Error(Assembly())
+  }
+  Ok(View(layout: layout, data: data))
+}
+
+pub fn offset(layout: Shape, x: u64, y: u64) -> Result[u64, report.Problem] {
+  if x >= layout.width || y >= layout.height {
+    return Error(Assembly())
+  }
+  let Some(row) = int.checked_mul(y, layout.stride) else {
+    return Error(Codec(Overflow()))
+  }
+  let Some(column) = int.checked_mul(x, layout.channels) else {
+    return Error(Codec(Overflow()))
+  }
+  let Some(start) = int.checked_add(row, column) else {
+    return Error(Codec(Overflow()))
+  }
+  if start > layout.length || layout.channels > layout.length - start {
+    return Error(Assembly())
+  }
+  Ok(start)
+}
+
+pub fn sample[P: plain](view: View, pixel: Pixel[P], x: u64, y: u64) -> Result[
+  P,
+  report.Problem
+] {
+  let start = offset(view.layout, x, y)?
+  Ok(pixel.read(view.data, start))
+}
+
+fn gray_read(data: Bytes, start: u64) -> u8 {
+  data[start]
+}
+
+fn gray_channel(value: u8, channel: u64) -> u64 {
+  int.widen(value)
+}
+
+fn gray_make(values: Inline[u64, 3]) -> u8 {
+  int.narrow(values[0])
+}
+
+fn gray_append(value: u8, mut out: unique List[u8]) {
+  list.push(mut out, value)
+}
+
+fn rgb_read(data: Bytes, start: u64) -> Rgb {
+  Rgb(red: data[start], green: data[start + 1], blue: data[start + 2])
+}
+
+fn rgb_channel(value: Rgb, channel: u64) -> u64 {
+  if channel == 0 {
+    int.widen(value.red)
+  } else if channel == 1 {
+    int.widen(value.green)
+  } else {
+    int.widen(value.blue)
+  }
+}
+
+fn rgb_make(values: Inline[u64, 3]) -> Rgb {
+  Rgb(
+    red: int.narrow(values[0]),
+    green: int.narrow(values[1]),
+    blue: int.narrow(values[2])
+  )
+}
+
+fn rgb_append(value: Rgb, mut out: unique List[u8]) {
+  list.push(mut out, value.red)
+  list.push(mut out, value.green)
+  list.push(mut out, value.blue)
+}
+
+pub const GRAY: Pixel[u8] = Pixel(
+  read: gray_read,
+  channel: gray_channel,
+  make: gray_make,
+  append: gray_append
+)
+
+pub const RGB: Pixel[Rgb] = Pixel(
+  read: rgb_read,
+  channel: rgb_channel,
+  make: rgb_make,
+  append: rgb_append
+)

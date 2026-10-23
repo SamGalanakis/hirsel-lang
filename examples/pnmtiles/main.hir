@@ -1,0 +1,245 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  input: Path,
+  output: Path,
+  root: Path,
+  operation: report.Operation,
+  jobs: u64,
+  interruptible: bool,
+}
+
+type Raster {
+  layout: image.Shape,
+  pixels: unique Bytes,
+}
+
+fn arguments(args: Args) -> Result[Options, report.Problem] {
+  let count = arg.len(args)
+  if count < 3 || count > 8 {
+    return Error(Usage())
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(input) = arg.path(args, 2) else {
+    return Error(Usage())
+  }
+  let expected = if command == "info" {
+    3u64
+  } else {
+    6u64
+  }
+  let interruptible = count == expected + 1
+  if count != expected && !interruptible {
+    return Error(Usage())
+  }
+  if interruptible {
+    let Ok(flag) = arg.text(args, expected) else {
+      return Error(Usage())
+    }
+    if flag != "--interruptible" {
+      return Error(Usage())
+    }
+  }
+  if command == "info" {
+    return Ok(
+      Options(
+        input: input,
+        output: input,
+        root: root,
+        operation: Info(),
+        jobs: 1,
+        interruptible: interruptible
+      )
+    )
+  }
+  if command != "filter" {
+    return Error(Usage())
+  }
+  let Ok(output) = arg.path(args, 3) else {
+    return Error(Usage())
+  }
+  let Ok(name) = arg.text(args, 4) else {
+    return Error(Usage())
+  }
+  let operation = report.operation(name)?
+  let Ok(value) = arg.text(args, 5) else {
+    return Error(Usage())
+  }
+  let jobs = tiles.parse_jobs(value)?
+  Ok(
+    Options(
+      input: input,
+      output: output,
+      root: root,
+      operation: operation,
+      jobs: jobs,
+      interruptible: interruptible
+    )
+  )
+}
+
+// Header admission precedes each 1-byte request. Raster layout arithmetic is
+// checked before the bounded std reader requests or allocates any raster bytes.
+// No metadata size or seek is trusted, and a final probe rejects extra images.
+fn read(d: Dir, input: Path) -> Result[unique Raster, report.Problem] {
+  let mut f = match file.open(d, input) {
+    Ok(value) => take value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let mut state = pnm.decoder()
+  let mut done = false
+  while !done {
+    pnm.admit(state)?
+    let mut byte: List[u8] = []
+    let count = match file.read(d, mut f, mut byte, 1) {
+      Ok(count) => count,
+      Error(error) => return Error(report.file_error(Read(), error)),
+    }
+    if count != 1 {
+      return Error(Codec(Header()))
+    }
+    done = pnm.feed(mut state, byte[0])?
+  }
+  let layout = pnm.finish(state)?
+  let pixels = match file.read_all_bounded(d, mut f, layout.length) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(Codec(TrailingRaster())),
+    Error(File(error)) => return Error(report.file_error(Read(), error)),
+  }
+  pnm.check_raster(layout, pixels)?
+  Ok(unique Raster(layout: layout, pixels: take pixels))
+}
+
+fn publish(d: Dir, output: Path, layout: image.Shape, pixels: Bytes) -> Result[
+  (),
+  report.Problem
+] {
+  pnm.check_raster(layout, pixels)?
+  let mut destination = match file.create_atomic(d, output) {
+    Ok(value) => take value,
+    Error(error) => return Error(report.file_error(Create(), error)),
+  }
+  let header = pnm.encode_header(layout)
+  match file.write_all(d, mut destination, header) {
+    Ok(()) => (),
+    Error(error) => return Error(report.file_error(Write(), error)),
+  }
+  match file.write_all(d, mut destination, pixels) {
+    Ok(()) => (),
+    Error(error) => return Error(report.file_error(Write(), error)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(report.file_error(Commit(), error)),
+  }
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[
+  report.Metadata,
+  report.Problem
+] {
+  let raster = read(d, options.input)?
+  let Raster(layout: layout, pixels: pixels) = take raster
+  if options.operation != Info() {
+    let filtered = tiles.run(
+      tasks,
+      layout,
+      take pixels,
+      options.operation,
+      options.jobs
+    )?
+    publish(d, options.output, layout, filtered)?
+  }
+  Ok(
+    report.Metadata(
+      width: layout.width,
+      height: layout.height,
+      channels: layout.channels,
+      bytes: layout.length,
+      operation: options.operation
+    )
+  )
+}
+
+// An interruptible workflow races the entire read/filter/publication against
+// the granted Interrupt source. select cancels and joins the loser. A pending
+// read has no bytes/effect and is canceled through the actual provider wait.
+fn run_interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  report.Metadata,
+  report.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[report.Metadata, report.Problem] {
+      let mut pending: TaskSet[Result[report.Metadata, report.Problem]] of s = task.set(
+        s
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[report.Metadata, report.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[report.Metadata, report.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Canceled(Requested()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[report.Metadata, report.Problem] {
+  let options = arguments(args)?
+  let d = match io.dir(rt, options.root) {
+    Ok(value) => value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    run_interruptible(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(meta) => {
+      out.write(output, report.summary(meta))?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, report.diagnostic(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

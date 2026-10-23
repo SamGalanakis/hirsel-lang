@@ -1,0 +1,158 @@
+// Ported structure: image-rs 075e65d6 src/codecs/pnm/decoder.rs:303-473.
+// MIT license: LICENSE-image-rs. Only binary 8-bit gray/RGB are supported.
+// The incremental header scanner never looks beyond the one raster separator.
+pub type Decoder {
+  phase: u64,
+  count: u64,
+  comment: bool,
+  digits: bool,
+  value: u64,
+  width: u64,
+  height: u64,
+  channels: u64,
+}
+
+pub fn decoder() -> Decoder {
+  Decoder(
+    phase: 0,
+    count: 0,
+    comment: false,
+    digits: false,
+    value: 0,
+    width: 0,
+    height: 0,
+    channels: 0
+  )
+}
+
+pub fn whitespace(byte: u8) -> bool {
+  byte == b' ' || byte == b'\t' || byte == b'\n' || byte == b'\r' || byte == 11u8 || byte == 12u8
+}
+
+// Call before requesting the next byte; the cap byte itself may end the header.
+pub fn admit(state: Decoder) -> Result[(), report.Problem] {
+  if state.count >= 4096 {
+    Error(Resource(HeaderBytes()))
+  } else {
+    Ok(())
+  }
+}
+
+fn decimal(mut state: Decoder, byte: u8) -> Result[(), report.Problem] {
+  let digit: u64 = int.widen(byte - b'0')
+  let Some(times) = int.checked_mul(state.value, 10u64) else {
+    return Error(Codec(Overflow()))
+  }
+  let Some(value) = int.checked_add(times, digit) else {
+    return Error(Codec(Overflow()))
+  }
+  state.value = value
+  state.digits = true
+  Ok(())
+}
+
+fn finish_field(mut state: Decoder) -> Result[bool, report.Problem] {
+  if state.phase == 3 {
+    state.width = state.value
+  } else if state.phase == 4 {
+    state.height = state.value
+  } else {
+    if state.value != 255 {
+      return Error(Codec(Maxval()))
+    }
+    state.phase = 6
+    return Ok(true)
+  }
+  state.phase += 1
+  state.value = 0
+  state.digits = false
+  Ok(false)
+}
+
+pub fn feed(mut state: Decoder, byte: u8) -> Result[bool, report.Problem] {
+  admit(state)?
+  state.count += 1
+  if state.phase == 0 {
+    if byte != b'P' {
+      return Error(Codec(Header()))
+    }
+    state.phase = 1
+    return Ok(false)
+  }
+  if state.phase == 1 {
+    if byte == b'5' {
+      state.channels = 1
+    } else if byte == b'6' {
+      state.channels = 3
+    } else if byte >= b'1' && byte <= b'7' {
+      return Error(Unsupported())
+    } else {
+      return Error(Codec(Header()))
+    }
+    state.phase = 2
+    return Ok(false)
+  }
+  if state.phase == 2 {
+    if !whitespace(byte) {
+      return Error(Codec(Header()))
+    }
+    state.phase = 3
+    return Ok(false)
+  }
+  if state.phase >= 6 {
+    return Error(Codec(Header()))
+  }
+  if state.comment {
+    if byte == b'\n' || byte == b'\r' {
+      state.comment = false
+    }
+    return Ok(false)
+  }
+  if byte >= b'0' && byte <= b'9' {
+    decimal(mut state, byte)?
+    return Ok(false)
+  }
+  if whitespace(byte) {
+    if state.digits {
+      return finish_field(mut state)
+    }
+    return Ok(false)
+  }
+  if byte == b'#' && !state.digits {
+    state.comment = true
+    return Ok(false)
+  }
+  if state.phase == 5 && state.digits {
+    return Error(Codec(Header()))
+  }
+  Error(Codec(Decimal()))
+}
+
+pub fn finish(state: Decoder) -> Result[image.Shape, report.Problem] {
+  if state.phase != 6 {
+    return Error(Codec(Header()))
+  }
+  image.checked_layout(state.width, state.height, state.channels)
+}
+
+// Canonical output has no comments and exactly one LF raster separator.
+pub fn encode_header(layout: image.Shape) -> unique Bytes {
+  let mut out: List[u8] = []
+  bytes.append(mut out, string.as_bytes(report.magic(layout.channels)))
+  list.push(mut out, b'\n')
+  u64.format_into(layout.width, mut out)
+  list.push(mut out, b' ')
+  u64.format_into(layout.height, mut out)
+  bytes.append(mut out, b"\n255\n")
+  bytes.from_list(take out)
+}
+
+pub fn check_raster(layout: image.Shape, data: Bytes) -> Result[(), report.Problem] {
+  if bytes.len(data) < layout.length {
+    Error(Codec(ShortRaster()))
+  } else if bytes.len(data) > layout.length {
+    Error(Codec(TrailingRaster()))
+  } else {
+    Ok(())
+  }
+}

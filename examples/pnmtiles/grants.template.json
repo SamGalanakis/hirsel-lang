@@ -1,0 +1,27 @@
+{
+  "args": [
+    "filter",
+    "data",
+    "sample-2x3-c3-blur.pnm",
+    "output.ppm",
+    "blur",
+    "4"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "REPLACE_WITH_ABSOLUTE_IMAGE_DIRECTORY",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

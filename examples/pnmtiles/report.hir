@@ -1,0 +1,103 @@
+// Application errors are data. Resource refusal never raises a language check.
+pub type CodecError = Header | Decimal | Overflow | Dimensions | Maxval | ShortRaster | TrailingRaster
+
+pub type Limit = HeaderBytes | RasterBytes | Jobs
+
+pub type Stage = Open | Read | Create | Write | Commit
+
+pub type Problem = Usage | Unsupported | Codec(CodecError) | Resource(Limit) | File(
+  Stage,
+  FileError
+) | Grant | Canceled(CancelCause) | Assembly
+
+pub type Operation = Info | Invert | Blur
+
+pub type Metadata {
+  width: u64,
+  height: u64,
+  channels: u64,
+  bytes: u64,
+  operation: Operation,
+}
+
+pub fn file_error(stage: Stage, error: FileError) -> Problem {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(stage, error),
+  }
+}
+
+pub fn operation(name: String) -> Result[Operation, Problem] {
+  match name {
+    "invert" => Ok(Invert()),
+    "blur" => Ok(Blur()),
+    _ => Error(Usage()),
+  }
+}
+
+pub fn magic(channels: u64) -> String {
+  if channels == 1 {
+    "P5"
+  } else {
+    "P6"
+  }
+}
+
+pub fn summary(meta: Metadata) -> unique Bytes {
+  let mut out: List[u8] = []
+  match meta.operation {
+    Invert() => bytes.append(mut out, b"invert "),
+    Blur() => bytes.append(mut out, b"blur "),
+    Info() => (),
+  }
+  bytes.append(mut out, string.as_bytes(magic(meta.channels)))
+  list.push(mut out, b' ')
+  u64.format_into(meta.width, mut out)
+  list.push(mut out, b' ')
+  u64.format_into(meta.height, mut out)
+  list.push(mut out, b' ')
+  u64.format_into(meta.bytes, mut out)
+  list.push(mut out, b'\n')
+  bytes.from_list(take out)
+}
+
+fn codec_name(error: CodecError) -> String {
+  match error {
+    Header() => "header",
+    Decimal() => "decimal",
+    Overflow() => "overflow",
+    Dimensions() => "dimensions",
+    Maxval() => "maxval",
+    ShortRaster() => "short_raster",
+    TrailingRaster() => "trailing_raster",
+  }
+}
+
+pub fn problem_name(problem: Problem) -> String {
+  match problem {
+    Usage() => "usage",
+    Unsupported() => "unsupported",
+    Codec(error) => codec_name(error),
+    Resource(HeaderBytes()) => "header_limit",
+    Resource(RasterBytes()) => "raster_limit",
+    Resource(Jobs()) => "jobs",
+    File(_, NotGranted()) => "file_denied",
+    File(_, PermissionDenied()) => "file_denied",
+    File(Open(), _) => "file_open",
+    File(Read(), _) => "file_read",
+    File(Create(), _) => "file_create",
+    File(Write(), _) => "file_write",
+    File(Commit(), _) => "file_commit",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+    Assembly() => "assembly",
+  }
+}
+
+pub fn diagnostic(problem: Problem) -> unique Bytes {
+  let mut out: List[u8] = []
+  bytes.append(mut out, b"pnmtiles: ")
+  bytes.append(mut out, string.as_bytes(problem_name(problem)))
+  list.push(mut out, b'\n')
+  bytes.from_list(take out)
+}

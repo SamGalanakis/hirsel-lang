@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "pnmtiles",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "pnm.hir",
+      "module": [
+        "pnm"
+      ]
+    },
+    {
+      "path": "image.hir",
+      "module": [
+        "image"
+      ]
+    },
+    {
+      "path": "filter.hir",
+      "module": [
+        "filter"
+      ]
+    },
+    {
+      "path": "tiles.hir",
+      "module": [
+        "tiles"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}
