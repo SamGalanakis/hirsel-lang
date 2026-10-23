@@ -15,7 +15,9 @@ unsafe extern "C" fn entry(
 ) -> u8 {
     unsafe {
         let _role = crate::tasks::role::Guard::new(ctx);
-        let block = crate::alloc::hirsel_rt_v2_alloc(ctx, 1, 128, 8, crate::DOMAIN_HEAP, 0);
+        // This is plain owned storage, independent of reserved runtime layouts
+        // (index one belongs to the streaming-walk finalizer).
+        let block = crate::text::allocate_bytes(ctx, &[0; 128]).owner;
         crate::failure::hirsel_rt_v2_failure_begin(ctx, 1, 1, 1, 0);
         if INTERNAL.load(Ordering::Relaxed) {
             // FAIL-3: this still-owned allocation is reclaimed by abandonment.
