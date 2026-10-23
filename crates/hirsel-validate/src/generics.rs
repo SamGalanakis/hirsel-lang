@@ -475,6 +475,19 @@ impl Checker<'_> {
     }
     pub(super) fn nominal_bounds(&mut self) {
         let context = self.generic_declarations();
+        // A function actual can disappear completely during substitution (for
+        // example, a parameter absent from the value signature). Validate its
+        // declaration identity before relying on the instantiated callable's
+        // types; an empty bound list still requires a well-formed actual.
+        if self.body.rvalues.iter().any(|value| {
+            matches!(value, Rvalue::FunctionReference { arguments, .. }
+            if arguments.iter().any(|argument| {
+                matches!(argument, GenericArgument::Type(actual)
+                    if !generic_references_valid(self.t, *actual, &context))
+            }))
+        }) {
+            self.error(ViolationKind::InvalidTypeGraph);
+        }
         let mut pending: Vec<_> = self
             .body
             .locals
