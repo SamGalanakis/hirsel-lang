@@ -2568,6 +2568,12 @@ conformance/MEM/MEM-4-seal-definition.hir
 conformance/MEM/MEM-4-seal-noalloc-bad.hir
 conformance/MEM/MEM-4-seal-noalloc-ok.hir
 conformance/MEM/MEM-4-tour-12-arenas-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-direct-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-nested-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-nominal-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-swapped-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-transparent-run.hir
+conformance/MEM/MEM-5-alias-cleanup-24-unbounded-bad.hir
 conformance/MEM/MEM-5-allocating-signature-call-bad.hir
 conformance/MEM/MEM-5-allocating-signature-call-ok.hir
 conformance/MEM/MEM-5-array-bad.hir

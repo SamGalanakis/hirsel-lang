@@ -1,0 +1,30 @@
+// rule: MEM-5
+// expect: run
+
+resource type Token {
+  n: u64,
+}
+@noalloc drop(x) {
+  ()
+}
+
+@noalloc
+fn relay[R: noalloc_drop](read: @noalloc fn() -> R uses {}, divisor: u64) -> R uses {} {
+  let output = read()
+  let _ = 1u64 / divisor
+  take output
+}
+
+@noalloc
+fn one() -> Token uses {} {
+  Token(n: 7)
+}
+
+pub fn main() -> Result[(), u64] {
+  let value = relay(one, 1u64)
+  let n = value.n
+  if n != 7u64 {
+    return Error(1)
+  }
+  Ok(())
+}

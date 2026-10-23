@@ -831,6 +831,8 @@ impl Checker<'_> {
         argument: ExprId,
         callee: ExprId,
     ) -> bool {
+        let actual = self.cleanup_contract(actual);
+        let expected = self.cleanup_contract(expected);
         let root = (actual, expected);
         let mut pending = vec![(actual, expected)];
         let mut seen = HashSet::default();
@@ -946,6 +948,14 @@ impl Checker<'_> {
         }
         true
     }
+    /// Alias substitution and callback signatures may spell the same cleanup
+    /// promise as NoAlloc or DependsOn. Resolve from the exact declaring binder
+    /// before invariant comparison, as V does for owned receipts. Traverse the
+    /// whole contract here so nested callable binders retain their own bounds.
+    fn cleanup_contract(&mut self, root: TypeId) -> TypeId {
+        instantiate_cleanup_bounds(self.t, root, &self.declarations())
+            .unwrap_or_else(|error| self.proof_failure(error, root))
+    }
     /// Whether an erased state's captures (CLO-2) or a cleanup summary
     /// (MEM-5) differ between two rows that must state the same contract.
     fn state_difference(&mut self, a: &Type, b: &Type) -> Option<(RuleId, &'static str)> {
@@ -983,6 +993,8 @@ impl Checker<'_> {
     /// promises exactly what the expected type states, at every depth. v22
     /// is silent here; this is the conservative reading (spec #92).
     fn keeps_exact_promises(&mut self, actual: TypeId, expected: TypeId, span: Span) -> bool {
+        let actual = self.cleanup_contract(actual);
+        let expected = self.cleanup_contract(expected);
         let mut pending = vec![(actual, expected)];
         let mut seen = HashSet::default();
         while let Some((actual, expected)) = pending.pop() {

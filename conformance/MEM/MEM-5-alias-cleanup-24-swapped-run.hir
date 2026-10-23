@@ -1,0 +1,44 @@
+// rule: MEM-5
+// expect: run
+type Pair[A, B] {
+  first: A,
+  second: B,
+}
+
+type Alias2[A, B] = Pair[B, A]
+
+resource type Token {
+  n: u64,
+}
+@noalloc drop(x) {
+  ()
+}
+
+@noalloc
+fn relay[R: noalloc_drop](read: @noalloc fn() -> Alias2[R, bool] uses {}, divisor: u64) -> Alias2[
+  R,
+  bool
+] uses {} {
+  let output = read()
+  let _ = 1u64 / divisor
+  take output
+}
+
+@noalloc
+fn one() -> Alias2[Token, bool] uses {} {
+  Pair(first: true, second: Token(n: 7))
+}
+
+pub fn main() -> Result[(), u64] {
+  let value = relay(one, 1u64)
+  let n = {
+    if !value.first {
+      return Error(2)
+    }
+    value.second.n
+  }
+  if n != 7u64 {
+    return Error(1)
+  }
+  Ok(())
+}

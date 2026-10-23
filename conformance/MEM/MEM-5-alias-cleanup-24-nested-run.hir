@@ -1,0 +1,41 @@
+// rule: MEM-5
+// expect: run
+type Wrapped[T] {
+  payload: (T,),
+}
+
+type Alias[T] = Wrapped[Wrapped[T]]
+
+resource type Token {
+  n: u64,
+}
+@noalloc drop(x) {
+  ()
+}
+
+@noalloc
+fn relay[R: noalloc_drop](read: @noalloc fn() -> Alias[R] uses {}, divisor: u64) -> Alias[
+  R
+] uses {} {
+  let output = read()
+  let _ = 1u64 / divisor
+  take output
+}
+
+@noalloc
+fn one() -> Alias[Token] uses {} {
+  Wrapped(payload: (Wrapped(payload: (Token(n: 7),)),))
+}
+
+pub fn main() -> Result[(), u64] {
+  let value = relay(one, 1u64)
+  let n = {
+    let Wrapped(payload: (inner,)) = take value
+    let Wrapped(payload: (token,)) = take inner
+    token.n
+  }
+  if n != 7u64 {
+    return Error(1)
+  }
+  Ok(())
+}
