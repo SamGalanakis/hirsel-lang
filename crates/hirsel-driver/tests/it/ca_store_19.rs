@@ -991,3 +991,39 @@ fn selected_generic_generators_reuse_ordinary_text_under_canonical_actuals() {
         assert_eq!(oracle.instance_body(&path, &arguments(&oracle, "Point")).unwrap(), Some(selected));
     });
 }
+
+#[test]
+fn enclosing_products_replay_selected_generated_bodies_without_execution() {
+    with_compiler_stack(|| {
+        let source = "fn made()->u32 uses {}=comptime Ok(codegen.body(\"fn()->u32 uses {}{7u32}\"))\nconst A:u32=comptime made()\nconst B:u32=comptime A+1u32\nfn value()->u32{comptime made()}\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        assert_eq!(seed.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(8));
+        seed.lower_to_tir(&definition("value")).unwrap();
+        let text = seed.generated_source(&definition("made")).unwrap().text.clone();
+        let mut fresh = signature_session(store.clone(), source, true);
+        fresh.adapters.modes = None; fresh.adapters.lowering = None;
+        assert_eq!(fresh.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(8));
+        assert_eq!(fresh.generated_source(&definition("made")).unwrap().text, text);
+        fresh.lower_to_tir(&definition("value")).unwrap();
+        fresh.lower_to_tir(&definition("value")).unwrap();
+        for name in ["A", "B", "value"] {
+            assert_eq!(fresh.recompute_count(&definition(name), QueryKind::Modes), 0);
+            assert_eq!(fresh.lower_adapter_calls(&definition(name)), 0);
+        }
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, true);
+        remote.adapters.modes = None; remote.adapters.lowering = None;
+        assert!(remote.materialize_constant(&definition("B")).is_err());
+        let mut oracle = signature_session(store.clone(), source, true).with_verify_store(store::VerifyStore::Recompute);
+        assert_eq!(oracle.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(8));
+        oracle.lower_to_tir(&definition("value")).unwrap();
+        let mut changed = signature_session(store, &source.replace("7u32", "9u32"), true);
+        changed.adapters.modes = None; changed.adapters.lowering = None;
+        assert!(changed.materialize_constant(&definition("B")).is_err());
+    });
+}
