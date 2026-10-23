@@ -1751,6 +1751,7 @@ type Parser {
   state: u8,
   states: unique List[u8],
   tags: Map[String, String],
+  anchors: Set[String],
   events: List[Event],
   entry: u64,
 }
@@ -1773,6 +1774,11 @@ fn event(kind: u8, start: u64, end: u64) -> unique Event uses {} {
 // The next event emitted after a block `-` or `:` records its position.
 fn emit(mut p: unique Parser, take e: unique Event) -> () uses {} {
   let mut emitted = take e
+  if emitted.kind == E_DOCUMENT_START {
+    p.anchors = core@1/set.empty()
+  } else if emitted.anchor != "" {
+    core@1/set.insert(mut p.anchors, unique emitted.anchor)
+  }
   emitted.entry = p.entry
   p.entry = NONE
   core@1/list.push(mut p.events, take emitted)
@@ -1940,6 +1946,11 @@ fn parse_node(
 ) -> Result[(), YamlError] uses {} {
   let first = tokens[p.at]
   if first.kind == T_ALIAS {
+    // saphyr Parser::parse_node checks the name before parsing later tokens:
+    // an unknown alias wins over a following grammar error (e.g. `*a x`).
+    if !core@1/set.contains(p.anchors, first.text) {
+      return Error(syntax(data, first.start))
+    }
     pop_state(mut p)
     p.at += 1
     let mut e = event(E_ALIAS, first.start, first.end)
@@ -2328,6 +2339,7 @@ fn parse_events(data: Bytes) -> Result[List[Event], YamlError] uses {} {
     state: S_STREAM_START,
     states: [],
     tags: core@1/map.empty(),
+    anchors: core@1/set.empty(),
     events: [],
     entry: NONE
   )
