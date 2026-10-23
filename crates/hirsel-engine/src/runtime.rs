@@ -3,8 +3,10 @@
 use hirsel_artifact_store::{Action, Address, Reference};
 use std::task::Poll;
 mod budget;
+mod future_task;
 mod scheduler;
 pub use budget::{MemoryReservation, ProcessBudget};
+pub use future_task::{LocalFutureTask, QueryReads};
 pub use scheduler::{
     AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
 };

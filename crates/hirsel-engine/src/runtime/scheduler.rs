@@ -966,7 +966,6 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
             charged,
         });
         let discard = state.nodes[&query].discard;
-        let live = state.nodes[&query].live;
         if discard || state.stopped {
             // Drop without holding the shared graph lock.
             drop(state);
@@ -974,6 +973,9 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 locals.remove(&query);
             }));
             state = shared.lock();
+            // A new request may attach while home-thread destruction runs
+            // without the graph lock. Re-read liveness after that handoff.
+            let live = state.nodes.get(&query).is_some_and(|node| node.live);
             if live && !state.stopped {
                 state.restart(query);
             } else {
