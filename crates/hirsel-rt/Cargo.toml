@@ -18,6 +18,8 @@ memcheck = []
 # ThreadSanitizer fiber annotations, for builds with `-Zsanitizer=thread`.
 tsan = []
 measurement = []
+# Temporary E1 qualification build; default admission remains off.
+ordered-qualification = []
 
 [dependencies]
 serde_json = "1"

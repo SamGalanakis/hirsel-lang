@@ -56,13 +56,29 @@ impl Selected {
 /// `--hirsel-replay <tape>` alone, or an optional `--hirsel-record <tape>` prefix
 /// before the ordinary launch input. Replay refuses a recording bound to other code.
 pub(crate) fn select(
-    arguments: Vec<OsString>,
+    mut arguments: Vec<OsString>,
     program: [u8; 32],
     entry: &str,
     roots: u8,
     escapes: bool,
     fueled: bool,
 ) -> Result<Selected, RunRefusal> {
+    let policy = if arguments
+        .first()
+        .is_some_and(|flag| flag == "--hirsel-replay-policy")
+    {
+        let policy = arguments
+            .get(1)
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                replay_policy_error("expected a JSON object after --hirsel-replay-policy")
+            })?;
+        let policy = replay_policy(policy)?;
+        arguments.drain(..2);
+        Some(policy)
+    } else {
+        None
+    };
     if arguments
         .first()
         .is_some_and(|flag| flag == "--hirsel-replay")
@@ -73,9 +89,30 @@ pub(crate) fn select(
                 detail: "expected only --hirsel-replay <tape>".into(),
             });
         };
-        let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
+        let (io, mut run) = crate::host_launch::replay(std::path::Path::new(path))?;
+        if let Some(policy) = policy {
+            let admission = crate::tasks::ordered::admission::Admission::prepare(Some(&run))
+                .map_err(|error| replay_policy_error(&error))?;
+            if !admission.is_some_and(|admission| admission.enabled()) {
+                return Err(replay_policy_error(
+                    "requires qualified FIFO cooperative execution",
+                ));
+            }
+            let identity = run.identity();
+            let mut record = run.record().clone();
+            record.placement = Some(policy);
+            run = record.validated()?;
+            assert_eq!(
+                run.identity(),
+                identity,
+                "replay policy never changes identity"
+            );
+        }
         let run = run.bind(&facts(program, entry, roots, escapes, fueled)?)?;
         return Ok(Selected::Replay { run, io });
+    }
+    if policy.is_some() {
+        return Err(replay_policy_error("requires --hirsel-replay <tape>"));
     }
     let options = live_options(&arguments)?;
     Ok(Selected::Live {
@@ -90,6 +127,35 @@ pub(crate) fn select(
         tape: options.tape,
         revocations: options.revocations,
     })
+}
+
+fn replay_policy_error(detail: &str) -> RunRefusal {
+    RunRefusal::Invalid {
+        field: "replay.policy".into(),
+        detail: detail.into(),
+    }
+}
+
+/// A fresh host policy is separate from recorded placement provenance. Only
+/// these nonidentity Ordered knobs are accepted: no cores, affinity, sidecars
+/// or new authority can be requested through replay.
+fn replay_policy(json: &str) -> Result<hirsel_run_config::Placement, RunRefusal> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| replay_policy_error(&e.to_string()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| replay_policy_error("expected a JSON object"))?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "commit" | "reorder" | "run_ahead" | "speculation_bytes"
+        )
+    }) {
+        return Err(replay_policy_error(
+            "expected only commit, reorder, run_ahead or speculation_bytes",
+        ));
+    }
+    hirsel_run_config::Placement::from_json(json.as_bytes())
 }
 pub(crate) struct LiveOptions<'a> {
     pub input: &'a [OsString],
@@ -213,6 +279,109 @@ fn select_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_policy_accepts_only_ordered_nonidentity_knobs() {
+        let policy = replay_policy(
+            r#"{"commit":"dedicated","reorder":"off","run_ahead":3,"speculation_bytes":4096}"#,
+        )
+        .unwrap();
+        let record = RunConfig::empty([1; 32], "entry@1/main".into(), LaunchKind::Main);
+        let before = record.validated().unwrap();
+        let mut record = record;
+        record.placement = Some(policy);
+        let after = record.validated().unwrap();
+        assert_eq!(before.canonical(), after.canonical());
+        assert_eq!(before.identity(), after.identity());
+        for json in [
+            "[]",
+            "null",
+            r#"{"cores":8}"#,
+            r#"{"control":"socket"}"#,
+            r#"{"metrics":"file"}"#,
+            r#"{"io":{}}"#,
+            r#"{"run_ahead":65}"#,
+            r#"{"commit":"other"}"#,
+            r#"{"commit":"shared","commit":"dedicated"}"#,
+            r#"{"run_ahead":1.0}"#,
+        ] {
+            assert!(replay_policy(json).is_err(), "{json}");
+        }
+        assert!(
+            select(
+                vec!["--hirsel-replay-policy".into(), "{}".into(), "--".into()],
+                [1; 32],
+                "entry@1/main",
+                0,
+                false,
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn replay_policy_requires_qualified_cooperative_admission() {
+        use crate::launch::{RecordedRun, Recording, render_recording};
+        let entry = "standalone@0/main";
+        let scratch = tempfile::tempdir().unwrap();
+        let tape = scratch.path().join("tape");
+        for provider in ["tasks.cooperative@1", "tasks.free@1"] {
+            let mut record = RunConfig::empty([1; 32], entry.into(), LaunchKind::Main);
+            record.io = Some(hirsel_run_schema::IoGrants {
+                tasks: Some(provider.into()),
+                ..Default::default()
+            });
+            let run = record.validated().unwrap();
+            let recording = Recording {
+                arguments: vec![],
+                run_identity: run.identity(),
+                hash_seed: 0,
+                random_seed: 0,
+                test_seed: 0,
+                binding: Some(RecordedRun {
+                    canonical: run.canonical().to_vec(),
+                    placement: None,
+                    admitted_at: 0,
+                    revocation: None,
+                    instance: None,
+                }),
+                tree: crate::io::Tree::new(Default::default()).unwrap(),
+                events: vec![],
+            };
+            let bytes = render_recording(&recording).unwrap();
+            std::fs::write(&tape, &bytes).unwrap();
+            let selected = select(
+                vec![
+                    "--hirsel-replay-policy".into(),
+                    r#"{"commit":"dedicated","reorder":"off"}"#.into(),
+                    "--hirsel-replay".into(),
+                    tape.clone().into(),
+                ],
+                [1; 32],
+                entry,
+                ROOT_IO,
+                false,
+                false,
+            );
+            if provider == "tasks.cooperative@1" && crate::tasks::ordered::admission::qualified() {
+                let Selected::Replay { run: selected, .. } = selected.unwrap() else {
+                    panic!("expected replay");
+                };
+                assert_eq!(selected.run().identity(), run.identity());
+                assert_eq!(
+                    selected.run().record().placement.as_ref().unwrap().commit,
+                    Some(hirsel_run_config::Commit::Dedicated)
+                );
+            } else {
+                assert!(
+                    matches!(selected, Err(RunRefusal::Invalid { field, .. }) if field == "replay.policy")
+                );
+            }
+            assert_eq!(std::fs::read(&tape).unwrap(), bytes.as_bytes());
+        }
+    }
+
     #[test]
     fn replay_refuses_a_recording_of_other_code_and_record_needs_a_tape() {
         use crate::launch::{RecordedRun, Recording, render_recording};

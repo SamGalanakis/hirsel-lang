@@ -8,7 +8,7 @@ use hirsel_run_config::ValidatedRun;
 
 // Enable only after the native differential, host, value, physical-bound and
 // performance gates have qualified production E1. Keep this independent of F1.
-const PRODUCTION_QUALIFIED: bool = false;
+const PRODUCTION_QUALIFIED: bool = cfg!(feature = "ordered-qualification");
 
 pub(crate) fn qualified() -> bool {
     PRODUCTION_QUALIFIED

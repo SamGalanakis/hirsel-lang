@@ -687,6 +687,47 @@ and `--hirsel-replay <tape>` stands alone:
 ./app --hirsel-replay failing.tape
 ```
 
+A compiled executable can select a fresh Ordered execution policy while replaying
+exactly the same host inputs. This supports scheduler diagnosis and tuning without
+recording new effects:
+
+```sh
+./app --hirsel-replay-policy '{"commit":"dedicated","reorder":"off"}' \
+  --hirsel-replay failing.tape
+./app --hirsel-trace-events replay.jsonl \
+  --hirsel-replay-policy '{"commit":"shared","reorder":"auto","run_ahead":8}' \
+  --hirsel-replay failing.tape
+```
+
+`--hirsel-replay-policy` accepts an inline JSON object containing only `commit`,
+`reorder`, `run_ahead` and `speculation_bytes`, with the same values and bounds as
+Ordered placement. Unknown and duplicate fields refuse. The option requires
+qualified Ordered execution, the FIFO `tasks.cooperative@1` provider and
+`--hirsel-replay`; it cannot carry cores,
+CPU affinity, sidecar paths or grants. It uses fresh validated host policy,
+preserves the run identity, and never uses recorded placement provenance.
+Changing commit or reorder policy must replay identically: canonical Ordered
+events, program output and exit are unchanged. A divergent request or unconsumed
+input still refuses normally. The input tape is immutable, and a trace destination
+that aliases it is refused. Default production Ordered remains disabled until
+its qualification gate is complete.
+
+The temporary Cargo feature `ordered-qualification` (Buck configuration
+`-c hirsel.ordered_qualification=true`) changes only Ordered admission. All
+implementation and tests compile in ordinary builds. `tools/check-native.sh`
+registers the qualification corpus, including both native backends, live and
+immutable-input replay at widths 1/2/4/8, shared/dedicated commit and reorder
+off/auto. It runs on the host so the pool executor cannot clamp wider cells to
+two CPUs. Physical perturbation uses forced migration at suspension; at width
+one the replay perturbation cell is equivalent to its unperturbed counterpart.
+Run a single case with:
+
+```sh
+.buck2/bin/buck2 test -c hirsel.tests=host -c hirsel.ordered_qualification=true \
+  //:hirsel-cli-test-cli-shard-1 -- \
+  --test-arg=ordered_qualification_corpus_saved_receiver --test-arg=--ignored
+```
+
 `--record` combines with `--run` or `--grants`; `--replay` takes neither, because the tape
 binds the canonical run record and admission time it was recorded with. The tape is one
 format for both engines: a run recorded interpreted replays compiled and the other way

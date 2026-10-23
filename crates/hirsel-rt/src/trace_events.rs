@@ -29,10 +29,18 @@ pub(crate) fn select(arguments: &mut Vec<OsString>) -> Result<Option<PathBuf>, S
         .ok_or("expected a path after --hirsel-trace-events")?;
     let path = PathBuf::from(path);
     check()?;
-    if arguments
+    let replay = if arguments
         .get(2)
+        .is_some_and(|flag| flag == "--hirsel-replay-policy")
+    {
+        4
+    } else {
+        2
+    };
+    if arguments
+        .get(replay)
         .is_some_and(|flag| flag == "--hirsel-replay")
-        && let Some(input) = arguments.get(3)
+        && let Some(input) = arguments.get(replay + 1)
     {
         let output =
             crate::host_paths::RecorderDestination::pin(&path).map_err(|e| e.to_string())?;

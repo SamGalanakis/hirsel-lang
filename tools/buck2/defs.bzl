@@ -144,6 +144,10 @@ def _compile_env(package_name, crate, version, build_script):
 CLIPPY_TWINS = read_root_config("hirsel", "clippy", "false") == "true"
 
 def _rust(rule, name, **attrs):
+    # Qualification changes only runtime admission. All implementation is
+    # compiled in either build; native archive variants receive the same bit.
+    if attrs.get("crate") == "hirsel_rt" and read_root_config("hirsel", "ordered_qualification", "false") == "true":
+        attrs["features"] = attrs.get("features", []) + ["ordered-qualification"]
     rule(name = name, **attrs)
     if CLIPPY_TWINS:
         twin = attrs | dict(exec_compatible_with = [budget_constraint(pool_budget_name(*CLIPPY_REQUEST))], visibility = ["PUBLIC"])

@@ -69,6 +69,10 @@ run_stage "native stages end to end: full matrix on both targets and 22 link par
   buck2 test "${release[@]}" "${driver[@]}" -- "${long[@]}" \
   $(libtest native:: --include-ignored --test-threads=4)
 run_stage "native smoke with real Io record and replay" buck2 test //:gate-native-smoke -- "${timeout[@]}"
+# Qualification changes only Ordered admission; host execution proves widths 1/2/4/8
+# rather than silently clamping the corpus to the pool executor's two CPUs.
+run_stage "Ordered qualification: native trace, immutable-input replay and topology" \
+  buck2 test -c hirsel.tests=host -c hirsel.ordered_qualification=true //:hirsel-cli-test-cli-shard-1 -- "${long[@]}" $(libtest ordered_qualification:: --ignored --test-threads=1)
 run_stage "native executables under Valgrind memcheck" buck2 test //:gate-native-sanitize -- "${long[@]}"
 run_stage "native library bodies on both targets" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
