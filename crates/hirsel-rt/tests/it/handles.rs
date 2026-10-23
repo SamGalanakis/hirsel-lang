@@ -38,7 +38,8 @@ fn narrow_and_commit_consume_handles_on_success_fault_cancellation_and_nonfit() 
         let atomic = library.create_atomic(root, "dst").unwrap().unwrap();
         let old = atomic.0;
         if let Some(error) = outcome.clone() {
-            library.0.inject(Fault { error, partial: 9 });
+            // Commit has no byte prefix; only writes admit partial file faults.
+            library.0.inject(Fault { error, partial: 0 });
         }
         let result = library.commit(root, atomic).unwrap();
         assert_eq!(result, outcome.clone().map_or(Ok(()), Err));
