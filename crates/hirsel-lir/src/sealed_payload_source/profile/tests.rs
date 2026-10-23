@@ -75,9 +75,8 @@ fn closed_storage_profile_33_canonical_alternatives_and_exact_owned_slots() {
     assert_eq!(expanded.canonical().unwrap(), canonical);
 
     let mut duplicate = original.clone();
-    duplicate.functions[0]
-        .cases
-        .push(duplicate.functions[0].cases[0].clone());
+    let case = duplicate.functions[0].cases[0].clone();
+    duplicate.functions[0].cases.push(case);
     assert!(duplicate.canonical().is_err());
     let mut unknown = original.clone();
     unknown.functions[0].cases[0].recipe = hash(0);
@@ -211,6 +210,7 @@ fn closed_storage_profile_33_original_selector_is_separate_and_exactly_bound() {
     assert!(selector.check_structure(&profile).is_ok());
     selector.operation.definition = DefPath::core("other.seal");
     assert!(selector.check_structure(&profile).is_err());
+    selector.operation.definition = DefPath::core("arena.seal");
     // Literals are data too; no signature-derived capture ordinal is accepted.
     selector.root.producer = PayloadProducer::Literal(PayloadLiteral::Unit);
     assert!(selector.check_structure(&profile).is_err());
