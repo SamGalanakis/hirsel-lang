@@ -479,3 +479,66 @@ fn action_index_admission_does_not_fetch_content_and_missing_outputs_miss() {
             .is_none()
     );
 }
+
+#[test]
+fn directory_packaged_roots_are_read_only_and_local_corruption_does_not_mask_them() {
+    let packaged = scratch("packaged");
+    let local = scratch("packaged-local");
+    let seed = DirStore::new(packaged.clone());
+    let query = key("packaged");
+    let content_domain = Domain {
+        kind: 123,
+        schema: 1,
+    };
+    let reference = seed.put_content(content_domain, b"shared product").unwrap();
+    seed.put(&query, b"ordinary query index");
+    fn contents(root: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = vec![];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending.extend(
+                    std::fs::read_dir(&path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+            } else {
+                files.push((
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(path).unwrap(),
+                ));
+            }
+        }
+        files.sort();
+        files
+    }
+    let before = contents(&packaged);
+    let reader = DirStore::new(local.clone()).with_read_only_root(packaged.clone());
+    assert_eq!(&*reader.get(&query).unwrap(), b"ordinary query index");
+    assert_eq!(&*reader.get_content(reference).unwrap(), b"shared product");
+    reader.put(&query, b"local query index");
+    assert_eq!(&*reader.get(&query).unwrap(), b"local query index");
+    let local_store = hirsel_artifact_store::Store::new(local.clone());
+    let association = local_store
+        .lookup(hirsel_artifact_store::Address(query.0))
+        .unwrap();
+    std::fs::write(local_store.output_path(association.reference), b"truncated").unwrap();
+    assert_eq!(&*reader.get(&query).unwrap(), b"ordinary query index");
+    reader.gc(0);
+    assert_eq!(&*reader.get_content(reference).unwrap(), b"shared product");
+    assert_eq!(
+        contents(&packaged),
+        before,
+        "lookup and local collection must not mutate installed products"
+    );
+    let packaged_store = hirsel_artifact_store::Store::new(packaged.clone());
+    let output = packaged_store.output_path(reference);
+    std::fs::write(&output, b"bad container").unwrap();
+    assert!(reader.get_content(reference).is_none());
+    assert!(
+        output.exists(),
+        "corrupt installed content is never deleted by a reader"
+    );
+    let _ = std::fs::remove_dir_all(packaged);
+    let _ = std::fs::remove_dir_all(local);
+}

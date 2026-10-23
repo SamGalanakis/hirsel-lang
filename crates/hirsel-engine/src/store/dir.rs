@@ -15,6 +15,7 @@ const GC_EVERY: u64 = 64 << 20;
 #[derive(Debug)]
 pub struct DirStore {
     root: PathBuf,
+    read_only: Vec<PathBuf>,
     cap: u64,
     written: AtomicU64,
     verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
@@ -34,9 +35,18 @@ impl DirStore {
         Self {
             verifier: std::sync::Arc::new(hirsel_validate::VerifierCache::directory(root.clone())),
             root,
+            read_only: vec![],
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
         }
+    }
+    /// Read installed ordinary products with the same checked format. Writes,
+    /// collection and verifier associations remain in this store's own root.
+    pub fn with_read_only_root(mut self, root: PathBuf) -> Self {
+        if root != self.root && !self.read_only.contains(&root) {
+            self.read_only.push(root);
+        }
+        self
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
         self.cap = cap;
@@ -107,13 +117,22 @@ impl ResultStore for DirStore {
         Some(self.verifier.clone())
     }
     fn get_content(&self, reference: super::Reference) -> Option<super::Bytes> {
-        let store = hirsel_artifact_store::Store::new(self.root.clone());
-        let bytes = store.get(reference)?;
-        store.touch(
-            hirsel_artifact_store::Address(reference.output.0),
-            reference,
-        );
-        Some(bytes)
+        for (index, root) in std::iter::once(&self.root)
+            .chain(&self.read_only)
+            .enumerate()
+        {
+            let store = hirsel_artifact_store::Store::new(root.clone());
+            if let Some(bytes) = store.get(reference) {
+                if index == 0 {
+                    store.touch(
+                        hirsel_artifact_store::Address(reference.output.0),
+                        reference,
+                    );
+                }
+                return Some(bytes);
+            }
+        }
+        None
     }
     fn put_content(&self, domain: super::Domain, bytes: &[u8]) -> Option<super::Reference> {
         let reference = hirsel_artifact_store::Store::new(self.root.clone())
@@ -123,27 +142,35 @@ impl ResultStore for DirStore {
         Some(reference)
     }
     fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
-        let store = hirsel_artifact_store::Store::new(self.root.clone());
-        let previous = store.lookup(hirsel_artifact_store::Address(key.0))?;
-        // The address finds the previous action. The query validates its
-        // explicit inputs and dependency outputs before decoding its payload.
-        if previous.reference.domain
-            != (hirsel_artifact_store::Domain {
-                kind: key.2 as u32 + 256,
-                schema: FORMAT,
-            })
+        for (index, root) in std::iter::once(&self.root)
+            .chain(&self.read_only)
+            .enumerate()
         {
-            return None;
-        }
-        let bytes = match store.get(previous.reference) {
-            Some(bytes) => bytes,
-            None => {
-                let _ = fs::remove_file(store.output_path(previous.reference));
-                return None;
+            let store = hirsel_artifact_store::Store::new(root.clone());
+            let Some(previous) = store.lookup(hirsel_artifact_store::Address(key.0)) else {
+                continue;
+            };
+            // Query code validates prior input/output identities before decoding.
+            if previous.reference.domain
+                != (hirsel_artifact_store::Domain {
+                    kind: key.2 as u32 + 256,
+                    schema: FORMAT,
+                })
+            {
+                continue;
             }
-        };
-        store.touch(hirsel_artifact_store::Address(key.0), previous.reference);
-        Some(bytes)
+            let Some(bytes) = store.get(previous.reference) else {
+                if index == 0 {
+                    let _ = fs::remove_file(store.output_path(previous.reference));
+                }
+                continue;
+            };
+            if index == 0 {
+                store.touch(hirsel_artifact_store::Address(key.0), previous.reference);
+            }
+            return Some(bytes);
+        }
+        None
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
         self.publish(

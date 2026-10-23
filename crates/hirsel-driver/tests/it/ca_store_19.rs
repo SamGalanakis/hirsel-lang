@@ -1519,3 +1519,36 @@ fn ordinary_constant_values_reuse_heads_without_syntax_and_refuse_unverified_com
         }
     });
 }
+
+#[test]
+fn package_precomputation_publishes_only_ordinary_products_and_keeps_verifier_authority_local() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new().prefix("hirsel-precompute-").tempdir().unwrap();
+        let dir = scratch.path();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}).to_string()).unwrap();
+        std::fs::write(dir.join("api.hir"), "pub fn value()->u32{7u32}\npub const VALUE:u32=comptime value()\n").unwrap();
+        let bundle = dir.join("ordinary-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig { jobs: hirsel_intern::jobs::Jobs::new(1), ..CompileConfig::for_memory_cap(None) });
+        compiler.precompute_package(&manifest, &bundle).unwrap();
+        let local = dir.join("local-products");
+        let compiler = compiler.with_config(CompileConfig { store: Arc::new(store::DirStore::new(local.clone()).with_read_only_root(bundle.clone())), ..CompileConfig::for_memory_cap(None) });
+        let mut reader = compiler.load_check_package(&manifest).unwrap();
+        assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+        reader.engine.adapters.lexer = None; reader.engine.adapters.parser = None; reader.engine.adapters.signature = None; reader.engine.adapters.modes = None; reader.engine.adapters.lowering = None;
+        let mut value = reader.entry.clone(); value.0.name = "value".into();
+        assert!(reader.engine.definition_summary(hirsel_syntax::DefId::intern(&value)).is_ok());
+        assert!(reader.engine.semantic_program_revision(&value).is_ok());
+        let mut constant = value.clone(); constant.0.name = "VALUE".into();
+        assert!(reader.engine.materialize_constant(&constant).is_err(), "packaged producer products confer no private execution authority");
+        assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+        assert!(!local.join("hirsel-std.image").exists());
+        let mut fresh = compiler.load_check_package(&manifest).unwrap();
+        assert_eq!(fresh.engine.materialize_constant(&constant).unwrap(), hirsel_tir::Constant::Integer(7));
+        // After first local V, reopening the same writable authority reuses it.
+        let mut warm = compiler.load_check_package(&manifest).unwrap();
+        warm.engine.adapters.lexer = None; warm.engine.adapters.parser = None; warm.engine.adapters.signature = None; warm.engine.adapters.modes = None; warm.engine.adapters.lowering = None;
+        assert_eq!(warm.engine.materialize_constant(&constant).unwrap(), hirsel_tir::Constant::Integer(7));
+        assert_eq!(warm.engine.work_stats().parsed_bytes, 0);
+    });
+}
