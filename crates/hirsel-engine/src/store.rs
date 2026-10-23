@@ -50,6 +50,12 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Explicit host-local writable storage for independently owned validator
+    /// associations. Ordinary product bytes and read-only roots confer no
+    /// authority; only the relevant validator may issue its accepted record.
+    fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
+        None
+    }
     /// Local verifier capability, never imported through producer bytes. Custom
     /// and remote providers default to no authority and require first V.
     fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
