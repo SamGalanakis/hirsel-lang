@@ -1046,7 +1046,6 @@ fn semantic_record(mut record: hirsel_rt::launch::Recording) -> hirsel_rt::launc
     record
 }
 #[test]
-#[ignore = "UNRUN: width-reruns-36 owns Fixture run-selection admission; requires landed repaired producer"]
 fn spectral_audit_35_scripted_ordered_streams() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("scripted-ordered-");
