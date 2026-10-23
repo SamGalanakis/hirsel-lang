@@ -199,3 +199,41 @@ never launched and remains explicitly ignored/UNRUN pending width-reruns-36's
 landed repair. Routed in 658195. No duplicate runtime/Fixture patch. The real
 ordered.py/CLI capacity route is independent. Owner will provide the repair SHA
 for a missing-only importer continuation.
+
+## Final missing-cell distinctions
+
+Eleven physical cells passed with exact running/requested=effective/pending0
+replies: LLVM all9; Cranelift width1 success/domain. Cranelift width1 cancel
+returned0 before injection (`signal_delivered=false`), despite two running
+control replies; this is neither a delivered-signal loss nor a capacity pass.
+The injector had parked waiting for another file event after a running reply
+but before io.signals installed its handler. It now continues the existing
+bounded control/handler handshake while waiting for that projection. The
+handler condition, delivered-signal requirement, expected canceled outcome,
+cleanup, inputs and caps stay intact. Only this failed cell and the six unrun
+Cranelift width2/4 cells may run. About 3 active minutes; no app/runtime change.
+
+The old length32 checked-H replay now refuses program binding after the main
+rebase, while all six app .hir files are byte-identical to the original archive.
+The historical tape remains unchanged and incompatible; routed in 658827.
+No fresh recording substitutes for that identity. New missing Cranelift live
+cells use their own newly recorded tapes; historical LLVM results are retained.
+
+The original aggregate unrounded oracle reference stopped Steps1M at
+transform.hir:75:7 before a semantic observation. Its source/vector set and
+budget remain unchanged and the aggregate stays explicitly INCOMPLETE/ignored.
+Missing checked-H/native engines run separately on that same aggregate; native
+math evidence never qualifies the stopped interpreter identity. No raised cap,
+smaller vector, tolerance relaxation or replacement oracle. Owner: app lane.
+
+Output-bound helper source had LANG-8 (`io.dir` FileError has no arm in
+GrantError) and LANG-2 (bare generic Ok/Error comparison has no prefix type).
+Handle the expected granted Dir locally and annotate the expected Result;
+use existing list.filled for exactly16384/16385 bytes. No std error-arm change,
+no input/cap change; <2 active minutes. Original diagnostics/source retained.
+
+Producer repair 152600399b9ce9370bec9d2cda46bb9679d62c5d is landed. The original
+observer-flags-after-grants argv is restored for only failed/unrun physical
+cells, exercising that repaired parser. Earlier accepted capacity cells are
+not repeated. The previously UNRUN scripted placement importer can now run on
+the repaired Fixture producer with its original assertions intact.

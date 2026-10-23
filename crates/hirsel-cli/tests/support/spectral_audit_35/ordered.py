@@ -29,7 +29,7 @@ if a.kind=='cancel':grant['io']['signals']=dict(provider='signals.host@1',kinds=
 lib=ctypes.CDLL(None,use_errno=True);notify=lib.inotify_init1(os.O_CLOEXEC|os.O_NONBLOCK);assert notify>=0
 assert lib.inotify_add_watch(notify,os.fsencode(r),0x102)>=0
 assert lib.inotify_add_watch(notify,os.fsencode(data),0x20)>=0
-cmd=[str(binary.resolve()),'--hirsel-trace-events',str(trace),'--hirsel-record',str(tape),'--hirsel-grants',str(r/'grants.json'),*words]
+cmd=[str(binary.resolve()),'--hirsel-grants',str(r/'grants.json'),'--hirsel-record',str(tape),'--hirsel-trace-events',str(trace),*words]
 (r/'consumer-before.json').write_text(json.dumps(dict(argv=cmd,environment={k:v for k,v in os.environ.items() if k.startswith('HIRSEL_')},files={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [binary,pathlib.Path(__file__),r/'grants.json',data/'samples.json']}),indent=2))
 child=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE);pidfd=os.pidfd_open(child.pid)
 samples=[];opened=False;ready=False;sent=False;deadline=time.monotonic()+45
@@ -46,6 +46,10 @@ while child.poll() is None and time.monotonic()<deadline:
    if mask&(1<<(signal.SIGINT-1)):child.send_signal(signal.SIGINT);sent=True
   except (FileNotFoundError,StopIteration):pass
  if ready and (a.kind!='cancel' or sent):break
+ # Once workers are running, handler projection can happen without another
+ # watched filesystem event. Continue the bounded control/handler handshake
+ # instead of parking until process exit and missing the injection window.
+ if ready and a.kind=='cancel' and not sent:continue
  rd,_,_=select.select([notify,pidfd],[],[],max(0,deadline-time.monotonic()))
  if notify in rd:
   raw=os.read(notify,65536);i=0

@@ -17,6 +17,7 @@ with tarfile.open(fileobj=stream, mode='w') as archive:
         if any(part in {'tool-blobs', 'runtime', 'root', 'objects'} for part in relative.parts):
             continue
         if (path.suffix in {'.hir', '.json', '.jsonl', '.txt', '.tape', '.py'}
+                or path.name.endswith(('-stdout','-stderr'))
                 or path.name in {'recording', 'capped', 'stdout', 'stderr', 'cap-stdout', 'cap-stderr'}):
             archive.add(path, arcname=str(relative), recursive=False)
 body = gzip.compress(stream.getvalue(), compresslevel=9, mtime=0)

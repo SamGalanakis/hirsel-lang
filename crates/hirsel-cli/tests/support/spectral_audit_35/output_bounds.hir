@@ -1,15 +1,13 @@
 // Additional helper control, never a substitute for full application coverage.
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let d = io.dir(rt, path.of("data"))?
+  let Ok(d) = io.dir(rt, path.of("data")) else { failure.check(false, Arithmetic()); return Ok(()) }
   let Ok(text) = arg.text(args, 0) else { failure.check(false, Arithmetic()); return Ok(()) }
   let Ok(count) = u64.parse(text) else { failure.check(false, Arithmetic()); return Ok(()) }
   failure.check(count == 16384 || count == 16385, Arithmetic())
-  let mut buffer: List[u8] = []
-  let mut i = 0u64
-  while i < count { list.push(mut buffer, b'x'); i += 1 }
+  let buffer = list.filled(count, b'x')
   let bytes = bytes.from_list(take buffer)
   let outcome = report.publish(d, path.of("audit.json"), bytes)
-  if count == 16384 { failure.check(outcome == Ok(()), Arithmetic()) }
-  else { failure.check(outcome == Error(OutputLimit()), Arithmetic()) }
+  let expected: Result[(), report.Problem] = if count == 16384 { Ok(()) } else { Error(OutputLimit()) }
+  failure.check(outcome == expected, Arithmetic())
   Ok(())
 }
