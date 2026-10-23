@@ -13,12 +13,17 @@ struct Observed {
     writes: AtomicUsize,
     content_reads: AtomicUsize,
     content_writes: AtomicUsize,
+    mode_reads: AtomicUsize,
+    summary_reads: AtomicUsize,
+    summary_content_reads: AtomicUsize,
     indexes: Mutex<std::collections::BTreeSet<hirsel_syntax::ContentHash>>,
     forbid_content_reads: AtomicBool,
 }
 impl store::ResultStore for Observed {
     fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
         self.reads.fetch_add(1, Ordering::Relaxed);
+        if key.2 == QueryKind::Modes { self.mode_reads.fetch_add(1, Ordering::Relaxed); }
+        if key.2 == QueryKind::Summary { self.summary_reads.fetch_add(1, Ordering::Relaxed); }
         store::ResultStore::get(&self.inner, key)
     }
     fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
@@ -28,10 +33,12 @@ impl store::ResultStore for Observed {
     }
     fn get_content(&self, reference: store::Reference) -> Option<store::Bytes> {
         assert!(
-            !self.forbid_content_reads.load(Ordering::Relaxed),
+            !self.forbid_content_reads.load(Ordering::Relaxed)
+                || ![QueryKind::Modes, QueryKind::Summary].iter().any(|kind| reference.domain.kind == *kind as u32 + 16),
             "stale dependency action materialized a payload"
         );
         self.content_reads.fetch_add(1, Ordering::Relaxed);
+        if reference.domain.kind == QueryKind::Summary as u32 + 16 { self.summary_content_reads.fetch_add(1, Ordering::Relaxed); }
         store::ResultStore::get_content(&self.inner, reference)
     }
     fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
@@ -72,20 +79,24 @@ fn compact_store_hits_do_not_lookup_or_materialize_modes_bodies() {
             let (_, seeded) = publish(store.clone(), source, jobs);
             assert!(seeded.iter().all(|o| o.result.is_ok()));
             store.reads.store(0, Ordering::Relaxed);
+            store.mode_reads.store(0, Ordering::Relaxed);
+            store.summary_reads.store(0, Ordering::Relaxed);
+            store.summary_content_reads.store(0, Ordering::Relaxed);
             store.writes.store(0, Ordering::Relaxed);
             store.content_reads.store(0, Ordering::Relaxed);
             store.content_writes.store(0, Ordering::Relaxed);
             let (mut fresh, actual) = publish(store.clone(), source, jobs);
             assert!(actual.iter().all(|o| o.result.is_ok()));
             assert_eq!(
-                store.reads.load(Ordering::Relaxed),
+                store.summary_reads.load(Ordering::Relaxed),
                 2,
                 "one compact record per definition; no Modes lookup"
             );
             assert_eq!(store.writes.load(Ordering::Relaxed), 0);
             assert_eq!(store.content_writes.load(Ordering::Relaxed), 0);
-            assert_eq!(store.content_reads.load(Ordering::Relaxed), 2);
-            assert_eq!(fresh.store_adoptions(), 2);
+            assert_eq!(store.summary_content_reads.load(Ordering::Relaxed), 2);
+            assert_eq!(store.mode_reads.load(Ordering::Relaxed), 0);
+            assert_eq!(fresh.store_adoptions(), 4, "two signatures and two completions");
             for output in &actual {
                 for phase in [QueryKind::Check, QueryKind::Modes] {
                     assert_eq!(fresh.recompute_count(&output.definition, phase), 0);
@@ -264,7 +275,7 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             let (_, outputs) = publish(store.clone(), source, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
             let count = store.indexes.lock().unwrap().len();
-            assert_eq!(count, 4, "Modes and Summary are separate domains");
+            assert_eq!(count, 6, "Signature, Modes and Summary are separate domains");
             let changed = source.replace("{1u32}", "{2u32}");
             let (edited, outputs) = publish(store.clone(), &changed, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
@@ -281,12 +292,94 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             store.writes.store(0, Ordering::Relaxed);
             let (reverted, outputs) = publish(store.clone(), source, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
-            assert_eq!(reverted.store_adoptions(), 2);
+            assert_eq!(reverted.store_adoptions(), 4, "two signatures and two completions");
             assert_eq!(
                 store.writes.load(Ordering::Relaxed),
                 0,
                 "original action remains available"
             );
         }
+    });
+}
+
+fn signature_session(store: Arc<dyn store::ResultStore>, source: &str, normalize: bool) -> QueryEngine {
+    let mut adapters = compiler_adapters();
+    if !normalize { adapters.signature = None; }
+    let mut engine = QueryEngine::new(default_environment(), adapters).with_result_store(store);
+    if !normalize {
+        engine.sources.add("earlier.hir", "fn unrelated(){}\n".into()).unwrap();
+    }
+    let file = engine.sources.add("signatures.hir", source.into()).unwrap();
+    assert!(engine.parse_file(file, &default_context()).unwrap().diagnostics.is_empty());
+    engine
+}
+fn definition(name: &str) -> DefPath {
+    let mut path = entry_path(&default_context());
+    path.0.name = name.into();
+    path
+}
+#[test]
+fn signature_store_reuses_headers_and_preserves_owned_views_and_resolver_syntax() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "pub opaque type Hidden: plain uses {} {value:u32}\nfn value(x:u32)->u32{x+1u32}\nfn caller(x:Hidden)->Hidden{x}\n";
+        let mut seed = signature_session(store.clone(), source, true);
+        let names = ["Hidden", "value", "caller"];
+        let fingerprints: Vec<_> = names.iter().map(|name| seed.item_signature(&definition(name)).unwrap().value.fingerprint).collect();
+        let owner = definition("Hidden");
+        let shape = seed.owner_representation(&owner, &owner).unwrap().representation_revision;
+        drop(seed);
+        let edited = source.replace("x+1u32", "x+2u32");
+        // Every success must come from ordinary persistence: normalization is
+        // absent in this fresh session, and the original source bodies are gone.
+        let mut fresh = signature_session(store.clone(), &edited, false);
+        for (name, fingerprint) in names.iter().zip(fingerprints) {
+            let path = definition(name);
+            let actual = fresh.item_signature(&path).unwrap();
+            assert_eq!(actual.value.fingerprint, fingerprint);
+            assert_eq!(fresh.recompute_count(&path, QueryKind::Signature), 0);
+            let syntax = fresh.parse_definition(&path).unwrap().value;
+            let resolution = fresh.resolver_snapshot(&path, QueryKind::Signature).unwrap();
+            assert!(Arc::ptr_eq(&syntax, &resolution.syntax));
+        }
+        assert_eq!(fresh.owner_representation(&owner, &owner).unwrap().representation_revision, shape);
+        let private_edit = edited.replace("value:u32", "value:u64");
+        let mut invalid = signature_session(store.clone(), &private_edit, false);
+        assert!(invalid.item_signature(&owner).is_err(), "private declaration changes cannot reuse an old owner view");
+        let mut changed = signature_session(store, &private_edit, true);
+        let actual = changed.owner_representation(&owner, &owner).unwrap().representation_revision;
+        let mut cold = signature_session(Arc::new(store::NoneStore), &private_edit, true);
+        assert_eq!(actual, cold.owner_representation(&owner, &owner).unwrap().representation_revision);
+        assert_ne!(actual, shape);
+    });
+}
+#[test]
+fn signature_store_keeps_negative_namespace_and_relocated_diagnostic_dependencies() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "fn bad(x:Missing)->u32{0u32}\n";
+        let path = definition("bad");
+        let mut seed = signature_session(store.clone(), source, true);
+        assert!(matches!(seed.item_signature(&path), Err(QueryError::Diagnostics(_))));
+        drop(seed);
+        let mut fresh = signature_session(store.clone(), source, false);
+        let QueryError::Diagnostics(actual) = fresh.item_signature(&path).unwrap_err() else { panic!("stored diagnostic missing") };
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Signature), 0);
+        let mut cold = signature_session(Arc::new(store::NoneStore), source, true);
+        let QueryError::Diagnostics(expected) = cold.item_signature(&path).unwrap_err() else { panic!() };
+        assert_eq!(actual.iter().map(|d| d.render_human(&fresh.sources)).collect::<Vec<_>>(), expected.iter().map(|d| d.render_human(&cold.sources)).collect::<Vec<_>>());
+        // Relative offsets are explicit inputs. Changing them must recompute
+        // diagnostic positions; changing FileIds/anchors above must not.
+        let shifted = format!("\n\n{source}");
+        let mut positioned = signature_session(store.clone(), &shifted, true);
+        let QueryError::Diagnostics(actual) = positioned.item_signature(&path).unwrap_err() else { panic!() };
+        assert_eq!(positioned.recompute_count(&path, QueryKind::Signature), 1);
+        let mut cold = signature_session(Arc::new(store::NoneStore), &shifted, true);
+        let QueryError::Diagnostics(expected) = cold.item_signature(&path).unwrap_err() else { panic!() };
+        assert_eq!(actual.iter().map(|d| d.render_human(&positioned.sources)).collect::<Vec<_>>(), expected.iter().map(|d| d.render_human(&cold.sources)).collect::<Vec<_>>());
+        let repaired = format!("{source}type Missing=u32\n");
+        let mut fresh = signature_session(store, &repaired, true);
+        assert!(fresh.item_signature(&path).is_ok());
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Signature), 1);
     });
 }

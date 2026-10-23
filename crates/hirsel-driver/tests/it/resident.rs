@@ -1923,6 +1923,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         peak: AtomicUsize,
         writers: Mutex<Vec<std::thread::ThreadId>>,
         summaries: AtomicUsize,
+        signatures: AtomicUsize,
         types: AtomicUsize,
         home: std::thread::ThreadId,
     }
@@ -1936,7 +1937,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
             if domain.kind == 2 {
                 self.types.fetch_add(1, Ordering::SeqCst);
-            } else if domain.kind == QueryKind::Summary as u32 + 16 {
+            } else if [QueryKind::Summary, QueryKind::Signature].iter().any(|k| domain.kind == *k as u32 + 16) {
                 assert_eq!(std::thread::current().id(), self.home);
             } else {
                 assert_eq!(domain.kind, QueryKind::Modes as u32 + 16);
@@ -1944,6 +1945,11 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             domain.reference(bytes)
         }
         fn put_query(&self, kind: QueryKind, _: &store::EntryKey, _: store::Action, _: &[u8]) {
+            if kind == QueryKind::Signature {
+                assert_eq!(std::thread::current().id(), self.home);
+                self.signatures.fetch_add(1, Ordering::SeqCst);
+                return;
+            }
             if kind == QueryKind::Summary {
                 assert_eq!(std::thread::current().id(), self.home);
                 self.summaries.fetch_add(1, Ordering::SeqCst);
@@ -1986,6 +1992,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
                 peak: AtomicUsize::new(0),
                 writers: Mutex::new(vec![]),
                 summaries: AtomicUsize::new(0),
+                signatures: AtomicUsize::new(0),
                 types: AtomicUsize::new(0),
                 home: std::thread::current().id(),
             });
@@ -2024,6 +2031,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             let writers = store.writers.lock().unwrap();
             assert_eq!(writers.len(), 64);
             assert_eq!(store.summaries.load(Ordering::SeqCst), 64);
+            assert_eq!(store.signatures.load(Ordering::SeqCst), 64);
             assert!(store.types.load(Ordering::SeqCst) > 0);
             if jobs > 1 {
                 assert!(
