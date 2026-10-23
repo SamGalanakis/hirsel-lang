@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "=0.22.1"
 hirsel-graph = { path = "../hirsel-graph" }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-codec = { path = "../hirsel-codec" }

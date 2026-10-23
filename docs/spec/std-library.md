@@ -3215,9 +3215,13 @@ reporting trailing garbage. Unlike Go, CR/LF are rejected rather than skipped.
 Error kinds distinguish invalid bytes, length, padding and unused bits; no partial
 output is returned.
 
-The whole-input codec reserves output once. Encoding uses the Rust `base64`
-scalar engine's four six-byte blocks; decoding uses an eight-symbol lookup
-block and returns to the Go quantum parser at padding or invalid input.
+The whole-input codec calls core's low-level Base64 leaves. The native runtime
+uses pinned `base64-simd` 0.8.0 with lazy ISA detection and scalar fallback;
+the interpreter and checked H use an independent scalar engine. A rejected
+whole-input attempt reruns the unchanged Go quantum parser from offset zero,
+so the exact error kind and offset above are preserved. `Alphabet` and `Padding`
+are aliases of core's serializable `Base64Alphabet` and `Base64Padding`; their
+variant spellings and std signatures remain the same.
 Checked source loads and initialized output storage preserve the same behavior
 in the interpreter, LLVM and Cranelift. The incremental state and error
 lifecycle are unchanged.

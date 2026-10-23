@@ -295,6 +295,8 @@ N fn string.scalars(s: String) -> ScalarView in s
 N fn string.positions(s: String) -> PositionView of s in s
 N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
+fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}
+fn bytes.base64_decode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Option[Bytes] uses {}
 N fn bytes.len(src: Bytes) -> u64
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()
@@ -1557,6 +1559,21 @@ allocates nothing and forwards no caller site. This is how source libraries, the
 library included, raise language failures; `bytes.replace`'s empty-pattern SEM-3, for
 example, is reported at its check site in the std source. A failure during cleanup keeps
 FAIL-3 shielding.
+
+**Low-level Base64 leaves.** `Base64Alphabet = Standard() | UrlSafe()` and
+`Base64Padding = Required() | Omitted()` are serializable plain configuration
+variants; `std@1/base64.Alphabet` and `Padding` alias them. Applications normally
+use `std@1/base64.encode/decode`, which retain their String API and typed errors.
+`bytes.base64_encode` borrows its exact byte extent and returns fresh unique
+ASCII bytes with the selected RFC4648 alphabet and padding. `bytes.base64_decode`
+returns `Some` of fresh unique bytes only for a complete strict success: no
+whitespace, other-alphabet symbols, misplaced/missing padding or nonzero unused
+bits. Empty input succeeds as `Some(b"")`. `None` exposes no partial output or
+error: std reruns its existing quantum parser from offset zero to recover the
+precise `DecodeError` and byte offset, including its canonical-bit/padding
+precedence. Neither leaf retains the input or changes its owner credits. Runtime
+ISA selection is lazy and cached, with a scalar fallback. These are low-level
+codec leaves, parallel to `string.from_bytes`, rather than a second diagnostic API.
 
 **Bulk byte append.** `bytes.append(mut builder, data)` appends the complete borrowed
 byte interval to the `List[u8]` in order. Empty input is a complete no-op, including arena preparation and charges.

@@ -1,7 +1,7 @@
 // langarena: Base64::Encode
 // langarena: Base64::Decode
 // Port: rust/src/benchmarks/base64_{encode,decode}.rs:5-67 (3c9f84d).
-// The std codec uses scalar RFC4648 packing; upstream Rust uses base64_simd.
+// Both native codecs use base64_simd; std preserves its own exact error parser.
 type State {
   data: Bytes,
   encoded: String,

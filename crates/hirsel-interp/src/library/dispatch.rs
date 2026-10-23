@@ -2226,6 +2226,28 @@ primary_operations! { library, call, context, name, a, value;
                     ))));
                 }
             },
+    Primitive: "bytes.base64_encode" | "bytes.base64_decode" => {
+        use base64::Engine;
+        let Value::Variant { variant: alphabet, .. } = arg(a, 1)? else {
+            return Err(invalid("Base64Alphabet"));
+        };
+        let Value::Variant { variant: padding, .. } = arg(a, 2)? else {
+            return Err(invalid("Base64Padding"));
+        };
+        let engine = match (alphabet, padding) {
+            (0, 0) => base64::engine::general_purpose::STANDARD,
+            (0, 1) => base64::engine::general_purpose::STANDARD_NO_PAD,
+            (1, 0) => base64::engine::general_purpose::URL_SAFE,
+            (1, 1) => base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            _ => return Err(invalid("Base64 configuration")),
+        };
+        let data = bytes(arg(a, 0)?)?;
+        if call.path.is_core("bytes.base64_encode") {
+            Value::Bytes(engine.encode(data).into_bytes())
+        } else {
+            engine.decode(data).ok().map_or_else(none, |data| some(Value::Bytes(data)))
+        }
+    },
     Primitive: "string.from_bytes" => match String::from_utf8(bytes(arg(a, 0)?)?.to_vec()) {
                 Ok(s) => ok(Value::String(s)),
                 Err(e) => error(Value::Bytes(e.into_bytes())),

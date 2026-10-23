@@ -1722,3 +1722,14 @@ Developers, MIT, license above), and Go `src/unicode/utf8/utf8_test.go:31-107`,
 `utf8.go:108-128` at `ebe2feefc400f813aefdc8a036e66d2619da6649`
 (Copyright 2009 The Go Authors; BSD-3-Clause, license above). The fixture README
 records the independent Rust oracle and Hirsel relative-bound/brand policy.
+
+Base64 acceleration links unmodified **base64-simd =0.8.0** (Nugine, MIT), with
+vsimd =0.8.0 and outref =0.5.2 resolved by Cargo.lock. Safe complete-buffer APIs
+are base64-simd/src/lib.rs:234-277; strict padding and canonical bits are in
+src/decode.rs:30-75,148-170; lazy cached dispatch is vsimd/src/macros.rs:96-133.
+The independent scalar test oracle is base64 =0.22.1 (MIT OR Apache-2.0).
+Round-trip/comparison structure follows base64-simd/tests/it.rs; Hirsel adds all
+four configurations, malformed bytes and exhaustive canonical-tail checks.
+The MIT credits are retained in LICENSE.base64-simd (also vsimd), LICENSE.outref
+and LICENSE.base64; linked dependency license
+notices accompany release packaging.

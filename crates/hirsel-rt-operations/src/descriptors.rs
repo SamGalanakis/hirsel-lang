@@ -923,6 +923,8 @@ pub const ENTRIES: &[Entry] = &[
     // test_net_abi.rs
     ops("hirsel_rt_v2_test_net", HOST),
     // text.rs
+    entry("hirsel_rt_v2_bytes_base64_encode", Local),
+    entry("hirsel_rt_v2_bytes_base64_decode", Local),
     entry("hirsel_rt_v2_string_from_bytes", Local),
     entry("hirsel_rt_v2_string_slice", Local),
     entry("hirsel_rt_v2_bytes_append", Local),

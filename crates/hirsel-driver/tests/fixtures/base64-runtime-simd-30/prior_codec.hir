@@ -1,0 +1,673 @@
+// Frozen origin/main 09d67507; only type references use std aliases.
+// Go encoding/base64 @ ebe2feef, base64.go:328-408 decodeQuantum (BSD-3-Clause).
+// Quantum scan/padding/error precedence and byte offsets follow Go Strict().
+// Deviations: CR/LF rejected (strict RFC4648), typed error kinds, no partial output.
+// Bulk kernels adapt aklomp/base64 generic lookup blocks; no SIMD shuffle exists.
+
+fn alphabet_bytes(alphabet: std@1/base64.Alphabet) -> Bytes uses {} {
+  core@1/string.as_bytes(
+    match alphabet {
+      Standard() => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+      UrlSafe() => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+    }
+  )
+}
+
+// Rust base64 5b98ee18 general_purpose/mod.rs:151-268 (MIT), scalar only.
+// Reserve and initialize once. Hirsel requires initialized List elements before
+// indexed writes; the history primitive fills the reservation with memset.
+fn output_buffer(length: u64) -> unique List[u8] uses {} {
+  let mut out: List[u8] = []
+  if length != 0 {
+    core@1/list.reserve(mut out, length)
+    core@1/list.push(mut out, 0u8)
+    core@1/bytes.append_from_history(mut out, 1, length - 1)
+  }
+  take out
+}
+
+// aklomp/base64 e4cc438b lib/arch/generic/64/enc_loop.c:14-24,
+// lib/tables/table_enc_12bit.py:11-26: two output symbols per 12-bit index.
+// See third-party/LICENSE.aklomp-base64. Explicit shifts are endian independent.
+fn encode_pairs(alphabet: std@1/base64.Alphabet) -> unique List[u16] uses {} {
+  let bytes = alphabet_bytes(alphabet)
+  let mut table: List[u16] = []
+  core@1/list.reserve(mut table, 4096)
+  let mut i = 0u64
+  while i < 4096 {
+    let a: u16 = core@1/int.widen(bytes[i >> 6])
+    let b: u16 = core@1/int.widen(bytes[i & 63])
+    core@1/list.push(mut table, a << 8 | b)
+    i += 1
+  }
+  take table
+}
+
+const ENCODE_STANDARD: List[u16] = comptime encode_pairs(Standard())
+
+const ENCODE_URL: List[u16] = comptime encode_pairs(UrlSafe())
+
+// aklomp/base64 e4cc438b lib/arch/generic/32/dec_loop.c:4-20:
+// shifted sextets and an error bit share each lookup. OR validates a block.
+// Unlike the C kernel, store exactly three output bytes (no overstore).
+fn decode_words(alphabet: std@1/base64.Alphabet) -> unique List[u32] uses {} {
+  let bytes = alphabet_bytes(alphabet)
+  let mut table: List[u32] = []
+  core@1/list.reserve(mut table, 1024)
+  for _ in 0u64..1024 {
+    core@1/list.push(mut table, 0x80000000u32)
+  }
+  let mut i = 0u64
+  while i < 64 {
+    let byte: u64 = core@1/int.widen(bytes[i])
+    let value: u32 = core@1/int.truncate(i)
+    table[byte] = value << 18
+    table[256 + byte] = value << 12
+    table[512 + byte] = value << 6
+    table[768 + byte] = value
+    i += 1
+  }
+  take table
+}
+
+const DECODE_STANDARD: List[u32] = comptime decode_words(Standard())
+
+const DECODE_URL: List[u32] = comptime decode_words(UrlSafe())
+
+// Frozen shared tables avoid copying kilobytes of Inline lanes on each call.
+// Keep the complete loop in one unique mutable borrow: no per-byte detach.
+// Both literal tables have 64 ASCII bytes; masked indices stay within them.
+@noalloc
+fn encode_into(
+  data: Bytes,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  mut out: unique List[u8]
+) -> () uses {} {
+  let table = match alphabet {
+    Standard() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    UrlSafe() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  }
+  let pairs = match alphabet {
+    Standard() => ENCODE_STANDARD,
+    UrlSafe() => ENCODE_URL,
+  }
+  let len = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  let mut at: u64 = 0
+  // Eight quanta consume exactly 24 bytes; no input overread.
+  while len - i >= 24 {
+    let c7: u64 = core@1/int.widen(data[i + 23])
+    let b7: u64 = core@1/int.widen(data[i + 22])
+    let a7: u64 = core@1/int.widen(data[i + 21])
+    let high7 = pairs[a7 << 4 | b7 >> 4]
+    let low7 = pairs[(b7 & 15) << 8 | c7]
+    out[at + 31] = core@1/int.truncate(low7)
+    out[at + 30] = core@1/int.truncate(low7 >> 8)
+    out[at + 29] = core@1/int.truncate(high7)
+    out[at + 28] = core@1/int.truncate(high7 >> 8)
+    let c6: u64 = core@1/int.widen(data[i + 20])
+    let b6: u64 = core@1/int.widen(data[i + 19])
+    let a6: u64 = core@1/int.widen(data[i + 18])
+    let high6 = pairs[a6 << 4 | b6 >> 4]
+    let low6 = pairs[(b6 & 15) << 8 | c6]
+    out[at + 27] = core@1/int.truncate(low6)
+    out[at + 26] = core@1/int.truncate(low6 >> 8)
+    out[at + 25] = core@1/int.truncate(high6)
+    out[at + 24] = core@1/int.truncate(high6 >> 8)
+    let c5: u64 = core@1/int.widen(data[i + 17])
+    let b5: u64 = core@1/int.widen(data[i + 16])
+    let a5: u64 = core@1/int.widen(data[i + 15])
+    let high5 = pairs[a5 << 4 | b5 >> 4]
+    let low5 = pairs[(b5 & 15) << 8 | c5]
+    out[at + 23] = core@1/int.truncate(low5)
+    out[at + 22] = core@1/int.truncate(low5 >> 8)
+    out[at + 21] = core@1/int.truncate(high5)
+    out[at + 20] = core@1/int.truncate(high5 >> 8)
+    let c4: u64 = core@1/int.widen(data[i + 14])
+    let b4: u64 = core@1/int.widen(data[i + 13])
+    let a4: u64 = core@1/int.widen(data[i + 12])
+    let high4 = pairs[a4 << 4 | b4 >> 4]
+    let low4 = pairs[(b4 & 15) << 8 | c4]
+    out[at + 19] = core@1/int.truncate(low4)
+    out[at + 18] = core@1/int.truncate(low4 >> 8)
+    out[at + 17] = core@1/int.truncate(high4)
+    out[at + 16] = core@1/int.truncate(high4 >> 8)
+    let c3: u64 = core@1/int.widen(data[i + 11])
+    let b3: u64 = core@1/int.widen(data[i + 10])
+    let a3: u64 = core@1/int.widen(data[i + 9])
+    let high3 = pairs[a3 << 4 | b3 >> 4]
+    let low3 = pairs[(b3 & 15) << 8 | c3]
+    out[at + 15] = core@1/int.truncate(low3)
+    out[at + 14] = core@1/int.truncate(low3 >> 8)
+    out[at + 13] = core@1/int.truncate(high3)
+    out[at + 12] = core@1/int.truncate(high3 >> 8)
+    let c2: u64 = core@1/int.widen(data[i + 8])
+    let b2: u64 = core@1/int.widen(data[i + 7])
+    let a2: u64 = core@1/int.widen(data[i + 6])
+    let high2 = pairs[a2 << 4 | b2 >> 4]
+    let low2 = pairs[(b2 & 15) << 8 | c2]
+    out[at + 11] = core@1/int.truncate(low2)
+    out[at + 10] = core@1/int.truncate(low2 >> 8)
+    out[at + 9] = core@1/int.truncate(high2)
+    out[at + 8] = core@1/int.truncate(high2 >> 8)
+    let c1: u64 = core@1/int.widen(data[i + 5])
+    let b1: u64 = core@1/int.widen(data[i + 4])
+    let a1: u64 = core@1/int.widen(data[i + 3])
+    let high1 = pairs[a1 << 4 | b1 >> 4]
+    let low1 = pairs[(b1 & 15) << 8 | c1]
+    out[at + 7] = core@1/int.truncate(low1)
+    out[at + 6] = core@1/int.truncate(low1 >> 8)
+    out[at + 5] = core@1/int.truncate(high1)
+    out[at + 4] = core@1/int.truncate(high1 >> 8)
+    let c0: u64 = core@1/int.widen(data[i + 2])
+    let b0: u64 = core@1/int.widen(data[i + 1])
+    let a0: u64 = core@1/int.widen(data[i + 0])
+    let high0 = pairs[a0 << 4 | b0 >> 4]
+    let low0 = pairs[(b0 & 15) << 8 | c0]
+    out[at + 3] = core@1/int.truncate(low0)
+    out[at + 2] = core@1/int.truncate(low0 >> 8)
+    out[at + 1] = core@1/int.truncate(high0)
+    out[at + 0] = core@1/int.truncate(high0 >> 8)
+    i += 24
+    at += 32
+  }
+  while i < len {
+    let remaining = len - i
+    let a: u32 = core@1/int.widen(data[i])
+    let b: u32 = if remaining > 1 {
+      core@1/int.widen(data[i + 1])
+    } else {
+      0
+    }
+    let c: u32 = if remaining > 2 {
+      core@1/int.widen(data[i + 2])
+    } else {
+      0
+    }
+    let value = a * 65536u32 + b * 256u32 + c
+    let first: u64 = core@1/int.widen(value / 262144u32)
+    let second: u64 = core@1/int.widen(value / 4096u32 % 64u32)
+    out[at] = table[first]
+    out[at + 1] = table[second]
+    if remaining > 1 {
+      let third: u64 = core@1/int.widen(value / 64u32 % 64u32)
+      out[at + 2] = table[third]
+    } else if padding == Required() {
+      out[at + 2] = b'='
+    }
+    if remaining > 2 {
+      let fourth: u64 = core@1/int.widen(value % 64u32)
+      out[at + 3] = table[fourth]
+    } else if padding == Required() {
+      out[at + 3] = b'='
+    }
+    at += if remaining >= 3 || padding == Required() {
+      4
+    } else {
+      remaining + 1
+    }
+    i += if remaining > 2 {
+      3
+    } else {
+      remaining
+    }
+  }
+}
+
+pub fn encode(
+  data: Bytes,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding
+) -> unique String uses {} {
+  let len = core@1/bytes.len(data)
+  let remainder = len % 3
+  let tail: u64 = if remainder == 0 {
+    0
+  } else if padding == Required() {
+    4
+  } else {
+    remainder + 1
+  }
+  core@1/failure.check(len / 3 <= (18446744073709551615u64 - tail) / 4, TextInvariant())
+  let mut out: unique List[u8] = output_buffer(len / 3 * 4 + tail)
+  encode_into(data, alphabet, padding, mut out)
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+@noalloc
+fn sextet(byte: u8, alphabet: std@1/base64.Alphabet) -> u32 uses {} {
+  let value: u8 = if std@1/ascii.is_upper(byte) {
+    byte - b'A'
+  } else if std@1/ascii.is_lower(byte) {
+    byte - b'a' + 26
+  } else if std@1/ascii.is_digit(byte) {
+    byte - b'0' + 52
+  } else if alphabet == Standard() && byte == b'+' || alphabet == UrlSafe() && byte == b'-' {
+    62
+  } else if alphabet == Standard() && byte == b'/' || alphabet == UrlSafe() && byte == b'_' {
+    63
+  } else {
+    64
+  }
+  core@1/int.widen(value)
+}
+
+// aklomp/base64 generic shifted lookup blocks, sixteen input bytes to twelve.
+// Invalid or padded blocks fall back to Go's existing quantum parser from the
+// same input position, retaining its first-error and canonical-bit precedence.
+@noalloc
+fn decode_into(
+  text: String,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  mut out: unique List[u8]
+) -> Result[u64, std@1/base64.DecodeError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(data)
+  let table = match alphabet {
+    Standard() => b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3e\xff\xff\xff\x3f\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\xff\xff\xff\xff\xff\xff\xff\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\xff\xff\xff\xff\xff\xff\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
+    UrlSafe() => b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3e\xff\xff\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\xff\xff\xff\xff\xff\xff\xff\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\xff\xff\xff\xff\x3f\xff\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff",
+  }
+  let mut at: u64 = 0
+  let mut i: u64 = 0
+  let words = match alphabet {
+    Standard() => DECODE_STANDARD,
+    UrlSafe() => DECODE_URL,
+  }
+  // Four quanta share one error test. Retry the untouched block through the
+  // existing quantum parser on any padding or invalid byte, preserving offsets.
+  while len - i >= 16 {
+    let d3_3: u64 = core@1/int.widen(data[i + 15])
+    let d3_2: u64 = core@1/int.widen(data[i + 14])
+    let d3_1: u64 = core@1/int.widen(data[i + 13])
+    let d3_0: u64 = core@1/int.widen(data[i + 12])
+    let v3 = words[d3_0] | words[256 + d3_1] | words[512 + d3_2] | words[768 + d3_3]
+    let d2_3: u64 = core@1/int.widen(data[i + 11])
+    let d2_2: u64 = core@1/int.widen(data[i + 10])
+    let d2_1: u64 = core@1/int.widen(data[i + 9])
+    let d2_0: u64 = core@1/int.widen(data[i + 8])
+    let v2 = words[d2_0] | words[256 + d2_1] | words[512 + d2_2] | words[768 + d2_3]
+    let d1_3: u64 = core@1/int.widen(data[i + 7])
+    let d1_2: u64 = core@1/int.widen(data[i + 6])
+    let d1_1: u64 = core@1/int.widen(data[i + 5])
+    let d1_0: u64 = core@1/int.widen(data[i + 4])
+    let v1 = words[d1_0] | words[256 + d1_1] | words[512 + d1_2] | words[768 + d1_3]
+    let d0_3: u64 = core@1/int.widen(data[i + 3])
+    let d0_2: u64 = core@1/int.widen(data[i + 2])
+    let d0_1: u64 = core@1/int.widen(data[i + 1])
+    let d0_0: u64 = core@1/int.widen(data[i + 0])
+    let v0 = words[d0_0] | words[256 + d0_1] | words[512 + d0_2] | words[768 + d0_3]
+    if (v0 | v1 | v2 | v3) & 0x80000000u32 != 0 {
+      break
+    }
+    out[at + 11] = core@1/int.truncate(v3 >> 0)
+    out[at + 10] = core@1/int.truncate(v3 >> 8)
+    out[at + 9] = core@1/int.truncate(v3 >> 16)
+    out[at + 8] = core@1/int.truncate(v2 >> 0)
+    out[at + 7] = core@1/int.truncate(v2 >> 8)
+    out[at + 6] = core@1/int.truncate(v2 >> 16)
+    out[at + 5] = core@1/int.truncate(v1 >> 0)
+    out[at + 4] = core@1/int.truncate(v1 >> 8)
+    out[at + 3] = core@1/int.truncate(v1 >> 16)
+    out[at + 2] = core@1/int.truncate(v0 >> 0)
+    out[at + 1] = core@1/int.truncate(v0 >> 8)
+    out[at + 0] = core@1/int.truncate(v0 >> 16)
+    i += 16
+    at += 12
+  }
+  while i < len {
+    let start = i
+    let mut count: u64 = 0
+    let mut value: u32 = 0
+    let mut padded = false
+    let mut trailing: Option[u64] = None()
+    while count < 4 {
+      if i == len {
+        if count == 1 || padding == Required() {
+          return Error(InvalidLength(start))
+        }
+        break
+      }
+      let byte = data[i]
+      i += 1
+      let digit: u32 = core@1/int.widen(table[core@1/int.widen(byte)])
+      if digit != 255 {
+        value = value * 64u32 + digit
+        count += 1
+        continue
+      }
+      if byte != b'=' {
+        return Error(InvalidByte(i - 1))
+      }
+      if padding == Omitted() || count < 2 {
+        return Error(InvalidPadding(i - 1))
+      }
+      if count == 2 {
+        if i == len {
+          return Error(InvalidPadding(len))
+        }
+        if data[i] != b'=' {
+          return Error(InvalidPadding(i - 1))
+        }
+        i += 1
+      }
+      padded = true
+      if i < len {
+        trailing = Some(i)
+      }
+      break
+    }
+    if count == 2 && value % 16u32 != 0 {
+      return Error(NonCanonical(i - 2))
+    }
+    if count == 3 && value % 4u32 != 0 {
+      return Error(NonCanonical(i - 1))
+    }
+    if let Some(trailing_at) = trailing {
+      return Error(InvalidPadding(trailing_at))
+    }
+    let packed = if count == 2 {
+      value * 4096u32
+    } else if count == 3 {
+      value * 64u32
+    } else {
+      value
+    }
+    out[at] = core@1/int.narrow(packed / 65536u32)
+    at += 1
+    if count >= 3 {
+      out[at] = core@1/int.narrow(packed / 256u32 % 256u32)
+      at += 1
+    }
+    if count == 4 {
+      out[at] = core@1/int.narrow(packed % 256u32)
+      at += 1
+    }
+    if padded {
+      break
+    }
+  }
+  Ok(at)
+}
+
+pub fn decode(
+  text: String,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding
+) -> Result[unique Bytes, std@1/base64.DecodeError] uses {} {
+  let len = core@1/string.byte_len(text)
+  let capacity = len / 4 * 3 + if len % 4 > 1 {
+    len % 4 - 1
+  } else {
+    0
+  }
+  let mut out: unique List[u8] = output_buffer(capacity)
+  let at = decode_into(text, alphabet, padding, mut out)?
+  while core@1/list.len(out) > at {
+    let _ = core@1/list.pop(mut out)
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+// Go @ ebe2feef base64.go:217-286 encoder.Write/Close/NewEncoder,
+// :467-540 decoder.Read and :677-680 NewDecoder. Fixed carry and explicit EOF;
+// no io.Reader/Writer, whitespace skipping, or output from a failing call.
+// Zig bff490a lib/std/base64.zig:261-280 scalar sextet accumulator/unused-bit
+// check, widened to hold a full quantum until Hirsel can commit its output.
+@serializable
+pub type StreamError = Closed | Decode(std@1/base64.DecodeError)
+
+pub opaque type Encoder: copyable + inert + noalloc_drop uses {} {
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  value: u32,
+  used: u64,
+  ended: bool,
+}
+
+pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  value: u32,
+  used: u64,
+  offset: u64,
+  second_pad: bool,
+  padded: bool,
+  ended: bool,
+  failed: Option[std@1/base64.DecodeError],
+}
+
+@noalloc
+pub fn encoder(alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding) -> Encoder uses {} {
+  Encoder(alphabet: alphabet, padding: padding, value: 0, used: 0, ended: false)
+}
+
+@noalloc
+pub fn decoder(alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding) -> Decoder uses {} {
+  Decoder(
+    alphabet: alphabet,
+    padding: padding,
+    value: 0,
+    used: 0,
+    offset: 0,
+    second_pad: false,
+    padded: false,
+    ended: false,
+    failed: None()
+  )
+}
+
+// Go encoder.Write's leading fringe, interior full quanta, trailing fringe.
+pub fn encode_feed(mut state: Encoder, data: Bytes) -> Result[
+  unique String,
+  StreamError
+] uses {} {
+  if state.ended {
+    return Error(Closed())
+  }
+  let len = core@1/bytes.len(data)
+  let groups = len / 3 + if len % 3 + state.used >= 3 {
+    1
+  } else {
+    0
+  }
+  core@1/failure.check(groups <= 18446744073709551615u64 / 4, TextInvariant())
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  // Leading fringe: finish the quantum carried by the previous feed.
+  if state.used != 0 {
+    while i < len && state.used < 3 {
+      let byte: u32 = core@1/int.widen(data[i])
+      state.value = state.value * 256u32 + byte
+      state.used += 1
+      i += 1
+    }
+    if state.used == 3 {
+      let raw = core@1/bytes.from_list(
+        [
+          core@1/int.narrow(state.value / 65536u32),
+          core@1/int.narrow(state.value / 256u32 % 256u32),
+          core@1/int.narrow(state.value % 256u32)
+        ]
+      )
+      text.append(mut out, encode(raw, state.alphabet, Omitted()))
+      state.value = 0
+      state.used = 0
+    }
+  }
+  // Interior: reuse the established whole-buffer 24-bit packing kernel.
+  let end = i + (len - i) / 3 * 3
+  if end != i {
+    text.append(
+      mut out,
+      encode(core@1/bytes.slice(data, i, end), state.alphabet, Omitted())
+    )
+    i = end
+  }
+  // Trailing fringe: retain only the remaining zero, one or two raw bytes.
+  while i < len {
+    let byte: u32 = core@1/int.widen(data[i])
+    state.value = state.value * 256u32 + byte
+    state.used += 1
+    i += 1
+  }
+  Ok(text.finish_valid(take out))
+}
+
+pub fn encode_finish(mut state: Encoder) -> Result[unique String, StreamError] uses {} {
+  if state.ended {
+    return Error(Closed())
+  }
+  state.ended = true
+  let mut tail: List[u8] = []
+  if state.used == 2 {
+    core@1/list.push(mut tail, core@1/int.narrow(state.value / 256u32))
+  }
+  if state.used != 0 {
+    core@1/list.push(mut tail, core@1/int.narrow(state.value % 256u32))
+  }
+  state.value = 0
+  state.used = 0
+  Ok(encode(core@1/bytes.from_list(take tail), state.alphabet, state.padding))
+}
+
+@noalloc
+fn stream_tail(state: Decoder) -> Result[(), std@1/base64.DecodeError] uses {} {
+  if state.used == 2 && state.value % 16u32 != 0 {
+    return Error(NonCanonical(state.offset - 2))
+  }
+  if state.used == 3 && state.value % 4u32 != 0 {
+    return Error(NonCanonical(state.offset - 1))
+  }
+  Ok(())
+}
+
+@preserves_unique(out)
+fn stream_emit(state: Decoder, mut out: List[u8]) -> () uses {} {
+  let packed = if state.used == 2 {
+    state.value * 4096u32
+  } else if state.used == 3 {
+    state.value * 64u32
+  } else {
+    state.value
+  }
+  core@1/list.push(mut out, core@1/int.narrow(packed / 65536u32))
+  if state.used >= 3 {
+    core@1/list.push(mut out, core@1/int.narrow(packed / 256u32 % 256u32))
+  }
+  if state.used == 4 {
+    core@1/list.push(mut out, core@1/int.narrow(packed % 256u32))
+  }
+}
+
+fn stream_feed(mut state: Decoder, data: Bytes) -> Result[
+  unique Bytes,
+  std@1/base64.DecodeError
+] uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    // Keep a terminal padded quantum until EOF, including its original offset.
+    if state.padded {
+      stream_tail(state)?
+      return Error(InvalidPadding(state.offset))
+    }
+    let byte = data[i]
+    if state.second_pad {
+      if byte != b'=' {
+        return Error(InvalidPadding(state.offset - 1))
+      }
+      state.offset += 1
+      state.second_pad = false
+      state.padded = true
+    } else {
+      let at = state.offset
+      state.offset += 1
+      let digit = sextet(byte, state.alphabet)
+      if digit != 64 {
+        state.value = state.value * 64u32 + digit
+        state.used += 1
+        if state.used == 4 {
+          stream_emit(state, mut out)
+          state.value = 0
+          state.used = 0
+        }
+      } else if byte != b'=' {
+        return Error(InvalidByte(at))
+      } else if state.padding == Omitted() || state.used < 2 {
+        return Error(InvalidPadding(at))
+      } else if state.used == 2 {
+        state.second_pad = true
+      } else {
+        state.padded = true
+      }
+    }
+    i += 1
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+pub fn decode_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, StreamError] uses {} {
+  if let Some(error) = state.failed {
+    return Error(Decode(error))
+  }
+  if state.ended {
+    return Error(Closed())
+  }
+  core@1/failure.check(
+    core@1/bytes.len(data) <= 18446744073709551615u64 - state.offset,
+    TextInvariant()
+  )
+  match stream_feed(mut state, data) {
+    Ok(chunk) => Ok(take chunk),
+    Error(error) => {
+      state.failed = Some(error)
+      state.value = 0
+      state.used = 0
+      Error(Decode(error))
+    },
+  }
+}
+
+fn stream_finish(mut state: Decoder) -> Result[unique Bytes, std@1/base64.DecodeError] uses {} {
+  if state.second_pad {
+    return Error(InvalidPadding(state.offset))
+  }
+  if !state.padded && state.used != 0 && (state.used == 1 || state.padding == Required()) {
+    return Error(InvalidLength(state.offset - state.used))
+  }
+  stream_tail(state)?
+  let mut out: List[u8] = []
+  if state.used != 0 {
+    stream_emit(state, mut out)
+  }
+  state.value = 0
+  state.used = 0
+  Ok(core@1/bytes.from_list(take out))
+}
+
+pub fn decode_finish(mut state: Decoder) -> Result[unique Bytes, StreamError] uses {} {
+  if let Some(error) = state.failed {
+    return Error(Decode(error))
+  }
+  if state.ended {
+    return Error(Closed())
+  }
+  state.ended = true
+  match stream_finish(mut state) {
+    Ok(chunk) => Ok(take chunk),
+    Error(error) => {
+      state.failed = Some(error)
+      state.value = 0
+      state.used = 0
+      Error(Decode(error))
+    },
+  }
+}

@@ -86,6 +86,8 @@ atomic.load	241679ffb01e1e9d4549acc84d6f3927a34d8dc3572e799382d91bd6095347b6	0:b
 atomic.store	adedffc915f9d726048f51494daa4a677fd42051c82dbae8c73af9ff1dd20641	0:b:n;1:b:n;2:b:n->n
 bytes.append	b29ae84f6277a9dd7cf3cb64d73f0612af68c8453f2277cbe95cd48d87317729	0:m:n;1:b:n->n
 bytes.append_from_history	e476591f56ab5d2c5bed7bf4e17a9b2f250224f2f4d848d29ca520b9c736fbcc	0:m:n;1:b:n;2:b:n->n
+bytes.base64_decode	659f24278c2bb879e14ab790a958116136e24809ca97b6e4f28f32b173dba935	0:b:n;1:b:n;2:b:n->n
+bytes.base64_encode	f8900c67174b0d123f0845d3539ce842392e6c657df4c19c861ccd89e43210d5	0:b:n;1:b:n;2:b:n->n
 bytes.from_list	085214666081030ac924e2ea1567e489c7214d3dcaad5ed82c444708cf5bf789	0:t:n->n
 bytes.len	fa0e8671cc4dd70b0bbda1f14bc23a0de11472f89953d2fd476e3ad20821db44	0:b:n->n
 bytes.replace_range	19e02e44aa00db2cc0a65a58123414bc555dabcbf5c255e064e2ba6f1da9a638	0:m:n;1:b:n;2:b:n->n

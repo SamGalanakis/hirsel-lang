@@ -99,6 +99,10 @@ uint8_t hirsel_rt_v2_env_get(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_env_result*,
 uint8_t hirsel_rt_v2_env_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_arg_len(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_arg_text(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, const uint64_t*, uint64_t);
+/* ABI 52: std-internal Base64 leaves. Decode's null Slice owner means retry the
+ * source parser; no public error type/offset is produced or discarded here. */
+uint8_t hirsel_rt_v2_bytes_base64_encode(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint32_t*, const uint32_t*);
+uint8_t hirsel_rt_v2_bytes_base64_decode(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint32_t*, const uint32_t*);
 uint8_t hirsel_rt_v2_string_from_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_string_slice(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint64_t*, const uint64_t*);
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_bytes_result;

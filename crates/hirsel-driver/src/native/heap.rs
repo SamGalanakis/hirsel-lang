@@ -1946,6 +1946,38 @@ fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome>
             scalar: ScalarKind::U64,
             bits: *bits,
         },
+        (
+            Some("bytes"),
+            name @ ("base64_encode" | "base64_decode"),
+            [
+                OpValue::Bytes(bytes),
+                OpValue::Variant { tag: alphabet, .. },
+                OpValue::Variant { tag: padding, .. },
+            ],
+        ) => {
+            use base64::Engine;
+            let engine = match (alphabet, padding) {
+                (0, 0) => base64::engine::general_purpose::STANDARD,
+                (0, 1) => base64::engine::general_purpose::STANDARD_NO_PAD,
+                (1, 0) => base64::engine::general_purpose::URL_SAFE,
+                (1, 1) => base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                _ => return Some(OpOutcome::Unsupported),
+            };
+            if name == "base64_encode" {
+                OpValue::ByteSequence(engine.encode(bytes).into_bytes())
+            } else {
+                match engine.decode(bytes) {
+                    Ok(bytes) => OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::ByteSequence(bytes)),
+                    },
+                    Err(_) => OpValue::Variant {
+                        tag: 0,
+                        value: Box::new(OpValue::Unit),
+                    },
+                }
+            }
+        }
         (Some("string"), "from_bytes", [OpValue::Bytes(bytes)]) => OpValue::Variant {
             tag: u32::from(hirsel_rt::kernels::string_from_bytes(bytes.clone()).is_err()),
             value: Box::new(OpValue::Slice {

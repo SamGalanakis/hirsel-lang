@@ -189,6 +189,147 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_from_bytes(
     STATUS_OK
 }
 
+/// Fresh initialized byte storage, owned solely by the adapter until returned.
+/// # Safety
+/// `ctx` is a live context; allocation checks the complete sequence extent.
+unsafe fn zeroed_bytes(ctx: *mut TaskCtx, length: usize) -> Slice {
+    let length = u64::try_from(length).unwrap_or_else(|_| fault("byte length overflow"));
+    let owner = unsafe { allocate_sequence(ctx, 0, length, 1, 1) };
+    // SAFETY: the fresh byte sequence has exactly this writable extent and no
+    // aliases. Initializing it permits a safe &mut [u8] for the safe SIMD API.
+    unsafe {
+        payload(owner)
+            .add(sequence_elements_offset(1) as usize)
+            .write_bytes(0, length as usize)
+    };
+    Slice {
+        owner,
+        start: sequence_slice_start(1),
+        length,
+    }
+}
+
+/// # Safety
+/// `value` is fresh byte storage exclusively owned by this adapter.
+unsafe fn fresh_bytes_mut<'a>(value: Slice) -> &'a mut [u8] {
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            payload(value.owner).add(8 + value.start as usize),
+            value.length as usize,
+        )
+    }
+}
+
+/// Read well-typed named configuration values. Invalid enum bits are an ABI fault.
+/// # Safety
+/// Both pointers address initialized u32 enum tags.
+unsafe fn base64_engine(alphabet: *const u32, padding: *const u32) -> base64_simd::Base64 {
+    let url_safe = match unsafe { alphabet.read() } {
+        0 => false,
+        1 => true,
+        _ => fault("Base64Alphabet tag"),
+    };
+    let padded = match unsafe { padding.read() } {
+        0 => true,
+        1 => false,
+        _ => fault("Base64Padding tag"),
+    };
+    crate::base64::engine(url_safe, padded)
+}
+
+/// Encode a borrowed extent directly into fresh byte storage. Configuration
+/// values are std's existing Standard/UrlSafe and Required/Omitted variants.
+/// # Safety
+/// Context/output and enum addresses are live; the borrowed extent is initialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_base64_encode(
+    ctx: *mut TaskCtx,
+    _destination: *mut c_void,
+    out: *mut Slice,
+    owner: *mut Header,
+    start: u64,
+    length: u64,
+    alphabet: *const u32,
+    padding: *const u32,
+) -> u8 {
+    use base64_simd::AsOut;
+    let engine = unsafe { base64_engine(alphabet, padding) };
+    let source = unsafe {
+        bytes(Slice {
+            owner,
+            start,
+            length,
+        })
+    };
+    let result = unsafe { zeroed_bytes(ctx, engine.encoded_length(source.len())) };
+    let encoded = engine.encode(source, unsafe { fresh_bytes_mut(result) }.as_out());
+    debug_assert_eq!(encoded.len(), result.length as usize);
+    unsafe { out.write(result) };
+    STATUS_OK
+}
+
+/// Try a strict decode. Option[Bytes] uses the Slice owner niche: null is None.
+/// Rejection exposes no partial output; std retries its unchanged parser from
+/// input zero to recover its exact DecodeError and first-error precedence.
+/// # Safety
+/// Context/output and enum addresses are live; the borrowed extent is initialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_base64_decode(
+    ctx: *mut TaskCtx,
+    _destination: *mut c_void,
+    out: *mut Slice,
+    owner: *mut Header,
+    start: u64,
+    length: u64,
+    alphabet: *const u32,
+    padding: *const u32,
+) -> u8 {
+    use base64_simd::AsOut;
+    let engine = unsafe { base64_engine(alphabet, padding) };
+    let source = unsafe {
+        bytes(Slice {
+            owner,
+            start,
+            length,
+        })
+    };
+    let decoded = engine.decoded_length(source).ok().and_then(|length| {
+        let result = unsafe { zeroed_bytes(ctx, length) };
+        match engine.decode(source, unsafe { fresh_bytes_mut(result) }.as_out()) {
+            Ok(decoded) => {
+                debug_assert_eq!(decoded.len(), result.length as usize);
+                Some(result)
+            }
+            Err(_) => {
+                // SAFETY: this adapter exclusively owns the fresh failed output.
+                // Byte storage has no finalizers; release cannot fail.
+                let status = unsafe {
+                    crate::release::hirsel_rt_v2_release(
+                        ctx,
+                        result.owner,
+                        (*result.owner).index(),
+                        std::ptr::null(),
+                        0,
+                        0,
+                    )
+                };
+                if status != STATUS_OK {
+                    fault("Base64 scratch release")
+                }
+                None
+            }
+        }
+    });
+    unsafe {
+        out.write(decoded.unwrap_or(Slice {
+            owner: std::ptr::null_mut(),
+            start: 0,
+            length: 0,
+        }))
+    };
+    STATUS_OK
+}
+
 /// StrPos has one u64 of storage but, as a nominal, travels by read-only address.
 /// A failing export leaves output untouched; the caller records SEM-3 at its call site.
 /// # Safety

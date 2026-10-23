@@ -15,6 +15,7 @@
 #[cfg(test)]
 hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
+mod base64;
 pub mod handles;
 mod host_child;
 pub mod host_launch;
@@ -133,7 +134,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 51;
+pub const ABI_VERSION: u32 = 52;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

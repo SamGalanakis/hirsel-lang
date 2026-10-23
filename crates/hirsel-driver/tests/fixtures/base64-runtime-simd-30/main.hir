@@ -1,0 +1,141 @@
+// A borrowed argument permits comparing all four modes without consuming
+// the unique value produced by bytes.from_list on the caller's loop backedge.
+fn encode_case(data: Bytes) {
+  for mode in 0u64..4 {
+    let a: std@1/base64.Alphabet = if mode < 2 {
+      Standard()
+    } else {
+      UrlSafe()
+    }
+    let p: std@1/base64.Padding = if mode % 2 == 0 {
+      Required()
+    } else {
+      Omitted()
+    }
+    let expected = prior_codec.encode(data, a, p)
+    failure.check(std@1/base64.encode(data, a, p) == expected, TextInvariant())
+    failure.check(std@1/base64.decode(expected, a, p) == Ok(data), TextInvariant())
+  }
+}
+
+// Compares the exact preceding std implementation, including error kinds/offsets.
+fn decode_case(input: String) {
+  for mode in 0u64..4 {
+    let a: std@1/base64.Alphabet = if mode < 2 {
+      Standard()
+    } else {
+      UrlSafe()
+    }
+    let p: std@1/base64.Padding = if mode % 2 == 0 {
+      Required()
+    } else {
+      Omitted()
+    }
+    failure.check(
+      std@1/base64.decode(input, a, p) == prior_codec.decode(input, a, p),
+      TextInvariant()
+    )
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // The std names and core names are the same serializable types.
+  let core_alphabet: Base64Alphabet = Standard()
+  let std_alphabet: std@1/base64.Alphabet = core_alphabet
+  let core_padding: Base64Padding = Required()
+  let std_padding: std@1/base64.Padding = core_padding
+  failure.check(
+    core_alphabet == std_alphabet && core_padding == std_padding,
+    TextInvariant()
+  )
+  let round_alphabet: Result[std@1/base64.Alphabet, core@1/DecodeError] = codec.decode(
+    codec.encode(core_alphabet)
+  )
+  let round_padding: Result[std@1/base64.Padding, core@1/DecodeError] = codec.decode(
+    codec.encode(core_padding)
+  )
+  failure.check(round_alphabet == Ok(std_alphabet), TextInvariant())
+  failure.check(round_padding == Ok(std_padding), TextInvariant())
+  let mut seed = 2026102330u32
+  for length in 0u64..130 {
+    let mut raw: List[u8] = []
+    for _ in 0u64..length {
+      seed = u32.wrapping_add(u32.wrapping_mul(seed, 1664525), 1013904223)
+      list.push(mut raw, int.truncate(seed >> 24))
+    }
+    encode_case(bytes.from_list(take raw))
+  }
+  // Invalid byte, length, padding, noncanonical bits, and combined precedence.
+  for input in [
+    "",
+    "A",
+    "AA",
+    "AAA",
+    "AAAA",
+    "A=",
+    "AA=",
+    "AA==",
+    "AAA=",
+    "AA=A",
+    "AAA==",
+    "=AAA",
+    "A===",
+    "AB==",
+    "AAB=",
+    "AB",
+    "AAB",
+    "AA==!",
+    "AB==!",
+    "AAB=!",
+    "AAA=!",
+    "+/8=",
+    "-_8=",
+    "\n",
+    "\r",
+    "é",
+    "AAAAé",
+    "AAAA AA",
+    "AAAAAA==AAAA",
+    "AAAAAA=!"
+  ] {
+    decode_case(input)
+  }
+  let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  // Every canonical and noncanonical trailing sextet, with and without padding.
+  for digit in 0u64..64 {
+    let x = text.finish_valid([alphabet[digit]])
+    decode_case(f"A{x}==")
+    decode_case(f"AA{x}=")
+    decode_case(f"A{x}")
+    decode_case(f"AA{x}")
+    decode_case(f"A{x}==!")
+    decode_case(f"AA{x}=!")
+  }
+  // First invalid byte and padding on each side of every SIMD block boundary.
+  for at in 0u64..66 {
+    for bad in [0u8, 10u8, 13u8, 32u8, b'!', b'=', b'+', b'/', b'-', b'_'] {
+      let mut raw: List[u8] = []
+      for i in 0u64..68 {
+        list.push(
+          mut raw,
+          if i == at {
+            bad
+          } else {
+            b'A'
+          }
+        )
+      }
+      decode_case(text.finish_valid(take raw))
+    }
+  }
+  // Seeded arbitrary ASCII inputs, retaining every invalid-input class.
+  for length in 0u64..130 {
+    let mut raw: List[u8] = []
+    for _ in 0u64..length {
+      seed = u32.wrapping_add(u32.wrapping_mul(seed, 1664525), 1013904223)
+      list.push(mut raw, int.truncate(seed >> 24 & 127u32))
+    }
+    decode_case(text.finish_valid(take raw))
+  }
+  Ok(())
+}

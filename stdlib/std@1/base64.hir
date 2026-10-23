@@ -1,12 +1,11 @@
 // Go encoding/base64 @ ebe2feef, base64.go:328-408 decodeQuantum (BSD-3-Clause).
 // Quantum scan/padding/error precedence and byte offsets follow Go Strict().
 // Deviations: CR/LF rejected (strict RFC4648), typed error kinds, no partial output.
-// Bulk kernels adapt aklomp/base64 generic lookup blocks; no SIMD shuffle exists.
-@serializable
-pub type Alphabet = Standard | UrlSafe
+// Complete-buffer success uses the pinned runtime SIMD kernel. Rejected input
+// retains this Go parser; streaming retains its source failure-state machine.
+pub type Alphabet = core@1/Base64Alphabet
 
-@serializable
-pub type Padding = Required | Omitted
+pub type Padding = core@1/Base64Padding
 
 @serializable
 pub type DecodeError = InvalidByte(u64) | InvalidLength(u64) | InvalidPadding(u64) | NonCanonical(
@@ -35,26 +34,6 @@ fn output_buffer(length: u64) -> unique List[u8] uses {} {
   take out
 }
 
-// aklomp/base64 e4cc438b lib/arch/generic/64/enc_loop.c:14-24,
-// lib/tables/table_enc_12bit.py:11-26: two output symbols per 12-bit index.
-// See third-party/LICENSE.aklomp-base64. Explicit shifts are endian independent.
-fn encode_pairs(alphabet: Alphabet) -> unique List[u16] uses {} {
-  let bytes = alphabet_bytes(alphabet)
-  let mut table: List[u16] = []
-  core@1/list.reserve(mut table, 4096)
-  let mut i = 0u64
-  while i < 4096 {
-    let a: u16 = core@1/int.widen(bytes[i >> 6])
-    let b: u16 = core@1/int.widen(bytes[i & 63])
-    core@1/list.push(mut table, a << 8 | b)
-    i += 1
-  }
-  take table
-}
-
-const ENCODE_STANDARD: List[u16] = comptime encode_pairs(Standard())
-const ENCODE_URL: List[u16] = comptime encode_pairs(UrlSafe())
-
 // aklomp/base64 e4cc438b lib/arch/generic/32/dec_loop.c:4-20:
 // shifted sextets and an error bit share each lookup. OR validates a block.
 // Unlike the C kernel, store exactly three output bytes (no overstore).
@@ -79,148 +58,8 @@ fn decode_words(alphabet: Alphabet) -> unique List[u32] uses {} {
 }
 
 const DECODE_STANDARD: List[u32] = comptime decode_words(Standard())
-const DECODE_URL: List[u32] = comptime decode_words(UrlSafe())
 
-// Frozen shared tables avoid copying kilobytes of Inline lanes on each call.
-// Keep the complete loop in one unique mutable borrow: no per-byte detach.
-// Both literal tables have 64 ASCII bytes; masked indices stay within them.
-@noalloc
-fn encode_into(
-  data: Bytes,
-  alphabet: Alphabet,
-  padding: Padding,
-  mut out: unique List[u8]
-) -> () uses {} {
-  let table = match alphabet {
-    Standard() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
-    UrlSafe() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
-  }
-  let pairs = match alphabet {
-    Standard() => ENCODE_STANDARD,
-    UrlSafe() => ENCODE_URL,
-  }
-  let len = core@1/bytes.len(data)
-  let mut i: u64 = 0
-  let mut at: u64 = 0
-  // Eight quanta consume exactly 24 bytes; no input overread.
-  while len - i >= 24 {
-    let c7: u64 = core@1/int.widen(data[i + 23])
-    let b7: u64 = core@1/int.widen(data[i + 22])
-    let a7: u64 = core@1/int.widen(data[i + 21])
-    let high7 = pairs[a7 << 4 | b7 >> 4]
-    let low7 = pairs[(b7 & 15) << 8 | c7]
-    out[at + 31] = core@1/int.truncate(low7)
-    out[at + 30] = core@1/int.truncate(low7 >> 8)
-    out[at + 29] = core@1/int.truncate(high7)
-    out[at + 28] = core@1/int.truncate(high7 >> 8)
-    let c6: u64 = core@1/int.widen(data[i + 20])
-    let b6: u64 = core@1/int.widen(data[i + 19])
-    let a6: u64 = core@1/int.widen(data[i + 18])
-    let high6 = pairs[a6 << 4 | b6 >> 4]
-    let low6 = pairs[(b6 & 15) << 8 | c6]
-    out[at + 27] = core@1/int.truncate(low6)
-    out[at + 26] = core@1/int.truncate(low6 >> 8)
-    out[at + 25] = core@1/int.truncate(high6)
-    out[at + 24] = core@1/int.truncate(high6 >> 8)
-    let c5: u64 = core@1/int.widen(data[i + 17])
-    let b5: u64 = core@1/int.widen(data[i + 16])
-    let a5: u64 = core@1/int.widen(data[i + 15])
-    let high5 = pairs[a5 << 4 | b5 >> 4]
-    let low5 = pairs[(b5 & 15) << 8 | c5]
-    out[at + 23] = core@1/int.truncate(low5)
-    out[at + 22] = core@1/int.truncate(low5 >> 8)
-    out[at + 21] = core@1/int.truncate(high5)
-    out[at + 20] = core@1/int.truncate(high5 >> 8)
-    let c4: u64 = core@1/int.widen(data[i + 14])
-    let b4: u64 = core@1/int.widen(data[i + 13])
-    let a4: u64 = core@1/int.widen(data[i + 12])
-    let high4 = pairs[a4 << 4 | b4 >> 4]
-    let low4 = pairs[(b4 & 15) << 8 | c4]
-    out[at + 19] = core@1/int.truncate(low4)
-    out[at + 18] = core@1/int.truncate(low4 >> 8)
-    out[at + 17] = core@1/int.truncate(high4)
-    out[at + 16] = core@1/int.truncate(high4 >> 8)
-    let c3: u64 = core@1/int.widen(data[i + 11])
-    let b3: u64 = core@1/int.widen(data[i + 10])
-    let a3: u64 = core@1/int.widen(data[i + 9])
-    let high3 = pairs[a3 << 4 | b3 >> 4]
-    let low3 = pairs[(b3 & 15) << 8 | c3]
-    out[at + 15] = core@1/int.truncate(low3)
-    out[at + 14] = core@1/int.truncate(low3 >> 8)
-    out[at + 13] = core@1/int.truncate(high3)
-    out[at + 12] = core@1/int.truncate(high3 >> 8)
-    let c2: u64 = core@1/int.widen(data[i + 8])
-    let b2: u64 = core@1/int.widen(data[i + 7])
-    let a2: u64 = core@1/int.widen(data[i + 6])
-    let high2 = pairs[a2 << 4 | b2 >> 4]
-    let low2 = pairs[(b2 & 15) << 8 | c2]
-    out[at + 11] = core@1/int.truncate(low2)
-    out[at + 10] = core@1/int.truncate(low2 >> 8)
-    out[at + 9] = core@1/int.truncate(high2)
-    out[at + 8] = core@1/int.truncate(high2 >> 8)
-    let c1: u64 = core@1/int.widen(data[i + 5])
-    let b1: u64 = core@1/int.widen(data[i + 4])
-    let a1: u64 = core@1/int.widen(data[i + 3])
-    let high1 = pairs[a1 << 4 | b1 >> 4]
-    let low1 = pairs[(b1 & 15) << 8 | c1]
-    out[at + 7] = core@1/int.truncate(low1)
-    out[at + 6] = core@1/int.truncate(low1 >> 8)
-    out[at + 5] = core@1/int.truncate(high1)
-    out[at + 4] = core@1/int.truncate(high1 >> 8)
-    let c0: u64 = core@1/int.widen(data[i + 2])
-    let b0: u64 = core@1/int.widen(data[i + 1])
-    let a0: u64 = core@1/int.widen(data[i + 0])
-    let high0 = pairs[a0 << 4 | b0 >> 4]
-    let low0 = pairs[(b0 & 15) << 8 | c0]
-    out[at + 3] = core@1/int.truncate(low0)
-    out[at + 2] = core@1/int.truncate(low0 >> 8)
-    out[at + 1] = core@1/int.truncate(high0)
-    out[at + 0] = core@1/int.truncate(high0 >> 8)
-    i += 24
-    at += 32
-  }
-  while i < len {
-    let remaining = len - i
-    let a: u32 = core@1/int.widen(data[i])
-    let b: u32 = if remaining > 1 {
-      core@1/int.widen(data[i + 1])
-    } else {
-      0
-    }
-    let c: u32 = if remaining > 2 {
-      core@1/int.widen(data[i + 2])
-    } else {
-      0
-    }
-    let value = a * 65536u32 + b * 256u32 + c
-    let first: u64 = core@1/int.widen(value / 262144u32)
-    let second: u64 = core@1/int.widen(value / 4096u32 % 64u32)
-    out[at] = table[first]
-    out[at + 1] = table[second]
-    if remaining > 1 {
-      let third: u64 = core@1/int.widen(value / 64u32 % 64u32)
-      out[at + 2] = table[third]
-    } else if padding == Required() {
-      out[at + 2] = b'='
-    }
-    if remaining > 2 {
-      let fourth: u64 = core@1/int.widen(value % 64u32)
-      out[at + 3] = table[fourth]
-    } else if padding == Required() {
-      out[at + 3] = b'='
-    }
-    at += if remaining >= 3 || padding == Required() {
-      4
-    } else {
-      remaining + 1
-    }
-    i += if remaining > 2 {
-      3
-    } else {
-      remaining
-    }
-  }
-}
+const DECODE_URL: List[u32] = comptime decode_words(UrlSafe())
 
 pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {} {
   let len = core@1/bytes.len(data)
@@ -233,9 +72,8 @@ pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique Strin
     remainder + 1
   }
   core@1/failure.check(len / 3 <= (18446744073709551615u64 - tail) / 4, TextInvariant())
-  let mut out: unique List[u8] = output_buffer(len / 3 * 4 + tail)
-  encode_into(data, alphabet, padding, mut out)
-  match text.finish(take out) {
+  let encoded = core@1/bytes.base64_encode(data, alphabet, padding)
+  match core@1/string.from_bytes(take encoded) {
     Ok(s) => take s,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -404,6 +242,15 @@ pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
   unique Bytes,
   DecodeError
 ] uses {} {
+  // Only a complete strict success takes the accelerated path. On rejection,
+  // rerun the existing parser from offset zero for its exact error precedence.
+  if let Some(decoded) = core@1/bytes.base64_decode(
+    core@1/string.as_bytes(text),
+    alphabet,
+    padding
+  ) {
+    return Ok(take decoded)
+  }
   let len = core@1/string.byte_len(text)
   let capacity = len / 4 * 3 + if len % 4 > 1 {
     len % 4 - 1

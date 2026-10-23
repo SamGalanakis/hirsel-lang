@@ -232,6 +232,8 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         ),
         ("ArgError", "", "MissingArgument()|InvalidUtf8()"),
         ("FloatIntError", "", "NotFinite()|OutOfRange()"),
+        ("Base64Alphabet", "", "Standard()|UrlSafe()"),
+        ("Base64Padding", "", "Required()|Omitted()"),
         ("OutOfSpace", "", "OutOfSpace()"),
         (
             "CliError",
@@ -1154,7 +1156,9 @@ fn shape_data_bounds() -> Vec<Bound> {
 fn serializable_core(name: &str, t: &mut TypeDefinition) {
     if matches!(
         name,
-        "Option"
+        "Base64Alphabet"
+            | "Base64Padding"
+            | "Option"
             | "Result"
             | "Bounded"
             | "DecodeError"

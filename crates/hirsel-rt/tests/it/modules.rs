@@ -39,3 +39,4 @@ mod walk_stream;
 mod byte_append_fastpath_28;
 mod file_inputs_29;
 mod read_dir_stream;
+mod base64;
