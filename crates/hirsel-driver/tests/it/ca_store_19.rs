@@ -418,3 +418,37 @@ fn lower_store_hits_validate_reads_and_v_before_demanding_modes_bodies() {
         assert_eq!(render(&invalid, rejected), render(&cold, expected));
     });
 }
+
+#[test]
+fn staged_registration_queries_restore_declarations_without_analyzed_bodies() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "fn value[n:size]()->u64{comptime (n*n)}\n";
+        let path = definition("value");
+        let mut seed = signature_session(store.clone(), source, true);
+        seed.register_staged_definition(&path).unwrap();
+        let lowered = seed.lower_to_tir(&path).unwrap();
+        let snapshot = seed.signature_snapshot();
+        let declarations = lowered.value.bodies.iter().flat_map(|body| &body.rvalues)
+            .filter_map(|value| match value {
+                hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => {
+                    let signature = snapshot.signature(hirsel_syntax::DefId::intern(definition)).unwrap().unwrap();
+                    Some((definition.clone(), signature.fingerprint))
+                }
+                _ => None,
+            }).collect::<Vec<_>>();
+        assert_eq!(declarations.len(), 1);
+        drop(seed);
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None;
+        fresh.register_staged_definition(&path).unwrap();
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+        for (path, fingerprint) in &declarations {
+            assert_eq!(fresh.item_signature(path).unwrap().value.fingerprint, *fingerprint);
+        }
+        let changed = source.replace("->u64", "->u32");
+        let mut invalid = signature_session(store, &changed, true);
+        invalid.adapters.modes = None;
+        assert!(invalid.register_staged_definition(&path).is_err());
+    });
+}
