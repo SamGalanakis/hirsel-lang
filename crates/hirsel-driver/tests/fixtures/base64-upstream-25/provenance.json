@@ -1,0 +1,30 @@
+{
+  "seed": 2026102504,
+  "upstream": "golang/go ebe2feefc400f813aefdc8a036e66d2619da6649",
+  "sources": {
+    "base64.go": "6949606b322abf46fa6da88eca6db6773896bbdd6482a8322b3193226f9c6ffd",
+    "base64_test.go": "938f91d045d4d205af581e8f82146462617a0ea7eae6f2ee8801c5ccacae256c"
+  },
+  "vectors_sha256": "3ed936ae24ca592a6f825001db2dc165916b38533377068a409c3788e3bc304e",
+  "oracle_source_sha256": "3fb5efa0e397596fbad1cd0f9b5194b761c63ef749b37361d94a791c92b86aa8",
+  "oracle_binary_sha256": "dbad74b3f5f7e2f33b3f2ea9c6ad63bb7d0b41a545974f5698c87fb7ee8a857f",
+  "generator_sha256": "24714c6b461624b6657685935b7861531daf4a52d3c00243b0ea330360401d37",
+  "policy": "CR/LF raw Go answers retained; policy oracle substitutes ! at identical offsets, never strips input. Typed kinds are explicit mutation dispositions, offsets come only from Go. Failed whole-input results discard partial Go output. High bytes are UTF-8 C2 80 so identical bytes can reach both String and Bytes APIs. Streaming uses exact concatenated result; failed calls return no partial chunk; successful earlier chunks are committed. Terminal padded output held to finish; errors sticky; successful finish Closed. No observed Hirsel result enters expectations.",
+  "spec": "docs/spec/std-library.md, Base64 codec",
+  "spec_paragraphs": [
+    "Encoding checks output-size arithmetic before building. Required padding emits\nand requires `=` for incomplete quanta; complete quanta need no padding. Omitted\npadding rejects every `=`. Decoding rejects whitespace, the other alphabet's\nsymbols, padding before the final quantum, and nonzero unused low bits. Errors\nuse Go `decodeQuantum` byte offsets and precedence: InvalidLength identifies the\nstart of the incomplete quantum, missing second padding points at EOF, an\nincorrect second padding byte points at the first `=`, and trailing garbage\npoints just after the padded quantum. NonCanonical uses Go Strict's consumed\nquantum offset (two bytes back for two sextets, one byte back for three), before\nreporting trailing garbage. Unlike Go, CR/LF are rejected rather than skipped.\nError kinds distinguish invalid bytes, length, padding and unused bits; no partial\noutput is returned.",
+    "`StreamError = Closed | Decode(DecodeError)`. Call the corresponding finish\nfunction exactly once after all chunks, including for an empty stream. Empty\nfeeds before finish succeed with empty output and do not finalize. After a\nsuccessful finish every feed or finish returns `Closed()`. After a decoding\nerror every feed or finish returns the same `Decode(error)`; recovery requires\na new decoder. Each failed call returns no output, including valid complete\nquanta decoded earlier in that call. Chunks from previous successful calls are\ncommitted streaming output. Callers requiring atomic whole-stream acceptance\nmust retain those chunks privately and discard them if any feed or finish fails.\nThe existing `decode` remains all-or-nothing for the entire input.",
+    "Offsets count all supplied bytes from zero, across chunk boundaries, including\nCR/LF and arbitrary invalid UTF-8. The error class, offset and precedence match\n`decode` on concatenated valid UTF-8 input. An incomplete quantum is checked\nat finish; a missing second `=` reports EOF, whereas an incorrect second `=`\nreports the first `=`. A padded terminal quantum emits nothing until finish.\nIf later input arrives, its held tail bits are checked first, then trailing\ninput is rejected at the byte immediately after that quantum. Thus `Zh==x`\nreports `NonCanonical(2)` even when every character is a separate feed, while\n`Zg==x` reports `InvalidPadding(4)`. `decode_feed` accepts arbitrary Bytes and\nrejects non-ASCII bytes directly, without UTF-8 conversion. Offset overflow\nraises `TextInvariant`, as whole-buffer encode does for size overflow.",
+    "Streaming structure is ported from Go `golang/go` commit\n`ebe2feefc400f813aefdc8a036e66d2619da6649`,\n`src/encoding/base64/base64.go:217-286` (encoder fringe, full quanta, Close),\n`:467-540` (decoder carry, terminal padding, absolute errors), and `:677-680`\n(NewDecoder). Tests draw from `base64_test.go:31-38,125-158,200-228,248-279`\nand RFC4648 section 10. Semantic deviations: explicit pure feed/finish replaces\nReader/Writer I/O; CR/LF are rejected; typed errors preserve Hirsel's existing\nstrict decoder precedence; a padded terminal quantum is held until EOF; a\nfailing call returns no partial chunk; successful finish closes the state and\nrepeated failure preserves its original error. Fixed scalar carry replaces\nGo's I/O buffers, and there are no assembly fast paths. Zig `ziglang/zig` commit\n`bff490a23889750de7096d9057c0a432efc929a8`, `lib/std/base64.zig:261-280`,\nsupplies the scalar sextet accumulator and unused-bit check structure; Hirsel\nwidens the accumulator to one full quantum and keeps existing Go-compatible\nerror precedence instead of Zig's up-front whole-buffer length checks."
+  ],
+  "counts": {
+    "rows": 260,
+    "valid_encode_decode": 164,
+    "targeted_mutations": 96
+  },
+  "upstream_ranges": [
+    "base64_test.go:25-38",
+    "base64.go:316-410"
+  ],
+  "license": "BSD-3-Clause (Go), Copyright 2009 The Go Authors; third-party/NOTICES.md"
+}

@@ -1664,3 +1664,10 @@ at `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8`. Copyright (c) Serde project contr
 MIT, full text above. Number spellings use raw spans; insertion order, duplicate
 keys, byte offsets, depth and public-number validation follow Hirsel policy as
 recorded in the fixture provenance manifest.
+
+Base64 upstream vectors: `base64-upstream-25/vectors.json` adapts Go
+`src/encoding/base64/base64_test.go:25-38` (including RFC 4648 section 10),
+revision `ebe2feefc400f813aefdc8a036e66d2619da6649`.
+Copyright 2009 The Go Authors. All rights reserved. BSD-3-Clause (Go), full
+license above. Generated independent strict-Go expectations and Hirsel policy
+dispositions are described in the fixture's `provenance.json`.

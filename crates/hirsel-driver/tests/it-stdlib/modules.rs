@@ -94,3 +94,4 @@ mod base64_block_20;
 mod std_api_recipes_24;
 mod regex_empty_utf8_24;
 mod json_upstream_25;
+mod base64_upstream_25;

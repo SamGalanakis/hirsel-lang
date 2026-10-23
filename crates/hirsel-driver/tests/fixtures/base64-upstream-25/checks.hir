@@ -1,0 +1,99 @@
+// Expected bytes and typed errors are host literals from pinned Go, never a roundtrip.
+fn encoded(data: Bytes, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding, split: u64, size: u64, expected: String) -> String {
+  let mut state = std@1/base64.encoder(alphabet, padding)
+  let mut output = ""
+  failure.check(std@1/base64.encode_feed(mut state, b"") == Ok(""), TextInvariant())
+  let mut at = 0u64
+  let mut end = split
+  while at < bytes.len(data) || end == 0 {
+    let Ok(chunk) = std@1/base64.encode_feed(mut state, bytes.slice(data, at, end)) else {
+      failure.check(false, TextInvariant())
+      return ""
+    }
+    output = string.concat(output, chunk)
+    failure.check(string.as_bytes(output) == bytes.slice(string.as_bytes(expected), 0, end / 3 * 4), TextInvariant())
+    at = end
+    if at == bytes.len(data) { break }
+    end = if size == 0 || bytes.len(data) - at <= size { bytes.len(data) } else { at + size }
+  }
+  let Ok(tail) = std@1/base64.encode_finish(mut state) else {
+    failure.check(false, TextInvariant())
+    return ""
+  }
+  output = string.concat(output, tail)
+  failure.check(std@1/base64.encode_feed(mut state, b"x") == Error(Closed()), TextInvariant())
+  failure.check(std@1/base64.encode_finish(mut state) == Error(Closed()), TextInvariant())
+  take output
+}
+
+fn decoded(data: Bytes, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding, split: u64, size: u64, prefix: Bytes, terminal: u64, fail_at: u64) -> Result[Bytes, std@1/base64.DecodeError] {
+  let mut state = std@1/base64.decoder(alphabet, padding)
+  let mut output: List[u8] = []
+  failure.check(std@1/base64.decode_feed(mut state, b"") == Ok(b""), TextInvariant())
+  let mut at = 0u64
+  let mut end = split
+  let mut error: Option[std@1/base64.DecodeError] = None()
+  while at < bytes.len(data) || end == 0 {
+    match std@1/base64.decode_feed(mut state, bytes.slice(data, at, end)) {
+      Ok(chunk) => {
+        failure.check(fail_at == 0 || end < fail_at, TextInvariant())
+        let consumed = end / 4 * 3
+        let committed = if consumed < terminal { consumed } else { terminal }
+        failure.check(chunk == bytes.slice(prefix, list.len(output), committed), TextInvariant())
+        for byte in chunk { list.push(mut output, byte) }
+      },
+      Error(Decode(why)) => { failure.check(fail_at > at && fail_at <= end, TextInvariant()); error = Some(why); break },
+      Error(Closed()) => { failure.check(false, TextInvariant()) },
+    }
+    at = end
+    if at == bytes.len(data) { break }
+    end = if size == 0 || bytes.len(data) - at <= size { bytes.len(data) } else { at + size }
+  }
+  if error == None() {
+    match std@1/base64.decode_finish(mut state) {
+      Ok(chunk) => { for byte in chunk { list.push(mut output, byte) } },
+      Error(Decode(why)) => { failure.check(fail_at == 0, TextInvariant()); error = Some(why) },
+      Error(Closed()) => { failure.check(false, TextInvariant()) },
+    }
+  }
+  if let Some(why) = error {
+    failure.check(std@1/base64.decode_feed(mut state, b"valid") == Error(Decode(why)), TextInvariant())
+    failure.check(std@1/base64.decode_finish(mut state) == Error(Decode(why)), TextInvariant())
+    return Error(why)
+  }
+  failure.check(std@1/base64.decode_feed(mut state, b"x") == Error(Closed()), TextInvariant())
+  failure.check(std@1/base64.decode_finish(mut state) == Error(Closed()), TextInvariant())
+  Ok(bytes.from_list(take output))
+}
+
+fn vector(t: Test, id: String, raw: Bytes, input: String, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding, expected: Result[Bytes, std@1/base64.DecodeError], prefix: Bytes, terminal: u64, fail_at: u64, encode: bool, short: bool) {
+  failure.check(std@1/base64.decode(input, alphabet, padding) == expected, TextInvariant())
+  test.log(t, f"{id}/whole-decode")
+  if encode {
+    failure.check(std@1/base64.encode(raw, alphabet, padding) == input, TextInvariant())
+    test.log(t, f"{id}/whole-encode")
+  }
+  let input_bytes = string.as_bytes(input)
+  if short {
+    for split in 0u64..bytes.len(input_bytes) + 1 {
+      failure.check(decoded(input_bytes, alphabet, padding, split, 0, prefix, terminal, fail_at) == expected, TextInvariant())
+      test.log(t, f"{id}/stream-decode/split-{split}")
+    }
+    if encode {
+      for split in 0u64..bytes.len(raw) + 1 {
+        failure.check(encoded(raw, alphabet, padding, split, 0, input) == input, TextInvariant())
+        test.log(t, f"{id}/stream-encode/split-{split}")
+      }
+    }
+  } else {
+    let sizes: List[u64] = [1, 3, 7, 16]
+    for size in sizes {
+      failure.check(decoded(input_bytes, alphabet, padding, size, size, prefix, terminal, fail_at) == expected, TextInvariant())
+      test.log(t, f"{id}/stream-decode/chunk-{size}")
+      if encode {
+        failure.check(encoded(raw, alphabet, padding, size, size, input) == input, TextInvariant())
+        test.log(t, f"{id}/stream-encode/chunk-{size}")
+      }
+    }
+  }
+}
