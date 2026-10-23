@@ -2269,6 +2269,10 @@ impl TirProvider for QueryEngine {
                             item.item.name_span,
                         )
                     }
+                    None if self.catalog.body(&path).is_some() => (
+                        self.catalog.facts(&path)?.constant,
+                        self.declarations.sites(&path).first()?.name_span,
+                    ),
                     None => (
                         matches!(
                             self.image_signature(&path)?.output.value.kind,
