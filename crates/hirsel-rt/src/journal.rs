@@ -102,8 +102,8 @@ impl<W: io::Write> Journal for TapeJournal<W> {
     fn event(&mut self, _: Option<u64>, event: &Event) -> io::Result<()> {
         self.0.append(event)
     }
-    fn end(&mut self, _: &RunOutcome) -> io::Result<()> {
-        self.0.finish()
+    fn end(&mut self, outcome: &RunOutcome) -> io::Result<()> {
+        self.0.finish_with_outcome(outcome)
     }
 }
 

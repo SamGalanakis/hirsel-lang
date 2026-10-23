@@ -2058,6 +2058,9 @@ primary_operations! { library, call, context, name, a, value;
         return library.runner_call(name, &call, context).map(Some);
     },
     Capability: "signal.wait" => {
+        // The initial attempt suspends once. A host poll completes the same
+        // wait through wait_signal without yielding its resumed task again.
+        library.tasks.yield_now = true;
         // A rejected replay never publishes effects, consumes arrivals or keeps a wait.
         let saved = (!context.configuration.inputs.is_empty()).then(|| (library.simulation.clone(), library.signals.clone()));
         let result = library.wait_signal(a, context);

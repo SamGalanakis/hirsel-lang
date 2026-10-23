@@ -68,6 +68,8 @@ pub struct Tape {
     bytes: std::sync::Arc<Vec<u8>>,
     events: Vec<std::ops::Range<usize>>,
     pub complete: bool,
+    /// Confirmed terminal outcome, absent on legacy count-only trailers.
+    pub outcome: Option<hirsel_run_schema::RunOutcome>,
     pub valid: usize,
 }
 impl Tape {
@@ -84,10 +86,19 @@ impl Tape {
         let mut at = header.range.end;
         let mut events = vec![];
         let mut complete = false;
+        let mut outcome = None;
         while at < bytes.len() {
             let frame = tape::read(&bytes, at, events.len() as u64 + 1)?;
             match frame.kind {
                 3 if !complete => events.push(at + tape::FRAME..frame.range.end),
+                6 if !complete => {
+                    let (count, text): (u64, String) = decode(frame.payload)?;
+                    if count != events.len() as u64 {
+                        return Err("the trailer's event count disagrees".into());
+                    }
+                    outcome = Some(crate::journal::parse_outcome(&text)?);
+                    complete = true;
+                }
                 5 if !complete => {
                     let count: u64 = decode(frame.payload)?;
                     if count != events.len() as u64 {
@@ -108,6 +119,7 @@ impl Tape {
                 bytes,
                 events,
                 complete,
+                outcome,
                 valid: at,
             },
         ))
@@ -205,6 +217,23 @@ impl<W: Write> Writer<W> {
         self.write(self.count + 1, 3, event)?;
         self.count += 1;
         Ok(())
+    }
+    /// The production trailer preserves the run's confirmed ending (DET-1).
+    /// In particular an exhausted input prefix alone never proves Blocked.
+    pub fn finish_with_outcome(
+        &mut self,
+        outcome: &hirsel_run_schema::RunOutcome,
+    ) -> io::Result<()> {
+        if self.finished {
+            return Err(io::Error::other("finished recording"));
+        }
+        self.write(
+            self.count + 1,
+            6,
+            &(self.count, crate::journal::render_outcome(outcome)),
+        )?;
+        self.finished = true;
+        self.writer.flush()
     }
     pub fn finish(&mut self) -> io::Result<()> {
         if self.finished {

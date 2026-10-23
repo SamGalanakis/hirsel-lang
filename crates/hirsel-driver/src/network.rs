@@ -1146,6 +1146,9 @@ impl HostLibrary {
             return self.library.call(call, cx);
         }
         let a = &*call.arguments;
+        // A pending wait has not entered Library::wait_signal, which normally
+        // publishes this yield. Preserve native's yield-before-park boundary.
+        self.yield_now = true;
         let token = self.next_wait;
         self.next_wait += 1;
         if self.host_signal_wait(a, token)? {
@@ -1777,6 +1780,7 @@ impl HostLibrary {
         a: &mut [Value],
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        self.yield_now = true;
         if self.free_ready.is_some() {
             return self.storage("file.read", a);
         }
@@ -1818,7 +1822,11 @@ impl HostLibrary {
         } else {
             String::new()
         };
-        self.yield_now = true;
+        // A parked file read already spent its suspension at the initial call.
+        // Readiness retries can remain blocked without adding a scheduling point.
+        if name != "file.read" {
+            self.yield_now = true;
+        }
         let request = self.storage_request(name, a)?;
         let completion = self.host(request)?;
         let mut updates = vec![];

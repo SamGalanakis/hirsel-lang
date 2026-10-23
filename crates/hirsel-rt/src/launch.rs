@@ -2910,7 +2910,7 @@ pub(crate) unsafe fn execute(
     let mut finish = || -> Result<(), String> {
         echo_replay()?;
         if let Some(io) = &replay
-            && let Err(error) = io.borrow().finish()
+            && let Err(error) = io.borrow().finish_outcome(&outcome)
         {
             let _ = flush_stdout(sinks);
             return Err(format!("the replayed tape: {error:?}"));
@@ -2922,7 +2922,9 @@ pub(crate) unsafe fn execute(
                 .map_err(|e| format!("the Io tape: {e}"))?;
         }
         if let Some(writer) = &mut zero_recording {
-            writer.finish().map_err(|e| format!("the Io tape: {e}"))?;
+            writer
+                .finish_with_outcome(&outcome)
+                .map_err(|e| format!("the Io tape: {e}"))?;
         }
         write_observation(&record)
     };

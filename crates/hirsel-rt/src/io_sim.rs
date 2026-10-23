@@ -120,6 +120,9 @@ pub struct SimIo {
     tree: Tree,
     tape: ReplayTape,
     position: usize,
+    /// A complete recording's confirmed stop, never inferred from a missing event.
+    ending: Option<hirsel_run_schema::RunOutcome>,
+    ending_observed: bool,
     roots: std::collections::BTreeMap<u64, String>,
     identities: FileIdentities,
     detached_roots: std::collections::BTreeSet<u64>,
@@ -182,6 +185,8 @@ impl SimIo {
             tree,
             tape: ReplayTape::Owned(tape),
             position: 0,
+            ending: None,
+            ending_observed: false,
             roots: Default::default(),
             waits: Default::default(),
             runner_waits: Default::default(),
@@ -193,12 +198,38 @@ impl SimIo {
     }
     pub fn from_binary(tree: Tree, tape: crate::tape_binary::Tape) -> Self {
         let mut io = Self::new(tree, vec![]);
+        io.set_ending(tape.outcome.clone());
         io.tape = ReplayTape::Binary {
             tape,
             current: None,
             previous: None,
         };
         io
+    }
+    /// A trailer or recovered durable journal supplies the confirmed run ending.
+    pub(crate) fn set_ending(&mut self, outcome: Option<hirsel_run_schema::RunOutcome>) {
+        self.ending = outcome;
+    }
+    /// Check the terminal class too. Source coordinates in diagnostic metadata can
+    /// change after a formatting-only source edit, independently of program identity.
+    pub fn finish_outcome(
+        &self,
+        actual: &hirsel_run_schema::RunOutcome,
+    ) -> Result<(), AdapterError> {
+        self.finish()?;
+        if let Some(expected) = &self.ending {
+            use hirsel_run_schema::RunOutcome as O;
+            let matches = match (expected, actual) {
+                (O::Returned(a), O::Returned(b)) => a == b,
+                (O::Signaled(a), O::Signaled(b)) => a == b,
+                (O::BudgetExceeded(a), O::BudgetExceeded(b)) => a == b,
+                _ => std::mem::discriminant(expected) == std::mem::discriminant(actual),
+            };
+            if !matches {
+                return Err(AdapterError::ReplayMismatch(self.position));
+            }
+        }
+        Ok(())
     }
     /// Refuse ambiguous old durable scripted parks rather than guessing issue order.
     pub(crate) fn legacy_barrier_waits(&mut self, legacy: bool) {
@@ -277,6 +308,16 @@ impl SimIo {
             ));
         }
         if self.position == self.tape.len() {
+            if matches!(
+                self.ending,
+                Some(
+                    hirsel_run_schema::RunOutcome::Blocked(_)
+                        | hirsel_run_schema::RunOutcome::Signaled(_)
+                )
+            ) && !self.ending_observed
+            {
+                return Err(AdapterError::MissingInput(self.position));
+            }
             Ok(())
         } else {
             Err(AdapterError::UnconsumedInput(self.position))
@@ -412,6 +453,20 @@ impl Adapter for SimIo {
     /// No host wait: idle scheduling points continue only toward the next recorded `ready`,
     /// which must belong to a parked request that has not waited past it.
     fn wait(&mut self) -> Result<bool, AdapterError> {
+        if self.position == self.tape.len() {
+            use hirsel_run_schema::RunOutcome as O;
+            match self.ending {
+                Some(O::Blocked(_)) => {
+                    self.ending_observed = true;
+                    return Ok(false);
+                }
+                Some(O::Signaled(kind)) => {
+                    self.ending_observed = true;
+                    return Err(AdapterError::Signaled(kind));
+                }
+                _ => {}
+            }
+        }
         if self.waits.is_empty() {
             return Ok(false);
         }
@@ -1958,5 +2013,165 @@ mod scripted_connect_tests {
             matches!(io.call(connect), Err(AdapterError::Unsupported(detail)) if detail.contains("ambiguous Blocked") && detail.contains("re-record with Held"))
         );
         assert_eq!(io.position, 1);
+    }
+}
+#[cfg(test)]
+mod snapshot_wait_tests {
+    use super::*;
+    fn replay(held: bool, host: bool) -> (SimIo, Request) {
+        let directory = Request::Directory {
+            io: 1,
+            path: "data".into(),
+        };
+        let open = Request::Open {
+            directory: 2,
+            path: "input".into(),
+        };
+        let read = Request::FileRead {
+            directory: 2,
+            file: 3,
+            max: 1,
+        };
+        let mut io = SimIo::new(
+            Tree::new([("data/input".into(), b"x".to_vec())].into()).unwrap(),
+            vec![
+                Event {
+                    request: directory.clone(),
+                    completion: Completion::Handle(Ok(2)),
+                    fault: None,
+                },
+                Event {
+                    request: open.clone(),
+                    completion: if host {
+                        Completion::FileInput(FileInput::Opened(3))
+                    } else {
+                        Completion::Handle(Ok(3))
+                    },
+                    fault: None,
+                },
+                Event {
+                    request: read.clone(),
+                    completion: if held {
+                        Completion::Held
+                    } else {
+                        Completion::Blocked { committed: false }
+                    },
+                    fault: None,
+                },
+            ],
+        );
+        io.set_mounts([("data".into(), hirsel_run_schema::Access::Read)])
+            .unwrap();
+        assert_eq!(io.call(directory), Ok(Completion::Handle(Ok(2))));
+        assert_eq!(io.call(open), Ok(Completion::Handle(Ok(3))));
+        io.enter(10);
+        assert_eq!(io.call(read.clone()), Err(AdapterError::Blocked));
+        io.parked(10);
+        (io, read)
+    }
+    #[test]
+    fn root_snapshot_read_requires_confirmed_blocked_evidence() {
+        let (mut io, _) = replay(false, false);
+        assert_eq!(io.ready(), Ok(Ready::Tokens(vec![])));
+        assert_eq!(io.wait(), Err(AdapterError::MissingInput(3)));
+        io.set_ending(Some(hirsel_run_schema::RunOutcome::Blocked(vec![])));
+        assert_eq!(io.wait(), Ok(false));
+        assert_eq!(io.finish(), Ok(()));
+    }
+    #[test]
+    fn held_file_read_still_requires_the_journal_release() {
+        let (mut io, _) = replay(true, false);
+        assert_eq!(io.wait(), Err(AdapterError::MissingInput(3)));
+    }
+    #[test]
+    fn host_file_read_still_requires_its_completion() {
+        let (mut io, _) = replay(false, true);
+        assert_eq!(io.wait(), Err(AdapterError::MissingInput(3)));
+    }
+}
+
+#[cfg(test)]
+mod terminal_outcome_tests {
+    use super::*;
+    use crate::launch::{Recording, RecordingWriter};
+    use hirsel_run_schema::{RunOutcome as O, SignalKind};
+
+    fn binary(outcome: &O) -> Vec<u8> {
+        let header = Recording {
+            arguments: vec![],
+            run_identity: [0; 32],
+            hash_seed: 0,
+            random_seed: 0,
+            test_seed: 0,
+            binding: None,
+            tree: Tree::new(Default::default()).unwrap(),
+            events: vec![],
+        };
+        let mut bytes = vec![];
+        let mut writer = RecordingWriter::new(&mut bytes, &header).unwrap();
+        writer.finish_with_outcome(outcome).unwrap();
+        drop(writer);
+        bytes
+    }
+    fn replay(bytes: Vec<u8>) -> SimIo {
+        let (header, tape) = crate::tape_binary::replay(bytes).unwrap();
+        SimIo::from_binary(header.tree, tape.unwrap())
+    }
+    #[test]
+    fn confirmed_blocked_stop_is_required_and_observed_without_host_waits() {
+        let ending = O::Blocked(vec![]);
+        let mut io = replay(binary(&ending));
+        assert_eq!(io.finish(), Err(AdapterError::MissingInput(0)));
+        assert_eq!(io.wait(), Ok(false));
+        assert_eq!(io.finish_outcome(&ending), Ok(()));
+        assert_eq!(
+            io.finish_outcome(&O::Returned(hirsel_run_schema::Returned::Ok)),
+            Err(AdapterError::ReplayMismatch(0))
+        );
+    }
+    #[test]
+    fn scripted_default_signal_is_a_recorded_stop() {
+        let mut io = replay(binary(&O::Signaled(SignalKind::Interrupt)));
+        assert_eq!(io.finish(), Err(AdapterError::MissingInput(0)));
+        assert_eq!(
+            io.wait(),
+            Err(AdapterError::Signaled(SignalKind::Interrupt))
+        );
+        assert_eq!(
+            io.finish_outcome(&O::Signaled(SignalKind::Interrupt)),
+            Ok(())
+        );
+        assert_eq!(
+            io.finish_outcome(&O::Signaled(SignalKind::Terminate)),
+            Err(AdapterError::ReplayMismatch(0))
+        );
+    }
+    #[test]
+    fn terminal_frame_requires_full_envelope_and_no_suffix() {
+        let bytes = binary(&O::Blocked(vec![]));
+        assert!(crate::tape_binary::parse(&bytes[..bytes.len() - 1]).is_err());
+        let mut suffix = bytes.clone();
+        suffix.push(0);
+        assert!(crate::tape_binary::parse(&suffix).is_err());
+        let mut corrupt = bytes;
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(crate::tape_binary::parse(&corrupt).is_err());
+    }
+    #[test]
+    fn returned_and_budget_outcomes_still_require_the_exact_status() {
+        for (a, b) in [
+            (
+                O::Returned(hirsel_run_schema::Returned::Ok),
+                O::Returned(hirsel_run_schema::Returned::Error),
+            ),
+            (
+                O::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel),
+                O::BudgetExceeded(hirsel_run_schema::BudgetKind::Memory),
+            ),
+        ] {
+            let io = replay(binary(&a));
+            assert_eq!(io.finish_outcome(&a), Ok(()));
+            assert_eq!(io.finish_outcome(&b), Err(AdapterError::ReplayMismatch(0)));
+        }
     }
 }

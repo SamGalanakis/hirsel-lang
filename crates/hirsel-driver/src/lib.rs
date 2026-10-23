@@ -892,11 +892,9 @@ fn run_loaded_on_host_with_checks(
         }));
     }
     let execution = execution.map_err(|e| match e.error {
-        hirsel_interp::Error::Unavailable(_) => ToolError::Query {
-            error: hirsel_types::QueryError::NotImplemented,
-            phase: Some(hirsel_engine::QueryKind::Interpret),
-            sources: sources.clone(),
-        },
+        hirsel_interp::Error::Unavailable(reason) => {
+            ToolError::Runtime(format!("interpretation unavailable: {reason}"))
+        }
         hirsel_interp::Error::Query(error) => ToolError::Query {
             error,
             phase: Some(hirsel_engine::QueryKind::Interpret),
@@ -938,7 +936,7 @@ fn run_loaded_on_host_with_checks(
         && !operations.library.native_free()
         && !matches!(execution.outcome, hirsel_interp::Outcome::ToolingLimit(_))
     {
-        io.finish().map_err(|e| {
+        io.finish_outcome(&outcome).map_err(|e| {
             ToolError::Runtime(format!(
                 "replay refused: {e:?}; run stopped with {outcome:?}"
             ))

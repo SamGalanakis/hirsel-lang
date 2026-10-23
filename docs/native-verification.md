@@ -220,6 +220,14 @@ unconsumed suffix fails replay. Keep tapes private: they contain the run record
 and all bytes read/written. Preserve failed attempts in distinct directories;
 remove only your own evidence directory when you no longer need it.
 
+Binary v8 recordings now finish with frame kind 6: the event count and the
+journal's terminal-outcome encoding. Replay checks the count and outcome; a
+recorded Blocked ending permits an exhausted replay to stop without another
+host input only after its terminal wait observes that ending. A missing event
+alone does not establish Blocked. Legacy kind 5 count-only trailers remain
+readable with their existing strict input rules. Durable journals retain the
+same terminal evidence. Runtime revision binding still applies to old tapes.
+
 ## Run the executable check
 
 From a source checkout, discover the registered target, then run this one check:

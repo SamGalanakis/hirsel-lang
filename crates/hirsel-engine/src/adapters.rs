@@ -291,7 +291,9 @@ impl PhaseAdapters {
 fn core_error(error: hirsel_interp::Error) -> RuntimeError {
     match error {
         hirsel_interp::Error::Query(e) => RuntimeError::Query(e),
-        hirsel_interp::Error::Unavailable(_) => RuntimeError::Query(QueryError::NotImplemented),
+        hirsel_interp::Error::Unavailable(reason) => {
+            RuntimeError::Tool(format!("interpretation unavailable: {reason}"))
+        }
         hirsel_interp::Error::InvalidTir(e) => RuntimeError::Tool(format!("invalid TIR: {e}")),
         hirsel_interp::Error::Blocked(_) => {
             RuntimeError::Tool("unhandled Blocked stop signal".into())
@@ -312,8 +314,8 @@ fn core_error(error: hirsel_interp::Error) -> RuntimeError {
 fn launch_error(error: hirsel_interp::library::LaunchError) -> RuntimeError {
     match error {
         hirsel_interp::library::LaunchError::Provider(e) => RuntimeError::Query(e),
-        hirsel_interp::library::LaunchError::Unavailable(_) => {
-            RuntimeError::Query(QueryError::NotImplemented)
+        hirsel_interp::library::LaunchError::Unavailable(reason) => {
+            RuntimeError::Tool(format!("launch unavailable: {reason}"))
         }
         error => RuntimeError::Tool(format!("launch: {error:?}")),
     }

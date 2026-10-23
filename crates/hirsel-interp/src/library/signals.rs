@@ -76,7 +76,6 @@ impl Library {
                 _ => return Err(invalid("invalid SignalKind")),
             }
         }
-        self.tasks.yield_now = true;
         let input = vec![bits];
         let granted = self.signals_granted().map_or(0, |g| g.bits());
         let value = if bits == 0 {
