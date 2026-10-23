@@ -96,3 +96,4 @@ mod regex_empty_utf8_24;
 mod json_upstream_25;
 mod base64_upstream_25;
 mod toml_upstream_25;
+mod decimal_upstream_25;

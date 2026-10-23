@@ -1,0 +1,49 @@
+{
+  "seed": 2026102506,
+  "references": [
+    {
+      "start": 1440,
+      "end": 1480,
+      "revision": "b23fb077e301e77cb0ac36cc1ac4df1fba6c45d5",
+      "sha256": "492356140cc9530bb99c47e6058467711f2064eeeb082d566dee91c9fb0d5972",
+      "path": "rust_decimal/src/decimal.rs"
+    },
+    {
+      "start": 1,
+      "end": 15,
+      "revision": "b23fb077e301e77cb0ac36cc1ac4df1fba6c45d5",
+      "sha256": "d3023806603327018adad74c92671d3e54c3e5af623c93167b026f8f168c0ed3",
+      "path": "rust_decimal/tests/generated/Add_000_001.csv"
+    },
+    {
+      "start": 2504,
+      "end": 2540,
+      "revision": "8b7d6c53eee2226b08bed761d5a1742b5adb8507",
+      "sha256": "f593587a97ef4dad5716f1362f52e8e3d4ba48910f81138f4170c30c631e8089",
+      "path": "cpython/Lib/_pydecimal.py"
+    },
+    {
+      "start": 1,
+      "end": 45,
+      "revision": "8b7d6c53eee2226b08bed761d5a1742b5adb8507",
+      "sha256": "3dd55b5e9c7428026370098b9afd67c64921ce78b7c6f193fe8612da3120de00",
+      "path": "cpython/Lib/test/decimaltestdata/rounding.decTest"
+    },
+    {
+      "revision": "b23fb077e301e77cb0ac36cc1ac4df1fba6c45d5",
+      "start": 1,
+      "end": 128,
+      "sha256": "5d5676c28a61c8a820e35f6f91dd0719f26f997e09f998567130035bfa227a78",
+      "path": "rust_decimal/tests/decimal_tests/rounding.rs"
+    }
+  ],
+  "oracle": {
+    "python_module": "CPython Lib/_pydecimal.py",
+    "precision": 160,
+    "implementation": "Python 3.14.8",
+    "rust_decimal_features": [
+      "std"
+    ],
+    "generator_sha256": "46867ef95378a6cab2f249528317f9fd25daf361ee8b7847f9fcbdf4e486f538"
+  }
+}

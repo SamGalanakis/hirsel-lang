@@ -1,0 +1,3 @@
+[
+{"id":"normalize-negative-zero-minimal","op":"normalize","a":"0","sa":-1,"b":"0","sb":0,"target":0,"mode":"HalfEven","python_raw":{"text":"0","tuple":[0,[0],0]},"expected":{"coefficient":"0","scale":0,"text":"0"},"output":"normalize-negative-zero-minimal|0|0|0\n","disposition":["same"],"input_sha256":"ddc51ecb02eace618b8a06551c57ea7133504ac38ec098c57a51a8113ab35179","expected_sha256":"4fdacc4662a959fab3fc721a78051d4f965d183ca8ef7158e849944f332b7314","oracle":"cpython-8b7d6c53-prec160+rational-certificate","partition":"minimal","reason":"Minimized baseline normalize-131 disagreement: retain smallest negative scale and no parser dependency in the standalone witness."}
+]

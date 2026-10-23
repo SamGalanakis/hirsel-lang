@@ -1,0 +1,3 @@
+[
+{"id":"scale-overflow-low","op":"scale-overflow-low","a":"0","sa":0,"b":"0","sb":0,"target":0,"mode":"HalfEven","expected":"SEM-1","python_raw":"unbounded exponent; no i32 policy","output":"","disposition":["sem-1-policy"],"input_sha256":"bc822779755de20ae9f5d018941859aa196cb74c880910a20423589eec9c831f","expected_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","oracle":"cpython-8b7d6c53-prec160+rational-certificate","partition":23}
+]

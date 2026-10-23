@@ -1,0 +1,4 @@
+[
+{"id":"parse-160","op":"parse","a":"0","sa":0,"b":"0","sb":0,"target":0,"mode":"HalfEven","lexical":"Infinity","python_raw":"Infinity","expected":"Invalid","output":"parse-160|Invalid\n","disposition":["strict-lexical-grammar"],"input_sha256":"fdfc5c446a0bc0b2c3191e7badcc9b2419bf95ba209c0c092e15f2eb5a910f42","expected_sha256":"1ed3f3c9400816c3448150f3a0075b17ac3ab1dcce887403a5354da32124913d","oracle":"cpython-8b7d6c53-prec160+rational-certificate","partition":20},
+{"id":"parse-161","op":"parse","a":"0","sa":0,"b":"0","sb":0,"target":0,"mode":"HalfEven","lexical":"١","python_raw":"1","expected":"Invalid","output":"parse-161|Invalid\n","disposition":["strict-lexical-grammar"],"input_sha256":"46a5e809d8d3fd519daa6e4a47b3e8f6da8cb7f3f5490b734b8ad3474e22a348","expected_sha256":"ac31310957f08007e30ce86ac4b4ecc69f7e0628e2be087be8a48ee2c7c7facf","oracle":"cpython-8b7d6c53-prec160+rational-certificate","partition":20}
+]

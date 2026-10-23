@@ -172,7 +172,7 @@ pub fn normalize(value: Decimal) -> Decimal uses {} {
     unscaled = q
     places -= 1
   }
-  if bigint.is_zero(unscaled) && places > 0 {
+  if bigint.is_zero(unscaled) {
     places = 0
   }
   Decimal(coefficient: unscaled, scale: places)

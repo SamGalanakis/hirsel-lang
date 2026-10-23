@@ -1,0 +1,3 @@
+[
+{"id":"zero-divisor","op":"zero-divisor","a":"0","sa":0,"b":"0","sb":0,"target":0,"mode":"HalfEven","expected":"SEM-1","python_raw":"DivisionByZero","output":"","disposition":["sem-1-policy"],"input_sha256":"fab1937dbe1831b60adba8edd0cdbbd8b65bc6e4b53b579b3324586c55f7ad88","expected_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","oracle":"cpython-8b7d6c53-prec160+rational-certificate","partition":21}
+]
