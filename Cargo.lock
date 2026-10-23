@@ -1162,6 +1162,7 @@ dependencies = [
  "hirsel-type-analysis",
  "hirsel-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
