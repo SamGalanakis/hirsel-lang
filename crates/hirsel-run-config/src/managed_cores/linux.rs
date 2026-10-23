@@ -5,6 +5,7 @@ use super::{CpuSet, HostLimits, Quota};
 use crate::{RunRefusal, invalid};
 use std::{
     fs, io,
+    io::BufRead,
     path::{Component, Path, PathBuf},
 };
 
@@ -47,9 +48,19 @@ impl LinuxLimits {
             return Ok(limits);
         };
         let group = absolute(group)?;
-        let mounts = read(&self.proc_root.join("self/mountinfo"))?;
+        let mountinfo = self.proc_root.join("self/mountinfo");
+        let failed =
+            |e: io::Error| invalid("host limits", &format!("{}: {e}", mountinfo.display()));
+        // Reuse one line, as in Rust BufRead::read_line. A full mount table can
+        // cross libc's mmap threshold and change later runtime slab backing.
+        let mut mounts = io::BufReader::new(fs::File::open(&mountinfo).map_err(failed)?);
+        let mut line = String::new();
         let mut candidates = Vec::new();
-        for line in mounts.lines() {
+        loop {
+            line.clear();
+            if mounts.read_line(&mut line).map_err(failed)? == 0 {
+                break;
+            }
             let Some((before, after)) = line.split_once(" - ") else {
                 continue;
             };

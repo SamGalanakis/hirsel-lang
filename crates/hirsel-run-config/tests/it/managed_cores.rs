@@ -448,3 +448,40 @@ fn real_host_limit_probe() {
         r.target, r.hard_limit, r.quota
     );
 }
+
+#[test]
+fn large_mount_tables_preserve_root_selection_and_unterminated_last_lines() {
+    let f = Fixture::new();
+    f.put("cg/cpu.max", "200000 100000\n");
+    // Ordinary mounts dwarf the cgroup records on container hosts. Include a
+    // line larger than BufReader's buffer, CRLF, and a final line without LF.
+    let mut mounts = format!(
+        "2 0 0:2 / /ordinary rw - tmpfs tmpfs {}\n",
+        "x".repeat(20000)
+    );
+    mounts.push_str(&"2 0 0:2 / /ordinary rw - tmpfs tmpfs rw\n".repeat(5000));
+    mounts.push_str(&format!(
+        "3 0 0:3 /parent {} rw - cgroup2 cgroup rw\r\n",
+        f.0.join("cg/parent").display()
+    ));
+    mounts.push_str(&format!(
+        "4 0 0:4 / {} rw - cgroup2 cgroup rw",
+        f.0.join("cg").display()
+    ));
+    f.put("proc/self/mountinfo", &mounts);
+    let limits = f.reader().read().unwrap();
+    assert_eq!(limits.quota.unwrap().ceil(), 2);
+    assert_eq!(limits.effective_cpuset, cpus("0-15"));
+    assert_eq!(limits.throttled_usec, 123);
+}
+
+#[test]
+fn mount_discovery_rejects_invalid_utf8_after_a_usable_mount() {
+    let f = Fixture::new();
+    let path = f.0.join("proc/self/mountinfo");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend_from_slice(b"2 0 0:2 / /ordinary rw - tmpfs tmpfs ");
+    bytes.extend_from_slice(&[0xff, b'\n']);
+    fs::write(&path, bytes).unwrap();
+    assert!(f.reader().read().is_err());
+}
