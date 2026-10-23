@@ -4,6 +4,7 @@
 hirsel_guard::install!();
 
 mod work;
+pub mod runtime;
 pub use work::WorkStats;
 mod operations;
 pub use operations::*;
