@@ -1,0 +1,92 @@
+// RustFFT 3bfe1afa src/algorithm/dft.rs:27-72 and twiddles.rs:6-23.
+// Precompute N twiddles; each output starts at zero and advances its index
+// with one conditional subtraction. No planner, SIMD, or FFT is involved.
+pub type Twiddles {
+  length: u64,
+  values: List[samples.Complex],
+}
+
+pub fn new(length: u64) -> Result[unique Twiddles, report.Problem] uses {} {
+  if length == 0 || length > samples.MAX_SAMPLES {
+    return Error(Samples())
+  }
+  let Some(cells) = int.checked_mul(length, length) else {
+    return Error(Overflow())
+  }
+  if cells > 1024 {
+    return Error(Overflow())
+  }
+  let mut values: List[samples.Complex] = []
+  list.reserve(mut values, length)
+  let constant: f64 = -2.0 * 3.14159265358979323846264338327950288 / core@1/float.from_int(
+    length
+  )
+  let mut i = 0u64
+  while i < length {
+    let angle: f64 = constant * core@1/float.from_int(i)
+    list.push(
+      mut values,
+      samples.Complex(real: f64.cos(angle), imaginary: f64.sin(angle))
+    )
+    i += 1
+  }
+  Ok(unique Twiddles(length: length, values: take values))
+}
+
+pub fn scratch(length: u64) -> Result[unique List[samples.Complex], report.Problem] uses {} {
+  if length == 0 || length > samples.MAX_SAMPLES {
+    return Error(Samples())
+  }
+  let mut out: unique List[samples.Complex] = unique []
+  list.reserve(mut out, length)
+  let mut i = 0u64
+  while i < length {
+    // Deliberately dirty: correctness must not depend on zeroed scratch.
+    list.push(mut out, samples.Complex(real: 937.0, imaginary: -451.0))
+    i += 1
+  }
+  Ok(take out)
+}
+
+pub fn apply(
+  twiddles: Twiddles,
+  source: samples.Series[samples.Complex],
+  inverse: bool,
+  mut output: unique List[samples.Complex]
+) -> Result[(), report.Problem] uses {} {
+  let n = twiddles.length
+  if n == 0 || n > samples.MAX_SAMPLES || list.len(twiddles.values) != n || list.len(
+    source.values
+  ) != n || list.len(output) != n {
+    return Error(Samples())
+  }
+  let mut k = 0u64
+  while k < n {
+    let mut real: f64 = 0.0
+    let mut imaginary: f64 = 0.0
+    let mut index = 0u64
+    for value in source.values {
+      let twiddle = twiddles.values[index]
+      let imag = if inverse {
+        -twiddle.imaginary
+      } else {
+        twiddle.imaginary
+      }
+      real += twiddle.real * value.real - imag * value.imaginary
+      imaginary += twiddle.real * value.imaginary + imag * value.real
+      index += k
+      if index >= n {
+        index -= n
+      }
+    }
+    if inverse {
+      // RustFFT leaves normalization to its caller. Our inverse does it here,
+      // exactly once, after the whole sum; verification never normalizes again.
+      real /= core@1/float.from_int(n)
+      imaginary /= core@1/float.from_int(n)
+    }
+    output[k] = samples.Complex(real: real, imaginary: imaginary)
+    k += 1
+  }
+  Ok(())
+}

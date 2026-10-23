@@ -1,0 +1,30 @@
+{
+  "channels": [
+    {
+      "samples": [
+        {
+          "real": 0,
+          "imaginary": 1
+        },
+        {
+          "real": 2.5,
+          "imaginary": -3
+        },
+        {
+          "real": -1,
+          "imaginary": -1
+        },
+        {
+          "real": 4,
+          "imaginary": 0
+        }
+      ]
+    }
+  ],
+  "remove_mean": false,
+  "top": 8,
+  "band": {
+    "first": 0,
+    "end": 4
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "spectralaudit",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "samples.hir",
+      "module": [
+        "samples"
+      ]
+    },
+    {
+      "path": "transform.hir",
+      "module": [
+        "transform"
+      ]
+    },
+    {
+      "path": "analysis.hir",
+      "module": [
+        "analysis"
+      ]
+    },
+    {
+      "path": "verify.hir",
+      "module": [
+        "verify"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

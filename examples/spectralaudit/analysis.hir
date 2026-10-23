@@ -1,0 +1,196 @@
+pub type Audit {
+  ordinal: u64,
+  mean: samples.Complex,
+  spectrum: samples.Series[samples.Complex],
+  peaks: List[u64],
+  band_energy: f64,
+  checks: verify.Checks,
+}
+
+fn mean(source: samples.Series[samples.Complex]) -> samples.Complex uses {} {
+  let total = samples.fold(
+    source,
+    samples.zero(),
+    fn(take sum: samples.Complex, value: samples.Complex) -> samples.Complex {
+      samples.Complex(
+        real: sum.real + value.real,
+        imaginary: sum.imaginary + value.imaginary
+      )
+    }
+  )
+  let n: f64 = core@1/float.from_int(list.len(source.values))
+  samples.Complex(real: total.real / n, imaginary: total.imaginary / n)
+}
+
+fn peaks(spectrum: samples.Series[samples.Complex], top: u64) -> unique List[u64] uses {} {
+  let mut out: unique List[u64] = unique []
+  let n = list.len(spectrum.values)
+  while list.len(out) < top {
+    let mut best = n
+    let mut best_energy: f64 = -1.0
+    let mut i = 0u64
+    while i < n {
+      let mut selected = false
+      for previous in out {
+        if previous == i {
+          selected = true
+        }
+      }
+      if !selected {
+        let energy = verify.magnitude_squared(spectrum.values[i])
+        // Strict comparison retains the lower ordinal on equal energy.
+        if energy > best_energy {
+          best = i
+          best_energy = energy
+        }
+      }
+      i += 1
+    }
+    list.push(mut out, best)
+  }
+  take out
+}
+
+pub fn channel(
+  table: transform.Twiddles,
+  source: samples.Channel,
+  remove_mean: bool,
+  top: u64,
+  first: u64,
+  end: u64
+) -> Result[unique Audit, report.Problem] uses {} {
+  let average = if remove_mean {
+    mean(source.series)
+  } else {
+    samples.zero()
+  }
+  let centered = samples.map(
+    source.series,
+    fn(value: samples.Complex) -> samples.Complex {
+      samples.Complex(
+        real: value.real - average.real,
+        imaginary: value.imaginary - average.imaginary
+      )
+    }
+  )
+  let n = list.len(centered.values)
+  let mut bins = transform.scratch(n)?
+  transform.apply(table, centered, false, mut bins)?
+  let spectrum = samples.Series(values: take bins)
+  let mut rebuilt = transform.scratch(n)?
+  // Overwrite the same dirty storage twice, exercising reuse without aliasing.
+  transform.apply(table, spectrum, true, mut rebuilt)?
+  transform.apply(table, spectrum, true, mut rebuilt)?
+  let reconstruction = samples.Series(values: take rebuilt)
+  let checks = verify.check(centered, spectrum, reconstruction)?
+  let selected = peaks(spectrum, top)
+  let mut band_energy: f64 = 0.0
+  let mut i = first
+  while i < end {
+    band_energy += verify.magnitude_squared(spectrum.values[i])
+    i += 1
+  }
+  Ok(
+    unique Audit(
+      ordinal: source.ordinal,
+      mean: average,
+      spectrum: take spectrum,
+      peaks: take selected,
+      band_energy: band_energy / core@1/float.from_int(n),
+      checks: checks
+    )
+  )
+}
+
+// Shared immutable nested input views are scoped to the callback. Each task
+// produces its own owned Audit; add-order publication is independent of finish.
+pub fn run(tasks: Tasks, take manifest: unique samples.Manifest, jobs: u64) -> Result[
+  unique List[unique Audit],
+  report.Problem
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let table = shared.freeze(transform.new(manifest.length)?)
+  let input = shared.freeze(take manifest)
+  shared.with(
+    input,
+    fn(meta: samples.Manifest) -> Result[unique List[unique Audit], report.Problem] {
+      task.scope(
+        tasks,
+        fn(s: Scope) -> Result[unique List[unique Audit], report.Problem] {
+          let mut output: unique List[unique Audit] = unique []
+          let count = list.len(meta.channels)
+          let mut first = 0u64
+          while first < count {
+            let mut pending: TaskSet[Result[unique Audit, report.Problem]] of s = task.set(
+              s
+            )
+            let mut ordered: List[Option[unique Audit]] = []
+            let end = if jobs < count - first {
+              first + jobs
+            } else {
+              count
+            }
+            let mut index = first
+            while index < end {
+              let ordinal = index
+              list.push(mut ordered, None())
+              task.add(
+                s,
+                mut pending,
+                task.async(
+                  s,
+                  fn() -> Result[unique Audit, report.Problem] {
+                    shared.with(
+                      input,
+                      fn(data: samples.Manifest) -> Result[unique Audit, report.Problem] {
+                        shared.with(
+                          table,
+                          fn(twiddles: transform.Twiddles) -> Result[
+                            unique Audit,
+                            report.Problem
+                          ] {
+                            channel(
+                              twiddles,
+                              data.channels[ordinal],
+                              data.remove_mean,
+                              data.top,
+                              data.first,
+                              data.end
+                            )
+                          }
+                        )
+                      }
+                    )
+                  }
+                )
+              )
+              index += 1
+            }
+            while let Some(completed) = task.await_any(s, pending) {
+              match task.await_at(s, mut pending, completed) {
+                Ok(value) => {
+                  ordered[completed] = Some(take value)
+                },
+                Error(problem) => {
+                  task.cancel_all(s, take pending)
+                  return Error(problem)
+                },
+              }
+            }
+            task.cancel_all(s, take pending)
+            for slot in take ordered {
+              let Some(value) = take slot else {
+                return Error(Verification())
+              }
+              list.push(mut output, take value)
+            }
+            first = end
+          }
+          Ok(take output)
+        }
+      )
+    }
+  )
+}

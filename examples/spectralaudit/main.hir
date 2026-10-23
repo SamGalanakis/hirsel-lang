@@ -1,0 +1,144 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  root: Path,
+  input: Path,
+  output: Path,
+  jobs: u64,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, report.Problem] uses {args} {
+  let n = arg.len(args)
+  if n != 4 && n != 5 {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(input) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(output) = arg.path(args, 2) else {
+    return Error(Usage())
+  }
+  let Ok(text) = arg.text(args, 3) else {
+    return Error(Usage())
+  }
+  let Ok(jobs) = u64.parse(text) else {
+    return Error(Jobs())
+  }
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  if n == 5 {
+    let Ok(flag) = arg.text(args, 4) else {
+      return Error(Usage())
+    }
+    if flag != "--interruptible" {
+      return Error(Usage())
+    }
+  }
+  Ok(
+    Options(root: root, input: input, output: output, jobs: jobs, interruptible: n == 5)
+  )
+}
+
+fn read(d: Dir, path: Path) -> Result[unique samples.Manifest, report.Problem] {
+  let mut input = match file.open(d, path) {
+    Ok(value) => take value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let data = match file.read_all_bounded(d, mut input, samples.MAX_INPUT) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(InputLimit()),
+    Error(File(error)) => return Error(report.file_error(Read(), error)),
+  }
+  samples.parse(take data)
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[u64, report.Problem] {
+  let manifest = read(d, options.input)?
+  let count = list.len(manifest.channels)
+  let audits = analysis.run(tasks, take manifest, options.jobs)?
+  let bytes = report.render(audits)?
+  report.publish(d, options.output, bytes)?
+  Ok(count)
+}
+
+fn interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  u64,
+  report.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, report.Problem] {
+      let mut pending: TaskSet[Result[u64, report.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Canceled(Requested()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[u64, report.Problem] {
+  let options = arguments(args)?
+  let d = match io.dir(rt, options.root) {
+    Ok(value) => value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(count) => {
+      let mut message: List[u8] = []
+      bytes.append(mut message, b"spectral: ")
+      u64.format_into(count, mut message)
+      bytes.append(mut message, b" channels\n")
+      out.write(output, bytes.from_list(take message))?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, report.diagnostic(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

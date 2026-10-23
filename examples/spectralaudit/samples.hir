@@ -1,0 +1,205 @@
+// Owned samples are independent of the borrowed JSON DOM and input buffer.
+pub const MAX_INPUT: u64 = 32768
+
+pub const MAX_OUTPUT: u64 = 16384
+
+pub const MAX_CHANNELS: u64 = 4
+
+pub const MAX_SAMPLES: u64 = 32
+
+pub type Complex {
+  real: f64,
+  imaginary: f64,
+}
+
+pub type Series[T] {
+  values: List[T],
+}
+
+pub type Channel {
+  ordinal: u64,
+  series: Series[Complex],
+}
+
+pub type Manifest {
+  channels: List[Channel],
+  length: u64,
+  remove_mean: bool,
+  top: u64,
+  first: u64,
+  end: u64,
+}
+
+// Callbacks borrow each sample and the captured environment. No sample copy is
+// needed by fold. map owns its new list and every callback-produced element.
+pub fn map[T, U](source: Series[T], f: fn(T) -> U) -> Series[U] uses {source, f} {
+  let mut mapped: List[U] = []
+  for value in source.values {
+    list.push(mut mapped, f(value))
+  }
+  Series(values: take mapped)
+}
+
+pub fn fold[T, A](source: Series[T], take initial: A, f: fn(take A, T) -> A) -> A uses {source, initial, f} {
+  let mut accumulator = take initial
+  for value in source.values {
+    accumulator = f(take accumulator, value)
+  }
+  take accumulator
+}
+
+pub fn zero() -> Complex uses {} {
+  Complex(real: 0.0, imaginary: 0.0)
+}
+
+fn natural(value: json.Value) -> Result[u64, report.Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Schema())
+  }
+  match u64.parse(text) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Schema()),
+  }
+}
+
+fn component(value: json.Value) -> Result[f64, report.Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Schema())
+  }
+  let Ok(number) = f64.parse(text) else {
+    return Error(Component())
+  }
+  // NaN and infinities cannot enter through JSON grammar. Overflow during
+  // conversion is still checked here, including a future parser's infinity.
+  if number != number || number < -1000.0 || number > 1000.0 {
+    return Error(Component())
+  }
+  Ok(number)
+}
+
+fn sample(value: json.Value) -> Result[Complex, report.Problem] uses {} {
+  let Object(fields) = value else {
+    return Error(Schema())
+  }
+  if map.len(fields) != 2 {
+    return Error(Schema())
+  }
+  let Some(real) = map.get(fields, "real") else {
+    return Error(Schema())
+  }
+  let Some(imaginary) = map.get(fields, "imaginary") else {
+    return Error(Schema())
+  }
+  Ok(Complex(real: component(real)?, imaginary: component(imaginary)?))
+}
+
+fn channel(input_value: json.Value, ordinal: u64, expected: u64) -> Result[
+  unique Channel,
+  report.Problem
+] uses {} {
+  let Object(fields) = input_value else {
+    return Error(Schema())
+  }
+  if map.len(fields) != 1 {
+    return Error(Schema())
+  }
+  let Some(Array(values)) = map.get(fields, "samples") else {
+    return Error(Schema())
+  }
+  let count = list.len(values)
+  if count == 0 || count > MAX_SAMPLES || expected != 0 && expected != count {
+    return Error(Samples())
+  }
+  let mut out: List[Complex] = []
+  list.reserve(mut out, count)
+  for value in values {
+    list.push(mut out, sample(value)?)
+  }
+  Ok(unique Channel(ordinal: ordinal, series: Series(values: take out)))
+}
+
+pub fn parse(take bytes: unique Bytes) -> Result[unique Manifest, report.Problem] uses {} {
+  if bytes.len(bytes) > MAX_INPUT {
+    return Error(InputLimit())
+  }
+  let Ok(text) = string.from_bytes(take bytes) else {
+    return Error(Json())
+  }
+  let Ok(document) = json.parse(take text) else {
+    return Error(Json())
+  }
+  let Object(root) = document else {
+    return Error(Schema())
+  }
+  if map.len(root) != 4 {
+    return Error(Schema())
+  }
+  let Some(Array(channels)) = map.get(root, "channels") else {
+    return Error(Schema())
+  }
+  let Some(Bool(remove_mean)) = map.get(root, "remove_mean") else {
+    return Error(Schema())
+  }
+  let Some(top_value) = map.get(root, "top") else {
+    return Error(Schema())
+  }
+  let Some(Object(band)) = map.get(root, "band") else {
+    return Error(Schema())
+  }
+  if map.len(band) != 2 {
+    return Error(Schema())
+  }
+  let Some(first_value) = map.get(band, "first") else {
+    return Error(Schema())
+  }
+  let Some(end_value) = map.get(band, "end") else {
+    return Error(Schema())
+  }
+  let top = natural(top_value)?
+  let first = natural(first_value)?
+  let end = natural(end_value)?
+  if top == 0 || top > 8 {
+    return Error(Top())
+  }
+  let count = list.len(channels)
+  if count == 0 || count > MAX_CHANNELS {
+    return Error(Channels())
+  }
+  // Bound all count products before reserving owned channel/sample storage.
+  let Some(total) = int.checked_mul(count, MAX_SAMPLES) else {
+    return Error(Overflow())
+  }
+  let Some(cells) = int.checked_mul(total, 2) else {
+    return Error(Overflow())
+  }
+  if cells > 256 {
+    return Error(Overflow())
+  }
+  let mut out: List[Channel] = []
+  list.reserve(mut out, count)
+  let mut length = 0u64
+  let mut ordinal = 0u64
+  for value in channels {
+    let decoded = channel(value, ordinal, length)?
+    length = list.len(decoded.series.values)
+    list.push(mut out, take decoded)
+    ordinal += 1
+  }
+  if first >= end || end > length {
+    return Error(Band())
+  }
+  Ok(
+    unique Manifest(
+      channels: take out,
+      length: length,
+      remove_mean: remove_mean,
+      top: if top < length {
+        top
+      } else {
+        length
+      },
+      first: first,
+      end: end
+    )
+  )
+}

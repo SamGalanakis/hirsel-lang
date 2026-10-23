@@ -1,0 +1,64 @@
+pub type Checks {
+  reconstruction_error: f64,
+  time_energy: f64,
+  frequency_energy: f64,
+  energy_error: f64,
+}
+
+pub fn magnitude_squared(value: samples.Complex) -> f64 uses {} {
+  value.real * value.real + value.imaginary * value.imaginary
+}
+
+pub fn energy(source: samples.Series[samples.Complex]) -> f64 uses {} {
+  samples.fold(
+    source,
+    0.0,
+    fn(take total: f64, value: samples.Complex) -> f64 {
+      total + magnitude_squared(value)
+    }
+  )
+}
+
+pub fn check(
+  source: samples.Series[samples.Complex],
+  spectrum: samples.Series[samples.Complex],
+  rebuilt: samples.Series[samples.Complex]
+) -> Result[Checks, report.Problem] uses {} {
+  let n = list.len(source.values)
+  if n == 0 || list.len(spectrum.values) != n || list.len(rebuilt.values) != n {
+    return Error(Verification())
+  }
+  let mut maximum: f64 = 0.0
+  let mut i = 0u64
+  while i < n {
+    let difference = samples.Complex(
+      real: source.values[i].real - rebuilt.values[i].real,
+      imaginary: source.values[i].imaginary - rebuilt.values[i].imaginary
+    )
+    let error = f64.sqrt(magnitude_squared(difference))
+    if error > maximum {
+      maximum = error
+    }
+    i += 1
+  }
+  let time = energy(source)
+  let frequency: f64 = energy(spectrum) / core@1/float.from_int(n)
+  let absolute = f64.abs(time - frequency)
+  // Zero reference has an absolute test, avoiding division by zero.
+  let relative = if time == 0.0 {
+    absolute
+  } else {
+    absolute / time
+  }
+  if maximum != maximum || relative != relative || maximum > 1e-9 || relative > 1e-9 {
+    return Error(Verification())
+  }
+  Ok(
+    Checks(
+      reconstruction_error: maximum,
+      time_energy: time,
+      frequency_energy: frequency,
+      energy_error: relative
+    )
+  )
+}

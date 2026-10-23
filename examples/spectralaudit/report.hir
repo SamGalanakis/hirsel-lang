@@ -1,0 +1,170 @@
+pub type Stage = Open | Read | Create | Write | Commit
+
+pub type Problem = Usage | Json | Schema | Channels | Samples | Component | Top | Band | Jobs | InputLimit | OutputLimit | Overflow | Verification | Grant | File(
+  Stage,
+  FileError
+) | Canceled(CancelCause)
+
+pub fn file_error(stage: Stage, error: FileError) -> Problem uses {} {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(stage, error),
+  }
+}
+
+pub fn name(problem: Problem) -> String uses {} {
+  match problem {
+    Usage() => "usage",
+    Json() => "json",
+    Schema() => "schema",
+    Channels() => "channels",
+    Samples() => "samples",
+    Component() => "component",
+    Top() => "top",
+    Band() => "band",
+    Jobs() => "jobs",
+    InputLimit() => "input_limit",
+    OutputLimit() => "output_limit",
+    Overflow() => "overflow",
+    Verification() => "verification",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+    File(_, NotGranted()) => "file_denied",
+    File(_, PermissionDenied()) => "file_denied",
+    File(Open(), _) => "file_open",
+    File(Read(), _) => "file_read",
+    File(Create(), _) => "file_create",
+    File(Write(), _) => "file_write",
+    File(Commit(), _) => "file_commit",
+  }
+}
+
+pub fn diagnostic(problem: Problem) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  bytes.append(mut out, b"spectral: ")
+  bytes.append(mut out, string.as_bytes(name(problem)))
+  list.push(mut out, b'\n')
+  bytes.from_list(take out)
+}
+
+@preserves_unique(out)
+fn number(value: f64, mut out: List[u8]) -> () uses {} {
+  // A value rounding to zero is printed positively, including IEEE -0.
+  let normalized: f64 = if f64.abs(value) <= 0.0000005 {
+    0.0
+  } else {
+    value
+  }
+  f64.format_into_spec(normalized, ' ', 0, 0, 6, 8, 0, mut out)
+}
+
+@preserves_unique(out)
+fn complex(value: samples.Complex, mut out: List[u8]) -> () uses {} {
+  bytes.append(mut out, b"{\"real\":")
+  number(value.real, mut out)
+  bytes.append(mut out, b",\"imaginary\":")
+  number(value.imaginary, mut out)
+  list.push(mut out, b'}')
+}
+
+@preserves_unique(out)
+fn channel(value: analysis.Audit, mut out: List[u8]) -> () uses {} {
+  bytes.append(mut out, b"{\"ordinal\":")
+  u64.format_into(value.ordinal, mut out)
+  bytes.append(mut out, b",\"mean\":")
+  complex(value.mean, mut out)
+  bytes.append(mut out, b",\"bins\":[")
+  let mut index = 0u64
+  for bin in value.spectrum.values {
+    if index != 0 {
+      list.push(mut out, b',')
+    }
+    bytes.append(mut out, b"{\"real\":")
+    number(bin.real, mut out)
+    bytes.append(mut out, b",\"imaginary\":")
+    number(bin.imaginary, mut out)
+    bytes.append(mut out, b",\"energy\":")
+    number(verify.magnitude_squared(bin), mut out)
+    list.push(mut out, b'}')
+    index += 1
+  }
+  bytes.append(mut out, b"],\"peaks\":[")
+  index = 0
+  for peak in value.peaks {
+    if index != 0 {
+      list.push(mut out, b',')
+    }
+    u64.format_into(peak, mut out)
+    index += 1
+  }
+  bytes.append(mut out, b"],\"band_energy\":")
+  number(value.band_energy, mut out)
+  bytes.append(mut out, b",\"time_energy\":")
+  number(value.checks.time_energy, mut out)
+  bytes.append(mut out, b",\"frequency_energy\":")
+  number(value.checks.frequency_energy, mut out)
+  bytes.append(mut out, b",\"reconstruction_error\":")
+  number(value.checks.reconstruction_error, mut out)
+  bytes.append(mut out, b",\"energy_error\":")
+  number(value.checks.energy_error, mut out)
+  list.push(mut out, b'}')
+}
+
+pub fn render(audits: List[unique analysis.Audit]) -> Result[unique Bytes, Problem] uses {} {
+  let count = list.len(audits)
+  if count == 0 || count > samples.MAX_CHANNELS {
+    return Error(Channels())
+  }
+  // Worst case: 32 bins * 90 bytes, 8 peak ordinals and 512 metadata bytes.
+  // Each component <=64000 after centering, bin energy <=8192000000.
+  // Every product and sum is checked before reserving/rendering the buffer.
+  let Some(bins) = int.checked_mul(samples.MAX_SAMPLES, 90u64) else {
+    return Error(Overflow())
+  }
+  let Some(per_channel) = int.checked_add(bins, 512u64) else {
+    return Error(Overflow())
+  }
+  let Some(body) = int.checked_mul(count, per_channel) else {
+    return Error(Overflow())
+  }
+  let Some(bound) = int.checked_add(body, 32u64) else {
+    return Error(Overflow())
+  }
+  if bound > samples.MAX_OUTPUT {
+    return Error(OutputLimit())
+  }
+  let mut out: List[u8] = []
+  list.reserve(mut out, bound)
+  bytes.append(mut out, b"{\"channels\":[")
+  let mut index = 0u64
+  for audit in audits {
+    if index != 0 {
+      list.push(mut out, b',')
+    }
+    channel(audit, mut out)
+    index += 1
+  }
+  bytes.append(mut out, b"]}\n")
+  if list.len(out) > samples.MAX_OUTPUT {
+    return Error(OutputLimit())
+  }
+  Ok(bytes.from_list(take out))
+}
+
+pub fn publish(d: Dir, path: Path, bytes: Bytes) -> Result[(), Problem] {
+  if bytes.len(bytes) > samples.MAX_OUTPUT {
+    return Error(OutputLimit())
+  }
+  let mut destination = match file.create_atomic(d, path) {
+    Ok(value) => take value,
+    Error(error) => return Error(file_error(Create(), error)),
+  }
+  match file.write_all(d, mut destination, bytes) {
+    Ok(()) => (),
+    Error(error) => return Error(file_error(Write(), error)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(file_error(Commit(), error)),
+  }
+}
