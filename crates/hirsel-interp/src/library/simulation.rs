@@ -115,6 +115,9 @@ pub struct SimulationConfig {
     pub file_faults: hirsel_run_schema::FileFaults,
     pub file_aliases: BTreeMap<String, String>,
     pub directories: BTreeSet<String>,
+    /// Persistent read errors by resolved directory path in the initial tree.
+    /// Applied to the initial page and every lazy refill, after confinement.
+    pub directory_errors: BTreeMap<String, FileError>,
     pub links: BTreeMap<String, String>,
     pub metadata: BTreeMap<String, FileMetadata>,
     pub monotonic: u64,
@@ -173,6 +176,7 @@ impl Default for SimulationConfig {
             file_faults: Default::default(),
             file_aliases: BTreeMap::new(),
             directories: [String::new()].into_iter().collect(),
+            directory_errors: BTreeMap::new(),
             links: BTreeMap::new(),
             metadata: BTreeMap::new(),
             monotonic: 0,
@@ -960,6 +964,11 @@ impl Simulation {
         if self.metadata(tree, &physical)?.kind != 1 {
             return Err(FileError::NotDirectory);
         }
+        if tree == 0
+            && let Some(error) = self.config.directory_errors.get(&physical)
+        {
+            return Err(error.clone());
+        }
         let prefix = if physical.is_empty() {
             String::new()
         } else {
@@ -1365,5 +1374,51 @@ mod semantic_events {
         assert_eq!(*context.trace, before);
         assert_eq!(sim.events.len(), 1);
         assert_eq!(sim.replay_index, 0);
+    }
+}
+
+#[cfg(test)]
+mod directory_reads {
+    use super::*;
+
+    #[test]
+    fn errors_follow_resolved_directories_without_faulting_parent_pages_or_test_trees() {
+        let run = RunConfiguration {
+            entry: hirsel_syntax::DefPath::core("main"),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let config = SimulationConfig {
+            directories: ["fixtures".into(), "fixtures/zzbad".into()].into(),
+            files: [("fixtures/a".into(), vec![])].into(),
+            links: [("fixtures/alias".into(), "zzbad".into())].into(),
+            directory_errors: [("fixtures/zzbad".into(), FileError::Fault(7))].into(),
+            ..Default::default()
+        };
+        let mut sim = Simulation::new(&run, config).unwrap();
+        assert!(sim.walk_entries(0, 0, "fixtures", "", "", true).is_ok());
+        assert!(sim.walk_entries(0, 0, "fixtures", "", "a", true).is_ok());
+        for (root, path) in [
+            ("fixtures", "zzbad"),
+            ("fixtures", "alias"),
+            ("fixtures/zzbad", ""),
+        ] {
+            for _ in 0..2 {
+                assert_eq!(
+                    sim.walk_entries(0, 0, root, path, "", false),
+                    Err(FileError::Fault(7))
+                );
+            }
+        }
+        assert_eq!(
+            sim.walk_entries(0, 0, "fixtures/zzbad", "..", "", false),
+            Err(FileError::Fault(1))
+        );
+        sim.trees.insert(1, sim.trees[&0].clone());
+        assert!(
+            sim.walk_entries(1, 0, "fixtures", "zzbad", "", false)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -1,9 +1,6 @@
 //! walkdir nested-tree adaptations; exact app bytes and bounded directory-read effects.
 use hirsel_engine::{RunConfiguration, SimulationConfig};
-use hirsel_interp::{
-    library::simulation::{Fault, FileError},
-    observation::Effect,
-};
+use hirsel_interp::{library::simulation::FileError, observation::Effect};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -276,13 +273,9 @@ fn simulated(caps: bool) {
                     .insert(format!("fixtures/{name}"), target.as_str().unwrap().into());
             }
             if !input["directory_error"].is_null() {
-                world.faults.insert(
-                    "file.read_dir".into(),
-                    [Fault::File {
-                        error: FileError::Fault(1),
-                        partial: 0,
-                    }]
-                    .into(),
+                world.directory_errors.insert(
+                    format!("fixtures/{}", input["directory_error"].as_str().unwrap()),
+                    FileError::Fault(1),
                 );
             }
             let mut candidates: BTreeSet<String> = [String::new()].into();
