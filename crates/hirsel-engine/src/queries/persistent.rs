@@ -730,7 +730,9 @@ impl QueryEngine {
         if !matches!(record.output, Ok(_) | Err(QueryError::Diagnostics(_))) {
             return None;
         }
-        let resolution = if let Some((occurrence, output)) = record.resolution {
+        let resolution = if let Some((occurrence, output)) = record.resolution
+            && self.items.contains_key(path)
+        {
             let syntax = self
                 .items
                 .get(path)?
@@ -923,24 +925,30 @@ impl QueryEngine {
     fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
         // A generated body's registration must still be replayed by S1; its
         // transient syntax isn't a source-owned record.
-        let item = self.items.get(path)?.first()?;
-        if kind == QueryKind::Generate {
-            if generation::generator(item).is_none() || generation::instance_bodied(item) {
+        if !self.items.contains_key(path) && self.catalog.body(path).is_some() {
+            if !self.catalog.storeable(path, kind) {
                 return None;
             }
-        } else if kind != QueryKind::GeneratedRegistration
-            && (generation::generator(item).is_some() || self.generated.contains_key(path))
-        {
-            return None;
-        }
-        if self
-            .sources
-            .file(self.item_file(item))?
-            .path
-            .to_string_lossy()
-            .starts_with('<')
-        {
-            return None;
+        } else {
+            let item = self.items.get(path)?.first()?;
+            if kind == QueryKind::Generate {
+                if generation::generator(item).is_none() || generation::instance_bodied(item) {
+                    return None;
+                }
+            } else if kind != QueryKind::GeneratedRegistration
+                && (generation::generator(item).is_some() || self.generated.contains_key(path))
+            {
+                return None;
+            }
+            if self
+                .sources
+                .file(self.item_file(item))?
+                .path
+                .to_string_lossy()
+                .starts_with('<')
+            {
+                return None;
+            }
         }
         let env = ContentHash::of_parts(
             "hirsel.persisted-products.v1",
@@ -985,10 +993,10 @@ impl QueryEngine {
         let records = self.type_records()?;
         let record: T = records.decode_record(bytes, |path, occurrence| {
             self.items
-                .get(path)?
-                .iter()
-                .find(|item| item.occurrence == occurrence)
+                .get(path)
+                .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
                 .map(|item| item.anchor)
+                .or_else(|| self.catalog.anchor(path, occurrence))
         })?;
         // Check every nested payload TypeId before any semantic consumer indexes it.
         let (encoded, roots) = hirsel_types::with_table_collection(|| {

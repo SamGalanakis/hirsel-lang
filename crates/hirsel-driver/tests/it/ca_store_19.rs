@@ -1131,3 +1131,107 @@ fn semantic_body_products_reuse_body_free_nodes_and_keep_execution_dependencies(
         assert_ne!(reference.semantic_program_revision(&definition("root")).unwrap(), expected[0], "equal callable summaries do not cut off executed source content");
     });
 }
+
+#[test]
+fn ordinary_parse_heads_restore_names_and_signatures_without_syntax_or_type_tables() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "pub type Hidden = u32\nfn value(x:Hidden)->Hidden{x}\nfn unused()->u32{99u32}\n";
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        let file = writer.sources.add("heads.hir", source.into()).unwrap();
+        writer.index_source(file, &default_context()).unwrap();
+        let path = |name: &str| { let mut p = entry_path(&default_context()); p.0.name = name.into(); p };
+        let expected = writer.item_signature(&path("value")).unwrap().value.fingerprint;
+        let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        reader.adapters.parser = None;
+        reader.adapters.lexer = None;
+        reader.adapters.signature = None;
+        reader.sources.add("padding.hir", "\n".into()).unwrap();
+        let file = reader.sources.add("heads.hir", source.into()).unwrap();
+        reader.index_source(file, &default_context()).unwrap();
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        assert_eq!(reader.item_signature(&path("value")).unwrap().value.fingerprint, expected);
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        assert_eq!(reader.recompute_count(&path("value"), QueryKind::Signature), 0);
+        assert!(reader.parse_definition(&path("unused")).is_err(), "a syntax demand must use the absent parser");
+        let mut oracle = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone()).with_verify_store(store::VerifyStore::Recompute);
+        let file = oracle.sources.add("heads.hir", source.into()).unwrap();
+        oracle.index_source(file, &default_context()).unwrap();
+        assert!(oracle.work_stats().parsed_bytes > 0);
+        assert_eq!(oracle.item_signature(&path("value")).unwrap().value.fingerprint, expected);
+        let mut edited = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+        edited.adapters.parser = None;
+        let file = edited.sources.add("heads.hir", source.replace("Hidden = u32", "Hidden = u64")).unwrap();
+        assert!(edited.index_source(file, &default_context()).is_err(), "observed source bytes invalidate heads");
+    });
+}
+
+#[test]
+fn ordinary_parse_heads_materialize_only_demanded_files_and_preserve_resident_edits() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "fn value()->u32{7u32}\n";
+        let other = "fn other()->u32{3u32}\n";
+        let path = |name: &str| { let mut p = entry_path(&default_context()); p.0.name = name.into(); p };
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        for (name, text) in [("heads.hir", source), ("other.hir", other)] {
+            let file = writer.sources.add(name, text.into()).unwrap();
+            writer.index_source(file, &default_context()).unwrap();
+        }
+        let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+        for (name, text) in [("heads.hir", source), ("other.hir", other)] {
+            let file = reader.sources.add(name, text.into()).unwrap();
+            reader.index_source(file, &default_context()).unwrap();
+        }
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        let item = reader.parse_definition(&path("value")).unwrap().value;
+        assert_eq!(reader.work_stats().parsed_bytes, source.len() as u64);
+        assert!(reader.lower_to_tir(&path("value")).is_ok());
+        let file = reader.sources.add("heads.hir", source.replace("7u32", "8u32")).unwrap();
+        reader.index_source(file, &default_context()).unwrap();
+        assert_ne!(reader.definition_items(&path("value")).unwrap()[0].text_hash, item.text_hash);
+        assert_eq!(reader.work_stats().parsed_bytes, 2 * source.len() as u64);
+        assert!(reader.parse_definition(&path("other")).is_ok());
+        assert_eq!(reader.work_stats().parsed_bytes, (2 * source.len() + other.len()) as u64);
+    });
+}
+
+#[test]
+fn ordinary_parse_heads_preserve_duplicate_order_when_cached_and_new_files_mix() {
+    with_compiler_stack(|| {
+        let run = || {
+            for reverse in [false, true] {
+            let store = Arc::new(store::MemStore::default());
+            let mut value = entry_path(&default_context()); value.0.name = "value".into();
+            let source = "fn value()->u32{7u32}\n";
+            let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+            let file = writer.sources.add("z.hir", source.into()).unwrap();
+            writer.index_source(file, &default_context()).unwrap();
+            drop(writer);
+                let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+                let names = if reverse { ["z.hir", "a.hir"] } else { ["a.hir", "z.hir"] };
+                for name in names {
+                    let file = reader.sources.add(name, source.into()).unwrap();
+                    reader.index_source(file, &default_context()).unwrap();
+                }
+                // A newly parsed duplicate demands the cached candidate so the
+                // existing declaration transaction assigns both ordinals.
+                assert_eq!(reader.work_stats().parsed_bytes, if reverse { 2 * source.len() as u64 } else { source.len() as u64 });
+                let output = reader.parse_definition(&value).unwrap();
+                assert_eq!(output.value.occurrence, 0);
+                let candidates = reader.definition_items(&value).unwrap();
+                assert_eq!(candidates.len(), 2);
+                let files: Vec<_> = candidates.iter().map(|c| {
+                    let (file, _) = reader.sources.anchor(c.anchor).unwrap();
+                    (reader.sources.file(file).unwrap().path.clone(), c.occurrence)
+                }).collect();
+                assert_eq!(files, [("a.hir".into(), 0), ("z.hir".into(), 1)]);
+                assert!(reader.item_signature(&value).is_err(), "duplicate declarations still reject");
+            }
+            "ordered".to_owned()
+        };
+        if let Some(results) = hirsel_intern::under_salts("ca_store_19::ordinary_parse_heads_preserve_duplicate_order_when_cached_and_new_files_mix", &[1, 9], run) {
+            assert_eq!(results, ["ordered", "ordered"]);
+        }
+    });
+}

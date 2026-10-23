@@ -732,6 +732,7 @@ impl QueryEngine {
                 items: &self.items,
                 declarations: &self.declarations,
                 image: self.image.as_ref().map(|adopted| &*adopted.image),
+                catalog: &self.catalog,
             },
             registry: &self.registry,
             instance_bodies: &self.instance_bodies,

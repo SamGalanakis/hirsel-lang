@@ -18,8 +18,8 @@ mod sources;
 pub use sources::CitationSource;
 pub(crate) use sources::SourceContext;
 mod views;
+pub(crate) use declarations::{DeclarationHead, RowImage, header_hash, logical};
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
-pub(crate) use declarations::{RowImage, header_hash, logical};
 pub use provider::FrozenProvider;
 
 pub use views::{PackageViews, View, ViewTable};
