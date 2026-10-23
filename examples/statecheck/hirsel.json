@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "statecheck",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "model"
+      ],
+      "path": "model.hir"
+    },
+    {
+      "module": [
+        "reach"
+      ],
+      "path": "reach.hir"
+    },
+    {
+      "module": [
+        "components"
+      ],
+      "path": "components.hir"
+    },
+    {
+      "module": [
+        "properties"
+      ],
+      "path": "properties.hir"
+    },
+    {
+      "module": [
+        "report"
+      ],
+      "path": "report.hir"
+    }
+  ],
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+pub type Safety = Safe | Unsafe(reach.Trace)
+
+pub type Deadlock = Clear | Stuck(reach.Trace)
+
+pub type Termination = Terminates | Loops(components.Lasso)
+
+pub type Verdict {
+  reachable: List[u64],
+  parts: unique components.Partition,
+  safety: Safety,
+  deadlock: Deadlock,
+  termination: Termination,
+}
+
+fn forbidden(take targets: unique List[u64]) -> reach.Visitor[model.State] uses {} {
+  reach.Visitor(
+    accept: fn(index: u64, state: model.State) -> bool uses {} {
+      // Inspect the scoped borrowed State as well as its declaration ordinal.
+      state.id != "" && model.member(targets, index)
+    }
+  )
+}
+
+fn deadlocked(take terminal: unique List[u64], take sources: unique List[u64]) -> reach.Visitor[
+  model.State
+] uses {} {
+  reach.Visitor(
+    accept: fn(index: u64, state: model.State) -> bool uses {} {
+      state.id != "" && !model.member(terminal, index) && !model.member(sources, index)
+    }
+  )
+}
+
+pub fn analyze(g: model.Graph) -> Result[unique Verdict, model.Problem] uses {} {
+  let original = reach.bfs(g, g.initial, false, [])
+  let safety = match reach.first(
+    g.states,
+    original.order,
+    forbidden(unique g.forbidden)
+  ) {
+    None() => Safe(),
+    Some(node) => Unsafe(reach.prefix(g, original, node)?),
+  }
+  let mut sources: unique List[u64] = []
+  for edge in g.edges {
+    list.push(mut sources, edge.source)
+  }
+  let deadlock = match reach.first(
+    g.states,
+    original.order,
+    deadlocked(unique g.terminal, take sources)
+  ) {
+    None() => Clear(),
+    Some(node) => Stuck(reach.prefix(g, original, node)?),
+  }
+  let absorbing = reach.bfs(g, g.initial, true, [])
+  let parts = components.find(g, absorbing)
+  let termination = match components.witness(g, absorbing, parts)? {
+    None() => Terminates(),
+    Some(lasso) => Loops(take lasso),
+  }
+  Ok(
+    Verdict(
+      reachable: unique original.order,
+      parts: take parts,
+      safety: take safety,
+      deadlock: take deadlock,
+      termination: take termination
+    )
+  )
+}
+
+// Independent models share an immutable batch; each worker owns its complete
+// fallible report. Awaiting by slot publishes in declaration order at all widths.
+pub fn batch(tasks: Tasks, take batch_input: unique model.Batch, jobs: u64) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  let count = list.len(batch_input.models)
+  let source = shared.freeze(take batch_input)
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Bytes, model.Problem] {
+      let mut output: unique List[u8] = []
+      let mut next = 0u64
+      while next < count {
+        let first = next
+        let mut pending: TaskSet[Result[unique Bytes, model.Problem]] of scope = task.set(
+          scope
+        )
+        while next < count && next - first < jobs {
+          let index = next
+          task.add(
+            scope,
+            mut pending,
+            task.async(
+              scope,
+              fn() -> Result[unique Bytes, model.Problem] {
+                shared.with(
+                  source,
+                  fn(models: model.Batch) -> Result[unique Bytes, model.Problem] {
+                    let verdict = analyze(models.models[index])?
+                    report.encode(models.models[index], verdict)
+                  }
+                )
+              }
+            )
+          )
+          next += 1
+        }
+        let mut slot = 0u64
+        while slot < next - first {
+          let outcome = task.await_at(scope, mut pending, slot)
+          match take outcome {
+            Ok(data) => {
+              if let Error(problem) = report.append(mut output, data) {
+                task.cancel_all(scope, take pending)
+                return Error(problem)
+              }
+            },
+            Error(problem) => {
+              task.cancel_all(scope, take pending)
+              return Error(problem)
+            },
+          }
+          slot += 1
+        }
+        task.cancel_all(scope, take pending)
+      }
+      Ok(bytes.from_list(take output))
+    }
+  )
+}

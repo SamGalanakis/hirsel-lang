@@ -1,0 +1,194 @@
+pub const OUTPUT_BYTES: u64 = 16384
+
+pub const TRACE_EDGES: u64 = 128
+
+pub fn bounded(size: u64) -> Result[(), model.Problem] uses {} {
+  if size > OUTPUT_BYTES {
+    Error(Resource("output_bytes"))
+  } else {
+    Ok(())
+  }
+}
+
+pub fn trace_bound(prefix: u64, cycle: u64) -> Result[(), model.Problem] uses {} {
+  if prefix > TRACE_EDGES || cycle > TRACE_EDGES - prefix {
+    Error(Resource("trace_edges"))
+  } else {
+    Ok(())
+  }
+}
+
+fn number(mut output: unique List[u8], n: u64) -> () uses {} {
+  list.push(mut output, b' ')
+  u64.format_into(n, mut output)
+}
+
+pub fn append(mut output: unique List[u8], data: Bytes) -> Result[(), model.Problem] uses {} {
+  bounded(bytes.len(data))?
+  if list.len(output) > OUTPUT_BYTES - bytes.len(data) {
+    return Error(Resource("output_bytes"))
+  }
+  bytes.append(mut output, data)
+  Ok(())
+}
+
+// Validate before encoding. A path uses edge identities rather than trusting
+// textual state names; terminal sources are excluded only for termination.
+pub fn endpoint(g: model.Graph, trace: reach.Trace, absorbing: bool) -> Result[
+  u64,
+  model.Problem
+] uses {} {
+  trace_bound(list.len(trace.edges), 0)?
+  if trace.start >= list.len(g.states) {
+    return Error(Domain("trace_start"))
+  }
+  let mut node = trace.start
+  for ordinal in trace.edges {
+    if ordinal >= list.len(g.edges) {
+      return Error(Domain("trace_edge"))
+    }
+    let edge = g.edges[ordinal]
+    if edge.source != node {
+      return Error(Domain("trace_endpoint"))
+    }
+    if absorbing && model.member(g.terminal, node) {
+      return Error(Domain("trace_terminal"))
+    }
+    node = edge.target
+  }
+  Ok(node)
+}
+
+fn path(mut output: unique List[u8], trace: reach.Trace, start: bool) -> () uses {} {
+  if start {
+    number(mut output, trace.start)
+  }
+  for ordinal in trace.edges {
+    number(mut output, ordinal)
+  }
+}
+
+fn safety(mut output: unique List[u8], g: model.Graph, verdict: properties.Safety) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  match verdict {
+    Safe() => bytes.append(mut output, b"safety safe\n"),
+    Unsafe(trace) => {
+      let end = endpoint(g, trace, false)?
+      if trace.start != g.initial || !model.member(g.forbidden, end) {
+        return Error(Domain("safety_witness"))
+      }
+      bytes.append(mut output, b"safety unsafe")
+      path(mut output, trace, true)
+      list.push(mut output, b'\n')
+    },
+  }
+  Ok(())
+}
+
+fn deadlock(mut output: unique List[u8], g: model.Graph, verdict: properties.Deadlock) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  match verdict {
+    Clear() => bytes.append(mut output, b"deadlock clear\n"),
+    Stuck(trace) => {
+      let end = endpoint(g, trace, false)?
+      if trace.start != g.initial || model.member(g.terminal, end) {
+        return Error(Domain("deadlock_witness"))
+      }
+      for edge in g.edges {
+        if edge.source == end {
+          return Error(Domain("deadlock_witness"))
+        }
+      }
+      bytes.append(mut output, b"deadlock stuck")
+      path(mut output, trace, true)
+      list.push(mut output, b'\n')
+    },
+  }
+  Ok(())
+}
+
+fn termination(
+  mut output: unique List[u8],
+  g: model.Graph,
+  verdict: properties.Termination
+) -> Result[(), model.Problem] uses {} {
+  match verdict {
+    Terminates() => bytes.append(mut output, b"termination terminates\n"),
+    Loops(lasso) => {
+      trace_bound(list.len(lasso.prefix.edges), list.len(lasso.cycle.edges))?
+      let entry = endpoint(g, lasso.prefix, true)?
+      let end = endpoint(g, lasso.cycle, true)?
+      if lasso.prefix.start != g.initial || entry != lasso.cycle.start || end != entry || list.len(
+        lasso.cycle.edges
+      ) == 0 {
+        return Error(Domain("cycle_witness"))
+      }
+      bytes.append(mut output, b"termination loop")
+      path(mut output, lasso.prefix, true)
+      bytes.append(mut output, b" |")
+      path(mut output, lasso.cycle, false)
+      list.push(mut output, b'\n')
+    },
+  }
+  Ok(())
+}
+
+pub fn encode(g: model.Graph, verdict: properties.Verdict) -> Result[
+  unique Bytes,
+  model.Problem
+] uses {} {
+  let mut output: unique List[u8] = []
+  bytes.append(mut output, b"model ")
+  bytes.append(mut output, string.as_bytes(g.id))
+  bytes.append(mut output, b"\nreachable")
+  for node in verdict.reachable {
+    number(mut output, node)
+  }
+  bytes.append(mut output, b"\ncomponents")
+  for member in verdict.parts.member {
+    number(mut output, member)
+  }
+  list.push(mut output, b'\n')
+  safety(mut output, g, verdict.safety)?
+  deadlock(mut output, g, verdict.deadlock)?
+  termination(mut output, g, verdict.termination)?
+  bytes.append(mut output, b"end\n")
+  bounded(list.len(output))?
+  Ok(bytes.from_list(take output))
+}
+
+pub fn publish(d: Dir, name: Path, data: Bytes) -> Result[(), model.Problem] {
+  bounded(bytes.len(data))?
+  let mut handle = file.create_atomic(d, name) ? model.file_problem
+  file.write_all(d, mut handle, data) ? model.file_problem
+  file.commit(d, take handle) ? model.file_problem
+  Ok(())
+}
+
+pub fn diagnostic(problem: model.Problem) -> unique Bytes uses {} {
+  let name = match problem {
+    Domain(name) => name,
+    Resource(name) => name,
+    Canceled(_) => "canceled",
+    File(NotGranted()) => "file_denied",
+    File(_) => "file",
+  }
+  let mut output: unique List[u8] = []
+  bytes.append(mut output, b"statecheck: ")
+  bytes.append(mut output, string.as_bytes(name))
+  list.push(mut output, b'\n')
+  bytes.from_list(take output)
+}
+
+@test
+fn exact_caps_and_one_over(t: Test) {
+  failure.check(bounded(16384) == Ok(()), Arithmetic())
+  failure.check(bounded(16385) == Error(Resource("output_bytes")), Arithmetic())
+  failure.check(trace_bound(64, 64) == Ok(()), Arithmetic())
+  failure.check(trace_bound(64, 65) == Error(Resource("trace_edges")), Arithmetic())
+  failure.check(trace_bound(129, 0) == Error(Resource("trace_edges")), Arithmetic())
+}

@@ -117,3 +117,4 @@ mod relation_query_33;
 mod host_replay_parity_31;
 mod discrete_simulation_33;
 mod policy_evaluator_33;
+mod state_model_checker_34;

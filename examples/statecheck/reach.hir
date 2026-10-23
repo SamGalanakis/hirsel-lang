@@ -1,0 +1,109 @@
+// NetworkX generic_bfs_edges, breadth_first_search.py:85–106, pinned in
+// REFERENCES.md. Queue ordinals replace the Python frontier iterators.
+pub type Search {
+  order: List[u64],
+  parent: unique List[u64],
+  seen: unique List[bool],
+  start: u64,
+}
+
+pub type Trace {
+  start: u64,
+  edges: List[u64],
+}
+
+// The callback only borrows a State during this call. It cannot retain a view.
+pub type Visitor[S] {
+  accept: fn(u64, S) -> bool uses {},
+}
+
+fn apply[S](visitor: Visitor[S], index: u64, state: S) -> bool uses {} {
+  visitor.accept(index, state)
+}
+
+fn with_state[S](states: List[S], index: u64, body: fn(S) -> bool uses {}) -> bool uses {} {
+  body(states[index])
+}
+
+pub fn first[S](states: List[S], order: List[u64], visitor: Visitor[S]) -> Option[u64] uses {} {
+  for index in order {
+    if with_state(
+      states,
+      index,
+      fn(state: S) -> bool uses {} {
+        apply(visitor, index, state)
+      }
+    ) {
+      return Some(index)
+    }
+  }
+  None()
+}
+
+// allowed is either empty (all vertices) or an SCC membership mask. Terminal
+// absorption is explicit so the original-graph safety search stays independent.
+pub fn bfs(g: model.Graph, start: u64, absorbing: bool, allowed: List[bool]) -> unique Search uses {} {
+  let n = list.len(g.states)
+  let mut search = unique Search(
+    order: [],
+    parent: unique list.filled(n, 128u64),
+    seen: unique list.filled(n, false),
+    start: start
+  )
+  search.seen[start] = true
+  list.push(mut search.order, start)
+  let mut cursor = 0u64
+  while cursor < list.len(search.order) {
+    let source = search.order[cursor]
+    cursor += 1
+    if absorbing && model.member(g.terminal, source) {
+      continue
+    }
+    for ordinal in 0u64..list.len(g.edges) {
+      let edge = g.edges[ordinal]
+      if edge.source == source && !search.seen[edge.target] {
+        if list.len(allowed) == 0 || allowed[edge.target] {
+          search.seen[edge.target] = true
+          search.parent[edge.target] = ordinal
+          list.push(mut search.order, edge.target)
+        }
+      }
+    }
+  }
+  take search
+}
+
+// Parent storage is unique and borrowed only here. The returned edge vector
+// owns its allocation and survives both the search and the graph callback.
+pub fn prefix(g: model.Graph, search: Search, target: u64) -> Result[
+  unique Trace,
+  model.Problem
+] uses {} {
+  if target >= list.len(search.seen) || !search.seen[target] {
+    return Error(Domain("unreachable_witness"))
+  }
+  let mut reverse: List[u64] = []
+  let mut node = target
+  while node != search.start {
+    if list.len(reverse) >= list.len(g.states) {
+      return Error(Domain("parent_cycle"))
+    }
+    let ordinal = search.parent[node]
+    if ordinal >= list.len(g.edges) {
+      return Error(Domain("parent_edge"))
+    }
+    let edge = g.edges[ordinal]
+    if edge.target != node {
+      return Error(Domain("parent_edge"))
+    }
+    list.push(mut reverse, ordinal)
+    node = edge.source
+  }
+  let mut edges: List[u64] = []
+  let mut left = list.len(reverse)
+  while left > 0 {
+    left -= 1
+    list.push(mut edges, reverse[left])
+  }
+  Ok(Trace(start: search.start, edges: take edges))
+}

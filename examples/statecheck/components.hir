@@ -1,0 +1,154 @@
+// Iterative NetworkX lowlink/lead SCC structure, strongly_connected.py:76–148.
+// Explicit typed frames replace successor iterators; no recursion or captures.
+pub type Frame {
+  node: u64,
+  next: u64,
+  lead: bool,
+}
+
+pub type Partition {
+  member: unique List[u64],
+  size: unique List[u64],
+}
+
+pub type Lasso {
+  prefix: reach.Trace,
+  cycle: reach.Trace,
+}
+
+pub fn find(g: model.Graph, reachable: reach.Search) -> unique Partition uses {} {
+  let n = list.len(g.states)
+  let mut lowlink: unique List[u64] = unique list.filled(n, 0u64)
+  let mut found: unique List[bool] = unique list.filled(n, false)
+  let mut output = unique Partition(
+    member: unique list.filled(n, model.ABSENT),
+    size: unique list.filled(n, 0u64)
+  )
+  let mut frames: List[Frame] = []
+  let mut parked: List[u64] = []
+  let mut index = 0u64
+  for source in 0u64..n {
+    if !reachable.seen[source] || model.member(g.terminal, source) || lowlink[source] != 0 {
+      continue
+    }
+    index += 1
+    lowlink[source] = index
+    list.push(mut frames, Frame(node: source, next: 0, lead: true))
+    while list.len(frames) > 0 {
+      let top = list.len(frames) - 1
+      let node = frames[top].node
+      let mut descended = false
+      while frames[top].next < list.len(g.edges) {
+        let ordinal = frames[top].next
+        frames[top].next += 1
+        let edge = g.edges[ordinal]
+        if edge.source != node || model.member(g.terminal, edge.target) {
+          continue
+        }
+        let child = edge.target
+        if lowlink[child] == 0 {
+          index += 1
+          lowlink[child] = index
+          list.push(mut frames, Frame(node: child, next: 0, lead: true))
+          descended = true
+          break
+        }
+        if !found[child] && lowlink[node] > lowlink[child] {
+          frames[top].lead = false
+          lowlink[node] = lowlink[child]
+        }
+      }
+      if descended {
+        continue
+      }
+      let Some(frame) = list.pop(mut frames) else {
+        break
+      }
+      if frame.lead {
+        let mut members: List[u64] = [node]
+        let mut representative = node
+        while list.len(parked) > 0 {
+          let last = list.len(parked) - 1
+          let other = parked[last]
+          if lowlink[other] < lowlink[node] {
+            break
+          }
+          let _ = list.pop(mut parked)
+          list.push(mut members, other)
+          if other < representative {
+            representative = other
+          }
+        }
+        let size = list.len(members)
+        for item in members {
+          found[item] = true
+          output.member[item] = representative
+          output.size[item] = size
+        }
+      } else {
+        list.push(mut parked, node)
+        let parent_slot = list.len(frames) - 1
+        let parent = frames[parent_slot].node
+        if lowlink[parent] > lowlink[node] {
+          frames[parent_slot].lead = false
+          lowlink[parent] = lowlink[node]
+        }
+      }
+    }
+  }
+  take output
+}
+
+pub fn cyclic(g: model.Graph, parts: Partition, node: u64) -> bool uses {} {
+  if parts.member[node] == model.ABSENT {
+    return false
+  }
+  if parts.size[node] > 1 {
+    return true
+  }
+  for edge in g.edges {
+    if edge.source == node && edge.target == node {
+      return true
+    }
+  }
+  false
+}
+
+// Select by absorbing BFS order, then declaration edge order. A shortest
+// internal return path closes the selected edge; even a singleton uses an edge.
+pub fn witness(g: model.Graph, search: reach.Search, parts: Partition) -> Result[
+  unique Option[Lasso],
+  model.Problem
+] uses {} {
+  for node in search.order {
+    if !cyclic(g, parts, node) {
+      continue
+    }
+    let mut allowed: List[bool] = []
+    for member in parts.member {
+      list.push(mut allowed, member == parts.member[node])
+    }
+    for ordinal in 0u64..list.len(g.edges) {
+      let edge = g.edges[ordinal]
+      if edge.source == node && allowed[edge.target] {
+        let back = reach.bfs(g, edge.target, true, allowed)
+        let suffix = reach.prefix(g, back, node)?
+        let mut cycle_edges: List[u64] = [ordinal]
+        for step in suffix.edges {
+          list.push(mut cycle_edges, step)
+        }
+        let prefix = reach.prefix(g, search, node)?
+        return Ok(
+          Some(
+            Lasso(
+              prefix: take prefix,
+              cycle: reach.Trace(start: node, edges: take cycle_edges)
+            )
+          )
+        )
+      }
+    }
+    return Error(Domain("scc_cycle"))
+  }
+  Ok(None())
+}

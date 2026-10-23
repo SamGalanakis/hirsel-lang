@@ -1,0 +1,216 @@
+pub const INPUT_BYTES: u64 = 32768
+
+pub const ABSENT: u64 = 64
+
+pub type Problem = Domain(unique String) | Resource(unique String) | File(FileError) | Canceled(
+  CancelCause
+)
+
+pub type State {
+  id: String,
+}
+
+pub type Edge {
+  source: u64,
+  target: u64,
+  label: String,
+}
+
+pub type Graph {
+  id: String,
+  states: List[State],
+  edges: List[Edge],
+  initial: u64,
+  terminal: List[u64],
+  forbidden: List[u64],
+}
+
+pub type Batch {
+  version: u64,
+  models: List[Graph],
+}
+
+fn state_fields_from_json(value: json.Value) -> Result[unique State, String] uses {} = comptime derive.from_json(
+  shape(State)
+)
+
+fn edge_fields_from_json(value: json.Value) -> Result[unique Edge, String] uses {} = comptime derive.from_json(
+  shape(Edge)
+)
+
+fn graph_fields_from_json(value: json.Value) -> Result[unique Graph, String] uses {} = comptime derive.from_json(
+  shape(Graph)
+)
+
+fn batch_fields_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+  shape(Batch)
+)
+
+pub fn member(items: List[u64], value: u64) -> bool uses {} {
+  for item in items {
+    if item == value {
+      return true
+    }
+  }
+  false
+}
+
+pub fn identifier(text: String) -> bool uses {} {
+  if string.byte_len(text) == 0 || string.byte_len(text) > 24 {
+    return false
+  }
+  for c in string.as_bytes(text) {
+    if !ascii.is_alnum(c) && c != b'_' && c != b'-' {
+      return false
+    }
+  }
+  true
+}
+
+fn state_set(items: List[u64], size: u64) -> bool uses {} {
+  if list.len(items) > size {
+    return false
+  }
+  for i in 0u64..list.len(items) {
+    if items[i] >= size {
+      return false
+    }
+    for j in 0u64..i {
+      if items[i] == items[j] {
+        return false
+      }
+    }
+  }
+  true
+}
+
+pub fn validate(g: Graph) -> Result[(), Problem] uses {} {
+  let n = list.len(g.states)
+  if n == 0 || n > 64 {
+    return Error(Resource("states"))
+  }
+  if list.len(g.edges) > 128 {
+    return Error(Resource("edges"))
+  }
+  if !identifier(g.id) {
+    return Error(Domain("identifier"))
+  }
+  if g.initial >= n {
+    return Error(Domain("initial"))
+  }
+  if !state_set(g.terminal, n) {
+    return Error(Domain("terminal"))
+  }
+  if !state_set(g.forbidden, n) {
+    return Error(Domain("forbidden"))
+  }
+  for i in 0u64..n {
+    if !identifier(g.states[i].id) {
+      return Error(Domain("identifier"))
+    }
+    for j in 0u64..i {
+      if g.states[i].id == g.states[j].id {
+        return Error(Domain("duplicate_state"))
+      }
+    }
+  }
+  for i in 0u64..list.len(g.edges) {
+    let edge = g.edges[i]
+    if edge.source >= n || edge.target >= n {
+      return Error(Domain("edge"))
+    }
+    if !identifier(edge.label) {
+      return Error(Domain("identifier"))
+    }
+    for j in 0u64..i {
+      if edge.source == g.edges[j].source && edge.target == g.edges[j].target {
+        return Error(Domain("duplicate_edge"))
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Batch, Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Resource("input_bytes"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Domain("utf8"))
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Domain("json"))
+  }
+  let Ok(batch) = batch_from_json(value) else {
+    return Error(Domain("schema"))
+  }
+  if batch.version != 1 {
+    return Error(Domain("version"))
+  }
+  if list.len(batch.models) == 0 || list.len(batch.models) > 4 {
+    return Error(Resource("models"))
+  }
+  for i in 0u64..list.len(batch.models) {
+    validate(batch.models[i])?
+    for j in 0u64..i {
+      if batch.models[i].id == batch.models[j].id {
+        return Error(Domain("duplicate_model"))
+      }
+    }
+  }
+  Ok(take batch)
+}
+
+pub fn file_problem(error: FileError) -> Problem uses {} {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(error),
+  }
+}
+
+pub fn jobs(text: String) -> Result[u64, Problem] uses {} {
+  let Ok(n) = u64.parse(text) else {
+    return Error(Resource("jobs"))
+  }
+  if n == 0 || n > 4 {
+    return Error(Resource("jobs"))
+  }
+  Ok(n)
+}
+
+fn state_from_json(value: json.Value) -> Result[unique State, String] uses {} {
+  if !closed(value, 1) {
+    return Error("schema")
+  }
+  state_fields_from_json(value)
+}
+
+fn edge_from_json(value: json.Value) -> Result[unique Edge, String] uses {} {
+  if !closed(value, 3) {
+    return Error("schema")
+  }
+  edge_fields_from_json(value)
+}
+
+fn graph_from_json(value: json.Value) -> Result[unique Graph, String] uses {} {
+  if !closed(value, 6) {
+    return Error("schema")
+  }
+  graph_fields_from_json(value)
+}
+
+fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} {
+  if !closed(value, 2) {
+    return Error("schema")
+  }
+  batch_fields_from_json(value)
+}
+
+// Required-field lookup remains in std derive; exact cardinality additionally
+// refuses unknown members. This is schema admission, not a JSON codec.
+fn closed(value: json.Value, count: u64) -> bool uses {} {
+  let Some(fields) = json_access.as_object(value) else {
+    return false
+  }
+  map.len(fields) == count
+}

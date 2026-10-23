@@ -1,0 +1,29 @@
+{
+  "args": [
+    "networkx.json",
+    "report.txt",
+    "2"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "examples/statecheck/fixtures",
+        "access": "read"
+      },
+      {
+        "path": "output",
+        "host": ".",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 2,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}
