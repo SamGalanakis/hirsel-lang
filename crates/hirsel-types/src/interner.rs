@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 /// A row of the session interner. It carries no provenance and has no order.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,11 +99,21 @@ fn row_hash(row: &Type) -> u64 {
     hasher.finish()
 }
 
-/// An immutable bottom layer, supplied by the std image: its rows occupy the
-/// first positions and its index is read without locks.
+/// A lazy immutable component provider. `rows` returns a checked component with
+/// edges expressed as ids obtained from `base.id_at`, without demanding rows.
+/// `candidates` is an index only; TypeBase compares complete rows after loading.
+pub trait TypeBaseSource: Send + Sync {
+    fn rows(&self, position: u32, base: &TypeBase) -> Option<Vec<(u32, Type)>>;
+    fn candidates(&self, row: &Type, base: &TypeBase) -> Vec<u32>;
+}
+
+/// An immutable shared prefix. A source-backed base loads only demanded
+/// components; decoded rows have exactly one owner across session interners.
 pub struct TypeBase {
-    entries: Box<[Entry]>,
+    entries: Box<[OnceLock<Entry>]>,
     index: HashMap<u64, Ids, IdHasher>,
+    source: Option<Arc<dyn TypeBaseSource>>,
+    loading: Mutex<()>,
 }
 impl TypeBase {
     /// Build a base of `count` rows. `build` receives the ids the rows will
@@ -132,8 +142,13 @@ impl TypeBase {
             id.position().expect("a base id") as usize
         }
         Arc::new(Self {
-            entries: rows.into_iter().map(Entry::new).collect(),
+            entries: rows
+                .into_iter()
+                .map(|row| OnceLock::from(Entry::new(row)))
+                .collect(),
             index,
+            source: None,
+            loading: Mutex::new(()),
         })
     }
     pub fn len(&self) -> usize {
@@ -146,11 +161,65 @@ impl TypeBase {
     pub(crate) fn id(position: u32) -> TypeId {
         TypeId::at(position)
     }
+    /// Construct the compact index without decoding any type rows.
+    pub fn from_source(count: u32, source: Arc<dyn TypeBaseSource>) -> Arc<Self> {
+        Arc::new(Self {
+            entries: (0..count).map(|_| OnceLock::new()).collect(),
+            index: HashMap::default(),
+            source: Some(source),
+            loading: Mutex::new(()),
+        })
+    }
+    pub fn id_at(&self, position: u32) -> Option<TypeId> {
+        ((position as usize) < self.len()).then(|| Self::id(position))
+    }
+    pub fn position(&self, id: TypeId) -> Option<u32> {
+        id.position().filter(|&p| (p as usize) < self.len())
+    }
+    fn entry(&self, position: u32) -> Option<&Entry> {
+        let slot = self.entries.get(position as usize)?;
+        if let Some(entry) = slot.get() {
+            return Some(entry);
+        }
+        // std OnceLock owns publication. Serialize only first component loads;
+        // providers never recursively demand another row while holding this lock.
+        let _loading = self.loading.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.get().is_none() {
+            let rows = self.source.as_ref()?.rows(position, self)?;
+            let mut seen = std::collections::HashSet::new();
+            if !rows.iter().any(|(p, _)| *p == position)
+                || rows.iter().any(|(p, row)| {
+                    self.id_at(*p).is_none()
+                        || !seen.insert(*p)
+                        || row
+                            .kind
+                            .graph_edges()
+                            .iter()
+                            .any(|e| self.position(e.ty).is_none())
+                        || self.entries[*p as usize]
+                            .get()
+                            .is_some_and(|e| e.row != *row)
+                })
+            {
+                return None;
+            }
+            for (p, row) in rows {
+                self.entries[p as usize].get_or_init(|| Entry::new(row));
+            }
+        }
+        slot.get()
+    }
     fn find(&self, hash: u64, row: &Type) -> Option<TypeId> {
-        self.index
-            .get(&hash)?
-            .iter()
-            .find(|id| self.entries[id.position().expect("a base id") as usize].row == *row)
+        if let Some(source) = &self.source {
+            return source
+                .candidates(row, self)
+                .into_iter()
+                .find_map(|p| (self.entry(p)?.row == *row).then(|| Self::id(p)));
+        }
+        self.index.get(&hash)?.iter().find(|id| {
+            self.entry(id.position().expect("a base id"))
+                .is_some_and(|e| e.row == *row)
+        })
     }
 }
 
@@ -327,7 +396,7 @@ impl TypeInterner {
     pub(crate) fn entry(&self, id: TypeId) -> Option<&Entry> {
         let position = id.position()?;
         if position < self.base_len {
-            return self.base.as_ref()?.entries.get(position as usize);
+            return self.base.as_ref()?.entry(position);
         }
         self.entries.get(position - self.base_len)
     }
@@ -368,6 +437,10 @@ impl TypeInterner {
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+    /// A snapshot of assigned positions, including the immutable prefix.
+    pub fn ids(&self) -> impl Iterator<Item = TypeId> {
+        (0..self.len() as u32).map(TypeId::at)
     }
 
     pub fn stats(&self) -> InternerStats {
