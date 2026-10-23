@@ -657,7 +657,7 @@ impl TaskCtx {
             let heap = unsafe { &mut *heap };
             let (blocks, bytes) = heap.live();
             stats.backing_bytes +=
-                heap.backing_bytes() + heap.regions.active_bytes + heap.regions.idle_bytes;
+                heap.backing_bytes() + heap.regions.owned_bytes() + heap.regions.idle_bytes;
             stats.backing_allocations +=
                 heap.backing_allocations + heap.regions.backing_allocations;
             stats.slab_bytes += heap.slab_count * SLAB_SIZE as u64;
@@ -665,7 +665,7 @@ impl TaskCtx {
             stats.large_bytes += heap.large_bytes;
             stats.live_blocks += blocks;
             stats.live_bytes += bytes;
-            stats.region_active_bytes += heap.regions.active_bytes;
+            stats.region_active_bytes += heap.regions.active_bytes();
             stats.region_pool_bytes += heap.regions.idle_bytes;
             stats.active_regions = stats.active_regions.wrapping_add(heap.regions.active_count);
         }
@@ -753,7 +753,7 @@ impl TaskCtx {
                 // SAFETY: as above.
                 .map(|&heap| unsafe {
                     (*heap).backing_bytes()
-                        + (*heap).regions.active_bytes
+                        + (*heap).regions.owned_bytes()
                         + (*heap).regions.idle_bytes
                 })
                 .sum();

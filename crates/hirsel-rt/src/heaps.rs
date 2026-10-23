@@ -269,8 +269,8 @@ mod tests {
             b.join().unwrap();
             hirsel_rt_v2_worker_collect(root);
             let (pool_a, pool_b) = (&(*root).heap_ref().regions, &(*other).heap_ref().regions);
-            assert_eq!(pool_a.active_bytes, 0, "a segment stayed lent");
-            assert_eq!(pool_b.active_bytes, 0);
+            assert_eq!(pool_a.active_bytes(), 0, "a segment stayed lent");
+            assert_eq!(pool_b.active_bytes(), 0);
             assert_eq!(pool_a.active_count.wrapping_add(pool_b.active_count), 0);
             assert!(pool_a.idle_bytes > 0, "A's pool took its segments back");
             assert_eq!(pool_b.idle_bytes, 0, "B pooled a segment it never lent");

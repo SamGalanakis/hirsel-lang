@@ -14,6 +14,11 @@
 use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_dealloc};
 use std::ptr;
 
+mod detached;
+mod lent;
+pub use detached::{DetachedStorage, detach_storage};
+use lent::LentList;
+
 use crate::alloc::{FREE_POISON, Header, check_request};
 use crate::context::TaskCtx;
 use crate::count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE};
@@ -36,7 +41,7 @@ pub const SEGMENT_SIZE: usize = 64 * 1024;
 /// MEM-10: idle pooled backing retained per task at each region exit.
 pub const REGION_POOL_IDLE_CAP: u64 = 8 * 1024 * 1024;
 
-const SEGMENT_HEADER: usize = 48;
+const SEGMENT_HEADER: usize = 64;
 const _: () = assert!(size_of::<Segment>() <= SEGMENT_HEADER);
 const REGION_ACTIVE: u64 = 0x5245_4741_4354_4956; // "REGACTIV"
 const REGION_EXITED: u64 = 0x5245_4745_5849_5444; // "REGEXITD"
@@ -55,6 +60,7 @@ pub(crate) struct Segment {
     owner: u32,
     _reserved: u32,
     return_next: *mut Segment,
+    home: *const LentList,
 }
 
 impl crate::remote::Link for Segment {
@@ -574,14 +580,12 @@ struct Entry {
 /// The worker's region segment pool.
 pub(crate) struct RegionPool {
     idle: *mut Segment,
-    lent: *mut Segment,
+    lent: Box<LentList>,
     /// The id of the heap this pool belongs to, which its segments carry.
     id: u32,
     /// Segments regions exiting on other heaps gave back.
     pub(crate) returns: crate::remote::Returns<Segment>,
     pub(crate) idle_bytes: u64,
-    #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-    pub(crate) active_bytes: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) active_count: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -605,26 +609,42 @@ fn segment_layout(size: u64) -> HostLayout {
 }
 
 impl RegionPool {
+    #[cfg(any(test, feature = "diagnostic", feature = "measurement"))]
+    pub(crate) fn active_bytes(&self) -> u64 {
+        self.lent.active_bytes()
+    }
+    #[cfg(any(test, feature = "diagnostic", feature = "measurement"))]
+    pub(crate) fn owned_bytes(&self) -> u64 {
+        self.lent.owned_bytes()
+    }
+
     #[cfg(feature = "measurement")]
     pub(crate) fn write_residency(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        for (kind, mut segment) in [("region_idle", self.idle), ("region_active", self.lent)] {
-            // SAFETY: this worker owns both lists; a snapshot neither suspends nor mutates them.
-            unsafe {
-                while !segment.is_null() {
-                    writeln!(
-                        out,
-                        "hirsel-rss {kind} {} {}",
-                        segment.addr(),
-                        (*segment).size
-                    )?;
-                    segment = if kind == "region_idle" {
-                        (*segment).prev
-                    } else {
-                        (*segment).lent_next
-                    };
+        self.lent.inspect(|active, sealed| -> std::io::Result<()> {
+            for (kind, mut segment) in [
+                ("region_idle", self.idle),
+                ("region_active", active),
+                ("region_sealed", sealed),
+            ] {
+                // SAFETY: idle is collector-owned; shared membership remains locked.
+                unsafe {
+                    while !segment.is_null() {
+                        writeln!(
+                            out,
+                            "hirsel-rss {kind} {} {}",
+                            segment.addr(),
+                            (*segment).size
+                        )?;
+                        segment = if kind == "region_idle" {
+                            (*segment).prev
+                        } else {
+                            (*segment).lent_next
+                        };
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
         Ok(())
     }
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -635,12 +655,10 @@ impl RegionPool {
     pub(crate) fn new(meter: std::sync::Arc<crate::budget::Meter>, id: u32) -> RegionPool {
         RegionPool {
             idle: ptr::null_mut(),
-            lent: ptr::null_mut(),
+            lent: Box::default(),
             id,
             returns: crate::remote::Returns::new(),
             idle_bytes: 0,
-            #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-            active_bytes: 0,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             active_count: 0,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -733,16 +751,8 @@ impl RegionPool {
         // SAFETY: caller contract.
         unsafe {
             (*found).prev = ptr::null_mut();
-            (*found).lent_prev = ptr::null_mut();
-            (*found).lent_next = self.lent;
-            if !self.lent.is_null() {
-                (*self.lent).lent_prev = found;
-            }
-            self.lent = found;
-            #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-            {
-                self.active_bytes += (*found).size;
-            }
+            (*found).home = &*self.lent;
+            self.lent.insert(found);
             // A lent segment is a pool of its reservations; the rest of its data is
             // unaddressable.
             #[cfg(feature = "memcheck")]
@@ -797,18 +807,7 @@ impl RegionPool {
     unsafe fn give_back(&mut self, segment: *mut Segment) {
         // SAFETY: `segment` is lent by this pool.
         unsafe {
-            if (*segment).lent_prev.is_null() {
-                self.lent = (*segment).lent_next;
-            } else {
-                (*(*segment).lent_prev).lent_next = (*segment).lent_next;
-            }
-            if !(*segment).lent_next.is_null() {
-                (*(*segment).lent_next).lent_prev = (*segment).lent_prev;
-            }
-            #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-            {
-                self.active_bytes -= (*segment).size;
-            }
+            self.lent.remove(segment);
             self.idle_bytes += (*segment).size;
             (*segment).prev = self.idle;
             self.idle = segment;
@@ -834,28 +833,24 @@ impl RegionPool {
         }
     }
 
-    /// Task exit: free pooled segments and those lent to regions still active. Region records
-    /// are not read; they live in frames the task no longer has.
+    /// Run teardown, after all workers quiesce: return idle, active and sealed
+    /// segments. Region records may belong to vanished task frames and are not read.
     pub(crate) fn release_all(&mut self) {
         // Returned segments are still on the lent list, freed below.
         self.returns.take();
         self.trim(0);
-        let mut segment = self.lent;
-        while !segment.is_null() {
-            // SAFETY: each lent segment is freed once.
-            unsafe {
-                let next = (*segment).lent_next;
-                #[cfg(any(feature = "diagnostic", feature = "measurement"))]
-                {
-                    self.active_bytes -= (*segment).size;
+        for mut segment in self.lent.take_all() {
+            while !segment.is_null() {
+                // SAFETY: run teardown owns each disjoint chain after quiescence.
+                unsafe {
+                    let next = (*segment).lent_next;
+                    #[cfg(feature = "memcheck")]
+                    memcheck::destroy_pool(segment.cast());
+                    host_dealloc(segment.cast(), segment_layout((*segment).size));
+                    segment = next;
                 }
-                #[cfg(feature = "memcheck")]
-                memcheck::destroy_pool(segment.cast());
-                host_dealloc(segment.cast(), segment_layout((*segment).size));
-                segment = next;
             }
         }
-        self.lent = ptr::null_mut();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
             self.active_count = 0;
@@ -970,7 +965,7 @@ unsafe fn reserve_in(
 unsafe fn install(ctx: &mut TaskCtx, region: &mut Region, segment: *mut Segment) -> *mut u8 {
     #[cfg(feature = "measurement")]
     {
-        let active_bytes = ctx.pool().active_bytes;
+        let active_bytes = ctx.pool().active_bytes();
         let measurement = &mut ctx.heap().measurement;
         measurement.region_high_water_bytes = measurement.region_high_water_bytes.max(active_bytes);
     }
