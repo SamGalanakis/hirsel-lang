@@ -438,6 +438,12 @@ struct EvaluationRecord {
     owner: DefId,
     constant: crate::comptime::EvaluatedConstant,
 }
+#[derive(Serialize, Deserialize)]
+struct StagedEvaluationRecord {
+    declaration: DefId,
+    arguments: Vec<u64>,
+    constant: crate::comptime::EvaluatedConstant,
+}
 fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
     ContentHash::of_parts(
         "hirsel.validate.evaluated-output.v1",
@@ -898,16 +904,19 @@ impl QueryEngine {
             .then_some(record)
     }
     fn stored_variant(&mut self, path: &DefPath, kind: QueryKind) -> Option<Variant> {
+        let key = self.store_key(path, kind)?;
+        self.stored_variant_at(path, &key)
+    }
+    fn stored_variant_at(&mut self, owner: &DefPath, key: &EntryKey) -> Option<Variant> {
         let _time = timings::phase(Phase::StoreLookup);
         let store = self.result_store.clone()?;
-        let key = self.store_key(path, kind)?;
-        let mut entry = StoredEntry::load(&*store, &key);
+        let mut entry = StoredEntry::load(&*store, key);
         entry
             .variants
-            .retain(|variant| variant.inputs == key.1 && variant.valid(&key));
+            .retain(|variant| variant.inputs == key.1 && variant.valid(key));
         let hit = entry
-            .hit(|read| self.observe(path, read))
-            .and_then(|variant| variant.resolve(&*store, &key));
+            .hit(|read| self.observe(owner, read))
+            .and_then(|variant| variant.resolve(&*store, key));
         if hit.is_none() {
             timings::count(Count::StoreMisses);
         }
@@ -1344,6 +1353,134 @@ impl QueryEngine {
         .write(&value.executed, payload)
     }
 
+    /// A selected staged value has the ordinary Evaluate kind, but its logical
+    /// address names the declaration and complete canonical size arguments.
+    /// The source-owned declaration supplies the input and environment key.
+    fn staged_evaluation_key(&mut self, path: &DefPath, arguments: &[u64]) -> Option<EntryKey> {
+        let declaration = self.staged_constants.get(path)?.clone();
+        if declaration.inputs.len() != arguments.len() {
+            return None;
+        }
+        let owner = self.store_key(&declaration.owner, QueryKind::Evaluate)?;
+        let instance = hirsel_tir::constant_instance_path(path, arguments);
+        Some(EntryKey(
+            ContentHash::of_parts(
+                "hirsel.result.staged-evaluation-address.v1",
+                [owner.0.0.as_slice(), instance.fingerprint().0.as_slice()],
+            ),
+            ContentHash::of_parts(
+                "hirsel.result.staged-evaluation-input.v1",
+                [
+                    owner.1.0.as_slice(),
+                    declaration.signature.fingerprint.0.as_slice(),
+                ],
+            ),
+            QueryKind::Evaluate,
+        ))
+    }
+    pub(crate) fn load_staged_evaluation(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Option<crate::comptime::EvaluatedConstant> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let declaration = self.staged_constants.get(path)?.clone();
+        let key = self.staged_evaluation_key(path, arguments)?;
+        let variant = self.stored_variant_at(&declaration.owner, &key)?;
+        let record: StagedEvaluationRecord = self.decode_record(&variant.payload)?;
+        let syntax = self.snapshot(&declaration.owner).ok()?;
+        let mut value = record.constant;
+        if record.declaration != DefId::intern(path)
+            || record.arguments != arguments
+            || value.executed != variant.reads
+            || !self.portable_execution_reads(&value.executed)
+            || value.depth.first.len() != self.depth_limit() as usize + 1
+            || value
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+            || value
+                .substitutions
+                .iter()
+                .any(|(id, _)| !valid_expression(&syntax, *id))
+        {
+            return None;
+        }
+        if self.verify == Verify::On {
+            let cache = self.result_store.as_ref()?.verifier()?;
+            let snapshot = self.signature_snapshot();
+            let receipt = cache
+                .execution(evaluation_subject(&key, &variant.payload), |package| {
+                    snapshot.validation_input_digest(package)
+                })?;
+            value.validation = Some(receipt.contexts().to_vec().into());
+            value.acceptance = Some(receipt);
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            let instance = hirsel_tir::constant_instance_path(path, arguments);
+            self.pending_store_checks.insert(
+                (DefId::intern(&instance), QueryKind::Evaluate),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(value)
+    }
+    pub(crate) fn store_staged_evaluation(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+        value: &crate::comptime::EvaluatedConstant,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none()
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+            || !self.portable_execution_reads(&value.executed)
+        {
+            return Ok(());
+        }
+        let Some(key) = self.staged_evaluation_key(path, arguments) else {
+            return Ok(());
+        };
+        let Some(payload) = self.encode_record(&StagedEvaluationRecord {
+            declaration: DefId::intern(path),
+            arguments: arguments.to_vec(),
+            constant: value.clone(),
+        }) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled staged evaluation store")
+            .clone();
+        if let Some(receipt) = &value.acceptance
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        let instance = hirsel_tir::constant_instance_path(path, arguments);
+        EncodedWriter {
+            types: self
+                .type_records()
+                .expect("enabled staged evaluation types"),
+            store,
+            key,
+            path: instance.clone(),
+            kind: QueryKind::Evaluate,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(&instance), QueryKind::Evaluate)),
+        }
+        .write(&value.executed, payload)
+    }
+
     pub(crate) fn remember_lowered_verdict(
         &mut self,
         definition: hirsel_tir::DefinitionRef,
@@ -1507,6 +1644,102 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn malformed_staged_values_miss_before_adoption_or_comparison() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..7 {
+                let (mut engine, syntax) = fixture_source("fn main[n:size]()->u64{comptime n}");
+                engine.verify = Verify::Off;
+                let owner = &syntax.item.definition;
+                let mut path = owner.clone();
+                path.0.name = "$comptime:main:0".into();
+                let ty = engine.types.intern(hirsel_types::Type::unit());
+                engine.install_staged(crate::comptime::StagedRegistration {
+                    path: path.clone(),
+                    constant: crate::comptime::StagedConstant {
+                        owner: owner.clone(),
+                        expression: hirsel_syntax::ExprId(0),
+                        inputs: vec![hirsel_types::SizeParameterRef::bound(
+                            hirsel_types::SizeParamId(0),
+                        )],
+                        signature: Arc::new(Signature {
+                            definition: DefId::intern(&path),
+                            metadata: Default::default(),
+                            kind: hirsel_types::SignatureKind::Const {
+                                ty,
+                                generics: Default::default(),
+                            },
+                            fingerprint: ContentHash::default(),
+                        }),
+                    },
+                });
+                let mut record = StagedEvaluationRecord {
+                    declaration: DefId::intern(&path),
+                    arguments: vec![2],
+                    constant: crate::comptime::EvaluatedConstant {
+                        value: hirsel_tir::Materialized {
+                            root: hirsel_tir::ValueNode {
+                                ty,
+                                kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                            },
+                        },
+                        substitutions: vec![],
+                        executed: Reads::empty(),
+                        depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                        validation: None,
+                        acceptance: None,
+                    },
+                };
+                match fault {
+                    0 => (),
+                    1 => record.declaration = DefId::intern(&DefPath::core("foreign")),
+                    2 => record.arguments = vec![3],
+                    3 => record.arguments.push(3),
+                    4 => record.constant.depth.first = Box::new([]),
+                    5 => record.constant.substitutions.push((
+                        hirsel_syntax::ExprId(u32::MAX),
+                        record.constant.value.clone(),
+                    )),
+                    6 => {
+                        record.constant.executed = Reads::from_vec(vec![(
+                            ReadKey::Signature(DefId::intern(&path)),
+                            ContentHash::default(),
+                        )])
+                        .unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+                let key = engine.staged_evaluation_key(&path, &[2]).unwrap();
+                let payload = engine.encode_record(&record).unwrap();
+                EncodedWriter {
+                    types: engine.type_records().unwrap(),
+                    store: engine.result_store.clone().unwrap(),
+                    key,
+                    path: hirsel_tir::constant_instance_path(&path, &[2]),
+                    kind: QueryKind::Evaluate,
+                    expected: None,
+                }
+                .write(&Reads::empty(), payload)
+                .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_staged_evaluation(&path, &[2]);
+                assert_eq!(
+                    hit.is_some(),
+                    fault == 0 && verify == crate::store::VerifyStore::Off,
+                    "fault={fault} verify={verify:?}"
+                );
+                assert!(engine.load_staged_evaluation(&path, &[3]).is_none());
+                if fault != 0 {
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn producer_serialization_cannot_transfer_scalar_private_admission() {
