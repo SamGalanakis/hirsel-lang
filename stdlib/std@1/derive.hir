@@ -275,7 +275,16 @@ fn nested_option(ty: String, inner: String) -> Result[(), String] uses {} {
 // ---- JSON ----
 // Writes an expression of type std@1/json.Value for `read`, of canonical type
 // `ty`.
+// Schema generation shares the scalar emitter; its nominal converters have
+// their own context and contracts in schema_derive.hir.
 fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {} {
+  json_of_at(mut w, ty, read, "", "")
+}
+
+fn json_of_at(mut w: Writer, ty: String, read: String, parent: String, member: String) -> Result[
+  (),
+  String
+] uses {} {
   if ty == "bool" {
     put(mut w, f"Bool({read})")
     return Ok(())
@@ -296,7 +305,7 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
     nested_option(ty, inner)?
     let item = fresh(mut w, "item")
     put(mut w, f"match {read} {{ Some({item}) => ")
-    json_of(mut w, inner, item)?
+    json_of_at(mut w, inner, item, parent, member)?
     put(mut w, ", None => Null }")
     return Ok(())
   }
@@ -307,7 +316,7 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
       mut w,
       f"{{\n    let mut {items}: List[std@1/json.Value] = []\n    for {item} in {read} {{\n      list.push(mut {items}, "
     )
-    json_of(mut w, inner, item)?
+    json_of_at(mut w, inner, item, parent, member)?
     put(mut w, f")\n    }}\n    Array(take {items})\n  }}")
     return Ok(())
   }
@@ -320,7 +329,7 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
         mut w,
         f"{{\n    let mut {items}: Map[String, std@1/json.Value] = map.empty()\n    for ({key}, {entry}) in {read} {{\n      map.insert(mut {items}, unique {key}, "
       )
-      json_of(mut w, pair[1], entry)?
+      json_of_at(mut w, pair[1], entry, parent, member)?
       put(mut w, f")\n    }}\n    Object(take {items})\n  }}")
       return Ok(())
     }
@@ -328,9 +337,9 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
       mut w,
       f"{{\n    let mut {items}: List[std@1/json.Value] = []\n    for ({key}, {entry}) in {read} {{\n      list.push(mut {items}, Array(["
     )
-    json_of(mut w, pair[0], key)?
+    json_of_at(mut w, pair[0], key, parent, member)?
     put(mut w, ", ")
-    json_of(mut w, pair[1], entry)?
+    json_of_at(mut w, pair[1], entry, parent, member)?
     put(mut w, f"]))\n    }}\n    Array(take {items})\n  }}")
     return Ok(())
   }
@@ -344,7 +353,7 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
     let mut i: u64 = 0
     for component in components {
       put(mut w, f"    list.push(mut {items}, ")
-      json_of(mut w, component, names[i])?
+      json_of_at(mut w, component, names[i], parent, member)?
       put(mut w, ")\n")
       i += 1
     }
@@ -352,7 +361,15 @@ fn json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {
     return Ok(())
   }
   if nominal(ty) {
-    put(mut w, f"{deriver(ty, "to_json")}({read})")
+    let callee = deriver(ty, "to_json")
+    let converted = fresh(mut w, "converted")
+    // Keep the borrowed call in place. Type its result on the converter line
+    // so a wrong result is attributed there too; move it out without copying.
+    // The comments explain failures; ordinary checking still owns the call.
+    put(
+      mut w,
+      f"{{\n// schema-hook {parent}\t{member}\n// schema-contract fn {callee}(value: {ty}) -> std@1/json.Value uses {{}}\nlet {converted}: std@1/json.Value = {callee}({read})\ntake {converted}\n}}"
+    )
     return Ok(())
   }
   Error(f"no JSON form for {ty}")
@@ -401,7 +418,7 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
       put(mut w, "  let mut fields: Map[String, std@1/json.Value] = map.empty()\n")
       for f in fields {
         put(mut w, f"  map.insert(mut fields, \"{f.name}\", ")
-        json_of(mut w, f.ty, f"value.{f.name}")?
+        json_of_at(mut w, f.ty, f"value.{f.name}", info.name, f.name)?
         put(mut w, ")\n")
       }
       put(mut w, "  Object(take fields)\n")
@@ -422,7 +439,7 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
         )
         if kind == "newtype" {
           put(mut w, f"      map.insert(mut tagged, \"{v.name}\", ")
-          json_of(mut w, v.payload[0].ty, names[0])?
+          json_of_at(mut w, v.payload[0].ty, names[0], info.name, f"{v.name}.0")?
           put(mut w, ")\n")
         } else if kind == "struct" {
           put(
@@ -432,7 +449,7 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
           let mut i: u64 = 0
           for p in v.payload {
             put(mut w, f"      map.insert(mut fields, \"{label_of(p)}\", ")
-            json_of(mut w, p.ty, names[i])?
+            json_of_at(mut w, p.ty, names[i], info.name, f"{v.name}.{label_of(p)}")?
             put(mut w, ")\n")
             i += 1
           }
@@ -445,7 +462,7 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
           let mut i: u64 = 0
           for p in v.payload {
             put(mut w, "      list.push(mut payload, ")
-            json_of(mut w, p.ty, names[i])?
+            json_of_at(mut w, p.ty, names[i], info.name, f"{v.name}.{i}")?
             put(mut w, ")\n")
             i += 1
           }
@@ -466,7 +483,10 @@ pub fn json_value[T](s: TypeShape[T]) -> Result[
 
 // Writes an expression of canonical type `ty` decoding `read`, a
 // std@1/json.Value; a mismatch returns `Error` from the generated function.
-fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] uses {} {
+fn from_json_of(mut w: Writer, ty: String, read: String, parent: String, member: String) -> Result[
+  (),
+  String
+] uses {} {
   if ty == "bool" {
     put(mut w, f"std@1/derive.json_bool({read})?")
     return Ok(())
@@ -493,7 +513,7 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
     nested_option(ty, inner)?
     let item = fresh(mut w, "item")
     put(mut w, f"match {read} {{ Null => None, {item} => Some(")
-    from_json_of(mut w, inner, item)?
+    from_json_of(mut w, inner, item, parent, member)?
     put(mut w, ") }")
     return Ok(())
   }
@@ -507,7 +527,7 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
       mut w,
       f"    let mut {items}: List[{inner}] = []\n    for {item} in {array} {{\n      list.push(mut {items}, "
     )
-    from_json_of(mut w, inner, item)?
+    from_json_of(mut w, inner, item, parent, member)?
     put(mut w, f")\n    }}\n    take {items}\n  }}")
     return Ok(())
   }
@@ -520,7 +540,7 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
       mut w,
       f"    let mut {items}: Set[{inner}] = set.empty()\n    for {item} in {array} {{\n      let {decoded}: {inner} = "
     )
-    from_json_of(mut w, inner, item)?
+    from_json_of(mut w, inner, item, parent, member)?
     put(
       mut w,
       f"\n      if set.contains({items}, {decoded}) {{\n        return Error(\"duplicate set element\")\n      }}\n      set.insert(mut {items}, take {decoded})\n    }}\n    take {items}\n  }}"
@@ -538,7 +558,7 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
         mut w,
         f"{{\n    let Object({members}) = {read} else {{\n      return Error(\"expected a JSON object\")\n    }}\n    let mut {items}: {ty} = map.empty()\n    for ({key}, {item}) in {members} {{\n      let {entry}: {pair[1]} = "
       )
-      from_json_of(mut w, pair[1], item)?
+      from_json_of(mut w, pair[1], item, parent, member)?
       put(
         mut w,
         f"\n      map.insert(mut {items}, unique {key}, take {entry})\n    }}\n    take {items}\n  }}"
@@ -551,9 +571,9 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
       mut w,
       f"    let mut {items}: {ty} = map.empty()\n    for {item} in {array} {{\n      let Array({couple}) = {item} else {{\n        return Error(\"expected a JSON [key, value] array\")\n      }}\n      if core@1/list.len({couple}) != 2 {{\n        return Error(\"expected a JSON [key, value] array\")\n      }}\n      let {key}: {pair[0]} = "
     )
-    from_json_of(mut w, pair[0], f"{couple}[0]")?
+    from_json_of(mut w, pair[0], f"{couple}[0]", parent, member)?
     put(mut w, f"\n      let {entry}: {pair[1]} = ")
-    from_json_of(mut w, pair[1], f"{couple}[1]")?
+    from_json_of(mut w, pair[1], f"{couple}[1]", parent, member)?
     put(
       mut w,
       f"\n      if map.contains({items}, {key}) {{\n        return Error(\"duplicate map key\")\n      }}\n      map.insert(mut {items}, take {key}, take {entry})\n    }}\n    take {items}\n  }}"
@@ -572,7 +592,7 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
     let mut i: u64 = 0
     for component in components {
       put(mut w, f"    let {names[i]}: {component} = ")
-      from_json_of(mut w, component, f"{array}[{i}]")?
+      from_json_of(mut w, component, f"{array}[{i}]", parent, member)?
       put(mut w, "\n")
       list.push(mut taken, f"take {names[i]}")
       i += 1
@@ -581,7 +601,13 @@ fn from_json_of(mut w: Writer, ty: String, read: String) -> Result[(), String] u
     return Ok(())
   }
   if nominal(ty) {
-    put(mut w, f"{deriver(ty, "from_json")}({read})?")
+    let callee = deriver(ty, "from_json")
+    let converted = fresh(mut w, "converted")
+    // Keep `?` in the enclosing function and preserve the hook's result evidence.
+    put(
+      mut w,
+      f"{{\n// schema-hook {parent}\t{member}\n// schema-contract fn {callee}(value: std@1/json.Value) -> core@1/Result[{ty}, String] uses {{}}\nlet {converted}: {ty} = {callee}({read})?\ntake {converted}\n}}"
+    )
     return Ok(())
   }
   Error(f"no JSON form for {ty}")
@@ -597,7 +623,9 @@ fn members_from(
   names: List[String],
   types: List[String],
   members: String,
-  indent: String
+  indent: String,
+  parent: String,
+  prefix: String
 ) -> Result[List[String], String] uses {} {
   let mut arguments: List[String] = []
   let mut i: u64 = 0
@@ -610,14 +638,14 @@ fn members_from(
         mut w,
         f"{indent}let {decoded}: {ty} = match map.get({members}, \"{name}\") {{\n{indent}  None => None,\n{indent}  Some({member}) => "
       )
-      from_json_of(mut w, ty, member)?
+      from_json_of(mut w, ty, member, parent, f"{prefix}{name}")?
       put(mut w, f",\n{indent}}}\n")
     } else {
       put(
         mut w,
         f"{indent}let Some({member}) = map.get({members}, \"{name}\") else {{\n{indent}  return Error(\"missing field `{name}`\")\n{indent}}}\n{indent}let {decoded}: {ty} = "
       )
-      from_json_of(mut w, ty, member)?
+      from_json_of(mut w, ty, member, parent, f"{prefix}{name}")?
       put(mut w, "\n")
     }
     list.push(mut arguments, f"{name}: take {decoded}")
@@ -674,7 +702,7 @@ pub fn from_json[T](s: TypeShape[T]) -> Result[
         list.push(mut names, unique f.name)
         list.push(mut types, unique f.ty)
       }
-      let arguments = members_from(mut w, names, types, "fields", "  ")?
+      let arguments = members_from(mut w, names, types, "fields", "  ", info.name, "")?
       put(mut w, f"  Ok({constructor(info.name)}({string.join(arguments, ", ")}))\n")
     },
     Choice(variants) => {
@@ -720,7 +748,7 @@ pub fn from_json[T](s: TypeShape[T]) -> Result[
         } else if kind == "newtype" {
           let decoded = fresh(mut w, "decoded")
           put(mut w, f"          let {decoded}: {v.payload[0].ty} = ")
-          from_json_of(mut w, v.payload[0].ty, "payload")?
+          from_json_of(mut w, v.payload[0].ty, "payload", info.name, f"{v.name}.0")?
           put(mut w, f"\n          return Ok({v.name}(take {decoded}))\n")
         } else if kind == "tuple" {
           let items = fresh(mut w, "items")
@@ -733,7 +761,7 @@ pub fn from_json[T](s: TypeShape[T]) -> Result[
           let mut i: u64 = 0
           for p in v.payload {
             put(mut w, f"          let {names[i]}: {p.ty} = ")
-            from_json_of(mut w, p.ty, f"{items}[{i}]")?
+            from_json_of(mut w, p.ty, f"{items}[{i}]", info.name, f"{v.name}.{i}")?
             put(mut w, "\n")
             list.push(mut taken, f"take {names[i]}")
             i += 1
@@ -751,7 +779,15 @@ pub fn from_json[T](s: TypeShape[T]) -> Result[
             list.push(mut labels, label_of(p))
             list.push(mut types, unique p.ty)
           }
-          let arguments = members_from(mut w, labels, types, members, "          ")?
+          let arguments = members_from(
+            mut w,
+            labels,
+            types,
+            members,
+            "          ",
+            info.name,
+            f"{v.name}."
+          )?
           put(mut w, f"          return Ok({v.name}({string.join(arguments, ", ")}))\n")
         }
         put(mut w, "        }\n")

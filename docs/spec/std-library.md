@@ -3004,13 +3004,61 @@ type's canonical package and module, so a field `model.Draft` calls
 `model.draft_to_json`, `model.draft_from_json`, `model.draft_format` or
 `model.draft_hash`, without forwarding functions in the enclosing record's
 module. Ordinary visibility applies. The deriver may be derived or written by
-hand, and a missing one is LANG-4 in the generated text. A naming convention keeps
+hand. A missing JSON helper is LANG-4 at the original call in generated text,
+with labels on the enclosing source field or variant payload and the generating
+`= comptime` body. The field label gives the canonical helper path and its
+directional signature; wrong helper types and modes retain their own rules.
+See the [complete nested JSON recipe](#nested-json-helpers). A naming convention keeps
 headers exactly what their writers declare, where a dictionary argument would
 add a parameter to every derived function and its callers. A type that recurses
 through a `List`, `Set` or `Map` gets a deriver that calls itself. A `box T`
 field has no form: a deriver takes its type by value and a box's payload is
 reached only through patterns ([MEM-7](memory.md#mem-7-layout)). `equal`
 compares every field with `==`, nested types included.
+
+### Nested JSON helpers
+
+Declare a helper for each nominal type reached through a field or payload,
+including inside `List`, `Option`, tuples, sets and maps. Deriving `Report`
+does not synthesize helpers for `Item`:
+
+```hirsel
+type Item { name: String }
+type Report { items: List[Option[Item]] }
+
+fn item_to_json(value: Item) -> json.Value uses {} = comptime derive.json_value(shape(Item))
+fn item_from_json(value: json.Value) -> Result[unique Item, String] uses {} = comptime derive.from_json(shape(Item))
+fn report_to_json(value: Report) -> json.Value uses {} = comptime derive.json_value(shape(Report))
+fn report_from_json(value: json.Value) -> Result[unique Report, String] uses {} = comptime derive.from_json(shape(Report))
+
+pub fn main() -> Result[(), String] uses {} {
+  let original = Report(items: [Some(Item(name: "雪")), None])
+  let wire = report_to_json(original)
+  let decoded = report_from_json(wire)?
+  if decoded != original { return Error("roundtrip") }
+  let Ok(encoded) = json.stringify(report_to_json(decoded)) else {
+    return Error("JSON encoding failed")
+  }
+  if encoded != "{\"items\":[{\"name\":\"雪\"},null]}" { return Error("JSON form") }
+  Ok(())
+}
+```
+
+The helper argument is borrowed (`value: Item` or `value: json.Value`);
+`take value` and `mut value` change the call contract. Encoding returns
+`json.Value`; decoding returns `Result[Item, String]`. A decoder whose caller
+requires `unique Item` must itself promise `Result[unique Item, String]`, as in
+the recipe. Keep these ownership promises on handwritten helpers too. Errors
+from a nested decoder propagate unchanged, before later fields are decoded.
+
+For `model.Item`, put the helpers in `model` as `item_to_json` and
+`item_from_json`, with public visibility when another module needs them. The
+call uses that declared type's canonical package/module path, including across
+packages. A payload `Batch(items: List[Item])` names `Batch.items` in the field
+label; an unlabelled payload names its zero-based position, such as `Batch.0`.
+The label still points to the enclosing field when the nominal type sits inside
+containers. Breadcrumb comments in generated text only explain a failure;
+they do not define a helper, change visibility or make an ill-typed call legal.
 
 A generic declaration derives each instance separately (CT-5 instances), so one
 declaration serves every instance of a generic type, and a nested `T` field uses

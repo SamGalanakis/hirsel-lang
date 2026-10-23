@@ -115,3 +115,8 @@ the attempted forms and repairs.
 
 See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
 for public module names, contextual variants and ownership at each call.
+
+Nested JSON conversion uses the explicit `node_from_json` helper. See the
+[complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers)
+for naming, module visibility and directional signatures. Missing or mistyped
+helpers are labelled at the enclosing source field or payload.

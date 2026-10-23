@@ -96,3 +96,8 @@ shell grammar or expansion is added. PSF-2.0 copyright and license are retained
 in [fixtures/PSF-LICENSE.txt](fixtures/PSF-LICENSE.txt); see also the repository
 [third-party notice](../../third-party/NOTICES.md#python-software-foundation-license-version-2-cpython).
 See [FRICTION.md](FRICTION.md) for authoring attempts and remaining limitations.
+
+Nested JSON conversion uses explicit `command_plan_to_json` helpers. See the
+[complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers)
+for naming, module visibility and directional signatures. Missing or mistyped
+helpers are labelled at the enclosing source field or payload.

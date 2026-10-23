@@ -89,3 +89,8 @@ CSV row-advance errors use `results.map_error` with a taken CSV error and an
 immutable record snapshot. The reader construction and typed `Line` extraction
 keep explicit matches so their payload modes remain visible. See
 [LANG-8](../../docs/spec/language.md#lang-8-errors) for the complete recipe.
+
+Nested JSON conversion uses the explicit `invoice_to_json` helper. See the
+[complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers)
+for naming, module visibility and directional signatures. Missing or mistyped
+helpers are labelled at the enclosing source field or payload.

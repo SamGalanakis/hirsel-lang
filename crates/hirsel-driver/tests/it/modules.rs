@@ -117,3 +117,4 @@ mod match_missing_case_22;
 mod generic_element_context_21;
 mod noalloc_cleanup_repairs_21;
 mod nested_unique_result_24;
+mod json_hook_guidance_24;
