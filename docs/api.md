@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2241 exported definitions; 972 variants.
+2246 exported definitions; 974 variants.
 
 ## Types and roots
 
@@ -11236,6 +11236,36 @@ Extensions are opt-in. Rendering omits raw HTML and unsafe destinations by defau
 
 References: [`core@1/bool`](#def-core_401_2fbool)
 
+<a id="def-std_401_2fmarkdown_2fOutputLimit"></a>
+
+- `pub type markdown.OutputLimit { limit: u64, }`
+
+The bounded String helpers return no partial output on refusal.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fRenderError"></a>
+
+- `pub type markdown.RenderError[E] = LimitReached(u64) | Sink(E)`
+
+A render stops before emitting byte limit+1. Sink errors retain their payload.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fRenderError_23LimitReached"></a>
+
+- `LimitReached(u64) -> markdown.RenderError[E]`
+
+Variant of markdown.RenderError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fRenderError_23Sink"></a>
+
+- `Sink(E) -> markdown.RenderError[E]`
+
+Variant of markdown.RenderError.
+
 <a id="def-std_401_2fmarkdown_2fdefault_5foptions"></a>
 
 - `pub fn markdown.default_options() -> Options uses {}`
@@ -11265,6 +11295,27 @@ Render an editable AST safely with CommonMark defaults.
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode)
 
+<a id="def-std_401_2fmarkdown_2frender_5fhtml_5fbounded"></a>
+
+- `pub fn markdown.render_html_bounded(document: Node, options: Options, limit: u64) -> Result[ String, OutputLimit ] uses {}`
+
+Bound output payload storage, including escapes, image alts, tables and footnotes.
+Parser/AST allocations and allocator metadata/size-class rounding are separate.
+The output buffer reserves at most limit payload bytes, once, on first emission.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/OutputLimit`](#def-std_401_2fmarkdown_2fOutputLimit)
+
+<a id="def-std_401_2fmarkdown_2frender_5fhtml_5fto"></a>
+
+- `pub fn markdown.render_html_to[S, E]( document: Node, options: Options, limit: u64, mut sink: S, write: fn(mut S, u8) -> Result[(), E] uses {} ) -> Result[u64, RenderError[E]] uses {}`
+
+Stream an AST through the same walker, with no rendered heap fragments.
+The limit covers emitted bytes; parser/AST memory and sink-owned storage are separate.
+Each callback accepts one byte or returns Error without accepting it. A failure
+leaves the already accepted prefix in the caller's sink; no further calls occur.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/RenderError`](#def-std_401_2fmarkdown_2fRenderError)
+
 <a id="def-std_401_2fmarkdown_2frender_5fhtml_5fwith_5foptions"></a>
 
 - `pub fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}`
@@ -11278,6 +11329,12 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#
 - `pub fn markdown.to_html(take source: String, options: Options) -> String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2fto_5fhtml_5fbounded"></a>
+
+- `pub fn markdown.to_html_bounded(take source: String, options: Options, limit: u64) -> Result[ String, OutputLimit ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/OutputLimit`](#def-std_401_2fmarkdown_2fOutputLimit)
 
 
 ## md5
