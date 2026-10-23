@@ -109,3 +109,5 @@ change is included. The affected success, invalid, header, width and quoting
 cells, including CSV failures at records 1 and 2, preserve exact stdout, stderr
 and status through H, LLVM and Cranelift. The original errors and investigation
 notes above are historical evidence and have been preserved.
+
+Contextual-error guidance and these application rewrites landed in `ea29a8642f1a465689e71ebea18e6abfa740fd34`.

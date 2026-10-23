@@ -131,3 +131,5 @@ Affected success/order and requirement/version failures at rows 1 and 2 retain
 exact report bytes, semantic role, row and cause offset through H, LLVM and
 Cranelift. The original authoring errors above remain preserved; the closure
 recipe resolves the manual-context plumbing, not the intentional error-arm rule.
+
+Contextual-error guidance and these application rewrites landed in `ea29a8642f1a465689e71ebea18e6abfa740fd34`.
