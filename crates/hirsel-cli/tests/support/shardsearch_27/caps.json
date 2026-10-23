@@ -1,0 +1,286 @@
+[
+  {
+    "id": "file-exact",
+    "files": {
+      "a": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "paths": [
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      1
+    ],
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "id": "file-excess",
+    "files": {
+      "a": {
+        "repeat": "x",
+        "count": 65537
+      }
+    },
+    "paths": [
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      1
+    ],
+    "status": 2,
+    "stdout": "",
+    "stderr": "file_bytes_limit:0\n"
+  },
+  {
+    "id": "total-exact",
+    "files": {
+      "a": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "paths": [
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      1
+    ],
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "id": "total-excess",
+    "files": {
+      "a": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "paths": [
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      1
+    ],
+    "status": 2,
+    "stdout": "",
+    "stderr": "total_bytes_limit:16\n"
+  },
+  {
+    "id": "file-count-exact",
+    "files": {
+      "a": ""
+    },
+    "paths": [
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      4
+    ],
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "id": "file-count-excess",
+    "files": {},
+    "paths": [
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a",
+      "a"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      1
+    ],
+    "status": 2,
+    "stdout": "",
+    "stderr": "arguments:0\n"
+  },
+  {
+    "id": "jobs-rejection",
+    "files": {},
+    "paths": [],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      0,
+      9
+    ],
+    "status": 2,
+    "stdout": "",
+    "stderr": "jobs:0\n"
+  }
+]

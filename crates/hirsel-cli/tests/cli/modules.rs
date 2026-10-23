@@ -71,3 +71,4 @@ mod json_hook_guidance_24;
 mod string_concat_guidance_24;
 mod output_capability_guidance_24;
 mod filemanifest_stream_25;
+mod shardsearch_27;

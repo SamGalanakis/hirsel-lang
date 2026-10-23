@@ -1,0 +1,229 @@
+pub type AppError = Output(OutputError)
+
+type FileMatches {
+  size: u64,
+  offsets: List[u64],
+  problem: String,
+}
+
+type Match {
+  file: u64,
+  offset: u64,
+}
+
+type SearchError {
+  kind: String,
+  file: u64,
+}
+
+fn invalid(kind: String, index: u64) -> SearchError {
+  SearchError(kind: unique kind, file: index)
+}
+
+fn smaller(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+fn failed(kind: String) -> unique FileMatches {
+  FileMatches(size: 0, offsets: [], problem: unique kind)
+}
+
+// Each native substring search is bounded by FILE_BYTES. Reads and matches
+// are cancellation points; pure native search is not asynchronously interrupted.
+fn search_file(
+  tasks: Tasks,
+  d: Dir,
+  take name: unique String,
+  query: Shared[String],
+  limit: u64,
+  budget: u64
+) -> unique FileMatches {
+  task.scope(
+    tasks,
+    fn(child: Scope) -> unique FileMatches {
+      let mut Ok(handle) = file.open(d, path.of(name)) else {
+        return failed("file_open")
+      }
+      let data = match file.read_all_bounded(d, mut handle, budget) {
+        Ok(value) => take value,
+        Error(Limit()) => return failed(
+          if budget < 65536 {
+            "total_bytes_limit"
+          } else {
+            "file_bytes_limit"
+          }
+        ),
+        Error(File(_)) => return failed("file_read"),
+      }
+      let size = bytes.len(data)
+      let Ok(text) = string.from_bytes(take data) else {
+        return failed("contents_utf8")
+      }
+      shared.with(
+        query,
+        fn(needle: String) -> unique FileMatches {
+          let mut offsets: List[u64] = []
+          let mut start = 0u64
+          while start < size && list.len(offsets) < limit {
+            if let Error(_) = task.check_canceled(child) {
+              return failed("canceled")
+            }
+            let Some(begin) = string.position(text, start) else {
+              return failed("position")
+            }
+            let Some(end) = string.position(text, size) else {
+              return failed("position")
+            }
+            let rest = string.slice(text, begin, end)
+            let Some(found) = string.find(rest, needle) else {
+              break
+            }
+            let offset = start + string.byte_offset(rest, found)
+            list.push(mut offsets, offset)
+            start = offset + string.byte_len(needle)
+          }
+          FileMatches(size: size, offsets: take offsets, problem: "")
+        }
+      )
+    }
+  )
+}
+
+// TaskSet stores completed speculative results. Awaiting add-order slots
+// commits only a contiguous input prefix, even when later slots finish first.
+fn search(
+  tasks: Tasks,
+  d: Dir,
+  names: List[String],
+  query: Shared[String],
+  jobs: u64,
+  limit: u64
+) -> Result[List[Match], SearchError] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[Match], SearchError] {
+      let mut rows: List[Match] = []
+      let mut start = 0u64
+      let mut total = 0u64
+      while start < list.len(names) {
+        let remaining = 1048576u64 - total
+        // Reserve one full file per live job. A final partial reservation gets
+        // its own batch. Unused reservations become available after the batch.
+        let capacity = if remaining < 65536 {
+          1u64
+        } else {
+          remaining / 65536
+        }
+        let count = smaller(smaller(jobs, capacity), list.len(names) - start)
+        let budget = smaller(remaining, 65536)
+        let mut pending: TaskSet[unique FileMatches] of s = task.set(s)
+        for i in start..start + count {
+          let name = unique names[i]
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> unique FileMatches {
+                search_file(tasks, d, take name, query, limit, budget)
+              }
+            )
+          )
+        }
+        for slot in 0u64..count {
+          let row = task.await_at(s, mut pending, slot)
+          let index = start + slot
+          if row.problem != "" {
+            task.cancel_all(s, take pending)
+            return Error(invalid(row.problem, index))
+          }
+          total += row.size
+          for offset in row.offsets {
+            list.push(mut rows, Match(file: index, offset: offset))
+            if list.len(rows) == limit {
+              // cancel_all returns only after every outstanding child exits.
+              task.cancel_all(s, take pending)
+              return Ok(take rows)
+            }
+          }
+        }
+        task.cancel_all(s, take pending)
+        start += count
+      }
+      Ok(take rows)
+    }
+  )
+}
+
+fn execute(rt: Io, args: Args) -> Result[List[Match], SearchError] {
+  if arg.len(args) < 4 || arg.len(args) > 68 {
+    return Error(invalid("arguments", 0))
+  }
+  let Ok(root) = arg.text(args, 0) else {
+    return Error(invalid("arguments_utf8", 0))
+  }
+  let Ok(needle) = arg.text(args, 1) else {
+    return Error(invalid("arguments_utf8", 0))
+  }
+  if string.byte_len(needle) == 0 || string.byte_len(needle) > 256 {
+    return Error(invalid("query_bytes", 0))
+  }
+  let Ok(jobs_text) = arg.text(args, 2) else {
+    return Error(invalid("arguments_utf8", 0))
+  }
+  let Ok(limit_text) = arg.text(args, 3) else {
+    return Error(invalid("arguments_utf8", 0))
+  }
+  let Ok(jobs) = u64.parse(jobs_text) else {
+    return Error(invalid("jobs", 0))
+  }
+  let Ok(limit) = u64.parse(limit_text) else {
+    return Error(invalid("limit", 0))
+  }
+  if jobs == 0 || jobs > 8 {
+    return Error(invalid("jobs", 0))
+  }
+  if limit == 0 || limit > 64 {
+    return Error(invalid("limit", 0))
+  }
+  let mut names: List[String] = []
+  for i in 4u64..arg.len(args) {
+    let Ok(name) = arg.text(args, i) else {
+      return Error(invalid("arguments_utf8", i - 4))
+    }
+    list.push(mut names, take name)
+  }
+  let Ok(d) = io.dir(rt, path.of(root)) else {
+    return Error(invalid("directory_grant", 0))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(invalid("tasks_grant", 0))
+  }
+  let query = shared.freeze(unique needle)
+  search(tasks, d, names, query, jobs, limit)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match execute(rt, args) {
+    Ok(rows) => {
+      for row in rows {
+        out.print(output, f"{row.file}:{row.offset}\n")?
+      }
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(errors, f"{problem.kind}:{problem.file}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

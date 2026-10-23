@@ -1,0 +1,25 @@
+[
+  {
+    "id": "joined-cutoff",
+    "files": {
+      "a": "foo",
+      "b": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "paths": [
+      "a",
+      "b",
+      "missing"
+    ],
+    "query": "foo",
+    "limit": 1,
+    "jobs": [
+      4
+    ],
+    "status": 0,
+    "stdout": "0:0\n",
+    "stderr": ""
+  }
+]
