@@ -710,20 +710,41 @@ fn f1_corpus_matrix_with_exit(
     grants: impl FnOnce(&Scratch) -> serde_json::Value,
     expected_exit: i32,
 ) {
+    f1_corpus_matrix_with_run(
+        name,
+        text,
+        |scratch| serde_json::json!({"io":grants(scratch),"args":[]}),
+        expected_exit,
+        b"",
+    );
+}
+
+fn f1_corpus_matrix_with_run(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected_exit: i32,
+    stdin: &[u8],
+) {
     let scratch = Scratch::new(name);
-    let io = grants(&scratch);
+    let mut grants = grants(&scratch);
+    let io = grants["io"].clone();
     let program = scratch.path("main.hir");
+    let input = scratch.path("live-stdin");
     std::fs::write(&program, text).unwrap();
+    std::fs::write(&input, stdin).unwrap();
     for level in ["record", "durable"] {
         let tape = scratch.path(level);
         let report = scratch.path("projection");
-        let grants = serde_json::json!({"io":io,"args":[],"recording":level}).to_string();
+        grants["recording"] = level.into();
+        let encoded_grants = grants.to_string();
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command
             .args(["run", "--native"])
             .arg(&program)
-            .args(["--grants", &grants, "--cores", "8", "--record"])
+            .args(["--grants", &encoded_grants, "--cores", "8", "--record"])
             .arg(&tape)
+            .stdin(std::fs::File::open(&input).unwrap())
             .env(hirsel_rt::free_replay::Report::VAR, &report);
         f1_permits(&mut command, 8);
         let live = command.output().unwrap();
@@ -1321,5 +1342,126 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
         "owned-drops",
         &source,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read_write"}]}),
+    );
+}
+
+#[test]
+fn f1_environment_and_stdin_replay_without_live_input() {
+    f1_corpus_matrix_with_run(
+        "input-env",
+        r#"
+pub type AppError = Grant(GrantError) | Input(InputError) | Env(EnvError) | Output(OutputError)
+pub fn main(rt: Io, e: Env) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  failure.check(env.get(e, "SET") ? Env == Some("recorded"), Bounds())
+  failure.check(env.get(e, "UNSET") ? Env == None(), Bounds())
+  failure.check(env.get(e, "EMPTY") ? Env == Some(""), Bounds())
+  failure.check(env.get(e, "DENIED") == Error(NotGranted()), Bounds())
+  let narrowed = env.narrow(e, ["SET", "EMPTY"]) ? Env
+  failure.check(env.get(narrowed, "SET") ? Env == Some("recorded"), Bounds())
+  failure.check(env.get(narrowed, "UNSET") == Error(NotGranted()), Bounds())
+  failure.check(match env.narrow(narrowed, ["UNSET"]) { Error(NotGranted()) => true, _ => false }, Bounds())
+  let input = io.stdin(rt) ? Grant
+  let mut read: List[u8] = []
+  while stdin.read(input, mut read, 3u64) ? Input != 0u64 {}
+  failure.check(bytes.from_list(take read) == b"recorded stdin\n", Bounds())
+  out.print(output, "inputs restored\n") ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1", "stdin":"stdin.bytes@1", "tasks":"tasks.free@1", "dirs":[]},"args":[],"env":{"SET":"recorded", "UNSET":null,"EMPTY":""}}),
+        0,
+        b"recorded stdin\n",
+    );
+}
+
+#[test]
+fn f1_canceled_stdin_consumes_its_checked_completion_once() {
+    f1_corpus_matrix_with_io(
+        "canceled-stdin",
+        r#"
+pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let input = io.stdin(rt) ? Grant
+  let done = task.scope(tasks, fn(s: Scope) -> bool {
+    let (tx, rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+    let mut sender = take tx
+    let child = task.async(s, fn() -> bool {
+      let mut receiver = take rx
+      let _ = channel.receive(tasks, mut receiver)
+      let mut read: List[u8] = []
+      let canceled = stdin.read(input, mut read, 1u64) == Error(Canceled(Requested()))
+      let invalid = stdin.read(input, mut read, 0u64) == Error(InvalidInput())
+      canceled && invalid && list.len(read) == 0u64
+    })
+    task.cancel(s, child)
+    let _ = channel.send(tasks, mut sender, true)
+    task.await(s, take child)
+  })
+  failure.check(done, Bounds())
+  out.print(output, "canceled input\n") ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "stdin":"stdin.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_signal_waits_replay_checked_arrivals_without_a_signal_source() {
+    f1_corpus_matrix_with_io(
+        "signal-waits",
+        r#"
+pub type AppError = Grant(GrantError) | Signal(SignalError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let signals = io.signals(rt) ? Grant
+  failure.check(signal.wait(signals, []) == Error(InvalidInput()), Bounds())
+  failure.check(signal.wait(signals, [Hangup()]) == Error(NotGranted()), Bounds())
+  failure.check(signal.wait(signals, [Interrupt(), Terminate()]) ? Signal == Interrupt(), Bounds())
+  failure.check(signal.wait(signals, [Terminate()]) ? Signal == Terminate(), Bounds())
+  out.print(output, "signals restored\n") ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "signals":{"provider":"signals.script@1","kinds":["interrupt","terminate"],"script":["interrupt","terminate"]}, "tasks":"tasks.free@1", "dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_canceled_signals_consume_completions_after_program_checks() {
+    f1_corpus_matrix_with_io(
+        "canceled-signals",
+        r#"
+pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let signals = io.signals(rt) ? Grant
+  let done = task.scope(tasks, fn(s: Scope) -> bool {
+    let (tx, rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+    let mut sender = take tx
+    let child = task.async(s, fn() -> bool {
+      let mut receiver = take rx
+      let _ = channel.receive(tasks, mut receiver)
+      let canceled = signal.wait(signals, [Interrupt()]) == Error(Canceled(Requested()))
+      let invalid = signal.wait(signals, []) == Error(InvalidInput())
+      let denied = signal.wait(signals, [Hangup()]) == Error(NotGranted())
+      canceled && invalid && denied
+    })
+    task.cancel(s, child)
+    let _ = channel.send(tasks, mut sender, true)
+    task.await(s, take child)
+  })
+  failure.check(done, Bounds())
+  out.print(output, "canceled signals\n") ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "signals":{"provider":"signals.script@1","kinds":["interrupt"],"script":[]}, "tasks":"tasks.free@1", "dirs":[]}),
     );
 }

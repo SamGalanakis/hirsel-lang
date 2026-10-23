@@ -671,13 +671,45 @@ impl HostLibrary {
             id: h,
         }
     }
+    fn input_request(&self, name: &str, a: &[Value]) -> Result<R, Error> {
+        if name == "stdin.read" {
+            return Ok(R::ReadStdin {
+                stdin: self.id(&a[0])?,
+                max: word(&a[2])?,
+            });
+        }
+        // The launch Env is immutable and has no projected host row. Narrowed
+        // Env values retain the exact host authority returned by their creator.
+        let env = match &a[0] {
+            Value::Handle { id, .. } => self
+                .handles
+                .get(id)
+                .copied()
+                .unwrap_or(hirsel_rt::io::ENV_HANDLE),
+            _ => hirsel_rt::io::ENV_HANDLE,
+        };
+        Ok(match name {
+            "env.get" => R::EnvGet {
+                env,
+                name: text(&a[1])?,
+            },
+            "env.narrow" => R::EnvNarrow {
+                env,
+                names: fields(&a[1])?
+                    .into_iter()
+                    .map(text)
+                    .collect::<Result<_, _>>()?,
+            },
+            _ => return Err(invalid()),
+        })
+    }
     fn host_input(
         &mut self,
         name: &str,
         call: OperationCall<'_>,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        use hirsel_rt::io::{ENV_HANDLE, IoError};
+        use hirsel_rt::io::IoError;
         let a = &*call.arguments;
         if matches!(
             name,
@@ -717,18 +749,10 @@ impl HostLibrary {
             }
             return Ok(result);
         }
-        // The root Env has no host row; a narrowed one maps to its host Env.
-        let env = match &a[0] {
-            Value::Handle { id, .. } => self.handles.get(id).copied().unwrap_or(ENV_HANDLE),
-            _ => ENV_HANDLE,
-        };
         if name == "env.narrow" {
-            let names = fields(&a[1])?
-                .into_iter()
-                .map(text)
-                .collect::<Result<_, _>>()?;
+            let request = self.input_request(name, a)?;
             let result = self.library.call(call, cx)?;
-            match (&result, self.host(R::EnvNarrow { env, names })?) {
+            match (&result, self.host(request)?) {
                 (
                     Some(OperationResult::Complete {
                         value: Value::Variant { variant: 0, fields },
@@ -753,9 +777,9 @@ impl HostLibrary {
             return Ok(result);
         }
         if name == "env.get" {
-            let name = text(&a[1])?;
+            let request = self.input_request(name, a)?;
             let result = self.library.call(call, cx)?;
-            let completion = self.host(R::EnvGet { env, name })?;
+            let completion = self.host(request)?;
             let C::Env(value) = completion else {
                 return Err(invalid());
             };
@@ -801,7 +825,8 @@ impl HostLibrary {
         if matches!(
             name,
             "stdin.read" | "err.print" | "out.print" | "err.write" | "out.write"
-        ) && self.library.cancellation().is_some()
+        ) && self.free_ready.is_none()
+            && self.library.cancellation().is_some()
         {
             return self.library.call(call, cx);
         }
@@ -977,7 +1002,7 @@ impl HostLibrary {
         call: OperationCall<'_>,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        if self.library.cancellation().is_some() {
+        if self.free_ready.is_none() && self.library.cancellation().is_some() {
             return self.library.call(call, cx);
         }
         let a = &*call.arguments;
@@ -1003,18 +1028,21 @@ impl HostLibrary {
             },
         }))
     }
-    /// Issue `signal.wait` under `token`, supplying an arrival to the library. False while
-    /// none among its kinds is pending: the token keeps the source's readiness interest.
-    fn host_signal_wait(&mut self, a: &[Value], token: u64) -> Result<bool, Error> {
+    fn signal_request(&self, a: &[Value]) -> Result<R, Error> {
         let kinds = fields(&a[1])?.into_iter().try_fold(0u8, |bits, kind| {
             hirsel_run_schema::SignalKind::from_ordinal(tag(kind)?)
                 .map(|kind| bits | kind.bit())
                 .ok_or_else(invalid)
         })?;
-        let request = R::SignalWait {
+        Ok(R::SignalWait {
             signals: self.id(&a[0])?,
             kinds,
-        };
+        })
+    }
+    /// Issue `signal.wait` under `token`, supplying an arrival to the library. False while
+    /// none among its kinds is pending: the token keeps the source's readiness interest.
+    fn host_signal_wait(&mut self, a: &[Value], token: u64) -> Result<bool, Error> {
+        let request = self.signal_request(a)?;
         self.io.adapter().enter(token);
         let completion = match self.host(request) {
             Err(Error::Blocked(_)) => return Ok(false),
@@ -1034,10 +1062,7 @@ impl HostLibrary {
     /// Read host stdin into the simulation the library then consumes. False when no
     /// byte is available yet: the token keeps the descriptor's readiness interest.
     fn host_stdin(&mut self, a: &[Value], token: u64) -> Result<bool, Error> {
-        let request = R::ReadStdin {
-            stdin: self.id(&a[0])?,
-            max: word(&a[2])?,
-        };
+        let request = self.input_request("stdin.read", a)?;
         self.io.adapter().enter(token);
         let completion = match self.host(request) {
             Err(Error::Blocked(_)) => return Ok(false),

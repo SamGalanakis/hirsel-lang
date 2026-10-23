@@ -52,6 +52,8 @@ impl HostLibrary {
             "io.tasks" => R::Tasks { io: 1 },
             "io.random" => R::Random { io: 1 },
             "io.signals" => R::Signals { io: 1 },
+            "env.get" | "env.narrow" | "stdin.read" => self.input_request(name, a)?,
+            "signal.wait" => self.signal_request(a)?,
             "random.bytes" if word(&a[1])? != 0 => R::RandomBytes {
                 random: self.id(&a[0])?,
                 count: word(&a[1])?,
