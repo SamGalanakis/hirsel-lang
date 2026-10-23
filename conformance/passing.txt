@@ -5795,6 +5795,8 @@ conformance/SEM/SEM-3-log-slog-values-run.hir
 conformance/SEM/SEM-3-mail-address-15-invalid-run.hir
 conformance/SEM/SEM-3-mail-address-15-run.hir
 conformance/SEM/SEM-3-markdown-api-run.hir
+conformance/SEM/SEM-3-markdown-bounded-output-33-malformed-run.hir
+conformance/SEM/SEM-3-markdown-bounded-output-33-small-run.hir
 conformance/SEM/SEM-3-markdown-cmark-pathological-10-run.hir
 conformance/SEM/SEM-3-markdown-cmark-pathological-11-run.hir
 conformance/SEM/SEM-3-markdown-cmark-pathological-12-run.hir

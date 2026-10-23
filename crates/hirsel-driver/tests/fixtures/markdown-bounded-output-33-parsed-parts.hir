@@ -1,0 +1,200 @@
+// rule: SEM-3
+// expect: run
+// cmark-gfm api_test/main.c:498-523, 27d942c8; BSD-2-Clause.
+// Fallible cap/sink controls are Hirsel adaptations; see docs/prior-art/markdown.md.
+fn vector(source: String, expected: String, options: markdown.Options) {
+  let doc = markdown.parse(unique source, options)
+  let size = string.byte_len(expected)
+  failure.check(
+    markdown.render_html_with_options(doc, options) == expected,
+    TextInvariant()
+  )
+  failure.check(
+    markdown.render_html_bounded(doc, options, size) == Ok(expected),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html_bounded(unique source, options, size + 1) == Ok(expected),
+    TextInvariant()
+  )
+  if size > 0 {
+    failure.check(
+      markdown.render_html_bounded(doc, options, size - 1) == Error(
+        markdown.OutputLimit(limit: size - 1)
+      ),
+      TextInvariant()
+    )
+    failure.check(
+      markdown.render_html_bounded(doc, options, 0) == Error(
+        markdown.OutputLimit(limit: 0)
+      ),
+      TextInvariant()
+    )
+  }
+}
+
+type Probe {
+  accepted: u64,
+  calls: u64,
+  ceiling: u64,
+  last: u8,
+}
+
+@noalloc
+fn accept(mut sink: Probe, value: u8) -> Result[(), u64] uses {} {
+  sink.calls += 1
+  if sink.accepted == sink.ceiling {
+    return Error(sink.accepted)
+  }
+  // No output allocation, and no write beyond the requested cap.
+  sink.accepted += 1
+  sink.last = value
+  Ok(())
+}
+
+// Original parsed-source vectors partitioned under unchanged 1M budgets.
+pub fn main(args: Args) -> Result[(), ()] {
+  let safe = markdown.default_options()
+  let Ok(which) = arg.text(args, 0) else {
+    return Error(())
+  }
+  match which {
+    "text" => {
+      vector("", "", safe)
+      vector("é🐑", "<p>é🐑</p>\n", safe)
+      vector("\"<&", "<p>&quot;&lt;&amp;</p>\n", safe)
+    },
+    "link" => {
+      vector(
+        "[x](a?b=1&c=2 \"<&\")",
+        "<p><a href=\"a?b=1&amp;c=2\" title=\"&lt;&amp;\">x</a></p>\n",
+        safe
+      )
+    },
+    "image" => {
+      vector(
+        "![a *b* & <x>](a \"title\")",
+        "<p><img src=\"a\" alt=\"a b &amp; \" title=\"title\" /></p>\n",
+        safe
+      )
+    },
+    "html" => {
+      vector(
+        "<b>x</b>",
+        "<p><!-- raw HTML omitted -->x<!-- raw HTML omitted --></p>\n",
+        safe
+      )
+    },
+    "blocked" => {
+      vector("[x](JaVaScRiPt:alert)", "<p><a>x</a></p>\n", safe)
+    },
+    "raw" => {
+      let mut raw = markdown.gfm_options()
+      raw.allow_unsafe = true
+      vector("<script>x</script>\n", "&lt;script>x&lt;/script>\n", raw)
+    },
+    "table" => {
+      let mut raw = markdown.gfm_options()
+      raw.allow_unsafe = true
+      vector(
+        "a | b\n:--- | ---:\nc | d",
+        "<table>\n<thead>\n<tr>\n<th align=\"left\">a</th>\n<th align=\"right\">b</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"left\">c</td>\n<td align=\"right\">d</td>\n</tr>\n</tbody>\n</table>\n",
+        raw
+      )
+    },
+    "emphasis" => {
+      vector("foo *bar*", "<p>foo <em>bar</em></p>\n", safe)
+    },
+    "subnodes" => {
+      let doc = markdown.parse("foo *bar*\n\nparagraph 2\n", safe)
+      failure.check(
+        markdown.render_html_bounded(doc.children[0], safe, 24) == Ok(
+          "<p>foo <em>bar</em></p>\n"
+        ),
+        TextInvariant()
+      )
+      failure.check(
+        markdown.render_html_bounded(doc.children[0].children[0], safe, 4) == Ok("foo "),
+        TextInvariant()
+      )
+      failure.check(
+        markdown.render_html_bounded(doc.children[0].children[1], safe, 12) == Ok(
+          "<em>bar</em>"
+        ),
+        TextInvariant()
+      )
+    },
+    "footer" => {
+      let mut notes = safe
+      notes.footnotes = true
+      let source = "a[^x]\n\n[^x]: b"
+      let expected = "<p>a<sup class=\"footnote-ref\"><a href=\"#fn-x\" id=\"fnref-x\" data-footnote-ref>1</a></sup></p>\n<section class=\"footnotes\" data-footnotes>\n<ol>\n<li id=\"fn-x\">\n<p>b <a href=\"#fnref-x\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"1\" aria-label=\"Back to reference 1\">↩</a></p>\n</li>\n</ol>\n</section>\n"
+      vector(source, expected, notes)
+    },
+    "tail" => {
+      let mut notes = safe
+      notes.footnotes = true
+      let tail = markdown.Node(
+        kind: FootnoteBackrefs("é &%20", 18446744073709551615u64, 2),
+        children: []
+      )
+      let expected_tail = markdown.render_html_with_options(tail, notes)
+      failure.check(
+        markdown.render_html_bounded(tail, notes, string.byte_len(expected_tail)) == Ok(
+          expected_tail
+        ),
+        TextInvariant()
+      )
+    },
+    "sink" => {
+      let text = markdown.Node(kind: Text("abcdefghi"), children: [])
+      let mut ledger = Probe(accepted: 0, calls: 0, ceiling: 6, last: 0u8)
+      failure.check(
+        markdown.render_html_to(text, safe, 9, mut ledger, accept) == Error(Sink(6u64)),
+        TextInvariant()
+      )
+      failure.check(
+        ledger.accepted == 6 && ledger.calls == 7 && ledger.last == 102u8,
+        TextInvariant()
+      )
+      ledger = Probe(accepted: 0, calls: 0, ceiling: 99, last: 0u8)
+      failure.check(
+        markdown.render_html_to(text, safe, 8, mut ledger, accept) == Error(
+          LimitReached(8)
+        ),
+        TextInvariant()
+      )
+      failure.check(ledger.accepted == 8 && ledger.calls == 8, TextInvariant())
+      // Whole escape is admitted before any expansion byte; late cap refusal keeps prefix.
+      ledger = Probe(accepted: 0, calls: 0, ceiling: 99, last: 0u8)
+      let escaped = markdown.Node(kind: Text("a&"), children: [])
+      failure.check(
+        markdown.render_html_to(escaped, safe, 5, mut ledger, accept) == Error(
+          LimitReached(5)
+        ),
+        TextInvariant()
+      )
+      failure.check(ledger.accepted == 1 && ledger.calls == 1, TextInvariant())
+      failure.check(
+        markdown.render_html_to(
+          markdown.Node(kind: Document(), children: []),
+          safe,
+          18446744073709551615u64,
+          mut ledger,
+          accept
+        ) == Ok(0u64),
+        TextInvariant()
+      )
+      failure.check(
+        markdown.to_html_bounded("x", safe, 0) == Error(markdown.OutputLimit(limit: 0)),
+        TextInvariant()
+      )
+      failure.check(
+        markdown.to_html_bounded("x", safe, 9) == Ok("<p>x</p>\n"),
+        TextInvariant()
+      )
+    },
+    _ => return Error(()),
+  }
+  Ok(())
+}

@@ -102,34 +102,38 @@ fn load_assets(d: Dir, tasks: Tasks, config: model.Config, inputs: List[model.In
   )
 }
 
-// Owned page/config captures and a frozen navigation root cross E1 tasks.
+// Input reads remain parallel. Rendering admits one task at a time so each
+// owns exactly the remaining publication budget, with no speculative buffers.
 fn render_pages(
   tasks: Tasks,
   config: model.Config,
   pages: List[model.Page],
-  nav: Shared[List[model.Navigation]]
+  nav: Shared[List[model.Navigation]],
+  budget: u64
 ) -> Result[List[model.Output], model.Problem] {
   task.scope(
     tasks,
     fn(s: Scope) -> Result[List[model.Output], model.Problem] {
       let mut layouts: List[model.Output] = []
+      let mut remaining = budget
       let mut next = 0u64
       while next < list.len(pages) {
         let mut members: TaskSet[
           model.WorkResult[unique model.Output, unique model.Problem]
         ] of s = task.set(s)
         let mut active = 0u64
-        while next < list.len(pages) && active < config.jobs {
+        while next < list.len(pages) && active < 1 {
           if let Error(_) = task.check_canceled(s) {
             task.cancel_all(s, take members)
             return Error(Canceled())
           }
           let owned_page = unique pages[next]
           let owned_config = unique config
+          let limit = remaining
           let handle = task.async(
             s,
             fn() -> model.WorkResult[unique model.Output, unique model.Problem] {
-              render.job(take owned_page, take owned_config, nav)
+              render.job(take owned_page, take owned_config, nav, limit)
             }
           )
           task.add(s, mut members, take handle)
@@ -139,7 +143,10 @@ fn render_pages(
         for i in 0u64..active {
           let work = task.await_at(s, mut members, i)
           match model.resolve(take work) {
-            Ok(value) => list.push(mut layouts, take value),
+            Ok(value) => {
+              remaining -= bytes.len(value.bytes)
+              list.push(mut layouts, take value)
+            },
             Error(problem) => {
               task.cancel_all(s, take members)
               return Error(take problem)
@@ -179,10 +186,6 @@ fn run(d: Dir, tasks: Tasks, config: model.Config, plan: bool) -> Result[
   }
   let nav = shared.freeze(take nav_rows)
   let mut outputs = load_assets(d, tasks, config, inputs)?
-  let layouts = render_pages(tasks, config, pages, nav)?
-  for rendered in take layouts {
-    list.push(mut outputs, take rendered)
-  }
   let index = shared.with(
     nav,
     fn(rows: List[model.Navigation]) -> model.Output {
@@ -190,6 +193,11 @@ fn run(d: Dir, tasks: Tasks, config: model.Config, plan: bool) -> Result[
     }
   )
   list.push(mut outputs, take index)
+  let budget = publish.remaining(config, outputs, pages)?
+  let layouts = render_pages(tasks, config, pages, nav, budget)?
+  for rendered in take layouts {
+    list.push(mut outputs, take rendered)
+  }
   let mut ordered = unique outputs
   publish.order(mut ordered)
   task.scope(
@@ -209,18 +217,7 @@ fn build(d: Dir) -> Result[u64, AppError] {
   let inputs = catalog.scan(d, config) ? Site
   let mut links: List[model.Navigation] = []
   let mut outputs: List[(String, String)] = []
-  let mut total = 0u64
   for item in inputs {
-    let raw = assets.read(d, item.source, item.size) ? Site
-    let Ok(source) = string.from_bytes(take raw) else {
-      return Error(Utf8())
-    }
-    let rendered = render.page(item.source, take source)
-    if string.byte_len(rendered) > model.OUTPUT_BYTES - total {
-      return Error(Site(Limit("output_bytes")))
-    }
-    total += string.byte_len(rendered)
-    list.push(mut outputs, (unique item.destination, take rendered))
     list.push(
       mut links,
       model.Navigation(destination: unique item.destination, title: unique item.source)
@@ -228,8 +225,22 @@ fn build(d: Dir) -> Result[u64, AppError] {
   }
   let count = list.len(links)
   let index = render.legacy_index(links)
-  if string.byte_len(index) > model.OUTPUT_BYTES - total {
+  let mut total = string.byte_len(index)
+  if total > model.OUTPUT_BYTES {
     return Error(Site(Limit("output_bytes")))
+  }
+  for item in inputs {
+    let raw = assets.read(d, item.source, item.size) ? Site
+    let Ok(source) = string.from_bytes(take raw) else {
+      return Error(Utf8())
+    }
+    let rendered = render.page_bounded(
+      item.source,
+      take source,
+      model.OUTPUT_BYTES - total
+    ) ? Site
+    total += string.byte_len(rendered)
+    list.push(mut outputs, (unique item.destination, take rendered))
   }
   for (target_name, _) in outputs {
     assets.check_path(d, f"site/{target_name}") ? Site

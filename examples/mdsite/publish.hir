@@ -137,6 +137,9 @@ pub fn write(
   }
   let encoded = manifest(config, outputs)?
   let mut total = bytes.len(encoded)
+  if total > model.OUTPUT_BYTES {
+    return Error(Limit("output_bytes"))
+  }
   for output in outputs {
     if bytes.len(output.bytes) > model.OUTPUT_BYTES - total {
       return Error(Limit("output_bytes"))
@@ -187,4 +190,49 @@ pub fn write(
     atomic(d, f"{config.output}/{model.MANIFEST}", encoded)?
   }
   Ok(model.Report(pages: pages, written: written, skipped: skipped, stale: take stale))
+}
+
+// Manifest hashes have fixed width. Size it with the final paths and real input
+// hashes before rendering, reserving exactly the eventual manifest byte count.
+pub fn remaining(
+  config: model.Config,
+  outputs: List[model.Output],
+  pages: List[model.Page]
+) -> Result[u64, model.Problem] uses {} {
+  let mut skeleton: List[model.Output] = []
+  let placeholder: String = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  for item in outputs {
+    list.push(
+      mut skeleton,
+      model.Output(
+        destination: unique item.destination,
+        bytes: b"",
+        input_hash: unique item.input_hash,
+        output_hash: copy placeholder
+      )
+    )
+  }
+  for page in pages {
+    list.push(
+      mut skeleton,
+      model.Output(
+        destination: unique page.destination,
+        bytes: b"",
+        input_hash: unique page.digest,
+        output_hash: copy placeholder
+      )
+    )
+  }
+  let encoded = manifest(config, skeleton)?
+  let mut total = bytes.len(encoded)
+  if total > model.OUTPUT_BYTES {
+    return Error(Limit("output_bytes"))
+  }
+  for output in outputs {
+    if bytes.len(output.bytes) > model.OUTPUT_BYTES - total {
+      return Error(Limit("output_bytes"))
+    }
+    total += bytes.len(output.bytes)
+  }
+  Ok(model.OUTPUT_BYTES - total)
 }

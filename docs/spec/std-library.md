@@ -53,6 +53,11 @@ fn markdown.parse(take source: String, options: Options) -> Node uses {}
 fn markdown.render_html(document: Node) -> String uses {}
 fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}
 fn markdown.to_html(take source: String, options: Options) -> String uses {}
+type markdown.OutputLimit { limit: u64 }
+type markdown.RenderError[E] = LimitReached(u64) | Sink(E)
+fn markdown.render_html_bounded(document: Node, options: Options, limit: u64) -> Result[String, OutputLimit] uses {}
+fn markdown.to_html_bounded(take source: String, options: Options, limit: u64) -> Result[String, OutputLimit] uses {}
+fn markdown.render_html_to[S,E](document: Node, options: Options, limit: u64, mut sink: S, write: fn(mut S, u8) -> Result[(), E] uses {}) -> Result[u64, RenderError[E]] uses {}
 ```
 
 `Options` has seven booleans: `tables`, `strikethrough`, `autolinks`,
@@ -73,6 +78,25 @@ examples. Each has an independently reference-rendered truncated-input twin
 with NUL and unterminated bracket/entity syntax, using the same extension
 options as its published example. `tools/generate-markdown.py`
 pins both upstream checkouts and regenerates entity data and vectors.
+
+### Bounded Markdown output
+
+The bounded helpers use the existing single AST walker. They refuse before any
+append or escape expansion would exceed `limit` UTF-8 bytes, returning
+`OutputLimit { limit }` without partial HTML. The String sink reserves the cap
+once on first emission, preventing geometric payload growth past that cap.
+Zero-byte output performs no output reservation. Allocator metadata and size-class
+rounding are outside the payload bound. Parser/AST input memory is separate;
+this is neither a global allocation quota nor a bound on parsing work.
+
+Image alt text, language attributes, link URLs/titles, footnote URI/number/footer
+text, GFM tables and safety escapes emit directly without rendered heap
+fragments. Existing unrestricted convenience functions retain their output and
+amortized allocation behavior. `render_html_to` allocates no output buffer: the
+caller owns its sink's storage policy. Each callback accepts one byte or returns
+an error without accepting that byte. Admission precedes the callback, arithmetic
+cannot wrap, and refusal stops the walk immediately. Sink failure retains its
+typed payload; the caller retains the accepted prefix and owns cleanup.
 
 ## Schema boundaries
 

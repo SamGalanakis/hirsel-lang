@@ -1,0 +1,205 @@
+// cmark-gfm api_test/main.c:498-523 (BSD-2-Clause), adapted cap/sink controls.
+type Probe {
+  accepted: u64,
+  calls: u64,
+  ceiling: u64,
+  last: u8,
+}
+
+@noalloc
+fn accept(mut ledger: Probe, value: u8) -> Result[(), u64] uses {} {
+  ledger.calls += 1
+  if ledger.accepted == ledger.ceiling {
+    return Error(ledger.accepted)
+  }
+  ledger.accepted += 1
+  ledger.last = value
+  Ok(())
+}
+
+fn exact(node: markdown.Node, options: markdown.Options, expected: String) {
+  let n = string.byte_len(expected)
+  failure.check(
+    markdown.render_html_with_options(node, options) == expected,
+    TextInvariant()
+  )
+  failure.check(
+    markdown.render_html_bounded(node, options, n) == Ok(expected),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.render_html_bounded(node, options, n + 1) == Ok(expected),
+    TextInvariant()
+  )
+  if n > 0 {
+    failure.check(
+      markdown.render_html_bounded(node, options, n - 1) == Error(
+        markdown.OutputLimit(limit: n - 1)
+      ),
+      TextInvariant()
+    )
+  }
+}
+
+// Independent full vectors; the original aggregate witness remains unchanged.
+pub fn main(args: Args) -> Result[(), ()] {
+  let options = markdown.default_options()
+  let Ok(which) = arg.text(args, 0) else {
+    return Error(())
+  }
+  match which {
+    "text" => {
+      let text = markdown.Node(kind: Text("é🐑<&\""), children: [])
+      exact(text, options, "é🐑&lt;&amp;&quot;")
+      exact(markdown.Node(kind: Text(""), children: []), options, "")
+    },
+    "code" => {
+      exact(
+        markdown.Node(kind: CodeBlock("<&", " \tlang\u{b}age extra"), children: []),
+        options,
+        "<pre><code class=\"language-lang\u{b}age\">&lt;&amp;</code></pre>\n"
+      )
+    },
+    "heading" => {
+      exact(
+        markdown.Node(kind: Heading(18446744073709551615u64), children: []),
+        options,
+        "<h18446744073709551615></h18446744073709551615>\n"
+      )
+    },
+    "link" => {
+      let label = markdown.Node(kind: Text("x"), children: [])
+      exact(
+        markdown.Node(kind: Link("JAVASCRIPT:evil", "<&"), children: [label]),
+        options,
+        "<a title=\"&lt;&amp;\">x</a>"
+      )
+    },
+    "image" => {
+      exact(
+        markdown.Node(
+          kind: Image("a?x=1&y=2", "\""),
+          children: [
+            markdown.Node(kind: Code("<&"), children: []),
+            markdown.Node(kind: HtmlInline("<b>"), children: [])
+          ]
+        ),
+        options,
+        "<img src=\"a?x=1&amp;y=2\" alt=\"&lt;&amp;\" title=\"&quot;\" />"
+      )
+    },
+    "raw" => {
+      let raw_node = markdown.Node(kind: HtmlInline("<script>"), children: [])
+      exact(raw_node, options, "<!-- raw HTML omitted -->")
+      let mut trusted = markdown.gfm_options()
+      trusted.allow_unsafe = true
+      exact(raw_node, trusted, "&lt;script>")
+    },
+    "table" => {
+      let mut trusted = markdown.gfm_options()
+      trusted.allow_unsafe = true
+      exact(
+        markdown.Node(
+          kind: Table(),
+          children: [
+            markdown.Node(
+              kind: TableRow(true),
+              children: [
+                markdown.Node(
+                  kind: TableCell(2u8),
+                  children: [markdown.Node(kind: Text("<&"), children: [])]
+                )
+              ]
+            )
+          ]
+        ),
+        trusted,
+        "<table>\n<thead>\n<tr>\n<th align=\"center\">&lt;&amp;</th>\n</tr>\n</thead>\n</table>\n"
+      )
+    },
+    "footnote" => {
+      let footnote = markdown.Node(
+        kind: FootnoteBackrefs("é &%20", 18446744073709551615u64, 2),
+        children: []
+      )
+      let expected = markdown.render_html(footnote)
+      exact(footnote, options, expected)
+    },
+    "sink" => {
+      let text = markdown.Node(kind: Text("é🐑<&\""), children: [])
+      let mut ledger = Probe(accepted: 0, calls: 0, ceiling: 6, last: 0u8)
+      let nine = markdown.Node(kind: Text("abcdefghi"), children: [])
+      failure.check(
+        markdown.render_html_to(nine, options, 9, mut ledger, accept) == Error(
+          Sink(6u64)
+        ),
+        TextInvariant()
+      )
+      failure.check(
+        ledger.accepted == 6 && ledger.calls == 7 && ledger.last == 102u8,
+        TextInvariant()
+      )
+      ledger = Probe(accepted: 0, calls: 0, ceiling: 99, last: 0u8)
+      failure.check(
+        markdown.render_html_to(nine, options, 8, mut ledger, accept) == Error(
+          LimitReached(8)
+        ),
+        TextInvariant()
+      )
+      failure.check(ledger.accepted == 8 && ledger.calls == 8, TextInvariant())
+      ledger = Probe(accepted: 0, calls: 0, ceiling: 99, last: 0u8)
+      failure.check(
+        markdown.render_html_to(
+          markdown.Node(kind: Text("a&"), children: []),
+          options,
+          5,
+          mut ledger,
+          accept
+        ) == Error(LimitReached(5)),
+        TextInvariant()
+      )
+      failure.check(ledger.accepted == 1 && ledger.calls == 1, TextInvariant())
+      failure.check(
+        markdown.render_html_bounded(
+          markdown.Node(kind: Document(), children: []),
+          options,
+          18446744073709551615u64
+        ) == Ok(""),
+        TextInvariant()
+      )
+      failure.check(
+        markdown.render_html_bounded(text, options, 0) == Error(
+          markdown.OutputLimit(limit: 0)
+        ),
+        TextInvariant()
+      )
+    },
+    "cleanup" => {
+      // A refused private buffer has been cleaned; a later success is unaffected.
+      exact(
+        markdown.Node(
+          kind: Emphasis(),
+          children: [markdown.Node(kind: Text("bar"), children: [])]
+        ),
+        options,
+        "<em>bar</em>"
+      )
+    },
+    "literal-sink" => {
+      let node = markdown.Node(kind: Code("x"), children: [])
+      let mut ledger = Probe(accepted: 0, calls: 0, ceiling: 3, last: 0u8)
+      failure.check(
+        markdown.render_html_to(node, options, 99, mut ledger, accept) == Error(
+          Sink(3u64)
+        ),
+        TextInvariant()
+      )
+      failure.check(
+        ledger.accepted == 3 && ledger.calls == 4 && ledger.last == 111u8,
+        TextInvariant()
+      )
+    },
+    _ => return Error(()),
+  }
+  Ok(())
+}

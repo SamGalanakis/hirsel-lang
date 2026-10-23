@@ -76,3 +76,51 @@ Deviations and reasons:
   pinned implementation. Safety cases use the published safe expectations.
 - The GFM checkbox serialization remains the existing spec-compatible HTML
   normalization in `generate-markdown.py`, rather than cmark's equivalent XHTML.
+
+## Fallible output admission (markdown-bounded-output-33)
+
+The shared walk/output structure follows cmark-gfm `src/html.c:468-502` at
+`27d942c8b0a62d192f616e5bf3578f4b6a89e180` (BSD-2-Clause; existing
+`third-party/NOTICES.md` applies). Whole-file SHA256:
+`e2f61240a135e34d595cde1fae9063bbc3ff033720eb52d3acb77fde3cddeb29`.
+The paragraph, text and emphasis subtree expectations are copied unchanged from
+`api_test/main.c:498-523`, whole-file SHA256
+`fd9a392ef45a4285d963c5a1530cafe46107d03c4b5fed363cf17d6d336d953e`.
+The bounded fixture also exercises existing safe/raw/GFM serialization and checks
+exact-cap equality against unrestricted output. Existing conformance importers
+`tools/generate-markdown.py`, `tools/generate-markdown-hostile.py` and
+`packages/fixtures/markdown_vectors@1/harness.hir` still call the unrestricted
+surface and retain their pinned oracles; no oracle regeneration is required.
+
+The cap and fallible byte sink are Hirsel adaptations, not upstream features.
+Every append and escape expansion checks remaining length before emission;
+numeric fragments and normalized footnote IDs stream directly instead of
+allocating intermediate rendered strings. Borrowed ASCII comparisons preserve
+the existing safety policy without allocating a lowercased URL/tag. Bounded
+String output reserves its payload cap once rather than using upstream's growing
+buffer; allocator bookkeeping/size-class slack and parser/AST memory are separate.
+The generic sink owns accepted-prefix cleanup and may refuse late with a typed
+error. No Markdown dialect or unrestricted rendering semantics change.
+
+Mdsite's bounded layout streams the five existing `std.html.escape_into`
+replacements (Go `src/html/escape.go:166-181`, `ebe2feefc400f813aefdc8a036e66d2619da6649`)
+and the existing `std.uri.percent_encode` unreserved alphabet directly to its
+admitted buffer. This preserves numeric quote/apostrophe spellings and slash
+separators without constructing a temporary navigation or title fragment.
+
+The original full bounded AST and parsed-source aggregate fixtures are retained
+in `crates/hirsel-driver/tests/fixtures/markdown-bounded-output-33*.hir`.
+Initial interpreter aggregates exceeded the unchanged one-million-step cap.
+After literal admission was simplified, the complete AST fixture passes all
+four engines under the original interpreter cap. The larger parsed-source
+aggregate was moved out of the corpus; its independent full vectors run as Rust
+partitions under the same one-million-step cap, preserving every input byte,
+expected HTML and assertion. Its original aggregate stop remains recorded.
+The small corpus producer is additional coverage, not a shortened original oracle.
+
+The existing safety aggregate passed the original renderer at one million steps.
+An initial byte-callback implementation exceeded that same budget; retaining one
+admission check for a complete literal span removes redundant per-byte checks
+while preserving accounting of every accepted byte and late sink errors. This is
+an acceptance fix, not a measured performance claim. The original failed witness
+and baseline receipt are retained with the lane's evidence.

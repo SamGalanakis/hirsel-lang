@@ -1,0 +1,16 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let options = markdown.default_options()
+  failure.check(
+    markdown.to_html_bounded("[x](", options, 12) == Ok("<p>[x](</p>\n"),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.to_html_bounded("[x](", options, 11) == Error(
+      markdown.OutputLimit(limit: 11)
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

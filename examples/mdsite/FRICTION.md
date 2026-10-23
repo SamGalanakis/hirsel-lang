@@ -38,7 +38,7 @@ not a runtime dependency. Minutes below are approximate active effort.
 | `f"{problem}"` | SEM-3 no automatic custom formatting | Intended formatting contract | Explicit domain error description; no new std API | 1 | sitebuild-29; check-05.log |
 | Full three-page/asset build through public reference adapter | Original 1M Steps limit inside std.sha256, no semantic observation | Tooling limit, not resource/domain refusal; INCOMPLETE. Same unchanged budget on checked H | No budget increase, no substitute input. Six current-generation nested/unsafe/CommonMark reference+checked-H cells remain incomplete; empty/plan/domain workflows complete | 2 | interp-step-budget-29 / @agentlang-24; original scripted-02.log and exact per-ID scripted-04.log |
 | `file.read_dir(d,p)` before checking child count | Provider materializes direct-child list before app sees its length | Strict before-allocation admission unavailable through current API; OPEN/INCOMPLETE | Bound returned count, visited entries, pending stack and admitted inputs. Unbounded provider listing allocation remains; no new core API added | 2 | @agentlang-24, message639947; catalog.discover |
-| `markdown.to_html` before exact byte count | Existing safe renderer returns allocated String, no bounded sink | Exact pre-publication cap works; strict preallocation output cap remains OPEN/INCOMPLETE | Input/metadata bounds and exact staged 2MiB total checked before commits; renderer internal allocation not prebounded by output cap | 1 | @agentlang-24, message639947; render.layout/publish.write |
+| `markdown.to_html` before exact byte count | Historical renderer built its String before the 2MiB check (message639947) | Resolved by bounded shared walker: emission/escape admission precedes sink writes; no rendered heap fragments | Input/AST memory remains separately capped. Coordinator reserves manifest/assets/index bytes, renders one page task at a time with the remaining publication budget, and preserves output_bytes errors and pre-publication checks. Payload cap excludes allocator bookkeeping/size-class slack | 1 | markdown-bounded-output-33; render.finish_page/publish.remaining/publish.write |
 | Generic scripted wrapper accepted any ToolingLimit and incremented completed; successful libtest logs captured | scripted-03 wrapper EXIT0 lacked per-ID counts | Harness defect, fixed forward; no all-workflow credit from that wrapper | Separate attempted/observed/pass/incomplete counters, visible receipts and explicit demonstrated limit allowlist; unchanged compatibility green retained | 2 | sitebuild-29; harness-dispositions.md, scripted-04.log |
 | Native support invoked Python `tools/capped` via bash | Static review found shebang mismatch before first native launch | Setup bug fixed before execution | Invoke python3, keep CPU60/2GiB caps; zero native cells had run | 1 | sitebuild-29; shepherd639940 |
 | Full toolchain bundle materialization | std_objects setup still running after ~13 minutes | Overbroad setup, interrupted own client with EXIT141; zero application runs | Materialize only harness/runtime archives; reuse matching CLI and image | 1 | sitebuild-29; tools-materialized.log, tools-focused.log |
@@ -100,3 +100,22 @@ LLVM and Cranelift, plus all supported replay adapters (legacy-entry-final.log).
 ## Bounded directory iterator update
 
 The directory-listing row above is resolved by the read_dir iterator cutover: provider storage is a fixed128-entry page, and catalog.discover collects at most ITEMS children before rejecting the next. Tree-entry and pending-stack limits remain in force. The renderer output-allocation limitation is unchanged.
+
+## Bounded Markdown output (markdown-bounded-output-33)
+
+The shared fallible renderer and layout byte sink now check output admission
+before append/escape expansion. Exact 2MiB success and 2MiB+1 refusal retain the
+original vectors and atomic publication policy. Native workflow receipts and
+record/replay controls passed on LLVM and Cranelift. Scripted application cells
+observed 14 passes of 18 attempts; unsafe-Markdown and CommonMark cells on
+reference/checked H still stop at the existing 1M Steps cap in SHA-256. Both
+original publication-boundary cases on both interpreters stop there as well
+(0 observed of 4); these are INCOMPLETE, not output-limit successes.
+
+An initial renderer draft caused the existing Markdown safety aggregate to
+exceed 1M steps. The baseline passed, and checking complete literal spans once
+restored its unchanged cap without changing HTML, sink-prefix accounting or
+input vectors. Initial aggregate bounded fixtures also exceeded 1M; every full
+parsed vector now runs as an independent Rust partition at the unchanged cap.
+The complete AST aggregate passes reference, checked H, LLVM and Cranelift.
+Historical failures remain in the lane receipts; no language rule was weakened.

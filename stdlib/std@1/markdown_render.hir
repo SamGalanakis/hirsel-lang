@@ -2,59 +2,234 @@
 // Copyright (c) 2014 John MacFarlane. BSD-2-Clause third-party/NOTICES.md.
 // See docs/prior-art/markdown.md for exact reference locations and deviations.
 
-fn escape_html(mut out: List[u8], s: String) -> () uses {} {
-  let mut i: u64 = 0
-  while i < size(s) {
+/// A render stops before emitting byte limit+1. Sink errors retain their payload.
+pub type RenderError[E] = LimitReached(u64) | Sink(E)
+
+/// The bounded String helpers return no partial output on refusal.
+pub type OutputLimit {
+  limit: u64,
+}
+
+type RenderOutput {
+  written: u64,
+  limit: u64,
+  last: u8,
+}
+
+// Admission precedes every sink call; subtraction checks both limit and overflow.
+fn emit_byte[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  value: u8
+) -> Result[(), RenderError[E]] uses {} {
+  if emission.written == emission.limit {
+    return Error(LimitReached(emission.limit))
+  }
+  write(mut sink, value) ? Sink
+  emission.written += 1
+  emission.last = value
+  Ok(())
+}
+
+fn emit_text[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  value: String
+) -> Result[(), RenderError[E]] uses {} {
+  if size(value) > emission.limit - emission.written {
+    return Error(LimitReached(emission.limit))
+  }
+  // The whole span is admitted above. Keep per-byte success accounting for
+  // late sink refusal without repeating the same limit test at each byte.
+  for b in core@1/string.as_bytes(value) {
+    write(mut sink, b) ? Sink
+    emission.written += 1
+    emission.last = b
+  }
+  Ok(())
+}
+
+fn emit_number[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  value: u64
+) -> Result[(), RenderError[E]] uses {} {
+  // Decimal digits need no heap fragment, including u64::MAX.
+  let mut divisor = 1u64
+  while value / divisor >= 10 {
+    divisor *= 10
+  }
+  let mut left = value
+  while divisor > 0 {
+    emit_byte(mut emission, mut sink, write, core@1/int.narrow(left / divisor) + 48u8)?
+    left %= divisor
+    divisor /= 10
+  }
+  Ok(())
+}
+
+fn emit_suffix[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  occurrence: u64
+) -> Result[(), RenderError[E]] uses {} {
+  if occurrence > 1 {
+    emit_byte(mut emission, mut sink, write, 45u8)?
+    emit_number(mut emission, mut sink, write, occurrence)?
+  }
+  Ok(())
+}
+
+fn escape_range[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  s: String,
+  begin: u64,
+  end: u64
+) -> Result[(), RenderError[E]] uses {} {
+  let mut i = begin
+  while i < end {
     let b = byte(s, i)
     if b == 38 {
-      text.append(mut out, "&amp;")
+      emit_text(mut emission, mut sink, write, "&amp;")?
     } else if b == 60 {
-      text.append(mut out, "&lt;")
+      emit_text(mut emission, mut sink, write, "&lt;")?
     } else if b == 62 {
-      text.append(mut out, "&gt;")
+      emit_text(mut emission, mut sink, write, "&gt;")?
     } else if b == 34 {
-      text.append(mut out, "&quot;")
+      emit_text(mut emission, mut sink, write, "&quot;")?
     } else {
-      core@1/list.push(mut out, b)
+      emit_byte(mut emission, mut sink, write, b)?
     }
     i += 1
   }
+  Ok(())
 }
 
-fn newline(mut out: List[u8]) -> () uses {} {
-  let len = core@1/list.len(out)
-  if len > 0 && out[len - 1] != 10 {
-    core@1/list.push(mut out, 10u8)
+// normalize_uri's alphabet and existing percent triplets, escaped directly.
+fn escape_uri[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  s: String
+) -> Result[(), RenderError[E]] uses {} {
+  let hex = "0123456789ABCDEF"
+  let mut i = 0u64
+  while i < size(s) {
+    let b = byte(s, i)
+    if ascii.is_alnum(b) || member(";/?:@&=+$,-_.!~*'()#", b) || b == 37 && size(s) - i > 2 && ascii.digit_value_radix(
+      byte(s, i + 1),
+      16
+    ) != None() && ascii.digit_value_radix(byte(s, i + 2), 16) != None() {
+      if b == 38 {
+        emit_text(mut emission, mut sink, write, "&amp;")?
+      } else {
+        emit_byte(mut emission, mut sink, write, b)?
+      }
+      if b == 37 {
+        emit_byte(mut emission, mut sink, write, byte(s, i + 1))?
+        emit_byte(mut emission, mut sink, write, byte(s, i + 2))?
+        i += 2
+      }
+    } else {
+      // Check the complete expansion before its first byte.
+      if emission.limit - emission.written < 3 {
+        return Error(LimitReached(emission.limit))
+      }
+      emit_byte(mut emission, mut sink, write, 37u8)?
+      emit_byte(mut emission, mut sink, write, byte(hex, core@1/int.widen(b / 16u8)))?
+      emit_byte(mut emission, mut sink, write, byte(hex, core@1/int.widen(b % 16u8)))?
+    }
+    i += 1
   }
+  Ok(())
 }
 
-fn image_alt(node: Node, mut out: List[u8]) -> () uses {} {
+fn escape_html[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  s: String
+) -> Result[(), RenderError[E]] uses {} {
+  escape_range(mut emission, mut sink, write, s, 0, size(s))
+}
+
+fn newline[S, E](
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {}
+) -> Result[(), RenderError[E]] uses {} {
+  let len = emission.written
+  if len > 0 && emission.last != 10 {
+    emit_byte(mut emission, mut sink, write, 10u8)?
+  }
+  Ok(())
+}
+
+fn image_alt[S, E](
+  node: Node,
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {}
+) -> Result[(), RenderError[E]] uses {} {
   match node.kind {
-    Text(s) => escape_html(mut out, s),
-    Code(s) => escape_html(mut out, s),
+    Text(s) => escape_html(mut emission, mut sink, write, s)?,
+    Code(s) => escape_html(mut emission, mut sink, write, s)?,
     HtmlInline(_) => (),
-    SoftBreak() => core@1/list.push(mut out, 10u8),
-    HardBreak() => core@1/list.push(mut out, 10u8),
+    SoftBreak() => emit_byte(mut emission, mut sink, write, 10u8)?,
+    HardBreak() => emit_byte(mut emission, mut sink, write, 10u8)?,
     _ => {
       for descendant in node.children {
-        image_alt(descendant, mut out)
+        image_alt(descendant, mut emission, mut sink, write)?
       }
     },
   }
+  Ok(())
 }
 
-// Match anchored, case-insensitive protocols after the parser normalizes entities.
+// ASCII scheme/tag comparisons borrow input; no rendered temporary or lowercased URL.
+fn folded_prefix(s: String, at: u64, prefix: String) -> bool uses {} {
+  if at > size(s) || size(prefix) > size(s) - at {
+    return false
+  }
+  let mut i = 0u64
+  while i < size(prefix) {
+    let b = byte(s, at + i)
+    let lower = if b >= 65 && b <= 90 {
+      b + 32u8
+    } else {
+      b
+    }
+    if lower != byte(prefix, i) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn code_whitespace(b: u8) -> bool uses {} {
+  b == 32 || b == 9 || b == 10 || b == 12 || b == 13
+}
+
 fn potentially_unsafe(url: String) -> bool uses {} {
-  let lower = string.ascii_lower(url)
-  let unsafe_scheme = string.starts_with(lower, "javascript:") || string.starts_with(
-    lower,
+  let unsafe_scheme = folded_prefix(url, 0, "javascript:") || folded_prefix(
+    url,
+    0,
     "vbscript:"
-  ) || string.starts_with(lower, "file:") || string.starts_with(lower, "data:")
-  let safe_data = string.starts_with(lower, "data:image/png") || string.starts_with(
-    lower,
+  ) || folded_prefix(url, 0, "file:") || folded_prefix(url, 0, "data:")
+  let safe_data = folded_prefix(url, 0, "data:image/png") || folded_prefix(
+    url,
+    0,
     "data:image/gif"
-  ) || string.starts_with(lower, "data:image/jpeg") || string.starts_with(
-    lower,
+  ) || folded_prefix(url, 0, "data:image/jpeg") || folded_prefix(
+    url,
+    0,
     "data:image/webp"
   )
   unsafe_scheme && !safe_data
@@ -65,319 +240,412 @@ fn filtered_tag(s: String, start: u64) -> bool uses {} {
   if byte(s, i) == 47 {
     i += 1
   }
-  let name_start = i
-  while ascii.is_alpha(byte(s, i)) {
-    i += 1
+  for name in [
+    "title",
+    "textarea",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "script",
+    "plaintext"
+  ] {
+    if folded_prefix(s, i, name) {
+      let end = i + size(name)
+      if whitespace(byte(s, end)) || byte(s, end) == 62 || byte(s, end) == 47 && byte(
+        s,
+        end + 1
+      ) == 62 {
+        return true
+      }
+    }
   }
-  let name = string.ascii_lower(piece(s, name_start, i))
-  let disallowed = name == "title" || name == "textarea" || name == "style" || name == "xmp" || name == "iframe" || name == "noembed" || name == "noframes" || name == "script" || name == "plaintext"
-  disallowed && (whitespace(byte(s, i)) || byte(s, i) == 62 || byte(s, i) == 47 && byte(
-    s,
-    i + 1
-  ) == 62)
+  false
 }
 
-fn raw_html(s: String, mut out: List[u8], options: Options) -> () uses {} {
+fn raw_html[S, E](
+  s: String,
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  options: Options
+) -> Result[(), RenderError[E]] uses {} {
   if !options.allow_unsafe {
-    text.append(mut out, "<!-- raw HTML omitted -->")
-    return
+    emit_text(mut emission, mut sink, write, "<!-- raw HTML omitted -->")?
+    return Ok(())
   }
   let mut i: u64 = 0
   while i < size(s) {
     if options.tagfilter && byte(s, i) == 60 && filtered_tag(s, i) {
-      text.append(mut out, "&lt;")
+      emit_text(mut emission, mut sink, write, "&lt;")?
     } else {
-      core@1/list.push(mut out, byte(s, i))
+      emit_byte(mut emission, mut sink, write, byte(s, i))?
     }
     i += 1
   }
+  Ok(())
 }
 
 // Keep extension rendering separate from the CommonMark walker so validation
 // memory follows each small body rather than one growing exhaustive match.
-fn render_footnote(node: Node, mut out: List[u8], options: Options) -> () uses {} {
+fn render_footnote[S, E](
+  node: Node,
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
+  options: Options
+) -> Result[(), RenderError[E]] uses {} {
   match node.kind {
     FootnoteDefinition(label) => {
-      text.append(mut out, "<li id=\"fn-")
-      escape_html(mut out, normalize_uri(label))
-      text.append(mut out, "\">\n")
+      emit_text(mut emission, mut sink, write, "<li id=\"fn-")?
+      escape_uri(mut emission, mut sink, write, label)?
+      emit_text(mut emission, mut sink, write, "\">\n")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      newline(mut out)
-      text.append(mut out, "</li>\n")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "</li>\n")?
     },
     FootnoteReference(label, index, occurrence) => {
-      text.append(mut out, "<sup class=\"footnote-ref\"><a href=\"#fn-")
-      escape_html(mut out, normalize_uri(label))
-      text.append(mut out, "\" id=\"fnref-")
-      escape_html(mut out, normalize_uri(label))
+      emit_text(
+        mut emission,
+        mut sink,
+        write,
+        "<sup class=\"footnote-ref\"><a href=\"#fn-"
+      )?
+      escape_uri(mut emission, mut sink, write, label)?
+      emit_text(mut emission, mut sink, write, "\" id=\"fnref-")?
+      escape_uri(mut emission, mut sink, write, label)?
       if occurrence > 1 {
-        text.append(mut out, f"-{occurrence}")
+        emit_text(mut emission, mut sink, write, "-")?
+        emit_number(mut emission, mut sink, write, occurrence)?
       }
-      text.append(mut out, f"\" data-footnote-ref>{index}</a></sup>")
+      emit_text(mut emission, mut sink, write, "\" data-footnote-ref>")?
+      emit_number(mut emission, mut sink, write, index)?
+      emit_text(mut emission, mut sink, write, "</a></sup>")?
     },
     FootnoteBackrefs(label, index, count) => {
       let mut occurrence: u64 = 1
       while occurrence <= count {
         if occurrence > 1 {
-          core@1/list.push(mut out, 32u8)
+          emit_byte(mut emission, mut sink, write, 32u8)?
         }
-        let suffix = if occurrence == 1 {
-          ""
-        } else {
-          f"-{occurrence}"
-        }
-        text.append(mut out, "<a href=\"#fnref-")
-        escape_html(mut out, normalize_uri(label))
-        text.append(
-          mut out,
-          f"{suffix}\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\"{index}{suffix}\" aria-label=\"Back to reference {index}{suffix}\">↩"
-        )
+        emit_text(mut emission, mut sink, write, "<a href=\"#fnref-")?
+        escape_uri(mut emission, mut sink, write, label)?
+        emit_suffix(mut emission, mut sink, write, occurrence)?
+        emit_text(
+          mut emission,
+          mut sink,
+          write,
+          "\" class=\"footnote-backref\" data-footnote-backref data-footnote-backref-idx=\""
+        )?
+        emit_number(mut emission, mut sink, write, index)?
+        emit_suffix(mut emission, mut sink, write, occurrence)?
+        emit_text(mut emission, mut sink, write, "\" aria-label=\"Back to reference ")?
+        emit_number(mut emission, mut sink, write, index)?
+        emit_suffix(mut emission, mut sink, write, occurrence)?
+        emit_text(mut emission, mut sink, write, "\">↩")?
         if occurrence > 1 {
-          text.append(mut out, f"<sup class=\"footnote-ref\">{occurrence}</sup>")
+          emit_text(mut emission, mut sink, write, "<sup class=\"footnote-ref\">")?
+          emit_number(mut emission, mut sink, write, occurrence)?
+          emit_text(mut emission, mut sink, write, "</sup>")?
         }
-        text.append(mut out, "</a>")
+        emit_text(mut emission, mut sink, write, "</a>")?
+        if occurrence == count {
+          break
+        }
         occurrence += 1
       }
     },
     _ => (),
   }
+  Ok(())
 }
 
-fn render_node(
+fn render_node[S, E](
   node: Node,
-  mut out: List[u8],
+  mut emission: RenderOutput,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {},
   tight: bool,
   cell_header: bool,
   options: Options
-) -> () uses {} {
+) -> Result[(), RenderError[E]] uses {} {
   match node.kind {
     Document() => {
       let mut footnotes = false
       for descendant in node.children {
         if let FootnoteDefinition(_) = descendant.kind {
           if !footnotes {
-            text.append(mut out, "<section class=\"footnotes\" data-footnotes>\n<ol>\n")
+            emit_text(
+              mut emission,
+              mut sink,
+              write,
+              "<section class=\"footnotes\" data-footnotes>\n<ol>\n"
+            )?
             footnotes = true
           }
         }
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
       if footnotes {
-        text.append(mut out, "</ol>\n</section>\n")
+        emit_text(mut emission, mut sink, write, "</ol>\n</section>\n")?
       }
     },
-    FootnoteDefinition(_) => render_footnote(node, mut out, options),
-    FootnoteReference(_, _, _) => render_footnote(node, mut out, options),
-    FootnoteBackrefs(_, _, _) => render_footnote(node, mut out, options),
-    Text(s) => escape_html(mut out, s),
-    SoftBreak() => core@1/list.push(mut out, 10u8),
-    HardBreak() => text.append(mut out, "<br />\n"),
+    FootnoteDefinition(_) => render_footnote(
+      node,
+      mut emission,
+      mut sink,
+      write,
+      options
+    )?,
+    FootnoteReference(_, _, _) => render_footnote(
+      node,
+      mut emission,
+      mut sink,
+      write,
+      options
+    )?,
+    FootnoteBackrefs(_, _, _) => render_footnote(
+      node,
+      mut emission,
+      mut sink,
+      write,
+      options
+    )?,
+    Text(s) => escape_html(mut emission, mut sink, write, s)?,
+    SoftBreak() => emit_byte(mut emission, mut sink, write, 10u8)?,
+    HardBreak() => emit_text(mut emission, mut sink, write, "<br />\n")?,
     Code(s) => {
-      text.append(mut out, "<code>")
-      escape_html(mut out, s)
-      text.append(mut out, "</code>")
+      emit_text(mut emission, mut sink, write, "<code>")?
+      escape_html(mut emission, mut sink, write, s)?
+      emit_text(mut emission, mut sink, write, "</code>")?
     },
-    HtmlInline(s) => raw_html(s, mut out, options),
+    HtmlInline(s) => raw_html(s, mut emission, mut sink, write, options)?,
     HtmlBlock(s) => {
-      newline(mut out)
-      raw_html(s, mut out, options)
-      newline(mut out)
+      newline(mut emission, mut sink, write)?
+      raw_html(s, mut emission, mut sink, write, options)?
+      newline(mut emission, mut sink, write)?
     },
     CodeBlock(s, info) => {
-      newline(mut out)
-      text.append(mut out, "<pre><code")
-      let words = string.split_ascii_whitespace(unique info)
-      if core@1/list.len(words) != 0 {
-        // commonmark.js lib/render/html.js:157-165 avoids a duplicate prefix.
-        text.append(mut out, " class=\"")
-        if !string.starts_with(words[0], "language-") {
-          text.append(mut out, "language-")
-        }
-        escape_html(mut out, words[0])
-        core@1/list.push(mut out, 34u8)
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "<pre><code")?
+      let mut begin = 0u64
+      while begin < size(info) && code_whitespace(byte(info, begin)) {
+        begin += 1
       }
-      core@1/list.push(mut out, 62u8)
-      escape_html(mut out, s)
-      text.append(mut out, "</code></pre>\n")
+      let mut end = begin
+      while end < size(info) && !code_whitespace(byte(info, end)) {
+        end += 1
+      }
+      if begin < end {
+        emit_text(mut emission, mut sink, write, " class=\"")?
+        if !starts(info, begin, "language-") {
+          emit_text(mut emission, mut sink, write, "language-")?
+        }
+        escape_range(mut emission, mut sink, write, info, begin, end)?
+        emit_byte(mut emission, mut sink, write, 34u8)?
+      }
+      emit_byte(mut emission, mut sink, write, 62u8)?
+      escape_html(mut emission, mut sink, write, s)?
+      emit_text(mut emission, mut sink, write, "</code></pre>\n")?
     },
     ThematicBreak() => {
-      newline(mut out)
-      text.append(mut out, "<hr />\n")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "<hr />\n")?
     },
     Paragraph() => {
       if !tight {
-        newline(mut out)
-        text.append(mut out, "<p>")
+        newline(mut emission, mut sink, write)?
+        emit_text(mut emission, mut sink, write, "<p>")?
       }
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
       if !tight {
-        text.append(mut out, "</p>\n")
+        emit_text(mut emission, mut sink, write, "</p>\n")?
       }
     },
     Heading(level) => {
-      newline(mut out)
-      text.append(mut out, f"<h{level}>")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "<h")?
+      emit_number(mut emission, mut sink, write, level)?
+      emit_text(mut emission, mut sink, write, ">")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(mut out, f"</h{level}>\n")
+      emit_text(mut emission, mut sink, write, "</h")?
+      emit_number(mut emission, mut sink, write, level)?
+      emit_text(mut emission, mut sink, write, ">\n")?
     },
     BlockQuote() => {
-      newline(mut out)
-      text.append(mut out, "<blockquote>\n")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "<blockquote>\n")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      newline(mut out)
-      text.append(mut out, "</blockquote>\n")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "</blockquote>\n")?
     },
     ListBlock(ordered, start, list_tight) => {
-      newline(mut out)
+      newline(mut emission, mut sink, write)?
       if ordered {
-        text.append(
-          mut out,
-          if start == 1 {
-            "<ol>\n"
-          } else {
-            f"<ol start=\"{start}\">\n"
-          }
-        )
+        if start == 1 {
+          emit_text(mut emission, mut sink, write, "<ol>\n")?
+        } else {
+          emit_text(mut emission, mut sink, write, "<ol start=\"")?
+          emit_number(mut emission, mut sink, write, start)?
+          emit_text(mut emission, mut sink, write, "\">\n")?
+        }
       } else {
-        text.append(mut out, "<ul>\n")
+        emit_text(mut emission, mut sink, write, "<ul>\n")?
       }
       for descendant in node.children {
-        render_node(descendant, mut out, list_tight, false, options)
+        render_node(
+          descendant,
+          mut emission,
+          mut sink,
+          write,
+          list_tight,
+          false,
+          options
+        )?
       }
-      newline(mut out)
-      text.append(
-        mut out,
+      newline(mut emission, mut sink, write)?
+      emit_text(
+        mut emission,
+        mut sink,
+        write,
         if ordered {
           "</ol>\n"
         } else {
           "</ul>\n"
         }
-      )
+      )?
     },
     Item(checked) => {
-      text.append(mut out, "<li>")
+      emit_text(mut emission, mut sink, write, "<li>")?
       if let Some(value) = checked {
-        text.append(
-          mut out,
+        emit_text(
+          mut emission,
+          mut sink,
+          write,
           if value {
             "<input checked=\"\" disabled=\"\" type=\"checkbox\"> "
           } else {
             "<input disabled=\"\" type=\"checkbox\"> "
           }
-        )
+        )?
       }
       for descendant in node.children {
-        render_node(descendant, mut out, tight, false, options)
+        render_node(descendant, mut emission, mut sink, write, tight, false, options)?
       }
-      text.append(mut out, "</li>\n")
+      emit_text(mut emission, mut sink, write, "</li>\n")?
     },
     Link(dest, title) => {
-      text.append(mut out, "<a")
+      emit_text(mut emission, mut sink, write, "<a")?
       if options.allow_unsafe || !potentially_unsafe(dest) {
-        text.append(mut out, " href=\"")
-        escape_html(mut out, dest)
-        core@1/list.push(mut out, 34u8)
+        emit_text(mut emission, mut sink, write, " href=\"")?
+        escape_html(mut emission, mut sink, write, dest)?
+        emit_byte(mut emission, mut sink, write, 34u8)?
       }
       if title != "" {
-        text.append(mut out, " title=\"")
-        escape_html(mut out, title)
-        core@1/list.push(mut out, 34u8)
+        emit_text(mut emission, mut sink, write, " title=\"")?
+        escape_html(mut emission, mut sink, write, title)?
+        emit_byte(mut emission, mut sink, write, 34u8)?
       }
-      core@1/list.push(mut out, 62u8)
+      emit_byte(mut emission, mut sink, write, 62u8)?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(mut out, "</a>")
+      emit_text(mut emission, mut sink, write, "</a>")?
     },
     Image(dest, title) => {
-      text.append(mut out, "<img src=\"")
+      emit_text(mut emission, mut sink, write, "<img src=\"")?
       if options.allow_unsafe || !potentially_unsafe(dest) {
-        escape_html(mut out, dest)
+        escape_html(mut emission, mut sink, write, dest)?
       }
-      text.append(mut out, "\" alt=\"")
+      emit_text(mut emission, mut sink, write, "\" alt=\"")?
       for descendant in node.children {
-        image_alt(descendant, mut out)
+        image_alt(descendant, mut emission, mut sink, write)?
       }
-      core@1/list.push(mut out, 34u8)
+      emit_byte(mut emission, mut sink, write, 34u8)?
       if title != "" {
-        text.append(mut out, " title=\"")
-        escape_html(mut out, title)
-        core@1/list.push(mut out, 34u8)
+        emit_text(mut emission, mut sink, write, " title=\"")?
+        escape_html(mut emission, mut sink, write, title)?
+        emit_byte(mut emission, mut sink, write, 34u8)?
       }
-      text.append(mut out, " />")
+      emit_text(mut emission, mut sink, write, " />")?
     },
     Emphasis() => {
-      text.append(mut out, "<em>")
+      emit_text(mut emission, mut sink, write, "<em>")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(mut out, "</em>")
+      emit_text(mut emission, mut sink, write, "</em>")?
     },
     Strong() => {
-      text.append(mut out, "<strong>")
+      emit_text(mut emission, mut sink, write, "<strong>")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(mut out, "</strong>")
+      emit_text(mut emission, mut sink, write, "</strong>")?
     },
     Strikethrough() => {
-      text.append(mut out, "<del>")
+      emit_text(mut emission, mut sink, write, "<del>")?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(mut out, "</del>")
+      emit_text(mut emission, mut sink, write, "</del>")?
     },
     Table() => {
-      newline(mut out)
-      text.append(mut out, "<table>\n")
+      newline(mut emission, mut sink, write)?
+      emit_text(mut emission, mut sink, write, "<table>\n")?
       let mut first = true
       let mut body = false
       for row in node.children {
         if first {
-          text.append(mut out, "<thead>\n")
-          render_node(row, mut out, false, true, options)
-          text.append(mut out, "</thead>\n")
+          emit_text(mut emission, mut sink, write, "<thead>\n")?
+          render_node(row, mut emission, mut sink, write, false, true, options)?
+          emit_text(mut emission, mut sink, write, "</thead>\n")?
           first = false
         } else {
           if !body {
-            text.append(mut out, "<tbody>\n")
+            emit_text(mut emission, mut sink, write, "<tbody>\n")?
             body = true
           }
-          render_node(row, mut out, false, false, options)
+          render_node(row, mut emission, mut sink, write, false, false, options)?
         }
       }
       if body {
-        text.append(mut out, "</tbody>\n")
+        emit_text(mut emission, mut sink, write, "</tbody>\n")?
       }
-      text.append(mut out, "</table>\n")
+      emit_text(mut emission, mut sink, write, "</table>\n")?
     },
     TableRow(header) => {
-      text.append(mut out, "<tr>\n")
+      emit_text(mut emission, mut sink, write, "<tr>\n")?
       for cell in node.children {
-        render_node(cell, mut out, false, header, options)
+        render_node(cell, mut emission, mut sink, write, false, header, options)?
       }
-      text.append(mut out, "</tr>\n")
+      emit_text(mut emission, mut sink, write, "</tr>\n")?
     },
     TableCell(align) => {
-      text.append(
-        mut out,
+      emit_text(
+        mut emission,
+        mut sink,
+        write,
         if cell_header {
           "<th"
         } else {
           "<td"
         }
-      )
+      )?
       if align != 0 {
-        text.append(
-          mut out,
+        emit_text(
+          mut emission,
+          mut sink,
+          write,
           if align == 1 {
             " align=\"left\""
           } else if align == 2 {
@@ -385,22 +653,82 @@ fn render_node(
           } else {
             " align=\"right\""
           }
-        )
+        )?
       }
-      core@1/list.push(mut out, 62u8)
+      emit_byte(mut emission, mut sink, write, 62u8)?
       for descendant in node.children {
-        render_node(descendant, mut out, false, false, options)
+        render_node(descendant, mut emission, mut sink, write, false, false, options)?
       }
-      text.append(
-        mut out,
+      emit_text(
+        mut emission,
+        mut sink,
+        write,
         if cell_header {
           "</th>\n"
         } else {
           "</td>\n"
         }
-      )
+      )?
     },
   }
+  Ok(())
+}
+
+/// Stream an AST through the same walker, with no rendered heap fragments.
+/// The limit covers emitted bytes; parser/AST memory and sink-owned storage are separate.
+/// Each callback accepts one byte or returns Error without accepting it. A failure
+/// leaves the already accepted prefix in the caller's sink; no further calls occur.
+pub fn render_html_to[S, E](
+  document: Node,
+  options: Options,
+  limit: u64,
+  mut sink: S,
+  write: fn(mut S, u8) -> Result[(), E] uses {}
+) -> Result[u64, RenderError[E]] uses {} {
+  let mut emission = RenderOutput(written: 0, limit: limit, last: 0u8)
+  render_node(document, mut emission, mut sink, write, false, false, options)?
+  Ok(emission.written)
+}
+
+type RenderBuffer {
+  data: List[u8],
+  limit: Option[u64],
+}
+
+fn buffer_byte(mut sink: RenderBuffer, value: u8) -> Result[(), ()] uses {} {
+  if core@1/list.len(sink.data) == 0 {
+    if let Some(limit) = sink.limit {
+      // Reserve once, after first-byte admission, to prevent geometric output
+      // growth beyond the cap. No rendered fragment or second output buffer.
+      core@1/list.reserve(mut sink.data, limit)
+    }
+  }
+  core@1/list.push(mut sink.data, value)
+  Ok(())
+}
+
+/// Bound output payload storage, including escapes, image alts, tables and footnotes.
+/// Parser/AST allocations and allocator metadata/size-class rounding are separate.
+/// The output buffer reserves at most limit payload bytes, once, on first emission.
+pub fn render_html_bounded(document: Node, options: Options, limit: u64) -> Result[
+  String,
+  OutputLimit
+] uses {} {
+  let mut sink = RenderBuffer(data: [], limit: Some(limit))
+  match render_html_to(document, options, limit, mut sink, buffer_byte) {
+    Ok(_) => {
+      let RenderBuffer(data: data, limit: _) = take sink
+      Ok(text.finish_valid(take data))
+    },
+    Error(_) => Error(OutputLimit(limit: limit)),
+  }
+}
+
+pub fn to_html_bounded(take source: String, options: Options, limit: u64) -> Result[
+  String,
+  OutputLimit
+] uses {} {
+  render_html_bounded(parse(take source, options), options, limit)
 }
 
 /// Render an editable AST safely with CommonMark defaults.
@@ -410,9 +738,16 @@ pub fn render_html(document: Node) -> String uses {} {
 
 /// Render an AST with explicit safety and GFM tag filter options.
 pub fn render_html_with_options(document: Node, options: Options) -> String uses {} {
-  let mut out: List[u8] = []
-  render_node(document, mut out, false, false, options)
-  text.finish_valid(take out)
+  let mut sink = RenderBuffer(data: [], limit: None())
+  let _ = render_html_to(
+    document,
+    options,
+    18446744073709551615u64,
+    mut sink,
+    buffer_byte
+  )
+  let RenderBuffer(data: data, limit: _) = take sink
+  text.finish_valid(take data)
 }
 
 pub fn to_html(take source: String, options: Options) -> String uses {} {

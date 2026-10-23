@@ -353,6 +353,9 @@ fn sitebuild_29_bounds_reference_checked() {
     scripted_cases(vectors);
 }
 fn native_workflows(caps: bool) {
+    native_workflows_selected(caps, None);
+}
+fn native_workflows_selected(caps: bool, selected: Option<&str>) {
     let base = std::env::var_os("SITEBUILD_29_EVIDENCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -391,6 +394,12 @@ fn native_workflows(caps: bool) {
     let mut command = Command::new("python3");
     if caps {
         command.env("SITEBUILD_29_CAPS", "1");
+    }
+    if let Some(selected) = selected {
+        command.env("SITEBUILD_29_CASE", selected);
+        if caps {
+            command.env("SITEBUILD_29_SKIP_CONTROLS", "1");
+        }
     }
     let output = command
         .arg(root.join("verify.py"))
@@ -501,4 +510,71 @@ fn recording_controls(root: &Path) {
             eprintln!("SITEBUILD_29_CONTROL_PASS {id} {engine} exit=3");
         }
     }
+}
+
+// Bounded renderer importers select original, unmodified application vectors.
+#[test]
+fn markdown_bounded_output_33_scripted_reference_checked() {
+    scripted_cases(
+        cases()
+            .into_iter()
+            .filter(|c| {
+                [
+                    "empty",
+                    "collision",
+                    "invalid-utf8",
+                    "jobs-0",
+                    "unsafe-markdown",
+                    "commonmark",
+                    "legacy",
+                    "cancel-atomic",
+                    "failed-atomic",
+                ]
+                .contains(&c["id"].as_str().unwrap())
+            })
+            .collect(),
+    );
+}
+#[test]
+fn markdown_bounded_output_33_bounds_reference_checked() {
+    let specs: Vec<Value> =
+        serde_json::from_str(include_str!("../support/sitebuild_29/caps.json")).unwrap();
+    let mut vectors = vec![];
+    for spec in specs
+        .into_iter()
+        .filter(|s| ["output-2097152", "output-2097153"].contains(&s["id"].as_str().unwrap()))
+    {
+        let mut files = serde_json::Map::new();
+        for file in spec["files"].as_array().unwrap() {
+            files.insert(
+                file["path"].as_str().unwrap().into(),
+                file["fill"]
+                    .as_str()
+                    .unwrap()
+                    .repeat(file["size"].as_u64().unwrap() as usize)
+                    .into(),
+            );
+        }
+        let mut case = json!({"id":spec["id"],"files":files,"exit":if spec["error"].is_null(){0}else{2},"hashes":spec["output_hashes"],"error":spec["error"]});
+        if spec["error"].is_null() {
+            let pages = files
+                .keys()
+                .filter(|name| name.starts_with("content/"))
+                .count();
+            case["stdout"] = format!("pages {pages}; write {}; skip 0\n", files.len() + 1).into();
+        }
+        vectors.push(case);
+    }
+    scripted_cases(vectors);
+}
+#[test]
+fn markdown_bounded_output_33_native_workflows() {
+    native_workflows_selected(
+        false,
+        Some("empty,legacy,collision,invalid-utf8,unsafe-markdown,commonmark"),
+    );
+}
+#[test]
+fn markdown_bounded_output_33_native_bounds() {
+    native_workflows_selected(true, Some("output-2097152,output-2097153"));
 }

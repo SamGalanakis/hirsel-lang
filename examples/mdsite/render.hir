@@ -1,8 +1,152 @@
 // The renderer remains std.markdown (CommonMark.js BSD-2-Clause port).
-// Layout holes use std.html; URI segments use the original percent-encode policy.
+// Layout escaping retains std.html spellings; URI segments retain percent-encode policy.
 pub fn page(title: String, take source: String) -> String uses {} {
   let body = markdown.to_html(take source, markdown.default_options())
   f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(title)}</title>\n{body}"
+}
+
+// The publication renderer has one admitted output buffer, including layout.
+// html.esc's Go HTML spelling and uri.percent_encode's unreserved alphabet are
+// emitted directly so a small remaining budget cannot allocate a layout fragment.
+type LayoutBuffer {
+  data: List[u8],
+  limit: u64,
+}
+
+fn append_byte(mut buffer: LayoutBuffer, value: u8) -> Result[(), ()] uses {} {
+  let used = list.len(buffer.data)
+  if used == buffer.limit {
+    return Error(())
+  }
+  if used == 0 {
+    list.reserve(mut buffer.data, buffer.limit)
+  }
+  list.push(mut buffer.data, value)
+  Ok(())
+}
+
+fn literal(mut buffer: LayoutBuffer, value: String) -> Result[(), model.Problem] uses {} {
+  if string.byte_len(value) > buffer.limit - list.len(buffer.data) {
+    return Error(Limit("output_bytes"))
+  }
+  for b in string.as_bytes(value) {
+    if let Error(_) = append_byte(mut buffer, b) {
+      return Error(Limit("output_bytes"))
+    }
+  }
+  Ok(())
+}
+
+fn escaped(mut buffer: LayoutBuffer, value: String) -> Result[(), model.Problem] uses {} {
+  // Same five replacements as std.html.escape_into (Go html/escape.go).
+  for b in string.as_bytes(value) {
+    if b == b'&' {
+      literal(mut buffer, "&amp;")?
+    } else if b == b'<' {
+      literal(mut buffer, "&lt;")?
+    } else if b == b'>' {
+      literal(mut buffer, "&gt;")?
+    } else if b == b'"' {
+      literal(mut buffer, "&#34;")?
+    } else if b == b'\'' {
+      literal(mut buffer, "&#39;")?
+    } else if let Error(_) = append_byte(mut buffer, b) {
+      return Error(Limit("output_bytes"))
+    }
+  }
+  Ok(())
+}
+
+fn url_into(mut buffer: LayoutBuffer, value: String) -> Result[(), model.Problem] uses {} {
+  let hex = b"0123456789ABCDEF"
+  for b in string.as_bytes(value) {
+    if ascii.is_alnum(b) || b == b'-' || b == b'_' || b == b'.' || b == b'~' || b == b'/' {
+      if let Error(_) = append_byte(mut buffer, b) {
+        return Error(Limit("output_bytes"))
+      }
+    } else {
+      if buffer.limit - list.len(buffer.data) < 3 {
+        return Error(Limit("output_bytes"))
+      }
+      if let Error(_) = append_byte(mut buffer, b'%') {
+        return Error(Limit("output_bytes"))
+      }
+      if let Error(_) = append_byte(mut buffer, hex[int.widen(b / 16u8)]) {
+        return Error(Limit("output_bytes"))
+      }
+      if let Error(_) = append_byte(mut buffer, hex[int.widen(b % 16u8)]) {
+        return Error(Limit("output_bytes"))
+      }
+    }
+  }
+  Ok(())
+}
+
+fn head(mut buffer: LayoutBuffer, title: String) -> Result[(), model.Problem] uses {} {
+  literal(mut buffer, "<!doctype html>\n<meta charset=\"utf-8\">\n<title>")?
+  escaped(mut buffer, title)?
+  Ok(())
+}
+
+fn finish_page(take buffer: LayoutBuffer, take source: String, suffix: String) -> Result[
+  String,
+  model.Problem
+] uses {} {
+  let mut layout_owned = take buffer
+  let tail = string.byte_len(suffix)
+  let left = layout_owned.limit - list.len(layout_owned.data)
+  if tail > left {
+    return Error(Limit("output_bytes"))
+  }
+  let document = markdown.parse(take source, markdown.default_options())
+  if let Error(_) = markdown.render_html_to(
+    document,
+    markdown.default_options(),
+    left - tail,
+    mut layout_owned,
+    append_byte
+  ) {
+    return Error(Limit("output_bytes"))
+  }
+  literal(mut layout_owned, suffix)?
+  let LayoutBuffer(data: data, limit: _) = take layout_owned
+  Ok(text.finish_valid(take data))
+}
+
+pub fn page_bounded(title: String, take source: String, limit: u64) -> Result[
+  String,
+  model.Problem
+] uses {} {
+  let mut buffer = LayoutBuffer(data: [], limit: limit)
+  head(mut buffer, title)?
+  literal(mut buffer, "</title>\n")?
+  finish_page(take buffer, take source, "")
+}
+
+fn configured_page(
+  item: model.Page,
+  config: model.Config,
+  rows: List[model.Navigation],
+  limit: u64
+) -> Result[String, model.Problem] uses {} {
+  let mut buffer = LayoutBuffer(data: [], limit: limit)
+  head(mut buffer, item.title)?
+  literal(mut buffer, " | ")?
+  escaped(mut buffer, config.title)?
+  literal(mut buffer, "</title>\n<nav><ul>\n")?
+  let parts = path.components(path.of(item.destination))
+  for row in rows {
+    literal(mut buffer, "<li><a href=\"")?
+    for _ in 1u64..list.len(parts) {
+      literal(mut buffer, "../")?
+    }
+    url_into(mut buffer, row.destination)?
+    literal(mut buffer, "\">")?
+    escaped(mut buffer, row.title)?
+    literal(mut buffer, "</a></li>\n")?
+  }
+  literal(mut buffer, "</ul></nav>\n<main>\n")?
+  finish_page(take buffer, unique item.source, "</main>\n")
 }
 
 pub fn url(name: String) -> String uses {} {
@@ -51,11 +195,13 @@ pub fn output(destination: String, input_hash: String, take body: String) -> mod
   )
 }
 
-pub fn layout(item: model.Page, config: model.Config, rows: List[model.Navigation]) -> Result[
-  model.Output,
-  model.Problem
-] uses {} {
-  // The input cap bounds renderer work; exact output bytes are checked before publication.
+pub fn layout(
+  item: model.Page,
+  config: model.Config,
+  rows: List[model.Navigation],
+  limit: u64
+) -> Result[model.Output, model.Problem] uses {} {
+  // Input memory has its own cap; Markdown emission receives the remaining output budget.
   if string.byte_len(item.source) > model.PAGE_BYTES {
     return Error(Limit("page_bytes"))
   }
@@ -64,13 +210,9 @@ pub fn layout(item: model.Page, config: model.Config, rows: List[model.Navigatio
     let Ok(title) = string.from_bytes(unique bytes.slice(raw, 0, bytes.len(raw) - 5)) else {
       return Error(Utf8())
     }
-    render.page(title, unique item.source)
+    page_bounded(title, unique item.source, limit)?
   } else {
-    let content = markdown.to_html(unique item.source, markdown.default_options())
-    let nav = navigation(rows, item.destination)
-    f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(item.title)} | {html.esc(
-      config.title
-    )}</title>\n{nav}<main>\n{content}</main>\n"
+    configured_page(item, config, rows, limit)?
   }
   Ok(output(item.destination, item.digest, take body))
 }
@@ -95,7 +237,8 @@ pub fn index(config: model.Config, rows: List[model.Navigation]) -> model.Output
 pub fn job(
   take item: unique model.Page,
   take config: unique model.Config,
-  nav: Shared[List[model.Navigation]]
+  nav: Shared[List[model.Navigation]],
+  limit: u64
 ) -> model.WorkResult[unique model.Output, unique model.Problem] {
   shared.with(
     nav,
@@ -103,7 +246,7 @@ pub fn job(
       unique model.Output,
       unique model.Problem
     ] {
-      match layout(item, config, links) {
+      match layout(item, config, links, limit) {
         Ok(value) => Done(unique value),
         Error(problem) => Failed(unique problem),
       }
