@@ -406,8 +406,14 @@ struct Registrations {
     rows: Vec<crate::comptime::StagedRegistration>,
 }
 impl Registrations {
-    fn valid(&self, syntax: &ItemSyntax, types: &hirsel_types::TypeInterner) -> bool {
-        self.owner == syntax.owner().def
+    fn valid(
+        &self,
+        owner: hirsel_syntax::LexicalOwner,
+        shape: super::catalog::LexicalShape,
+        comptime: &[(u32, u32, u32)],
+        types: &hirsel_types::TypeInterner,
+    ) -> bool {
+        self.owner == owner.def
             && !self.rows.is_empty()
             && self.rows.windows(2).all(|w| w[0].path < w[1].path)
             && self.rows.iter().all(|row| {
@@ -416,7 +422,7 @@ impl Registrations {
                     hirsel_types::SignatureKind::Const { generics, .. }
                         if generics.len() == constant.inputs.len()
                             && generics.iter().all(|p| matches!(p, hirsel_types::GenericParameter::Size { .. })));
-                constant.owner == syntax.item.definition
+                constant.owner == *owner.def.path()
                     && row.path.0.package == constant.owner.0.package
                     && row.path.0.modules == constant.owner.0.modules
                     && row.path.0.name.starts_with(&format!("$comptime:{}:", constant.owner.0.name))
@@ -427,11 +433,10 @@ impl Registrations {
                     && !constant.inputs.is_empty()
                     && constant.inputs.windows(2).all(|w| w[0] < w[1])
                     && constant.inputs.iter().all(|p| match p.binder() {
-                        hirsel_types::GenericBinder::Body(scope) => scope.owner == syntax.owner() && valid_site(syntax, scope.site),
+                        hirsel_types::GenericBinder::Body(scope) => scope.owner == owner && shape.valid_site(scope.site),
                         hirsel_types::GenericBinder::Bound(_) => false,
                     })
-                    && syntax.tree.expressions.get(constant.expression.0 as usize)
-                        .is_some_and(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_)))
+                    && comptime.binary_search_by_key(&constant.expression.0, |site| site.0).is_ok()
             })
     }
 }
@@ -1260,8 +1265,9 @@ impl QueryEngine {
         }
         let variant = self.stored_variant(path, QueryKind::Registration)?;
         let record: Registrations = self.decode_record(&variant.payload)?;
-        let syntax = self.snapshot(path).ok()?;
-        if !record.valid(&syntax, &self.types) {
+        let (owner, shape) = self.lexical_shape(path)?;
+        let facts = self.source_facts(path)?;
+        if !record.valid(owner, shape, &facts.comptime, &self.types) {
             return None;
         }
         if self.verify_store == crate::store::VerifyStore::Recompute {
@@ -2128,7 +2134,7 @@ impl QueryEngine {
         let key = self.staged_evaluation_key(path, arguments)?;
         let variant = self.stored_variant_at(&declaration.owner, &key)?;
         let record: StagedEvaluationRecord = self.decode_record(&variant.payload)?;
-        let syntax = self.snapshot(&declaration.owner).ok()?;
+        let (_, shape) = self.lexical_shape(&declaration.owner)?;
         let mut value = record.constant;
         if record.declaration != DefId::intern(path)
             || record.arguments != arguments
@@ -2144,7 +2150,7 @@ impl QueryEngine {
             || value
                 .substitutions
                 .iter()
-                .any(|(id, _)| !valid_expression(&syntax, *id))
+                .any(|(id, _)| !shape.valid_site(hirsel_types::NameSite::Expression(*id)))
         {
             return None;
         }

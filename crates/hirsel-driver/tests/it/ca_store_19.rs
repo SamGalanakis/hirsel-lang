@@ -1432,3 +1432,48 @@ fn ordinary_source_audits_validate_lexical_heads_without_syntax_and_keep_local_a
         assert_eq!(oracle.source_audit(&definition("staged")).unwrap(), staged);
     });
 }
+
+#[test]
+fn ordinary_staged_registrations_restore_from_heads_without_syntax_or_execution_authority() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn value[n:size]()->u64{comptime (n*n)}\n";
+        let owner = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        let file = writer.sources.add("staged-heads.hir", source.into()).unwrap();
+        writer.index_source(file, &default_context()).unwrap();
+        let lowered = writer.lower_to_tir(&owner).unwrap();
+        let hidden = lowered.value.bodies.iter().flat_map(|b| &b.rvalues).find_map(|v| match v {
+            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()), _ => None,
+        }).unwrap();
+        for n in [2, 3] { writer.constant_instance(&hidden, &[n]).unwrap(); }
+        let open = |store: Arc<dyn store::ResultStore>| {
+            let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+            reader.sources.add("padding.hir", "\n".into()).unwrap();
+            let file = reader.sources.add("staged-heads.hir", source.into()).unwrap();
+            reader.index_source(file, &default_context()).unwrap();
+            reader.adapters.lexer = None; reader.adapters.parser = None; reader.adapters.signature = None; reader.adapters.modes = None; reader.adapters.lowering = None;
+            reader
+        };
+        let mut reader = open(store.clone());
+        reader.register_staged_definition(&owner).unwrap();
+        reader.lower_to_tir(&owner).unwrap();
+        for n in [2, 3] { assert_eq!(reader.constant_instance(&hidden, &[n]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(u128::from(n*n)))); }
+        assert!(reader.constant_instance(&hidden, &[4]).is_err());
+        assert!(reader.constant_instance(&hidden, &[2, 3]).is_err());
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        assert_eq!(reader.recompute_count(&owner, QueryKind::Modes), 0);
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() { store::ResultStore::put(&*copied, &key, &bytes); store::ResultStore::put(&*store, &key, &bytes); }
+        let mut untrusted = open(copied);
+        untrusted.register_staged_definition(&owner).unwrap();
+        assert!(untrusted.constant_instance(&hidden, &[2]).is_err(), "ordinary registration carries no execution completion");
+        let mut oracle = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store).with_verify_store(store::VerifyStore::Recompute);
+        let file = oracle.sources.add("staged-heads.hir", source.into()).unwrap();
+        oracle.index_source(file, &default_context()).unwrap();
+        oracle.register_staged_definition(&owner).unwrap();
+        oracle.lower_to_tir(&owner).unwrap();
+        assert_eq!(oracle.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
+    });
+}
