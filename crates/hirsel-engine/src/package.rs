@@ -85,6 +85,9 @@ pub(crate) fn load_package_declarations(
 ) -> Result<PackageDeclarations, ToolError> {
     let (graph, package) = Graph::program(manifest)?;
     let mut engine = compiler.engine(default_environment());
+    // This API indexes declarations only. Keep the configured provider for
+    // later demands, without querying or publishing parse-head products here.
+    let result_store = engine.result_store.take();
     engine.declarations.inputs_mut().package_exposures = graph
         .packages
         .iter()
@@ -115,6 +118,7 @@ pub(crate) fn load_package_declarations(
             files.push((file, context.clone()));
         }
     }
+    engine.result_store = result_store;
     Ok(PackageDeclarations {
         package,
         engine,
