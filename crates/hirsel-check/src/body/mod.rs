@@ -903,6 +903,7 @@ impl Checker<'_, '_> {
                     None
                 };
                 self.type_mismatch(rule, span, message, actual, required);
+                self.callback_mode_mismatch(id, actual, required);
                 if missing_loop_tail {
                     self.diagnostics.last_mut().unwrap().notes.push(
                         "help: A `while` statement has type `()`, even for `while true`. Add an explicit tail value matching the result, such as `Ok(())`. Use `return` inside the loop for early exits; the enclosing block still needs its tail value.".into(),

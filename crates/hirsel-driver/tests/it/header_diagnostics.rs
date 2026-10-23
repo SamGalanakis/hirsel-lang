@@ -464,3 +464,464 @@ fn task_result_sendability_uses_definition_identity_across_source_unit_order() {
         }
     });
 }
+
+#[test]
+fn callback_mode_mismatch_labels_contracts_and_checks_the_adapter() {
+    with_compiler_stack(|| {
+        let source = "fn invoke(cb:fn(mut xs:List[u8])->u64)->u64 {let mut xs:List[u8]=[];cb(mut xs)}\nfn borrow(xs:List[u8])->u64 {list.len(xs)}\nfn caller()->u64{invoke(borrow)}";
+        let output = sendability_check(source);
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "LANG-7");
+        assert!(
+            d.message.contains("expected `fn(mut List[u8]) -> u64`"),
+            "{d:?}"
+        );
+        assert!(d.message.contains("found `fn(List[u8]) -> u64`"), "{d:?}");
+        assert!(
+            d.notes.iter().any(|n| n
+                .contains("parameter 1 (`xs`) requires `mut`, but the callback declares `borrow`")),
+            "{d:?}"
+        );
+        assert_eq!(d.secondary.len(), 2, "{d:?}");
+        assert_eq!(output.sources.slice(d.secondary[0].span), Some("borrow"));
+        assert_eq!(output.sources.slice(d.secondary[1].span), Some("invoke"));
+        for rendered in [
+            d.render_human(&output.sources),
+            d.to_json(&output.sources).to_string(),
+        ] {
+            for text in [
+                "callback declared here",
+                "receiving callable requirement",
+                "callback_adapter",
+                "borrow(xs)",
+            ] {
+                assert!(rendered.contains(text), "{rendered}");
+            }
+        }
+        let recipe = d
+            .notes
+            .iter()
+            .find_map(|n| {
+                n.strip_prefix(
+                    "help: Define a named adapter and pass `callback_adapter` instead:\n",
+                )
+            })
+            .expect("complete recipe");
+        let repaired = source.replace("invoke(borrow)", "invoke(callback_adapter)") + "\n" + recipe;
+        let output = sendability_check(&repaired);
+        assert!(
+            output.diagnostics.is_empty(),
+            "{repaired}: {:?}",
+            output.diagnostics
+        );
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_covers_indirect_generic_resource_and_unsafe_repairs() {
+    with_compiler_stack(|| {
+        for (source, mode, adapter) in [
+            (
+                "fn invoke(cb:fn(mut xs:u64)->u64) {}\nfn read(xs:u64)->u64 {xs}\nfn caller(){let cb=read;invoke(cb)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:u64)->u64) {}\nfn caller(cb:fn(xs:u64)->u64){invoke(cb)}",
+                true,
+                false,
+            ),
+            (
+                "fn caller(receive:fn(cb:fn(mut xs:u64)->u64), cb:fn(xs:u64)->u64){receive(cb)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:u64)->u64) {}\nfn read[T:plain](xs:T)->u64 {0}\nfn caller(){invoke(read)}",
+                true,
+                true,
+            ),
+            (
+                "fn invoke[T](x:T,cb:fn(mut xs:T)->u64) {}\nfn read[T](xs:T)->u64 {0}\nfn caller[T](x:T){invoke(x,read)}",
+                true,
+                false,
+            ),
+            (
+                "resource type R { n:u64 } drop(x) {}\nfn invoke(cb:fn(mut xs:R)->u64) {}\nfn read(xs:R)->u64 {xs.n}\nfn caller(){invoke(read)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:once fn())->u64) {}\nfn read(xs:once fn())->u64 {0}\nfn caller(){invoke(read)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:List[u8])->u64) {}\nfn consume(take xs:List[u8])->u64 {list.len(xs)}\nfn caller(){invoke(consume)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(xs:u64)->u64) {}\nfn change(mut xs:u64)->u64 {xs}\nfn caller(){invoke(change)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:u64)->u64) {}\nfn read(xs:u64)->bool {true}\nfn caller(){invoke(read)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:@noalloc fn(mut xs:u64)->u64) {}\nfn read(xs:u64)->u64 {xs}\nfn caller(){invoke(read)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(mut xs:Stdin)->u64 uses {}) {}\nfn read(xs:Stdin)->u64 {0}\nfn caller(){invoke(read)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:once fn(mut xs:u64)->u64) {}\nfn caller(take cb:once fn(xs:u64)->u64){invoke(take cb)}",
+                true,
+                false,
+            ),
+            (
+                "fn invoke(cb:fn(xs:u64)->bool) {}\nfn read(xs:u64)->u64 {xs}\nfn caller(){invoke(read)}",
+                false,
+                false,
+            ),
+        ] {
+            let output = sendability_check(source);
+            let [d] = &output.diagnostics[..] else {
+                panic!("{source}: {:?}", output.diagnostics)
+            };
+            assert_eq!(d.rule.as_str(), "LANG-7", "{source}: {d:?}");
+            assert_eq!(
+                d.notes.iter().any(|n| n.starts_with("callback parameter")),
+                mode,
+                "{source}: {d:?}"
+            );
+            let recipe = d
+                .notes
+                .iter()
+                .find_map(|n| n.split_once("instead:\n").map(|(_, code)| code));
+            assert_eq!(recipe.is_some(), adapter, "{source}: {d:?}");
+            if let Some(recipe) = recipe {
+                let fixed =
+                    source.replace("invoke(read)", "invoke(callback_adapter)") + "\n" + recipe;
+                let output = sendability_check(&fixed);
+                assert!(
+                    output.diagnostics.is_empty(),
+                    "{fixed}: {:?}",
+                    output.diagnostics
+                );
+            }
+            if source.contains("invoke(consume)") {
+                assert!(
+                    d.notes
+                        .iter()
+                        .any(|n| n.contains("must hand the caller's value back"))
+                );
+            }
+        }
+        for source in [
+            "resource type R { n:u64 } drop(x) {}\nfn invoke(cb:fn(mut xs:R)->u64) {}\nfn read(xs:R)->u64 {xs.n}\nfn adapter(mut xs:R)->u64 {read(xs)}\nfn caller(){invoke(adapter)}",
+            "fn invoke(cb:fn(mut xs:u64)->u64) {}\nfn read(xs:u64)->u64 {xs}\nfn adapter(mut xs:u64)->u64 {read(xs)}\nfn caller(){invoke(adapter)}",
+            "fn invoke(cb:fn(mut a:u8,mut xs:u64)->u64) {}\nfn read(mut a:u8,xs:u64)->u64 {xs}\nfn adapter(mut a:u8,mut xs:u64)->u64 {read(mut a,xs)}\nfn caller(){invoke(adapter)}",
+        ] {
+            let output = sendability_check(source);
+            assert!(
+                output.diagnostics.is_empty(),
+                "{source}: {:?}",
+                output.diagnostics
+            );
+        }
+        let source = "fn invoke(cb:fn(mut a:u8,mut xs:u64)->u64) {}\nfn read(mut a:u8,xs:u64)->u64 {xs}\nfn caller(){invoke(read)}";
+        let output = sendability_check(source);
+        assert!(
+            output.diagnostics[0]
+                .notes
+                .iter()
+                .any(|n| n.starts_with("callback parameter 2 (`xs`)")),
+            "{:?}",
+            output.diagnostics
+        );
+        let output = sendability_check(
+            "fn consume(take xs:List[u8])->u64 {list.len(xs)}\nfn adapter(mut xs:List[u8])->u64 {consume(take xs)}",
+        );
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str().starts_with("OWN-")),
+            "{:?}",
+            output.diagnostics
+        );
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_cites_imported_contracts_and_checks_qualified_adapter() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("callbacks.hir"),
+            "pub fn invoke(cb:fn(mut xs:u64)->u64) {}\npub fn read(xs:u64)->u64 {xs}",
+        )
+        .unwrap();
+        let main = dir.path().join("main.hir");
+        let source = "pub fn main(){callbacks.invoke(callbacks.read)}";
+        std::fs::write(&main, source).unwrap();
+        let manifest = dir.path().join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"callbacks_test","version":"0"},"sources":[{"path":"main.hir","module":[]},{"path":"callbacks.hir","module":["callbacks"]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let mut program = load_program(&manifest).unwrap();
+        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "LANG-7");
+        assert!(
+            d.notes.iter().any(|n| n.contains("callback declared here")),
+            "{d:?}"
+        );
+        assert!(
+            d.notes
+                .iter()
+                .any(|n| n.contains("receiving callable requirement")),
+            "{d:?}"
+        );
+        let recipe = d
+            .notes
+            .iter()
+            .find_map(|n| n.split_once("instead:\n").map(|(_, code)| code))
+            .unwrap();
+        assert!(recipe.contains("callbacks.read(xs)"), "{recipe}");
+        std::fs::write(
+            &main,
+            source.replace(
+                "callbacks.invoke(callbacks.read)",
+                "callbacks.invoke(callback_adapter)",
+            ) + "\n"
+                + recipe,
+        )
+        .unwrap();
+        let mut program = load_program(&manifest).unwrap();
+        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_scalar_adapter_runs_on_h_llvm_and_cranelift() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.hir"), "fn invoke(cb:fn(mut xs:u64)->u64)->u64 {let mut xs=42u64;let answer=cb(mut xs);xs+answer}\nfn read(xs:u64)->u64 {xs}\nfn callback_adapter(mut xs:u64)->u64 {read(xs)}\npub fn main()->Result[(),()]{if invoke(callback_adapter)==84 {Ok(())} else {Error(())}}").unwrap();
+        let manifest = dir.path().join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"callback_runtime","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let mut program = load_program(&manifest).unwrap();
+        program.check_for_execution().unwrap();
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let execution =
+            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+                .unwrap();
+        let reference = native::Observation::of_reference(execution.observation.as_ref().unwrap());
+        assert_eq!(reference.exit_code, Some(0), "{reference:?}");
+        assert!(reference.failures.is_empty());
+        let input = program.engine.export_native_input().unwrap();
+        let validated = program.engine.import_native_input(input).unwrap();
+        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+        let configurations = vec![
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Heap { campaign: false },
+            },
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Native {
+                    opt: native::OptLevel::Speed,
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+            native::Configuration {
+                options,
+                engine: native::Engine::Cranelift {
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Diagnostic,
+                },
+            },
+        ];
+        let scratch =
+            std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("callback-mode-repairs-20");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let toolchain =
+            native::Toolchain::for_matrix(&scratch.join("runtime"), &configurations).unwrap();
+        let outcomes = native::differential(
+            &validated,
+            &program.entry,
+            &reference,
+            &configurations,
+            &toolchain,
+            &scratch,
+        );
+        assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in outcomes {
+            assert!(
+                matches!(outcome, native::Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_stdin_recipe_and_existing_api_alternative_are_checked() {
+    with_compiler_stack(|| {
+        for (declarations, adapter) in [
+            ("", "stdin_adapter"),
+            (
+                "fn input() {}\nfn buffer() {}\nfn requested() {}\nfn stdin_adapter() {}\n",
+                "stdin_adapter_2",
+            ),
+        ] {
+            let source = format!(
+                "{declarations}fn invoke(refill:fn(mut Stdin,mut List[u8],u64)->Result[u64,InputError]) {{}}\nfn caller(){{invoke(stdin.read)}}"
+            );
+            let output = sendability_check(&source);
+            let [d] = &output.diagnostics[..] else {
+                panic!("{:?}", output.diagnostics)
+            };
+            assert_eq!(d.rule.as_str(), "LANG-7");
+            assert!(
+                d.notes.iter().any(|n| n.contains("bufio.stdin_read")),
+                "{d:?}"
+            );
+            let prefix =
+                format!("help: For stdin, define this named adapter and pass `{adapter}`:\n");
+            let recipe = d
+                .notes
+                .iter()
+                .find_map(|n| n.strip_prefix(&prefix))
+                .unwrap();
+            if !declarations.is_empty() {
+                for parameter in ["input_2", "buffer_2", "requested_2"] {
+                    assert!(recipe.contains(parameter), "{recipe}");
+                }
+            }
+            let repaired =
+                source.replace("invoke(stdin.read)", &format!("invoke({adapter})")) + "\n" + recipe;
+            let output = sendability_check(&repaired);
+            assert!(
+                output.diagnostics.is_empty(),
+                "{repaired}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_does_not_offer_adapters_for_effects_or_other_modes() {
+    with_compiler_stack(|| {
+        for source in [
+            "fn invoke(cb:@noalloc fn(xs:u64)->u64) {}\nfn read(xs:u64)->u64 {xs}\nfn caller(){invoke(read)}",
+            "fn invoke(cb:fn(xs:Stdin)->u64 uses {}) {}\nfn read(xs:Stdin)->u64 {0}\nfn caller(){invoke(read)}",
+            "fn invoke(cb:fn()->unique String) {}\nfn read()->String {\"x\"}\nfn caller(){invoke(read)}",
+            "fn invoke(cb:fn()) {}\nfn caller(take cb:once fn()){invoke(take cb)}",
+        ] {
+            let output = sendability_check(source);
+            assert!(!output.diagnostics.is_empty(), "{source}");
+            for d in &output.diagnostics {
+                assert!(
+                    !d.notes.iter().any(|n| n.contains("named adapter")),
+                    "{source}: {d:?}"
+                );
+                assert!(
+                    !d.notes.iter().any(|n| n.starts_with("callback parameter")),
+                    "{source}: {d:?}"
+                );
+                assert_ne!(d.rule.as_str(), "LANG-4", "{source}: {d:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_recipe_avoids_shadowing_callback_and_adapter_names() {
+    with_compiler_stack(|| {
+        let source = "fn invoke(cb:fn(mut state:u64)->u64) {}\nfn xs(item:u64)->u64 {item}\nfn callback_adapter() {}\nfn caller(){invoke(xs)}";
+        let output = sendability_check(source);
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        let recipe = d
+            .notes
+            .iter()
+            .find_map(|n| n.split_once("instead:\n").map(|(_, code)| code))
+            .unwrap();
+        assert!(
+            recipe.contains("fn callback_adapter_2(mut xs_2: u64)"),
+            "{recipe}"
+        );
+        let fixed = source.replace("invoke(xs)", "invoke(callback_adapter_2)") + "\n" + recipe;
+        let output = sendability_check(&fixed);
+        assert!(
+            output.diagnostics.is_empty(),
+            "{fixed}: {:?}",
+            output.diagnostics
+        );
+    });
+}
+
+#[test]
+fn callback_mode_mismatch_bufio_stdin_witness_has_no_name_setup_errors() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "fn read(mut r:bufio.Reader,mut input:Stdin,mut output:List[u8])->Result[u64,bufio.ReadError[InputError]]{bufio.read(mut r,mut input,stdin.read,mut output,4096)}\npub fn main() {}";
+        let main = dir.path().join("main.hir");
+        std::fs::write(&main, source).unwrap();
+        let manifest = dir.path().join("hirsel.json");
+        let std_manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stdlib/std@1/hirsel.json")
+            .canonicalize()
+            .unwrap();
+        std::fs::write(&manifest,serde_json::json!({"schema":1,"package":{"name":"callback_stdin","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":std_manifest,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let mut program = load_program(&manifest).unwrap();
+        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "LANG-7");
+        let recipe = d
+            .notes
+            .iter()
+            .find_map(|n| {
+                n.strip_prefix(
+                    "help: For stdin, define this named adapter and pass `stdin_adapter`:\n",
+                )
+            })
+            .unwrap();
+        let repaired = source.replace(",stdin.read,", ",stdin_adapter,") + "\n" + recipe;
+        let alternative = source.replace(
+            "bufio.read(mut r,mut input,stdin.read,mut output,4096)",
+            "bufio.stdin_read(input,mut r,mut output,4096)",
+        );
+        for accepted in [repaired, alternative] {
+            std::fs::write(&main, &accepted).unwrap();
+            let mut program = load_program(&manifest).unwrap();
+            let output = program.check(LoweringPolicy::Comptime).unwrap();
+            assert!(
+                output.diagnostics.is_empty(),
+                "{accepted}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}

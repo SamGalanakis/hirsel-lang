@@ -641,6 +641,226 @@ impl Checker<'_, '_> {
         f.state_promises = promises.into();
         self.types.intern(row)
     }
+    /// Add declaration evidence to a callable passing-mode mismatch. As with
+    /// tail-result suggestions (rustc suggestions.rs:50-87, afe686de), cite
+    /// the contract that supplied the expectation before offering a repair.
+    pub(super) fn callback_mode_mismatch(
+        &mut self,
+        expression: ast::ExprId,
+        actual: TypeId,
+        expected: TypeId,
+    ) {
+        let (TypeKind::Function(have), TypeKind::Function(want)) =
+            (self.kind(actual), self.kind(expected))
+        else {
+            return;
+        };
+        let Some((ordinal, (provided, required))) = have
+            .parameters
+            .iter()
+            .zip(&want.parameters)
+            .enumerate()
+            .find(|(_, (a, b))| a.passing != b.passing)
+        else {
+            return;
+        };
+        let mode = |m| match m {
+            ast::PassingMode::Borrow => "borrow",
+            ast::PassingMode::Mut => "mut",
+            ast::PassingMode::Take => "take",
+        };
+        let name = required
+            .name
+            .as_ref()
+            .map(|n| format!(" (`{n}`)"))
+            .unwrap_or_default();
+        let Some(mut d) = self.diagnostics.pop() else {
+            return;
+        };
+        if d.rule.as_str() != "LANG-7" {
+            self.diagnostics.push(d);
+            return;
+        }
+        d.notes.push(format!("callback parameter {}{name} requires `{}`, but the callback declares `{}`; passing modes are part of the callable contract",
+            ordinal + 1, mode(required.passing), mode(provided.passing)));
+        let callback = self.input_name(expression).map(|(_, r)| r.clone());
+        self.callback_declaration(
+            &mut d,
+            expression,
+            callback.as_ref(),
+            format!("callback declared here: `{}`", self.type_spelling(actual)),
+        );
+        if let Some(c) = self
+            .calls
+            .iter()
+            .rev()
+            .find(|c| c.arguments.iter().any(|a| a.value == expression))
+        {
+            let target = c.target.clone();
+            let parameter = c
+                .arguments
+                .iter()
+                .position(|a| a.value == expression)
+                .and_then(|i| c.ordinals[i])
+                .and_then(|i| c.function.parameters.get(i))
+                .and_then(|p| p.name.as_ref())
+                .map(|n| format!(" for `{n}`"))
+                .unwrap_or_default();
+            let message = format!(
+                "receiving callable requirement{parameter}: `{}`",
+                self.type_spelling(expected)
+            );
+            match target {
+                CallTarget::Definition(path) => {
+                    self.mapper_declaration(&mut d, &path, format!("{message} (`{path}`)"))
+                }
+                CallTarget::Value(e) => {
+                    let binding = self.input_name(e).map(|(_, r)| r.clone());
+                    self.callback_declaration(&mut d, e, binding.as_ref(), message);
+                }
+                CallTarget::Constructor(_) => d.notes.push(message),
+            }
+        }
+        if matches!(callback, Some(ResolvedName::Definition(_)))
+            && self.borrow_callback_adapter_fits(actual, expected)
+            && let ast::ExprKind::Path(path) =
+                &self.input.syntax.tree.expressions[expression.0 as usize].kind
+        {
+            let segments = path.segments.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+            let callee = match &path.package {
+                Some(package) => format!(
+                    "{}@{}/{}",
+                    package.name,
+                    package.version,
+                    segments.join("/")
+                ),
+                None => segments.join("."),
+            };
+            let parameter = self.callback_adapter_name("xs");
+            let adapter = self.callback_adapter_name("callback_adapter");
+            d.notes.push(format!("help: Define a named adapter and pass `{adapter}` instead:\nfn {adapter}(mut {parameter}: {}) -> {} {{ {callee}({parameter}) }}",
+                self.callback_adapter_type(want.parameters[0].ty), self.type_spelling(want.result)));
+        }
+        if matches!(&callback, Some(ResolvedName::Definition(path)) if path.is_core("stdin.read")) {
+            d.notes.push("help: For buffered stdin, use the existing `bufio.stdin_read`, `bufio.stdin_read_more`, `bufio.stdin_read_exact`, `bufio.stdin_read_until`, or `bufio.stdin_read_line` API instead of supplying a refill callback.".into());
+            if self.stdin_callback_adapter_fits(actual, expected) {
+                let adapter = self.callback_adapter_name("stdin_adapter");
+                let input = self.callback_adapter_name("input");
+                let buffer = self.callback_adapter_name("buffer");
+                let requested = self.callback_adapter_name("requested");
+                d.notes.push(format!("help: For stdin, define this named adapter and pass `{adapter}`:\nfn {adapter}(mut {input}: core@1/Stdin, mut {buffer}: core@1/List[u8], {requested}: u64) -> core@1/Result[u64, core@1/InputError] {{ core@1/stdin.read({input}, mut {buffer}, {requested}) }}"));
+            }
+        }
+        if have
+            .parameters
+            .iter()
+            .zip(&want.parameters)
+            .any(|(a, b)| a.passing == ast::PassingMode::Take && b.passing == ast::PassingMode::Mut)
+        {
+            d.notes.push("a `take` callback consumes its input; a `mut` adapter must hand the caller's value back and cannot forward it with `take`".into());
+        }
+        self.diagnostics.push(d);
+    }
+    /// The automatic recipe accepts only scalar inputs or a scalar List.
+    /// Qualify List so a same-spelled user type cannot change the repair.
+    fn callback_adapter_type(&self, ty: TypeId) -> String {
+        if let TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments,
+        } = self.kind(ty)
+            && let [GenericArgument::Type(element)] = arguments.as_slice()
+        {
+            format!("core@1/List[{}]", self.type_spelling(*element))
+        } else {
+            self.type_spelling(ty)
+        }
+    }
+    fn callback_adapter_name(&mut self, base: &str) -> String {
+        hirsel_diag::fresh_name(base, |name| {
+            !self
+                .input
+                .resolution
+                .bindings
+                .iter()
+                .any(|(_, symbol, _)| symbol.as_str() == name)
+                && !matches!(&self.input.syntax.item.kind, ast::ItemKind::Function { signature, .. }
+                    if signature.parameters.iter().any(|p| p.name.is_some_and(|n| n.as_str() == name)))
+                && !self.input.syntax.tree.expressions.iter().any(|e|
+                    matches!(&e.kind, ast::ExprKind::Closure { signature, .. }
+                        if signature.parameters.iter().any(|p| p.name.is_some_and(|n| n.as_str() == name))))
+                && !self.input.syntax.tree.statements.iter().any(|s|
+                    matches!(&s.kind, ast::StmtKind::Function { signature, .. }
+                        if signature.parameters.iter().any(|p| p.name.is_some_and(|n| n.as_str() == name))))
+                && self
+                    .provider
+                    .lookup(
+                        self.input.context,
+                        &ast::Path {
+                            package: None,
+                            segments: vec![hirsel_intern::Symbol::intern(name)],
+                        },
+                    )
+                    .result
+                    .is_err()
+        })
+    }
+    fn callback_declaration(
+        &mut self,
+        d: &mut Diagnostic,
+        expression: ast::ExprId,
+        binding: Option<&ResolvedName>,
+        message: String,
+    ) {
+        match binding {
+            Some(ResolvedName::Definition(path)) => {
+                self.mapper_declaration(d, path, format!("{message} (`{path}`)"))
+            }
+            Some(ResolvedName::Local(local)) => {
+                let span = self
+                    .input
+                    .resolution
+                    .bindings
+                    .iter()
+                    .find(|(_, _, id)| id == local)
+                    .map(|(p, _, _)| self.input.syntax.tree.patterns[p.0 as usize].origin.span)
+                    .unwrap_or(self.span(expression));
+                d.secondary.push(hirsel_diag::Label { span, message });
+            }
+            Some(ResolvedName::Parameter(parameter)) => {
+                let scope = self
+                    .input_scope(NameSite::Expression(expression))
+                    .map(|(_, owner)| *owner);
+                let syntax = match scope.unwrap_or(NameSite::Item) {
+                    NameSite::Item => match &self.input.syntax.item.kind {
+                        ast::ItemKind::Function { signature, .. } => Some(signature),
+                        _ => None,
+                    },
+                    NameSite::Expression(e) => {
+                        match &self.input.syntax.tree.expressions[e.0 as usize].kind {
+                            ast::ExprKind::Closure { signature, .. } => Some(signature),
+                            _ => None,
+                        }
+                    }
+                    NameSite::Statement(s) => {
+                        match &self.input.syntax.tree.statements[s.0 as usize].kind {
+                            ast::StmtKind::Function { signature, .. } => Some(signature),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let span = syntax
+                    .and_then(|f| f.parameters.get(parameter.0 as usize))
+                    .map(|p| self.input.syntax.tree.types[p.ty.0 as usize].origin.span)
+                    .unwrap_or(self.span(expression));
+                d.secondary.push(hirsel_diag::Label { span, message });
+            }
+            _ => d.secondary.push(hirsel_diag::Label {
+                span: self.span(expression),
+                message,
+            }),
+        }
+    }
     pub(super) fn call_argument(&mut self, call: usize, index: usize) -> Result<(), QueryError> {
         let c = &self.calls[call];
         let expression = c.arguments[index].value;
@@ -682,6 +902,7 @@ impl Checker<'_, '_> {
                         actual,
                         expected,
                     );
+                    self.callback_mode_mismatch(expression, actual, expected);
                     bad = true;
                 }
                 for (parameter, actual, type_contract) in self.occurrences(template, actual) {

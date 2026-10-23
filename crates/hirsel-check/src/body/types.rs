@@ -233,6 +233,104 @@ impl Checker<'_, '_> {
             variable.binder(),
         )
     }
+    /// A deliberately small, source-spellable adapter domain. These values
+    /// can be borrowed without transfer, and the scalar result retains no loan.
+    /// No callable variance is introduced: the emitted named function is checked
+    /// as an ordinary definition and receipt still requires identical modes.
+    pub(super) fn borrow_callback_adapter_fits(&self, actual: TypeId, expected: TypeId) -> bool {
+        let (TypeKind::Function(have), TypeKind::Function(want)) =
+            (self.kind(actual), self.kind(expected))
+        else {
+            return false;
+        };
+        let scalar = |ty| {
+            matches!(self.kind(ty), TypeKind::Primitive(p)
+            if !matches!(p, Primitive::String | Primitive::Bytes | Primitive::Never))
+                || matches!(self.kind(ty), TypeKind::Tuple(items) if items.is_empty())
+        };
+        let simple = |ty| {
+            scalar(ty)
+                || matches!(self.kind(ty), TypeKind::Builtin {
+            kind: BuiltinType::List, arguments,
+        } if matches!(arguments.as_slice(), [GenericArgument::Type(t)] if scalar(*t)))
+        };
+        let ordinary = |ty| {
+            let row = self.types.get(ty).unwrap();
+            row.modes.uniqueness == Uniqueness::Aliased
+                && row.modes.multiplicity == Multiplicity::Many
+                && (row.modes.relation.is_global() || row.modes.relation == Relation::environment())
+                && row.sendability_requirement == SendabilityRequirement::None
+                && row.brand == Brand::default()
+        };
+        have.parameters.len() == 1
+            && want.parameters.len() == 1
+            && have.parameters[0].passing == ast::PassingMode::Borrow
+            && want.parameters[0].passing == ast::PassingMode::Mut
+            && have.parameters[0].label.is_none()
+            && want.parameters[0].label.is_none()
+            && have.parameters[0].ty == want.parameters[0].ty
+            && have.result == want.result
+            && scalar(want.result)
+            && simple(want.parameters[0].ty)
+            && ordinary(want.parameters[0].ty)
+            && self.element(want.parameters[0].ty).is_none_or(ordinary)
+            && self.types.row(want.result).modes.relation.is_global()
+            && ordinary(want.result)
+            && self.types.row(actual).modes.multiplicity == Multiplicity::Many
+            && self.types.row(expected).modes.multiplicity == Multiplicity::Many
+            && self.types.row(expected).modes.uniqueness == Uniqueness::Aliased
+            && self.types.row(expected).sendability_requirement == SendabilityRequirement::None
+            && self.types.row(expected).brand == Brand::default()
+            && self.types.row(expected).erased_captures.is_none()
+            && have.generics.is_empty()
+            && want.generics.is_empty()
+            && have.authority == AuthoritySummary::inert()
+            && matches!(&have.uses, Uses::Only(a) if *a == AuthoritySummary::inert())
+            && want.allocation == Allocation::MayAllocate
+            && have.state_promises.is_empty()
+            && want.state_promises.is_empty()
+            && have.contracts.is_empty()
+            && want.contracts.is_empty()
+            && !have.incomplete
+            && !want.incomplete
+            && have.foreign.is_none()
+            && want.foreign.is_none()
+    }
+    /// The core stdin reader borrows its capability token but hands back its
+    /// mutable buffer. Only a mode-only receipt with unrestricted effects gets
+    /// this concrete recipe; the source check pins the complete declaration.
+    pub(super) fn stdin_callback_adapter_fits(&self, actual: TypeId, expected: TypeId) -> bool {
+        let (TypeKind::Function(have), TypeKind::Function(want)) =
+            (self.kind(actual), self.kind(expected))
+        else {
+            return false;
+        };
+        have.parameters.len() == 3
+            && want.parameters.len() == 3
+            && want.parameters.iter().map(|p| p.passing).eq([
+                ast::PassingMode::Mut,
+                ast::PassingMode::Mut,
+                ast::PassingMode::Borrow,
+            ])
+            && have
+                .parameters
+                .iter()
+                .zip(&want.parameters)
+                .all(|(a, b)| a.ty == b.ty && a.label == b.label)
+            && have.result == want.result
+            && want.generics.is_empty()
+            && !want.incomplete
+            && want.allocation == Allocation::MayAllocate
+            && want.uses == Uses::Unrestricted
+            && want.state_promises.is_empty()
+            && want.contracts.is_empty()
+            && want.foreign.is_none()
+            && self.types.row(expected).modes.multiplicity == Multiplicity::Many
+            && self.types.row(expected).modes.uniqueness == Uniqueness::Aliased
+            && self.types.row(expected).sendability_requirement == SendabilityRequirement::None
+            && self.types.row(expected).brand == Brand::default()
+            && self.types.row(expected).erased_captures.is_none()
+    }
     pub(super) fn compatible(&self, a: TypeId, b: TypeId) -> bool {
         if self.invalid(a)
             || self.invalid(b)
