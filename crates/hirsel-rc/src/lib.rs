@@ -21,6 +21,7 @@ pub mod placement;
 pub mod ready;
 pub mod reuse;
 pub mod reuse_stores;
+pub mod sealed_source;
 mod scoped_consumer_9;
 pub mod spare_push;
 mod spawn;
