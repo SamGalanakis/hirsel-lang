@@ -58,3 +58,4 @@ mod native_scoped_view_18;
 mod native_noalloc_list_19;
 mod unique_copy_nested_20;
 mod ownership_history_21;
+mod integer_boundary_21;

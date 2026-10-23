@@ -25,6 +25,11 @@ cannot close those claims. See [UNTESTABLE.md](UNTESTABLE.md) and the
 - **Bounded new control — MEM-8 / SEM-1:** checked SIMD addition has all-ten-width
   boundary and per-lane overflow/underflow coverage. This is not an exhaustive
   vector-operation or backend proof.
+- **Bounded scalar control — SEM-1:** the shared history runner compares 418
+  integer boundary vectors in literal and parameter forms across reference, H,
+  LLVM and Cranelift, including exact failure sites. The fixed matrix covers
+  all ten integer kinds and adjacent narrowing boundaries; it is not an
+  exhaustive arithmetic or backend proof.
 - **Shipped surface, open unsafe review — MEM-9:** scalar `unchecked_add`, foreign
   metadata, wrappers and raw-pointer APIs exist. Each declared operation needs its
   own contract vectors; universal unsafe aliasing and environmental crashes stay
