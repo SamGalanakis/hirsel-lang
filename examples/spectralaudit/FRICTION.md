@@ -188,15 +188,15 @@ trace, record, grants, then unchanged app words. No runtime parser patch, cap
 change, vector change, replay relaxation or control-assertion weakening. About
 3 active minutes; no app ownership/copy/runtime cost.
 
-## Fixture placement admission (dependency-owned, explicitly UNRUN)
+## Fixture placement admission (historically UNRUN; fixed by dependency)
 
 Shepherd658105 and owner658168/658210 identified the already owned producer
 gap: launch_fixture selects HIRSEL_RT_FIXTURE_RUN, Selection.Harness has
 requested=None, managed placement/control reads requested, and fixture_run
 restores only Args. The scripted_ordered_streams importer requires actual
-recorded placement, so it cannot earn width credit on this producer. It has
-never launched and remains explicitly ignored/UNRUN pending width-reruns-36's
-landed repair. Routed in 658195. No duplicate runtime/Fixture patch. The real
+recorded placement, so it cannot earn width credit on this producer. At that boundary it had
+never launched and remained explicitly ignored/UNRUN pending width-reruns-36's
+landed repair. The completed continuation is recorded below. Routed in 658195. No duplicate runtime/Fixture patch. The real
 ordered.py/CLI capacity route is independent. Owner will provide the repair SHA
 for a missing-only importer continuation.
 
@@ -258,3 +258,22 @@ with the same Steps1M budget per run; they are additional evidence, never a
 replacement or a green verdict for the original aggregate. The original kernel
 bytes remain unchanged. No higher cap, smaller sample vector or tolerance
 change. Output16384/16385 helper controls pass on reference and checked H.
+
+All32 additional per-vector controls pass (16 original vectors × reference and
+checked H), including exact original length32 inputs and dirty scratch reuse.
+These qualify their own named identities only. Across 46 workflows (39 frozen
+originals and seven additional fault/rounding cases), 180 full-main engine
+cells completed; four original live interpreter cells remain Steps1M. Completed
+non-stopped interpreter replays and native cross-backend replays are retained.
+The original LLVM input-cap checked-H replay is still UNRUN; the original LLVM
+length32 checked-H tape remains incompatible at binding.program, rather than
+being replaced by a fresh recording. The corresponding original reference
+replays retain their recorded Steps1M stops. Missing Cranelift interpreter
+replays also retain their original cap stops.
+
+No compiler/runtime/std code changed in this lane. Source-check corrections
+above were legal application or test adaptations, with no observed source/V
+disagreement. The final CLI harness has 587 tests: 12 declarations from this
+lane, including three explicit ignored qualification tests; the starting tree
+had 565 and unrelated incoming main changes added ten. Individual engine,
+replay and matrix subcells are counted separately from Rust test declarations.

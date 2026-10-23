@@ -36,6 +36,28 @@ workflow against an explicitly granted Interrupt signal.
 
 Use a read-write directory grant for ROOT, stdout/stderr and cooperative Tasks;
 interruptible mode additionally needs Signals. See grants.json for a template.
+From the checkout, with a matching `hirsel` on PATH:
+
+```sh
+mkdir -p /tmp/spectral-data /tmp/spectral-run
+cp examples/spectralaudit/fixtures/rustfft-4.json /tmp/spectral-data/samples.json
+python3 - <<'PYTHON'
+import json
+from pathlib import Path
+grant = json.loads(Path('examples/spectralaudit/grants.json').read_text())
+grant['io']['dirs'][0]['host'] = '/tmp/spectral-data'
+Path('/tmp/spectral-run/grants.json').write_text(json.dumps(grant) + '\n')
+PYTHON
+hirsel build examples/spectralaudit/hirsel.json --backend llvm -o /tmp/spectral-run/spectralaudit
+HIRSEL_MEMORY_LIMIT=2G HIRSEL_JOBS=4 tools/capped --timeout 60 prlimit --cpu=60:61 /tmp/spectral-run/spectralaudit --hirsel-record /tmp/spectral-run/audit.tape --hirsel-grants /tmp/spectral-run/grants.json data samples.json audit.json 4
+/tmp/spectral-run/spectralaudit --hirsel-replay /tmp/spectral-run/audit.tape
+```
+
+Set the template's absolute host directory before launch. For interruptible
+mode add `"signals":{"provider":"signals.host@1","kinds":["interrupt"]}`
+to `io` and append `--interruptible` to the application words. Cancellation
+joins child tasks; an already committed complete output remains published.
+
 The focused spectral_audit_35 tests use the actual Io+Args main through public
 Fixture APIs. The standard-library-only Decimal fixture generator is evidence,
 not application code. It fixes 1e-9*(1+|expected|) component intervals,
@@ -56,3 +78,11 @@ JSON whitespace respectively). Their qualification identity remains explicit
 in `spectral_audit_35_original_caps` and is ignored in ordinary suites; it
 still fails with INCOMPLETE when explicitly run. The vectors and caps are
 unchanged. Native and mathematical-kernel evidence are separate obligations.
+
+Qualification completed 180 full-main engine cells, 18 physical capacity cells
+and 18 scripted width cells, retaining raw tapes and own-tape offline replays.
+Both native engines pass the original unrounded mathematical aggregate;
+32 additional reference/checked-H per-vector controls pass on the exact frozen
+vectors. The original aggregate still stops at Steps1M in both interpreters.
+Historical replay binding refusals and unrun adapters remain incomplete;
+FRICTION.md records their separate identities and owners.

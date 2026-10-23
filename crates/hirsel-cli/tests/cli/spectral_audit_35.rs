@@ -295,7 +295,7 @@ fn reference_checked_baselines(
     path: &Path,
     part: usize,
 ) -> (BTreeMap<String, Vec<u8>>, Vec<String>) {
-    let mut loaded = hirsel_driver::load_program(&path).unwrap();
+    let mut loaded = hirsel_driver::load_program(path).unwrap();
     loaded
         .check_for_execution()
         .unwrap_or_else(|e| panic!("{e}"));
