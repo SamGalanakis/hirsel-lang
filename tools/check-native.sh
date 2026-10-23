@@ -88,6 +88,8 @@ run_stage "SIMD structural equality parity" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest native_simd_eq_17:: --ignored --test-threads=1)
 run_stage "isolate owned result parity" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest isolate_bytes_leak_17::isolate_returns_unique_bytes --ignored --test-threads=1)
+run_stage "nested unique copies: native snapshots and borrowed extractions" \
+  buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest unique_copy_nested_20:: --ignored --test-threads=1)
 # Cursor parity and RC assertions are explicit full/native controls, not fast-tier tests.
 run_stage "borrow cursor projection, parity, deep walks and RC evidence" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)

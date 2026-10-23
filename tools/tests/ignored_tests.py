@@ -4,8 +4,9 @@
 An ignored test is a `full_gate_` case (`#[ignore = "full gate..."]`, run by
 both full-gate crate stages of tools/main-runs), a release-only case
 (`cfg_attr(debug_assertions, ignore ...)`, run by the release tests), or a case
-in a module that tools/check-native.sh runs with its ignored tests. Expectation
-rewrites are not ignored tests: they run under HIRSEL_BLESS (tools/bless.sh).
+in a module that tools/check-native.sh runs with its ignored tests.
+A registered subprocess worker runs through its ordinary bounded parent test.
+Expectation rewrites are not ignored tests: they run under HIRSEL_BLESS (tools/bless.sh).
 """
 from pathlib import Path
 import re
@@ -28,10 +29,16 @@ NATIVE = [
     ('crates/hirsel-pipeline-tests/tests/rc/rc_library_', '$(libtest rc_library_ --include-ignored --test-threads=4)'),
     ('crates/hirsel-pipeline-tests/tests/front/llvm_scalar_library.rs', '//:hirsel-pipeline-tests-test-front-shard-1 -- "${timeout[@]}" $(libtest llvm_scalar_library:: --include-ignored)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_maps_native.rs', '$(libtest rc_maps_native:: --include-ignored --test-threads=1)'),
+    ('crates/hirsel-pipeline-tests/tests/rc/unique_copy_nested_20.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest unique_copy_nested_20:: --ignored --test-threads=1)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_8.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_field_match_13.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_borrow_cursor_compose_13.rs', '//:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_borrow_cursor_ --ignored --test-threads=1)'),
 ]
+# These workers require parent-supplied input and cannot run alone in a gate.
+DELEGATED = {
+    ('crates/hirsel-parser/tests/it/grammar_fuzz_22.rs', 'worker'):
+        ('bounded_grammar_recovery', 'isolated'),
+}
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
 FUNCTION = re.compile(r'\bfn\s+(\w+)')
 
@@ -55,6 +62,8 @@ def orphans(sources):
                     continue
             elif attribute[2].strip() == 'debug_assertions':
                 continue
+            if (path, name) in DELEGATED:
+                continue
             if any(native_covers(path, name, prefix, selection) for prefix, selection in NATIVE):
                 continue
             found.append((path, name))
@@ -71,6 +80,23 @@ class IgnoredTests(unittest.TestCase):
         for prefix, selection in NATIVE:
             self.assertIn(selection, script, prefix)
             self.assertTrue(list(ROOT.glob(prefix + '*')), prefix)
+
+    def test_delegated_workers_have_an_unignored_parent_and_exact_child_selection(self):
+        for (path, worker), (parent, helper) in DELEGATED.items():
+            text = (ROOT / path).read_text()
+            module = Path(path).stem
+            self.assertRegex(text, rf'#\[test\]\s+fn {parent}\(\)')
+            parent_body = text.split(f'fn {parent}()', 1)[1].split('\n#[test]', 1)[0]
+            self.assertIn(f'{helper}(', parent_body)
+            helper_body = text.split(f'fn {helper}(', 1)[1].split('\nfn ', 1)[0]
+            self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
+            self.assertIn('current_exe()', helper_body)
+            self.assertIn('child.wait()', helper_body)
+            self.assertTrue(any(FUNCTION.search(text, a.end())[1] == worker
+                                for a in ATTRIBUTE.finditer(text)))
+            # The annotation covers only the named child, never a sibling.
+            sources = {path: '#[test]\n#[ignore]\nfn unregistered_worker() {}\n'}
+            self.assertEqual(orphans(sources), [(path, 'unregistered_worker')])
 
     def test_cursor_home_selects_registered_modules_and_ignored_cases(self):
         registry = (ROOT / 'crates/hirsel-pipeline-tests/tests/rc/modules.rs').read_text()
