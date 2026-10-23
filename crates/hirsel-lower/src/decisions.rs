@@ -25,6 +25,7 @@ impl<'a, K: Ord, V> Table<'a, K, V> {
 pub(super) struct Decisions<'a> {
     /// The owner of the lowered item's lexical sites, which rows qualify them with.
     pub lexical: hirsel_types::LexicalOwner,
+    pub confined_releases: Table<'a, StmtId, (StmtId, usize)>,
     pub cloned_scopes: std::cell::RefCell<BTreeMap<hirsel_types::SiteRef, hirsel_types::SiteRef>>,
     pub unreachable_arms: Table<'a, PatternId, PatternId>,
     pub resource_patterns: Table<'a, PatternId, (PatternId, Vec<TypeId>)>,
@@ -71,6 +72,7 @@ impl<'a> Decisions<'a> {
         let checked = input.checked;
         Self {
             lexical: input.syntax.owner(),
+            confined_releases: Table::new(&input.ownership.confined_releases, |row| row.0),
             cloned_scopes: Default::default(),
             repeats: Table::new(&input.syntax.tree.repeats, |row| row.sequence),
             unreachable_arms: Table::new(&input.plans.unreachable_arms, |row| *row),

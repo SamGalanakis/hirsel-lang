@@ -1,0 +1,1 @@
+fn probe(b: bool) { let mut m: unique Map[u64,List[u64]] = map.empty(); map.insert(mut m, 0, [1]); let saved = map.get(m,0); let kept = if b { copy saved } else { None() }; let _ = unique saved; let _ = map.remove(mut m,0); let _ = kept }

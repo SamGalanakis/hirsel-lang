@@ -1,0 +1,1 @@
+fn probe(take ops: List[u64]) { let mut m: unique Map[u64,List[u64]] = map.empty(); map.insert(mut m, 0, [1]); let mut kept: Option[List[u64]] = None(); for tag in ops { let _ = map.remove(mut m,tag); kept = map.get(m,0) }; let _ = kept }

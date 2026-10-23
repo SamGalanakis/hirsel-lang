@@ -90,9 +90,10 @@ Crossing requirements belong to receiving contracts; crossing evidence belongs t
 content. Changing only the lifetime of access does not erase a referent's evidence, and
 preserving that evidence does not change the access lifetime.
 
-**Uniqueness is not a loan.** Uniqueness is a count fact. A share ends a binding's
-uniqueness for the rest of its scope even though loans end at last use; ending uniqueness
-at a share's last use would need counts released at last use.
+**Uniqueness is not a loan.** Uniqueness is a count fact. An ordinary counted copy ends a binding's
+uniqueness for the rest of its scope even though loans end at last use. The confined
+related-result exception in MODE-2 requires an actual release of every dependent holder;
+last use alone does not release a count.
 
 ### MODE-1: Locality
 
@@ -252,7 +253,14 @@ that drops a resource or a once callable. A copyable value's release runs no cod
 result related to `x`, such as `map.get(x, k)`'s, holds a share of it and ends its
 uniqueness while the result may live; its shares stay local to the borrow, so `x` counts
 as unique again once no live binding and no temporary of an unfinished statement holds a
-value derived from that result (a temporary lives to the end of its statement), at a
+value derived from that result (a temporary lives to the end of its statement). In a
+straight-line direct named call, a dead confined holder of concrete copyable owned data
+may be released after its last dependent statement, before the next uniqueness demand.
+This excludes ordinary copies, escaping takes, handles anywhere in the result,
+opaque or abstract payloads, callable/iterator environments and ambiguous joins or loops;
+existing scope cleanup still applies to those holders. Release must precede restoration
+and preserve cleanup order (G11, option B of `unique-restoration-design-18/DESIGN.md`).
+Uniqueness is also restored at a
 return whose value derives none of them (`unique value` copies a borrow into fresh storage
 that derives nothing from it), and at a failure site. A share passed by `take` to a call,
 or produced by calling a function value, may be kept anywhere, so it ends `x`'s uniqueness

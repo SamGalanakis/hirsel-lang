@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 mod causes;
+mod confined;
 mod creation;
 mod cursors;
 mod loans;
@@ -1369,6 +1370,8 @@ struct Checker<'a, 's> {
     /// Statements whose end releases a call's temporary with a user-visible
     /// destruction, which may fail (FAIL-3).
     destroying: BTreeSet<hirsel_syntax::StmtId>,
+    confined: BTreeSet<usize>,
+    confined_nodes: BTreeSet<usize>,
     /// Proving `@preserves_unique` on this parameter: it and every non-plain
     /// taken or `mut` parameter enter unique, and it must leave unique.
     unique_proof: Option<ParamId>,
@@ -1804,6 +1807,8 @@ pub(super) fn check(
         return_sendability: BTreeMap::new(),
         lost_handbacks: BTreeSet::new(),
         destroying: BTreeSet::new(),
+        confined: BTreeSet::new(),
+        confined_nodes: BTreeSet::new(),
         unique_proof: proof,
         live: &live,
         constants: constants.into_iter().map(|e| (e, None)).collect(),
@@ -1820,6 +1825,8 @@ pub(super) fn check(
         })
         .map(|(_, statement)| *statement)
         .collect();
+    checker.confined_nodes = checker.confined_prefix();
+    checker.confined = checker.confined_candidates();
     let initial = checker.proof_entry(initial_storage.initial(&checker));
     let finalizer = graph.owner == NameSite::Item
         && matches!(
@@ -4520,6 +4527,7 @@ impl Checker<'_, '_> {
                 for index in parked {
                     Arc::make_mut(&mut state.slots[index].value.parked).retain(|key| !ended(key));
                 }
+                self.release_confined(state, *statement);
                 self.restore_borrowed(state);
             }
             Op::Use {

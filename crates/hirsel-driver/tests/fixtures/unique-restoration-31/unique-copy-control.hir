@@ -1,0 +1,2 @@
+fn keep(mut x: List[u64]) {}
+fn main() -> u64 { let mut xs: unique List[u64] = [10u64]; let saved = copy xs; keep(mut xs); xs[0u64] = 11u64; xs[0u64] + saved[0u64] }

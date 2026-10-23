@@ -269,6 +269,30 @@ impl Builder<'_, '_> {
                 self.emit(InstructionKind::RunCleanup(cleanup), span);
                 self.retire_plain(&temps, span);
                 self.end_unheld_loans(span);
+                // MODE-2 confined-result recovery requires a physical release,
+                // after every temporary of the statement has been cleaned.
+                let releases: Vec<_> = self
+                    .decisions
+                    .confined_releases
+                    .get(&statement)
+                    .iter()
+                    .map(|(_, index)| *index)
+                    .collect();
+                for index in releases {
+                    let binding = &self.input.checked.bindings[index];
+                    let place = self.lookup(&binding.binding, &binding.owner, span)?;
+                    let root = self.root(place).0;
+                    if self.state.live.contains(&root) {
+                        self.state.live.remove(&root);
+                        self.emit(
+                            InstructionKind::Drop {
+                                place,
+                                if_live: false,
+                            },
+                            span,
+                        );
+                    }
+                }
             }
         }
         let result = if self.current.is_some() {

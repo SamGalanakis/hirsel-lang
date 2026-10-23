@@ -139,12 +139,28 @@ impl Checker<'_, '_> {
                         .bindings(Kind::Read)
                         .any(|root| root == binding)
                 {
-                    step.losses.push((self.span_of(*expression), format!("the counted result of this call may share `{name}` while the result or a derived value lives")));
+                    let description = if self.callee_definition(*callee).is_none() {
+                        format!(
+                            "the function-value call has an escaped origin; its counted result may share `{name}` permanently"
+                        )
+                    } else {
+                        format!(
+                            "the counted result of this call may share `{name}`; release of its confined holder and every derived holder remains unproved"
+                        )
+                    };
+                    step.losses.push((self.span_of(*expression), description));
                 }
                 for (argument, requirement) in arguments.iter().zip(requirements) {
                     let Some(requirement) = requirement else {
                         continue;
                     };
+                    if requirement.passing == PassingMode::Take
+                        && self
+                            .reached_bindings(before, &self.value(before, argument.value))
+                            .contains(&binding)
+                    {
+                        step.losses.push((self.span_of(argument.value), format!("this taken result escapes the confined borrow of `{name}`; an external counted holder remains unproved")));
+                    }
                     if requirement.passing != PassingMode::Mut
                         || requirement.modes.uniqueness == Uniqueness::Unique
                         || self.callee_preserves_state(*callee, requirement.parameter, false)
@@ -1354,6 +1370,10 @@ impl Checker<'_, '_> {
                 let (facts, repairs) = self.uniqueness_causes(&trace, binding, node);
                 pending.explanation.provided = facts;
                 pending.explanation.repairs.extend(repairs);
+                let (name, _) = self.binding_site(binding);
+                self.diagnostics[index].notes.push(format!(
+                    "Put confined result holders and their derived copies in a scope that ends before this operation, or replace the root with `{name} = unique {name}` when its concrete copyable data, locality and allocation contract permit it. Copying an unrelated result does not repair this root."
+                ));
             }
             if let Some(site) = pending.temporary {
                 let fact = match site {

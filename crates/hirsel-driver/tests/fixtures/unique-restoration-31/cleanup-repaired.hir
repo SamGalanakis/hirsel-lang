@@ -1,0 +1,3 @@
+resource type Bomb { n: u64 }
+drop(b) { let _ = 10u64 / b.n }
+fn probe(mut m: unique Map[u64,List[u64]]) { let fresh: unique Map[u64,List[u64]] = map.empty(); { let b = Bomb(n: 0); let kept = copy m; m = take fresh } }

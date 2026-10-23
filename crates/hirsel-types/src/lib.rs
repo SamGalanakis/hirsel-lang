@@ -868,6 +868,10 @@ pub struct BorrowCursorDecision {
 /// Complete static decisions; cleanup lowering still determines ordered drops.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct OwnershipFacts {
+    /// Confined counted-result owners released after a completed statement.
+    /// Lowering emits ordinary cleanup; V reconstructs shares independently.
+    #[serde(default)]
+    pub confined_releases: Vec<(hirsel_syntax::StmtId, usize)>,
     pub borrow_cursors: Vec<BorrowCursorDecision>,
     pub cursor_rebindings: Vec<ExprId>,
     /// Plain rows in the session interner; K omits their cleanup.
