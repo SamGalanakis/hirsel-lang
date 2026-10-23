@@ -826,3 +826,12 @@ The sanitizer child's address-space guard is lifted for shadow mappings; its
 normal pool RSS reservation still applies. The control refuses an uninstrumented
 binary. `//:io-real-workers` is also a small file-I/O probe: arguments are worker
 count (1/2/4/8) and writes per file (default 16, 64 KiB each, eight files total).
+
+`test_requirements.bzl` declares exact CPU counts for harnesses whose assertions
+need a physical width. These override measured CPUs and the focus clamp while
+keeping measured memory and CPU class. The run's executor sends `cpu_count=N`,
+`exact_cpus=N` and `cpu_affinity=exact-v1`. The scheduler must declare the last
+property exact, and only upgraded Kiln workers advertise it. The launcher checks
+that inherited affinity has N CPUs and the visible quota permits N; it refuses
+a narrower grant rather than silently running fewer workers. Ordinary targets
+continue using measured sizing. No runtime worker/topology override is involved.

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = Path(os.environ.get('HIRSEL_TEST_LAUNCHER', ROOT / 'tools/buck2/test_launcher.sh')).resolve()
@@ -49,6 +50,51 @@ else:
 '''
 
 
+class CpuRequests(unittest.TestCase):
+    def platforms(self, mode):
+        source_dir = ROOT / 'tools/buck2'
+        paths = {name: Path(os.environ.get('HIRSEL_TEST_' + name.upper(), source_dir / (name + '.bzl')))
+                 for name in ('platforms', 'test_requirements', 'test_sizes', 'exec_sizes')}
+        config = {'tests': mode, 'remote_properties': 'kiln_executor_runtime=fixture-runtime'}
+        namespace = dict(read_root_config=lambda section, key, default: config.get(key, default),
+                         CommandExecutorConfig=lambda **kwargs: kwargs,
+                         ConfigurationInfo=object(), rule=lambda **kwargs: None,
+                         attrs=SimpleNamespace(**{name: lambda *args, **kwargs: None
+                                                  for name in ('dict', 'string', 'dep', 'list')}))
+        def load(label, *names):
+            imported = {}
+            exec(paths[label.removeprefix(':').removesuffix('.bzl')].read_text(), imported)
+            namespace.update({name: imported[name] for name in names})
+        namespace['load'] = load
+        # This module uses the Python-compatible Starlark subset. Evaluate the
+        # production request functions; Buck2 cquery also validates Starlark.
+        exec(paths['platforms'].read_text(), namespace)
+        return namespace
+
+    def test_exact_requirements_override_measurement_and_focus(self):
+        for mode in ('pool', 'focus'):
+            module = self.platforms(mode)
+            for binary, cpu in [('hirsel-cli-test-free', 8), ('hirsel-cli-test-cli', 4)]:
+                measured = module['TEST_REQUESTS'][binary]
+                request = module['test_request'](binary)
+                self.assertEqual(request, [cpu, *measured[1:]])
+                props = module['test_executor'](*request, binary=binary)['remote_execution_properties']
+                self.assertEqual((props['cpu_count'], props['exact_cpus'], props['cpu_affinity']),
+                                 (str(cpu), str(cpu), 'exact-v1'))
+                self.assertEqual(props['kiln_executor_runtime'], 'fixture-runtime')
+
+    def test_ordinary_targets_keep_measured_and_focus_defaults(self):
+        for mode in ('pool', 'focus'):
+            module = self.platforms(mode)
+            for binary in ('hirsel-rt-test-it', 'unknown-test'):
+                measured = module['TEST_REQUESTS'].get(binary, module['DEFAULT_TEST_REQUEST'])
+                request = module['test_request'](binary)
+                self.assertEqual(request, [1 if mode == 'focus' else measured[0], *measured[1:]])
+                props = module['test_executor'](*request, binary=binary)['remote_execution_properties']
+                self.assertNotIn('cpu_affinity', props)
+                self.assertNotIn('exact_cpus', props)
+
+
 class LauncherFixture(unittest.TestCase):
     """A fake harness under the launcher, as a test action runs it."""
 
@@ -66,7 +112,7 @@ class LauncherFixture(unittest.TestCase):
             HIRSEL_TEST_TMPDIR=str(self.root / 'tmp'), HIRSEL_TEST_CWD=str(self.root),
             LLVM_SYS_231_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
             OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
-        for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
+        for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'HIRSEL_TEST_EXACT_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
             self.env.pop(key, None)
 
 
@@ -109,6 +155,44 @@ class LauncherSelection(LauncherFixture):
         result, _ = self.run_cases()
         self.assertEqual(result['threads'], '2')
         self.assertEqual(result['jobs'], '2')
+
+    @unittest.skipUnless(len(os.sched_getaffinity(0)) >= 8, 'requires eight inherited CPUs')
+    def test_exact_eight_cpu_request_preserves_width_or_refuses_a_tighter_quota(self):
+        self.env.update(HIRSEL_TEST_CPUS='8', HIRSEL_TEST_EXACT_CPUS='8',
+                        RUST_TEST_THREADS='8', HIRSEL_JOBS='8')
+        cpus = ','.join(map(str, sorted(os.sched_getaffinity(0))[:8]))
+        run = subprocess.run(['taskset', '-c', cpus, 'sh', str(LAUNCHER), 'harness'],
+                             cwd=self.root, env=self.env, capture_output=True, text=True)
+        # The tool test itself books one CPU on the ordinary pool; it must
+        # prove refusal under that quota, while a host with room proves eight.
+        if int(os.environ.get('HIRSEL_TEST_CPUS', '8')) < 8:
+            self.assertEqual(run.returncode, 2, run.stderr)
+            self.assertIn('exceeds inherited quota', run.stderr)
+            self.assertFalse(self.observed.exists())
+            return
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(self.observed.read_text())
+        self.assertEqual((result['threads'], result['jobs']), ('8', '8'))
+
+    @unittest.skipUnless(len(os.sched_getaffinity(0)) >= 2, 'requires two inherited CPUs')
+    def test_exact_two_cpu_request_preserves_the_inherited_mask(self):
+        self.env.update(HIRSEL_TEST_CPUS='2', HIRSEL_TEST_EXACT_CPUS='2',
+                        RUST_TEST_THREADS='2', HIRSEL_JOBS='2')
+        cpus = ','.join(map(str, sorted(os.sched_getaffinity(0))[:2]))
+        run = subprocess.run(['taskset', '-c', cpus, 'sh', str(LAUNCHER), 'harness'],
+                             cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(self.observed.read_text())
+        self.assertEqual((result['threads'], result['jobs']), ('2', '2'))
+
+    def test_exact_request_refuses_a_smaller_inherited_affinity(self):
+        self.env.update(HIRSEL_TEST_CPUS='8', HIRSEL_TEST_EXACT_CPUS='8')
+        cpu = str(min(os.sched_getaffinity(0)))
+        run = subprocess.run(['taskset', '-c', cpu, 'sh', str(LAUNCHER), 'harness'],
+                             cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn('exact CPU request', run.stderr)
+        self.assertFalse(self.observed.exists())
 
     def test_pool_without_a_reservation_fails_before_running_the_harness(self):
         run = subprocess.run(['sh', str(LAUNCHER), 'harness'], cwd=self.root,

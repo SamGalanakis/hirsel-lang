@@ -1009,7 +1009,9 @@ def first_party(meta: dict) -> str:
                                   "//tools/buck2:event_logs.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
-                            files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh"}))
+                            files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh",
+                                       **{f"HIRSEL_TEST_{name.upper()}": f"//tools/buck2:{name}.bzl"
+                                          for name in ("platforms", "test_requirements", "test_sizes", "exec_sizes")}}))
     out.append("\n" + call("hirsel_script_test", name="test-tasks-bench", script="tools/tests/tasks_bench.py", full=False,
                             data=["tools/tests/tasks_bench.py", "bench/apps/tasks/bench", "bench/apps/tasks/support.py",
                                   "bench/micro/measure.py"]))

@@ -163,3 +163,11 @@ export_file(name = "workspace-metadata.json", mode = "reference", visibility = [
     "clippy.py",
     "fmt.py",
 ]]
+
+# Production request functions exercised by the launcher tool test.
+[export_file(name = source, src = source, mode = "reference", visibility = ["PUBLIC"]) for source in [
+    "platforms.bzl",
+    "test_requirements.bzl",
+    "test_sizes.bzl",
+    "exec_sizes.bzl",
+]]

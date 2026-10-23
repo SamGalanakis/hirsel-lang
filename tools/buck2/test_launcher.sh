@@ -5,7 +5,7 @@
 # run `clang` by name, and its lib on the loader path), the runtime archives as
 # absolute HIRSEL_RUNTIME_ARCHIVES, insta's snapshots under the project root,
 # and test threads and campaign workers bounded by the action's CPU share (at
-# most 4).
+# most 4 unless the target declares an exact CPU requirement).
 #
 # TEST_SHARD_INDEX=<i> of TEST_TOTAL_SHARDS=<n> (Bazel's variables, i from 0)
 # runs the i-th of n cost-balanced parts of the listed cases, weighted by
@@ -116,7 +116,28 @@ case "$jobs" in
   *[!0-9]* | 0) echo "test_launcher.sh: invalid HIRSEL_TEST_CPUS=$jobs" >&2; exit 2 ;;
 esac
 # A visible, tighter cgroup quota and caller settings can only reduce it.
-[ "$jobs" -le 4 ] || jobs=4
+exact_cpus="${HIRSEL_TEST_EXACT_CPUS:-}"
+if [ -n "$exact_cpus" ]; then
+  if [ "$exact_cpus" != "$jobs" ]; then
+    echo "test_launcher.sh: exact CPU request differs from reservation" >&2
+    exit 2
+  fi
+  # Validate inherited visibility, never expand it. The worker owns affinity.
+  visible=$(awk '/^Cpus_allowed_list:/ {
+    n=split($2, parts, ","); total=0
+    for (i=1; i<=n; i++) {
+      k=split(parts[i], ends, "-")
+      total += k == 1 ? 1 : ends[2]-ends[1]+1
+    }
+    print total
+  }' /proc/self/status)
+  if [ "$visible" != "$exact_cpus" ]; then
+    echo "test_launcher.sh: exact CPU request $exact_cpus has affinity width $visible" >&2
+    exit 2
+  fi
+else
+  [ "$jobs" -le 4 ] || jobs=4
+fi
 cgroup="$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)" || cgroup=""
 while :; do
   if read -r quota period 2>/dev/null < "/sys/fs/cgroup${cgroup%/}/cpu.max" && [ "$quota" != max ]; then
@@ -127,6 +148,10 @@ while :; do
   [ -n "$cgroup" ] && [ "$cgroup" != / ] || break
   cgroup="${cgroup%/*}"
 done
+if [ -n "$exact_cpus" ] && [ "$jobs" != "$exact_cpus" ]; then
+  echo "test_launcher.sh: exact CPU request $exact_cpus exceeds inherited quota ($jobs)" >&2
+  exit 2
+fi
 # The run's memory grant (defs.bzl) caps its data before anything runs, so
 # scripts and the native programs a test launches are capped too; hirsel
 # binaries set the same limit again and name it when they reach it. The limit

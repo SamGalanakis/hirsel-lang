@@ -13,6 +13,7 @@ CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
 load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "dist_compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
+load(":test_requirements.bzl", "EXACT_TEST_CPUS")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "runtime_profile_flags", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -31,7 +32,7 @@ TEST_TMPDIR = "buck-out/tmp/cargo-target-tmpdir"
 BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 
 # `-c hirsel.tests=host` explicitly opts into execution on the invoking host;
-# `-c hirsel.tests=focus` keeps them on the pool at one CPU each (platforms.bzl).
+# `-c hirsel.tests=focus` uses one CPU unless a target requires an exact count.
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # Compiled F1 qualification uses the ordinary launch with dedicated runtime
 # artifacts. This is a build input, never a runtime admission environment knob.
@@ -293,6 +294,8 @@ def _rust_test_impl(ctx):
         # those virtual bytes on the pool.
         "HIRSEL_MEMORY_LIMIT": "{}K".format(test_memory_limit(ctx.attrs.test_binary, int(ctx.attrs.request[1]))),
     }
+    if ctx.attrs.test_binary in EXACT_TEST_CPUS:
+        env["HIRSEL_TEST_EXACT_CPUS"] = str(EXACT_TEST_CPUS[ctx.attrs.test_binary])
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
     if tools:
         inputs.append(ctx.attrs._native_environment)
@@ -345,7 +348,7 @@ def _rust_test_impl(ctx):
             # environment and inputs), so a rerun on unchanged inputs does not
             # execute; a failure is never cached. The host platform has no cache.
             supports_test_execution_caching = ctx.attrs.pool,
-            default_executor = test_executor(int(ctx.attrs.request[0]), int(ctx.attrs.request[1]), ctx.attrs.request[2]) if ctx.attrs.pool else None,
+            default_executor = test_executor(int(ctx.attrs.request[0]), int(ctx.attrs.request[1]), ctx.attrs.request[2], ctx.attrs.test_binary) if ctx.attrs.pool else None,
         ),
     ]
 
