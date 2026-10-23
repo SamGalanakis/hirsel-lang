@@ -102,3 +102,4 @@ mod csv_upstream_25;
 mod semver_upstream_25;
 mod uuid_upstream_25;
 mod regex_upstream_25;
+mod unicode_normalization_upstream_25;

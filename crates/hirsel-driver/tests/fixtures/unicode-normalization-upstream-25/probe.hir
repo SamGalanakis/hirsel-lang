@@ -1,0 +1,29 @@
+// Emit exact UTF-8 bytes with an unambiguous byte-length prefix.
+fn emit(id: String, op: String, value: String, mut out: List[u8]) {
+  text.append(mut out, f"{id}/{op} {string.byte_len(value)}:")
+  text.append(mut out, value)
+  text.append(mut out, "\n")
+}
+fn observe(id: String, s: String, mut out: List[u8]) {
+  let c = std@1/unicode.normalize_nfc(s)
+  let d = std@1/unicode.normalize_nfd(s)
+  let kc = std@1/unicode.normalize_nfkc(s)
+  let kd = std@1/unicode.normalize_nfkd(s)
+  emit(id, "nfc", c, mut out)
+  emit(id, "nfd", d, mut out)
+  emit(id, "nfkc", kc, mut out)
+  emit(id, "nfkd", kd, mut out)
+  emit(id, "idem-nfc", std@1/unicode.normalize_nfc(c), mut out)
+  emit(id, "idem-nfd", std@1/unicode.normalize_nfd(d), mut out)
+  emit(id, "idem-nfkc", std@1/unicode.normalize_nfkc(kc), mut out)
+  emit(id, "idem-nfkd", std@1/unicode.normalize_nfkd(kd), mut out)
+  emit(id, "nfc-nfd", std@1/unicode.normalize_nfc(d), mut out)
+  emit(id, "nfd-nfc", std@1/unicode.normalize_nfd(c), mut out)
+  emit(id, "nfkc-nfkd", std@1/unicode.normalize_nfkc(kd), mut out)
+  emit(id, "nfkd-nfkc", std@1/unicode.normalize_nfkd(kc), mut out)
+}
+fn observe_slice(id: String, owner: String, start: u64, end: u64, mut out: List[u8]) {
+  let Some(a) = string.position(owner, start) else { failure.check(false, TextInvariant()); return }
+  let Some(b) = string.position(owner, end) else { failure.check(false, TextInvariant()); return }
+  observe(id, string.slice(owner, a, b), mut out)
+}

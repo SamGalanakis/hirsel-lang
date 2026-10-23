@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "unicode": "16.0.0",
+  "seed": 2026102509,
+  "counts": {
+    "seeded": 128,
+    "ascii": 32,
+    "upstream": 11,
+    "official": 40,
+    "slice": 8,
+    "total": 219
+  },
+  "operations": [
+    "nfc",
+    "nfd",
+    "nfkc",
+    "nfkd",
+    "idem-nfc",
+    "idem-nfd",
+    "idem-nfkc",
+    "idem-nfkd",
+    "nfc-nfd",
+    "nfd-nfc",
+    "nfkc-nfkd",
+    "nfkd-nfkc"
+  ],
+  "oracle": {
+    "repository": "https://github.com/unicode-rs/unicode-normalization",
+    "revision": "c9921309f09ebd05108920fda92efbf5f8124a7d",
+    "version": "0.1.24",
+    "source_sha256": {
+      "Cargo.toml": "d04a229dc0df997a785d166f844ec9bebf7acf78518f8f8df7cf9ba63ee929b4",
+      "src/decompose.rs": "87bbc8e5814d79613804f1684f0f1fc572878ee31620f1857184509a6619f802",
+      "src/recompose.rs": "30746c36c1f2929a7b89f2771d63fc857b5d57a87934c661d82c5649ff0cf391",
+      "src/test.rs": "8af1c74989355970cc150075f0c8517bb061caeb46a456458483fe5ef661dc89",
+      "src/tables.rs": "69a0faad67afe03146d80ff5b2d889d1898cbfe8f7677a24f012148f6fd27348"
+    },
+    "sanity_golden_checks": 42,
+    "binary_sha256": "0ca73dccbc790353be5cc24add65bb57dff339db77ea8b8f8a7b119d7a3565bb",
+    "oracle_source_sha256": "05449c354c5d1978b0ebf672c59d44594adc319b82be8d34202d300026ecf632",
+    "cargo_lock_sha256": "5718a66100078e65b89fa1d4c7c1f347c4fccf1919d24d56f296867075ff9d72",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+    "options": "cargo build --release; default std feature; stdin UTF-8 hex; four outputs as tab separated UTF-8 hex"
+  },
+  "ucd16_sha256": {
+    "UnicodeData.txt": "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f",
+    "DerivedNormalizationProps.txt": "4d4c03892dea9146d674b686e495df2d55a28d071ac474041d73518f887abddc",
+    "NormalizationTest.txt": "d811971453e7075e1ad56fb1b301eece5aa80757b81f6156e74a1bfb3ae5ceb1"
+  },
+  "vectors_sha256": "e48266ddacb4dc5533005d40142904b5b025be28ed3de5975cfb0ac8620968c5",
+  "deviations": [],
+  "contract": {
+    "path": "docs/spec/std-library.md",
+    "section": "Unicode",
+    "paragraph": "NFD recursively applies canonical decomposition and canonical ordering; NFC also applies canonical composition with composition exclusions and blocking. NFKD includes compatibility decomposition, and NFKC composes its result. All four implement algorithmic Hangul decomposition/composition. Normalization is explicit; equality, ordering and hashing remain bytewise."
+  },
+  "projection": "Each ID and operation emits id/op UTF-8, a space, decimal UTF-8 byte length, colon, exact normalized UTF-8 bytes and LF. Successful exit, no failures/budget/signal/blocked state/roots required. No implicit normalization or casing adaptation. Slice rows use the same oracle input on a nonzero-origin half-open string interval.",
+  "generator_sha256": "725c546302f12d98a46406e7d4603fddd5e47ad05e87641dd4d45b395a0f1317"
+}

@@ -1685,3 +1685,10 @@ Go `ebe2feefc400f813aefdc8a036e66d2619da6649`,
 `src/regexp/regexp.go:753-795`, Copyright 2010-2011 The Go Authors,
 BSD-3-Clause (Go), full license above. The fixture provenance records ASCII
 class configuration, optional-span representation and syntax dispositions.
+
+Unicode normalization fixtures: `unicode-normalization-upstream-25/vectors.json`
+ports `unicode-rs/unicode-normalization` `src/test.rs:19-118` goldens at
+`c9921309f09ebd05108920fda92efbf5f8124a7d` (v0.1.24, Unicode 16.0.0).
+Copyright (c) 2015 The Rust Project Developers; MIT, full text above.
+Selected Unicode16 `NormalizationTest.txt` identities retain original row and
+column IDs under the Unicode license in `stdlib/unicode16/LICENSE.txt`.
