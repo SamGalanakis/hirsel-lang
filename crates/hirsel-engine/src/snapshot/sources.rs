@@ -17,7 +17,6 @@ pub(crate) struct SourceContext<'a> {
     pub sources: &'a SourceMap,
     pub items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     pub declarations: &'a DeclarationIndex,
-    pub image: Option<&'a crate::image::StdImage>,
     pub catalog: &'a crate::queries::catalog::Catalog,
 }
 impl SourceContext<'_> {
@@ -62,11 +61,6 @@ impl CitationSource for SourceContext<'_> {
             return self
                 .catalog
                 .cited_text(self.sources, target.path())
-                .or_else(|| {
-                    self.image
-                        .and_then(|image| image.inputs(target))
-                        .map(|inputs| inputs.cited)
-                })
                 .unwrap_or_else(|| {
                     ContentHash::of_parts("hirsel.read.uncited", std::iter::empty::<&[u8]>())
                 });

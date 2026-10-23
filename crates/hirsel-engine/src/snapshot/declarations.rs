@@ -29,17 +29,17 @@ pub struct ModuleInputs {
     pub manifest_revision: ContentHash,
 }
 
-/// One immutable declaration row. Images and their importing sessions share
-/// it; owned declaration sites are constructed only when a consumer asks.
+/// One immutable declaration row. Snapshots share it; owned declaration sites
+/// are constructed only when a consumer asks.
 #[derive(Debug)]
 struct Row {
-    image: RowImage,
+    data: DeclarationRow,
     sites: OnceLock<Arc<[DeclarationSite]>>,
 }
 impl std::ops::Deref for Row {
-    type Target = RowImage;
-    fn deref(&self) -> &RowImage {
-        &self.image
+    type Target = DeclarationRow;
+    fn deref(&self) -> &DeclarationRow {
+        &self.data
     }
 }
 impl Row {
@@ -119,11 +119,10 @@ impl DeclarationHead {
     }
 }
 
-/// The compact row as the std image holds it. A site names this row's
-/// definition, so only its span needs storage. The image's existing definition
-/// table owns the path; neither decoding nor session adoption rebuilds it.
+/// Compact ordinary declaration inputs. A site's definition is supplied by
+/// the row; its ordered candidate spans are materialized only on demand.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct RowImage {
+pub(crate) struct DeclarationRow {
     definition: DefId,
     types: bool,
     visibility: Visibility,
@@ -134,7 +133,7 @@ pub(crate) struct RowImage {
     candidates: ContentHash,
     identity: [u64; 4],
 }
-impl RowImage {
+impl DeclarationRow {
     pub(crate) fn definition(&self) -> &DefPath {
         self.definition.path()
     }
@@ -143,10 +142,10 @@ impl RowImage {
         &self.site_spans
     }
 }
-impl From<RowImage> for Row {
-    fn from(image: RowImage) -> Self {
+impl From<DeclarationRow> for Row {
+    fn from(image: DeclarationRow) -> Self {
         Self {
-            image,
+            data: image,
             sites: OnceLock::new(),
         }
     }
@@ -321,34 +320,7 @@ impl DeclarationIndex {
             ..image.clone()
         };
     }
-    /// `path`'s row as the std image holds it.
-    pub(crate) fn row_image(&self, path: &DefPath) -> Option<RowImage> {
-        self.rows
-            .get(&DefId::intern(path))
-            .map(|row| row.image.clone())
-    }
-    /// Set `path`'s row from an image, whose items stand in sources not
-    /// indexed here (`place_file` lists them once parsed).
-    pub(crate) fn adopt_row(&mut self, path: &DefPath, row: impl Into<RowImage>) {
-        let row: Row = Row::from(row.into());
-        hirsel_intern::timings::count_by(hirsel_intern::timings::Count::ImageRowsDecoded, 1);
-        hirsel_intern::timings::count_by(
-            hirsel_intern::timings::Count::ImageDeclarationBytes,
-            (std::mem::size_of::<Row>()
-                + row.site_spans.capacity() * std::mem::size_of::<Span>()
-                + row.headers.capacity() * std::mem::size_of::<ContentHash>()) as u64,
-        );
-        self.replace_row(path, Some(Arc::new(row)));
-    }
-    /// Every row of `image`, added to this index.
-    pub(crate) fn adopt_rows(&mut self, image: &DeclarationIndex) {
-        for (path, row) in &image.rows {
-            hirsel_intern::timings::count_by(hirsel_intern::timings::Count::ImageRowsAdopted, 1);
-            self.replace_row(path.path(), Some(row.clone()));
-        }
-    }
-    /// List `file`'s items, which an image's rows already describe: a source
-    /// of an image package parsed on demand.
+    /// Place a demanded source file's materialized items under its indexed rows.
     pub(crate) fn place_file(
         &mut self,
         file: FileId,
@@ -469,7 +441,7 @@ impl DeclarationIndex {
                 parts.push(head.header.0.to_vec());
             }
             let public = first.visibility != Visibility::Private;
-            Arc::new(Row::from(RowImage {
+            Arc::new(Row::from(DeclarationRow {
                 definition: first.definition,
                 types: first.kind >= 2,
                 visibility: first.visibility,

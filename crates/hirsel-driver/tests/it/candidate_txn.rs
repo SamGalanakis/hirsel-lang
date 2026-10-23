@@ -316,7 +316,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     };
     let w = CandidateWorkspace::new(
         config.clone(),
-        vec![],
         hirsel_interp::Limits {
             steps: Some(1),
             call_depth: 64,
@@ -345,7 +344,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     );
     let tiny = CandidateWorkspace::new(
         config.clone(),
-        vec![],
         hirsel_interp::Limits::default(),
         Limits {
             bytes: 0,
@@ -359,7 +357,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     ));
     let limited = CandidateWorkspace::new(
         config,
-        vec![],
         hirsel_interp::Limits::default(),
         Limits {
             leases: 1,
@@ -744,7 +741,6 @@ fn store_fault_checks(candidate: bool) -> String {
                     let (output, actual, adoptions) = if candidate {
                         let w = CandidateWorkspace::new(
                             config,
-                            vec![],
                             hirsel_interp::Limits::default(),
                             Limits {
                                 retain_canonical_export: true,
@@ -989,7 +985,6 @@ fn candidate_digest_only_receipt_commits_to_the_same_optional_full_export() {
     assert!(full.checked_products.as_ref().unwrap().canonical.is_some());
     let compact = CandidateWorkspace::new(
         CompileConfig::for_memory_cap(None),
-        vec![],
         hirsel_interp::Limits::default(),
         Limits::default(),
     )

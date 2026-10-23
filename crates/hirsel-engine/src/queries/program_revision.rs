@@ -103,21 +103,7 @@ impl QueryEngine {
             if !visited.insert(path.clone()) {
                 continue;
             }
-            let (content, dependencies) = match self.image_node(&path) {
-                Some(record) => {
-                    // Closed materializations are already in the image. Only
-                    // size-generic reads need declarations for client selection.
-                    if record.has_staged_reads() {
-                        let body = self.mode_query(&path)?;
-                        self.register_staged(&body.value)?;
-                    }
-                    (
-                        record.node.content.clone(),
-                        record.node.dependencies.clone(),
-                    )
-                }
-                None => self.semantic_node(&path)?,
-            };
+            let (content, dependencies) = self.semantic_node(&path)?;
             pending.extend(dependencies.iter().cloned());
             uses.insert(path.clone(), dependencies.clone());
             let mut dependencies: Vec<_> = dependencies.iter().map(ToString::to_string).collect();

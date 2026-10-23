@@ -67,9 +67,10 @@ impl DirStore {
         if !base.is_absolute() {
             return None;
         }
-        Some(Self::new(
-            base.join("hirsel").join(format!("results-v{FORMAT}")),
-        ))
+        let mut store = Self::new(base.join("hirsel").join(format!("results-v{FORMAT}")));
+        let installed = std::env::var_os("HIRSEL_PRODUCTS").map(PathBuf::from).or_else(|| std::env::current_exe().ok().map(|executable| executable.with_file_name("hirsel-std.products")));
+        if let Some(installed) = installed { store = store.with_read_only_root(installed); }
+        Some(store)
     }
     pub fn root(&self) -> &Path {
         &self.root

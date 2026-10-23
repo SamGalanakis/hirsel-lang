@@ -435,7 +435,6 @@ struct Workspace {
     compiler: Compiler,
     config: CompileConfig,
     namespace_budget: v2::LeaseBudget,
-    images: hirsel_engine::StdImages,
     environment: ContentHash,
     limits: Limits,
     budget: Arc<Budget>,
@@ -455,18 +454,16 @@ pub struct CandidateWorkspace {
     inner: Arc<Workspace>,
 }
 impl CandidateWorkspace {
-    /// Explicit compiler, images and CT limits. Image values are copied into
-    /// an immutable set without a path, disabling ordinary stale-image writes.
+    /// Explicit compiler policy and CT limits over immutable observed source inputs.
     pub fn new(
         config: CompileConfig,
-        images: Vec<Arc<hirsel_engine::StdImage>>,
         comptime: hirsel_interp::Limits,
         limits: Limits,
     ) -> Result<Self, RequestError> {
         if config.verify != Verify::On || config.lowering != LoweringPolicy::Comptime {
             return Err(RequestError::PolicyMismatch);
         }
-        let mut parts = vec![
+        let parts = vec![
             crate::COMPILER_IDENTITY.to_vec(),
             comptime
                 .steps
@@ -474,11 +471,8 @@ impl CandidateWorkspace {
                 .unwrap_or_default(),
             (comptime.call_depth as u64).to_le_bytes().to_vec(),
         ];
-        for image in &images {
-            parts.push(image.key().0.to_vec());
-        }
         let environment = ContentHash::of_parts(
-            "hirsel.candidate-environment.v1",
+            "hirsel.candidate-environment.v2",
             parts.iter().map(Vec::as_slice),
         );
         let compiler = crate::COMPILER
@@ -496,7 +490,6 @@ impl CandidateWorkspace {
                 compiler,
                 config,
                 namespace_budget: v2::LeaseBudget::new(limits.bytes),
-                images: hirsel_engine::StdImages::of(images),
                 environment,
                 limits,
                 budget,
@@ -544,8 +537,7 @@ impl CandidateWorkspace {
             let alias = capture.canonicalize(&entry);
             let loaded = alias.map(|_| ()).map_err(ToolError::from).and_then(|_| {
                 hirsel_engine::with_compiler_stack(|| {
-                    w.compiler
-                        .load_program_inputs(&entry, &capture, &w.images, false)
+                    w.compiler.load_program_inputs(&entry, &capture, false)
                 })
             });
             let frozen = capture.freeze();
@@ -578,7 +570,7 @@ impl CandidateWorkspace {
                     Source {
                         physical,
                         text: SourceText::Captured(source.clone()),
-                        editable: !program.engine.imaged(&context.package),
+                        editable: true,
                     },
                 );
             }
@@ -1406,7 +1398,7 @@ impl CandidateWorkspace {
                 namespace.load(&w.compiler, w.config.clone(), false)
             } else {
                 w.compiler
-                    .load_program_inputs(&inputs.entry, &inputs.frozen, &w.images, true)
+                    .load_program_inputs(&inputs.entry, &inputs.frozen, true)
             } {
                 Ok(program) => program,
                 Err(error) => return Ok(snapshot_error(error, charge.clone(), true)),
@@ -1771,7 +1763,6 @@ mod tests {
     fn workspace() -> CandidateWorkspace {
         CandidateWorkspace::new(
             CompileConfig::for_memory_cap(None),
-            vec![],
             hirsel_interp::Limits::default(),
             Limits::default(),
         )
@@ -2010,7 +2001,7 @@ mod tests {
             let frozen = w
                 .inner
                 .compiler
-                .load_program_inputs(&entry, &base.inputs.frozen, &w.inner.images, false)
+                .load_program_inputs(&entry, &base.inputs.frozen, false)
                 .unwrap();
             assert_eq!(scope(&frozen), base.inputs.scope);
             for (file, _) in &frozen.files {
@@ -2023,12 +2014,7 @@ mod tests {
                             && captured.text.as_ref() == source.text())
                 );
             }
-            assert!(
-                w.inner
-                    .compiler
-                    .load_program_source_with_images(&entry, None, &w.inner.images,)
-                    .is_err()
-            );
+            assert!(w.inner.compiler.load_program_source(&entry, None).is_err());
         });
     }
     #[test]

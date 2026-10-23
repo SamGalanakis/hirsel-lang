@@ -622,17 +622,6 @@ impl QueryEngine {
         })
     }
 
-    /// The inputs `path`'s readers observe that a std image holds for it.
-    pub(crate) fn observed_inputs(&self, path: &DefPath) -> Option<crate::image::ImageInputs> {
-        let inputs = self.definition_inputs(path)?;
-        Some(crate::image::ImageInputs {
-            body: inputs.body,
-            header: inputs.header,
-            cited: self.cited_value(path),
-            names: inputs.names,
-        })
-    }
-
     /// Diffs the inputs of `paths` against what was last indexed and marks
     /// the subscribers of every changed read (S0's change set). Removed
     /// definitions forget their memos.
@@ -654,9 +643,7 @@ impl QueryEngine {
             if now == before {
                 continue;
             }
-            if !self.imaged(&path.0.package) {
-                self.source_growth.changed(id, now.is_some());
-            }
+            self.source_growth.changed(id, now.is_some());
             self.front_changes.changed(id, now.is_some());
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
             let mut read = |k| changes.read(k, durability);

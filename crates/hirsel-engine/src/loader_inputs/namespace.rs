@@ -41,8 +41,6 @@ pub struct CapturePlan {
     pub std_manifest: Option<PathBuf>,
     /// Caller-encoded explicit compiler/config/toolchain/policy identity.
     pub environment: Vec<u8>,
-    /// Owned image containers only, never paths or potentially mutable mmaps.
-    pub images: Vec<Arc<[u8]>>,
     pub limits: Limits,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,7 +104,6 @@ struct State {
     entry: PathBuf,
     std_manifest: Option<PathBuf>,
     environment: Vec<u8>,
-    image_bytes: Vec<Arc<[u8]>>,
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Usage {
@@ -116,10 +113,6 @@ pub struct Usage {
     pub directory_entries: usize,
     pub aliases: usize,
     pub file_bytes: usize,
-    pub image_bytes: usize,
-    /// Decoded indexes/type rows/lazy products are held by an external shared
-    /// image set, not metered by this namespace table/byte allowance.
-    pub external_image_handles: usize,
     pub fixed_probes: usize,
     /// Conservative retained charge: full tables/bytes for each live snapshot,
     /// even when immutable byte Arcs are shared. Clones of one lease are free.
@@ -175,7 +168,6 @@ struct Namespace {
     state: State,
     digest: ContentHash,
     inputs: ContentHash,
-    images: Arc<crate::StdImages>,
     usage: Usage,
     limits: Limits,
     reservation: Reservation,
@@ -266,14 +258,7 @@ impl CapturePlan {
         {
             return Err(bad("empty/oversized plan or unsupported attempt/hop limit"));
         }
-        if self.environment.len() > self.limits.bytes
-            || self.images.len() > self.limits.nodes
-            || self
-                .images
-                .iter()
-                .try_fold(0usize, |n, b| n.checked_add(b.len()))
-                .is_none_or(|n| n > self.limits.bytes)
-        {
+        if self.environment.len() > self.limits.bytes {
             return Err(CaptureError::Limit);
         }
         let plan_bytes = self
@@ -362,7 +347,7 @@ impl NamespaceLease {
                 Err(e) => return Err(e),
             };
             if first == second {
-                return Self::publish(second, plan.limits, budget, None)
+                return Self::publish(second, plan.limits, budget)
                     .map_err(|e| capture_error(&plan.entry, e));
             }
         }
@@ -384,12 +369,7 @@ impl NamespaceLease {
             .map_err(|e| CaptureError::InvalidSelection(e.to_string()))?;
         Ok(lease)
     }
-    fn publish(
-        state: State,
-        limits: Limits,
-        budget: &LeaseBudget,
-        held_images: Option<Arc<crate::StdImages>>,
-    ) -> io::Result<Self> {
+    fn publish(state: State, limits: Limits, budget: &LeaseBudget) -> io::Result<Self> {
         let usage = usage(&state)?;
         if usage.charged_bytes > limits.bytes
             || usage.nodes > limits.nodes
@@ -398,36 +378,21 @@ impl NamespaceLease {
             return Err(limit());
         }
         let reservation = budget.reserve(usage.charged_bytes)?;
-        let images = if let Some(images) = held_images {
-            images
-        } else {
-            Arc::new(crate::StdImages::of(
-                state
-                    .image_bytes
-                    .iter()
-                    .map(|b| crate::StdImage::from_bytes(b.to_vec()).map_err(io::Error::other))
-                    .collect::<io::Result<Vec<_>>>()?,
-            ))
-        };
         let digest = namespace_digest(&state);
-        let mut input_parts = vec![
+        let input_parts = [
             digest.0.to_vec(),
             path_bytes(&state.entry).to_vec(),
             state.environment.clone(),
             2u64.to_le_bytes().to_vec(),
         ];
-        for bytes in &state.image_bytes {
-            input_parts.push(ContentHash::of_bytes(bytes).0.to_vec());
-        }
         let inputs = ContentHash::of_parts(
-            "hirsel.candidate.inputs.v2",
+            "hirsel.candidate.inputs.v3",
             input_parts.iter().map(Vec::as_slice),
         );
         Ok(Self(Arc::new(Namespace {
             state,
             digest,
             inputs,
-            images,
             usage,
             limits,
             reservation,
@@ -444,9 +409,6 @@ impl NamespaceLease {
     }
     pub fn entry(&self) -> &Path {
         &self.0.state.entry
-    }
-    pub fn images(&self) -> &crate::StdImages {
-        &self.0.images
     }
     pub fn same_namespace(&self, other: &Self) -> bool {
         self.0.digest == other.0.digest && self.0.state == other.0.state
@@ -469,7 +431,7 @@ impl NamespaceLease {
                 lowering: crate::LoweringPolicy::Comptime,
                 ..config
             })
-            .load_program_inputs(self.entry(), self, self.images(), parse_sources)
+            .load_program_inputs(self.entry(), self, parse_sources)
     }
 }
 
@@ -481,7 +443,6 @@ fn scan(plan: &CapturePlan, source: &dyn CaptureSource) -> Result<State, Capture
         entry: plan.entry.clone(),
         std_manifest: plan.std_manifest.clone(),
         environment: plan.environment.clone(),
-        image_bytes: plan.images.clone(),
     };
     // Charge explicit context before scanning anything. Per-operation bounds
     // also apply before allocation, including complete directory enumeration.
@@ -830,11 +791,6 @@ fn usage(state: &State) -> io::Result<Usage> {
         add(128)?;
         add(root.id.len())?;
         add(path_bytes(&root.path).len())?;
-    }
-    for bytes in &state.image_bytes {
-        u.image_bytes = u.image_bytes.checked_add(bytes.len()).ok_or_else(limit)?;
-        add(bytes.len().checked_mul(2).ok_or_else(limit)?)?;
-        u.external_image_handles += 1;
     }
     for (path, node) in &state.nodes {
         add(node_charge(path, node)?)?;
@@ -1451,13 +1407,8 @@ impl NamespaceLease {
                 }
             }
         }
-        let lease = Self::publish(
-            state,
-            self.0.limits,
-            &self.0.reservation.budget,
-            Some(self.0.images.clone()),
-        )
-        .map_err(|_| OverlayError::Limit)?;
+        let lease = Self::publish(state, self.0.limits, &self.0.reservation.budget)
+            .map_err(|_| OverlayError::Limit)?;
         Ok((lease, delta))
     }
 }

@@ -6,7 +6,7 @@
 //! - `resident`: one `Session` across the edit.
 //! - `disk`: two processes sharing a `dir@1` store.
 use super::{
-    Artifacts, Config, Report, Verdict, difference, edits::Scenario, fresh_images,
+    Artifacts, Config, Report, Verdict, difference, edits::Scenario,
     o1::produce_in_child, produce, produce_with_store, program_artifacts, switches,
 };
 use hirsel_driver::session::{FileChange, Session};
@@ -37,9 +37,8 @@ fn one(
     let (before, after) = (&scenario.config_before, &scenario.config_after);
     scenario.write(&tree, root, false)?;
     let entry = scenario.entry(&tree);
-    let mem = fresh_images();
     let store = Arc::new(MemStore::default());
-    let warmed = produce_with_store(&entry, before, &mem, store.clone());
+    let warmed = produce_with_store(&entry, before, store.clone());
     let mut resident = Session::open_configured(&entry, before.compile(before.result_store()));
     let _resident_before = resident_artifacts(&mut resident, before);
     let disk = base.join("store");
@@ -71,7 +70,7 @@ fn one(
             })
             .collect(),
     );
-    let cold = match produce(&entry, after, &fresh_images()) {
+    let cold = match produce(&entry, after) {
         Ok(cold) => cold,
         Err(switch) => {
             for mode in ["mem", "resident", "disk"] {
@@ -94,7 +93,7 @@ fn one(
         name("mem"),
         compare(
             warmed.map_err(Verdict::Todo).and_then(|_| {
-                produce_with_store(&entry, after, &mem, store).map_err(Verdict::Todo)
+                produce_with_store(&entry, after, store).map_err(Verdict::Todo)
             }),
         ),
     );

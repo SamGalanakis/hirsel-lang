@@ -3,7 +3,7 @@
 hirsel_guard::install!();
 use hirsel_driver::candidate::*;
 use hirsel_driver::session::{FileChange, Session};
-use hirsel_engine::{CheckCompletion, CompileConfig, LoweringPolicy, StdImage, StdImages};
+use hirsel_engine::{CheckCompletion, CompileConfig, LoweringPolicy};
 use sha2::{Digest, Sha256};
 use std::{
     io::{self, BufRead, Write},
@@ -85,18 +85,7 @@ fn main() {
         .iter()
         .map(|v| v.as_str().unwrap().into())
         .collect();
-    let image_paths: Vec<PathBuf> = spec["images"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().into())
-        .collect();
     let started = Instant::now();
-    let images: Vec<Arc<StdImage>> = image_paths
-        .iter()
-        .map(|p| StdImage::open(p).unwrap())
-        .collect();
-    let image_set = StdImages::of(images.clone());
     let mut config = CompileConfig::for_memory_cap(Some(4 << 30));
     config.jobs = hirsel_intern::jobs::Jobs::new(1);
     if mode == "resident" {
@@ -116,7 +105,6 @@ fn main() {
         .with_owned_engines();
     let workspace = CandidateWorkspace::new(
         config.clone(),
-        images,
         hirsel_interp::Limits::default(),
         Limits::default(),
     )
@@ -126,9 +114,7 @@ fn main() {
         let tree = Path::new(spec["trees"][index].as_str().unwrap());
         let row = hirsel_engine::with_compiler_stack(|| {
             let load = Instant::now();
-            let mut p = compiler
-                .load_program_source_with_images(tree, None, &image_set)
-                .unwrap();
+            let mut p = compiler.load_program_source(tree, None).unwrap();
             let load_ns = ns(load);
             let check = Instant::now();
             let output = p.check(LoweringPolicy::Comptime).unwrap();
@@ -161,9 +147,7 @@ fn main() {
     let mut resident = Session::open_configured(entry, config.clone());
     if mode == "disk" || mode == "frozen" {
         hirsel_engine::with_compiler_stack(|| {
-            let mut p = compiler
-                .load_program_source_with_images(entry, None, &image_set)
-                .unwrap();
+            let mut p = compiler.load_program_source(entry, None).unwrap();
             assert!(
                 p.check(LoweringPolicy::Comptime)
                     .unwrap()
@@ -177,7 +161,7 @@ fn main() {
     }
     let mut leases = vec![];
     emit(
-        serde_json::json!({"ready":true,"initialization_ns":ns(started),"compiler":format!("{:02x?}",hirsel_driver::COMPILER_IDENTITY),"mode":mode,"store":config.store.name(),"retention":format!("{:?}",config.retention),"image_keys":image_paths.iter().map(|p|format!("{:?}",StdImage::open(p).unwrap().key())).collect::<Vec<_>>()}),
+        serde_json::json!({"ready":true,"initialization_ns":ns(started),"compiler":format!("{:02x?}",hirsel_driver::COMPILER_IDENTITY),"mode":mode,"store":config.store.name(),"retention":format!("{:?}",config.retention)}),
     );
     for line in io::stdin().lock().lines() {
         let i: usize = line.unwrap().parse().unwrap();
@@ -328,9 +312,7 @@ fn main() {
             let tree = Path::new(spec["trees"][i].as_str().unwrap());
             let output = hirsel_engine::with_compiler_stack(|| {
                 let t = Instant::now();
-                let mut p = compiler
-                    .load_program_source_with_images(tree, None, &image_set)
-                    .unwrap();
+                let mut p = compiler.load_program_source(tree, None).unwrap();
                 load_ns = ns(t);
                 let t = Instant::now();
                 let out = p.check(LoweringPolicy::Comptime).unwrap();

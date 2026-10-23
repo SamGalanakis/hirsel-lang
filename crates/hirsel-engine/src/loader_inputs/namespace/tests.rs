@@ -36,7 +36,6 @@ fn plan(tree: &Tree) -> CapturePlan {
         entry: tree.0.join("main.hir"),
         std_manifest: None,
         environment: b"explicit-test-environment".to_vec(),
-        images: vec![],
         limits: Limits {
             bytes: 1 << 20,
             nodes: 1000,
@@ -720,73 +719,6 @@ fn exact_counts_hardlinks_limits_and_live_lease_release() {
         }
         assert!(NamespaceLease::capture(&p, &DiskCapture, &budget).is_err());
     }
-}
-fn image_bytes() -> Arc<[u8]> {
-    let mut writer = hirsel_image::ImageWriter::new(
-        ContentHash::of_bytes(b"namespace-test-image"),
-        hirsel_types::TypeInterner::new(None),
-    );
-    writer.blob(
-        crate::image::META,
-        Box::new(crate::image::Whole(crate::image::Meta {
-            package: hirsel_syntax::PackageId {
-                name: "unused".into(),
-                version: "1".into(),
-            },
-            files: vec![],
-            generated: vec![],
-        })),
-    );
-    writer.finish().unwrap().bytes.into()
-}
-#[test]
-fn owned_images_are_shared_charged_before_decode_and_keep_old_leases() {
-    let tree = Tree::new();
-    tree.write("main.hir", b"one");
-    let mut p = plan(&tree);
-    p.images.push(image_bytes());
-    let budget = LeaseBudget::new(16 << 20);
-    let base = NamespaceLease::capture(&p, &DiskCapture, &budget).unwrap();
-    let plain = capture(&tree);
-    assert_eq!(
-        base.usage().charged_bytes - plain.usage().charged_bytes,
-        p.images[0].len() * 2
-    );
-    assert_eq!(base.usage().image_bytes, p.images[0].len());
-    assert_eq!(base.usage().external_image_handles, 1);
-    let image = base.images().get().unwrap().images[0].clone();
-    let (child, _) = base.overlay(&[replace(&base, "main.hir", b"two")]).unwrap();
-    assert!(Arc::ptr_eq(
-        &image,
-        &child.images().get().unwrap().images[0]
-    ));
-    assert_ne!(base.inputs_digest(), plain.inputs_digest());
-    let base_charge = base.usage().charged_bytes;
-    let child_charge = child.usage().charged_bytes;
-    assert_eq!(budget.retained(), (base_charge + child_charge, 2));
-    drop(base);
-    assert_eq!(budget.retained(), (child_charge, 1));
-    assert_eq!(
-        child.images().get().unwrap().images[0].key(),
-        ContentHash::of_bytes(b"namespace-test-image")
-    );
-    drop(child);
-    assert_eq!(budget.retained(), (0, 0));
-    let exact = LeaseBudget::new(base_charge);
-    let held = NamespaceLease::capture(&p, &DiskCapture, &exact).unwrap();
-    assert!(matches!(
-        NamespaceLease::capture(&p, &DiskCapture, &exact),
-        Err(CaptureError::Limit)
-    ));
-    assert_eq!(exact.retained(), (base_charge, 1));
-    drop(held);
-    assert_eq!(exact.retained(), (0, 0));
-    // Invalid image would fail decoding; a zero budget must refuse first.
-    p.images = vec![Arc::from(&b"invalid-image"[..])];
-    assert!(matches!(
-        NamespaceLease::capture(&p, &DiskCapture, &LeaseBudget::new(0)),
-        Err(CaptureError::Limit)
-    ));
 }
 #[test]
 fn explicit_toolchain_context_loads_sidecar_graph_without_host_discovery() {

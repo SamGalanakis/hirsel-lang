@@ -34,7 +34,7 @@ impl QueryEngine {
         {
             return Some(record.clone());
         }
-        self.image_signature(path)?.owner.clone()
+        None
     }
     /// A body-local view, never published by item_signature or the public
     /// provider. PROG-2's privacy boundary is the exact package (version included).
@@ -49,17 +49,7 @@ impl QueryEngine {
         {
             return Ok((public, None));
         }
-        let path = public.definition.path();
-        if let Some(image) = self.image_signature(path)
-            && std::sync::Arc::ptr_eq(&image.output.value, &public)
-        {
-            let digest = image
-                .owner
-                .as_ref()
-                .map(|owner| owner.body_view(&self.types, &public).1)
-                .unwrap_or_else(|| hirsel_validate::digest(&self.types, &image.private).0);
-            return Ok((image.private.clone(), Some(digest)));
-        }
+
         let Some(record) = self
             .signature_products(public.definition)
             .and_then(|products| products.representation.as_ref())

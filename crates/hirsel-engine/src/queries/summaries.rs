@@ -110,12 +110,7 @@ impl QueryEngine {
         {
             return Ok(published.summary);
         }
-        if let Some(summary) = self.image_summary(path)
-            && summary.definition == definition
-            && self.seed_definition_summary(summary.clone())
-        {
-            return Ok(summary);
-        }
+
         self.mode_query(path)?;
         // Only the final mode result contains every planned call. Its complete
         // reads include the checked body's, as well as mode refinements.
@@ -426,7 +421,6 @@ impl QueryEngine {
         let paths = self
             .item_paths()
             .into_iter()
-            .filter(|path| !self.imaged(&path.0.package))
             .collect::<Vec<_>>();
         paths
             .into_iter()

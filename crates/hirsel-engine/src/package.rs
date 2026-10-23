@@ -135,24 +135,10 @@ pub struct LoadedProgram {
     pub primary: FileId,
     /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
-    /// Why a dependency package is checked from source rather than read from
-    /// its std image, for `--verbose`; an image changes only how long checking
-    /// takes.
-    pub image_notes: Vec<String>,
     /// The files other than sources that loading read or probed: each package
     /// manifest and, for a source, its sidecar path. A change to any of them
     /// selects another package graph, so a resident session loads again.
     pub inputs: Vec<std::path::PathBuf>,
-    packages: Vec<DependencyPackage>,
-    identity: ContentHash,
-}
-/// A selected dependency package: its checked-input revision (the image
-/// key's input), its closure and its files.
-struct DependencyPackage {
-    package: PackageId,
-    key: ContentHash,
-    closure: BTreeSet<PackageId>,
-    files: Vec<(FileId, FileContext)>,
 }
 impl LoadedProgram {
     /// Check using the host's configured lowering policy.
@@ -179,10 +165,6 @@ impl LoadedProgram {
         let mut diagnostics = Vec::new();
         let mut completion = CheckCompletion::Complete;
         for (file, context) in &self.files {
-            // An image package checked complete and clean (`StdImage`).
-            if self.engine.imaged(&context.package) {
-                continue;
-            }
             match crate::tools::association_diagnostics(&mut self.engine, *file, context) {
                 Ok(errors) | Err(QueryError::Diagnostics(errors)) => {
                     diagnostics.extend(errors);
@@ -209,7 +191,6 @@ impl LoadedProgram {
         let files: Vec<_> = self
             .files
             .iter()
-            .filter(|(_, context)| !self.engine.imaged(&context.package))
             .map(|(file, context)| (*file, context, policy(&context.package)))
             .collect();
         for (file, output) in crate::tools::check_files(&mut self.engine, &files)? {
@@ -295,72 +276,6 @@ impl LoadedProgram {
         let entry = self.entry.clone();
         self.engine.unsafe_reach(&entry).map_err(|e| self.error(e))
     }
-    /// The std image of `package`, a dependency of this program, which must
-    /// check complete with no diagnostics at all (`StdImage`). Each
-    /// definition's record goes to `spill` in source order after the program
-    /// check, and its source's checked bodies are then released.
-    pub fn image(
-        &mut self,
-        package: &PackageId,
-        spill: std::fs::File,
-    ) -> Result<Vec<u8>, ToolError> {
-        let name = format!("{}@{}", package.name, package.version);
-        let revision = self.packages.iter().find(|p| &p.package == package);
-        let key = revision
-            .map(|r| crate::StdImage::key_of(self.identity, r.key, self.engine.comptime_limits));
-        let mut build = revision.map(|revision| {
-            let files: Vec<_> = revision.files.iter().map(|(f, _)| *f).collect();
-            crate::queries::ImageBuild::new(
-                package.clone(),
-                revision.closure.clone(),
-                &files,
-                spill,
-            )
-        });
-        let mut released = false;
-        let portable = self.engine.portable_products;
-        let retention = self.engine.retention;
-        self.engine.portable_products = true;
-        self.engine.set_retention(crate::memo::Retention::Resident);
-        let checked = self.check_with(LoweringPolicy::Comptime, |engine, file| match &mut build {
-            Some(build) if build.has_file(file) => {
-                let paths = engine.file_definitions(file);
-                engine.image_definitions(build, paths)?;
-                // GEN-5 has consumed every body's summary. Release the
-                // other sources' products before writing their records.
-                if !released {
-                    released = true;
-                    engine.release_unrecorded(build);
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        });
-        self.engine.portable_products = portable;
-        self.engine.set_retention(retention);
-        let output = checked.map_err(|error| self.error(error))?;
-        if !output.diagnostics.is_empty() {
-            return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
-        }
-        if output.completion != CheckCompletion::Complete {
-            return Err(ToolError::Runtime(format!(
-                "image: {name} does not check completely"
-            )));
-        }
-        if self.unsafe_ffi.iter().any(|p| &p.package == package) {
-            return Err(ToolError::Runtime(format!(
-                "image: {name} is an unsafe ffi package"
-            )));
-        }
-        let (Some(build), Some(key)) = (build, key) else {
-            return Err(ToolError::Runtime(format!(
-                "image: {name} is not a dependency"
-            )));
-        };
-        self.engine
-            .finish_image(build, key)
-            .map_err(|error| self.error(error))
-    }
     /// The reference interpreter calls no C: a program whose entry reaches an
     /// extern refuses before entry (PROG-4).
     pub fn refuse_foreign_interpretation(&mut self) -> Result<(), ToolError> {
@@ -415,10 +330,7 @@ impl LoadedProgram {
         else {
             return Ok(false);
         };
-        let (old, context) = self.files[index].clone();
-        if self.engine.imaged(&context.package) {
-            return Ok(false);
-        }
+        let (old, _) = self.files[index].clone();
         let file = self
             .engine
             .sources
@@ -428,22 +340,12 @@ impl LoadedProgram {
         if self.primary == old {
             self.primary = file;
         }
-        for package in &mut self.packages {
-            for entry in &mut package.files {
-                if entry.0 == old {
-                    entry.0 = file;
-                }
-            }
-        }
         Ok(true)
     }
     /// Observe every source in check order, as loading does. Ordinary heads
     /// avoid parsing unchanged bytes; changed invalid bytes fail as on a fresh load.
     pub fn parse_sources(&mut self) -> Result<(), ToolError> {
         for (file, context) in self.files.clone() {
-            if self.engine.imaged(&context.package) {
-                continue;
-            }
             self.engine
                 .index_source(file, &context)
                 .map_err(|e| self.error(e))?;
@@ -520,12 +422,11 @@ fn sidecar_path(path: &Path) -> PathBuf {
     sidecar.push(".json");
     PathBuf::from(sidecar)
 }
-/// Load, adopting the matching std `images`.
-pub(crate) fn load_program_source_with_images(
+/// Load sources using the configured ordinary product provider.
+pub(crate) fn load_program_source(
     compiler: &Compiler,
     path: &Path,
     replacement: Option<&str>,
-    images: &StdImages,
     entry_selection: EntrySelection,
 ) -> Result<LoadedProgram, ToolError> {
     load_program_inputs(
@@ -534,10 +435,8 @@ pub(crate) fn load_program_source_with_images(
         &crate::loader_inputs::DiskInputs,
         Loading {
             replacement,
-            images,
             entry_selection,
             parse_sources: true,
-            rebuild_images: true,
         },
     )
 }
@@ -550,10 +449,8 @@ pub(crate) enum EntrySelection {
 }
 pub(crate) struct Loading<'a> {
     pub replacement: Option<&'a str>,
-    pub images: &'a StdImages,
     pub entry_selection: EntrySelection,
     pub parse_sources: bool,
-    pub rebuild_images: bool,
 }
 pub(crate) fn load_program_inputs(
     compiler: &Compiler,
@@ -563,10 +460,8 @@ pub(crate) fn load_program_inputs(
 ) -> Result<LoadedProgram, ToolError> {
     let Loading {
         replacement,
-        images,
         entry_selection,
         parse_sources,
-        rebuild_images,
     } = loading;
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
     let (graph, package) = Graph::program_inputs(path, inputs)?;
@@ -647,15 +542,6 @@ pub(crate) fn load_program_inputs(
         })
         .collect();
     let limits = compiler.comptime_limits();
-    let mut revisions: Vec<DependencyPackage> = dependencies
-        .iter()
-        .map(|id| DependencyPackage {
-            package: (*id).clone(),
-            key: graph.revision(id, &environment, &files, &texts),
-            closure: graph.closure(id),
-            files: vec![],
-        })
-        .collect();
     let unsafe_ffi: Vec<UnsafeFfiPackage> = graph
         .packages
         .iter()
@@ -725,7 +611,6 @@ pub(crate) fn load_program_inputs(
         has_launch_entry: root.entry.is_some(),
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
-        image_notes: vec![],
         inputs: path
             .extension()
             .is_none_or(|e| e != "json")
@@ -733,73 +618,9 @@ pub(crate) fn load_program_inputs(
             .into_iter()
             .chain(graph.packages.values().map(|p| p.path.clone()))
             .collect(),
-        packages: vec![],
-        identity: compiler.identity(),
     };
-    // A dependency whose image matches is adopted before anything is parsed:
-    // the session's interner is built over the image's rows.
-    if let Some(toolchain) = (!revisions.is_empty()).then(|| images.get()).flatten() {
-        for revision in &revisions {
-            let key = crate::StdImage::key_of(program.identity, revision.key, limits);
-            let candidates: Vec<_> = toolchain
-                .images
-                .iter()
-                .filter(|image| image.package() == &revision.package)
-                .collect();
-            let name = format!("{}@{}", revision.package.name, revision.package.version);
-            let mut selected = candidates
-                .iter()
-                .find(|image| image.key() == key)
-                .map(|image| (*image).clone());
-            // A toolchain owns its selected file; explicit image sets only
-            // supply values. Rebuild a stale file from source with images off,
-            // preserving an existing mapping until atomic replacement completes.
-            if rebuild_images
-                && selected.is_none()
-                && !candidates.is_empty()
-                && let Some(path) = &toolchain.path
-            {
-                if hirsel_image::Image::read_key(path).ok() != Some(key) {
-                    let _ = compiler.image_package(&graph.packages[&revision.package].path, path);
-                }
-                selected = crate::StdImage::open(path)
-                    .ok()
-                    .filter(|image| image.key() == key);
-            }
-            match selected {
-                Some(image)
-                    if graph.packages[&revision.package].unsafe_ffi.is_none()
-                        && !program.files.iter().any(|(_, c)| program.engine.imaged(&c.package)) =>
-                {
-                    let files = program
-                        .files
-                        .iter()
-                        .filter(|(_, c)| c.package == revision.package)
-                        .cloned()
-                        .collect();
-                    program.engine.adopt_image(image, files);
-                }
-                _ if !candidates.is_empty() => program.image_notes.push(format!(
-                    "the image for {name} was checked under another compiler or other sources; checking {name}"
-                )),
-                _ => {
-                    if let Some(missing) = &toolchain.missing {
-                        program.image_notes.push(format!("{missing}; checking {name}"));
-                    }
-                }
-            }
-        }
-    }
-    if crate::image::reporting_images() {
-        for note in &program.image_notes {
-            eprintln!("hirsel: {note}");
-        }
-    }
     if parse_sources {
         for (file, context) in &program.files {
-            if program.engine.imaged(&context.package) {
-                continue;
-            }
             program
                 .engine
                 .index_source(*file, context)
@@ -832,15 +653,6 @@ pub(crate) fn load_program_inputs(
             }
         }
     }
-    for revision in &mut revisions {
-        revision.files = program
-            .files
-            .iter()
-            .filter(|(_, c)| c.package == revision.package)
-            .cloned()
-            .collect();
-    }
-    program.packages = revisions;
     Ok(program)
 }
 

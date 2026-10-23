@@ -99,7 +99,6 @@ impl QueryEngine {
             for path in self
                 .item_paths()
                 .into_iter()
-                .filter(|p| !self.imaged(&p.0.package))
                 .collect::<Vec<_>>()
             {
                 self.front_changes.changed(DefId::intern(&path), true);

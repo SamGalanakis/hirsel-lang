@@ -33,8 +33,6 @@ pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
-mod image;
-pub(crate) use image::ImageBuild;
 mod persistent;
 mod retention;
 mod safety;
@@ -250,8 +248,6 @@ pub struct QueryEngine {
     scalar_lower_calls: hirsel_syntax::DefMap<u64>,
     scalar_validation_runs: hirsel_syntax::DefMap<u64>,
     s1_lower_work: hirsel_syntax::DefMap<S1LowerWork>,
-    /// The std image whose package's checked products this engine reads.
-    image: Option<image::AdoptedImage>,
     catalog: catalog::Catalog,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
@@ -335,7 +331,6 @@ impl Drop for QueryEngine {
             take(&mut self.scalar_validation_runs),
         );
         released("engine: S1 lower work", take(&mut self.s1_lower_work));
-        released("engine: image", take(&mut self.image));
         released("engine: constant values", take(&mut self.constant_values));
         released("engine: sources", take(&mut self.sources));
         released("engine: adapters", take(&mut self.adapters));
@@ -564,7 +559,6 @@ impl QueryEngine {
             scalar_lower_calls: Default::default(),
             scalar_validation_runs: Default::default(),
             s1_lower_work: Default::default(),
-            image: None,
             catalog: Default::default(),
             unavailable: None,
             last_phase: None,
@@ -723,12 +717,6 @@ impl QueryEngine {
             } else {
                 body
             }
-        } else if let Some(inputs) = self.image_inputs(definition) {
-            if kind == QueryKind::Signature {
-                inputs.header
-            } else {
-                inputs.body
-            }
         } else {
             self.materialize(definition)?;
             let snapshot = self.snapshot(definition)?;
@@ -789,9 +777,7 @@ impl QueryEngine {
         if let Some(constant) = self.staged_constants.get(definition) {
             return Ok(Arc::new(output(constant.signature.clone())));
         }
-        if let Some(signature) = self.image_signature(definition) {
-            return Ok(signature.output.clone());
-        }
+
         if !self.items.contains_key(definition) {
             if let Some(signature) = self.registry.get(definition) {
                 return Ok(Arc::new(output(signature)));
@@ -896,7 +882,6 @@ impl QueryEngine {
             sources: &self.sources,
             items: &self.items,
             declarations: &self.declarations,
-            image: self.image.as_ref().map(|adopted| &*adopted.image),
             catalog: &self.catalog,
         }
     }
@@ -1000,16 +985,15 @@ impl QueryEngine {
     /// occurrence), so a signature surviving a body edit still names it. The
     /// items this snapshot dropped stay adoptable until the next index, for a
     /// definition moving to another file.
-    fn index(&mut self, file: &mut SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
+    fn index(&mut self, file: &mut SyntaxFile, _context: &FileContext) -> Result<(), QueryError> {
         self.prepare_catalog_edit(file.file)?;
-        self.release_image(&context.package)?;
         let new_paths: BTreeSet<_> = file
             .items
             .iter()
             .map(|item| item.item.definition.clone())
             .collect();
         for path in new_paths {
-            self.materialize_catalog(&path)?;
+            self.materialize(&path)?;
         }
         self.comptime_runtime = None;
         self.catalog.clear_facts();
@@ -1352,9 +1336,6 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Vec<SignatureDependency>, QueryError> {
-        if let Some(signature) = self.image_signature(definition) {
-            return Ok(signature.covered.clone());
-        }
         let output = self.signature_output(definition)?;
         Ok(match self.signatures.get(&DefId::intern(definition)) {
             Some(entry)
@@ -1619,13 +1600,7 @@ impl QueryEngine {
         let mut bodies = vec![];
         // An image package reaches no definition outside its closure, so it closes no
         // instantiation cycle through one, and its own verdict is in its image.
-        for path in self
-            .items
-            .keys()
-            .filter(|path| !self.imaged(&path.0.package))
-            .cloned()
-            .collect::<Vec<_>>()
-        {
+        for path in self.items.keys().cloned().collect::<Vec<_>>() {
             let checked = self.check_query(&path)?;
             bodies.push((path, checked));
         }
@@ -1919,8 +1894,8 @@ impl QueryEngine {
 }
 
 impl QueryEngine {
-    /// Whether `file` parsed cleanly into this engine's image.
-    pub(crate) fn parsed_in_image(&self, file: FileId) -> bool {
+    /// Whether this engine retained a clean parse of `file`.
+    pub(crate) fn parsed_cleanly(&self, file: FileId) -> bool {
         matches!(self.parsed.get(&file), Some((_, _, Ok(_))))
     }
     /// Parse `file` in this engine, discarding a retained outcome first.
@@ -1992,13 +1967,7 @@ impl QueryEngine {
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(prechecked) = self.image_lowering(definition)? {
-            if crate::comptime::has_staged_reads(&prechecked.value) {
-                let body = self.mode_query(definition)?;
-                self.register_staged(&body.value)?;
-            }
-            return Ok(prechecked);
-        }
+
         if self
             .source_facts(definition)
             .is_some_and(|facts| !facts.executable)
@@ -2293,13 +2262,7 @@ impl TirProvider for QueryEngine {
                         self.catalog.facts(&path)?.constant,
                         self.declarations.sites(&path).first()?.name_span,
                     ),
-                    None => (
-                        matches!(
-                            self.image_signature(&path)?.output.value.kind,
-                            hirsel_types::SignatureKind::Const { .. }
-                        ),
-                        self.declarations.sites(&path).first()?.name_span,
-                    ),
+                    None => return None,
                 };
                 constant.then(|| {
                     let site = self.sources.resolve(name);

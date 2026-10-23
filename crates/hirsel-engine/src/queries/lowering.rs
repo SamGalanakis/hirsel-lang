@@ -89,12 +89,7 @@ impl QueryEngine {
             None if self.catalog.body(path).is_some() => {
                 self.catalog.facts(path).is_some_and(|facts| facts.constant)
             }
-            None => self.image_signature(path).is_some_and(|signature| {
-                matches!(
-                    signature.output.value.kind,
-                    hirsel_types::SignatureKind::Const { .. }
-                )
-            }),
+            None => false,
         }
     }
 
@@ -124,7 +119,7 @@ impl QueryEngine {
 
     /// Every top-level declaration of an indexed file, in source order.
     pub(crate) fn file_definitions(&self, file: FileId) -> Vec<DefPath> {
-        if let Some(definitions) = self.image_file_definitions(file) {
+        if let Some(definitions) = self.catalog.file_definitions(file) {
             return definitions;
         }
         let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {

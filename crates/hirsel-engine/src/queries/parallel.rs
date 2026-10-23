@@ -899,10 +899,6 @@ impl QueryEngine {
                     .signatures
                     .get(&id)
                     .and_then(|entry| entry.result().ok())
-                    .or_else(|| {
-                        self.image_signature(&task.definition)
-                            .map(|image| image.output.clone())
-                    })
                     .map(Ok)
                     .unwrap_or_else(|| Ok(Arc::new(output(signature.clone())))),
                 Some(Err(error)) => Err(error.clone()),
