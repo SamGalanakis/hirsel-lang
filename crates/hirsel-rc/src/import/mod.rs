@@ -251,7 +251,6 @@ pub fn lower_cached(
             native_discharge.0.insert(path.clone(), sites.clone());
         }
     }
-    let none = BTreeSet::new();
     let mut discharged = Vec::new();
     // The library's native representations lie over the program's owners.
     let owners = crate::library::owners(&program.types, &program.signatures).over(&program.owners);
@@ -265,9 +264,7 @@ pub fn lower_cached(
     // Cache hits, bound to this program once every layout exists, and the imports made.
     let mut hits = Vec::new();
     let mut imported = Vec::new();
-    // Importing a unit or building a library body may require further
-    // library instances, which join the end of the list.
-    let mut required = Vec::new();
+    // Library requirements discovered by one import join the instance list.
     let mut next = 0;
     while next < instances.len() {
         let id = InstanceId(next as u32);
@@ -289,74 +286,27 @@ pub fn lower_cached(
             hits.push((id, hit));
             continue;
         }
-        hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeImports);
         if cache.enabled() && sites.is_none() {
             hirsel_intern::timings::count(hirsel_intern::timings::Count::ImportMisses);
         }
         let mut recorder = crate::effects::Recorder::new(&mut layouts, own_environment);
-        if instances.roles[id.index()].is_library() {
-            plans.push(None);
-            let unit = crate::library::build(program, &mut recorder, &mut instances, id)
-                .map_err(|e| LowerError::Library(id, e))?;
-            imported.push((id, recorder.finish()));
-            units.push(Some(unit));
-            continue;
+        let is_library = instances.roles[id.index()].is_library();
+        let imported_instance =
+            import_instance_mapped(program, &mut instances, id, sites, origin, &mut recorder)?;
+        plans.push(imported_instance.plan);
+        declined.extend(imported_instance.declined.into_iter().map(|d| (id, d)));
+        if let Some(discharge) = imported_instance.discharged {
+            discharged.push(discharge);
         }
-        let (plan, no) = plan_instance(program, &instances, id, &mut recorder)
-            .map_err(|e| LowerError::Normalize(id, e))?;
-        declined.extend(no.into_iter().map(|d| (id, d)));
-        let reference = match sites {
-            // The reference's library requests are its own: only the
-            // discharged unit is compiled.
-            Some(_) => Some(
-                import_mapped(
-                    program,
-                    &instances,
-                    id,
-                    plan.as_ref(),
-                    &none,
-                    origin,
-                    &mut recorder,
-                    &mut Vec::new(),
-                )
-                .map_err(|e| LowerError::Import(id, e))?,
-            ),
-            None => None,
-        };
-        let mut unit = import_mapped(
-            program,
-            &instances,
-            id,
-            plan.as_ref(),
-            sites.unwrap_or(&none),
-            origin,
-            &mut recorder,
-            &mut required,
-        )
-        .map_err(|e| LowerError::Import(id, e))?;
-        if let Some(reference) = reference {
-            discharged.push(DischargedUnit {
-                instance: id,
-                definition: proof_owner.clone(),
-                reference,
-                discharged: unit.clone(),
-            });
-        }
-        let proven = crate::spare_push::prove(&unit, &|l| recorder.record(l).kind.clone());
-        crate::spare_push::commit(&mut unit, &proven, &mut required, &program.types, &recorder)
-            .map_err(LowerError::Instance)?;
-        let fields = crate::spare_push::prove_fields(&unit);
-        crate::spare_push::commit_fields(&mut unit, &fields);
-        plans.push(plan);
-        for request in required.drain(..) {
+        for request in imported_instance.required {
             recorder.request(&request);
             crate::library::instantiate(&mut recorder, &mut instances, request)
                 .map_err(LowerError::Instance)?;
         }
-        if sites.is_none() {
+        if sites.is_none() || is_library {
             imported.push((id, recorder.finish()));
         }
-        units.push(Some(unit));
+        units.push(Some(imported_instance.unit));
     }
     // Bind the hits and erase the imports against one keying of the table.
     if !hits.is_empty() || (cache.enabled() && !imported.is_empty()) {
@@ -473,6 +423,102 @@ pub fn lower_cached(
     lowered.inline_instances = specialized.inline;
     crate::arena_credit::summarize(&mut lowered.units, &mut lowered.table);
     Ok(lowered)
+}
+
+/// The sole miss import of one source/library instance. Discovery and
+/// publication are explicit outputs; no cache, effect replay or whole-program
+/// traversal participates in this operation. Native validation remains required.
+pub struct InstanceImport {
+    pub unit: LirUnit<Value>,
+    pub plan: Option<LoopPlan>,
+    pub declined: Vec<Declined>,
+    pub required: Vec<crate::library::Request>,
+    pub discharged: Option<DischargedUnit>,
+}
+
+pub fn import_instance(
+    program: &Program,
+    instances: &mut Instances,
+    id: InstanceId,
+    sites: Option<&BTreeSet<Discharged>>,
+    layouts: &mut dyn crate::library::builder::Layouts,
+) -> Result<InstanceImport, LowerError> {
+    import_instance_mapped(program, instances, id, sites, None, layouts)
+}
+
+pub(crate) fn import_instance_mapped(
+    program: &Program,
+    instances: &mut Instances,
+    id: InstanceId,
+    sites: Option<&BTreeSet<Discharged>>,
+    origin: Option<&crate::append_into::SourceMap>,
+    layouts: &mut dyn crate::library::builder::Layouts,
+) -> Result<InstanceImport, LowerError> {
+    hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeImports);
+    if instances.roles[id.index()].is_library() {
+        let unit = crate::library::build(program, layouts, instances, id)
+            .map_err(|e| LowerError::Library(id, e))?;
+        return Ok(InstanceImport {
+            unit,
+            plan: None,
+            declined: Vec::new(),
+            required: Vec::new(),
+            discharged: None,
+        });
+    }
+    let (plan, declined) =
+        plan_instance(program, instances, id, layouts).map_err(|e| LowerError::Normalize(id, e))?;
+    let none = BTreeSet::new();
+    let reference = if sites.is_some() {
+        Some(
+            import_mapped(
+                program,
+                instances,
+                id,
+                plan.as_ref(),
+                &none,
+                origin,
+                layouts,
+                &mut Vec::new(),
+            )
+            .map_err(|e| LowerError::Import(id, e))?,
+        )
+    } else {
+        None
+    };
+    let mut required = Vec::new();
+    let mut unit = import_mapped(
+        program,
+        instances,
+        id,
+        plan.as_ref(),
+        sites.unwrap_or(&none),
+        origin,
+        layouts,
+        &mut required,
+    )
+    .map_err(|e| LowerError::Import(id, e))?;
+    let discharged = reference.map(|reference| DischargedUnit {
+        instance: id,
+        definition: origin.map_or_else(
+            || instances.view(id).key.definition().clone(),
+            |o| o.definition.clone(),
+        ),
+        reference,
+        discharged: unit.clone(),
+    });
+    let proven = crate::spare_push::prove(&unit, &|l| layouts.record(l).kind.clone());
+    crate::spare_push::commit(&mut unit, &proven, &mut required, &program.types, layouts)
+        .map_err(LowerError::Instance)?;
+    let fields = crate::spare_push::prove_fields(&unit);
+    crate::spare_push::commit_fields(&mut unit, &fields);
+    Ok(InstanceImport {
+        unit,
+        plan,
+        declined,
+        required,
+        discharged,
+    })
 }
 
 /// The definition of every static empty sequence; its instance names the
