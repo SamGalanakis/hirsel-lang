@@ -239,7 +239,6 @@ pub struct QueryEngine {
     pub(crate) snapshot_sources:
         hirsel_syntax::DefMap<std::sync::Weak<Entry<hirsel_types::SignatureRef>>>,
     /// Successful durable view receipts, candidates for the next snapshot.
-    pub(crate) snapshot_seed_verdicts: hirsel_validate::ValidatedSignatures,
     /// Signatures published or retired outside declaration indexing (S1).
     pub(crate) snapshot_inputs_revision: u64,
     /// The session's one type interner (design §1(a)), over the core rows.
@@ -321,10 +320,6 @@ impl Drop for QueryEngine {
         released(
             "engine: snapshot row provenance",
             take(&mut self.snapshot_sources),
-        );
-        released(
-            "engine: imported signature verdicts",
-            take(&mut self.snapshot_seed_verdicts),
         );
         released("engine: instance bodies", take(&mut self.instance_bodies));
         released("engine: staged values", take(&mut self.staged_values));
@@ -548,7 +543,6 @@ impl QueryEngine {
             comptime_runtime: None,
             source_growth: Default::default(),
             snapshot: None,
-            snapshot_seed_verdicts: Default::default(),
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
             snapshot_sources: Default::default(),
             snapshot_inputs_revision: 0,

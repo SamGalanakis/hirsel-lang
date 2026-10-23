@@ -737,14 +737,6 @@ fn image_bytes() -> Arc<[u8]> {
             generated: vec![],
         })),
     );
-    writer.blob(
-        crate::image::SNAPSHOT,
-        Box::new(crate::image::Whole(crate::SnapshotSeed {
-            public: vec![],
-            private: vec![],
-            verdicts: vec![],
-        })),
-    );
     writer.finish().unwrap().bytes.into()
 }
 #[test]

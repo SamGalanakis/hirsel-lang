@@ -1411,16 +1411,14 @@ fn restored_success_rechecks_private_shape_reads_under_unchanged_fingerprints() 
             false,
         ),
     );
-    let mut original = ValidatedSignatures::default();
+    let cache = std::sync::Arc::new(hirsel_validate::VerifierCache::default());
+    let policy = hirsel_syntax::ContentHash::of_bytes(b"view-receipt-context");
+    let mut original = ValidatedSignatures::with_cache(Some(cache.clone()), policy);
     let verdict = original.verdict(interner(), id("Hidden"), &signatures);
     assert!(verdict.error.is_none() && reads_view(&verdict, "Inner"));
-    let mut restored = ValidatedSignatures::default();
-    for (digest, reads) in original.successful() {
-        restored.seed_success(digest, reads.to_vec());
-    }
     let before = work::read(Counter::ValidateSignatureRows);
-    let mut next = ValidatedSignatures::default();
-    let reused = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    let mut next = ValidatedSignatures::with_cache(Some(cache), policy);
+    let reused = next.verdict(interner(), id("Hidden"), &signatures);
     assert_eq!(*reused, *verdict);
     assert_eq!(work::read(Counter::ValidateSignatureRows), before);
     let fingerprint = signatures.get(&path("Inner")).unwrap().fingerprint;
@@ -1433,7 +1431,7 @@ fn restored_success_rechecks_private_shape_reads_under_unchanged_fingerprints() 
         signatures.get(&path("Inner")).unwrap().fingerprint,
         fingerprint
     );
-    let recomputed = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    let recomputed = next.verdict(interner(), id("Hidden"), &signatures);
     assert!(!std::sync::Arc::ptr_eq(&reused, &recomputed));
     assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
     // Hidden's own declared nominal bounds can still hold. Its newly recorded

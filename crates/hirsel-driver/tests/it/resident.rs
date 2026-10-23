@@ -668,23 +668,23 @@ fn cold_frozen_frontier_defers_v_until_the_validation_universe_is_requested() {
 }
 
 #[test]
-fn deferred_snapshot_extensions_preserve_unconsumed_seed_receipts() {
+fn deferred_snapshot_extensions_preserve_local_verifier_receipts() {
     with_compiler_stack(|| {
         use hirsel_intern::{
             jobs::Jobs,
             work::{self, Counter},
         };
         let source = "fn a() -> u8 { 1u8 }\nfn b() -> u8 { 2u8 }\n";
-        let mut writer = engine(Arc::new(store::NoneStore));
-        let file = writer.sources.add("resident.hir", source.into()).unwrap();
-        writer.parse_file(file, &default_context()).unwrap();
-        let seed = writer.signature_snapshot().seed();
-        drop(writer);
         for jobs in [1, 2, 8] {
-            let mut reader = engine(Arc::new(store::NoneStore));
+            let store = Arc::new(store::MemStore::default());
+            let mut writer = engine(store.clone());
+            let file = writer.sources.add("resident.hir", source.into()).unwrap();
+            writer.parse_file(file, &default_context()).unwrap();
+            writer.signature_snapshot();
+            drop(writer);
+            let mut reader = engine(store.clone());
             let file = reader.sources.add("resident.hir", source.into()).unwrap();
             reader.parse_file(file, &default_context()).unwrap();
-            reader.seed_signature_verdicts(&seed);
             let before = work::read(Counter::ValidateSignatureRows);
             assert!(
                 reader
@@ -706,7 +706,7 @@ fn deferred_snapshot_extensions_preserve_unconsumed_seed_receipts() {
             assert_eq!(
                 work::read(Counter::ValidateSignatureRows) - before,
                 1,
-                "only a changed view is checked; unused successful seed receipts survive deferred epochs"
+                "only a changed view is checked; local successful receipts survive deferred epochs"
             );
         }
     });

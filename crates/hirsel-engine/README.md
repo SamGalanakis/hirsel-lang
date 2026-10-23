@@ -43,11 +43,10 @@ The snapshot's stamp follows declaration rows, explicit module inputs and S1
 signature publication/retirement, including the environment and comptime limits.
 An ordinary function-body edit retains the snapshot and runtime type tables;
 candidate, header and private-shape changes rebuild the affected views.
-`SnapshotSeed` stores public/private signatures and successful per-view V
-receipts in canonical type/anchor scopes. Import independently computes each
-view digest and checks every contextual read before reusing a success; failed
-verdicts are recomputed. `seed_signature_verdicts` primes only receipt candidates:
-actual source/image views remain authoritative.
+Signature view receipts live in the verifier-owned namespace of the ordinary
+content store. V binds each success to its complete view, policy and observed
+context. Product bytes cannot import successful verdicts or grant declaration
+authority; changed or missing views require independent validation.
 
 Compose phases through per-definition queries; record dependency fingerprints for later caching.
 
