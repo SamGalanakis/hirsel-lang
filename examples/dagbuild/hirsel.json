@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "dagbuild",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "manifest.hir",
+      "module": [
+        "manifest"
+      ]
+    },
+    {
+      "path": "graph.hir",
+      "module": [
+        "graph"
+      ]
+    },
+    {
+      "path": "fingerprint.hir",
+      "module": [
+        "fingerprint"
+      ]
+    },
+    {
+      "path": "execute.hir",
+      "module": [
+        "execute"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

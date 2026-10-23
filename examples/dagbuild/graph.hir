@@ -1,0 +1,156 @@
+// Completion release follows CPython graphlib.py:112-200, 010bebbf9fd12bba1e3f40bdbddacd51a9c2bf20.
+// PSF-2.0; see REFERENCES.md and LICENSES. std owns cycle detection.
+pub type Link[K] {
+  from: K,
+  to: K,
+}
+
+pub type Binding[K, V] {
+  key: K,
+  value: V,
+}
+
+// Borrowed views: callers detach only the value they need. String/cache records
+// and numeric task-set slots are independent real instantiations of this seam.
+pub fn lookup[K: key, V: copyable](rows: List[Binding[K, V]], key: K) -> Option[V] in rows uses {} {
+  for row in rows {
+    if row.key == key {
+      return Some(copy row.value)
+    }
+  }
+  None()
+}
+
+pub fn index[K: key](keys: List[K], key: K) -> Option[u64] uses {} {
+  for i in 0u64..list.len(keys) {
+    if keys[i] == key {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+pub fn resolve[K: key](keys: List[K], links: List[Link[K]]) -> Result[
+  List[toposort.Edge],
+  manifest.Problem
+] uses {} {
+  let count = list.len(keys)
+  if count > manifest.MAX_NODES || list.len(links) > manifest.MAX_EDGES {
+    return Error(manifest.problem("graph_limit"))
+  }
+  for i in 0u64..count {
+    for j in 0u64..i {
+      if keys[i] == keys[j] {
+        return Error(manifest.problem("duplicate_task"))
+      }
+    }
+  }
+  let mut edges: List[toposort.Edge] = []
+  for link in links {
+    let Some(a) = index(keys, link.from) else {
+      return Error(manifest.problem("unknown_dependency"))
+    }
+    let Some(b) = index(keys, link.to) else {
+      return Error(manifest.problem("unknown_dependency"))
+    }
+    list.push(mut edges, toposort.Edge(from: a, to: b))
+  }
+  let Ok(_) = toposort.order(count, edges, manifest.MAX_NODES, manifest.MAX_EDGES) else {
+    return Error(manifest.problem("cycle"))
+  }
+  Ok(take edges)
+}
+
+pub fn validate(dag: manifest.Dag) -> Result[List[toposort.Edge], manifest.Problem] uses {} {
+  let mut names: List[String] = []
+  let mut outputs: List[String] = []
+  let mut links: List[Link[String]] = []
+  for node in dag.tasks {
+    list.push(mut names, unique node.name)
+    for output in node.outputs {
+      // Reject equal paths and ancestor/descendant output aliases before spawn.
+      for prior in outputs {
+        if output == prior || string.starts_with(output, f"{prior}/") || string.starts_with(
+          prior,
+          f"{output}/"
+        ) {
+          return Error(manifest.problem("duplicate_output"))
+        }
+      }
+      list.push(mut outputs, unique output)
+    }
+    for dependency in node.dependencies {
+      list.push(mut links, Link(from: unique dependency, to: unique node.name))
+    }
+  }
+  resolve(names, links)
+}
+
+pub const PENDING: u64 = 0
+
+pub const ACTIVE: u64 = 1
+
+pub const CLEAN: u64 = 2
+
+pub const BUILT: u64 = 3
+
+pub const FAILED: u64 = 4
+
+pub const BLOCKED: u64 = 5
+
+pub const CANCELED: u64 = 6
+
+pub const DIRTY: u64 = 7
+
+pub fn successful(code: u64) -> bool uses {} {
+  code == CLEAN || code == BUILT
+}
+
+// Re-scan declaration order after each completion. A bounded graph needs no
+// mutable priority heap and ready ties do not inherit provider completion order.
+pub fn ready(edges: List[toposort.Edge], codes: List[u64], node: u64) -> bool uses {} {
+  if codes[node] != PENDING {
+    return false
+  }
+  for edge in edges {
+    if edge.to == node && !successful(codes[edge.from]) {
+      return false
+    }
+  }
+  true
+}
+
+pub fn blocked(edges: List[toposort.Edge], codes: List[u64], node: u64) -> bool uses {} {
+  for edge in edges {
+    if edge.to == node && (codes[edge.from] == FAILED || codes[edge.from] == BLOCKED || codes[edge.from] == CANCELED) {
+      return true
+    }
+  }
+  false
+}
+
+pub fn propagate(edges: List[toposort.Edge], mut codes: List[u64]) -> () uses {} {
+  for _ in 0u64..list.len(codes) {
+    for i in 0u64..list.len(codes) {
+      if codes[i] == PENDING && blocked(edges, codes, i) {
+        codes[i] = BLOCKED
+      }
+    }
+  }
+}
+
+pub fn status(code: u64) -> String uses {} {
+  if code == CLEAN {
+    "clean"
+  } else if code == BUILT {
+    "built"
+  } else if code == FAILED {
+    "failed"
+  } else if code == BLOCKED {
+    "blocked"
+  } else if code == DIRTY {
+    "dirty"
+  } else {
+    "canceled"
+  }
+}

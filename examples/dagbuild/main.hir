@@ -1,0 +1,156 @@
+pub type AppError = Report(report.Error) | Output(OutputError) | Json(json.JsonError)
+
+const HELP: String = "Usage: dagbuild plan|build FILE\nMount project for manifest/artifacts and state for state.json.\nLiteral argv; 32 tasks, 128 edges, 64 artifacts, jobs 1..4, deadline 30s.\nExit: 0 success/plan; 1 failed tasks; 2 invalid DAG/state; 3 file/capability/resource refusal.\n"
+
+fn invalid(errors: Stderr, kind: String, code: u8) -> Result[
+  std@1/process.ExitCode,
+  AppError
+] {
+  let text = json.stringify(manifest.problem_json(manifest.problem(kind)))?
+  err.print(errors, f"{text}\n")?
+  Ok(std@1/process.exit_code(code))
+}
+
+fn fault(errors: Stderr, problem: fingerprint.Fault) -> Result[
+  std@1/process.ExitCode,
+  AppError
+] {
+  match problem {
+    Corrupt() => invalid(errors, "state_corrupt", 2u8),
+    Bound() => invalid(errors, "artifact_bytes", 3u8),
+    File(_) => invalid(errors, "file_refused", 3u8),
+    Json(_) => invalid(errors, "state_json", 2u8),
+  }
+}
+
+fn workflow(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.print(output, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  if arg.len(args) != 2 {
+    return invalid(errors, "usage", 2u8)
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return invalid(errors, "usage", 2u8)
+  }
+  if mode != "plan" && mode != "build" {
+    return invalid(errors, "usage", 2u8)
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return invalid(errors, "manifest_path", 2u8)
+  }
+  if !manifest.relative(name) {
+    return invalid(errors, "manifest_path", 2u8)
+  }
+  let Ok(project) = io.dir(rt, path.of("project")) else {
+    return invalid(errors, "project_grant", 3u8)
+  }
+  let Ok(state) = io.dir(rt, path.of("state")) else {
+    return invalid(errors, "state_grant", 3u8)
+  }
+  let mut input = match file.open(project, path.of(name)) {
+    Ok(f) => take f,
+    Error(_) => return invalid(errors, "manifest_read", 3u8),
+  }
+  let raw = match file.read_all_bounded(project, mut input, manifest.MAX_MANIFEST) {
+    Ok(data) => take data,
+    Error(Limit()) => return invalid(errors, "manifest_bytes", 3u8),
+    Error(_) => return invalid(errors, "manifest_read", 3u8),
+  }
+  let dag = match manifest.decode(take raw) {
+    Ok(value) => take value,
+    Error(e) => return invalid(errors, e.kind, 2u8),
+  }
+  // Cycles, unknown names and collisions are rejected before obtaining Proc.
+  let edges = match graph.validate(dag) {
+    Ok(value) => take value,
+    Error(e) => return invalid(errors, e.kind, 2u8),
+  }
+  let prior = match fingerprint.load(state) {
+    Ok(value) => fingerprint.table(value),
+    Error(e) => return fault(errors, e),
+  }
+  if mode == "plan" {
+    let run = match execute.plan(project, dag, edges, prior) {
+      Ok(value) => take value,
+      Error(e) => return fault(errors, e),
+    }
+    let _ = report.render(output, dag, run, true)?
+    return Ok(std@1/process.SUCCESS)
+  }
+  let Ok(p) = io.process(rt) else {
+    return invalid(errors, "process_grant", 3u8)
+  }
+  let Ok(c) = io.monotonic_clock(rt) else {
+    return invalid(errors, "clock_grant", 3u8)
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return invalid(errors, "tasks_grant", 3u8)
+  }
+  // Invalidate the previous generation before any command can affect artifacts.
+  // A crash/refused final publication can only lose cache hits, never invent one.
+  if let Error(_) = report.clear(state) {
+    return invalid(errors, "state_write", 3u8)
+  }
+  let run = match execute.build(p, c, tasks, project, dag, edges, prior) {
+    Ok(value) => take value,
+    Error(e) => return fault(errors, e),
+  }
+  if let Error(_) = report.publish(state, dag, run) {
+    return invalid(errors, "state_write", 3u8)
+  }
+  let failed = report.render(output, dag, run, false)?
+  Ok(
+    if failed {
+      std@1/process.FAILURE
+    } else {
+      std@1/process.SUCCESS
+    }
+  )
+}
+
+// The outer deadline includes manifest/state reads, planning, commands and final
+// publication. Normal cleanup remains structured when the deadline cancels work.
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        return workflow(rt, args)
+      }
+    }
+  }
+  let Ok(c) = io.monotonic_clock(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(start) = clock.monotonic(c) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Some(at) = instant.checked_add(c, start, 30000000000u64) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Result[std@1/process.ExitCode, AppError] {
+      workflow(rt, args)
+    }
+  )
+  match take bounded {
+    Finished(value) => take value,
+    Expired(_) => Ok(std@1/process.FAILURE),
+  }
+}

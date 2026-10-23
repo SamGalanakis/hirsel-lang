@@ -1,0 +1,518 @@
+{
+  "incremental|cranelift|changed-output|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(48)"
+    }
+  ],
+  "incremental|cranelift|changed-output|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(48)"
+    }
+  ],
+  "incremental|cranelift|changed-output|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|cranelift|command|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(38)"
+    }
+  ],
+  "incremental|cranelift|first|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|cranelift|first|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|cranelift|first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|cranelift|input|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|cranelift|input|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|cranelift|input|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|cranelift|missing|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(44)"
+    }
+  ],
+  "incremental|cranelift|missing|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(44)"
+    }
+  ],
+  "incremental|cranelift|missing|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|cranelift|unchanged|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|changed-output|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(48)"
+    }
+  ],
+  "incremental|llvm|changed-output|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(48)"
+    }
+  ],
+  "incremental|llvm|changed-output|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|command|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(38)"
+    }
+  ],
+  "incremental|llvm|first|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|llvm|first|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|llvm|first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(30)"
+    }
+  ],
+  "incremental|llvm|input|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|input|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|input|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|missing|1|cranelift": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(44)"
+    }
+  ],
+  "incremental|llvm|missing|1|llvm": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(44)"
+    }
+  ],
+  "incremental|llvm|missing|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "incremental|llvm|unchanged|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(33)"
+    }
+  ],
+  "real|cranelift|cancel-cleanup|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|cancel-cleanup|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|domain-error|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|domain-error|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|domain-error|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|success|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|success|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|cranelift|success|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|cancel-cleanup|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|cancel-cleanup|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|cancel-cleanup|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|domain-error|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|domain-error|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|domain-error|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|success|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|success|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "real|llvm|success|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "script|cranelift|argv-4096|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(12)"
+    }
+  ],
+  "script|cranelift|artifacts-64|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(236)"
+    }
+  ],
+  "script|cranelift|bytes-1048576|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(280)"
+    }
+  ],
+  "script|cranelift|chain-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(31)"
+    }
+  ],
+  "script|cranelift|clean-ready-tie|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|cranelift|command-change|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(34)"
+    }
+  ],
+  "script|cranelift|cpython-disconnected|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|diamond-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|diamond-first|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|diamond-first|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|disconnected-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|edges-128|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "script|cranelift|failure-descendants|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|failure-descendants|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|failure-descendants|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|cranelift|input-change|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(34)"
+    }
+  ],
+  "script|cranelift|manifest-65536|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|cranelift|nodes-32|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(20)"
+    }
+  ],
+  "script|cranelift|reverse-chain|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|cranelift|unchanged-plan|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(20)"
+    }
+  ],
+  "script|cranelift|unchanged|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(28)"
+    }
+  ],
+  "script|llvm|argv-4096|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(12)"
+    }
+  ],
+  "script|llvm|artifacts-64|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(236)"
+    }
+  ],
+  "script|llvm|bytes-1048576|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(280)"
+    }
+  ],
+  "script|llvm|chain-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(31)"
+    }
+  ],
+  "script|llvm|clean-ready-tie|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|llvm|command-change|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(34)"
+    }
+  ],
+  "script|llvm|cpython-disconnected|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|diamond-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|diamond-first|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|disconnected-first|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|edges-128|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(23)"
+    }
+  ],
+  "script|llvm|failure-descendants|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|failure-descendants|2|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|failure-descendants|4|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(29)"
+    }
+  ],
+  "script|llvm|input-change|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(34)"
+    }
+  ],
+  "script|llvm|manifest-65536|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|llvm|nodes-32|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(20)"
+    }
+  ],
+  "script|llvm|reverse-chain|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(26)"
+    }
+  ],
+  "script|llvm|unchanged-plan|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(20)"
+    }
+  ],
+  "script|llvm|unchanged|1|reference": [
+    {
+      "exit": 3,
+      "diagnostic": "ReplayMismatch(28)"
+    }
+  ]
+}

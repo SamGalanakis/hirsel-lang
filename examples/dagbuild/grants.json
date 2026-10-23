@@ -1,0 +1,37 @@
+{
+  "args": [
+    "build",
+    "manifest.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "project",
+        "host": "fixtures",
+        "access": "read_write"
+      },
+      {
+        "path": "state",
+        "host": "state",
+        "access": "read_write"
+      }
+    ],
+    "process": {
+      "provider": "process.spawn@1",
+      "rules": [
+        {
+          "program": "/usr/bin/true"
+        }
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

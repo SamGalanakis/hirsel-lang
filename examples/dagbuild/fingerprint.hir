@@ -1,0 +1,285 @@
+// Versioned app state, intentionally separate from every compiler cache.
+pub const BYTE_LIMIT: u64 = 1048576
+
+pub const STATE_LIMIT: u64 = 65536
+
+pub type Artifact {
+  path: String,
+  digest: String,
+}
+
+pub type Record {
+  fingerprint: String,
+  digest_result: String,
+  outputs: List[Artifact],
+}
+
+pub type Saved {
+  name: String,
+  record: Record,
+}
+
+pub type State {
+  version: u64,
+  tasks: List[Saved],
+}
+
+pub type Fault = File(FileError) | Bound | Corrupt | Json(json.JsonError)
+
+pub type Check {
+  key: String,
+  outputs: List[Artifact],
+  reason: String,
+}
+
+fn artifact_from_json(value: json.Value) -> Result[unique Artifact, String] uses {} = comptime derive.from_json(
+  shape(Artifact)
+)
+
+fn record_from_json(value: json.Value) -> Result[unique Record, String] uses {} = comptime derive.from_json(
+  shape(Record)
+)
+
+fn saved_from_json(value: json.Value) -> Result[unique Saved, String] uses {} = comptime derive.from_json(
+  shape(Saved)
+)
+
+fn state_from_json(value: json.Value) -> Result[unique State, String] uses {} = comptime derive.from_json(
+  shape(State)
+)
+
+fn artifact_to_json(value: Artifact) -> json.Value uses {} = comptime derive.json_value(
+  shape(Artifact)
+)
+
+fn record_to_json(value: Record) -> json.Value uses {} = comptime derive.json_value(
+  shape(Record)
+)
+
+fn saved_to_json(value: Saved) -> json.Value uses {} = comptime derive.json_value(
+  shape(Saved)
+)
+
+pub fn state_json(value: State) -> json.Value uses {} = comptime derive.json_value(
+  shape(State)
+)
+
+pub fn empty() -> State uses {} {
+  State(version: 1, tasks: [])
+}
+
+pub fn load(d: Dir) -> Result[State, Fault] {
+  let mut input = match file.open(d, path.of("state.json")) {
+    Ok(f) => take f,
+    Error(NotFound()) => return Ok(empty()),
+    Error(e) => return Error(File(e)),
+  }
+  let raw = match file.read_all_bounded(d, mut input, STATE_LIMIT) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Bound()),
+    Error(File(e)) => return Error(File(e)),
+  }
+  let Ok(text) = string.from_bytes(take raw) else {
+    return Error(Corrupt())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Corrupt())
+  }
+  let Some(Array(entries)) = json_access.member(value, "tasks") else {
+    return Error(Corrupt())
+  }
+  if list.len(entries) > manifest.MAX_NODES {
+    return Error(Corrupt())
+  }
+  let mut declared_outputs = 0u64
+  for entry in entries {
+    let Some(record_value) = json_access.member(entry, "record") else {
+      return Error(Corrupt())
+    }
+    let Some(Array(output_values)) = json_access.member(record_value, "outputs") else {
+      return Error(Corrupt())
+    }
+    if list.len(output_values) > manifest.MAX_ARTIFACTS - declared_outputs {
+      return Error(Corrupt())
+    }
+    declared_outputs += list.len(output_values)
+  }
+  let Ok(state) = state_from_json(value) else {
+    return Error(Corrupt())
+  }
+  if state.version != 1 {
+    return Error(Corrupt())
+  }
+  let mut names: Set[String] = set.empty()
+  let mut count = 0u64
+  for entry in state.tasks {
+    if set.contains(names, entry.name) || string.byte_len(entry.record.fingerprint) != 64 || string.byte_len(
+      entry.record.digest_result
+    ) != 64 {
+      return Error(Corrupt())
+    }
+    set.insert(mut names, unique entry.name)
+    for artifact in entry.record.outputs {
+      count += 1
+      if count > manifest.MAX_ARTIFACTS || !manifest.relative(artifact.path) || string.byte_len(
+        artifact.digest
+      ) != 64 {
+        return Error(Corrupt())
+      }
+    }
+  }
+  Ok(take state)
+}
+
+// Check size before allocation, then use a bounded read to defend file growth.
+// The one-byte overflow probe is std's fixed-size refusal check, not accepted data.
+pub fn read(d: Dir, name: String, mut used: u64) -> Result[unique Bytes, Fault] {
+  let size = file.size(d, path.of(name))?
+  if size > BYTE_LIMIT - used {
+    return Error(Bound())
+  }
+  let mut input = file.open(d, path.of(name))?
+  let raw = match file.read_all_bounded(d, mut input, BYTE_LIMIT - used) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Bound()),
+    Error(File(e)) => return Error(File(e)),
+  }
+  used += bytes.len(raw)
+  Ok(take raw)
+}
+
+// A decimal byte length and ':' frame every field, including exact file bytes.
+// This avoids argv/path concatenation ambiguity without a new std codec.
+pub fn field(mut hash: sha256.State, data: Bytes) -> () uses {} {
+  let length = bytes.len(data)
+  sha256.update(mut hash, string.as_bytes(f"{length}:"))
+  sha256.update(mut hash, data)
+}
+
+fn finish(take hash: sha256.State) -> String uses {} {
+  let digest = sha256.finish(take hash)
+  let mut raw: List[u8] = []
+  for byte in digest {
+    list.push(mut raw, byte)
+  }
+  hex.encode(bytes.from_list(take raw))
+}
+
+pub fn compute_key(
+  d: Dir,
+  node: manifest.Node,
+  results: List[String],
+  edges: List[toposort.Edge],
+  id: u64,
+  mut used: u64
+) -> Result[String, Fault] {
+  let mut hash = sha256.new()
+  field(mut hash, b"dagbuild-1")
+  field(mut hash, string.as_bytes(node.name))
+  field(mut hash, b"argv")
+  field(mut hash, string.as_bytes(f"{list.len(node.argv)}"))
+  for word in node.argv {
+    field(mut hash, string.as_bytes(word))
+  }
+  field(mut hash, b"inputs")
+  field(mut hash, string.as_bytes(f"{list.len(node.inputs)}"))
+  for name in node.inputs {
+    field(mut hash, string.as_bytes(name))
+    let raw = read(d, name, mut used)?
+    field(mut hash, raw)
+  }
+  field(mut hash, b"predecessors")
+  field(mut hash, string.as_bytes(f"{list.len(node.dependencies)}"))
+  for edge in edges {
+    if edge.to == id {
+      field(mut hash, string.as_bytes(f"{edge.from}"))
+      field(mut hash, string.as_bytes(results[edge.from]))
+    }
+  }
+  field(mut hash, b"outputs")
+  field(mut hash, string.as_bytes(f"{list.len(node.outputs)}"))
+  for name in node.outputs {
+    field(mut hash, string.as_bytes(name))
+  }
+  Ok(finish(take hash))
+}
+
+pub fn outputs(d: Dir, names: List[String], mut used: u64) -> Result[
+  List[Artifact],
+  Fault
+] {
+  let mut artifacts: List[Artifact] = []
+  for name in names {
+    let raw = read(d, name, mut used)?
+    list.push(
+      mut artifacts,
+      Artifact(path: unique name, digest: sha256.digest_hex(raw))
+    )
+  }
+  Ok(take artifacts)
+}
+
+pub fn digest_result(key: String, artifacts: List[Artifact]) -> String uses {} {
+  let mut hash = sha256.new()
+  field(mut hash, b"dagbuild-result-1")
+  field(mut hash, string.as_bytes(key))
+  for artifact in artifacts {
+    field(mut hash, string.as_bytes(artifact.path))
+    field(mut hash, string.as_bytes(artifact.digest))
+  }
+  finish(take hash)
+}
+
+pub fn table(state: State) -> List[graph.Binding[String, Record]] uses {} {
+  let mut rows: List[graph.Binding[String, Record]] = []
+  for saved in state.tasks {
+    list.push(
+      mut rows,
+      graph.Binding(key: unique saved.name, value: unique saved.record)
+    )
+  }
+  take rows
+}
+
+pub fn check(
+  d: Dir,
+  node: manifest.Node,
+  key: String,
+  prior: List[graph.Binding[String, Record]],
+  mut used: u64
+) -> Result[Check, Fault] {
+  let Some(old) = graph.lookup(prior, node.name) else {
+    return Ok(Check(key: unique key, outputs: [], reason: "no_record"))
+  }
+  if old.fingerprint != key {
+    return Ok(Check(key: unique key, outputs: [], reason: "fingerprint_changed"))
+  }
+  if list.len(old.outputs) != list.len(node.outputs) {
+    return Ok(Check(key: unique key, outputs: [], reason: "outputs_changed"))
+  }
+  let mut artifacts: List[Artifact] = []
+  for i in 0u64..list.len(node.outputs) {
+    if old.outputs[i].path != node.outputs[i] {
+      return Ok(Check(key: unique key, outputs: [], reason: "outputs_changed"))
+    }
+    let raw = match read(d, node.outputs[i], mut used) {
+      Ok(data) => take data,
+      Error(File(NotFound())) => return Ok(
+        Check(key: unique key, outputs: [], reason: "output_missing")
+      ),
+      Error(e) => return Error(e),
+    }
+    let digest = sha256.digest_hex(raw)
+    if old.outputs[i].digest != digest {
+      return Ok(Check(key: unique key, outputs: [], reason: "output_changed"))
+    }
+    list.push(
+      mut artifacts,
+      Artifact(path: unique node.outputs[i], digest: take digest)
+    )
+  }
+  if old.digest_result != digest_result(key, artifacts) {
+    return Error(Corrupt())
+  }
+  Ok(Check(key: unique key, outputs: take artifacts, reason: "unchanged"))
+}

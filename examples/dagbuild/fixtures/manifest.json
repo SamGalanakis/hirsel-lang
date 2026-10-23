@@ -1,0 +1,1 @@
+{"tasks":[{"name":"prepare","argv":["/usr/bin/true"],"dependencies":[],"inputs":[],"outputs":[]},{"name":"validate","argv":["/usr/bin/true"],"dependencies":["prepare"],"inputs":[],"outputs":[]}],"jobs":2,"fail_fast":false}

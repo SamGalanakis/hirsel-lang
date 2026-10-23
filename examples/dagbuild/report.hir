@@ -1,0 +1,61 @@
+pub type Error = Output(OutputError) | Json(json.JsonError) | File(FileError)
+
+pub type Row {
+  name: String,
+  status: String,
+  reason: String,
+  digest_result: String,
+}
+
+fn row_json(value: Row) -> json.Value uses {} = comptime derive.json_value(shape(Row))
+
+// The file API owns atomic replacement and abandoned temporary cleanup. State
+// has declaration order regardless of task completion order. Failures are absent.
+pub fn publish(d: Dir, dag: manifest.Dag, run: execute.Run) -> Result[(), Error] {
+  let mut rows: List[fingerprint.Saved] = []
+  for node in dag.tasks {
+    for saved in run.records {
+      if saved.name == node.name {
+        list.push(mut rows, unique saved)
+      }
+    }
+  }
+  let state = fingerprint.State(version: 1, tasks: take rows)
+  let encoded = json.stringify(fingerprint.state_json(state))?
+  let mut output = file.create_atomic(d, path.of("state.json"))?
+  file.write_all(d, mut output, string.as_bytes(encoded))?
+  file.commit(d, take output)?
+  Ok(())
+}
+
+pub fn clear(d: Dir) -> Result[(), Error] {
+  let encoded = json.stringify(fingerprint.state_json(fingerprint.empty()))?
+  let mut output = file.create_atomic(d, path.of("state.json"))?
+  file.write_all(d, mut output, string.as_bytes(encoded))?
+  file.commit(d, take output)?
+  Ok(())
+}
+
+pub fn render(out: Stdout, dag: manifest.Dag, run: execute.Run, planning: bool) -> Result[
+  bool,
+  Error
+] {
+  let mut failed = run.expired
+  for i in 0u64..list.len(dag.tasks) {
+    if !planning && !graph.successful(run.codes[i]) {
+      failed = true
+    }
+    let row = Row(
+      name: unique dag.tasks[i].name,
+      status: graph.status(run.codes[i]),
+      reason: unique run.reasons[i],
+      digest_result: unique run.results[i]
+    )
+    let encoded = json.stringify(row_json(row))?
+    out.print(out, f"{encoded}\n")?
+  }
+  let count = list.len(dag.tasks)
+  let expired = run.expired
+  out.print(out, f"{{\"tasks\":{count},\"expired\":{expired},\"failed\":{failed}}}\n")?
+  Ok(failed)
+}

@@ -1,0 +1,174 @@
+// Literal declarations; no ambient cwd, environment, shell or executable search.
+pub const MAX_NODES: u64 = 32
+
+pub const MAX_EDGES: u64 = 128
+
+pub const MAX_ARTIFACTS: u64 = 64
+
+pub const MAX_MANIFEST: u64 = 65536
+
+pub type Problem {
+  kind: String,
+}
+
+pub type Node {
+  name: String,
+  argv: List[String],
+  dependencies: List[String],
+  inputs: List[String],
+  outputs: List[String],
+}
+
+pub type Dag {
+  tasks: List[Node],
+  jobs: u64,
+  fail_fast: bool,
+}
+
+pub fn problem(kind: String) -> Problem uses {} {
+  Problem(kind: unique kind)
+}
+
+pub fn problem_json(value: Problem) -> json.Value uses {} = comptime derive.json_value(
+  shape(Problem)
+)
+
+fn node_from_json(value: json.Value) -> Result[unique Node, String] uses {} = comptime derive.from_json(
+  shape(Node)
+)
+
+fn dag_from_json(value: json.Value) -> Result[unique Dag, String] uses {} = comptime derive.from_json(
+  shape(Dag)
+)
+
+pub fn relative(name: String) -> bool uses {} {
+  if name == "" || string.byte_len(name) > 256 || string.starts_with(name, "/") || string.contains(
+    name,
+    "\\"
+  ) || string.contains(name, ":") || string.contains(name, "\0") {
+    return false
+  }
+  let Ok(normal) = path.normalize(path.of(name)) else {
+    return false
+  }
+  path.text(normal) == name && name != "." && name != ".." && !string.starts_with(
+    name,
+    "../"
+  )
+}
+
+fn array_width(value: json.Value, field: String) -> Result[u64, Problem] uses {} {
+  let Some(Array(items)) = json_access.member(value, field) else {
+    return Error(problem("shape"))
+  }
+  Ok(list.len(items))
+}
+
+// Preflight the bounded DOM before a derived decoder allocates typed lists.
+pub fn decode(take data: unique Bytes) -> Result[unique Dag, Problem] uses {} {
+  if bytes.len(data) > MAX_MANIFEST {
+    return Error(problem("manifest_bytes"))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(problem("utf8"))
+  }
+  let Ok(value) = json.parse(take source) else {
+    return Error(problem("json"))
+  }
+  let Object(fields) = value else {
+    return Error(problem("shape"))
+  }
+  if map.len(fields) != 3 {
+    return Error(problem("fields"))
+  }
+  let count = array_width(value, "tasks")?
+  if count > MAX_NODES {
+    return Error(problem("node_limit"))
+  }
+  let mut raw_edges = 0u64
+  let mut artifacts = 0u64
+  let Some(nodes) = json_access.member(value, "tasks") else {
+    return Error(problem("shape"))
+  }
+  for i in 0u64..count {
+    let Some(item) = json_access.element(nodes, i) else {
+      return Error(problem("shape"))
+    }
+    let Object(node_fields) = item else {
+      return Error(problem("shape"))
+    }
+    if map.len(node_fields) != 5 {
+      return Error(problem("task_fields"))
+    }
+    let width = array_width(item, "dependencies")?
+    if width > MAX_EDGES - raw_edges {
+      return Error(problem("edge_limit"))
+    }
+    raw_edges += width
+    let inputs = array_width(item, "inputs")?
+    if inputs > MAX_ARTIFACTS - artifacts {
+      return Error(problem("artifact_limit"))
+    }
+    artifacts += inputs
+    let outputs = array_width(item, "outputs")?
+    if outputs > MAX_ARTIFACTS - artifacts {
+      return Error(problem("artifact_limit"))
+    }
+    artifacts += outputs
+    let words = array_width(item, "argv")?
+    if words == 0 || words > 64 {
+      return Error(problem("argv"))
+    }
+  }
+  let Ok(dag) = dag_from_json(value) else {
+    return Error(problem("shape"))
+  }
+  if dag.jobs == 0 || dag.jobs > 4 {
+    return Error(problem("jobs"))
+  }
+  for node in dag.tasks {
+    if node.name == "" || string.byte_len(node.name) > 128 {
+      return Error(problem("name"))
+    }
+    let mut argv_bytes = 0u64
+    for word in node.argv {
+      let size = string.byte_len(word) + 1
+      if size > 4096 - argv_bytes || string.contains(word, "\0") {
+        return Error(problem("argv_bytes"))
+      }
+      argv_bytes += size
+    }
+    let program = node.argv[0]
+    let Ok(normal) = path.normalize(path.of(program)) else {
+      return Error(problem("program"))
+    }
+    if !string.starts_with(program, "/") || program == "/" || path.text(normal) != program {
+      return Error(problem("program"))
+    }
+    for name in node.inputs {
+      if !relative(name) {
+        return Error(problem("artifact_path"))
+      }
+    }
+    for name in node.outputs {
+      if !relative(name) {
+        return Error(problem("artifact_path"))
+      }
+    }
+  }
+  Ok(unique dag)
+}
+
+pub fn command(node: Node) -> unique Command uses {} {
+  let mut args: List[String] = []
+  for i in 1u64..list.len(node.argv) {
+    list.push(mut args, unique node.argv[i])
+  }
+  Command(
+    program: path.of(unique node.argv[0]),
+    args: take args,
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
+}

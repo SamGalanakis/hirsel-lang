@@ -1,0 +1,330 @@
+// CPython done/get_ready release + Go exec.Wait join/discard ownership.
+// No command is admitted until validation and state invalidation have completed.
+pub type Completion {
+  node: u64,
+  code: i32,
+  reason: u64,
+}
+
+pub type Run {
+  codes: List[u64],
+  reasons: List[String],
+  results: List[String],
+  records: List[fingerprint.Saved],
+  expired: bool,
+}
+
+pub fn initial(count: u64) -> Run uses {} {
+  let mut codes: List[u64] = []
+  let mut reasons: List[String] = []
+  let mut results: List[String] = []
+  for _ in 0u64..count {
+    list.push(mut codes, graph.PENDING)
+    list.push(mut reasons, "")
+    list.push(mut results, "")
+  }
+  Run(
+    codes: take codes,
+    reasons: take reasons,
+    results: take results,
+    records: [],
+    expired: false
+  )
+}
+
+fn process_fault(id: u64, error: ProcessError) -> Completion uses {} {
+  let reason = match error {
+    NotGranted() => 1u64,
+    NotFound() => 2u64,
+    Canceled(_) => 3u64,
+    TimedOut() => 4u64,
+    _ => 5u64,
+  }
+  Completion(node: id, code: -1, reason: reason)
+}
+
+fn process_reason(code: u64) -> String uses {} {
+  if code == 0 {
+    "exit"
+  } else if code == 1 {
+    "spawn_denied"
+  } else if code == 2 {
+    "spawn_missing"
+  } else if code == 3 {
+    "canceled"
+  } else if code == 4 {
+    "deadline"
+  } else if code == 6 {
+    "signal"
+  } else {
+    "process_error"
+  }
+}
+
+fn job(p: Proc, take cmd: unique Command, id: u64, deadline: Deadline) -> Completion {
+  let mut child = match proc.spawn(p, take cmd) {
+    Ok(handle) => take handle,
+    Error(e) => return process_fault(id, e),
+  }
+  child.close_stdin(p, mut child)
+  // wait consumes/reaps Child and concurrently drains both streams, including
+  // cancellation. No Child, parent Scope or mutable scheduler crosses a task.
+  match child.wait(p, take child, Some(deadline)) {
+    Ok(Exited(code)) => Completion(node: id, code: code, reason: 0),
+    Ok(Signaled(_)) => Completion(node: id, code: -1, reason: 6),
+    Error(e) => process_fault(id, e),
+  }
+}
+
+fn success(
+  mut run: Run,
+  id: u64,
+  name: String,
+  key: String,
+  artifacts: List[fingerprint.Artifact],
+  clean: bool
+) -> () uses {} {
+  let digest = fingerprint.digest_result(key, artifacts)
+  run.codes[id] = if clean {
+    graph.CLEAN
+  } else {
+    graph.BUILT
+  }
+  run.results[id] = unique digest
+  list.push(
+    mut run.records,
+    fingerprint.Saved(
+      name: unique name,
+      record: fingerprint.Record(
+        fingerprint: unique key,
+        digest_result: take digest,
+        outputs: unique artifacts
+      )
+    )
+  )
+}
+
+pub fn build(
+  p: Proc,
+  c: MonotonicClock,
+  tasks: Tasks,
+  d: Dir,
+  dag: manifest.Dag,
+  edges: List[toposort.Edge],
+  prior: List[graph.Binding[String, fingerprint.Record]]
+) -> Result[Run, fingerprint.Fault] {
+  let Ok(start) = clock.monotonic(c) else {
+    return Error(Corrupt())
+  }
+  let Some(at) = instant.checked_add(c, start, 30000000000u64) else {
+    return Error(Corrupt())
+  }
+  let deadline = Deadline(clock: c, at: at)
+  let input = shared.freeze(unique dag.tasks)
+  let count = list.len(dag.tasks)
+  let bounded = task.scope_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> Result[Run, fingerprint.Fault] {
+      let mut run = initial(count)
+      let mut used = 0u64
+      let mut active = 0u64
+      let mut stopped = false
+      let mut members: TaskSet[Completion] of s = task.set(s)
+      // task-set indices are add-order, never graph indices.
+      let mut tickets: List[graph.Binding[u64, u64]] = []
+      let mut keys: List[String] = []
+      for _ in 0u64..count {
+        list.push(mut keys, "")
+      }
+      while true {
+        graph.propagate(edges, mut run.codes)
+        while !stopped && active < dag.jobs {
+          let mut candidate: Option[u64] = None()
+          for id in 0u64..count {
+            if graph.ready(edges, run.codes, id) {
+              candidate = Some(id)
+              break
+            }
+          }
+          let Some(i) = candidate else {
+            break
+          }
+          if let Error(_) = task.check_canceled(s) {
+            stopped = true
+            break
+          }
+          // Borrowed graph/manifest views remain in the parent; job snapshot owns argv.
+          let node = dag.tasks[i]
+          let key = match fingerprint.compute_key(
+            d,
+            node,
+            run.results,
+            edges,
+            i,
+            mut used
+          ) {
+            Ok(value) => take value,
+            Error(e) => {
+              task.cancel_all(s, take members)
+              return Error(e)
+            },
+          }
+          let checked = match fingerprint.check(d, node, key, prior, mut used) {
+            Ok(value) => take value,
+            Error(e) => {
+              task.cancel_all(s, take members)
+              return Error(e)
+            },
+          }
+          run.reasons[i] = unique checked.reason
+          if checked.reason == "unchanged" {
+            success(mut run, i, node.name, key, checked.outputs, true)
+            continue
+          }
+          keys[i] = unique key
+          let cmd = unique shared.with(
+            input,
+            fn(nodes: List[manifest.Node]) -> unique Command {
+              manifest.command(nodes[i])
+            }
+          )
+          let ticket = list.len(tickets)
+          list.push(mut tickets, graph.Binding(key: ticket, value: i))
+          let handle = task.async(
+            s,
+            fn() -> Completion {
+              job(p, take cmd, i, deadline)
+            }
+          )
+          task.add(s, mut members, take handle)
+          run.codes[i] = graph.ACTIVE
+          active += 1
+        }
+        if active == 0 {
+          let mut pending = false
+          for code in run.codes {
+            if code == graph.PENDING {
+              pending = true
+            }
+          }
+          if pending && !stopped {
+            continue
+          }
+          break
+        }
+        if stopped {
+          break
+        }
+        let Some(ticket) = task.await_any(s, members) else {
+          break
+        }
+        let completed = task.await_at(s, mut members, ticket)
+        let Some(id) = graph.lookup(tickets, ticket) else {
+          task.cancel_all(s, take members)
+          return Error(Corrupt())
+        }
+        active -= 1
+        if completed.node != id {
+          task.cancel_all(s, take members)
+          return Error(Corrupt())
+        }
+        if completed.code == 0 {
+          let artifacts = match fingerprint.outputs(d, dag.tasks[id].outputs, mut used) {
+            Ok(values) => take values,
+            Error(File(NotFound())) => {
+              run.codes[id] = graph.FAILED
+              run.reasons[id] = "output_missing_after_success"
+              if dag.fail_fast {
+                stopped = true
+              }
+              continue
+            },
+            Error(e) => {
+              task.cancel_all(s, take members)
+              return Error(e)
+            },
+          }
+          success(mut run, id, dag.tasks[id].name, keys[id], artifacts, false)
+        } else {
+          run.codes[id] = graph.FAILED
+          let label = process_reason(completed.reason)
+          run.reasons[id] = f"{label}:{completed.code}"
+          if dag.fail_fast {
+            stopped = true
+          }
+        }
+      }
+      // cancel_all always joins. No report or state publication can race a child.
+      task.cancel_all(s, take members)
+      graph.propagate(edges, mut run.codes)
+      for i in 0u64..count {
+        if run.codes[i] == graph.ACTIVE || run.codes[i] == graph.PENDING {
+          run.codes[i] = graph.CANCELED
+          run.reasons[i] = "canceled"
+        }
+        if run.codes[i] == graph.BLOCKED {
+          run.reasons[i] = "dependency_failed"
+        }
+      }
+      Ok(take run)
+    }
+  )
+  match take bounded {
+    Finished(value) => take value,
+    Expired(value) => {
+      let mut run = take value?
+      run.expired = true
+      Ok(take run)
+    },
+  }
+}
+
+// Planning never treats a dirty predecessor's old digest as its future digest_result.
+pub fn plan(
+  d: Dir,
+  dag: manifest.Dag,
+  edges: List[toposort.Edge],
+  prior: List[graph.Binding[String, fingerprint.Record]]
+) -> Result[Run, fingerprint.Fault] {
+  let count = list.len(dag.tasks)
+  let mut run = initial(count)
+  let mut used = 0u64
+  for _ in 0u64..count {
+    for i in 0u64..count {
+      if run.codes[i] != graph.PENDING {
+        continue
+      }
+      let mut waiting = false
+      let mut dirty = false
+      for edge in edges {
+        if edge.to == i {
+          if run.codes[edge.from] == graph.PENDING {
+            waiting = true
+          }
+          if run.codes[edge.from] == graph.DIRTY {
+            dirty = true
+          }
+        }
+      }
+      if waiting {
+        continue
+      }
+      if dirty {
+        run.codes[i] = graph.DIRTY
+        run.reasons[i] = "dependency_dirty"
+        continue
+      }
+      let node = dag.tasks[i]
+      let key = fingerprint.compute_key(d, node, run.results, edges, i, mut used)?
+      let checked = fingerprint.check(d, node, key, prior, mut used)?
+      run.reasons[i] = unique checked.reason
+      if checked.reason == "unchanged" {
+        success(mut run, i, node.name, key, checked.outputs, true)
+      } else {
+        run.codes[i] = graph.DIRTY
+      }
+    }
+  }
+  Ok(take run)
+}

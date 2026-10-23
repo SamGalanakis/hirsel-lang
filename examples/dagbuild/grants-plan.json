@@ -1,0 +1,29 @@
+{
+  "args": [
+    "plan",
+    "manifest.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "project",
+        "host": "fixtures",
+        "access": "read"
+      },
+      {
+        "path": "state",
+        "host": "state",
+        "access": "read"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}
