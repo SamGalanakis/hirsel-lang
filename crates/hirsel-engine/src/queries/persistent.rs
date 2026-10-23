@@ -529,11 +529,19 @@ struct PublicationRecord {
     lowering: Option<lowering::LoweringUse>,
 }
 impl PublicationRecord {
-    fn valid(&self, syntax: &ItemSyntax) -> bool {
-        fn summary(value: &DefinitionSummary, syntax: &ItemSyntax) -> bool {
-            value.owner == syntax.owner().def
+    fn valid(
+        &self,
+        owner: hirsel_syntax::LexicalOwner,
+        shape: super::catalog::LexicalShape,
+    ) -> bool {
+        fn summary(
+            value: &DefinitionSummary,
+            owner: hirsel_syntax::LexicalOwner,
+            shape: super::catalog::LexicalShape,
+        ) -> bool {
+            value.owner == owner.def
                 && value.frames.iter().enumerate().all(|(index, frame)| {
-                    valid_site(syntax, frame.site)
+                    shape.valid_site(frame.site)
                         && frame.parent.is_none_or(|parent| (parent as usize) < index)
                 })
                 && value.calls.iter().all(|call| {
@@ -542,20 +550,16 @@ impl PublicationRecord {
                             .target_frame
                             .is_none_or(|frame| (frame as usize) < value.frames.len())
                         && (call.binder.owner.def != value.owner
-                            || (call.binder.owner == syntax.owner()
-                                && valid_site(syntax, call.binder.site)))
+                            || (call.binder.owner == owner && shape.valid_site(call.binder.site)))
                 })
-                && value
-                    .staged
-                    .iter()
-                    .all(|(site, _)| valid_site(syntax, *site))
+                && value.staged.iter().all(|(site, _)| shape.valid_site(*site))
         }
-        summary(&self.summary.summary, syntax)
+        summary(&self.summary.summary, owner, shape)
             && self
                 .summary
                 .checked
                 .as_ref()
-                .is_some_and(|checked| summary(&checked.summary, syntax))
+                .is_some_and(|checked| summary(&checked.summary, owner, shape))
     }
 }
 pub(super) fn canonical_bytes<T: Serialize>(
@@ -815,13 +819,22 @@ impl QueryEngine {
         let variant = self.stored_variant(path, QueryKind::Summary)?;
         let record: PublicationRecord = self.decode_record(&variant.payload)?;
         let id = DefId::intern(path);
-        let syntax = self.snapshot(path).ok()?;
+        let (owner, shape) = self
+            .snapshot(path)
+            .ok()
+            .map(|syntax| {
+                (
+                    syntax.owner(),
+                    super::catalog::LexicalShape::capture(&syntax),
+                )
+            })
+            .or_else(|| self.catalog.lexical(path))?;
         if record.summary.definition != id
             || record.summary.summary.owner != id
             || record.summary.text != self.key_text(path, QueryKind::Summary).ok()?
             || *record.summary.reads != variant.reads
             || record.summary.checked.is_none()
-            || !record.valid(&syntax)
+            || !record.valid(owner, shape)
         {
             return None;
         }
