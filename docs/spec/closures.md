@@ -260,6 +260,30 @@ fn adder(k: u64) -> fn(u64) -> u64 {
 Returning `fn() -> u64 { list.len(xs) }` for a borrowed `xs: List[u64]` is CLO-4: an
 escaping closure cannot capture a borrowed counted value.
 
+For a read-only snapshot of a plain mutable value, bind an immutable value before
+creating the closure and capture that name instead:
+
+```hirsel
+fn snapshot() -> fn() -> u64 {
+  let mut n = 7u64
+  let saved = n
+  let f: fn() -> u64 = fn() -> u64 { saved }
+  n = 9
+  f                               // calling f still returns 7
+}
+```
+
+This records the current value; it provides no shared mutable state and does not
+observe future writes to `n`. CLO-4 still forbids capturing `n` itself. A counted
+snapshot must separately establish owned global content: an ordinary copy can
+retain binding loans, and current uniqueness alone grants no ownership conversion.
+For concrete copyable counted data without placement or borrowed callable bounds,
+`let saved = unique copy n` retains the source and can establish independence, at
+O(size) cost and with possible allocation. Resources need a checked API; borrowed content, arena/region bounds,
+callable captures and `@noalloc` must each satisfy their existing rules. Taking a
+live mutable capture is not a snapshot repair. These binding recipes grant no
+authority and do not remove the escaping environment's allocation requirements.
+
 A global environment owns the copied or taken owner incarnations and the branded
 relations proved at its creation; ending or replacing the caller's bindings does not end
 them. A branded value alone supplies no owner. Borrowed captures keep their actual source

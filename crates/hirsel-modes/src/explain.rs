@@ -735,6 +735,17 @@ pub enum Repair {
     },
     HeapParameter(String),
     DeepCopy(String),
+    /// A read-only immutable snapshot, selected from current flow evidence.
+    CaptureSnapshot {
+        source: String,
+        saved: String,
+        deep_copy: bool,
+    },
+    /// No concrete snapshot recipe is established for this mutable capture.
+    MutableCaptureLocal {
+        source: String,
+        evidence: String,
+    },
     /// Conditional guidance when independence cannot be proved for a capture.
     KeepCaptureLocal(String),
     TakeChangesMeaning(String),
@@ -809,6 +820,28 @@ impl Repair {
             ),
             Repair::DeepCopy(x) => format!(
                 "`unique {x}` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)"
+            ),
+            Repair::CaptureSnapshot {
+                source,
+                saved,
+                deep_copy,
+            } => {
+                let value = if *deep_copy {
+                    format!("unique copy {source}")
+                } else {
+                    source.clone()
+                };
+                let cost = if *deep_copy {
+                    "this independent deep copy may allocate and costs O(size); it requires permitted allocation"
+                } else {
+                    "this plain value copy needs no allocation"
+                };
+                format!(
+                    "before creating the closure, write `let {saved} = {value}` and capture `{saved}` instead of `{source}` for read-only uses. This is a snapshot of the current value, not shared mutable state: it does not observe future writes to `{source}`; {cost}. The escaping closure's environment has its own allocation requirements"
+                )
+            }
+            Repair::MutableCaptureLocal { source, evidence } => format!(
+                "keep `{source}` within its owner's scope, or construct an independently owned immutable value before creating the closure. No concrete snapshot recipe is established here: {evidence}. Check copyability, locality, current uniqueness and allocation first; resources need a checked API, an ordinary counted copy retains binding loans, and deep copying keeps arena/region bounds and borrowed callable captures. Allocating copies are unavailable under `@noalloc`; a live mutable capture cannot be taken. Any read-only snapshot records the current value and does not observe future writes or provide shared mutable state"
             ),
             Repair::KeepCaptureLocal(x) => format!(
                 "keep `{x}` within its source owner's scope, or construct an independent owned value; `unique` removes binding loans only for copyable counted data, and retains arena/region bounds and borrowed callable captures"
@@ -998,16 +1031,25 @@ impl Repair {
             | Repair::CopyShared(_)
             | Repair::PassBorrowed(_)
             | Repair::TakeAtLastUse(_)
-            | Repair::CopyPart(_) => 0,
+            | Repair::CopyPart(_)
+            | Repair::CaptureSnapshot {
+                deep_copy: false, ..
+            } => 0,
             Repair::PreserveUnique { .. }
             | Repair::TakeParameter(_)
             | Repair::LocalResult { .. }
             | Repair::PlaceParameter { .. }
             | Repair::PlaceResult { .. }
             | Repair::HeapParameter(_) => 1,
-            Repair::DeepCopy(_) | Repair::UniqueResult { .. } | Repair::IterationItem { .. } => 2,
+            Repair::DeepCopy(_)
+            | Repair::UniqueResult { .. }
+            | Repair::IterationItem { .. }
+            | Repair::CaptureSnapshot {
+                deep_copy: true, ..
+            } => 2,
             Repair::TakeChangesMeaning(_)
             | Repair::KeepCaptureLocal(_)
+            | Repair::MutableCaptureLocal { .. }
             | Repair::WholeRecord { .. }
             | Repair::ResourcePart(_)
             | Repair::WholeOwnerOnly(_) => 3,

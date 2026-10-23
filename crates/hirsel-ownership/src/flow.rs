@@ -3868,7 +3868,12 @@ impl Checker<'_, '_> {
                     |c| {
                         let required = Fact::new(Requirement::EscapingCapture, closure, &[]);
                         if mutable {
-                            c.binding_explanation(index, Some(Cause::MutableCapture), required)
+                            c.mutable_capture_explanation(
+                                index,
+                                &part,
+                                capture.usage == UseKind::Copy,
+                                required,
+                            )
                         } else {
                             c.locality(state, &part, required)
                         }

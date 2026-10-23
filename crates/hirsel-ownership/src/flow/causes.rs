@@ -936,6 +936,129 @@ impl Checker<'_, '_> {
             .required(required)
             .into()
     }
+    /// CLO-4 remains a construction failure. Snapshot guidance changes what
+    /// the user captures; it grants no mutable, ownership or authority promise.
+    pub(super) fn mutable_capture_explanation(
+        &self,
+        index: usize,
+        value: &Value,
+        read_only: bool,
+        required: Fact<Requirement>,
+    ) -> Pending {
+        // Owning selection says Copy even for writes in the body. H's
+        // access rows describe explicit operations; assignments retain their
+        // target separately. Both must be read-only, including nested uses.
+        let within = |at: Span| at.start >= required.span.start && at.end <= required.span.end;
+        let is_capture = |source: &SourcePlace| {
+            matches!(&source.root, SourceRoot::Binding { owner, binding }
+                if self.source_rows.binding(self.body, Some(*owner), binding) == Some(index))
+        };
+        let read_only = read_only
+            && !self.body.places.iter().any(|source| {
+                within(self.span_of(source.expression))
+                    && matches!(
+                        source.access,
+                        SourceAccess::Mut | SourceAccess::Take | SourceAccess::Unique
+                    )
+                    && is_capture(source)
+            })
+            && !self.tree.statements.iter().any(|statement| {
+                let hirsel_syntax::StmtKind::Assign { place, .. } = statement.kind else {
+                    return false;
+                };
+                within(statement.origin.span)
+                    && self
+                        .source_rows
+                        .source_place(place)
+                        .is_some_and(|row| is_capture(&self.body.places[row]))
+            });
+        let mut pending = self.binding_explanation(index, Some(Cause::MutableCapture), required);
+        let (source, _) = self.binding_site(index);
+        let ty = self.body.bindings[index].ty;
+        let plain = self.properties[ty].plain;
+        let noalloc = self
+            .graph_callable()
+            .is_some_and(|(f, _)| f.allocation == hirsel_types::Allocation::NoAlloc);
+        let deep_copy = !noalloc && self.independent_capture_copy(value, ty);
+        // Counted snapshots must establish independence, even when the source
+        // is currently unique: copying into an immutable binding can keep a
+        // loan on its mutable owner. Do not propose a take of live storage.
+        let saved = (read_only && (plain || deep_copy))
+            .then(|| self.snapshot_name())
+            .flatten();
+        let repair = if let Some(saved) = saved {
+            Repair::CaptureSnapshot {
+                source,
+                saved,
+                deep_copy: !plain,
+            }
+        } else {
+            let evidence = format!(
+                "copyability: {}; locality: {}; current uniqueness: {}; allocation: {}; capture: {}",
+                if self.properties[ty].copyable {
+                    "copyable"
+                } else {
+                    "not copyable"
+                },
+                if self.arenas.global(&value.modes.relation)
+                    && value.aliased().is_none()
+                    && !value.unplaced()
+                    && value.content.summary().scopes().next().is_none()
+                {
+                    "global content"
+                } else {
+                    "source or placement bounds remain"
+                },
+                if value.modes.uniqueness == Uniqueness::Unique {
+                    "unique"
+                } else {
+                    "not proved unique"
+                },
+                if noalloc {
+                    "@noalloc"
+                } else {
+                    "permitted, but independence still needs proof"
+                },
+                if read_only {
+                    "read-only"
+                } else {
+                    "takes or mutates its source"
+                },
+            );
+            Repair::MutableCaptureLocal { source, evidence }
+        };
+        pending.explanation.repairs.push(repair);
+        pending
+    }
+
+    /// Avoid all written identifiers (including later closure locals) and
+    /// available declarations/imports. This runs only for failed diagnostics.
+    fn snapshot_name(&self) -> Option<String> {
+        let used: BTreeSet<_> = self
+            .tree
+            .tokens
+            .iter()
+            .filter_map(|token| match token.kind {
+                hirsel_syntax::TokenKind::Ident(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        (1..=64)
+            .map(|suffix| {
+                if suffix == 1 {
+                    "saved".to_owned()
+                } else {
+                    format!("saved_{suffix}")
+                }
+            })
+            .find(|name| {
+                !used.contains(name.as_str())
+                    && self
+                        .signatures
+                        .diagnostic_name_available(self.own.definition.path(), name)
+            })
+    }
+
     /// OWN-8 repairs consume the whole binding, never just the selected place.
     /// Use only retained declaration evidence; failing diagnostics must not
     /// invent a constructor for hidden, generic or indirect storage.
