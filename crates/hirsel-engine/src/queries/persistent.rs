@@ -2356,8 +2356,7 @@ impl QueryEngine {
         let entry = self.lowered.get(&definition.path).cloned();
         let snapshot = self.signature_snapshot();
         let policy = self.source_verification_policy();
-        if let Some(entry) = &entry
-            && let Some(evidence) = entry.verification.lock().unwrap().as_ref()
+        if let Some(evidence) = self.lowered_verification(definition.path)
             && evidence.holds(
                 definition,
                 &self.types,
