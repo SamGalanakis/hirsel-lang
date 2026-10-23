@@ -985,23 +985,54 @@ fn copy_capture_weakening_preserves_other_modes_and_type_structure() {
 
 #[test]
 fn take_capture_types_remain_exact() {
-    let mut f = copied_capture_fixture(Uniqueness::Unique, Uniqueness::Aliased);
-    if let Rvalue::Closure { captures, .. } = &mut f.body().rvalues[2] {
-        captures[0].usage = UseKind::Take;
-    } else {
-        panic!("expected closure producer");
+    let taken_capture = || {
+        let mut f = copied_capture_fixture(Uniqueness::Unique, Uniqueness::Aliased);
+        if let Rvalue::Closure { captures, .. } = &mut f.body().rvalues[2] {
+            captures[0].usage = UseKind::Take;
+        } else {
+            panic!("expected closure producer");
+        }
+        let closure = f.body().places.len() - 1;
+        let ty = f.body().places[closure].ty;
+        let mut row = interner().get(ty).unwrap().clone();
+        row.modes.multiplicity = Multiplicity::Once;
+        let ty = f.definition.types.push(row);
+        let root = f.body().places[closure].root;
+        f.body().places[closure].ty = ty;
+        f.body().locals[root.0 as usize].ty = ty;
+        f
+    };
+    // dd474e53 compares neutral shapes for a whole take: a fresh unique
+    // String may enter an aliased capture. Shape and relation stay exact.
+    taken_capture().valid();
+    for change_kind in [false, true] {
+        let mut f = taken_capture();
+        let nested = &mut f.definition.bodies[1];
+        let mut row = interner().get(nested.locals[1].ty).unwrap().clone();
+        if change_kind {
+            row.kind = TypeKind::Primitive(Primitive::Bytes);
+        } else {
+            row.modes.relation = Relation::environment();
+        }
+        let ty = f.definition.types.push(row);
+        nested.locals[1].ty = ty;
+        nested.places[1].ty = ty;
+        f.broken(vec![ViolationKind::TypeMismatch {
+            entity: "closure capture",
+        }]);
     }
-    let closure = f.body().places.len() - 1;
-    let ty = f.body().places[closure].ty;
-    let mut row = interner().get(ty).unwrap().clone();
-    row.modes.multiplicity = Multiplicity::Once;
-    let ty = f.definition.types.push(row);
-    let root = f.body().places[closure].root;
-    f.body().places[closure].ty = ty;
-    f.body().locals[root.0 as usize].ty = ty;
-    f.broken(vec![ViolationKind::TypeMismatch {
-        entity: "closure capture",
-    }]);
+    // Positive capture modes must still be proved from the current content
+    // by flow, even though static typing no longer compares those row modes.
+    taken_slot_capture_fixture(Uniqueness::Unique, Sendability::NotSendable, true).broken(vec![
+        ViolationKind::TypeMismatch {
+            entity: "value modes",
+        },
+    ]);
+    taken_slot_capture_fixture(Uniqueness::Aliased, Sendability::Sendable, true).broken(vec![
+        ViolationKind::TypeMismatch {
+            entity: "closure capture",
+        },
+    ]);
 }
 
 /// A whole `let mut` slot whose storage row is aliased and unsendable, holding
