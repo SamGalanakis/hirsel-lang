@@ -1,0 +1,18 @@
+type Expr = Literal(i64) | Negate(box Expr)
+fn evaluate(tree: box Expr, resolve: fn(u64) -> i64 uses {}) -> i64 uses {} {
+  match tree { Literal(n) => n, Negate(child) => -evaluate(child, resolve) }
+}
+fn job(take parsed: Result[box Expr, u64], prior: Shared[List[i64]]) -> i64 uses {} {
+  match take parsed {
+    Ok(tree) => shared.with(prior, fn(values: List[i64]) -> i64 uses {} {
+      evaluate(tree, fn(index: u64) -> i64 uses {} { values[index] })
+    }),
+    Error(_) => 0,
+  }
+}
+pub fn main() -> Result[(), ()] {
+  let prior = shared.freeze(unique [1i64])
+  let n = job(Ok(box Literal(7)), prior)
+  failure.check(n == 7, Arithmetic())
+  Ok(())
+}

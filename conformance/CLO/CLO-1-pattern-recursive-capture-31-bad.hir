@@ -1,0 +1,25 @@
+// rule: CLO-1
+// expect: reject CLO-4 at line 10
+// twin: CLO/CLO-1-pattern-recursive-capture-31-run.hir
+// An escaping environment cannot own the borrowed pattern view.
+type Node = Leaf(i64) | Next(box Node)
+
+fn job(take parsed: Result[box Node, u64]) -> i64 uses {} {
+  match parsed {
+    Ok(tree) => {
+      let f: fn() -> i64 uses {} = fn() -> i64 uses {} {
+        match tree {
+          Leaf(n) => n,
+          Next(_) => 0,
+        }
+      }
+      f()
+    },
+    Error(_) => 0,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(job(Ok(box Leaf(7))) == 7, Arithmetic())
+  Ok(())
+}

@@ -1761,6 +1761,28 @@ impl Builder<'_, '_> {
                 place,
                 usage: capture.usage,
             };
+            // Structural views inherit their access bound into payload rows.
+            // Stage a mismatched read view for a plain-result callback without
+            // retyping the physical owner. Counted environment results retain
+            // the original content source used by global-result specialisation.
+            if capture.usage == UseKind::Borrow
+                && matches!(
+                    self.types.get(capture.ty).unwrap().kind,
+                    TypeKind::Box(_)
+                        | TypeKind::Tuple(_)
+                        | TypeKind::Record(_)
+                        | TypeKind::Variant(_)
+                )
+                && self.plain(result)
+                && !self.types.semantic_eq(self.ty(place), capture.ty)
+            {
+                let binding = self.body.places[place.0 as usize].binding.clone();
+                value = self.transport_typed(value, capture.ty, Storage::Temporary, span);
+                if let Some(origin) = binding {
+                    value.place =
+                        self.bind_origin(value.place, origin, OriginBindingKind::Alias, span);
+                }
+            }
             let _ = self.loan(&mut value, span);
             captures.push(Operand {
                 place: value.place,

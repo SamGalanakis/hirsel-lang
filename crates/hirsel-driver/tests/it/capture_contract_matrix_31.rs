@@ -431,9 +431,26 @@ fn failed(
 }
 fn evaluate(row: Row, ops: &[Op], runner: Option<&history::Runner>, name: &str) -> Attempt {
     let text = source(row, ops);
-    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-    let file = engine.sources.add("main.hir", text).unwrap();
-    let output = match check_progress(&mut engine, file, &default_context()) {
+    let source_dir = tempfile::tempdir().expect("source staging directory");
+    let path = source_dir.path().join("main.hir");
+    std::fs::write(&path, &text).expect("source staging write");
+    let mut program = match load_program(&path) {
+        Ok(program) => program,
+        Err(e) => {
+            return failed(
+                false,
+                false,
+                Fingerprint::Setup {
+                    phase: "source load".into(),
+                    category: format!("{e:?}"),
+                },
+                format!("INCOMPLETE source load API={e:?}"),
+            );
+        }
+    };
+    // Reachable checking can already invoke V and return a V Operational error
+    // before yielding diagnostics. Keep the source verdict independently first.
+    let output = match program.check(LoweringPolicy::Comptime) {
         Ok(output) => output,
         Err(e) => {
             return failed(
@@ -441,12 +458,13 @@ fn evaluate(row: Row, ops: &[Op], runner: Option<&history::Runner>, name: &str) 
                 false,
                 Fingerprint::Setup {
                     phase: "source API".into(),
-                    category: format!("{:?}", history::query_error("source", e)),
+                    category: format!("{e:?}"),
                 },
-                "INCOMPLETE source API error".into(),
+                format!("INCOMPLETE source API={e:?}"),
             );
         }
     };
+    let mut engine = program.engine;
     let diagnostics: Vec<_> = output
         .diagnostics
         .iter()
@@ -1417,4 +1435,206 @@ pub fn main(rt:Io)->Result[(),GrantError] {
             "CAPTURE_GENERIC_RECEIPT_COUNTS observations_per_engine=1 generic_producer_probes=1 scoped_control_probes=1"
         );
     });
+}
+
+#[test]
+fn sheet_pattern_capture_source_v_agreement() {
+    with_compiler_stack(|| {
+        let dir = artifacts("sheet-pattern-capture");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/capture_contract_matrix_31");
+        for name in ["sheet-minimal.hir", "sheet-taken.hir"] {
+            let text = std::fs::read_to_string(root.join(name)).unwrap();
+            let mut program = load_program(&root.join(name)).unwrap();
+            let output = program.check(LoweringPolicy::Comptime).unwrap();
+            history::persist(
+                &dir,
+                &format!("{name}-source"),
+                0,
+                &text,
+                &format!(
+                    "transferred original sheet witness expected source/V ACCEPT; source_diagnostics={:?}; provenance={}",
+                    output.diagnostics,
+                    provenance()
+                ),
+            );
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let result = program.engine.export_native_input();
+            history::persist(
+                &dir,
+                name,
+                0,
+                &text,
+                &format!(
+                    "source accepted; export={:?}",
+                    result.as_ref().map(|_| "ACCEPT")
+                ),
+            );
+            let input = result.expect("checker-positive/V closure capture TypeMismatch");
+            validate(&input).unwrap();
+        }
+    });
+}
+
+#[test]
+fn sheet_borrowed_capture_affected_rows_runtime() {
+    with_compiler_stack(|| {
+        let dir = artifacts("sheet-affected-borrowed");
+        let runner = history::Runner::with_matrix(&dir.join("runs"), configurations()).unwrap();
+        for seed in [6, 8, 10, 15, 23] {
+            let row = Row(TABLE[seed]);
+            let ops = history(row);
+            let attempt = evaluate(row, &ops, Some(&runner), &format!("affected-{seed}"));
+            retain(
+                &dir,
+                &format!("affected-{seed}"),
+                seed,
+                row,
+                &ops,
+                &source(row, &ops),
+                &attempt.detail,
+            );
+            assert!(attempt.failure.is_none(), "{:?}", attempt.failure);
+            assert_eq!(attempt.report.unwrap().cells.len(), 4);
+        }
+        eprintln!("CAPTURE_AFFECTED_COUNTS observations_per_engine=5");
+    });
+}
+
+#[test]
+fn sheet_originals_runtime_and_capture_transfer_adversaries() {
+    with_compiler_stack(|| {
+        let dir = artifacts("sheet-original-runtime");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/capture_contract_matrix_31");
+        let runner = history::Runner::with_matrix(&dir.join("runs"), configurations()).unwrap();
+        let mut mutation_sites = 0;
+        for name in ["sheet-minimal.hir", "sheet-taken.hir"] {
+            let text = std::fs::read_to_string(root.join(name)).unwrap();
+            let mut program = load_program(&root.join(name)).unwrap();
+            let source = program.check(LoweringPolicy::Comptime).unwrap();
+            assert!(source.diagnostics.is_empty(), "{:?}", source.diagnostics);
+            let input = program.engine.export_native_input().unwrap();
+            validate(&input).unwrap();
+            let job = input
+                .definitions
+                .iter()
+                .find(|(p, _)| p.0.name == "job")
+                .unwrap()
+                .1;
+            let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+            signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
+            let mut selected = None;
+            'producer: for (bi, body) in job.bodies.iter().enumerate() {
+                for (ri, rvalue) in body.rvalues.iter().enumerate() {
+                    if let Rvalue::Closure { captures, .. } = rvalue {
+                        for (ci, capture) in captures.iter().enumerate() {
+                            let place = &body.places[capture.place.0 as usize];
+                            if capture.usage == UseKind::Borrow
+                                && matches!(
+                                    input.types.row(place.ty).kind,
+                                    hirsel_types::TypeKind::Box(_)
+                                )
+                            {
+                                selected = Some((bi, ri, ci, capture.place));
+                                break 'producer;
+                            }
+                        }
+                    }
+                }
+            }
+            let (bi, ri, ci, place) = selected.expect("zero captured borrowed view probes");
+            let mut forged = (**job).clone();
+            let Rvalue::Closure { captures, .. } = &mut forged.bodies[bi].rvalues[ri] else {
+                unreachable!()
+            };
+            captures[ci].usage = UseKind::Take;
+            let report = hirsel_validate::validate(&forged, &input.types, &signatures, &mut vec![]);
+            history::persist(
+                &dir,
+                &format!("{name}-mutation"),
+                0,
+                &text,
+                &format!(
+                    "original validates; Body{bi} Rvalue{ri} capture{ci} Borrow->Take Place{place:?}; V={report:?}; provenance={}",
+                    provenance()
+                ),
+            );
+            // Construction cannot invent ownership in a scoped Borrow
+            // capture or consume it while retaining a Many callable type.
+            // These are producer classification rules; the earlier eight
+            // Copy->Take invocation adversaries still require BorrowedMove.
+            for expected in ["closure source classification", "closure multiplicity"] {
+                assert!(report.violations.iter().any(|v|matches!(v.kind,hirsel_validate::ViolationKind::TypeMismatch{entity} if entity==expected)),"{report:?}");
+            }
+            mutation_sites += 1;
+            let validated = program.engine.import_native_input(input).unwrap();
+            let entry = program.entry;
+            let reference = run_observed_snapshot(
+                &mut program.engine,
+                &RunConfiguration {
+                    entry: entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            let report = runner.compare(
+                &validated,
+                &entry,
+                &Observation::of_reference(reference.observation.as_ref().unwrap()),
+                name,
+            );
+            history::persist(
+                &dir,
+                name,
+                0,
+                &text,
+                &format!(
+                    "model callback result=7 checked by entry, output=[] visible destructors=[] exit0; reference_full={reference:?}; report={report:#?}; provenance={}",
+                    provenance()
+                ),
+            );
+            assert!(report.agrees(), "{report:#?}");
+            assert_eq!(report.cells.len(), 4);
+            assert!(report.disagreements(b"", false).is_empty());
+        }
+        assert_eq!(mutation_sites, 2);
+        eprintln!("CAPTURE_SHEET_COUNTS observations_per_engine=2 mutations=2");
+    });
+}
+
+#[test]
+fn sheet_diagnostic_o0_runtime() {
+    let dir = artifacts("sheet-o0");
+    let matrix = vec![Configuration {
+        engine: Engine::Native {
+            opt: OptLevel::None,
+            partition: Partition::Whole,
+            runtime: Runtime::Diagnostic,
+        },
+        options: Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+    }];
+    let runner = history::Runner::with_matrix(&dir.join("runs"), matrix).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/capture_contract_matrix_31");
+    for name in ["sheet-minimal.hir", "sheet-taken.hir"] {
+        let text = std::fs::read_to_string(root.join(name)).unwrap();
+        let report = runner.run(name, &text);
+        history::persist(
+            &dir,
+            name,
+            0,
+            &text,
+            &format!(
+                "affected lowering witness LLVM O0 diagnostic; model exit0 output=[]; report={report:#?}; provenance={}",
+                provenance()
+            ),
+        );
+        assert!(report.agrees(), "{report:#?}");
+        assert_eq!(report.cells.len(), 2);
+        assert!(report.disagreements(b"", false).is_empty());
+    }
+    eprintln!("CAPTURE_O0_COUNTS reference=2 llvm_o0_diagnostic=2");
 }

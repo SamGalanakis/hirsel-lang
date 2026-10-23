@@ -7266,3 +7266,5 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
+conformance/CLO/CLO-1-pattern-recursive-capture-31-run.hir
+conformance/CLO/CLO-1-pattern-recursive-capture-31-bad.hir
