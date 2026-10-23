@@ -26,7 +26,9 @@ and a second invoice with zero quantity. It reports invoice totals `54.98` and
 its numeric column; it prints
 `{"error":{"record":2,"reason":"decimal_syntax"}}` and exits 2.
 To use another file, put it in the granted fixture directory and supply its base
-filename. Directory hosts are relative to the grants file. The checked-in grant
+filename. Directory hosts are relative to the grants file; the
+[shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+explains refusal path context and verification from another working directory. The checked-in grant
 allows only reads in `fixtures` and stdout. No write, stderr, process, socket,
 clock, randomness or task authority is requested. `--help` needs stdout only.
 

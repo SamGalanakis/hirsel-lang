@@ -17,7 +17,9 @@ hirsel build examples/configcheck/hirsel.json --backend llvm -o /tmp/configcheck
 /tmp/configcheck --hirsel-grants examples/configcheck/grants.json toml service.toml
 ```
 
-The template's host directory `fixtures` is relative to the grants file. It grants
+The template's host directory `fixtures` is relative to the grants file; see the
+[shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for the original host, base and resolved candidate in a launch refusal. It grants
 only read access to that directory and stdout; it needs no stderr, write, process,
 socket or clock capability. Change its `args` to `["yaml", "service.yaml"]` for the
 same configuration in YAML, `["yaml", "invalid.yaml"]` to reject a realistic

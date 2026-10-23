@@ -16,8 +16,9 @@ hirsel build examples/depplan/hirsel.json --backend llvm -o /tmp/depplan
 # The same build/run commands accept --backend cranelift.
 ```
 
-The read-only grants template names only `fixtures` (relative to the grants template),
-stdout and stderr. For your own inputs, copy the template and replace `host` with
+The read-only grants template names only `fixtures` (relative to the grants file),
+stdout and stderr. See the [shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for a preserved bad/correct pair launched from another working directory. For your own inputs, copy the template and replace `host` with
 an absolute directory. `FILE` is relative to the logical `input` grant; it cannot
 escape that directory. Help needs stdout only. No process, socket, clock, write,
 network or task authority is requested.

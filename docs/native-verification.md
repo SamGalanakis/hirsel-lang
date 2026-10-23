@@ -61,6 +61,45 @@ template's relative `host` resolves relative to that template. An inline JSON
 template must instead use absolute hosts. Neither selecting std nor finding a
 host file grants authority. The sentinel above is deliberately outside the mount.
 
+## Resolve directory hosts beside the grants file
+
+Relative host paths resolve relative to the grants file. With
+`/tmp/session/grants.json`, `"host":"data"` selects `/tmp/session/data`, even
+when the launcher runs from another directory. The mount's `"path":"data"`
+is the program's granted name; it does not determine the host base. The same
+rule applies to directory hosts in nested runner grants. Inline JSON has no
+file base and requires absolute hosts; canonical run records also require
+canonical absolute hosts.
+
+Keep the templates and fixture directories above unchanged. Preserve a separate
+bad template and launch both from another working directory:
+
+```sh
+cat > "$recipe_dir/bad-relative.json" <<'JSON'
+{"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"data","host":"data/data","access":"read"}]},"args":[]}
+JSON
+mkdir "$recipe_dir/launch-cwd"
+(
+  cd "$recipe_dir/launch-cwd"
+  hirsel run "$manifest" --grants "$recipe_dir/bad-relative.json" -- alpha
+  # exit 3, empty stdout: invalid io.dirs.host, before program entry
+  hirsel run "$manifest" --grants "$recipe_dir/grants.json" -- alpha
+  # exit 0, stdout: alpha:hello plus LF
+)
+```
+
+The refusal retains its `kind:"invalid"`, `field:"io.dirs.host"` and OS cause,
+and adds the original host, grants-file directory and attempted resolved
+candidate. For the bad template those are `data/data`, `$recipe_dir` and
+`$recipe_dir/data/data`. Read the decoded JSON `detail` to inspect quoted,
+Unicode or whitespace-containing paths. The launcher refuses a missing relative
+host without retrying another base or creating a directory. Choose the intended
+host in the template; for an example's grants file beside its `fixtures`
+directory, keep `"host":"fixtures"`, rather than prefixing it with the path
+from the repository root. An absolute host keeps its existing validation and
+admission behavior. Missing authority inside an admitted program remains a
+separate application error, as the denied control below demonstrates.
+
 ## Compare identical observations
 
 First use the ordinary interpreter as the control:

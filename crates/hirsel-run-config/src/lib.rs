@@ -225,7 +225,16 @@ impl RunConfig {
                 if host.is_relative() {
                     let candidate = base.join(host);
                     let canonical = candidate.canonicalize().map_err(|e| {
-                        invalid("io.dirs.host", &format!("{}: {e}", candidate.display()))
+                        invalid(
+                            "io.dirs.host",
+                            &format!(
+                                "{}: {e}; relative host paths resolve relative to the grants file; host {:?}; grants file directory {}; resolved candidate {}",
+                                candidate.display(),
+                                mount.host,
+                                base.display(),
+                                candidate.display()
+                            ),
+                        )
                     })?;
                     mount.host = canonical
                         .to_str()

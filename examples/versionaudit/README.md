@@ -21,7 +21,8 @@ hirsel build examples/versionaudit/hirsel.json --backend llvm -o /tmp/versionaud
 ```
 
 `grants.json` grants stdout and read access only to `fixtures/`, resolved relative
-to that grants file. Change its `host` to the directory holding your inputs.
+to that grants file. The [shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+explains original host/base/candidate diagnostics. Change its `host` to the directory holding your inputs.
 The single argument is a basename within the logical `input` directory; empty,
 dot/parent, slash, backslash, colon and NUL paths are refused. The program needs
 no write, stderr, stdin, process, network, clock, task or environment grant.

@@ -26,7 +26,9 @@ Copy the grants file and change its `args` to `["invalid.json"]` for an invalid
 retry budget: stdout is empty, stderr is `{"kind":"max_attempts"}` and exit is 2.
 Set `args` to `["--help"]` (or `["-h"]`) for usage; only stdout/stderr grants are
 needed. Relative host paths resolve beside the grants template; its `host: "fixtures"`
-selects this package’s fixture directory. The commands above assume the repository root.
+selects this package’s fixture directory. See the
+[shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for original host/base/candidate diagnostics and verification from another directory.
 
 The input object has exactly seven fields:
 

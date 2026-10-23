@@ -19,7 +19,8 @@ hirsel run examples/metricfold/hirsel.json --grants examples/metricfold/grants.j
 
 The grants template grants read access only to `examples/metricfold/fixtures`,
 projected as `input`, plus stdout and stderr. Host paths are relative to the
-grants template file. To process another export, copy the template, set its
+grants template file; see the [shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for launch refusal context and a bad/correct template pair. To process another export, copy the template, set its
 single `host` directory, and supply a relative filename. No process, socket,
 clock, network, stdin or write grant is needed. `--help` needs only stdout.
 

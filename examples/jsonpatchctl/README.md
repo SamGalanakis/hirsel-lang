@@ -32,7 +32,9 @@ followed by root add can recreate a document in the same patch.
 
 To use your own inputs, copy a grants template, set its directory's `host` to
 your input directory and its `args` to `["document.json","patch.json"]`. Relative
-host paths resolve from the grants file's directory. Filenames must be normalized
+host paths resolve from the grants file's directory; see the
+[shared grants-base recipe](../../docs/native-verification.md#resolve-directory-hosts-beside-the-grants-file)
+for launch refusal context and an isolated bad/correct pair. Filenames must be normalized
 relative paths, at most 256 UTF-8 bytes; empty, `.`, `..`, empty path components,
 backslashes, colons and NUL are rejected. The tool requests only read access to
 the directory and stdout/stderr. Help needs only stdout; rejection needs stderr.
