@@ -451,3 +451,110 @@ fn sealed_regions_33_sorted_root_does_not_change_comparator_identity() {
         );
     });
 }
+
+#[test]
+fn sealed_regions_33_plain_payload_depth_twins() {
+    with_compiler_stack(|| {
+        for root in [
+            "R(n:7u64)",
+            "Some(R(n:7u64))",
+            "box R(n:7u64)",
+            "[R(n:7u64)]",
+            "Wrap(value:R(n:7u64))",
+        ] {
+            let setup = if root.starts_with("fn") {
+                "let payload=R(n:7u64);"
+            } else {
+                ""
+            };
+            let source = format!(
+                "type R {{n:u64}}\ntype Wrap[T]{{value:T}}\npub fn main(){{arena.with(fn(a:Arena){{{setup}let root={root};let r=arena.seal(take a,take root);}});}}"
+            );
+            check(&source, None, true);
+        }
+    });
+}
+
+#[test]
+fn sealed_regions_33_live_read_view_cannot_be_captured_by_a_task() {
+    with_compiler_stack(|| {
+        let prefix = "fn cross(tasks:Tasks)->u64{let mut owner=arena.with(fn(a:Arena)->Region[unique List[u64]]{let root:unique List[u64]=unique [7u64];arena.seal(take a,take root)});region.with(mut owner,fn(view:unique List[u64])->u64{";
+        check(
+            &format!(
+                "{prefix}let n=view[0];task.scope(tasks,fn(s:Scope)->u64{{let child=task.async(s,fn()->u64{{n}});task.await(s,take child)}})}})}}\npub fn main(){{}}"
+            ),
+            None,
+            true,
+        );
+        check(
+            &format!(
+                "{prefix}task.scope(tasks,fn(s:Scope)->u64{{let child=task.async(s,fn()->u64{{view[0]}});task.await(s,take child)}})}})}}\npub fn main(){{}}"
+            ),
+            Some("CLO-3"),
+            false,
+        );
+    });
+}
+
+#[test]
+fn sealed_regions_33_plain_callable_payload_twin() {
+    with_compiler_stack(|| {
+        check(
+            "type R{n:u64}\npub fn main(){arena.with(fn(a:Arena){let payload=R(n:7u64);let root:once fn()->u64=fn()->u64{let owned=take payload;owned.n};let r=arena.seal(take a,take root);});}",
+            None,
+            true,
+        );
+    });
+}
+
+#[test]
+fn sealed_regions_33_projected_read_field_cannot_escape() {
+    with_compiler_stack(|| {
+        let prefix = "type Root{xs:List[u64]}\npub fn main(){let mut r=arena.with(fn(a:Arena)->Region[Root]{let root=Root(xs:[7u64]);arena.seal(take a,take root)});";
+        check(
+            &format!(
+                "{prefix}let independent=region.with(mut r,fn(view:Root)->List[u64]{{copy_to(heap,view.xs)}});}}"
+            ),
+            None,
+            true,
+        );
+        check(
+            &format!(
+                "{prefix}let escaped=region.with(mut r,fn(view:Root)->List[u64]{{view.xs}});}}"
+            ),
+            Some("MODE-1"),
+            false,
+        );
+    });
+}
+
+#[test]
+fn sealed_regions_33_read_result_can_own_an_independent_heap_capture() {
+    with_compiler_stack(|| {
+        check(
+            "pub fn main(){let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});let escaped=region.with(mut r,fn(view:List[u64])->fn()->u64{let independent=copy_to(heap,view);fn()->u64{list.len(independent)}});}",
+            None,
+            true,
+        );
+    });
+}
+
+#[test]
+fn sealed_regions_33_zero_roots_still_require_allocating_seal() {
+    with_compiler_stack(|| {
+        for (ty, root) in [
+            ("()", "let root=();"),
+            ("u64", "let root=0u64;"),
+            ("List[u64]", "let root:List[u64] in heap=[];"),
+            ("List[u64]", "let root:List[u64] in a=[];"),
+        ] {
+            check(
+                &format!(
+                    "@noalloc fn bad(take a:Arena in a)->Region[{ty}]{{{root}arena.seal(take a,take root)}}\npub fn main(){{}}"
+                ),
+                Some("MEM-5"),
+                false,
+            );
+        }
+    });
+}
