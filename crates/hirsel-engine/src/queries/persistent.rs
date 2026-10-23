@@ -444,6 +444,12 @@ struct LowerRecord {
     detail: DependencyReads,
 }
 #[derive(Serialize, Deserialize)]
+struct AuditRecord {
+    products: crate::native_audit::SourceAuditProducts,
+    selections: Vec<crate::comptime::Selection>,
+    depth: crate::memo::DepthEvidence<Span>,
+}
+#[derive(Serialize, Deserialize)]
 struct EvaluationRecord {
     owner: DefId,
     constant: crate::comptime::EvaluatedConstant,
@@ -1001,7 +1007,10 @@ impl QueryEngine {
             .hit(|read| {
                 if matches!(
                     key.2,
-                    QueryKind::Evaluate | QueryKind::Lower | QueryKind::Generate
+                    QueryKind::Evaluate
+                        | QueryKind::Lower
+                        | QueryKind::Generate
+                        | QueryKind::SourceAudit
                 ) && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
                     && id.path().0.name.starts_with("$comptime:")
                     && !self.staged_constants.contains_key(id.path())
@@ -1012,7 +1021,10 @@ impl QueryEngine {
                 }
                 if matches!(
                     key.2,
-                    QueryKind::Evaluate | QueryKind::Lower | QueryKind::Generate
+                    QueryKind::Evaluate
+                        | QueryKind::Lower
+                        | QueryKind::Generate
+                        | QueryKind::SourceAudit
                 ) && let Some(id) = read.definition()
                     && id.path().0.name.contains("$instance$")
                     && !self.items.contains_key(id.path())
@@ -1705,6 +1717,121 @@ impl QueryEngine {
         }
         .write(&reads, payload)
     }
+    pub(crate) fn load_source_audit(
+        &mut self,
+        path: &DefPath,
+    ) -> Option<crate::native_audit::SourceAuditProducts> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let key = self.store_key(path, QueryKind::SourceAudit)?;
+        let variant = self.stored_variant(path, QueryKind::SourceAudit)?;
+        let record: AuditRecord = self.decode_record(&variant.payload)?;
+        let syntax = self.snapshot(path).ok()?;
+        let audit = &record.products.audit;
+        if audit.definition != *path
+            || audit.implementation_revision != syntax.text_hash
+            || !self.portable_lower_reads(path, &variant.reads, &record.selections)
+            || record.depth.first.len() != self.depth_limit() as usize + 1
+            || record
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+            || audit
+                .closures
+                .iter()
+                .chain(&audit.invocations)
+                .map(|(id, _)| id)
+                .chain(record.products.materialized.iter().map(|(id, _)| id))
+                .any(|id| syntax.tree.expressions.get(id.0 as usize).is_none())
+            || self.signature_output(path).ok()?.value.fingerprint != audit.signature
+        {
+            return None;
+        }
+        let required = self.lower_requires_execution(path, &variant.reads);
+        let acceptance = if required && self.verify == Verify::On {
+            let snapshot = self.signature_snapshot();
+            Some(
+                self.result_store
+                    .as_ref()?
+                    .verifier()?
+                    .execution(evaluation_subject(&key, &variant.payload), |package| {
+                        snapshot.validation_input_digest(package)
+                    })?,
+            )
+        } else {
+            None
+        };
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::SourceAudit),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        self.replay_selections(&record.selections)?;
+        self.depth_replay_requests(&record.depth).ok()?;
+        self.merge_execution(&variant.reads);
+        self.merge_lower_acceptance(acceptance.as_ref(), required);
+        self.record_selections(&record.selections);
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(record.products)
+    }
+    pub(crate) fn store_source_audit(
+        &mut self,
+        products: &crate::native_audit::SourceAuditProducts,
+        reads: &Reads,
+        depth: crate::memo::DepthEvidence<Span>,
+        selections: Vec<crate::comptime::Selection>,
+        acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    ) -> Result<(), QueryError> {
+        let path = &products.audit.definition;
+        if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
+            return Ok(());
+        }
+        let Some(reads) = persisted_execution_reads(reads, acceptance.as_ref()) else {
+            return Ok(());
+        };
+        if !self.portable_lower_reads(path, &reads, &selections)
+            || !self.store_selections(&selections)?
+        {
+            return Ok(());
+        }
+        let Some(key) = self.store_key(path, QueryKind::SourceAudit) else {
+            return Ok(());
+        };
+        let Some(payload) = self.encode_record(&AuditRecord {
+            products: products.clone(),
+            depth,
+            selections,
+        }) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled audit store")
+            .clone();
+        if let Some(receipt) = acceptance.as_ref()
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        EncodedWriter {
+            types: self.type_records().expect("enabled audit types"),
+            store,
+            key,
+            path: path.clone(),
+            kind: QueryKind::SourceAudit,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(path), QueryKind::SourceAudit)),
+        }
+        .write(&reads, payload)
+    }
     pub(super) fn load_lower(
         &mut self,
         path: &DefPath,
@@ -2183,6 +2310,69 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn malformed_source_audits_miss_before_signature_demand_or_comparison() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..7 {
+                let (mut engine, syntax) = fixture();
+                let path = &syntax.item.definition;
+                let mut record = AuditRecord {
+                    products: crate::native_audit::SourceAuditProducts {
+                        audit: crate::native_audit::SourceAudit {
+                            definition: path.clone(),
+                            implementation_revision: syntax.text_hash,
+                            signature: ContentHash::default(),
+                            noalloc: false,
+                            cleanup: vec![],
+                            closures: vec![],
+                            invocations: vec![],
+                        },
+                        materialized: vec![],
+                    },
+                    depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                    selections: vec![],
+                };
+                match fault {
+                    0 => record.products.audit.definition = DefPath::core("foreign"),
+                    1 => record.products.audit.implementation_revision = ContentHash::default(),
+                    2 => record.depth.first = Box::new([]),
+                    3 => record.products.audit.closures.push((
+                        hirsel_syntax::ExprId(u32::MAX),
+                        hirsel_types::Allocation::NoAlloc,
+                    )),
+                    4 => record.products.audit.invocations.push((
+                        hirsel_syntax::ExprId(u32::MAX),
+                        hirsel_types::Allocation::NoAlloc,
+                    )),
+                    5 => record
+                        .selections
+                        .push(crate::comptime::Selection::Generated(DefId::intern(
+                            &DefPath::core("absent-generator"),
+                        ))),
+                    6 => record.selections.push(crate::comptime::Selection::Staged(
+                        DefId::intern(&DefPath::core("absent-stage")),
+                        vec![2],
+                    )),
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::SourceAudit, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                assert!(
+                    engine.load_source_audit(path).is_none(),
+                    "fault={fault} verify={verify:?}"
+                );
+                assert_eq!(engine.recompute_count(path, QueryKind::Signature), 0);
+                assert_eq!(engine.store_adoptions(), 0);
+                assert!(engine.pending_store_checks.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn generated_registrations_validate_before_installation_and_comparison() {
