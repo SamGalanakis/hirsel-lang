@@ -622,7 +622,7 @@ fn encode_record<T: Serialize>(
 ) -> Option<Vec<u8>> {
     records.encode_record(record, |anchor| anchor_owner(items, anchor))
 }
-struct Contents(Arc<dyn crate::store::ResultStore>);
+pub(super) struct Contents(pub(super) Arc<dyn crate::store::ResultStore>);
 impl hirsel_artifact_store::Contents for Contents {
     fn get_content(&self, reference: crate::store::Reference) -> Option<crate::store::Bytes> {
         self.0.get_content(reference)

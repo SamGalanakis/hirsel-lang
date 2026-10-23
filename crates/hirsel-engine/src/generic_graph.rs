@@ -24,7 +24,9 @@ use hirsel_types::{
 use std::collections::HashSet;
 
 /// Why an owner's instance requires the callee's instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum InstanceKind {
     /// A written or checker-planned call, in any body of the owner.
     Call,
@@ -43,7 +45,7 @@ pub enum InstanceKind {
 /// of `callee`. Free `Body` references in the arguments name the owner's
 /// parameters; when `owner_binder` is set (a signature-owned root), so do
 /// `Bound` references at the owner's own depth.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InstanceEdge {
     pub owner: DefPath,
     pub owner_binder: Option<SiteRef>,
@@ -107,7 +109,7 @@ impl InstanceEdge {
 }
 /// The instance requirements of a program, in collection order. The verdict
 /// depends only on the edge set, never on the order units contributed them.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct InstanceGraph {
     pub edges: Vec<InstanceEdge>,
 }
