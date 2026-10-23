@@ -2420,6 +2420,13 @@ pub trait Adapter {
     }
 
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
+
+    /// A scheduler-owned scope deadline attempt. It uses the same host/tape
+    /// operation as SleepUntil, with deadline evidence rather than an issuing
+    /// task's host-request evidence. Ordinary clock.sleep_until still uses call.
+    fn scope_timer(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        self.call(request)
+    }
     /// Whether the adapter records who issues each request (a durable journal).
     fn wants_issuer(&self) -> bool {
         false
@@ -3778,7 +3785,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
         },
     };
     unsafe { out.write(value) };
-    unsafe { crate::tasks::yield_now(&mut *ctx) };
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                crate::tasks::ordered::host::argument(ctx, "arg.path", Some(index), || {
+                    text.map(|text| text.as_bytes().to_vec())
+                }),
+            )
+        };
+    } else {
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+    }
     crate::STATUS_OK
 }
 
@@ -3797,8 +3815,20 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }
-    unsafe { out.write(crate::paths::names(ctx).arguments.len() as u64) };
-    unsafe { crate::tasks::yield_now(&mut *ctx) };
+    let len = crate::paths::names(ctx).arguments.len() as u64;
+    unsafe { out.write(len) };
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                crate::tasks::ordered::host::argument(ctx, "arg.len", None, || {
+                    Some(len.to_le_bytes().to_vec())
+                }),
+            )
+        };
+    } else {
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+    }
     crate::STATUS_OK
 }
 
@@ -3829,7 +3859,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
         None => result.tag = 1,
     }
     unsafe { out.write(result) };
-    unsafe { crate::tasks::yield_now(&mut *ctx) };
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                crate::tasks::ordered::host::argument(ctx, "arg.text", Some(index), || {
+                    text.map(|text| text.as_bytes().to_vec())
+                }),
+            )
+        };
+    } else {
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+    }
     crate::STATUS_OK
 }
 

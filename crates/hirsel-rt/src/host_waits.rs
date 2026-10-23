@@ -777,7 +777,7 @@ unsafe fn arm_here(
         clock,
         deadline: at,
     };
-    match binding.adapter.call(request.clone()) {
+    match binding.adapter.scope_timer(request.clone()) {
         Err(AdapterError::Blocked) => {
             binding.adapter.parked(token);
             binding.waits.armed.insert(token, (scope, request));
@@ -835,7 +835,7 @@ fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
     for (_, token) in armed {
         let (scope, request) = binding.waits.armed[&token].clone();
         binding.adapter.enter(token);
-        match binding.adapter.call(request) {
+        match binding.adapter.scope_timer(request) {
             Err(AdapterError::Blocked) => continue,
             Ok(Completion::Wait(_)) => {}
             Ok(_) => crate::fault("a scope deadline's timer completed as another request"),

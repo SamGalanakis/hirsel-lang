@@ -190,6 +190,11 @@ pub(super) enum CanonicalOutcome {
     Created(ObjectId),
     Alias(ObjectId),
     Scalar(Vec<u8>),
+    Argument {
+        kind: &'static str,
+        index: Option<u64>,
+        value: Option<Vec<u8>>,
+    },
     Value {
         status: u32,
         payload: Vec<u8>,
@@ -354,7 +359,7 @@ struct DeadlineEvidence {
     path: Vec<u32>,
     ordinal: u64,
     scope: ObjectId,
-    clock: Option<ObjectId>,
+    clock: Option<CanonicalItem>,
     at: u64,
 }
 
@@ -476,9 +481,20 @@ pub(super) fn deadline_scope(
         unreachable!()
     };
     let clock = driver
-        .objects
-        .identity(crate::ordered::objects::Kind::Capability, clock)
-        .cloned();
+        .events
+        .as_ref()
+        .unwrap()
+        .host_handles
+        .get(&clock)
+        .cloned()
+        .map(CanonicalItem::HostHandle)
+        .or_else(|| {
+            driver
+                .objects
+                .identity(crate::ordered::objects::Kind::Capability, clock)
+                .cloned()
+                .map(CanonicalItem::HostKey)
+        });
     let log = driver.events.as_mut().unwrap();
     let ordinal = log.ordinals.get(&path).copied().unwrap_or(0);
     let scope = ObjectId {
@@ -544,7 +560,7 @@ pub(super) fn deadline_armed(ctx: *mut TaskCtx, scope: u32, armed: bool) {
     };
     let events = vec![
         (
-            CanonicalItem::HostKey(clock),
+            clock,
             CanonicalOutcome::DeadlineArmed {
                 deadline: evidence.at,
                 armed,

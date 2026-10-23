@@ -81,6 +81,12 @@ impl HomeAdapter {
 }
 
 impl Adapter for HomeAdapter {
+    fn scope_timer(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        // Scope timers are observed by deadline_armed/expire, rather than by
+        // the issuing task's ordinary host request/result transfer slot.
+        self.with(|adapter| adapter.scope_timer(request))
+    }
+
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.with(|adapter| adapter.preflight(request))
     }

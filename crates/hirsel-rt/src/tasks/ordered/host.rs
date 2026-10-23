@@ -34,6 +34,33 @@ pub(crate) fn yield_now(ctx: *mut TaskCtx) -> Stopped<()> {
     finish(ctx, Next::Yield)
 }
 
+/// Argument reads use the immutable launch snapshot, rather than an adapter.
+/// Retire their declared arg.read operation with owned request/result bytes;
+/// a generic host.request yield has no adapter evidence to complete it.
+pub(crate) fn argument(
+    ctx: *mut TaskCtx,
+    kind: &'static str,
+    index: Option<u64>,
+    value: impl FnOnce() -> Option<Vec<u8>>,
+) -> Stopped<()> {
+    let (_, progress) = engine::head_canonical(
+        ctx,
+        "arg.read",
+        || ((), Next::Yield),
+        |_| {
+            Some(vec![(
+                super::events::CanonicalItem::Root,
+                super::events::CanonicalOutcome::Argument {
+                    kind,
+                    index,
+                    value: value(),
+                },
+            )])
+        },
+    )?;
+    engine::continue_at_head(ctx, progress)
+}
+
 /// # Safety
 /// This task exclusively owns the request and all of its completion buffers.
 pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopped<()> {

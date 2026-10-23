@@ -209,6 +209,9 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
         O::Created(id) => json!({"kind":"created", "id":object(id)}),
         O::Alias(id) => json!({"kind":"alias", "id":object(id)}),
         O::Scalar(value) => json!({"kind":"scalar", "value":bytes(value)}),
+        O::Argument { kind, index, value } => {
+            json!({"kind":"argument", "operation":kind, "index":index, "value":optional_bytes(value)})
+        }
         O::Value { status, payload } => {
             json!({"kind":"value", "status":status, "payload":bytes(payload)})
         }
