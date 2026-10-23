@@ -814,3 +814,45 @@ fn staged_lower_products_restore_own_declarations_before_admission_without_modes
         oracle.lower_to_tir(&path).unwrap();
     });
 }
+
+#[test]
+fn enclosing_evaluations_replay_exact_staged_selections_before_body_free_adoption() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime A+1u64\n";
+        let roots = vec![definition("A"), definition("B")];
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            let lower = seed.lower_to_tir(&definition("scaled")).unwrap();
+            let hidden = lower.value.bodies[lower.value.entry.0 as usize].rvalues.iter().find_map(|r| match r {
+                hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()), _ => None,
+            }).unwrap();
+            let expected = seed.materialize_values(roots.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(expected.iter().all(Result::is_ok), "jobs={jobs}: {expected:?}");
+            let mut fresh = signature_session(store.clone(), source, false);
+            fresh.adapters.modes = None;
+            fresh.adapters.lowering = None;
+            let actual = fresh.materialize_values(roots.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(actual.iter().all(Result::is_ok), "jobs={jobs}: {actual:?}");
+            assert_eq!(actual.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>(), expected.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>());
+            assert_eq!(fresh.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
+            assert!(fresh.constant_instance(&hidden, &[3]).is_err(), "only selected instances replay");
+            for root in &roots { assert_eq!(fresh.recompute_count(root, QueryKind::Modes), 0); }
+            let copied = Arc::new(store::MemStore::default());
+            for (key, bytes) in store.take() {
+                store::ResultStore::put(&*copied, &key, &bytes);
+                store::ResultStore::put(&*store, &key, &bytes);
+            }
+            let mut remote = signature_session(copied, source, false);
+            remote.adapters.modes = None; remote.adapters.lowering = None;
+            assert!(remote.materialize_values(roots.clone(), hirsel_intern::jobs::Jobs::new(jobs)).iter().all(Result::is_err), "producer transactions cannot transfer private completion");
+            let mut oracle = signature_session(store.clone(), source, true).with_verify_store(store::VerifyStore::Recompute);
+            oracle.register_staged_definition(&definition("scaled")).unwrap();
+            assert_eq!(oracle.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(5), "worker/scalar transaction encoding jobs={jobs}");
+            let mut changed = signature_session(store, &source.replace("n*n", "n+n"), true);
+            changed.adapters.modes = None; changed.adapters.lowering = None;
+            assert!(changed.materialize_constant(&definition("B")).is_err(), "stage owner body changes invalidate enclosing values");
+        }
+    });
+}

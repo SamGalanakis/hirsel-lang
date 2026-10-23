@@ -218,6 +218,7 @@ pub struct QueryEngine {
     /// executes or materializes (execution closure by union).
     pub(crate) execution_stack: Vec<ReadsBuilder>,
     pub(crate) evaluation_acceptance: Vec<Option<Vec<hirsel_validate::AcceptedArtifact>>>,
+    pub(crate) evaluation_selections: Vec<Vec<(DefId, Vec<u64>)>>,
     pub(crate) evaluation_validation: Vec<Option<BTreeMap<hirsel_syntax::PackageId, ContentHash>>>,
     active: BTreeSet<(DefPath, QueryKind)>,
     /// The runtime types compile-time evaluation runs with, and the epoch of
@@ -542,6 +543,7 @@ impl QueryEngine {
             execution_stack: vec![],
             evaluation_validation: vec![],
             evaluation_acceptance: vec![],
+            evaluation_selections: vec![],
             active: BTreeSet::new(),
             comptime_runtime: None,
             source_growth: Default::default(),
@@ -2074,7 +2076,7 @@ impl QueryEngine {
             .expect("lowering execution frame");
         observed.merged.extend(executed);
         let depth = self.s1.finish_requests(self.depth_limit());
-        let (_, acceptance) = self.end_evaluation_validation();
+        let (_, acceptance, _) = self.end_evaluation_validation();
         let key = MemoKey::new(QueryKind::Lower, id);
         let mut entry = self.finish(key, text, reads, result, observed);
         entry.depth = entry.result().is_ok().then_some(depth);
