@@ -32,6 +32,9 @@ pub(crate) struct Driver {
     pub(super) frontier: Option<Frontier<Command, Outcome>>,
     pub(super) objects: Registry,
     execution: BTreeMap<TaskId, Execution>,
+    pub(super) reserved: BTreeMap<u32, super::ahead::Reserved>,
+    pub(super) awaiting_save: bool,
+    pub(super) private_enabled: bool,
     pub(super) submitted: BTreeMap<TaskId, u64>,
     pub(super) recorded: BTreeMap<TaskId, u64>,
     pub(super) events: Option<super::events::Log>,
@@ -63,6 +66,10 @@ impl Driver {
             frontier: Some(frontier),
             objects,
             execution: BTreeMap::from([(root, Execution::Saved { head_only: false })]),
+            reserved: BTreeMap::new(),
+            awaiting_save: false,
+            private_enabled: policy.run_ahead != 0
+                && policy.reorder == hirsel_run_config::Reorder::Auto,
             submitted: BTreeMap::new(),
             recorded: BTreeMap::new(),
             events: None,
@@ -99,11 +106,21 @@ impl Driver {
         );
     }
 
+    /// Permission for new head work includes all outstanding retirement gates.
+    /// A save notification only enables retry: Frontier still owns the log.
+    pub(super) fn head_ready(&self, task: TaskId) -> bool {
+        !self.awaiting_save
+            && !self.host_poll
+            && !self.poll_deferred()
+            && self.frontier.as_ref().is_some_and(|f| f.head_ready(task))
+    }
+
     /// Return notifications in logical order, without retaining row references.
     /// Selected frames are omitted from later scans until claimed and saved.
     /// During a deferred poll no new turn may be selected before wake merge.
     pub(crate) fn select(&mut self) -> Vec<TaskId> {
-        if self.poll_after_save.is_some() || self.return_after_save.is_some() {
+        if self.awaiting_save || self.poll_after_save.is_some() || self.return_after_save.is_some()
+        {
             return Vec::new();
         }
         let Some(frontier) = &mut self.frontier else {

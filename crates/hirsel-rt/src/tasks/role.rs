@@ -290,6 +290,13 @@ impl Guard {
     /// # Safety
     /// As for enter. The guard stays on this task's own stack.
     pub(crate) unsafe fn new(ctx: *mut TaskCtx) -> Self {
+        unsafe { super::ordered::ahead::barrier(ctx) };
+        unsafe { Self::physical(ctx) }
+    }
+
+    /// # Safety
+    /// Physical dispatch/fuel only; this does not authorize a semantic op.
+    pub(crate) unsafe fn physical(ctx: *mut TaskCtx) -> Self {
         // SAFETY: caller contract.
         unsafe {
             if !(*(*ctx).run_ptr()).role.enabled.load(Ordering::Acquire) {

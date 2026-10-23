@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 53;
+pub const ABI_VERSION: u32 = 54;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -370,6 +370,8 @@ pub enum CName {
     Failure,
     Codec,
     ReportNode,
+    TaskCode,
+    SpawnAheadInfo,
 }
 
 impl CName {
@@ -391,6 +393,8 @@ impl CName {
             Self::Failure => "hirsel_rt_v2_failure",
             Self::Codec => "hirsel_rt_v2_codec",
             Self::ReportNode => "hirsel_rt_v2_report_node",
+            Self::TaskCode => "hirsel_rt_v2_task_code",
+            Self::SpawnAheadInfo => "hirsel_rt_v2_spawn_ahead_info",
         }
     }
 }
@@ -518,6 +522,8 @@ pub enum RuntimeEntry {
     CallbackLeave,
     /// A failed unchecked-add contract: ends the run with a MEM-9 diagnostic.
     UncheckedAddOverflow,
+    TaskSpawnAhead,
+    AheadBarrier,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -589,7 +595,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 77] = [
+    pub const ALL: [RuntimeEntry; 79] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -667,6 +673,8 @@ impl RuntimeEntry {
         Self::WorkerCollect,
         Self::CallbackLeave,
         Self::UncheckedAddOverflow,
+        Self::TaskSpawnAhead,
+        Self::AheadBarrier,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1123,6 +1131,32 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::TaskSpawnAhead => (
+                "hirsel_rt_v2_task_spawn_ahead",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("caller_site", U64),
+                        p("operation_site", U64),
+                        p("destination", ptr(N::Void, 1)),
+                        p("out", ptr(N::U64, 1)),
+                        p("scope", cptr(N::U64)),
+                        p(
+                            "code",
+                            CType {
+                                name: N::TaskCode,
+                                pointers: 0,
+                                constant: false,
+                            },
+                        ),
+                        p("environment", ptr(N::Header, 1)),
+                        p("flags", U64),
+                        p("info", cptr(N::SpawnAheadInfo)),
+                    ]
+                },
+            ),
+            Self::AheadBarrier => ("hirsel_rt_v2_ahead_barrier", VOID, const { &[CTX] }),
             Self::FuelRefill => ("hirsel_rt_v2_fuel_refill", VOID, const { &[CTX] }),
             Self::WorkerCreate => (
                 "hirsel_rt_v2_worker_create",
@@ -1258,4 +1292,6 @@ snapshot_enum!(RuntimeEntry {
     WorkerCollect,
     CallbackLeave,
     UncheckedAddOverflow,
+    TaskSpawnAhead,
+    AheadBarrier,
 });

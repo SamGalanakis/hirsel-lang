@@ -1,0 +1,688 @@
+//! Private physical frames, disjoint from the logical task table.
+//!
+//! The parent's owned D command names a reservation; only retirement installs
+//! its row. Tokio's exclusive Running token remains the physical owner. Like
+//! Rayon join's unwind path (ee0a00bd, join/mod.rs:180-196), adoption waits for
+//! that owner to save before transferring the storage it may still reference.
+
+use super::super::{Logical, Scheduler, Task, handle};
+use crate::{TaskCtx, budget::stretch::Stretch};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub(crate) const MAX_RESERVATIONS: usize = 8;
+
+/// Owner-local counters are touched only by the running image. The committer
+/// writes only the two atomic handoff flags until idle acknowledges the save.
+pub(crate) struct Local {
+    pub(crate) admitted: AtomicBool,
+    pub(crate) save_requested: AtomicBool,
+    grant: Cell<u64>,
+    fuel: Cell<u64>,
+}
+
+impl Local {
+    pub(crate) fn new(admitted: bool) -> Self {
+        Self {
+            admitted: AtomicBool::new(admitted),
+            save_requested: AtomicBool::new(false),
+            grant: Cell::new(0),
+            fuel: Cell::new(0),
+        }
+    }
+}
+
+pub(crate) struct Reserved {
+    pub(crate) task: Box<Task>,
+}
+
+pub(crate) fn private(ctx: *mut TaskCtx) -> bool {
+    unsafe {
+        (*ctx)
+            .ahead
+            .as_ref()
+            .is_some_and(|local| !local.admitted.load(Ordering::Acquire))
+    }
+}
+
+/// The role is held. A private lookup is confined to physical dispatch and
+/// never falls through to Scheduler::task for an unpublished identity.
+pub(crate) fn physical(s: &mut Scheduler, index: u32) -> &mut Task {
+    let reserved =
+        matches!(&s.logical, Logical::Ordered(driver) if driver.reserved.contains_key(&index));
+    if reserved {
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        &mut driver.reserved.get_mut(&index).unwrap().task
+    } else {
+        s.task(index)
+    }
+}
+
+/// Request acknowledgement, without touching the running owner's fuel word.
+pub(crate) fn can_promote(s: &mut Scheduler, index: u32) -> bool {
+    let row = physical(s, index);
+    if row.dispatch.as_ref().is_none_or(|frame| frame.is_saved()) {
+        return true;
+    }
+    unsafe {
+        (*row.ctx)
+            .ahead
+            .as_ref()
+            .expect("a privately running reservation")
+            .save_requested
+            .store(true, Ordering::Release);
+    }
+    false
+}
+
+/// Adopt once, after physical save. No result, completion rank or child count
+/// is published here; the ordinary spawn retirement performs those mutations.
+pub(crate) fn take(s: &mut Scheduler, index: u32) -> Task {
+    assert!(can_promote(s, index));
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let reserved = driver.reserved.remove(&index).expect("owned reservation");
+    let id = handle(index, reserved.task.generation);
+    unsafe {
+        let local = (*reserved.task.ctx).ahead.as_ref().unwrap();
+        let fuel = local.fuel.replace(0);
+        if fuel != 0 {
+            driver
+                .stretches
+                .entry(id)
+                .or_insert_with(|| Stretch::new(driver.budgets))
+                .fuel_points(fuel);
+        }
+        local.admitted.store(true, Ordering::Release);
+    }
+    *reserved.task
+}
+
+/// Idle only, after the exclusive physical owner acknowledged its save.
+pub(crate) fn after_save(
+    s: &mut Scheduler,
+    index: u32,
+    completed: bool,
+    stopped: bool,
+) -> Option<Vec<(u32, crate::pool::Owner)>> {
+    if !matches!(&s.logical, Logical::Ordered(d) if d.reserved.contains_key(&index)) {
+        return None;
+    }
+    assert!(
+        !completed || stopped,
+        "an unpublished child cannot complete logically"
+    );
+    if let Some(frame) = &physical(s, index).dispatch {
+        frame.mark_saved();
+    }
+    if stopped {
+        return Some(Vec::new());
+    }
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    driver.awaiting_save = false;
+    let selected = driver.select();
+    Some(
+        selected
+            .into_iter()
+            .map(|id| {
+                let row = s.task(id as u32);
+                assert_eq!(row.generation, (id >> 32) as u32);
+                (id as u32, row.owner)
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
+    unsafe {
+        let local = (*ctx).ahead.as_ref().unwrap();
+        local.grant.set(crate::budget::FUEL_CHUNK);
+        (*ctx).view.private();
+        (*ctx).heap().set_fuel(crate::budget::FUEL_CHUNK as i64);
+        (*ctx)
+            .ordered_charge_trace
+            .grant(crate::budget::FUEL_CHUNK as i64);
+    }
+}
+
+pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
+    unsafe {
+        let word = (*ctx).view.compiled.fuel;
+        (*ctx).ordered_charge_trace.capture(word);
+        let local = (*ctx).ahead.as_ref().unwrap();
+        let consumed = local
+            .grant
+            .get()
+            .saturating_sub(word.max(0) as u64)
+            .saturating_add(u64::from(word < 0));
+        local.fuel.set(local.fuel.get().saturating_add(consumed));
+        local.grant.set(0);
+        (*ctx).heap().set_fuel(0);
+    }
+}
+
+/// Before an R/E/H boundary, allocation or unknown work, a reservation waits
+/// without a logical yield. Its stack and context remain run-owned throughout.
+pub(crate) unsafe fn barrier(ctx: *mut TaskCtx) {
+    while private(ctx) {
+        unsafe {
+            super::super::role::enter(ctx);
+            crate::pool::free::suspend_current(ctx, false);
+        }
+    }
+}
+
+/// A physical refill adds neither a cancellation observation nor a logical
+/// point. The same compiled fuel points charge only when a budget is active.
+pub(crate) unsafe fn refill(ctx: *mut TaskCtx) {
+    fuel_out(ctx);
+    let pause = unsafe {
+        let local = (*ctx).ahead.as_ref().unwrap();
+        local.save_requested.load(Ordering::Acquire)
+            || local.fuel.get() > (*ctx).run_ref().fuel.remaining()
+    };
+    if pause {
+        unsafe { barrier(ctx) };
+    }
+    if private(ctx) {
+        fuel_in(ctx);
+    } else {
+        super::engine::fuel_in(ctx);
+    }
+}
+
+/// Additive, immutable alternate entry metadata. The source closure and its
+/// ordinary entry are unchanged; an unsupported record is a typed refusal.
+#[repr(C)]
+pub struct SpawnAheadInfo {
+    pub version: u32,
+    pub flags: u32,
+    pub entry: Option<super::super::TaskCode>,
+}
+const _: () = {
+    assert!(size_of::<SpawnAheadInfo>() == 16);
+    assert!(align_of::<SpawnAheadInfo>() == 8);
+    assert!(std::mem::offset_of!(SpawnAheadInfo, entry) == 8);
+};
+
+/// # Safety
+/// The ordinary TaskSpawn contract; non-null info is a live immutable record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
+    ctx: *mut TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    destination: *mut u8,
+    out: *mut u64,
+    scope: *const u64,
+    code: super::super::TaskCode,
+    environment: *mut crate::Header,
+    flags: u64,
+    info: *const SpawnAheadInfo,
+) -> u8 {
+    let entry = if info.is_null() {
+        None
+    } else {
+        let info = unsafe { &*info };
+        if info.version != 1 || info.flags != 0 {
+            unsafe {
+                crate::stop::raise(
+                    ctx,
+                    crate::stop::Stop::Refused(
+                        "unsupported spawn-ahead metadata version or flags".into(),
+                    ),
+                )
+            };
+        }
+        info.entry
+    };
+    if super::engine::on(ctx) {
+        let _role = unsafe { super::super::role::Guard::new(ctx) };
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                super::lifecycle::spawn_with_entry(
+                    ctx,
+                    out,
+                    scope,
+                    code,
+                    environment,
+                    operation_site,
+                    entry,
+                ),
+            )
+        };
+    }
+    unsafe {
+        super::super::hirsel_rt_v2_task_spawn(
+            ctx,
+            caller_site,
+            operation_site,
+            destination,
+            out,
+            scope,
+            code,
+            environment,
+            flags,
+        )
+    }
+}
+
+/// # Safety
+/// The running ahead body owns its context, and no loan crosses this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ahead_barrier(ctx: *mut TaskCtx) {
+    unsafe { barrier(ctx) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::*;
+    use std::sync::{Arc, atomic::AtomicU32};
+
+    #[derive(Default)]
+    struct Probe {
+        entered: AtomicU32,
+        private: AtomicU32,
+    }
+
+    unsafe extern "C" fn child(
+        ctx: *mut TaskCtx,
+        environment: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let [address, ordinal] =
+            unsafe { crate::alloc::payload(environment).cast::<[u64; 2]>().read() };
+        let probe = unsafe { &*(address as *const Probe) };
+        if private(ctx) {
+            // Observer only: this is not a language-visible shared operation.
+            unsafe { role::enter(ctx) };
+            let s = scheduler(ctx);
+            assert!(s.tasks[unsafe { (*ctx).task_id } as usize].is_none());
+            probe.private.fetch_add(1, Ordering::Release);
+            unsafe { role::release(ctx) };
+        }
+        probe.entered.fetch_or(1 << ordinal, Ordering::AcqRel);
+        if ordinal == 0 {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while probe.entered.load(Ordering::Acquire) & 2 == 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "a second private segment never started"
+                );
+                std::thread::yield_now();
+            }
+        }
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn a_second_real_frame_runs_before_its_spawn_is_admitted_and_is_adopted_once() {
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4] {
+            let probe = Arc::new(Probe::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    super::super::engine::enable(
+                        ctx,
+                        crate::ordered::Policy::admit(&Default::default(), None),
+                    )
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        crate::STATUS_OK
+                    );
+                    for ordinal in 0..4 {
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            16,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env)
+                            .cast::<[u64; 2]>()
+                            .write([Arc::as_ptr(&seen) as u64, ordinal]);
+                        let mut task = 0;
+                        let _role = role::Guard::new(ctx);
+                        assert_eq!(
+                            super::super::lifecycle::spawn_with_entry(
+                                ctx,
+                                &mut task,
+                                &scope,
+                                child,
+                                env,
+                                0,
+                                Some(child)
+                            ),
+                            Ok(crate::STATUS_OK)
+                        );
+                    }
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        crate::STATUS_OK
+                    );
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(probe.entered.load(Ordering::Acquire), 15);
+            assert!(probe.private.load(Ordering::Acquire) > 0);
+        }
+    }
+
+    struct FuelProbe {
+        wide: bool,
+        points: u64,
+        hold_until_save: bool,
+        second_computed: AtomicBool,
+        private_refills: AtomicU32,
+        remaining: std::sync::atomic::AtomicU64,
+    }
+
+    const POINTS: u64 = crate::budget::FUEL_CHUNK + 4;
+
+    unsafe extern "C" fn fuel_child(
+        ctx: *mut TaskCtx,
+        environment: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let [address, ordinal] =
+            unsafe { crate::alloc::payload(environment).cast::<[u64; 2]>().read() };
+        let probe = unsafe { &*(address as *const FuelProbe) };
+        if ordinal == 0 && probe.wide {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !probe.second_computed.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "private checkpoint tail did not run"
+                );
+                std::thread::yield_now();
+            }
+        }
+        let points = probe.points;
+        for _ in 0..points {
+            unsafe {
+                (*ctx).view.compiled.fuel -= 1;
+                if (*ctx).view.compiled.fuel < 0 {
+                    if private(ctx) {
+                        probe.private_refills.fetch_add(1, Ordering::Release);
+                    }
+                    crate::budget::hirsel_rt_v2_fuel_refill(ctx);
+                }
+            }
+        }
+        if ordinal == 1 {
+            probe.second_computed.store(true, Ordering::Release);
+            // Force the legal interleaving in which this private owner is
+            // still Running when its spawn becomes the parent's head op.
+            // This reads only physical protocol state, never language state.
+            if probe.hold_until_save && private(ctx) {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while private(ctx) {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "requested private save was never adopted"
+                    );
+                    unsafe {
+                        (*ctx).view.compiled.fuel -= 1;
+                        if (*ctx).view.compiled.fuel < 0 {
+                            probe.private_refills.fetch_add(1, Ordering::Release);
+                            crate::budget::hirsel_rt_v2_fuel_refill(ctx);
+                        }
+                    }
+                }
+            }
+        }
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn private_checkpoint_fuel_is_adopted_once_and_matches_width_one() {
+        for width in [1, 2, 4] {
+            checkpoint_case(width, 4, false, POINTS, Boundary::Exit);
+        }
+    }
+
+    #[test]
+    fn head_work_waits_for_running_reservation_save_before_scope_exit() {
+        checkpoint_case(1, 2, true, 1, Boundary::Exit);
+        eprintln!("width-one two-child control completed successfully");
+        checkpoint_case(2, 2, true, 1, Boundary::Exit);
+    }
+
+    #[test]
+    fn head_work_waits_for_running_reservation_save_before_scope_exit_full_chunk() {
+        checkpoint_case(2, 2, true, POINTS, Boundary::Exit);
+    }
+
+    #[derive(Clone, Copy)]
+    enum Boundary {
+        Exit,
+        Submit,
+        Refill,
+        Allocation,
+    }
+
+    #[test]
+    fn submit_waits_for_running_reservation_save_before_new_head_operation() {
+        checkpoint_case(2, 2, true, 1, Boundary::Submit);
+    }
+
+    #[test]
+    fn refill_waits_for_running_reservation_save_before_head_settlement() {
+        checkpoint_case(2, 2, true, 1, Boundary::Refill);
+    }
+
+    #[test]
+    fn allocation_waits_for_running_reservation_save_before_head_settlement() {
+        checkpoint_case(2, 2, true, 1, Boundary::Allocation);
+    }
+
+    fn checkpoint_case(
+        width: u32,
+        jobs: u64,
+        hold_until_save: bool,
+        points: u64,
+        boundary: Boundary,
+    ) {
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        {
+            let probe = Arc::new(FuelProbe {
+                wide: width != 1,
+                points,
+                hold_until_save,
+                second_computed: AtomicBool::new(false),
+                private_refills: AtomicU32::new(0),
+                remaining: std::sync::atomic::AtomicU64::new(u64::MAX),
+            });
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            run.fuel = (!hold_until_save).then_some(1_000_000);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    if matches!(boundary, Boundary::Allocation) {
+                        (*ctx).set_budgets(None, Some(1_000_000));
+                    }
+                    super::super::engine::enable(
+                        ctx,
+                        crate::ordered::Policy::admit(&Default::default(), None),
+                    );
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        crate::STATUS_OK
+                    );
+                    for ordinal in 0..jobs {
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            16,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env)
+                            .cast::<[u64; 2]>()
+                            .write([Arc::as_ptr(&seen) as u64, ordinal]);
+                        let mut task = 0;
+                        let _role = role::Guard::new(ctx);
+                        assert_eq!(
+                            super::super::lifecycle::spawn_with_entry(
+                                ctx,
+                                &mut task,
+                                &scope,
+                                fuel_child,
+                                env,
+                                0,
+                                Some(fuel_child)
+                            ),
+                            Ok(crate::STATUS_OK)
+                        );
+                    }
+                    if !matches!(boundary, Boundary::Exit) {
+                        // Save without absorbing: a busy wait would retain the
+                        // parent's permit while child zero waits for child one.
+                        // Head-only dispatch resumes this exact native frame
+                        // with its spawn log still owned by Frontier.
+                        let _role = role::Guard::new(ctx);
+                        let task = super::super::engine::current(ctx);
+                        super::super::engine::driver(ctx).suspending(task, true);
+                        crate::pool::free::suspend_current(ctx, false);
+                        let driver = super::super::engine::driver(ctx);
+                        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+                        assert_eq!(driver.frontier.as_ref().unwrap().head(), Some(task));
+                        assert!(!driver.frontier.as_ref().unwrap().head_ready(task));
+                        assert!(!driver.reserved.is_empty());
+                        assert!(seen.second_computed.load(Ordering::Acquire));
+                    }
+                    match boundary {
+                        Boundary::Exit => {}
+                        Boundary::Submit => {
+                            let mut inner = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut inner,
+                                    &scope
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &inner, 0),
+                                crate::STATUS_OK
+                            );
+                        }
+                        Boundary::Refill => {
+                            let _role = role::Guard::new(ctx);
+                            (*ctx).view.compiled.fuel -= 1;
+                            super::super::engine::fuel_refill(ctx).unwrap();
+                        }
+                        Boundary::Allocation => {
+                            let allocation = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            assert_eq!(
+                                crate::release::hirsel_rt_v2_release(
+                                    ctx,
+                                    allocation,
+                                    2,
+                                    std::ptr::null(),
+                                    0,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        crate::STATUS_OK
+                    );
+                    let _role = role::Guard::new(ctx);
+                    super::super::engine::at_head(ctx).unwrap();
+                    seen.remaining.store(
+                        super::super::engine::driver(ctx)
+                            .frontier
+                            .as_ref()
+                            .unwrap()
+                            .settled
+                            .fuel,
+                        Ordering::Release,
+                    );
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            if !hold_until_save {
+                assert_eq!(
+                    probe.remaining.load(Ordering::Acquire),
+                    1_000_000 - jobs * POINTS,
+                    "width {width}"
+                );
+            }
+            if width != 1 {
+                assert!(probe.private_refills.load(Ordering::Acquire) > 0);
+            }
+        }
+    }
+}

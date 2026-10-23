@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 53
+#define HIRSEL_RT_V2_ABI_VERSION 54
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -725,6 +725,16 @@ void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
 /* A callback thunk returns to C: the compute permit its Hirsel code took at
    callback_context goes back. */
 void hirsel_rt_v2_callback_leave(hirsel_rt_v2_ctx *ctx);
+
+/* Additive spawn-ahead metadata (ABI 54). Physical entry/checkpoints only. */
+typedef uint8_t (*hirsel_rt_v2_task_code)(hirsel_rt_v2_ctx *, hirsel_rt_v2_header *, uint64_t, uint64_t);
+typedef struct hirsel_rt_v2_spawn_ahead_info {
+    uint32_t version;
+    uint32_t flags;
+    hirsel_rt_v2_task_code entry;
+} hirsel_rt_v2_spawn_ahead_info;
+uint8_t hirsel_rt_v2_task_spawn_ahead(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, void *destination, uint64_t *out, const uint64_t *scope, hirsel_rt_v2_task_code code, hirsel_rt_v2_header *environment, uint64_t flags, const hirsel_rt_v2_spawn_ahead_info *info);
+void hirsel_rt_v2_ahead_barrier(hirsel_rt_v2_ctx *ctx);
 
 /* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime
    stores the next chunk, less the point the failed charge spent, in the word and returns, so

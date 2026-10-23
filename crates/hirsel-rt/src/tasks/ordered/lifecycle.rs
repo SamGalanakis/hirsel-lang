@@ -19,22 +19,30 @@ pub(crate) struct Spawn {
     owner: u64,
     scope: u64,
     shield: u32,
-    task: Task,
+    task: Option<Task>,
     held: crate::ordered::footprint::Held,
     started: Option<std::time::Instant>,
     run: *mut crate::context::RunShared,
 }
 
 impl Spawn {
+    pub(super) fn ready(&self, s: &mut Scheduler) -> bool {
+        self.task.is_some() || super::ahead::can_promote(s, self.index)
+    }
+
     pub(super) fn install(
         mut self,
         s: &mut Scheduler,
     ) -> (u64, crate::ordered::footprint::Held, Option<u32>) {
+        let mut task = self
+            .task
+            .take()
+            .unwrap_or_else(|| super::ahead::take(s, self.index));
         let parent = self.owner as u32;
         assert_eq!(s.task(parent).generation, (self.owner >> 32) as u32);
         let scope = s.scope_handle(self.scope);
-        assert_eq!(self.task.scope, Some(scope));
-        let ordinal = self.task.path.last().copied().expect("a child path");
+        assert_eq!(task.scope, Some(scope));
+        let ordinal = task.path.last().copied().expect("a child path");
         assert_eq!(
             s.task(parent).spawned,
             ordinal,
@@ -42,14 +50,14 @@ impl Spawn {
         );
         s.task(parent).spawned = ordinal.checked_add(1).expect("spawn path ordinal overflow");
         let inherited = s.canceled_task(parent, self.shield);
-        self.task.canceled = inherited.map(|_| CANCEL_PARENT).into();
-        self.task.priority = s.schedule.admit();
-        let word = handle(self.index, self.task.generation);
+        task.canceled = inherited.map(|_| CANCEL_PARENT).into();
+        task.priority = s.schedule.admit();
+        let word = handle(self.index, task.generation);
         assert!(
             s.tasks[self.index as usize].is_none(),
             "a reserved task row"
         );
-        s.tasks[self.index as usize] = Some(self.task);
+        s.tasks[self.index as usize] = Some(task);
         s.scope(scope).children.push(self.index);
         s.link_child(parent, self.index);
         if let (Some(started), Some(metrics)) =
@@ -153,6 +161,18 @@ pub(crate) unsafe fn spawn(
     environment: *mut Header,
     operation_site: u64,
 ) -> Stopped<u8> {
+    unsafe { spawn_with_entry(ctx, out, scope, code, environment, operation_site, None) }
+}
+
+pub(crate) unsafe fn spawn_with_entry(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    scope: *const u64,
+    code: TaskCode,
+    environment: *mut Header,
+    operation_site: u64,
+    ahead_entry: Option<TaskCode>,
+) -> Stopped<u8> {
     let parent = engine::current(ctx);
     let scope = unsafe { scope.read() };
     let ordinal = {
@@ -187,8 +207,20 @@ pub(crate) unsafe fn spawn(
         }
         (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
     }
+    let wide = unsafe {
+        (*ctx)
+            .run_ref()
+            .control
+            .width
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 1
+    };
+    let alternate = ahead_entry.filter(|_| wide && engine::driver(ctx).private_enabled);
     let mut task = Task::new(generation, child, Some(scope as u32), path, None);
-    task.code = Some((code, environment, operation_site));
+    task.code = Some((alternate.unwrap_or(code), environment, operation_site));
+    if alternate.is_some() {
+        unsafe { (*child).ahead = Some(Box::new(super::ahead::Local::new(true))) };
+    }
     task.stack = Some(stack);
     // SAFETY: no notification has published this owned environment yet.
     let captures = unsafe {
@@ -215,6 +247,43 @@ pub(crate) unsafe fn spawn(
         Kind::Task,
         word,
     );
+    let safe_capture = !captures.roots
+        && !captures.unknown
+        && captures.handles.is_empty()
+        && captures.typed.is_empty()
+        && driver
+            .plain_layouts
+            .contains(&unsafe { (*environment).index() });
+    let scope_committed = {
+        let s = scheduler(ctx);
+        s.scopes
+            .get(scope as u32 as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|row| row.generation == (scope >> 32) as u32)
+    };
+    let reserve = alternate.is_some()
+        && safe_capture
+        && scope_committed
+        && engine::driver(ctx).reserved.len() < super::ahead::MAX_RESERVATIONS;
+    let task = if reserve {
+        unsafe {
+            (*child)
+                .ahead
+                .as_ref()
+                .unwrap()
+                .admitted
+                .store(false, std::sync::atomic::Ordering::Release)
+        };
+        engine::driver(ctx).reserved.insert(
+            index,
+            super::ahead::Reserved {
+                task: Box::new(task),
+            },
+        );
+        None
+    } else {
+        Some(task)
+    };
     let spawn = Spawn {
         index,
         owner: parent,
@@ -240,6 +309,11 @@ pub(crate) unsafe fn spawn(
             ..Default::default()
         }),
     )?;
+    // A committed spawn has already moved out of the private owner map.
+    // Only an owned unpublished frame can be advertised by this path.
+    if engine::driver(ctx).reserved.contains_key(&index) {
+        unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any) };
+    }
     unsafe { out.write(word) };
     Ok(STATUS_OK)
 }

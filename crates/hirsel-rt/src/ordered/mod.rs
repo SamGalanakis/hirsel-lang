@@ -111,6 +111,13 @@ pub struct Retirement<'a> {
 pub trait Backend<P> {
     type Result;
 
+    /// A private physical owner may still be saving storage this operation
+    /// adopts. Refusal retains the entire operation and its positional stretch;
+    /// it does not settle, commit, poll or give the turn a retirement index.
+    fn can_retire(&mut self, _task: TaskId, _op: &Operation<P>) -> bool {
+        true
+    }
+
     /// Dynamic readiness is separate from footprint independence. In
     /// particular an unavailable mutex must wait at its boundary, even when
     /// its type/object footprint would otherwise permit early commit.
@@ -221,6 +228,9 @@ pub enum Pause {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Progress {
     NeedSegment(TaskId),
+    /// The head is waiting for physical save acknowledgement, not for a
+    /// language operation or a cooperative scheduling point.
+    NeedSave(TaskId),
     Absorbed(TaskId),
     Called(TaskId),
     Retired,
@@ -297,6 +307,15 @@ impl<P, R> Frontier<P, R> {
 
     pub fn head(&self) -> Option<TaskId> {
         self.head
+    }
+
+    /// Logical identity alone does not permit another operation or charge.
+    /// An owned log may still await its physical owner's save at this head.
+    pub(crate) fn head_ready(&self, task: TaskId) -> bool {
+        !self.stopped
+            && self.polling.is_none()
+            && self.head == Some(task)
+            && self.tasks[&task].log.is_empty()
     }
 
     pub fn queue(&self) -> impl Iterator<Item = TaskId> + '_ {
@@ -541,6 +560,17 @@ impl<P, R> Frontier<P, R> {
             "absorb the log before new head work"
         );
         self.tasks.get_mut(&task).unwrap().open_speculative_bytes = 0;
+        if !backend.can_retire(task, &operation) {
+            let row = self.tasks.get_mut(&task).unwrap();
+            row.log.push_front(Entry {
+                before,
+                operation,
+                committed: None,
+                turn: row.retiring,
+            });
+            row.state = State::Pending;
+            return Ok(Progress::NeedSave(task));
+        }
         self.apply(task, before, operation, None, backend)
     }
 
@@ -562,6 +592,10 @@ impl<P, R> Frontier<P, R> {
         let Some(entry) = self.tasks.get_mut(&task).unwrap().log.pop_front() else {
             return Ok(Progress::NeedSegment(task));
         };
+        if entry.committed.is_none() && !backend.can_retire(task, &entry.operation) {
+            self.tasks.get_mut(&task).unwrap().log.push_front(entry);
+            return Ok(Progress::NeedSave(task));
+        }
         self.apply(
             task,
             entry.before,

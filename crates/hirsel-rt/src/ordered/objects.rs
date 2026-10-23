@@ -255,6 +255,7 @@ mod tests {
             handles: BTreeSet::from([17]),
             typed: BTreeSet::new(),
             unknown: false,
+            roots: false,
         });
         assert_eq!(held.objects, BTreeSet::from([object(0), object(1)]));
         assert_eq!(held.obtains, BTreeSet::from([3]));
@@ -275,6 +276,7 @@ mod tests {
             handles: BTreeSet::from([31]),
             typed: BTreeSet::new(),
             unknown: false,
+            roots: false,
         });
         let tasks = BTreeMap::from([(1, held)]);
         registry.bind(Kind::Atomic, 42, object(1), 3, BTreeSet::new());
@@ -289,6 +291,7 @@ mod tests {
             handles: BTreeSet::from([5]),
             typed: BTreeSet::new(),
             unknown: false,
+            roots: false,
         };
         assert!(registry.captured(&captures).unknown);
         registry.inert(Kind::Scope, 5);

@@ -177,6 +177,8 @@ pub struct TaskCtx {
     /// The actual source invocation of a site-carrying host primitive. Task-owned
     /// across a physical save; nested calls restore their caller's site.
     pub(crate) operation_site: u64,
+    /// Private execution ownership; never part of the compiled context view.
+    pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -394,6 +396,7 @@ impl TaskCtx {
             free_terminal: None,
             pending_ordered_host: None,
             operation_site: 0,
+            ahead: None,
             native_host_result: None,
             replay_host: None,
             ordered_charge_trace: Default::default(),
