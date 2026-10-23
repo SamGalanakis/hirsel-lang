@@ -3029,3 +3029,91 @@ fn f1_returned_error_resource_cleanup_replays_exact_terminal_and_projection() {
         }
     }
 }
+
+#[test]
+fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    // Cover all three entry result ABIs using the ordinary ExitCode fixtures'
+    // public constructors. Resource-bearing Result[(), E] is covered above.
+    for (name, text, code, stderr) in [
+        (
+            "direct",
+            "pub fn main() -> std@1/process.ExitCode { std@1/process.exit_code(37u8) }",
+            37,
+            "",
+        ),
+        (
+            "wrapped",
+            "pub fn main() -> Result[std@1/process.ExitCode, String] { Ok(std@1/process.exit_code(19u8)) }",
+            19,
+            "",
+        ),
+        (
+            "error",
+            "pub fn main() -> Result[std@1/process.ExitCode, String] { Error(unique \"missing data\") }",
+            1,
+            "error: missing data\n",
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("f1-exit-code-{name}"));
+        let program = scratch.path("main.hir");
+        std::fs::write(&program, text).unwrap();
+        let report = scratch.path("projection");
+        for level in ["record", "durable"] {
+            let tape = scratch.path(level);
+            let grants = format!(
+                r#"{{"io":{{"tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
+            );
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .args(["run", "--native"])
+                .arg(&program)
+                .args(["--grants", &grants, "--cores", "1", "--record"])
+                .arg(&tape)
+                .env(hirsel_rt::free_replay::Report::VAR, &report);
+            f1_permits(&mut command, 1);
+            let live = bounded_output(
+                &mut command,
+                &program,
+                &format!("exit code {name} {level} live"),
+            );
+            assert_eq!(live.status.code(), Some(code), "{name}: {live:?}");
+            assert!(live.stdout.is_empty(), "{live:?}");
+            assert_eq!(live.stderr, stderr.as_bytes(), "{live:?}");
+            let bytes = std::fs::read(&tape).unwrap();
+            let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+            assert!(
+                parsed
+                    .end
+                    .as_ref()
+                    .unwrap()
+                    .outcome
+                    .starts_with("native-outcome-v2/")
+            );
+            let projection = std::fs::read_to_string(&report).unwrap();
+            for engine in ENGINES {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", "1"])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, 1);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!("exit code {name} {level} replay {engine:?}"),
+                );
+                assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            }
+        }
+    }
+}
