@@ -488,3 +488,52 @@ fn packtree_29_native_workflows_replay() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn packtree_29_bounded_target_listing_native_replay() {
+    let tmp = scratch("packtree-directory-probe-");
+    package(tmp.path());
+    for (name, source) in [
+        (
+            "verify.py",
+            include_str!("../support/packtree_29/verify.py"),
+        ),
+        (
+            "oracle.py",
+            include_str!("../support/packtree_29/oracle.py"),
+        ),
+        (
+            "cases.json",
+            include_str!("../support/packtree_29/cases.json"),
+        ),
+        (
+            "vectors.py",
+            include_str!("../support/packtree_29/vectors.py"),
+        ),
+        ("capped", include_str!("../../../../tools/capped")),
+    ] {
+        fs::write(tmp.path().join(name), source).unwrap();
+    }
+    let output = Command::new("python3")
+        .arg(tmp.path().join("verify.py"))
+        .arg("--hirsel")
+        .arg(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("--root")
+        .arg(tmp.path())
+        .env("PACKTREE_29_CASE", "unpack-go,target-nonempty")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let receipt: Value = serde_json::from_str(stdout.lines().last().unwrap())
+        .unwrap_or_else(|error| panic!("invalid packtree summary: {error}: {stdout}"));
+    let selected = receipt["selected"].as_u64().unwrap();
+    assert!(selected > 0);
+    assert_eq!(receipt["passed"].as_u64(), Some(selected));
+    assert_eq!(receipt["incomplete_cells"].as_u64(), Some(0));
+    eprintln!("PACKTREE_DIRECTORY_PROBE {receipt}");
+}

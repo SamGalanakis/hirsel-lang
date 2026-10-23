@@ -475,11 +475,18 @@ fn file_request(kind: usize, directory: u64, file: u64, invalid: bool, round: us
             bytes,
         },
         8 => Request::Size { directory, path },
-        9 => Request::ReadDir {
+        9 => Request::ReadDirPage {
             directory,
             path: String::new(),
+            after: String::new(),
+            recursive: false,
         },
-        10 => Request::ReadDir { directory, path },
+        10 => Request::ReadDirPage {
+            directory,
+            path,
+            after: String::new(),
+            recursive: false,
+        },
         11 => Request::Metadata { directory, path },
         12 => Request::Remove { directory, path },
         13 => Request::Mkdir { directory, path },
@@ -519,7 +526,7 @@ fn file_completion(request: &Request, error: IoError) -> Completion {
         }
         Request::FileRead { .. } | Request::Read { .. } => Completion::Bytes(Err(error)),
         Request::FileWrite { .. } | Request::Size { .. } => Completion::Size(Err(error)),
-        Request::ReadDir { .. } => Completion::Entries(Err(error)),
+        Request::ReadDirPage { .. } => Completion::Entries(Err(error)),
         Request::Metadata { .. } => Completion::Metadata(Err(error)),
         _ => Completion::Unit(Err(error)),
     }

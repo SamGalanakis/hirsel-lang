@@ -59,6 +59,6 @@ pub fn main(t: Test) -> Result[(), FileError] {
       Insecure("/etc/evil")
     )
   )
-  test.check(t, file.read_dir(dir, path.of("."))? == [])
+  test.check(t, iter.try_collect(take file.read_dir(dir, path.of("."))?)? == [])
   Ok(())
 }

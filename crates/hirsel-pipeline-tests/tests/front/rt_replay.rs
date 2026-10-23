@@ -292,7 +292,7 @@ pub fn replay_interpreter_with_fixture(
                 | Request::FileWrite { .. }
                 | Request::FileAppend { .. }
                 | Request::NarrowFile { .. }
-                | Request::ReadDir { .. }
+                | Request::ReadDirPage { .. }
                 | Request::Metadata { .. }
                 | Request::Mkdir { .. }
                 | Request::SetPermissions { .. }
@@ -431,33 +431,76 @@ pub fn replay_interpreter_with_fixture(
                     .push_back(fault);
             }
             let path = hirsel_syntax::DefPath::core(name);
-            let result = library
-                .call(
-                    OperationCall {
-                        runtime: &hirsel_interp::aggregate::RuntimeTypes::new(types.clone()),
-                        path: &path,
-                        generics: &[],
-                        arguments: &mut args.to_vec(),
-                        result_type,
-                        types: &types,
-                        site: Span::default(),
-                    },
-                    &mut OperationContext {
-                        configuration: &run,
-                        sources: &sources,
-                        stdout: &mut output,
-                        trace: &mut trace,
-                        trace_mode: Default::default(),
-                        anchor: None,
-                    },
-                )
-                .unwrap()
-                .unwrap();
-            let OperationResult::Complete {
-                value, arguments, ..
-            } = result
-            else {
-                panic!("unexpected reference failure")
+            let (value, arguments) = if let Request::ReadDirPage {
+                directory,
+                path,
+                after,
+                recursive,
+            } = &event.request
+            {
+                let result = library
+                    .read_directory_page(
+                        &handle("Dir", *directory),
+                        path,
+                        after,
+                        *recursive,
+                        &mut OperationContext {
+                            configuration: &run,
+                            sources: &sources,
+                            stdout: &mut output,
+                            trace: &mut trace,
+                            trace_mode: Default::default(),
+                            anchor: None,
+                        },
+                    )
+                    .unwrap();
+                let value = match result {
+                    Ok(entries) => reference::ok(reference::collection::sequence(
+                        hirsel_types::BuiltinType::List,
+                        entries.into_iter().map(|e| Value::Record {
+                            definition: (&hirsel_syntax::DefPath::core("DirEntry")).into(),
+                            fields: vec![
+                                Some(reference::path(&e.path)),
+                                Some(Value::Variant {
+                                    variant: e.kind,
+                                    fields: vec![],
+                                }),
+                            ],
+                        }),
+                    )),
+                    Err(error) => error,
+                };
+                (value, vec![])
+            } else {
+                let result = library
+                    .call(
+                        OperationCall {
+                            runtime: &hirsel_interp::aggregate::RuntimeTypes::new(types.clone()),
+                            path: &path,
+                            generics: &[],
+                            arguments: &mut args.to_vec(),
+                            result_type,
+                            types: &types,
+                            site: Span::default(),
+                        },
+                        &mut OperationContext {
+                            configuration: &run,
+                            sources: &sources,
+                            stdout: &mut output,
+                            trace: &mut trace,
+                            trace_mode: Default::default(),
+                            anchor: None,
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                let OperationResult::Complete {
+                    value, arguments, ..
+                } = result
+                else {
+                    panic!("unexpected reference failure")
+                };
+                (value, arguments)
             };
             let value = if name == "file.read" && matches!(value, Value::Variant { variant: 0, .. })
             {
@@ -890,7 +933,9 @@ pub(crate) fn file_arguments(
             "file.narrow",
             vec![handle("Dir", *directory), handle("File", *file)],
         ),
-        Request::ReadDir { directory, path } => (
+        Request::ReadDirPage {
+            directory, path, ..
+        } => (
             "file.read_dir",
             vec![handle("Dir", *directory), reference::path(path)],
         ),

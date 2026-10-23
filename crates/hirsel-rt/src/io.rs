@@ -357,9 +357,11 @@ pub enum Request {
         directory: u64,
         file: u64,
     },
-    ReadDir {
+    ReadDirPage {
         directory: u64,
         path: String,
+        after: String,
+        recursive: bool,
     },
     Metadata {
         directory: u64,
@@ -1031,6 +1033,14 @@ pub(crate) trait Storage {
     fn unwatch(&mut self, id: u64);
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
+    fn read_dir_page(
+        &mut self,
+        _path: &str,
+        _after: &str,
+        _recursive: bool,
+    ) -> Result<Vec<DirEntry>, IoError> {
+        Err(IoError::Fault(1))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1268,7 +1278,7 @@ impl State {
             | Request::FileSeek { directory, .. }
             | Request::NarrowFile { directory, .. }
             | Request::Size { directory, .. }
-            | Request::ReadDir { directory, .. }
+            | Request::ReadDirPage { directory, .. }
             | Request::Metadata { directory, .. }
             | Request::Read { directory, .. }
             | Request::Write { directory, .. }
@@ -1356,7 +1366,7 @@ impl State {
         }
         if matches!(
             request,
-            Request::ReadDir { .. }
+            Request::ReadDirPage { .. }
                 | Request::Metadata { .. }
                 | Request::Mkdir { .. }
                 | Request::RemoveDir { .. }
@@ -2150,7 +2160,9 @@ impl State {
                     | R::OpenAppend { directory, path }
                     | R::Create { directory, path }
                     | R::Size { directory, path }
-                    | R::ReadDir { directory, path }
+                    | R::ReadDirPage {
+                        directory, path, ..
+                    }
                     | R::Metadata { directory, path }
                     | R::Mkdir { directory, path }
                     | R::RemoveDir { directory, path }
@@ -2223,7 +2235,9 @@ impl State {
                             }))
                         })
                     })),
-                    R::ReadDir { .. } => Ok(C::Entries(if let Some(e) = error {
+                    R::ReadDirPage {
+                        after, recursive, ..
+                    } => Ok(C::Entries(if let Some(e) = error {
                         Err(e)
                     } else {
                         path.and_then(|p| {
@@ -2234,7 +2248,7 @@ impl State {
                             } else {
                                 p.strip_prefix(&format!("{root}/")).expect("relative path")
                             };
-                            storage.read_dir(&p).map(|entries| {
+                            storage.read_dir_page(&p, after, *recursive).map(|entries| {
                                 entries
                                     .into_iter()
                                     .map(|mut entry| {
@@ -4916,6 +4930,7 @@ pub struct WalkOption {
 pub(crate) struct StreamingWalk {
     pub(crate) directory: u64,
     pub(crate) walk: hirsel_kernels::walk::Walk,
+    pub(crate) recursive: bool,
 }
 unsafe extern "C" fn drop_walk(
     _ctx: *mut crate::TaskCtx,
@@ -4965,19 +4980,29 @@ pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(cr
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     ctx: *mut crate::TaskCtx,
-    _destination: *mut u8,
+    destination: *mut u8,
     out: *mut WalkResult,
     directory: *const u64,
 ) -> u8 {
-    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    unsafe { directory_iterator(ctx, destination, out, directory.read(), String::new(), true) }
+}
+unsafe fn directory_iterator(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut WalkResult,
+    directory: u64,
+    path: String,
+    recursive: bool,
+) -> u8 {
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let directory = unsafe { directory.read() };
     let Ok(completion) = (unsafe {
         capability_call(
             ctx,
-            Request::ReadDir {
+            Request::ReadDirPage {
                 directory,
-                path: String::new(),
+                path: path.clone(),
+                after: String::new(),
+                recursive,
             },
         )
     }) else {
@@ -4986,23 +5011,30 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     unsafe {
         crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
             let Completion::Entries(value) = completion else {
-                crate::fault("walk root completion mismatch")
+                crate::fault("directory root completion mismatch")
             };
             out.cast::<u8>()
                 .write_bytes(0, std::mem::size_of::<WalkResult>());
             match value {
                 Ok(entries) => {
                     let mut walk = hirsel_kernels::walk::Walk::default();
-                    walk.push(walk_entries(entries));
+                    walk.push_page(&path, walk_entries(entries), recursive);
                     let environment =
                         crate::alloc::hirsel_rt_v2_alloc(ctx, 1, 8, 8, crate::DOMAIN_HEAP, 0);
-                    let payload = crate::alloc::payload(environment);
-                    payload
+                    crate::alloc::payload(environment)
                         .cast::<*mut StreamingWalk>()
-                        .write(Box::into_raw(Box::new(StreamingWalk { directory, walk })));
+                        .write(Box::into_raw(Box::new(StreamingWalk {
+                            directory,
+                            walk,
+                            recursive,
+                        })));
                     (*out).value = WalkIterator {
-                        code: hirsel_rt_v2_file_walk_step as *const std::ffi::c_void,
                         environment,
+                        code: if recursive {
+                            hirsel_rt_v2_file_walk_step as *const std::ffi::c_void
+                        } else {
+                            hirsel_rt_v2_file_read_dir_step as *const std::ffi::c_void
+                        },
                         drop: std::ptr::null(),
                     };
                 }
@@ -5013,85 +5045,142 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
                         .write(error_word(error.clone()));
                 }
             }
-        })
-    };
+        });
+    }
     crate::STATUS_OK
 }
-/// IterNext closure ABI: context, environment, the inert caller and operation
-/// site words every closure and iterator callable carries, hidden destination,
-/// output. WalkOption is an aggregate, so cross-unit ABI 3 retains the output
-/// pointer and bare status; it never applies the scalar register pair here.
+unsafe fn directory_next(
+    ctx: *mut crate::TaskCtx,
+    environment: *mut crate::Header,
+) -> Result<Option<Result<hirsel_kernels::walk::Entry, IoError>>, ()> {
+    let state = unsafe {
+        crate::alloc::payload(environment)
+            .cast::<*mut StreamingWalk>()
+            .read()
+    };
+    while let Some(entry) = unsafe { (*state).walk.next_entry() } {
+        if entry.kind == 4 || (entry.kind == 1 && unsafe { (*state).recursive }) {
+            let (path, after) = if entry.kind == 4 {
+                entry.path.split_once('\0').expect("page cursor")
+            } else {
+                (entry.path.as_str(), "")
+            };
+            let Ok(completion) = (unsafe {
+                capability_call(
+                    ctx,
+                    Request::ReadDirPage {
+                        directory: (*state).directory,
+                        path: path.into(),
+                        after: after.into(),
+                        recursive: (*state).recursive,
+                    },
+                )
+            }) else {
+                return Err(());
+            };
+            let mut failure = None;
+            unsafe {
+                crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
+                    let Completion::Entries(entries) = completion else {
+                        crate::fault("directory page completion mismatch")
+                    };
+                    match entries {
+                        Ok(entries) => {
+                            (*state)
+                                .walk
+                                .push_page(path, walk_entries(entries), (*state).recursive)
+                        }
+                        Err(error) => {
+                            (*state).walk.stop();
+                            failure = Some(error.clone());
+                        }
+                    }
+                });
+            }
+            if let Some(error) = failure {
+                return Ok(Some(Err(error)));
+            }
+        } else if entry.kind <= 3 {
+            if entry.kind == 3 && unsafe { (*state).recursive } {
+                unsafe {
+                    (*state).walk.stop();
+                }
+                return Ok(Some(Err(IoError::Fault(1))));
+            }
+            return Ok(Some(Ok(entry)));
+        } else {
+            crate::fault("invalid directory cursor");
+        }
+    }
+    Ok(None)
+}
 /// # Safety
-/// The environment is an exclusive live walk environment and out is writable.
+/// Live exclusive iterator environment; out is writable Option[Result[Path,FileError]].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
-    _ctx: *mut crate::TaskCtx,
+    ctx: *mut crate::TaskCtx,
     environment: *mut crate::Header,
     _caller_site: u64,
     _operation_site: u64,
     _destination: *mut u8,
     out: *mut WalkOption,
 ) -> u8 {
-    // SAFETY: this semantic entry owns its task until it suspends or returns.
-    let _role = unsafe { crate::tasks::role::Guard::new(_ctx) };
-    let payload = crate::alloc::payload(environment);
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let Ok(item) = (unsafe { directory_next(ctx, environment) }) else {
+        return crate::STATUS_FAILURE;
+    };
     let mut result = WalkOption::default();
-    // Do not retain a Rust borrow across capability_call: it can suspend the task.
-    let state = unsafe { payload.cast::<*mut StreamingWalk>().read() };
-    while let Some(entry) = unsafe { (*state).walk.next_entry() } {
-        match entry.kind {
-            1 => {
-                let directory = unsafe { (*state).directory };
-                let Ok(completion) = (unsafe {
-                    capability_call(
-                        _ctx,
-                        Request::ReadDir {
-                            directory,
-                            path: entry.path,
-                        },
-                    )
-                }) else {
-                    return crate::STATUS_FAILURE;
-                };
-                unsafe {
-                    crate::tasks::free::host::native::convert_result(
-                        _ctx,
-                        completion,
-                        |completion| {
-                            let Completion::Entries(entries) = completion else {
-                                crate::fault("walk child completion mismatch")
-                            };
-                            match entries {
-                                Ok(entries) => (*state).walk.push(walk_entries(entries)),
-                                Err(error) => {
-                                    (*state).walk.stop();
-                                    result.tag = 1;
-                                    result.value = HandleResult::of(Err(error.clone()));
-                                }
-                            }
-                        },
-                    );
-                }
-                if result.tag == 1 {
-                    break;
-                }
-            }
-            0 | 2 => {
-                result.tag = 1;
-                result.value =
-                    HandleResult::of(Ok(crate::paths::names(_ctx).paths.intern(&entry.path)));
-                break;
-            }
-            _ => {
-                unsafe { (*state).walk.stop() };
-                result.tag = 1;
-                result.value = HandleResult::of(Err(IoError::Fault(1)));
-                break;
-            }
-        }
+    if let Some(item) = item {
+        result.tag = 1;
+        result.value =
+            HandleResult::of(item.map(|e| crate::paths::names(ctx).paths.intern(&e.path)));
     }
-
-    unsafe { out.write(result) };
+    unsafe {
+        out.write(result);
+    }
+    crate::STATUS_OK
+}
+#[repr(C)]
+#[derive(Default)]
+pub struct DirEntryOption {
+    pub tag: u32,
+    pub padding: u32,
+    pub result: u64,
+    pub path: u64,
+    pub kind: u64,
+}
+/// # Safety
+/// Live exclusive iterator environment; out is writable Option[Result[DirEntry,FileError]].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir_step(
+    ctx: *mut crate::TaskCtx,
+    environment: *mut crate::Header,
+    _caller_site: u64,
+    _operation_site: u64,
+    _destination: *mut u8,
+    out: *mut DirEntryOption,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let Ok(item) = (unsafe { directory_next(ctx, environment) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let mut result = DirEntryOption::default();
+    match item {
+        Some(Ok(e)) => {
+            result.tag = 1;
+            result.path = crate::paths::names(ctx).paths.intern(&e.path);
+            result.kind = e.kind as u64;
+        }
+        Some(Err(e)) => {
+            result.tag = 1;
+            result.result = 1;
+            result.path = error_word(e);
+        }
+        None => (),
+    }
+    unsafe {
+        out.write(result);
+    }
     crate::STATUS_OK
 }
 
@@ -5498,47 +5587,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
     crate::STATUS_OK
 }
 /// # Safety
-/// Context bound, directory and path borrowed, out writable for Result[List[DirEntry],FileError].
+/// Context bound, directory and path borrowed, out writable for Result[Iter[Result[DirEntry,FileError]],FileError].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
     ctx: *mut crate::TaskCtx,
-    _destination: *mut u8,
-    out: *mut HandleResult,
+    destination: *mut u8,
+    out: *mut WalkResult,
     directory: *const u64,
     path: *const u64,
 ) -> u8 {
-    // SAFETY: this semantic entry owns its task until it suspends or returns.
-    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let request = Request::ReadDir {
-        directory: unsafe { directory.read() },
-        path: crate::paths::names(ctx)
-            .path_text(unsafe { path.read() })
-            .to_owned(),
-    };
-    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
-        return crate::STATUS_FAILURE;
-    };
-    unsafe {
-        crate::tasks::free::host::native::convert_result(ctx, completion, |completion| {
-            let Completion::Entries(result) = completion else {
-                crate::fault("directory entries completion mismatch")
-            };
-            let result = result.as_ref().map(|entries| {
-                // DirEntry is pointer-free (Path @0, FileKind @8), like the runtime address list.
-                let block = crate::alloc::allocate_sequence(ctx, 0, entries.len() as u64, 16, 8);
-                let first = crate::alloc::sequence_elements_offset(8) as usize;
-                for (index, entry) in entries.iter().enumerate() {
-                    let id = crate::paths::names(ctx).paths.intern(&entry.path);
-                    let slot = crate::alloc::payload(block).add(first + index * 16);
-                    slot.cast::<u64>().write(id);
-                    slot.add(8).cast::<u64>().write(entry.kind as u64);
-                }
-                block as u64
-            });
-            out.write(HandleResult::of(result.map_err(Clone::clone)));
-        })
-    };
-    crate::STATUS_OK
+    let p = crate::paths::names(ctx)
+        .path_text(unsafe { path.read() })
+        .to_owned();
+    unsafe { directory_iterator(ctx, destination, out, directory.read(), p, false) }
 }
 
 #[cfg(test)]

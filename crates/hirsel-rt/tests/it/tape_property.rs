@@ -196,7 +196,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         FileAppend { directory: n.wrapping_add(7), file: n.wrapping_add(9), bytes: bytes.clone() },
         NarrowFile { directory: n.wrapping_add(7), file: n.wrapping_add(9) },
 
-        ReadDir { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
+        ReadDirPage { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") }, after: format!("{text}#after"), recursive: n % 2 == 0 },
         Metadata { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         Mkdir { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         Rename { directory: n.wrapping_add(7), from: if n == 0 { String::new() } else { format!("{text}#from") }, to: if n == 0 { String::new() } else { format!("{text}#to") } },

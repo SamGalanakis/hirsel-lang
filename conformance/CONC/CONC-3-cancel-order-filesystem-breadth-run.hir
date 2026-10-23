@@ -45,7 +45,15 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     }
   )
   failure.check(
-    match file.read_dir(d, path.of("kept")) {
+    match results.and_then(
+      take file.read_dir(d, path.of("kept")),
+      fn(take entries: Iter[Result[DirEntry, FileError]]) -> Result[
+        List[DirEntry],
+        FileError
+      ] {
+        iter.try_collect(take entries)
+      }
+    ) {
       Ok(entries) => list.len(entries) == 0,
       _ => false,
     },

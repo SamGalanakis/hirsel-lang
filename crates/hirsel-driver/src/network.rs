@@ -1672,13 +1672,17 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
             },
-            "file.walk" => R::ReadDir {
+            "file.walk" => R::ReadDirPage {
                 directory: self.id(&a[0])?,
                 path: String::new(),
+                after: String::new(),
+                recursive: true,
             },
-            "file.read_dir" => R::ReadDir {
+            "file.read_dir" => R::ReadDirPage {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
+                after: String::new(),
+                recursive: false,
             },
             "file.metadata" => R::Metadata {
                 directory: self.id(&a[0])?,
@@ -1767,6 +1771,11 @@ impl HostLibrary {
         })
     }
     fn storage(&mut self, name: &str, a: &mut [Value]) -> Result<OperationResult, Error> {
+        let iterator_path = if name == "file.read_dir" {
+            text(fields(&a[1])?[0])?
+        } else {
+            String::new()
+        };
         self.yield_now = true;
         let request = self.storage_request(name, a)?;
         let completion = self.host(request)?;
@@ -1827,16 +1836,20 @@ impl HostLibrary {
                 Err(e) => file_error(e),
             },
             C::Entries(r) => match r {
-                Ok(entries) if name == "file.walk" => ok(hirsel_interp::library::walk::iterator(
-                    a[0].clone(),
-                    entries
-                        .into_iter()
-                        .map(|e| hirsel_interp::library::walk::Entry {
-                            path: e.path,
-                            kind: e.kind as u32,
-                        })
-                        .collect(),
-                )),
+                Ok(entries) if name == "file.walk" || name == "file.read_dir" => {
+                    ok(hirsel_interp::library::walk::iterator(
+                        a[0].clone(),
+                        &iterator_path,
+                        entries
+                            .into_iter()
+                            .map(|e| hirsel_interp::library::walk::Entry {
+                                path: e.path,
+                                kind: e.kind as u32,
+                            })
+                            .collect(),
+                        name == "file.walk",
+                    ))
+                }
                 Ok(entries) => ok(sequence(
                     BuiltinType::List,
                     entries.into_iter().map(|entry| Value::Record {

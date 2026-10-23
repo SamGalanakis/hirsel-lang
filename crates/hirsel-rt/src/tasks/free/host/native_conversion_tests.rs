@@ -20,7 +20,7 @@ impl ConcurrentAdapter for Payloads {
     fn keys(&self, request: &Request) -> KeySet {
         KeySet::new(match request {
             Request::Net { .. } => vec![(ROOT, Mode::Shared)],
-            Request::Directory { .. } | Request::ReadDir { .. } => {
+            Request::Directory { .. } | Request::ReadDirPage { .. } => {
                 vec![(NAMESPACE, Mode::Shared)]
             }
             Request::Resolve { .. } => vec![(Key(7), Mode::Shared)],
@@ -60,7 +60,7 @@ impl ConcurrentAdapter for Payloads {
             Request::TlsPeer { .. } => Completion::Certificates(Ok(Some(vec![42; 8192]))),
             Request::TlsProtocol { .. } => Completion::Protocol(Ok(Some("p".repeat(8192)))),
             Request::EnvGet { .. } => Completion::Env(Ok(Some("e".repeat(8192)))),
-            Request::ReadDir { .. } => Completion::Entries(Ok(vec![crate::io::DirEntry {
+            Request::ReadDirPage { .. } => Completion::Entries(Ok(vec![crate::io::DirEntry {
                 path: "data".into(),
                 kind: crate::io::FileKind::Regular,
             }])),
@@ -234,11 +234,11 @@ fn bulk_native_abi_conversions_keep_completed_payloads_owned_at_allocation_cuts(
                             );
                         }
                         Case::Entries => {
-                            let mut out = directory;
+                            let mut out = std::mem::MaybeUninit::<crate::io::WalkResult>::uninit();
                             crate::io::hirsel_rt_v2_file_read_dir(
                                 ctx,
                                 std::ptr::null_mut(),
-                                &mut out,
+                                out.as_mut_ptr(),
                                 &directory.value,
                                 &root,
                             );

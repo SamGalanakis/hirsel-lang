@@ -57,7 +57,8 @@ fn local_put(mut d: Dir, name: String, data: Bytes, mode: Durability) -> Result[
 fn local_list(mut d: Dir, name: String) -> Result[List[String], FileError] uses {d} {
   let entries = file.read_dir(d, path.of(name))?
   let mut names: List[String] = []
-  for entry in entries {
+  for item in take entries {
+    let entry = item?
     list.push(mut names, path.text(entry.path))
   }
   Ok(take names)

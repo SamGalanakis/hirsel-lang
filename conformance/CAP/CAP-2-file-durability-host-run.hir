@@ -35,7 +35,7 @@ pub fn main(rt: Io) -> Result[(), FileError] {
   failure.check(file.read_bytes(store, path.of("log/2"))? == b"two", TextInvariant())
   // Only the two objects: no temporary survives a put.
   failure.check(
-    list.len(file.read_dir(store, path.of("log"))?) == 2u64,
+    list.len(iter.try_collect(take file.read_dir(store, path.of("log"))?)?) == 2u64,
     TextInvariant()
   )
   let mut f = file.create(store, path.of("notes"))?

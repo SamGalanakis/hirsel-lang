@@ -13,7 +13,7 @@ impl Adapter for Pages {
         Ok(None)
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
-        let Request::ReadDir { path, .. } = request else {
+        let Request::ReadDirPage { path, .. } = request else {
             panic!("unexpected {request:?}")
         };
         self.reads.lock().unwrap().push(path.clone());

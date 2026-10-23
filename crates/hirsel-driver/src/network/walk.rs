@@ -12,39 +12,42 @@ impl HostLibrary {
         let mut it = call.arguments[0].clone();
         loop {
             let mut pending = None;
-            let walked = hirsel_interp::library::walk::pull(&mut it, |directory, path| {
-                let directory = self.id(directory)?;
-                let request = R::ReadDir {
-                    directory,
-                    path: path.into(),
-                };
-                let completion = if let Some((expected, completion)) = supplied.take() {
-                    if request != expected {
-                        return Err(invalid());
+            let walked =
+                hirsel_interp::library::walk::pull(&mut it, |directory, path, after, recursive| {
+                    let directory = self.id(directory)?;
+                    let request = R::ReadDirPage {
+                        directory,
+                        path: path.into(),
+                        after: after.into(),
+                        recursive,
+                    };
+                    let completion = if let Some((expected, completion)) = supplied.take() {
+                        if request != expected {
+                            return Err(invalid());
+                        }
+                        completion.map_err(|e| Error::Unavailable(format!("Free walk: {e:?}")))?
+                    } else if self.free.is_some() {
+                        pending = Some(request);
+                        return Err(Error::Blocked(vec![]));
+                    } else {
+                        self.yield_now = true;
+                        self.host(request)?
+                    };
+                    match completion {
+                        C::Entries(result) => Ok(result
+                            .map(|entries| {
+                                entries
+                                    .into_iter()
+                                    .map(|e| hirsel_interp::library::walk::Entry {
+                                        path: e.path,
+                                        kind: e.kind as u32,
+                                    })
+                                    .collect()
+                            })
+                            .map_err(file_error)),
+                        _ => Err(invalid()),
                     }
-                    completion.map_err(|e| Error::Unavailable(format!("Free walk: {e:?}")))?
-                } else if self.free.is_some() {
-                    pending = Some(request);
-                    return Err(Error::Blocked(vec![]));
-                } else {
-                    self.yield_now = true;
-                    self.host(request)?
-                };
-                match completion {
-                    C::Entries(result) => Ok(result
-                        .map(|entries| {
-                            entries
-                                .into_iter()
-                                .map(|e| hirsel_interp::library::walk::Entry {
-                                    path: e.path,
-                                    kind: e.kind as u32,
-                                })
-                                .collect()
-                        })
-                        .map_err(file_error)),
-                    _ => Err(invalid()),
-                }
-            });
+                });
             if let Some(request) = pending {
                 if !self.library.begin_native_host()? {
                     return Ok(self.library.native_free_cut(cx));

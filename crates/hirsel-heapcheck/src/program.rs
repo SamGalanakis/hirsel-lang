@@ -168,6 +168,8 @@ pub enum Arg {
 pub enum OpValue {
     /// A runtime-built iterator of pointer-free semantic items. H owns its environment.
     Iterator(Vec<OpValue>),
+    /// Model-owned plain cursor state, advanced only when the program pulls.
+    LazyIterator(Box<OpValue>),
     /// Pointer-free fields in declaration order, including nested records.
     Aggregate(Vec<OpValue>),
     /// Pointer-free elements of an aggregate sequence or inline array.
@@ -319,6 +321,13 @@ pub trait Operations {
             .flatten()
     }
 
+    fn iterator_next(
+        &mut self,
+        _state: &mut OpValue,
+        _canceled: Option<u32>,
+    ) -> Result<Option<OpValue>, String> {
+        Err("unsupported lazy iterator".into())
+    }
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
     /// The outcome of `op` in a task canceled with `cause` and not shielded (CONC-3), when
     /// `op` is a cancellation point: effect-free program errors win, otherwise it completes

@@ -8,9 +8,12 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
   file.write_bytes(d, path.of("source/value"), b"content")?
   let old = dir.narrow(d, path.of("target"))?
   file.rename(d, path.of("source"), path.of("target"))?
-  test.check(t, list.len(file.read_dir(old, path.of(""))?) == 0)
+  test.check(t, list.len(iter.try_collect(take file.read_dir(old, path.of(""))?)?) == 0)
   let again = dir.narrow(old, path.of("."))?
-  test.check(t, list.len(file.read_dir(again, path.of(""))?) == 0)
+  test.check(
+    t,
+    list.len(iter.try_collect(take file.read_dir(again, path.of(""))?)?) == 0
+  )
   test.check(
     t,
     match file.metadata(old, path.of("."))?.kind {
@@ -25,11 +28,17 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
       _ => false,
     }
   )
-  test.check(t, list.len(file.read_dir(d, path.of("target"))?) == 1)
+  test.check(
+    t,
+    list.len(iter.try_collect(take file.read_dir(d, path.of("target"))?)?) == 1
+  )
   file.mkdir(d, path.of("empty"))?
   let empty = dir.narrow(d, path.of("empty"))?
   file.remove_dir(d, path.of("empty"))?
-  test.check(t, list.len(file.read_dir(empty, path.of(""))?) == 0)
+  test.check(
+    t,
+    list.len(iter.try_collect(take file.read_dir(empty, path.of(""))?)?) == 0
+  )
   test.check(
     t,
     match file.create(empty, path.of("file")) {

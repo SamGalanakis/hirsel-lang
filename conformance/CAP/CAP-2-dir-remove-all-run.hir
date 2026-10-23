@@ -8,8 +8,11 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
   let nested = dir.narrow(d, path.of("tree/deep"))?
   let mut opened = file.open(d, path.of("tree/deep/file"))?
   dir.remove_all(d, path.of("tree"))?
-  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 1)
-  test.check(t, list.len(file.read_dir(nested, path.of(""))?) == 0)
+  test.check(t, list.len(iter.try_collect(take file.read_dir(d, path.of(""))?)?) == 1)
+  test.check(
+    t,
+    list.len(iter.try_collect(take file.read_dir(nested, path.of(""))?)?) == 0
+  )
   let mut buffer: List[u8] = []
   test.check(t, file.read(d, mut opened, mut buffer, 1)? == 1)
   test.check(t, bytes.from_list(take buffer) == b"x")

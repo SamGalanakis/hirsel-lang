@@ -538,7 +538,8 @@ pub fn content_type(name: String) -> String uses {} {
 /// Loads every file of the static directory.
 pub fn load_assets(dir: Dir) -> Result[unique Map[String, Asset], FileError] {
   let mut files: Map[String, Asset] = map.empty()
-  for entry in file.read_dir(dir, path.of("."))? {
+  for item in take file.read_dir(dir, path.of("."))? {
+    let entry = item?
     if entry.kind != Regular() {
       continue
     }

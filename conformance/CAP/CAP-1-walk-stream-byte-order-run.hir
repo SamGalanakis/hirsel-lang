@@ -103,7 +103,7 @@ pub fn main(t: Test) -> Result[(), FileError] {
     }
   }
   failure.check(first == 10u64, Bounds())
-  let direct = file.read_dir(d, path.of(""))?
+  let direct = iter.try_collect(take file.read_dir(d, path.of(""))?)?
   failure.check(list.len(direct) == 6, Bounds())
   Ok(())
 }

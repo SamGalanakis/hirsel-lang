@@ -232,6 +232,7 @@ conformance/CAP/CAP-2-opaque-stdout-bad.hir
 conformance/CAP/CAP-2-opaque-stdout-ok.hir
 conformance/CAP/CAP-2-plain-wrapper-inert-bad.hir
 conformance/CAP/CAP-2-plain-wrapper-inert-ok.hir
+conformance/CAP/CAP-2-read-dir-stream-bounded-run.hir
 conformance/CAP/CAP-2-record-summary-bad.hir
 conformance/CAP/CAP-2-record-summary-ok.hir
 conformance/CAP/CAP-2-recursive-argument-authority-bad.hir
@@ -3610,6 +3611,14 @@ conformance/MODE/MODE-2-unique-copy-string-run.hir
 conformance/MODE/MODE-2-unique-deep-copy.hir
 conformance/MODE/MODE-2-unique-destructure-bad.hir
 conformance/MODE/MODE-2-unique-destructure-ok.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-aliased-source-bad.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-borrowed-source-bad.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-copied-item-bad.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-matrix-run.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-minimal-run.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-nonfresh-initializer-bad.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-shared-source-bad.hir
+conformance/MODE/MODE-2-unique-empty-builder-29-witness-run.hir
 conformance/MODE/MODE-2-unique-field-push-pop-aliased-bad.hir
 conformance/MODE/MODE-2-unique-field-push-pop-ok.hir
 conformance/MODE/MODE-2-unique-flat-field-copy-projection-run.hir
@@ -7243,11 +7252,3 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-aliased-source-bad.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-borrowed-source-bad.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-copied-item-bad.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-matrix-run.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-minimal-run.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-nonfresh-initializer-bad.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-shared-source-bad.hir
-conformance/MODE/MODE-2-unique-empty-builder-29-witness-run.hir

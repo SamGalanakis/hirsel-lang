@@ -14,7 +14,15 @@ fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreErr
 }
 
 fn count(d: Dir, kind: String) -> u64 uses {d} {
-  match file.read_dir(d, path.of(kind)) {
+  match results.and_then(
+    take file.read_dir(d, path.of(kind)),
+    fn(take entries: Iter[Result[DirEntry, FileError]]) -> Result[
+      List[DirEntry],
+      FileError
+    ] {
+      iter.try_collect(take entries)
+    }
+  ) {
     Ok(entries) => list.len(entries),
     Error(_) => 0,
   }

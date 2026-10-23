@@ -15,7 +15,7 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
     }
   )
   test.check(t, file.read_bytes(d, path.of("dest"))? == b"abc")
-  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 2)
+  test.check(t, list.len(iter.try_collect(take file.read_dir(d, path.of(""))?)?) == 2)
   let mut data: List[u8] = []
   let mut i: u64 = 0
   while i < 8193 {

@@ -15,7 +15,15 @@ fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreErr
 
 // The log ids, which must be contiguous, and the size of the newest log.
 fn logs(d: Dir) -> (bool, u64) uses {d} {
-  let Ok(entries) = file.read_dir(d, path.of("log")) else {
+  let Ok(entries) = results.and_then(
+    take file.read_dir(d, path.of("log")),
+    fn(take entries: Iter[Result[DirEntry, FileError]]) -> Result[
+      List[DirEntry],
+      FileError
+    ] {
+      iter.try_collect(take entries)
+    }
+  ) else {
     return (false, 0)
   }
   let mut low: u64 = 18446744073709551615

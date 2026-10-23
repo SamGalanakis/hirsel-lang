@@ -371,7 +371,7 @@ wire_enum!(crate::io::Request {
     57 => FileAppend{ directory, file, bytes },
     58 => NarrowFile{ directory, file },
     // Tag 59 (eager Walk) is permanently reserved by "Stream file.walk through sorted directory cursors"; never reuse.
-    60 => ReadDir{ directory, path },
+    115 => ReadDirPage{ directory, path, after, recursive },
     61 => Metadata{ directory, path },
     62 => Mkdir{ directory, path },
     63 => Rename{ directory, from, to },
@@ -426,7 +426,7 @@ wire_enum!(crate::io::Request {
     112 => Ready{ wait, points },
     113 => Schedule{ count, choice },
     114 => OpenAppend{ directory, path }
-} retired { 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
+} retired { 60 => "retired eager read_dir recording; re-record with streaming file.read_dir", 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {
     0 => Unavailable,
@@ -992,14 +992,25 @@ mod tests {
             decode::<crate::io::Request>(&old).unwrap_err(),
             "retired Request::Walk recording; re-record with streaming file.walk"
         );
-        let request = crate::io::Request::ReadDir {
+        let request = crate::io::Request::ReadDirPage {
             directory: 7,
             path: String::new(),
+            after: String::new(),
+            recursive: false,
         };
         let mut bytes = vec![];
         request.encode(&mut bytes);
-        assert_eq!(&bytes[..4], &60u32.to_le_bytes());
+        assert_eq!(&bytes[..4], &115u32.to_le_bytes());
         assert_eq!(decode::<crate::io::Request>(&bytes).unwrap(), request);
+    }
+    #[test]
+    fn retired_directory_page_binary_recording_requires_recording_again() {
+        let mut old = 60u32.to_le_bytes().to_vec();
+        old.extend_from_slice(&7u64.to_le_bytes());
+        assert_eq!(
+            decode::<crate::io::Request>(&old).unwrap_err(),
+            "retired eager read_dir recording; re-record with streaming file.read_dir"
+        );
     }
     #[test]
     fn fixed_integer_vectors_and_bad_lengths() {

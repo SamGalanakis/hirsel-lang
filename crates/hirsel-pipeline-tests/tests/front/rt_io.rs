@@ -1079,9 +1079,11 @@ fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
         Completion::Unit(Ok(()))
     );
     assert_eq!(
-        host.call(Request::ReadDir {
+        host.call(Request::ReadDirPage {
             directory: nested,
-            path: "".into()
+            path: "".into(),
+            after: String::new(),
+            recursive: false
         })
         .unwrap(),
         Completion::Entries(Ok(vec![]))

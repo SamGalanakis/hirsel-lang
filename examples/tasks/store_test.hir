@@ -18,7 +18,8 @@ fn board_with(titles: List[String]) -> unique model.Board uses {} {
 
 fn listing(dir: Dir) -> Result[List[String], FileError] {
   let mut names: List[String] = []
-  for entry in file.read_dir(dir, path.of("."))? {
+  for item in take file.read_dir(dir, path.of("."))? {
+    let entry = item?
     if let Some(name) = path.filename(entry.path) {
       list.push(mut names, unique name)
     }

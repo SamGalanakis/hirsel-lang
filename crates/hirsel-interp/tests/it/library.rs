@@ -2073,3 +2073,51 @@ fn pending_file_read_keeps_accumulated_storage_through_poll_and_release() {
     assert_eq!(elements[1], Some(Value::Integer(n(Primitive::U8, 1))));
     assert_eq!(elements[2], Some(Value::Integer(n(Primitive::U8, 2))));
 }
+
+#[test]
+fn read_dir_stream_keeps_direct_entries_sorted_across_pages_and_reports_refill_errors_late() {
+    let mut h = Harness::new(SimulationConfig {
+        files: (0..270)
+            .map(|n| (format!("{n:04}"), vec![]))
+            .chain([("a/leaf".into(), vec![])])
+            .collect(),
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let dir = unok(h.value("io.dir", vec![io, path("")]));
+    let mut entries = unok(h.value("file.read_dir", vec![dir.clone(), path("")]));
+    let items = drain_walk(&mut h, &mut entries);
+    assert_eq!(items.len(), 271);
+    for (n, item) in items.iter().take(270).enumerate() {
+        let Value::Variant {
+            variant: 0, fields, ..
+        } = item
+        else {
+            panic!("{item:?}")
+        };
+        let Value::Record { fields, .. } = fields[0].as_ref().unwrap() else {
+            panic!()
+        };
+        assert_eq!(fields[0], Some(path(&format!("{n:04}"))));
+    }
+    let mut entries = unok(h.value("file.read_dir", vec![dir.clone(), path("")]));
+    h.library.simulation.config.faults.insert(
+        "file.read_dir".into(),
+        [Fault::File {
+            error: simulation::FileError::PermissionDenied,
+            partial: 0,
+        }]
+        .into(),
+    );
+    let items = drain_walk(&mut h, &mut entries);
+    assert_eq!(items.len(), 129);
+    assert!(matches!(
+        items.last(),
+        Some(Value::Variant { variant: 1, .. })
+    ));
+    assert!(drain_walk(&mut h, &mut entries).is_empty());
+    assert!(matches!(
+        h.value("file.read_dir", vec![dir, path("missing")]),
+        Value::Variant { variant: 1, .. }
+    ));
+}

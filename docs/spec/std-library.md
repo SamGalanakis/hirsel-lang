@@ -3395,6 +3395,7 @@ fn iter.enumerate[T](take it: Iter[T]) -> Iter[(u64, T)] uses {it}
 @captures(a, b)
 fn iter.zip[T, U](take a: Iter[T], take b: Iter[U]) -> Iter[(T, U)] uses {a, b}
 fn iter.collect[T](take it: Iter[T]) -> List[T] uses {it}
+fn iter.try_collect[T, E](take it: Iter[Result[T, E]]) -> Result[List[T], E] uses {it}
 fn iter.fold[T, A](take it: Iter[T], take initial: A, take f: fn(take A, take T) -> A) -> A uses {it, initial, f}
 ```
 
@@ -3923,7 +3924,9 @@ temporary and leave the old destination intact. Source permissions and timestamp
 are not copied. Source links use the existing confined `file.open` policy;
 destination links are replaced as entries by atomic commit. No durability is promised.
 
-`list_recursive` is an ordinary std walker over `file.read_dir`. It returns every
+`iter.try_collect` collects successful iterator items and returns the first error.
+
+`list_recursive` is an ordinary std walker over `file.read_dir`, explicitly collecting each fallible page stream. It returns every
 descendant entry, including empty directories, symlinks and other entry kinds,
 in depth-first preorder with each directory's children sorted by UTF-8 bytes.
 Paths are relative to `d`, including the requested prefix; the starting directory

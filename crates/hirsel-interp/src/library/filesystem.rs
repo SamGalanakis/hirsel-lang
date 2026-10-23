@@ -5,7 +5,7 @@ use super::{
     simulation::{FileError, FileMetadata},
 };
 use crate::{Error, Integer, Value};
-use hirsel_types::{BuiltinType, Primitive};
+use hirsel_types::Primitive;
 use std::collections::BTreeSet;
 
 fn record(name: &str, fields: Vec<Value>) -> Value {
@@ -281,52 +281,11 @@ impl Library {
                         permissions: 0o777,
                     })));
                 }
-                "file.read_dir" => {
-                    return Ok(ok(Value::Sequence {
-                        kind: BuiltinType::List,
-                        elements: Default::default(),
-                        arena: None,
-                    }));
-                }
                 _ => {}
             }
         }
         let result = match name {
             "file.metadata" => self.simulation.metadata(tree, path).map(metadata_value),
-            "file.read_dir" => self.simulation.children(tree, path).map(|children| {
-                let prefix = if root.is_empty() {
-                    logical
-                } else if logical == root {
-                    ""
-                } else {
-                    logical.strip_prefix(&format!("{root}/")).unwrap()
-                };
-                Value::Sequence {
-                    kind: BuiltinType::List,
-                    elements: children
-                        .into_iter()
-                        .map(|p| {
-                            let name = p.rsplit_once('/').map_or(p.as_str(), |(_, n)| n);
-                            let local = if prefix.is_empty() {
-                                name.into()
-                            } else {
-                                format!("{prefix}/{name}")
-                            };
-                            Some(record(
-                                "DirEntry",
-                                vec![
-                                    super::path(&local),
-                                    variant(
-                                        self.simulation.metadata(tree, &p).unwrap().kind,
-                                        vec![],
-                                    ),
-                                ],
-                            ))
-                        })
-                        .collect(),
-                    arena: None,
-                }
-            }),
             "file.set_permissions" => {
                 let Value::Integer(bits) = arg(a, 2)? else { return Err(crate::invalid("permission bits")); };
                 let bits = bits.bits() as u32;

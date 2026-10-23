@@ -79,7 +79,7 @@ impl State {
             | R::Read { directory, .. }
             | R::Write { directory, .. }
             | R::Size { directory, .. }
-            | R::ReadDir { directory, .. }
+            | R::ReadDirPage { directory, .. }
             | R::Metadata { directory, .. }
             | R::Remove { directory, .. }
             | R::Mkdir { directory, .. }
@@ -191,7 +191,7 @@ impl State {
             | R::Read { path, .. }
             | R::Write { path, .. }
             | R::Size { path, .. }
-            | R::ReadDir { path, .. }
+            | R::ReadDirPage { path, .. }
             | R::Metadata { path, .. }
             | R::Remove { path, .. }
             | R::Mkdir { path, .. }
@@ -221,7 +221,7 @@ fn file_completion(request: &R, error: IoError) -> C {
         R::WatchNext { .. } => C::Watch(Err(error)),
         R::FileRead { .. } | R::Read { .. } => C::Bytes(Err(error)),
         R::FileWrite { .. } | R::Size { .. } => C::Size(Err(error)),
-        R::ReadDir { .. } => C::Entries(Err(error)),
+        R::ReadDirPage { .. } => C::Entries(Err(error)),
         R::Metadata { .. } => C::Metadata(Err(error)),
         _ => C::Unit(Err(error)),
     }
@@ -323,7 +323,7 @@ pub(crate) fn cancellation_result(request: &R, cause: u32) -> Option<C> {
         | R::Read { .. }
         | R::Write { .. }
         | R::Size { .. }
-        | R::ReadDir { .. }
+        | R::ReadDirPage { .. }
         | R::Metadata { .. }
         | R::Remove { .. }
         | R::Mkdir { .. }

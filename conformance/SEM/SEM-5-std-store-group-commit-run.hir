@@ -6,7 +6,15 @@
 // written writes nothing; a group limit of 1 writes every commit; a Volatile
 // store writes the same objects.
 fn logs(d: Dir) -> u64 uses {d} {
-  match file.read_dir(d, path.of("log")) {
+  match results.and_then(
+    take file.read_dir(d, path.of("log")),
+    fn(take entries: Iter[Result[DirEntry, FileError]]) -> Result[
+      List[DirEntry],
+      FileError
+    ] {
+      iter.try_collect(take entries)
+    }
+  ) {
     Ok(entries) => list.len(entries),
     Error(_) => 0,
   }

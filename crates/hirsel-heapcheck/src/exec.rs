@@ -277,6 +277,7 @@ pub(crate) struct Machine<'p, S> {
     /// The kind (`SignalKind` ordinal) whose default action ended the run.
     pub signaled: Option<u32>,
     runtime_iterators: Snapshot<std::sync::Arc<[OpValue]>>,
+    lazy_iterators: Snapshot<OpValue>,
     version_slots: std::sync::Arc<Vec<Vec<Option<SlotId>>>>,
     map_storage: std::sync::Arc<hirsel_lir::logical_storage::MapStorage>,
     statics: BTreeMap<(usize, u32), Ptr>,
@@ -406,6 +407,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 &program.layouts,
             )),
             runtime_iterators: Default::default(),
+            lazy_iterators: Default::default(),
             version_slots: std::sync::Arc::new(program.units.iter().map(versions::slots).collect()),
             statics: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -7768,15 +7770,37 @@ impl<'p, S: Stage> Machine<'p, S> {
                 env.ok_or_else(|| err(V::Malformed, "runtime iterator without environment"))?;
             self.ledger.check(environment)?;
             let position = self.scan_scalar(environment, 8)? as usize;
-            let items = self
-                .runtime_iterators
+            let (item, next) = if let Some(mut state) = self
+                .lazy_iterators
                 .get(environment.alloc.0 as usize)
-                .ok_or_else(|| err(V::ForgedPointer, "unknown runtime iterator environment"))?;
-            let item = items.get(position).cloned();
-            let next = match &item {
-                Some(OpValue::Variant { tag: 1, .. }) => items.len(),
-                Some(_) => position + 1,
-                None => position,
+                .cloned()
+            {
+                let item = if position != 0 {
+                    None
+                } else {
+                    let cause = self
+                        .tasks
+                        .as_deref()
+                        .and_then(|s| s.canceled(self.shielded(f)));
+                    self.ops
+                        .iterator_next(&mut state, cause)
+                        .map_err(|e| err(V::Malformed, e))?
+                };
+                let ended = item.is_none() || matches!(item, Some(OpValue::Variant { tag: 1, .. }));
+                self.lazy_iterators.set(environment.alloc.0 as usize, state);
+                (item, usize::from(ended))
+            } else {
+                let items = self
+                    .runtime_iterators
+                    .get(environment.alloc.0 as usize)
+                    .ok_or_else(|| err(V::ForgedPointer, "unknown runtime iterator environment"))?;
+                let item = items.get(position).cloned();
+                let next = match &item {
+                    Some(OpValue::Variant { tag: 1, .. }) => items.len(),
+                    Some(_) => position + 1,
+                    None => position,
+                };
+                (item, next)
             };
             self.ledger
                 .get_mut(environment.alloc)
@@ -8199,7 +8223,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                         image.write_bytes(0, &bytes);
                         Val::Image(image)
                     }
-                    value @ (OpValue::Iterator(_)
+                    value @ (OpValue::LazyIterator(_)
+                    | OpValue::Iterator(_)
                     | OpValue::Aggregate(_)
                     | OpValue::Sequence(_)
                     | OpValue::TakenHandle { .. }
@@ -8595,7 +8620,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                     Ok(image)
                 }
             }
-            OpValue::Iterator(items) => {
+            value @ (OpValue::Iterator(_) | OpValue::LazyIterator(_)) => {
+                let (items, lazy) = match value {
+                    OpValue::Iterator(items) => (items, None),
+                    OpValue::LazyIterator(state) => (vec![], Some(*state)),
+                    _ => unreachable!(),
+                };
                 if !matches!(self.record(layout)?.kind, LayoutKind::Iterator { .. }) {
                     return fail(V::TypeConfusion, "runtime iterator result layout");
                 }
@@ -8625,8 +8655,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .get_mut(environment.alloc)
                     .extent
                     .write_bytes(0, &0u64.to_le_bytes());
-                self.runtime_iterators
-                    .set(environment.alloc.0 as usize, items.into());
+                if let Some(state) = lazy {
+                    self.lazy_iterators.set(environment.alloc.0 as usize, state);
+                } else {
+                    self.runtime_iterators
+                        .set(environment.alloc.0 as usize, items.into());
+                }
                 let mut image = Extent::new(self.size(layout)?);
                 image.write_bytes(0, &vec![0; self.size(layout)? as usize]);
                 image.put_cell(
@@ -9822,24 +9856,31 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 self.ledger.end_resources(&rest)?;
             }
-            Work::Death { alloc, raw } => match raw {
-                None => self.ledger.free(alloc)?,
-                Some(token) => {
-                    let size = self.ledger.get(alloc).extent.len();
-                    let rest = self
-                        .ledger
-                        .get_mut(alloc)
-                        .extent
-                        .take(0, size, FREE_POISON, None);
-                    if !rest.cells.is_empty() {
-                        return fail(V::LeakedCredit, format!("reset of {alloc:?} left a holder"));
+            Work::Death { alloc, raw } => {
+                self.lazy_iterators.remove(alloc.0 as usize);
+                self.runtime_iterators.remove(alloc.0 as usize);
+                match raw {
+                    None => self.ledger.free(alloc)?,
+                    Some(token) => {
+                        let size = self.ledger.get(alloc).extent.len();
+                        let rest =
+                            self.ledger
+                                .get_mut(alloc)
+                                .extent
+                                .take(0, size, FREE_POISON, None);
+                        if !rest.cells.is_empty() {
+                            return fail(
+                                V::LeakedCredit,
+                                format!("reset of {alloc:?} left a holder"),
+                            );
+                        }
+                        let a = self.ledger.get_mut(alloc);
+                        a.state = AllocState::Raw(token);
+                        a.layout = None;
+                        a.count = None;
                     }
-                    let a = self.ledger.get_mut(alloc);
-                    a.state = AllocState::Raw(token);
-                    a.layout = None;
-                    a.count = None;
                 }
-            },
+            }
         }
         Ok(None)
     }

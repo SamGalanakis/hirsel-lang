@@ -384,8 +384,18 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 bytes,
             } => format!("file_append {directory} {file} {}", hex(bytes)),
             Request::NarrowFile { directory, file } => format!("narrow_file {directory} {file}"),
-            Request::ReadDir { directory, path } => {
-                format!("read_dir {directory} {}", hex(path.as_bytes()))
+            Request::ReadDirPage {
+                directory,
+                path,
+                after,
+                recursive,
+            } => {
+                format!(
+                    "read_dir_page {directory} {} {} {}",
+                    hex(path.as_bytes()),
+                    hex(after.as_bytes()),
+                    u8::from(*recursive)
+                )
             }
             Request::Metadata { directory, path } => {
                 format!("metadata {directory} {}", hex(path.as_bytes()))
@@ -636,221 +646,232 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
             };
             let (req, comp) = line.split_once(" -> ").ok_or("bad tape delimiter")?;
             let w: Vec<_> = req.split(' ').collect();
-            let request = match w.as_slice() {
-                ["stdout", io] => Request::Stdout { io: number(io)? },
-                ["monotonic_clock", io] => Request::MonotonicClock { io: number(io)? },
-                ["wall_clock", io] => Request::WallClock { io: number(io)? },
-                ["monotonic", clock] => Request::Monotonic {
-                    clock: number(clock)?,
-                },
-                ["wall", clock] => Request::Wall {
-                    clock: number(clock)?,
-                },
-                ["random", io] => Request::Random { io: number(io)? },
-                ["tasks", io] => Request::Tasks { io: number(io)? },
-                ["net", io] => Request::Net { io: number(io)? },
-                ["directory", io, p] => Request::Directory {
-                    io: number(io)?,
-                    path: string(p)?,
-                },
-                ["narrow_dir", d, p] => Request::NarrowDir {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["read_only_dir", d] => Request::ReadOnlyDir {
-                    directory: number(d)?,
-                },
-                ["print", s, b] => Request::Print {
-                    stdout: number(s)?,
-                    bytes: bytes(b)?,
-                },
-                ["open", d, p] => Request::Open {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["open_append", d, p] => Request::OpenAppend {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["create", d, p] => Request::Create {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["map", d, p] => Request::Map {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["map_view", d, m] => Request::MapView {
-                    directory: number(d)?,
-                    mapped: number(m)?,
-                },
-                ["map_check", d, m] => Request::MapCheck {
-                    directory: number(d)?,
-                    mapped: number(m)?,
-                },
-                ["watch", d, p, r] => Request::Watch {
-                    directory: number(d)?,
-                    path: string(p)?,
-                    recursive: boolean(r)?,
-                },
-                ["watch_next", d, w] => Request::WatchNext {
-                    directory: number(d)?,
-                    watcher: number(w)?,
-                },
-                ["test_dir_event", t, d, e] => Request::TestDirEvent {
-                    test: number(t)?,
-                    directory: number(d)?,
-                    event: parse_watch_event(e)?,
-                },
-                ["file_read", d, f, n] => Request::FileRead {
-                    directory: number(d)?,
-                    file: number(f)?,
-                    max: number(n)?,
-                },
-                ["file_seek", d, f, n] => Request::FileSeek {
-                    directory: number(d)?,
-                    file: number(f)?,
-                    offset: number(n)?,
-                },
-                ["file_write", d, f, b] => Request::FileWrite {
-                    directory: number(d)?,
-                    file: number(f)?,
-                    bytes: bytes(b)?,
-                },
-                ["file_append", d, f, b] => Request::FileAppend {
-                    directory: number(d)?,
-                    file: number(f)?,
-                    bytes: bytes(b)?,
-                },
-                ["narrow_file", d, f] => Request::NarrowFile {
-                    directory: number(d)?,
-                    file: number(f)?,
-                },
-                ["walk", ..] => {
-                    return Err(
-                        "retired Request::Walk recording; re-record with streaming file.walk"
-                            .into(),
-                    );
-                }
-                ["read_dir", d, p] => Request::ReadDir {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["metadata", d, p] => Request::Metadata {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["mkdir", d, p] => Request::Mkdir {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["set_permissions", d, p, permissions] => Request::SetPermissions {
-                    directory: number(d)?,
-                    path: string(p)?,
-                    permissions: number(permissions)?,
-                },
-                ["remove_all", d, p] => Request::RemoveAll {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["remove_dir", d, p] => Request::RemoveDir {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["rename", d, a, b] => Request::Rename {
-                    directory: number(d)?,
-                    from: string(a)?,
-                    to: string(b)?,
-                },
-                ["size", d, p] => Request::Size {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["read", d, p] => Request::Read {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["write", d, p, b] => Request::Write {
-                    directory: number(d)?,
-                    path: string(p)?,
-                    bytes: bytes(b)?,
-                },
-                ["remove", d, p] => Request::Remove {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["atomic", d, p] => Request::CreateAtomic {
-                    directory: number(d)?,
-                    path: string(p)?,
-                },
-                ["write_all", d, f, b] => Request::WriteAll {
-                    directory: number(d)?,
-                    file: number(f)?,
-                    bytes: bytes(b)?,
-                },
-                ["commit", d, f] => Request::Commit {
-                    directory: number(d)?,
-                    file: number(f)?,
-                },
-                ["sync", d, f] => Request::Sync {
-                    directory: number(d)?,
-                    file: number(f)?,
-                },
-                ["put_new", d, p, b, durable] => Request::PutNew {
-                    directory: number(d)?,
-                    path: string(p)?,
-                    bytes: bytes(b)?,
-                    durable: boolean(durable)?,
-                },
-                ["test_crash", t, d, seed] => Request::TestCrash {
-                    test: number(t)?,
-                    directory: number(d)?,
-                    seed: number(seed)?,
-                },
-                ["close", h] => Request::Close { handle: number(h)? },
-                ["check", t, c] => Request::TestCheck {
-                    test: number(t)?,
-                    condition: boolean(c)?,
-                },
-                ["check_case", t, c, index] => Request::TestCheckCase {
-                    test: number(t)?,
-                    condition: boolean(c)?,
-                    case: number(index)?,
-                },
-                ["fail", t] => Request::TestFail { test: number(t)? },
-                ["test_clock", t] => Request::TestClock { test: number(t)? },
-                ["test_seed", t] => Request::TestSeed { test: number(t)? },
-                ["test_tasks", t] => Request::TestTasks { test: number(t)? },
-                ["test_log", t, text] => Request::TestLog {
-                    test: number(t)?,
-                    text: string(text)?,
-                },
-                ["test_snapshot", t, name, text] => Request::TestSnapshot {
-                    test: number(t)?,
-                    name: string(name)?,
-                    text: string(text)?,
-                },
-                ["test_dir", t, entries] => Request::TestDir {
-                    test: number(t)?,
-                    entries: if entries.is_empty() {
-                        vec![]
-                    } else {
-                        entries
-                            .split(',')
-                            .map(|e| {
-                                let (p, b) = e.split_once(':').ok_or("bad tape test entry")?;
-                                Ok((string(p)?, bytes(b)?))
-                            })
-                            .collect::<Result<_, String>>()?
+            let request =
+                match w.as_slice() {
+                    ["stdout", io] => Request::Stdout { io: number(io)? },
+                    ["monotonic_clock", io] => Request::MonotonicClock { io: number(io)? },
+                    ["wall_clock", io] => Request::WallClock { io: number(io)? },
+                    ["monotonic", clock] => Request::Monotonic {
+                        clock: number(clock)?,
                     },
-                },
-                words => match crate::host_io_tape::parse_request(words)?
-                    .or(crate::net::tape::parse_request(words)?)
-                {
-                    Some(request) => request,
-                    None => return Err("bad tape request".into()),
-                },
-            };
+                    ["wall", clock] => Request::Wall {
+                        clock: number(clock)?,
+                    },
+                    ["random", io] => Request::Random { io: number(io)? },
+                    ["tasks", io] => Request::Tasks { io: number(io)? },
+                    ["net", io] => Request::Net { io: number(io)? },
+                    ["directory", io, p] => Request::Directory {
+                        io: number(io)?,
+                        path: string(p)?,
+                    },
+                    ["narrow_dir", d, p] => Request::NarrowDir {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["read_only_dir", d] => Request::ReadOnlyDir {
+                        directory: number(d)?,
+                    },
+                    ["print", s, b] => Request::Print {
+                        stdout: number(s)?,
+                        bytes: bytes(b)?,
+                    },
+                    ["open", d, p] => Request::Open {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["open_append", d, p] => Request::OpenAppend {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["create", d, p] => Request::Create {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["map", d, p] => Request::Map {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["map_view", d, m] => Request::MapView {
+                        directory: number(d)?,
+                        mapped: number(m)?,
+                    },
+                    ["map_check", d, m] => Request::MapCheck {
+                        directory: number(d)?,
+                        mapped: number(m)?,
+                    },
+                    ["watch", d, p, r] => Request::Watch {
+                        directory: number(d)?,
+                        path: string(p)?,
+                        recursive: boolean(r)?,
+                    },
+                    ["watch_next", d, w] => Request::WatchNext {
+                        directory: number(d)?,
+                        watcher: number(w)?,
+                    },
+                    ["test_dir_event", t, d, e] => Request::TestDirEvent {
+                        test: number(t)?,
+                        directory: number(d)?,
+                        event: parse_watch_event(e)?,
+                    },
+                    ["file_read", d, f, n] => Request::FileRead {
+                        directory: number(d)?,
+                        file: number(f)?,
+                        max: number(n)?,
+                    },
+                    ["file_seek", d, f, n] => Request::FileSeek {
+                        directory: number(d)?,
+                        file: number(f)?,
+                        offset: number(n)?,
+                    },
+                    ["file_write", d, f, b] => Request::FileWrite {
+                        directory: number(d)?,
+                        file: number(f)?,
+                        bytes: bytes(b)?,
+                    },
+                    ["file_append", d, f, b] => Request::FileAppend {
+                        directory: number(d)?,
+                        file: number(f)?,
+                        bytes: bytes(b)?,
+                    },
+                    ["narrow_file", d, f] => Request::NarrowFile {
+                        directory: number(d)?,
+                        file: number(f)?,
+                    },
+                    ["walk", ..] => {
+                        return Err(
+                            "retired Request::Walk recording; re-record with streaming file.walk"
+                                .into(),
+                        );
+                    }
+                    ["read_dir", ..] => return Err(
+                        "retired eager read_dir recording; re-record with streaming file.read_dir"
+                            .into(),
+                    ),
+                    ["read_dir_page", d, p, after, recursive] => Request::ReadDirPage {
+                        directory: number(d)?,
+                        path: string(p)?,
+                        after: string(after)?,
+                        recursive: match *recursive {
+                            "0" => false,
+                            "1" => true,
+                            _ => return Err("read_dir_page order".into()),
+                        },
+                    },
+                    ["metadata", d, p] => Request::Metadata {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["mkdir", d, p] => Request::Mkdir {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["set_permissions", d, p, permissions] => Request::SetPermissions {
+                        directory: number(d)?,
+                        path: string(p)?,
+                        permissions: number(permissions)?,
+                    },
+                    ["remove_all", d, p] => Request::RemoveAll {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["remove_dir", d, p] => Request::RemoveDir {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["rename", d, a, b] => Request::Rename {
+                        directory: number(d)?,
+                        from: string(a)?,
+                        to: string(b)?,
+                    },
+                    ["size", d, p] => Request::Size {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["read", d, p] => Request::Read {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["write", d, p, b] => Request::Write {
+                        directory: number(d)?,
+                        path: string(p)?,
+                        bytes: bytes(b)?,
+                    },
+                    ["remove", d, p] => Request::Remove {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["atomic", d, p] => Request::CreateAtomic {
+                        directory: number(d)?,
+                        path: string(p)?,
+                    },
+                    ["write_all", d, f, b] => Request::WriteAll {
+                        directory: number(d)?,
+                        file: number(f)?,
+                        bytes: bytes(b)?,
+                    },
+                    ["commit", d, f] => Request::Commit {
+                        directory: number(d)?,
+                        file: number(f)?,
+                    },
+                    ["sync", d, f] => Request::Sync {
+                        directory: number(d)?,
+                        file: number(f)?,
+                    },
+                    ["put_new", d, p, b, durable] => Request::PutNew {
+                        directory: number(d)?,
+                        path: string(p)?,
+                        bytes: bytes(b)?,
+                        durable: boolean(durable)?,
+                    },
+                    ["test_crash", t, d, seed] => Request::TestCrash {
+                        test: number(t)?,
+                        directory: number(d)?,
+                        seed: number(seed)?,
+                    },
+                    ["close", h] => Request::Close { handle: number(h)? },
+                    ["check", t, c] => Request::TestCheck {
+                        test: number(t)?,
+                        condition: boolean(c)?,
+                    },
+                    ["check_case", t, c, index] => Request::TestCheckCase {
+                        test: number(t)?,
+                        condition: boolean(c)?,
+                        case: number(index)?,
+                    },
+                    ["fail", t] => Request::TestFail { test: number(t)? },
+                    ["test_clock", t] => Request::TestClock { test: number(t)? },
+                    ["test_seed", t] => Request::TestSeed { test: number(t)? },
+                    ["test_tasks", t] => Request::TestTasks { test: number(t)? },
+                    ["test_log", t, text] => Request::TestLog {
+                        test: number(t)?,
+                        text: string(text)?,
+                    },
+                    ["test_snapshot", t, name, text] => Request::TestSnapshot {
+                        test: number(t)?,
+                        name: string(name)?,
+                        text: string(text)?,
+                    },
+                    ["test_dir", t, entries] => Request::TestDir {
+                        test: number(t)?,
+                        entries: if entries.is_empty() {
+                            vec![]
+                        } else {
+                            entries
+                                .split(',')
+                                .map(|e| {
+                                    let (p, b) = e.split_once(':').ok_or("bad tape test entry")?;
+                                    Ok((string(p)?, bytes(b)?))
+                                })
+                                .collect::<Result<_, String>>()?
+                        },
+                    },
+                    words => match crate::host_io_tape::parse_request(words)?
+                        .or(crate::net::tape::parse_request(words)?)
+                    {
+                        Some(request) => request,
+                        None => return Err("bad tape request".into()),
+                    },
+                };
             let w: Vec<_> = comp.split(' ').collect();
             let completion = match w.as_slice() {
                 ["clock_grant", "ok", id] => Completion::ClockGrant(Ok(number(id)?)),

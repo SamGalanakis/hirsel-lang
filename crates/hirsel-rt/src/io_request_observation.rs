@@ -149,7 +149,7 @@ pub(crate) fn project<A>(
         | R::Open { directory, .. }
         | R::OpenAppend { directory, .. }
         | R::Create { directory, .. }
-        | R::ReadDir { directory, .. }
+        | R::ReadDirPage { directory, .. }
         | R::Metadata { directory, .. }
         | R::Mkdir { directory, .. }
         | R::Rename { directory, .. }

@@ -145,3 +145,12 @@ pub fn fold[T, A](take it: Iter[T], take initial: A, take f: fn(take A, take T) 
   }
   take accumulator
 }
+
+/// Collects successful items, stopping at the first error.
+pub fn try_collect[T, E](take it: Iter[Result[T, E]]) -> Result[List[T], E] uses {it} {
+  let mut out: List[T] = []
+  for item in take it {
+    core@1/list.push(mut out, item?)
+  }
+  Ok(take out)
+}

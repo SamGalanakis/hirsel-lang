@@ -2352,6 +2352,50 @@ impl Storage for Disk {
         entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
         Ok(entries)
     }
+    fn read_dir_page(
+        &mut self,
+        path: &str,
+        after: &str,
+        recursive: bool,
+    ) -> Result<Vec<DirEntry>, IoError> {
+        let fd = self.open(path, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        let mut entries = hirsel_kernels::walk::PageSelector::default();
+        for entry in
+            std::fs::read_dir(format!("/proc/self/fd/{}", fd.as_raw_fd())).map_err(error)?
+        {
+            let name = entry
+                .map_err(error)?
+                .file_name()
+                .into_string()
+                .map_err(|_| IoError::Fault(1))?;
+            if name.contains(['\\', '\0']) {
+                return Err(IoError::Fault(1));
+            }
+            let pin = open_component(fd.as_raw_fd(), &name, libc::O_PATH, 0)?;
+            let kind = entry_metadata(&pin.metadata().map_err(error)?).kind;
+            entries.offer(
+                hirsel_kernels::walk::Entry {
+                    path: name,
+                    kind: kind as u32,
+                },
+                after,
+                recursive,
+            );
+        }
+        Ok(entries
+            .finish()
+            .into_iter()
+            .map(|e| DirEntry {
+                path: e.path,
+                kind: match e.kind {
+                    0 => FileKind::Regular,
+                    1 => FileKind::Directory,
+                    2 => FileKind::Symlink,
+                    _ => FileKind::Other,
+                },
+            })
+            .collect())
+    }
 }
 /// Every directory below pinned directory `root` (tree path `path`), each pinned, without
 /// following links.

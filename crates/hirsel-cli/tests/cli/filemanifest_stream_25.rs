@@ -428,7 +428,7 @@ fn native(caps: bool, backend: &str) {
         for event in events {
             use hirsel_rt::io::Request;
             match event.request {
-                Request::ReadDir { path, .. } => reads.push(path),
+                Request::ReadDirPage { path, .. } => reads.push(path),
                 Request::Open { path, .. } => opens.push(path),
                 Request::Metadata { path, .. } => metadata.push(path),
                 Request::FileRead { .. } => file_reads += 1,

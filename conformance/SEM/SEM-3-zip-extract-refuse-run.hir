@@ -31,6 +31,6 @@ pub fn main(t: Test) -> Result[(), FileError] {
       100
     ) == Error(Unsupported("symlink"))
   )
-  test.check(t, file.read_dir(dir, path.of("."))? == [])
+  test.check(t, iter.try_collect(take file.read_dir(dir, path.of("."))?)? == [])
   Ok(())
 }

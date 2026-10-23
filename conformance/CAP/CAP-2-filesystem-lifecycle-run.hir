@@ -13,7 +13,7 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
       _ => false,
     }
   )
-  let entries = file.read_dir(d, path.of("out"))?
+  let entries = iter.try_collect(take file.read_dir(d, path.of("out"))?)?
   test.check(t, list.len(entries) == 1)
   test.check(t, path.text(entries[0].path) == "out/nested")
   test.check(
@@ -49,12 +49,15 @@ pub fn exercise(t: Test) -> Result[(), FileError] {
   file.rename(d, path.of("old"), path.of("out/nested/value"))?
   let nested = dir.narrow(d, path.of("out/nested"))?
   file.rename(d, path.of("out"), path.of("moved"))?
-  test.check(t, list.len(file.read_dir(nested, path.of(""))?) == 1)
+  test.check(
+    t,
+    list.len(iter.try_collect(take file.read_dir(nested, path.of(""))?)?) == 1
+  )
   test.check(t, file.read_bytes(d, path.of("moved/nested/value"))? == b"abc")
   file.remove(d, path.of("moved/nested/value"))?
   file.remove_dir(d, path.of("moved/nested"))?
   file.remove_dir(d, path.of("moved"))?
-  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 0)
+  test.check(t, list.len(iter.try_collect(take file.read_dir(d, path.of(""))?)?) == 0)
   test.check(
     t,
     match file.metadata(d, path.of("moved")) {

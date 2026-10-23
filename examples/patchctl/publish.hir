@@ -9,8 +9,9 @@ pub fn write(d: Dir, tree: plan.Tree, rows: List[apply.Row]) -> Result[
       return Error(manifest.problem("conflicts"))
     }
   }
-  let entries = file.read_dir(d, path.of("")) ? report.file_problem
-  if list.len(entries) != 0 {
+  let mut entries = file.read_dir(d, path.of("")) ? report.file_problem
+  if let Some(item) = iter.next(mut entries) {
+    let _ = item ? report.file_problem
     return Error(manifest.problem("output_not_empty"))
   }
   file.put_new(d, path.of(".patchctl-incomplete"), bytes.from_list([]), Volatile()) ? report.file_problem

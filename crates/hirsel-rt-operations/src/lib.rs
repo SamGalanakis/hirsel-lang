@@ -1974,7 +1974,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         caller_site: false,
         symbol: "hirsel_rt_v2_file_read_dir",
         destination: true,
-        result: Some((16, 8)),
+        result: Some((32, 8)),
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {

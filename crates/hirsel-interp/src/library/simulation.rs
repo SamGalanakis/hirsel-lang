@@ -940,25 +940,88 @@ impl Simulation {
         directory: u64,
         root: &str,
         local: &str,
+        after: &str,
+        recursive: bool,
     ) -> Result<Vec<hirsel_kernels::walk::Entry>, FileError> {
         let physical = self.resolve_in(tree, directory, root, local, true)?;
         if self.detached_directories.contains(&directory) {
             return Ok(vec![]);
         }
-        self.children(tree, &physical)?
+        if self.metadata(tree, &physical)?.kind != 1 {
+            return Err(FileError::NotDirectory);
+        }
+        let prefix = if physical.is_empty() {
+            String::new()
+        } else {
+            format!("{physical}/")
+        };
+        let mut page = hirsel_kernels::walk::PageSelector::default();
+        let (dirs, files) = &self.trees[&tree];
+        let links = (tree == 0).then_some(&self.config.links);
+        let metadata = (tree == 0).then_some(&self.config.metadata);
+        let mut offer = |p: String| {
+            let name = p.strip_prefix(&prefix).expect("direct child");
+            page.offer(
+                hirsel_kernels::walk::Entry {
+                    path: name.into(),
+                    kind: self
+                        .metadata(tree, &p)
+                        .expect("indexed directory entry")
+                        .kind,
+                },
+                after,
+                recursive,
+            );
+        };
+        hirsel_kernels::walk::visit_children(
+            &physical,
+            |bound| dirs.range(bound.to_owned()..).next().cloned(),
+            &mut offer,
+        );
+        hirsel_kernels::walk::visit_children(
+            &physical,
+            |bound| {
+                files
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            },
+            &mut offer,
+        );
+        if let Some(links) = links {
+            hirsel_kernels::walk::visit_children(
+                &physical,
+                |bound| {
+                    links
+                        .range(bound.to_owned()..)
+                        .next()
+                        .map(|(p, _)| p.clone())
+                },
+                &mut offer,
+            );
+        }
+        if let Some(metadata) = metadata {
+            hirsel_kernels::walk::visit_children(
+                &physical,
+                |bound| {
+                    metadata
+                        .range(bound.to_owned()..)
+                        .next()
+                        .map(|(p, _)| p.clone())
+                },
+                &mut offer,
+            );
+        }
+        Ok(page
+            .finish()
             .into_iter()
-            .map(|p| {
-                let name = p.rsplit_once('/').map_or(p.as_str(), |(_, n)| n);
-                Ok(hirsel_kernels::walk::Entry {
-                    path: if local.is_empty() {
-                        name.into()
-                    } else {
-                        format!("{local}/{name}")
-                    },
-                    kind: self.metadata(tree, &p)?.kind,
-                })
+            .map(|mut e| {
+                if !local.is_empty() {
+                    e.path = format!("{local}/{}", e.path);
+                }
+                e
             })
-            .collect()
+            .collect())
     }
     pub fn grant_root(&mut self, name: &str) -> Result<Value, Error> {
         if !matches!(name, "Io" | "Args" | "Env" | "Unsafe" | "Test")

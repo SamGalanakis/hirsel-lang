@@ -900,9 +900,11 @@ fn filesystem_lifecycle_replays_without_host_paths() {
             }),
             Completion::Unit(Ok(()))
         );
-        let Completion::Entries(Ok(entries)) = call(Request::ReadDir {
+        let Completion::Entries(Ok(entries)) = call(Request::ReadDirPage {
             directory: dir,
             path: "new".into(),
+            after: String::new(),
+            recursive: false,
         }) else {
             panic!()
         };
@@ -968,9 +970,11 @@ fn filesystem_lifecycle_replays_without_host_paths() {
             Completion::Unit(Ok(()))
         );
         assert_eq!(
-            call(Request::ReadDir {
+            call(Request::ReadDirPage {
                 directory: dir,
-                path: "moved".into()
+                path: "moved".into(),
+                after: String::new(),
+                recursive: false
             }),
             Completion::Entries(Ok(vec![DirEntry {
                 path: "moved/empty".into(),
@@ -1293,9 +1297,11 @@ fn filesystem_mount_pins_survive_rename_and_removal_before_directory_projection(
         panic!()
     };
     assert_eq!(
-        host.call(Request::ReadDir {
+        host.call(Request::ReadDirPage {
             directory: removed,
-            path: "".into()
+            path: "".into(),
+            after: String::new(),
+            recursive: false
         }),
         Ok(Completion::Entries(Ok(vec![])))
     );

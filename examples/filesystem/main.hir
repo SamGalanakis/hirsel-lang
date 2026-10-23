@@ -1,23 +1,24 @@
 pub type Error = Grant(GrantError) | Files(FileError) | Output(OutputError)
 
 pub fn main(rt: Io) -> Result[(), Error] {
-  let out = io.stdout(rt) ?
-  let d = io.dir(rt, path.of("output")) ?
-  file.mkdir_all(d, path.of("build/empty")) ?
-  file.write_bytes(d, path.of("build/value"), b"hello") ?
-  for entry in file.read_dir(d, path.of("build")) ? {
+  let out = io.stdout(rt)?
+  let d = io.dir(rt, path.of("output"))?
+  file.mkdir_all(d, path.of("build/empty"))?
+  file.write_bytes(d, path.of("build/value"), b"hello")?
+  for item in take file.read_dir(d, path.of("build"))? {
+    let entry = item?
     let kind = match entry.kind {
       Regular() => "regular",
       Directory() => "directory",
       Symlink() => "symlink",
       Other() => "other",
     }
-    let meta = file.metadata(d, entry.path) ?
-    out.print(out, f"{path.text(entry.path)} {kind} {meta.size}\n") ?
+    let meta = file.metadata(d, entry.path)?
+    out.print(out, f"{path.text(entry.path)} {kind} {meta.size}\n")?
   }
-  file.rename(d, path.of("build"), path.of("finished")) ?
-  file.remove(d, path.of("finished/value")) ?
-  file.remove_dir(d, path.of("finished/empty")) ?
-  file.remove_dir(d, path.of("finished")) ?
+  file.rename(d, path.of("build"), path.of("finished"))?
+  file.remove(d, path.of("finished/value"))?
+  file.remove_dir(d, path.of("finished/empty"))?
+  file.remove_dir(d, path.of("finished"))?
   Ok(())
 }

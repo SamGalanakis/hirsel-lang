@@ -323,6 +323,13 @@ impl Operations for Io {
         self.yielded = true;
         Some(OpOutcome::Value(value))
     }
+    fn iterator_next(
+        &mut self,
+        state: &mut OpValue,
+        canceled: Option<u32>,
+    ) -> Result<Option<OpValue>, String> {
+        self.directory_next(state, canceled)
+    }
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
         let path = &op.definition.0;
         if !path.package.name_is("core") {
@@ -1426,25 +1433,7 @@ impl Io {
                 }
             }
             (Some("file"), "walk", [OpValue::Handle(directory)]) => {
-                let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(directory) else {
-                    return Some(OpOutcome::Fail("CAP-2".into()));
-                };
-                let root = self.resolved_directories.get(directory).unwrap_or(root);
-                let prefix = if root.is_empty() {
-                    String::new()
-                } else {
-                    format!("{root}/")
-                };
-                let paths: Vec<_> = self.trees[tree]
-                    .1
-                    .keys()
-                    .filter_map(|p| p.strip_prefix(&prefix).map(str::to_owned))
-                    .collect();
-                let items = paths
-                    .iter()
-                    .map(|p| io_ok(OpValue::Handle(self.path(p))))
-                    .collect();
-                io_ok(OpValue::Iterator(items))
+                io_ok(self.directory_iterator(*directory, "", true))
             }
             (
                 Some("file"),

@@ -149,3 +149,7 @@ adapter limitation is now fixed upstream; this lane's prior tapes bind the old
 runtime revision and its checked-H host replay cells remain UNRUN/INCOMPLETE.
 No unchanged green campaign was repeated because main moved. Public full-app
 checked-H SimulationConfig cells and the prior replay receipts remain as stated.
+
+## Bounded directory iterator update
+
+The directory-listing limitation above is resolved by the read_dir iterator cutover: the provider retains fixed128-entry pages and plan.scan collects at most its remaining8192 admitted entries, probing one extra before rejecting. Empty-output admission pulls one fallible entry. Other INCOMPLETE obligations in this authoring record remain separate.

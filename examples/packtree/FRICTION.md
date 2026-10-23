@@ -158,3 +158,7 @@ oracles, failed drafts and runtime receipts live externally under
     the edit script, so it rejected before changing files and the illustrative
     missing CLI paths returned127. No app ran; distinct heredoc delimiters fix
     the authoring command. This is not language or application evidence.
+
+## Bounded directory iterator update
+
+The target-emptiness listing allocation limitation in item1 is resolved by the read_dir iterator cutover: the provider retains a fixed128-entry page and extract pulls one fallible entry before rejecting a nonempty target. Manifest-driven pack discovery and the other recorded obligations retain their existing scope.

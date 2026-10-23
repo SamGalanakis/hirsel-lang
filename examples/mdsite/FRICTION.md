@@ -96,3 +96,7 @@ control attempt ended127 before source execution (controls-final.log). The
 corrected LD_LIBRARY_PATH attempt passed9/9 refusals at2GiB/four wrapper CPUs;
 raw originals remain. Final no-Tasks legacy entry passes reference, checked H,
 LLVM and Cranelift, plus all supported replay adapters (legacy-entry-final.log).
+
+## Bounded directory iterator update
+
+The directory-listing row above is resolved by the read_dir iterator cutover: provider storage is a fixed128-entry page, and catalog.discover collects at most ITEMS children before rejecting the next. Tree-entry and pending-stack limits remain in force. The renderer output-allocation limitation is unchanged.

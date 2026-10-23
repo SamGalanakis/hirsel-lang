@@ -16,10 +16,13 @@ fn discover(
   let mut pending: List[String] = [unique root]
   let mut visited = 0u64
   while let Some(current) = list.pop(mut pending) {
-    // Current API materializes one directory before its length can be checked.
-    let children = file.read_dir(d, path.of(current)) ? Files
-    if list.len(children) > model.ITEMS {
-      return Error(Limit("directory_entries"))
+    let mut children: List[DirEntry] = []
+    for item in take file.read_dir(d, path.of(current)) ? Files {
+      let entry = item ? Files
+      if list.len(children) == model.ITEMS {
+        return Error(Limit("directory_entries"))
+      }
+      list.push(mut children, entry)
     }
     for entry in children {
       visited += 1

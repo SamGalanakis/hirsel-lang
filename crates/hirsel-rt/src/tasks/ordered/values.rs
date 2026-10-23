@@ -797,7 +797,7 @@ impl Program {
             *fuel = fuel.checked_sub(page.len()).ok_or(Error::Limit)?;
             out.extend_from_slice(&(page.len() as u64).to_le_bytes());
             for entry in page {
-                if entry.kind > 3 {
+                if entry.kind > 4 || (entry.kind == 4 && !entry.path.contains('\0')) {
                     return Err(Error::Value);
                 }
                 if out
@@ -1125,9 +1125,13 @@ impl Program {
                     continue;
                 }
                 Node::Callable { iterator, generic } => {
-                    let walk = *iterator
+                    let read_dir = *iterator
                         && unsafe { at.add(8).cast::<usize>().read_unaligned() }
-                            == crate::io::hirsel_rt_v2_file_walk_step as *const () as usize;
+                            == crate::io::hirsel_rt_v2_file_read_dir_step as *const () as usize;
+                    let walk = read_dir
+                        || (*iterator
+                            && unsafe { at.add(8).cast::<usize>().read_unaligned() }
+                                == crate::io::hirsel_rt_v2_file_walk_step as *const () as usize);
                     let code_offsets: &[usize] = if *iterator { &[8, 16] } else { &[0] };
                     for (ordinal, offset) in code_offsets.iter().enumerate() {
                         let code = unsafe { at.add(*offset).cast::<usize>().read_unaligned() };
@@ -1138,7 +1142,11 @@ impl Program {
                         let name = if !iterator && code == 0 {
                             generic.as_deref().ok_or(Error::Unsupported)?
                         } else if walk && ordinal == 0 {
-                            "hirsel.runtime.file_walk.next.v2"
+                            if read_dir {
+                                "hirsel.runtime.file_read_dir.next.v1"
+                            } else {
+                                "hirsel.runtime.file_walk.next.v3"
+                            }
                         } else {
                             self.codes.get(&code).ok_or(Error::Unsupported)?.as_str()
                         };
@@ -1525,6 +1533,7 @@ mod tests {
                 2
             ];
             let mut cursor = Box::new(crate::io::StreamingWalk {
+                recursive: true,
                 directory,
                 walk: Default::default(),
             });

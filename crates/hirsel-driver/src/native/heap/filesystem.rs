@@ -266,23 +266,7 @@ impl Io {
             },
             "read_dir" => match kind(self, tree, &path) {
                 Some(1) => {
-                    let mut paths = children(self, tree, &path);
-                    paths.sort();
-                    let prefix = io_relative("", &text)?;
-                    let entries = paths
-                        .into_iter()
-                        .map(|p| {
-                            let name = p.rsplit_once('/').map_or(p.as_str(), |(_, n)| n);
-                            let local = if prefix.is_empty() {
-                                name.into()
-                            } else {
-                                format!("{prefix}/{name}")
-                            };
-                            let k = kind(self, tree, &p).unwrap();
-                            OpValue::Aggregate(vec![OpValue::Handle(self.path(&local)), tag(k)])
-                        })
-                        .collect();
-                    io_ok(OpValue::Sequence(entries))
+                    io_ok(self.directory_iterator(*directory, &io_relative("", &text)?, false))
                 }
                 Some(_) => io_portable(7),
                 None => io_portable(3),
@@ -523,11 +507,205 @@ impl Io {
                         bits: 0o777,
                     },
                 ])),
-                (_, "read_dir") => io_ok(OpValue::Sequence(vec![])),
+                (_, "read_dir") => io_ok(self.directory_iterator(*directory, local, false)),
                 (_, "mkdir" | "remove_dir" | "rename") => io_error(1),
                 _ => io_portable(6),
             },
         };
         Some(OpOutcome::Value(result))
+    }
+}
+
+impl Io {
+    pub(super) fn directory_iterator(
+        &self,
+        directory: u64,
+        path: &str,
+        recursive: bool,
+    ) -> OpValue {
+        let mut walk = hirsel_rt::kernels::walk::Walk::default();
+        let entries = self
+            .directory_page(directory, path, "", recursive)
+            .expect("validated directory root");
+        walk.push_page(path, entries, recursive);
+        OpValue::LazyIterator(Box::new(OpValue::Aggregate(vec![
+            OpValue::Handle(directory),
+            OpValue::Bits {
+                scalar: ScalarKind::U8,
+                bits: u128::from(recursive),
+            },
+            Self::directory_pages(walk),
+        ])))
+    }
+    fn directory_pages(walk: hirsel_rt::kernels::walk::Walk) -> OpValue {
+        OpValue::Sequence(
+            walk.pages
+                .into_iter()
+                .map(|page| {
+                    OpValue::Sequence(
+                        page.into_iter()
+                            .map(|entry| {
+                                OpValue::Aggregate(vec![
+                                    OpValue::Bytes(entry.path.into_bytes()),
+                                    OpValue::Bits {
+                                        scalar: ScalarKind::U32,
+                                        bits: entry.kind as u128,
+                                    },
+                                ])
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
+    fn directory_page(
+        &self,
+        directory: u64,
+        path: &str,
+        after: &str,
+        recursive: bool,
+    ) -> Result<Vec<hirsel_rt::kernels::walk::Entry>, OpValue> {
+        let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(&directory) else {
+            return Err(io_error(1));
+        };
+        if self.detached_directories.contains(&directory) {
+            return Ok(vec![]);
+        }
+        let logical = io_relative(root, path).ok_or_else(|| io_error(1))?;
+        let physical = self
+            .physical_path(directory, &logical)
+            .ok_or_else(|| io_error(1))?;
+        match kind(self, *tree, &physical) {
+            Some(1) => (),
+            Some(_) => return Err(io_portable(7)),
+            None => return Err(io_portable(3)),
+        };
+        let prefix = if physical.is_empty() {
+            String::new()
+        } else {
+            format!("{physical}/")
+        };
+        let mut page = hirsel_rt::kernels::walk::PageSelector::default();
+        let mut offer = |p: String| {
+            let name = p.strip_prefix(&prefix).expect("direct child");
+            page.offer(
+                hirsel_rt::kernels::walk::Entry {
+                    path: name.into(),
+                    kind: kind(self, *tree, &p).expect("indexed directory entry"),
+                },
+                after,
+                recursive,
+            );
+        };
+        hirsel_rt::kernels::walk::visit_children(
+            &physical,
+            |bound| self.trees[tree].0.range(bound.to_owned()..).next().cloned(),
+            &mut offer,
+        );
+        hirsel_rt::kernels::walk::visit_children(
+            &physical,
+            |bound| {
+                self.trees[tree]
+                    .1
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            },
+            &mut offer,
+        );
+        Ok(page
+            .finish()
+            .into_iter()
+            .map(|mut e| {
+                if !path.is_empty() {
+                    e.path = format!("{path}/{}", e.path);
+                }
+                e
+            })
+            .collect())
+    }
+    pub(super) fn directory_next(
+        &mut self,
+        state: &mut OpValue,
+        canceled: Option<u32>,
+    ) -> Result<Option<OpValue>, String> {
+        let OpValue::Aggregate(fields) = state else {
+            return Err("directory iterator state".into());
+        };
+        let OpValue::Handle(directory) = fields[0] else {
+            return Err("directory iterator grant".into());
+        };
+        let recursive = matches!(fields[1], OpValue::Bits { bits: 1, .. });
+        let OpValue::Sequence(pages) = &fields[2] else {
+            return Err("directory pages".into());
+        };
+        let mut walk = hirsel_rt::kernels::walk::Walk::default();
+        for page in pages {
+            let OpValue::Sequence(entries) = page else {
+                return Err("directory page".into());
+            };
+            let mut p = std::collections::VecDeque::new();
+            for entry in entries {
+                let OpValue::Aggregate(pair) = entry else {
+                    return Err("directory entry".into());
+                };
+                let (OpValue::Bytes(path), OpValue::Bits { bits, .. }) = (&pair[0], &pair[1])
+                else {
+                    return Err("directory entry fields".into());
+                };
+                p.push_back(hirsel_rt::kernels::walk::Entry {
+                    path: String::from_utf8(path.clone()).map_err(|_| "directory path")?,
+                    kind: *bits as u32,
+                });
+            }
+            walk.pages.push(p);
+        }
+        let mut result = None;
+        while let Some(entry) = walk.next_entry() {
+            if entry.kind == 4 || (recursive && entry.kind == 1) {
+                self.yielded = true;
+                if let Some(cause) = canceled {
+                    walk.stop();
+                    let mut bytes = 1u32.to_le_bytes().to_vec();
+                    bytes.extend_from_slice(&cause.to_le_bytes());
+                    result = Some(OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::Plain(bytes)),
+                    });
+                    break;
+                }
+
+                let (path, after) = if entry.kind == 4 {
+                    entry
+                        .path
+                        .split_once('\0')
+                        .unwrap_or((entry.path.as_str(), ""))
+                } else {
+                    (entry.path.as_str(), "")
+                };
+                let entries = match self.directory_page(directory, path, after, recursive) {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        walk.stop();
+                        result = Some(error);
+                        break;
+                    }
+                };
+                walk.push_page(path, entries, recursive);
+            } else {
+                result = Some(io_ok(if recursive {
+                    OpValue::Handle(self.path(&entry.path))
+                } else {
+                    OpValue::Aggregate(vec![
+                        OpValue::Handle(self.path(&entry.path)),
+                        tag(entry.kind),
+                    ])
+                }));
+                break;
+            }
+        }
+        fields[2] = Self::directory_pages(walk);
+        Ok(result)
     }
 }

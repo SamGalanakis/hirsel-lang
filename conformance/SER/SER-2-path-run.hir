@@ -33,7 +33,15 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
   round(t, path.of("../x/./y//"))?
   round(t, DirEntry(path: path.of("d/x"), kind: Symlink()))?
   let dir = test.dir(t, [(path.of("d/a.txt"), b"x")])
-  match file.read_dir(dir, path.of("d")) {
+  match results.and_then(
+    take file.read_dir(dir, path.of("d")),
+    fn(take entries: Iter[Result[DirEntry, FileError]]) -> Result[
+      List[DirEntry],
+      FileError
+    ] {
+      iter.try_collect(take entries)
+    }
+  ) {
     Ok(entries) => {
       round(t, entries)?
       let read: Result[List[DirEntry], DecodeError] = codec.decode(

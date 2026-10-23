@@ -113,7 +113,7 @@ fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]
 fn file.narrow(d: Dir, take f: File) -> Option[File of d]
 fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
 fn file.size(d: Dir, p: Path) -> Result[u64, FileError]
-fn file.read_dir(d: Dir, p: Path) -> Result[List[DirEntry], FileError]
+fn file.read_dir(d: Dir, p: Path) -> Result[Iter[Result[DirEntry, FileError]], FileError]
 fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]
 fn file.mkdir(d: Dir, p: Path) -> Result[(), FileError]
 fn file.rename(d: Dir, from: Path, to: Path) -> Result[(), FileError]
@@ -412,9 +412,35 @@ type WatchEvent = Created(Path) | Modified(Path) | Removed(Path) | Renamed(Path,
 `DirEntry` is `serializable` like `FileKind` and `Metadata`: a listed path is data, and
 reading the entry again still needs the `Dir`.
 
-`file.read_dir` materializes only the requested directory, listing its direct children, including empty directories and symlinks,
-sorted by UTF-8 path bytes. Entry paths are relative to the supplied `Dir`, including
-the requested directory prefix. Invalid UTF-8 entry names return `FileFault`.
+`file.read_dir` returns a lazy, fused iterator over direct children, including empty
+directories and symlinks, sorted by UTF-8 path bytes. Entry paths are relative to
+the supplied `Dir`, including the requested directory prefix. The constructor
+reads the first bounded page; directory and first-page errors are its outer
+`Error`. Later page errors are yielded once after buffered entries, then the
+iterator ends permanently. Invalid UTF-8 entry names return `FileFault` on the
+scan that encounters them. Dropping the iterator frees its unread pages.
+
+Both `file.read_dir` and `file.walk` use the same fixed internal bound of 128
+entries per page. A provider scans lazy directory entries directly into a
+bounded sorted selector; it never collects an entire directory. Cursor memory
+is O(128 × maximum entry path bytes) for `read_dir`, independent of directory
+width, and O(depth × 128 × maximum entry path bytes) for `walk`. The selector,
+page conversion and iterator state may hold a constant number of page copies;
+one scan buffer, a candidate entry and a continuation name add bounded storage.
+Native Path identities are interned for the run, and recordings retain consumed
+pages. Those values, application-retained results and the pre-existing simulated
+filesystem are outside this bound on cursor storage and unread work.
+
+Each refill rescans the directory after its last name (after its virtual slash
+work key for `walk` directories). For width W and C consumed entries in one
+directory, this costs O(W × ceil(C/128)) entries examined, plus one terminal scan
+when C is an exact multiple of 128; selection costs O(log 128) per candidate.
+Pages observe directory contents at each scan, without a whole-directory
+snapshot: buffered name/kind pairs keep their observed values. Names inserted
+at or behind the last page cursor are skipped; names ahead may be observed on
+a later scan. Direct names are yielded at most once and in byte order. Directory
+mutation does not make earlier pages rewind. Old eager directory recordings,
+including old walk recordings that used them, require re-recording.
 `file.metadata` describes the final entry without following its symlink; parent
 symlinks resolve beneath the granted root. `size` is the host entry's byte length
 (and the UTF-8 target length for simulated symlinks); non-regular sizes are
@@ -759,10 +785,9 @@ byte order. Directories are traversal work, including empty directories, and are
 not yielded. Symlinks are yielded as entries and never descended; their targets
 are not resolved for traversal. Confinement of directory reads is unchanged.
 Only the root directory is read when constructing the iterator; further
-directories are read as iteration reaches them. The traversal cursor retains at
-most one sorted page per active depth, O(depth × largest single directory)
-entries and their path bytes. Consumed Path identities and recorded inputs can
-remain retained for the run; this bound describes cursor storage and unread work. A root read error is the outer `Error`;
+directories are read as iteration reaches them. Its bounded pages, name-cursor
+mutation semantics, memory bound and rescan cost are described under
+[filesystem lifecycle](#filesystem-lifecycle). A root read error is the outer `Error`;
 a descendant read error is yielded at discovery, after any earlier paths, and
 the iterator then ends permanently. Unlike eager traversal, unvisited subtrees
 cannot cause an error before their turn or be read after an early stop.

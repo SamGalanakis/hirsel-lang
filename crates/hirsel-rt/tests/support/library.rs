@@ -89,10 +89,13 @@ impl<A: Adapter> Library<A> {
         let mut next = Some(String::new());
         let mut paths = vec![];
         loop {
-            if let Some(path) = next.take() {
-                let Completion::Entries(entries) = self.0.call(Request::ReadDir {
+            if let Some(cursor) = next.take() {
+                let (path, after) = cursor.split_once('\0').unwrap_or((cursor.as_str(), ""));
+                let Completion::Entries(entries) = self.0.call(Request::ReadDirPage {
                     directory: directory.0,
-                    path,
+                    path: path.into(),
+                    after: after.into(),
+                    recursive: true,
                 })?
                 else {
                     panic!("read_dir completion")
@@ -101,7 +104,8 @@ impl<A: Adapter> Library<A> {
                     Ok(entries) => entries,
                     Err(error) => return Ok(Err(error)),
                 };
-                walk.push(
+                walk.push_page(
+                    path,
                     entries
                         .into_iter()
                         .map(|e| hirsel_rt::kernels::walk::Entry {
@@ -109,10 +113,11 @@ impl<A: Adapter> Library<A> {
                             kind: e.kind as u32,
                         })
                         .collect(),
+                    true,
                 );
             }
             match walk.next_entry() {
-                Some(entry) if entry.kind == 1 => next = Some(entry.path),
+                Some(entry) if matches!(entry.kind, 1 | 4) => next = Some(entry.path),
                 Some(entry) if matches!(entry.kind, 0 | 2) => paths.push(entry.path),
                 Some(_) => return Ok(Err(IoError::Fault(1))),
                 None => return Ok(Ok(paths)),

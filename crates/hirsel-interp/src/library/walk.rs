@@ -6,9 +6,14 @@ use hirsel_kernels::walk::Walk;
 use hirsel_syntax::DefPath;
 use hirsel_types::BuiltinType;
 
-fn state(directory: Value, walk: Walk) -> Value {
+fn state(directory: Value, walk: Walk, recursive: bool) -> Value {
     Value::Record {
-        definition: (&DefPath::core("WalkState")).into(),
+        definition: (&DefPath::core(if recursive {
+            "WalkState"
+        } else {
+            "ReadDirState"
+        }))
+            .into(),
         fields: vec![
             Some(directory),
             Some(collection::sequence(
@@ -25,23 +30,24 @@ fn state(directory: Value, walk: Walk) -> Value {
         ],
     }
 }
-pub fn iterator(directory: Value, entries: Vec<Entry>) -> Value {
+pub fn iterator(directory: Value, path: &str, entries: Vec<Entry>, recursive: bool) -> Value {
     let mut walk = Walk::default();
-    walk.push(entries);
-    state(directory, walk)
+    walk.push_page(path, entries, recursive);
+    state(directory, walk, recursive)
 }
 /// Find a walk under any number of map adapters. None means an unrelated iterator.
 /// Each read is one confined, recorded read_dir operation; a failure is yielded
 /// once, after which the cursor pages are empty. Adapter refusal is not a FileError.
 pub fn pull(
     it: &mut Value,
-    mut read: impl FnMut(&Value, &str) -> Result<Result<Vec<Entry>, Value>, Error>,
+    mut read: impl FnMut(&Value, &str, &str, bool) -> Result<Result<Vec<Entry>, Value>, Error>,
 ) -> Result<Option<Option<Value>>, Error> {
     let base = it;
     let Value::Record { definition, fields } = base else {
         return Ok(None);
     };
-    if !definition.is_core("WalkState") {
+    let recursive = definition.is_core("WalkState");
+    if !recursive && !definition.is_core("ReadDirState") {
         return Ok(None);
     }
     let directory = fields[0]
@@ -71,25 +77,42 @@ pub fn pull(
     let mut item = None;
     while let Some(entry) = walk.next_entry() {
         match entry.kind {
-            1 => match read(&directory, &entry.path) {
-                Err(error) => {
-                    // A host continuation has not delivered this page yet.
-                    // Keep all completed pages and retry only this directory.
-                    walk.pages.push([entry].into());
-                    *base = state(directory, walk);
-                    return Err(error);
-                }
-                Ok(result) => match result {
-                    Ok(entries) => walk.push(entries),
+            1 | 4 if recursive || entry.kind == 4 => {
+                let (p, after) = if entry.kind == 4 {
+                    entry
+                        .path
+                        .split_once('\0')
+                        .ok_or_else(|| invalid("directory cursor"))?
+                } else {
+                    (entry.path.as_str(), "")
+                };
+                match read(&directory, p, after, recursive) {
                     Err(error) => {
-                        walk.stop();
-                        item = Some(error);
-                        break;
+                        // A host continuation has not delivered this page yet.
+                        // Keep all completed pages and retry only this directory.
+                        walk.pages.push([entry].into());
+                        *base = state(directory, walk, recursive);
+                        return Err(error);
                     }
-                },
-            },
-            0 | 2 => {
-                item = Some(ok(path(&entry.path)));
+                    Ok(result) => match result {
+                        Ok(entries) => walk.push_page(p, entries, recursive),
+                        Err(error) => {
+                            walk.stop();
+                            item = Some(error);
+                            break;
+                        }
+                    },
+                }
+            }
+            0..=3 if !recursive || entry.kind != 3 => {
+                item = Some(ok(if recursive {
+                    path(&entry.path)
+                } else {
+                    Value::Record {
+                        definition: (&DefPath::core("DirEntry")).into(),
+                        fields: vec![Some(path(&entry.path)), Some(variant(entry.kind, vec![]))],
+                    }
+                }));
                 break;
             }
             _ => {
@@ -99,7 +122,7 @@ pub fn pull(
             }
         }
     }
-    *base = state(directory, walk);
+    *base = state(directory, walk, recursive);
     Ok(Some(item))
 }
 
@@ -109,7 +132,9 @@ pub fn directory(mut it: &Value) -> Option<&Value> {
             Value::Record { definition, fields } if definition.is_core("IterMap") => {
                 it = fields.first()?.as_ref()?
             }
-            Value::Record { definition, fields } if definition.is_core("WalkState") => {
+            Value::Record { definition, fields }
+                if definition.is_core("WalkState") || definition.is_core("ReadDirState") =>
+            {
                 return fields.first()?.as_ref();
             }
             _ => return None,

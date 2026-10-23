@@ -1,0 +1,74 @@
+// rule: CAP-2
+// expect: run
+// Shared fixed pages: full byte order, direct directories, treepatch's first
+// cap+1 refusal shape, and sitebuild's bounded scan before reading file data.
+pub fn main(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [])
+  file.mkdir(d, path.of("a"))?
+  file.mkdir(d, path.of("empty"))?
+  file.write_bytes(d, path.of("a/hidden"), b"not a direct child")?
+  for i in 0u64..270u64 {
+    file.write_bytes(d, path.of(f"{i:04}"), b"body")?
+  }
+  file.write_bytes(d, path.of("a-"), b"dash")?
+  file.write_bytes(d, path.of("a.c"), b"dot")?
+  file.write_bytes(d, path.of("a0"), b"zero")?
+  file.write_bytes(d, path.of("é"), b"unicode")?
+  let mut count = 0u64
+  let mut previous = ""
+  for item in take file.read_dir(d, path.of("."))? {
+    let entry = item?
+    let name = path.text(entry.path)
+    if count > 0 {
+      test.check(t, string.compare(previous, name) < 0)
+    }
+    test.check(t, name != "a/hidden")
+    previous = name
+    count += 1
+  }
+  test.check(t, count == 276)
+  let mut scanned = 0u64
+  for item in take file.read_dir(d, path.of(""))? {
+    let _ = item?
+    scanned += 1
+    if scanned > 10 {
+      break
+    }
+  }
+  test.check(t, scanned == 11)
+  let mut kept = 0u64
+  for item in take file.read_dir(d, path.of(""))? {
+    let entry = item?
+    if kept == 5 {
+      break
+    }
+    if entry.kind == Regular() {
+      test.check(t, file.read_bytes(d, entry.path)? == b"body")
+      kept += 1
+    }
+  }
+  test.check(t, kept == 5)
+  test.check(
+    t,
+    match file.read_dir(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  let mut empty = file.read_dir(d, path.of("empty"))?
+  test.check(
+    t,
+    match iter.next(mut empty) {
+      None() => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match iter.next(mut empty) {
+      None() => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

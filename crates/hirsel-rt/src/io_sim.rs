@@ -866,6 +866,103 @@ impl Storage for MemoryTree<'_> {
             },
         })
     }
+
+    fn read_dir_page(
+        &mut self,
+        path: &str,
+        after: &str,
+        recursive: bool,
+    ) -> Result<Vec<DirEntry>, IoError> {
+        self.directory(path, 0)?;
+        let mut page = hirsel_kernels::walk::PageSelector::default();
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}/")
+        };
+        let mut offer = |p: String| {
+            let name = p.strip_prefix(&prefix).expect("direct child");
+            let kind = self
+                .tree
+                .metadata
+                .get(&p)
+                .map(|m| m.kind)
+                .unwrap_or_else(|| {
+                    if self.tree.directories.contains(&p) {
+                        FileKind::Directory
+                    } else if self.tree.files.contains_key(&p) {
+                        FileKind::Regular
+                    } else {
+                        FileKind::Symlink
+                    }
+                });
+            page.offer(
+                hirsel_kernels::walk::Entry {
+                    path: name.into(),
+                    kind: kind as u32,
+                },
+                after,
+                recursive,
+            );
+        };
+        hirsel_kernels::walk::visit_children(
+            path,
+            |bound| {
+                self.tree
+                    .directories
+                    .range(bound.to_owned()..)
+                    .next()
+                    .cloned()
+            },
+            &mut offer,
+        );
+        hirsel_kernels::walk::visit_children(
+            path,
+            |bound| {
+                self.tree
+                    .files
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            },
+            &mut offer,
+        );
+        hirsel_kernels::walk::visit_children(
+            path,
+            |bound| {
+                self.tree
+                    .links
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            },
+            &mut offer,
+        );
+        hirsel_kernels::walk::visit_children(
+            path,
+            |bound| {
+                self.tree
+                    .metadata
+                    .range(bound.to_owned()..)
+                    .next()
+                    .map(|(p, _)| p.clone())
+            },
+            &mut offer,
+        );
+        Ok(page
+            .finish()
+            .into_iter()
+            .map(|e| DirEntry {
+                path: e.path,
+                kind: match e.kind {
+                    0 => FileKind::Regular,
+                    1 => FileKind::Directory,
+                    2 => FileKind::Symlink,
+                    _ => FileKind::Other,
+                },
+            })
+            .collect())
+    }
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
         self.directory(path, 0)?;
         let mut children: std::collections::BTreeSet<_> =
@@ -1358,6 +1455,19 @@ impl Storage for LinkedTree<'_> {
             Some(_) => Err(IoError::Fault(1)),
             None => Ok(derived),
         }
+    }
+
+    fn read_dir_page(
+        &mut self,
+        path: &str,
+        after: &str,
+        recursive: bool,
+    ) -> Result<Vec<DirEntry>, IoError> {
+        let physical = self.path(path, true)?;
+        if self.detached() {
+            return Ok(vec![]);
+        }
+        self.memory().read_dir_page(&physical, after, recursive)
     }
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
         let physical = self.path(path, true)?;

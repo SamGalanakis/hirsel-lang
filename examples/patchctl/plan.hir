@@ -60,11 +60,13 @@ pub fn scan(d: Dir) -> Result[Tree, manifest.Problem] {
     let Some(current) = list.pop(mut pending) else {
       break
     }
-    let children = file.read_dir(d, path.of(current)) ? report.file_problem
-    // read_dir is an eager provider page; this checks before admitting entries,
-    // not before the provider allocates its page (documented API limitation).
-    if list.len(children) > 8192 - visited {
-      return Error(manifest.problem("entry_count_limit"))
+    let mut children: List[DirEntry] = []
+    for item in take file.read_dir(d, path.of(current)) ? report.file_problem {
+      let entry = item ? report.file_problem
+      if list.len(children) == 8192 - visited {
+        return Error(manifest.problem("entry_count_limit"))
+      }
+      list.push(mut children, entry)
     }
     visited += list.len(children)
     for entry in children {

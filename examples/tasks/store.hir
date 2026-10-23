@@ -48,9 +48,10 @@ pub fn decode(take data: Bytes) -> Result[unique model.Board, String] uses {} {
 
 // Every snapshot revision in the directory, ascending.
 fn revisions(dir: Dir) -> Result[List[u64], StoreError] {
-  let entries = file.read_dir(dir, path.of(".")) ?
+  let entries = file.read_dir(dir, path.of("."))?
   let mut found: List[u64] = []
-  for entry in entries {
+  for item in take entries {
+    let entry = item?
     let Some(name) = path.filename(entry.path) else {
       continue
     }
@@ -89,7 +90,7 @@ pub fn load(dir: Dir) -> Result[unique model.Board, StoreError] {
   while i > 0 {
     i -= 1
     let name = snapshot_name(found[i])
-    let data = file.read_bytes(dir, path.of(name)) ?
+    let data = file.read_bytes(dir, path.of(name))?
     match decode(unique data) {
       Ok(board) => {
         for j in 0u64..i {
@@ -100,7 +101,7 @@ pub fn load(dir: Dir) -> Result[unique model.Board, StoreError] {
         return Ok(take board)
       },
       Error(_) => {
-        file.rename(dir, path.of(name), path.of(f"{name}.corrupt")) ?
+        file.rename(dir, path.of(name), path.of(f"{name}.corrupt"))?
       },
     }
   }
@@ -113,7 +114,7 @@ pub fn save(dir: Dir, revision: u64, take data: Bytes, mode: Durability) -> Resu
   (),
   StoreError
 ] {
-  file.put_new(dir, path.of(snapshot_name(revision)), take data, mode) ?
+  file.put_new(dir, path.of(snapshot_name(revision)), take data, mode)?
   if revision >= 2 {
     remove_quietly(dir, snapshot_name(revision - 2))?
   }

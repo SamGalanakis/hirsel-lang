@@ -33,7 +33,6 @@ uint8_t hirsel_rt_v2_file_write(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_re
 uint8_t hirsel_rt_v2_file_append(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_file_create_atomic(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_size(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
-uint8_t hirsel_rt_v2_file_read_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_metadata(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_metadata_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_mkdir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_rename(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*, const uint64_t*);
@@ -122,8 +121,11 @@ uint8_t hirsel_rt_v2_capture_event(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_teleme
 uint8_t hirsel_rt_v2_capture_finish(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_capture_log(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_capture_measure(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_file_read_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_walk_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_walk(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_walk_result*, const uint64_t*);
-uint8_t hirsel_rt_v2_file_walk_step(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, void*, hirsel_rt_v2_walk_option*);
+uint8_t hirsel_rt_v2_file_walk_step(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t, void*, hirsel_rt_v2_walk_option*);
+typedef struct { uint32_t tag, padding; uint64_t result, path, kind; } hirsel_rt_v2_dir_entry_option;
+uint8_t hirsel_rt_v2_file_read_dir_step(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t, void*, hirsel_rt_v2_dir_entry_option*);
 typedef struct { hirsel_rt_v2_slice view; uint64_t position; } hirsel_rt_v2_view_cursor;
 typedef struct { uint32_t tag, value; } hirsel_rt_v2_scalar_option;
 typedef struct { uint32_t tag, padding; uint64_t value; } hirsel_rt_v2_position_option;

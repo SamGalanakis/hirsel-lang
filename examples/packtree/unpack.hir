@@ -131,10 +131,14 @@ fn parents(d: Dir, name: String, directory: bool) -> Result[(), manifest.Problem
 }
 
 pub fn extract(d: Dir, members: List[manifest.Member]) -> Result[(), manifest.Problem] {
-  let Ok(children) = file.read_dir(d, path.of(".")) else {
+  let Ok(listing) = file.read_dir(d, path.of(".")) else {
     return Error(manifest.problem("target_listing", ""))
   }
-  if list.len(children) != 0 {
+  let mut children = take listing
+  if let Some(item) = iter.next(mut children) {
+    if let Error(_) = item {
+      return Error(manifest.problem("target_listing", ""))
+    }
     return Error(manifest.problem("target_not_empty", ""))
   }
   // The marker survives every later error, even after a short provider write.
