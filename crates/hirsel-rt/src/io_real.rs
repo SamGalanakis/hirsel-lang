@@ -1586,8 +1586,14 @@ impl<S: Streams> RealCore<S> {
         }
         if self.retain_history || !self.journal.absent() {
             self.record(Event {
+                completion: if !fake && fault.is_none() {
+                    FileInput::capture(&request, &completion)
+                        .map(Completion::FileInput)
+                        .unwrap_or_else(|| completion.clone())
+                } else {
+                    completion.clone()
+                },
                 request,
-                completion: completion.clone(),
                 fault,
             })?;
         }

@@ -16,7 +16,7 @@ fn disposable_filesystem_tape_replays_exact_outputs_partial_writes_tree_and_hand
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -61,7 +61,10 @@ fn real_output_failure_records_and_replays_the_actual_committed_prefix() {
     assert_eq!(real.0.stdout(), &[0xce]);
     let mut sim = SimIo::new(Tree::new(BTreeMap::new()).unwrap(), real.0.tape().to_vec());
     for e in real.0.tape() {
-        assert_eq!(sim.call(e.request.clone()), Ok(e.completion.clone()));
+        assert_eq!(
+            sim.call(e.request.clone()),
+            Ok(crate::rt_support::library::delivered(&e.completion))
+        );
     }
     assert_eq!(sim.stdout(), real.0.stdout());
     sim.finish().unwrap();
@@ -205,7 +208,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -246,7 +249,10 @@ fn walk_yields_symlinks_without_descending_and_replays_directory_pages() {
     let tree = real.0.snapshot().unwrap();
     let mut sim = SimIo::new(tree.clone(), real.0.tape().to_vec());
     for e in real.0.tape() {
-        assert_eq!(sim.call(e.request.clone()), Ok(e.completion.clone()));
+        assert_eq!(
+            sim.call(e.request.clone()),
+            Ok(crate::rt_support::library::delivered(&e.completion))
+        );
     }
     sim.finish().unwrap();
     replay_interpreter(
@@ -287,7 +293,7 @@ fn write_through_directory_alias_then_read_target_replays_the_same_bytes() {
     for event in real.0.tape() {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -340,7 +346,7 @@ fn exclusive_temporaries_skip_poisoned_links_and_commit_the_prepared_regular_ino
         for event in real.0.tape() {
             assert_eq!(
                 sim.call(event.request.clone()),
-                Ok(event.completion.clone())
+                Ok(crate::rt_support::library::delivered(&event.completion))
             );
         }
         sim.finish().unwrap();
@@ -376,7 +382,7 @@ fn snapshots_preserve_links_and_invalid_names_without_refusing_admission() {
     for event in real.0.tape() {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -455,7 +461,7 @@ fn opened_identity_matches_disk_and_replays_live_unlink_identical_replacement_an
         for event in &tape {
             assert_eq!(
                 sim.call(event.request.clone()),
-                Ok(event.completion.clone()),
+                Ok(crate::rt_support::library::delivered(&event.completion)),
                 "{mutation}"
             );
         }
@@ -507,7 +513,7 @@ fn atomic_append_preserves_opened_identity_until_publication_and_replays_the_tra
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -544,7 +550,7 @@ fn opened_aliases_compare_resolved_identity_after_identical_target_and_leaf_repl
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -608,7 +614,7 @@ fn atomic_commit_rejects_identical_replacement_of_its_prepared_temporary_in_each
         for event in &tape {
             assert_eq!(
                 sim.call(event.request.clone()),
-                Ok(event.completion.clone())
+                Ok(crate::rt_support::library::delivered(&event.completion))
             );
         }
         sim.finish().unwrap();
@@ -762,7 +768,7 @@ fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_hos
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -779,7 +785,10 @@ fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_hos
         .iter_mut()
         .find(|e| {
             matches!(e.request, Request::FileRead { .. })
-                && matches!(e.completion, Completion::Bytes(Ok(_)))
+                && matches!(
+                    crate::rt_support::library::delivered(&e.completion),
+                    Completion::Bytes(Ok(_))
+                )
         })
         .unwrap();
     event.completion = Completion::Bytes(Ok(b"XX".to_vec()));
@@ -910,7 +919,7 @@ fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -1101,7 +1110,7 @@ fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
     for event in &tape {
         assert_eq!(
             replay.call(event.request.clone()).unwrap(),
-            event.completion
+            crate::rt_support::library::delivered(&event.completion)
         );
     }
     replay.finish().unwrap();
@@ -1159,7 +1168,7 @@ fn put_new_and_sync_on_a_host_tree_record_round_trip_as_text_and_replay() {
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::rt_support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();

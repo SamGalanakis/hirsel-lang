@@ -455,6 +455,28 @@ impl Adapter for SimIo {
         if event.request != request {
             return Err(AdapterError::ReplayMismatch(self.position));
         }
+        // Only explicitly tagged host file observations replace the storage input.
+        // Old tapes retain their snapshot-derived checks; test trees never accept a tag.
+        let input = match &event.completion {
+            Completion::FileInput(input) => {
+                if event.fault.is_some() || self.state.is_fake_request(&request) {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                Some(input)
+            }
+            _ => None,
+        };
+        let unwrapped;
+        let event = if let Some(input) = input {
+            unwrapped = Event {
+                request: event.request.clone(),
+                completion: input.completion(&request)?,
+                fault: None,
+            };
+            &unwrapped
+        } else {
+            event
+        };
         // The recorded run parked this request: its task parks again (DET-1).
         if let Completion::Blocked { committed } = event.completion {
             self.position += 1;
@@ -496,6 +518,7 @@ impl Adapter for SimIo {
             roots: &mut roots,
             active: Default::default(),
             identities: &mut identities,
+            file_input: input,
             metadata_input: match &event.completion {
                 Completion::Metadata(Ok(meta)) => Some(meta.clone()),
                 _ => None,
@@ -1200,6 +1223,7 @@ pub(crate) struct LinkedTree<'a> {
     mount_pins: Option<&'a mut MountPins>,
     active_id: u64,
     detached: &'a mut std::collections::BTreeSet<u64>,
+    file_input: Option<&'a FileInput>,
     metadata_input: Option<Metadata>,
     /// A recorded `mapped.with` view: a host input, like recorded metadata.
     view_input: Option<Vec<u8>>,
@@ -1227,6 +1251,7 @@ impl<'a> LinkedTree<'a> {
             roots,
             identities,
             active: Default::default(),
+            file_input: None,
             metadata_input: None,
             view_input: None,
             watch_input: None,
@@ -1388,7 +1413,15 @@ impl Storage for LinkedTree<'_> {
         if self.detached() {
             return Err(IoError::IsDirectory);
         }
-        self.memory().open_file(&path, id)
+        if matches!(self.file_input, Some(FileInput::Opened(_)))
+            && !self.identities.reachable.contains_key(&path)
+        {
+            // A confirmed host open can discover a file absent at admission.
+            // Its bytes are supplied by each subsequent recorded read.
+            self.memory().create_file(&path, id)
+        } else {
+            self.memory().open_file(&path, id)
+        }
     }
     fn map_file(&mut self, path: &str, id: u64) -> Result<u64, IoError> {
         let path = self.path(path, true)?;
@@ -1436,6 +1469,9 @@ impl Storage for LinkedTree<'_> {
         self.memory().create_file(&path, id)
     }
     fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError> {
+        if let Some(FileInput::Bytes(bytes)) = self.file_input {
+            return Ok(bytes.clone());
+        }
         let max = self.read_limit.unwrap_or(max).min(max);
         self.memory().read_file(id, offset, max)
     }
@@ -1495,7 +1531,20 @@ impl Storage for LinkedTree<'_> {
         if self.detached() {
             return Err(IoError::IsDirectory);
         }
+        if let Some(FileInput::Bytes(bytes)) = self.file_input {
+            return Ok(bytes.clone());
+        }
         self.memory().read(&path)
+    }
+    fn size(&mut self, path: &str) -> Result<u64, IoError> {
+        let path = self.path(path, true)?;
+        if self.detached() {
+            return Err(IoError::IsDirectory);
+        }
+        match self.file_input {
+            Some(FileInput::Size(size)) => Ok(*size),
+            _ => self.memory().size(&path),
+        }
     }
     fn write(
         &mut self,

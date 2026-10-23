@@ -94,3 +94,4 @@ mod e1_live_hang_29;
 mod reference_replay_29;
 mod treepatch_29;
 mod depsolve_29;
+mod replay_child_artifact_29;

@@ -491,6 +491,11 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 .unwrap_or_else(|| crate::net::tape::render_request(request)),
         };
         let completion = match &event.completion {
+            Completion::FileInput(input) => match input {
+                crate::io::FileInput::Opened(id) => format!("file_input opened {id}"),
+                crate::io::FileInput::Size(size) => format!("file_input size {size}"),
+                crate::io::FileInput::Bytes(bytes) => format!("file_input bytes {}", hex(bytes)),
+            },
             Completion::ClockGrant(v) => match v {
                 Ok(id) => format!("clock_grant ok {id}"),
                 Err(()) => "clock_grant denied".into(),
@@ -856,6 +861,15 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["wall", "unavailable"] => Completion::Wall(Err(ClockError::Unavailable)),
                 ["monotonic", "out_of_range"] => Completion::Monotonic(Err(ClockError::OutOfRange)),
                 ["wall", "out_of_range"] => Completion::Wall(Err(ClockError::OutOfRange)),
+                ["file_input", "opened", id] => {
+                    Completion::FileInput(crate::io::FileInput::Opened(number(id)?))
+                }
+                ["file_input", "size", size] => {
+                    Completion::FileInput(crate::io::FileInput::Size(number(size)?))
+                }
+                ["file_input", "bytes", data] => {
+                    Completion::FileInput(crate::io::FileInput::Bytes(bytes(data)?))
+                }
                 ["handle", r @ ..] => Completion::Handle(result(r, number)?),
                 ["optional", "none"] => Completion::OptionalFile(None),
                 ["optional", id] => Completion::OptionalFile(Some(number(id)?)),

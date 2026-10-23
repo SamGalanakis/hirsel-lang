@@ -480,7 +480,8 @@ pub fn replay_interpreter_with_fixture(
             } else {
                 value
             };
-            let decoded = match event.completion {
+            let expected = crate::rt_support::library::delivered(&event.completion);
+            let decoded = match expected {
                 Completion::Datagram(_)
                 | Completion::NetHandle(_)
                 | Completion::NetBytes(_)
@@ -489,10 +490,10 @@ pub fn replay_interpreter_with_fixture(
                 | Completion::Protocol(_)
                 | Completion::Halves(_)
                 | Completion::Address(_)
-                | Completion::Addresses(_) => network::decode(&event.completion, value, &arguments),
-                _ => decode(&event.completion, value),
+                | Completion::Addresses(_) => network::decode(&expected, value, &arguments),
+                _ => decode(&expected, value),
             };
-            assert_eq!(decoded, event.completion, "{name}");
+            assert_eq!(decoded, expected, "{name}");
         }
         library.simulation.finish_replay().unwrap();
         assert_eq!(output, stdout);

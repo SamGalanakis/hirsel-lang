@@ -565,6 +565,25 @@ claimed outcome. `recording: none` keeps no observation and still performs every
 Recorded observations are never sampled away. Capture records no time: original timing
 comes from a separate sidecar or an explicit clock read.
 
+### Host file observations
+
+A host file can be created or changed by a child or another process after admission.
+Successful `file.open`, `file.size`, path reads and file-handle reads therefore record
+an explicit host file input: the opened handle, observed size or exactly the bytes
+returned (including an empty read at end of file). Replay supplies these observations
+from the tape without running children or accessing host files. It independently checks
+the exact request, grant, confined path, handle allocation and ownership, read bound and
+cursor advancement. Program writes and other derived effects keep their ordinary checks;
+`test.dir` observations are derived from its simulated tree and cannot carry host inputs.
+An observed open may discover a file missing from the initial snapshot; its subsequent
+reads supply its bytes. Unobserved child files need no snapshot.
+
+The additive completion tag 43 (`FileInput`) carries a nonrecursive opened-handle, size
+or byte input. Legacy unmarked completions retain their snapshot-derived validation:
+they replay when consistent and otherwise refuse with the normal diagnostic. No
+request tag or runtime ABI changes. The text inspection form is `file_input opened`,
+`file_input size` or `file_input bytes` followed by the value.
+
 ### Mapped file recording
 
 `file.map` is recorded like `file.open`: the Dir and path, and the Mapped handle or the

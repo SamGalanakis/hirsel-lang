@@ -491,7 +491,8 @@ wire_enum!(crate::io::Completion {
     39 => Runner(v0),
     40 => View(v0),
     41 => Watch(v0),
-    42 => Span{ handle, trace, span }
+    42 => Span{ handle, trace, span },
+    43 => FileInput(v0)
 });
 
 wire_struct!(crate::io::Fault { error, partial });
@@ -1022,3 +1023,9 @@ mod tests {
         assert!(decode::<u64>(&[1, 2]).is_err());
     }
 }
+
+wire_enum!(crate::io::FileInput {
+    0 => Opened(v0),
+    1 => Size(v0),
+    2 => Bytes(v0)
+});

@@ -12,6 +12,17 @@ pub struct File(pub u64);
 #[derive(Debug, Eq, PartialEq)]
 pub struct AtomicFile(pub u64);
 
+/// A tape's explicit host input and its language-visible completion are distinct.
+pub fn delivered(completion: &Completion) -> Completion {
+    use hirsel_rt::io::FileInput;
+    match completion {
+        Completion::FileInput(FileInput::Opened(id)) => Completion::Handle(Ok(*id)),
+        Completion::FileInput(FileInput::Size(size)) => Completion::Size(Ok(*size)),
+        Completion::FileInput(FileInput::Bytes(bytes)) => Completion::Bytes(Ok(bytes.clone())),
+        completion => completion.clone(),
+    }
+}
+
 /// Typed requests for integration tests; production uses the compiled ABI entries.
 pub struct Library<A: Adapter>(pub A);
 macro_rules! typed {

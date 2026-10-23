@@ -700,6 +700,8 @@ impl RandomSource {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Completion {
+    /// Confirmed host file input; never emitted by a simulated tree.
+    FileInput(FileInput),
     Input(Result<Vec<u8>, InputError>),
     Env(Result<Option<String>, EnvError>),
     ClockGrant(Result<u64, ()>),
@@ -768,6 +770,39 @@ pub enum Completion {
         trace: [u8; 16],
         span: [u8; 8],
     },
+}
+/// Successful observations of host files. Request, authority and handle allocation
+/// remain independently checked; these values replace only the storage provider.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileInput {
+    Opened(u64),
+    Size(u64),
+    Bytes(Vec<u8>),
+}
+impl FileInput {
+    pub(crate) fn capture(request: &Request, completion: &Completion) -> Option<Self> {
+        match (request, completion) {
+            (Request::Open { .. }, Completion::Handle(Ok(id))) => Some(Self::Opened(*id)),
+            (Request::Size { .. }, Completion::Size(Ok(size))) => Some(Self::Size(*size)),
+            (Request::Read { .. } | Request::FileRead { .. }, Completion::Bytes(Ok(bytes))) => {
+                Some(Self::Bytes(bytes.clone()))
+            }
+            _ => None,
+        }
+    }
+    pub(crate) fn completion(&self, request: &Request) -> Result<Completion, AdapterError> {
+        match (request, self) {
+            (Request::Open { .. }, Self::Opened(id)) => Ok(Completion::Handle(Ok(*id))),
+            (Request::Size { .. }, Self::Size(size)) => Ok(Completion::Size(Ok(*size))),
+            (Request::Read { .. }, Self::Bytes(bytes)) => Ok(Completion::Bytes(Ok(bytes.clone()))),
+            (Request::FileRead { max, .. }, Self::Bytes(bytes))
+                if bytes.len() as u64 <= (*max).min(65536) =>
+            {
+                Ok(Completion::Bytes(Ok(bytes.clone())))
+            }
+            _ => Err(AdapterError::InvalidCompletion),
+        }
+    }
 }
 /// The bytes a mapping lends `mapped.with`'s body. A host mapping that nothing records
 /// keeps them where they are mapped: `block` is then the address of the static block in
@@ -948,6 +983,9 @@ pub(crate) trait Storage {
     fn transfer_file(&mut self, _from: u64, _to: Option<u64>) {}
     fn directory(&mut self, path: &str, id: u64) -> Result<(), IoError>;
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError>;
+    fn size(&mut self, path: &str) -> Result<u64, IoError> {
+        self.read(path).map(|bytes| bytes.len() as u64)
+    }
     fn write(
         &mut self,
         path: &str,
@@ -2249,7 +2287,7 @@ impl State {
                     R::Size { .. } => Ok(C::Size(if let Some(e) = error {
                         Err(e)
                     } else {
-                        path.and_then(|p| storage.read(&p).map(|b| b.len() as u64))
+                        path.and_then(|p| storage.size(&p))
                     })),
                     R::Read { .. } => Ok(C::Bytes(if let Some(e) = error {
                         Err(e)

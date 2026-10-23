@@ -107,6 +107,8 @@ pub(crate) fn fields(
         {
             Ok([None, None])
         }
+        // FileInput is tape-only; live adapters return the ordinary completion.
+        Ok(Completion::FileInput(_)) => Err("file input escaped tape decoding"),
         _ => Err("host result needs an unsupported logical handle codec"),
     }
 }

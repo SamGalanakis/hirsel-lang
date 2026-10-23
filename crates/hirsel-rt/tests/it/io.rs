@@ -604,7 +604,7 @@ fn fake_test_directories_derive_identity_and_refuse_foreign_trees() {
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();
@@ -835,7 +835,7 @@ fn host_input_tape_rechecks_exact_grants_and_never_reads_the_provider_on_replay(
             ),
             _ => assert_eq!(
                 replay.call(event.request.clone()),
-                Ok(event.completion.clone())
+                Ok(crate::support::library::delivered(&event.completion))
             ),
         }
     }
@@ -1061,7 +1061,10 @@ fn filesystem_mutations_deny_read_grants_before_resolving_paths_and_replay_cross
     let mut replay = SimIo::new(Tree::new(Default::default()).unwrap(), tape.clone());
     replay.set_mounts([("data".into(), Access::Read)]).unwrap();
     for event in tape {
-        assert_eq!(replay.call(event.request), Ok(event.completion));
+        assert_eq!(
+            replay.call(event.request),
+            Ok(crate::support::library::delivered(&event.completion))
+        );
     }
     replay.finish().unwrap();
 
@@ -1091,7 +1094,10 @@ fn filesystem_mutations_deny_read_grants_before_resolving_paths_and_replay_cross
         .unwrap();
     let mut replay = SimIo::new(initial(), tape.clone());
     for event in tape {
-        assert_eq!(replay.call(event.request), Ok(event.completion));
+        assert_eq!(
+            replay.call(event.request),
+            Ok(crate::support::library::delivered(&event.completion))
+        );
     }
     replay.finish().unwrap();
     assert_eq!(replay.tree(), &initial());
@@ -1208,7 +1214,10 @@ fn filesystem_hard_link_rename_keeps_both_names_and_replays_inode_sharing() {
     drop(temp);
     let mut replay = SimIo::new(decoded.tree, decoded.events.clone());
     for event in decoded.events {
-        assert_eq!(replay.call(event.request), Ok(event.completion));
+        assert_eq!(
+            replay.call(event.request),
+            Ok(crate::support::library::delivered(&event.completion))
+        );
     }
     replay.finish().unwrap();
     assert_eq!(replay.tree(), &final_tree);
@@ -1309,7 +1318,10 @@ fn filesystem_mount_pins_survive_rename_and_removal_before_directory_projection(
         ])
         .unwrap();
     for event in tape {
-        assert_eq!(replay.call(event.request), Ok(event.completion));
+        assert_eq!(
+            replay.call(event.request),
+            Ok(crate::support::library::delivered(&event.completion))
+        );
     }
     replay.finish().unwrap();
     assert_eq!(replay.tree(), &final_tree);
@@ -1378,7 +1390,7 @@ fn a_durable_journal_of_a_host_run_recovers_at_every_record_boundary_and_replays
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
-            Ok(event.completion.clone())
+            Ok(crate::support::library::delivered(&event.completion))
         );
     }
     sim.finish().unwrap();

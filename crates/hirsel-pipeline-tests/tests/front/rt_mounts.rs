@@ -24,7 +24,10 @@ fn replay(real: &RealIo, initial: Tree, mounts: &BTreeMap<String, Access>, final
     let mut sim = SimIo::new(initial.clone(), tape.clone());
     sim.set_mounts(mounts.clone()).unwrap();
     for event in &tape {
-        assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
+        assert_eq!(
+            sim.call(event.request.clone()).unwrap(),
+            crate::rt_support::library::delivered(&event.completion)
+        );
     }
     sim.finish().unwrap();
     assert_eq!(sim.tree(), final_tree);

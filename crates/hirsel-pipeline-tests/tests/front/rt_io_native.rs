@@ -177,7 +177,10 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                     sim.test_context(recording.test_seed);
                 }
                 for event in &recording.events {
-                    assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
+                    assert_eq!(
+                        sim.call(event.request.clone()).unwrap(),
+                        crate::rt_support::library::delivered(&event.completion)
+                    );
                 }
                 sim.finish().unwrap();
                 if !test {
@@ -408,7 +411,10 @@ fn partial_write_replay(
             let tree = Tree::new(BTreeMap::new()).unwrap();
             let mut sim = SimIo::new(tree.clone(), events.clone());
             for event in &events {
-                assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
+                assert_eq!(
+                    sim.call(event.request.clone()).unwrap(),
+                    crate::rt_support::library::delivered(&event.completion)
+                );
             }
             sim.finish().unwrap();
             crate::rt_replay::replay_interpreter(

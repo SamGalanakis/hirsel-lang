@@ -404,10 +404,14 @@ fn completions(n: u64) -> Vec<Completion> {
             span: [!(n as u8); 8],
         },
         Completion::Ready,
+        Completion::FileInput(FileInput::Opened(n)),
+        Completion::FileInput(FileInput::Size(n)),
+        Completion::FileInput(FileInput::Bytes(bytes.clone())),
     ];
     // Adding a completion variant must add a specimen, just like requests.
     for completion in &values {
         match completion {
+            Completion::FileInput(_) => (),
             Completion::Input(_) => (),
             Completion::Env(_) => (),
             Completion::ClockGrant(_) => (),
