@@ -27,7 +27,8 @@ pub struct ProductRef {
 }
 
 /// Upper bounds charged before polling. Retained includes continuation state,
-/// held products and mapped bytes; stack/scratch are released on suspension.
+/// held products and mapped bytes. Suspension releases scratch and the worker;
+/// pool stacks remain charged once and are reused by ready work.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MemoryWeight {
     pub scratch: u64,
@@ -59,6 +60,24 @@ pub trait QueryTask: Send {
 pub trait QueryFactory: Send + Sync {
     /// Constructs a continuation without executing its dependencies.
     fn create(&self, key: QueryId) -> Result<Box<dyn QueryTask>, Reference>;
+}
+
+/// A non-Send continuation, created, resumed and destroyed on its home worker.
+/// Its wait releases execution admission; ordinary Send work can still use the
+/// home worker. This permits the interpreter's Rc/RefCell state without an
+/// unsafe Send assertion or replaying the computation after a dependency miss.
+pub trait LocalQueryTask {
+    fn id(&self) -> QueryId;
+    fn weight(&self) -> MemoryWeight;
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll;
+}
+
+/// Only immutable construction inputs cross threads. The task itself never does.
+pub trait LocalQueryFactory: Send + Sync {
+    /// Bounded metadata read; reserves the full continuation before creation.
+    fn weight(&self, key: QueryId) -> Result<MemoryWeight, Reference>;
+    /// Called on the home worker after admission; never eagerly runs dependencies.
+    fn create(&self, key: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference>;
 }
 
 pub trait QueryRuntime {

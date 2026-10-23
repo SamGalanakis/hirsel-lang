@@ -558,3 +558,223 @@ fn declared_stack_fits_reserved_worker_stack_without_being_charged_twice() {
     assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
     assert_eq!(rt.stats().workers, 1);
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalEvent {
+    Create,
+    Poll(usize),
+    Drop,
+}
+struct AffineFactory {
+    dependency: QueryId,
+    events: mpsc::Sender<(QueryId, LocalEvent, std::thread::ThreadId)>,
+    barrier: Option<Arc<std::sync::Barrier>>,
+}
+impl LocalQueryFactory for AffineFactory {
+    fn weight(&self, _: QueryId) -> Result<MemoryWeight, Reference> {
+        Ok(MemoryWeight {
+            retained: 64,
+            scratch: 32,
+            stack: 0,
+        })
+    }
+    fn create(&self, id: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference> {
+        let home = std::thread::current().id();
+        self.events.send((id, LocalEvent::Create, home)).unwrap();
+        Ok(Box::new(AffineTask {
+            id,
+            home,
+            dependency: self.dependency,
+            polls: std::rc::Rc::new(std::cell::Cell::new(0)),
+            events: self.events.clone(),
+            barrier: self.barrier.clone(),
+        }))
+    }
+}
+struct AffineTask {
+    id: QueryId,
+    home: std::thread::ThreadId,
+    dependency: QueryId,
+    // Deliberately !Send. Neither task state nor this Rc crosses a worker.
+    polls: std::rc::Rc<std::cell::Cell<usize>>,
+    events: mpsc::Sender<(QueryId, LocalEvent, std::thread::ThreadId)>,
+    barrier: Option<Arc<std::sync::Barrier>>,
+}
+impl Drop for AffineTask {
+    fn drop(&mut self) {
+        assert_eq!(std::thread::current().id(), self.home);
+        self.events
+            .send((self.id, LocalEvent::Drop, self.home))
+            .unwrap();
+    }
+}
+impl LocalQueryTask for AffineTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        MemoryWeight {
+            retained: 64,
+            scratch: 32,
+            stack: 0,
+        }
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        assert_eq!(std::thread::current().id(), self.home);
+        self.polls.set(self.polls.get() + 1);
+        self.events
+            .send((self.id, LocalEvent::Poll(self.polls.get()), self.home))
+            .unwrap();
+        if let Some(barrier) = self.barrier.take() {
+            barrier.wait();
+        }
+        match cx.read(self.dependency) {
+            Poll::Pending => QueryPoll::Waiting(vec![self.dependency]),
+            Poll::Ready(Ok(_)) => QueryPoll::Complete(product(self.id)),
+            Poll::Ready(Err(error)) => QueryPoll::Failed(error),
+        }
+    }
+}
+fn local_query(n: u64) -> QueryId {
+    QueryId {
+        kind: 2,
+        address: query(n).address,
+    }
+}
+#[test]
+fn affine_wait_releases_single_worker_and_resumes_rc_state_without_replay() {
+    let mut rt = runtime(1, 4 << 20);
+    install(&mut rt, &[(0, Spec::deps(&[]))]);
+    let (events, rx) = mpsc::channel();
+    rt.register_local(
+        2,
+        Arc::new(AffineFactory {
+            dependency: query(0),
+            events,
+            barrier: None,
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[local_query(1)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(local_query(1))]));
+    let events: Vec<_> = rx.try_iter().collect();
+    assert_eq!(
+        events.iter().map(|e| e.1).collect::<Vec<_>>(),
+        [
+            LocalEvent::Create,
+            LocalEvent::Poll(1),
+            LocalEvent::Poll(2),
+            LocalEvent::Drop
+        ]
+    );
+    assert!(events.iter().all(|e| e.2 == events[0].2));
+    assert_ne!(events[0].2, std::thread::current().id());
+    assert_eq!(rt.stats().claims, 2);
+    assert_eq!(rt.stats().active, 0);
+}
+#[test]
+fn all_affine_workers_waiting_can_run_shared_send_dependency_and_keep_home_ownership() {
+    let mut rt = runtime(2, 8 << 20);
+    install(&mut rt, &[(0, Spec::deps(&[]))]);
+    let (events, rx) = mpsc::channel();
+    rt.register_local(
+        2,
+        Arc::new(AffineFactory {
+            dependency: query(0),
+            events,
+            barrier: Some(Arc::new(std::sync::Barrier::new(2))),
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[local_query(1), local_query(2)]);
+    assert_eq!(
+        rt.wait(request),
+        Ok(vec![product(local_query(1)), product(local_query(2))])
+    );
+    let events: Vec<_> = rx.try_iter().collect();
+    let homes: Vec<_> = events
+        .iter()
+        .filter(|e| e.1 == LocalEvent::Create)
+        .map(|e| e.2)
+        .collect();
+    assert_eq!(homes.len(), 2);
+    assert_ne!(homes[0], homes[1]);
+    for q in [local_query(1), local_query(2)] {
+        let own: Vec<_> = events.iter().filter(|e| e.0 == q).collect();
+        assert!(own.iter().all(|e| e.2 == own[0].2));
+        assert_eq!(own.iter().filter(|e| e.1 == LocalEvent::Create).count(), 1);
+        assert_eq!(own.iter().filter(|e| e.1 == LocalEvent::Drop).count(), 1);
+    }
+    assert_eq!(rt.stats().claims, 3);
+    assert_eq!(rt.stats().workers, 2);
+}
+#[test]
+fn affine_cancellation_and_shutdown_destroy_continuations_on_home_worker() {
+    for shutdown in [false, true] {
+        let mut rt = runtime(1, 4 << 20);
+        let (entered, rx) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        rt.register(
+            1,
+            Arc::new(BlockingFactory {
+                entered,
+                release: Mutex::new(Some(released)),
+            }),
+        )
+        .unwrap();
+        let (events, local_events) = mpsc::channel();
+        rt.register_local(
+            2,
+            Arc::new(AffineFactory {
+                dependency: query(0),
+                events,
+                barrier: None,
+            }),
+        )
+        .unwrap();
+        let request = rt.request(&[local_query(1)]);
+        rx.recv().unwrap();
+        // The affine parent is suspended, the same worker is running its Send
+        // dependency, and cancellation must not run Drop on this host thread.
+        if shutdown {
+            let host = std::thread::spawn(move || {
+                rt.shutdown();
+                rt
+            });
+            release.send(()).unwrap();
+            rt = host.join().unwrap();
+        } else {
+            rt.cancel(request);
+            assert!(!local_events.try_iter().any(|e| e.1 == LocalEvent::Drop));
+            release.send(()).unwrap();
+            let mut state = rt.shared.lock();
+            while !state.nodes.is_empty() || state.stats.active != 0 {
+                state = rt.shared.changed.wait(state).unwrap();
+            }
+        }
+        let events: Vec<_> = local_events.try_iter().collect();
+        let dropped = events.iter().find(|e| e.1 == LocalEvent::Drop).unwrap();
+        assert_ne!(dropped.2, std::thread::current().id());
+        assert_eq!(rt.poll(request), Poll::Ready(Err(errors().cancelled)));
+        rt.shutdown();
+        assert_eq!(rt.stats().charged_bytes, 0);
+    }
+}
+#[test]
+fn affine_factory_queue_obeys_same_metadata_bound_before_creating_local_state() {
+    let mut rt = runtime(1, STACK as u64 + 32 * ENTRY_BYTES);
+    let (events, rx) = mpsc::channel();
+    rt.register_local(
+        2,
+        Arc::new(AffineFactory {
+            dependency: query(0),
+            events,
+            barrier: None,
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[local_query(0), local_query(1), local_query(2)]);
+    assert_eq!(rt.poll(request), Poll::Ready(Err(errors().resource)));
+    assert_eq!(rx.try_iter().count(), 0);
+    assert_eq!(rt.stats().claims, 0);
+}
