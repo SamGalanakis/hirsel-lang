@@ -5,11 +5,40 @@ use crate::{Error, Value, aggregate::RuntimeTypes, invalid};
 use hirsel_types::{BuiltinType, GenericArgument, TypeId, TypeKind};
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AllocationSite {
+    pub anchor: crate::observation::Anchor,
+    pub block: hirsel_tir::BlockId,
+    pub statement: u32,
+    pub path: Vec<u32>,
+}
+impl AllocationSite {
+    fn below(&self, path: &[usize]) -> Result<Self, Error> {
+        let mut source = self.clone();
+        for &index in path {
+            source.path.push(
+                u32::try_from(index)
+                    .map_err(|_| invalid("retained source field ordinal overflow"))?,
+            );
+        }
+        Ok(source)
+    }
+    #[cfg(test)]
+    fn test(anchor: crate::observation::Anchor, statement: u32) -> Self {
+        Self {
+            anchor,
+            block: hirsel_tir::BlockId(0),
+            statement,
+            path: vec![],
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Retained {
     pub ty: TypeId,
     pub value: Value,
-    pub source: crate::observation::Anchor,
+    pub source: AllocationSite,
 }
 
 #[derive(Default, Debug)]
@@ -35,7 +64,7 @@ impl Storage {
         runtime: &RuntimeTypes,
         ty: TypeId,
         value: &mut Value,
-        source: &crate::observation::Anchor,
+        source: &AllocationSite,
         replace: bool,
     ) -> Result<(), Error> {
         if !needs_recording(value, replace) {
@@ -93,7 +122,7 @@ impl Storage {
                     Retained {
                         ty,
                         value: Value::Unit,
-                        source: source.clone(),
+                        source: source.below(&path)?,
                     },
                     Charge::ZERO,
                 );
@@ -161,7 +190,7 @@ impl Storage {
         root_ty: TypeId,
         root: &mut Value,
         path: &[usize],
-        source: &crate::observation::Anchor,
+        source: &AllocationSite,
     ) -> Result<(), Error> {
         if !root.contains_arena_storage() {
             return Ok(());
@@ -178,7 +207,13 @@ impl Storage {
             ancestors.push((path[..=depth].to_vec(), ty));
         }
         for (path, ty) in ancestors.into_iter().rev() {
-            self.record(runtime, ty, at_mut(root, &path)?, source, true)?;
+            self.record(
+                runtime,
+                ty,
+                at_mut(root, &path)?,
+                &source.below(&path)?,
+                true,
+            )?;
         }
         Ok(())
     }
@@ -486,7 +521,7 @@ mod tests {
     use crate::value::ArenaStorage;
     use hirsel_types::{Primitive, Type, TypeInterner};
 
-    fn fixture() -> (RuntimeTypes, TypeId, TypeId, crate::observation::Anchor) {
+    fn fixture() -> (RuntimeTypes, TypeId, TypeId, AllocationSite) {
         let runtime = RuntimeTypes::new(TypeInterner::new(None));
         let bytes = runtime
             .types
@@ -504,6 +539,7 @@ mod tests {
             site: Default::default(),
             cleanup: None,
         };
+        let source = AllocationSite::test(source, 0);
         (runtime, list, scalar, source)
     }
     fn list(count: usize) -> Value {
@@ -583,6 +619,64 @@ mod tests {
     }
 
     #[test]
+    fn sealed_regions_33_allocation_identity_distinguishes_statements_blocks_and_cow() {
+        let (runtime, list_ty, _, first_site) = fixture();
+        let mut storage = Storage::default();
+        storage.open(1).unwrap();
+        let mut first = list(1);
+        storage
+            .record(&runtime, list_ty, &mut first, &first_site, false)
+            .unwrap();
+        let first_id = first.arena_storage().unwrap().logical_block.unwrap();
+
+        // All source spans match, as can happen for synthesized instructions.
+        let mut growth_site = first_site.clone();
+        growth_site.statement = 1;
+        first
+            .fields_mut()
+            .unwrap()
+            .push(Some(Value::Bytes(b"abc".to_vec())));
+        storage
+            .record(&runtime, list_ty, &mut first, &growth_site, true)
+            .unwrap();
+        assert_eq!(first.arena_storage().unwrap().logical_block, Some(first_id));
+
+        let mut second = list(1);
+        storage
+            .record(&runtime, list_ty, &mut second, &growth_site, false)
+            .unwrap();
+        let second_id = second.arena_storage().unwrap().logical_block.unwrap();
+        let mut third_site = first_site.clone();
+        third_site.block = hirsel_tir::BlockId(1);
+        let mut third = list(1);
+        storage
+            .record(&runtime, list_ty, &mut third, &third_site, false)
+            .unwrap();
+        let third_id = third.arena_storage().unwrap().logical_block.unwrap();
+
+        let mut cow = first.clone();
+        cow.retag_own_block(Some(first.arena_storage().unwrap().detached()));
+        let mut cow_site = third_site.clone();
+        cow_site.statement = 2;
+        cow_site.path = vec![3];
+        storage
+            .record(&runtime, list_ty, &mut cow, &cow_site, false)
+            .unwrap();
+        let cow_id = cow.arena_storage().unwrap().logical_block.unwrap();
+        assert_ne!(cow_id, first_id);
+        let retained = storage.take(1).unwrap();
+        assert_eq!(retained.entries().len(), 4);
+        for (id, expected) in [
+            (first_id, first_site),
+            (second_id, growth_site),
+            (third_id, third_site),
+            (cow_id, cow_site),
+        ] {
+            assert_eq!(retained.entries()[&id].payload.source, expected);
+        }
+    }
+
+    #[test]
     fn sealed_regions_33_recorder_snapshots_do_not_acquire_shared_credits() {
         let (runtime, _, _, source) = fixture();
         let bytes = runtime
@@ -645,6 +739,7 @@ mod custody_tests {
             site: Default::default(),
             cleanup: None,
         };
+        let source = AllocationSite::test(source, 0);
         let root = SharedRoot::freeze(31, Value::Bytes(b"abc".to_vec()));
         let mut value = Value::Sequence {
             kind: BuiltinType::List,
@@ -770,6 +865,7 @@ mod sorted_tests {
             site: Default::default(),
             cleanup: None,
         };
+        let source = AllocationSite::test(source, 0);
         let mut storage = Storage::default();
         storage.open(1).unwrap();
         storage
@@ -841,6 +937,7 @@ mod invocation_tests {
             site: Default::default(),
             cleanup: None,
         };
+        let source = AllocationSite::test(source, 0);
         let root = Value::Integer(crate::Integer::new(Primitive::U64, 7).unwrap());
         let mut storage = Storage::default();
         storage.open(1).unwrap();

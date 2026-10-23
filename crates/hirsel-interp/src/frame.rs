@@ -1101,7 +1101,7 @@ impl Frame {
         place: PlaceId,
         runtime: &crate::aggregate::RuntimeTypes,
         storage: &mut crate::sealed_storage::Storage,
-        source: &crate::observation::Anchor,
+        source: &crate::sealed_storage::AllocationSite,
     ) -> Result<(), AccessError> {
         let place_root = self.place(place)?.root;
         let path = self

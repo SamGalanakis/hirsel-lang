@@ -847,9 +847,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         if let Some((_, place)) = state.mut_places.iter().find(|(i, _)| i == index)
                         {
                             let ty = closed_storage_type(frame, runtime, frame.place(*place)?.ty)?;
-                            budgets
-                                .storage
-                                .record(runtime, ty, value, &state.anchor, true)?;
+                            budgets.storage.record(
+                                runtime,
+                                ty,
+                                value,
+                                &operation_allocation_site(frame, &state.anchor)?,
+                                true,
+                            )?;
                         }
                     }
                     record_operation_storage(frame, &mut state, runtime, &mut budgets)?;
@@ -1253,9 +1257,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             runtime,
                             frame.place(returns.destination)?.ty,
                         )?;
-                        budgets
-                            .storage
-                            .record(runtime, ty, &mut value, &state.anchor, false)?;
+                        budgets.storage.record(
+                            runtime,
+                            ty,
+                            &mut value,
+                            &operation_allocation_site(frame, &state.anchor)?,
+                            false,
+                        )?;
                     }
                     if budgets.run.metered() {
                         // What the result holds beyond the owners it took or updated.
@@ -1898,7 +1906,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         release_fields(
                             frame,
                             &mut retained.value,
-                            retained.source,
+                            retained.source.anchor,
                             frame.caller.clone(),
                         )?;
                         retained.value.discard();
@@ -3139,13 +3147,6 @@ fn dispatch(
                 }
             }
             OpKind::Constant { slot, value } => {
-                if value.is_block()
-                    && frame
-                        .placed_arena(frame.body().locals[*slot as usize].ty)
-                        .is_some()
-                {
-                    return true;
-                }
                 if frame.slots[*slot as usize].is_some() {
                     return true;
                 }
@@ -3571,10 +3572,10 @@ async fn rvalue(
                 .get(ty)
                 .ok_or_else(|| invalid("type out of range"))?
                 .kind;
-            let mut value = scalar::constant(c, ty)?;
-            if let Some(arena) = frame.placed_arena(frame.place(destination)?.ty) {
-                value.retag_own_block(Some(crate::value::ArenaStorage::fresh(arena.into(), 0)));
-            }
+            // A receiving lifetime is not an allocation destination. Literal
+            // backing stays heap/static; only an explicit construction/copy
+            // destination enrolls a semantic arena allocation.
+            let value = scalar::constant(c, ty)?;
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
             }
@@ -3951,12 +3952,45 @@ async fn rvalue(
     };
     let mut value = value;
     let ty = closed_storage_type(frame, runtime, frame.place(destination)?.ty)?;
-    budgets
-        .storage
-        .record(runtime, ty, &mut value, &anchor(frame, site), false)?;
+    budgets.storage.record(
+        runtime,
+        ty,
+        &mut value,
+        &allocation_site(
+            frame,
+            anchor(frame, site),
+            frame.instruction.saturating_sub(1),
+        )?,
+        false,
+    )?;
     Ok((value, shadow))
 }
 
+fn allocation_site(
+    frame: &Frame,
+    anchor: crate::observation::Anchor,
+    statement: usize,
+) -> Result<crate::sealed_storage::AllocationSite, Error> {
+    Ok(crate::sealed_storage::AllocationSite {
+        anchor,
+        block: frame.block,
+        statement: u32::try_from(statement)
+            .map_err(|_| invalid("allocation statement ordinal overflow"))?,
+        path: vec![],
+    })
+}
+fn operation_allocation_site(
+    frame: &Frame,
+    anchor: &crate::observation::Anchor,
+) -> Result<crate::sealed_storage::AllocationSite, Error> {
+    allocation_site(
+        frame,
+        anchor.clone(),
+        frame.body().blocks[frame.block.0 as usize]
+            .instructions
+            .len(),
+    )
+}
 fn closed_storage_type(
     frame: &Frame,
     runtime: &crate::aggregate::RuntimeTypes,
@@ -3985,7 +4019,7 @@ fn record_operation_storage(
             runtime,
             ty,
             &mut state.arguments[*index],
-            &state.anchor,
+            &operation_allocation_site(frame, &state.anchor)?,
             true,
         )?;
     }
@@ -4485,7 +4519,11 @@ async fn execute_instruction(
                 destination,
                 runtime,
                 &mut budgets.storage,
-                &anchor(frame, site),
+                &allocation_site(
+                    frame,
+                    anchor(frame, site),
+                    frame.instruction.saturating_sub(1),
+                )?,
             )?;
         }
         InstructionKind::Assign { destination, value } => {
@@ -4557,7 +4595,11 @@ async fn execute_instruction(
                     destination,
                     runtime,
                     &mut budgets.storage,
-                    &anchor(frame, site),
+                    &allocation_site(
+                        frame,
+                        anchor(frame, site),
+                        frame.instruction.saturating_sub(1),
+                    )?,
                 )?;
             }
             if borrowed {
