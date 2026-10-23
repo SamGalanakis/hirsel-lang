@@ -2012,39 +2012,51 @@ pub(crate) unsafe fn execute(
                 {
                     return Err("recording configuration mismatch".into());
                 }
+                let bound_run = tape
+                    .binding
+                    .as_ref()
+                    .map(|_| tape.bound_run())
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
                 arguments = tape.arguments;
                 let mut io = match binary {
                     Some(binary) => SimIo::from_binary(tape.tree, binary),
                     None => SimIo::new(tape.tree, tape.events),
                 };
-                if let Some(run) = &fixture_run {
-                    io.set_mounts(
-                        run.record()
-                            .io
-                            .iter()
-                            .flat_map(|io| &io.dirs)
-                            .map(|mount| (mount.path.clone(), mount.access)),
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-                if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
-                    io.deny_output();
-                }
-                io.set_net_rules(net_rules.clone());
-                if let Some(env) = &env {
-                    io.set_env(env.clone());
-                }
-                io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
-                if let Some(grant) = &process {
-                    io.set_process_grant(grant);
-                }
-                if let Some(grant) = &signals {
-                    io.set_signal_kinds(grant.bits());
-                }
-                if let Some((peers, listeners)) = net_script.clone()
-                    && let Err(error) = io.set_net_script(peers, listeners)
-                {
-                    return Err(format!("the network script: {error:?}"));
+                if let Some(run) = &bound_run {
+                    crate::host_launch::configure_replay(&mut io, run)
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    // Unbound historical harness tapes keep their explicit fixture inputs.
+                    if let Some(run) = &fixture_run {
+                        io.set_mounts(
+                            run.record()
+                                .io
+                                .iter()
+                                .flat_map(|io| &io.dirs)
+                                .map(|mount| (mount.path.clone(), mount.access)),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
+                        io.deny_output();
+                    }
+                    io.set_net_rules(net_rules.clone());
+                    if let Some(env) = &env {
+                        io.set_env(env.clone());
+                    }
+                    io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
+                    if let Some(grant) = &process {
+                        io.set_process_grant(grant);
+                    }
+                    if let Some(grant) = &signals {
+                        io.set_signal_kinds(grant.bits());
+                    }
+                    if let Some((peers, listeners)) = net_script.clone()
+                        && let Err(error) = io.set_net_script(peers, listeners)
+                    {
+                        return Err(format!("the network script: {error:?}"));
+                    }
                 }
                 if entry.is_test() {
                     io.test_context(seed);

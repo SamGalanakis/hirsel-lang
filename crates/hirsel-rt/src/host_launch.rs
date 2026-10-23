@@ -202,6 +202,13 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     io.legacy_barrier_waits(legacy_barriers);
     io.free_tape = free;
     io.instance = instance;
+    configure_replay(&mut io, &run)?;
+    Ok((io, run))
+}
+
+/// Rebuild replay authority and scripted worlds from the validated recorded run.
+/// The provider environment of a later launch is never replay input.
+pub(crate) fn configure_replay(io: &mut SimIo, run: &ValidatedRun) -> Result<(), RunRefusal> {
     io.set_projections(run.io_projections());
     io.set_mounts(
         run.record()
@@ -228,7 +235,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     if let Some(grant) = run.signals_grant() {
         io.set_signal_kinds(grant.bits());
     }
-    Ok((io, run))
+    Ok(())
 }
 
 /// A complete recording at `path`: a tape, or a durable journal that recovers complete.
