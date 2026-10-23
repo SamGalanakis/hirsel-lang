@@ -76,6 +76,15 @@ fn canonical_detail(mut detail: DependencyReads) -> DependencyReads {
     detail
 }
 
+/// Syntax registration is an ordinary product, separate from generator text
+/// and independent V authority. Lossless actuals use canonical type records.
+#[derive(Serialize, Deserialize)]
+struct GeneratedRegistration {
+    declaration: DefId,
+    arguments: Vec<hirsel_types::GenericArgument>,
+    instance: DefId,
+}
+
 #[derive(Serialize, Deserialize)]
 struct SignatureRecord {
     output: Result<QueryOutput<hirsel_types::SignatureRef>, QueryError>,
@@ -880,7 +889,9 @@ impl QueryEngine {
             if generation::generator(item).is_none() || generation::instance_bodied(item) {
                 return None;
             }
-        } else if generation::generator(item).is_some() || self.generated.contains_key(path) {
+        } else if kind != QueryKind::GeneratedRegistration
+            && (generation::generator(item).is_some() || self.generated.contains_key(path))
+        {
             return None;
         }
         if self
@@ -973,6 +984,15 @@ impl QueryEngine {
                     let declaration_owner = self.staged_declaration_owner(id.path())?;
                     self.load_registrations(&declaration_owner)?;
                     self.staged_constants.get(id.path())?;
+                }
+                if matches!(
+                    key.2,
+                    QueryKind::Evaluate | QueryKind::Lower | QueryKind::Generate
+                ) && let Some(id) = read.definition()
+                    && id.path().0.name.contains("$instance$")
+                    && !self.items.contains_key(id.path())
+                {
+                    self.load_generated_registration(id.path())?;
                 }
                 self.observe(owner, read)
             })
@@ -1234,6 +1254,153 @@ impl QueryEngine {
             rows,
         };
         self.write_record(path, QueryKind::Registration, &reads, &record)
+    }
+
+    fn generated_registration_key(&mut self, instance: &DefPath) -> Option<(DefPath, EntryKey)> {
+        let (name, suffix) = instance.0.name.rsplit_once("$instance$")?;
+        if suffix.len() != 16
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return None;
+        }
+        let mut declaration = instance.clone();
+        declaration.0.name = name.into();
+        let item = self.items.get(&declaration)?.first()?;
+        if !generation::instance_bodied(item) {
+            return None;
+        }
+        let mut key = self.store_key(&declaration, QueryKind::GeneratedRegistration)?;
+        key.0 = ContentHash::of_parts(
+            "hirsel.result.generated-registration-address.v1",
+            [key.0.0.as_slice(), instance.fingerprint().0.as_slice()],
+        );
+        key.2 = QueryKind::GeneratedRegistration;
+        Some((declaration, key))
+    }
+    fn valid_generated_registration(
+        &self,
+        instance: &DefPath,
+        record: &GeneratedRegistration,
+    ) -> bool {
+        let Some(syntax) = self
+            .items
+            .get(record.declaration.path())
+            .and_then(|items| items.first())
+        else {
+            return false;
+        };
+        let hirsel_syntax::ItemKind::Function { signature, .. } = &syntax.item.kind else {
+            return false;
+        };
+        if !generation::instance_bodied(syntax)
+            || signature.generics.len() != record.arguments.len()
+            || !signature
+                .generics
+                .iter()
+                .zip(&record.arguments)
+                .all(|(parameter, argument)| {
+                    matches!(
+                        (&parameter.kind, argument),
+                        (
+                            hirsel_syntax::GenericKind::Type(_),
+                            hirsel_types::GenericArgument::Type(_)
+                        ) | (
+                            hirsel_syntax::GenericKind::Size,
+                            hirsel_types::GenericArgument::Size(hirsel_types::Size::Constant(_))
+                        )
+                    )
+                })
+        {
+            return false;
+        }
+        let Some(key) = hirsel_tir::InstanceBodies::key(&self.types, &record.arguments) else {
+            return false;
+        };
+        record.instance.path() == instance
+            && generation::instance_path(record.declaration.path(), key) == *instance
+    }
+    pub(super) fn store_generated_registration(
+        &mut self,
+        declaration: &DefPath,
+        arguments: &[hirsel_types::GenericArgument],
+        instance: &DefPath,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none() || !self.s1.failure_is_own() {
+            return Ok(());
+        }
+        let Some((owner, key)) = self.generated_registration_key(instance) else {
+            return Ok(());
+        };
+        if owner != *declaration {
+            return Ok(());
+        }
+        let record = GeneratedRegistration {
+            declaration: DefId::intern(declaration),
+            arguments: arguments.to_vec(),
+            instance: DefId::intern(instance),
+        };
+        if !self.valid_generated_registration(instance, &record) {
+            return Ok(());
+        }
+        let Some(payload) = self.encode_record(&record) else {
+            return Ok(());
+        };
+        let mut reads = ReadsBuilder::new();
+        reads.record(
+            ReadKey::ExecutedBody(record.declaration),
+            memos::optional(self.implementation_hash(declaration)),
+        );
+        let reads = reads.finish().map_err(|_| QueryError::NotImplemented)?;
+        EncodedWriter {
+            types: self.type_records().expect("enabled registration types"),
+            store: self
+                .result_store
+                .as_ref()
+                .expect("enabled registration store")
+                .clone(),
+            key,
+            path: instance.clone(),
+            kind: QueryKind::GeneratedRegistration,
+            expected: self
+                .pending_store_checks
+                .remove(&(record.instance, QueryKind::GeneratedRegistration)),
+        }
+        .write(&reads, payload)
+    }
+    pub(super) fn load_generated_registration(&mut self, instance: &DefPath) -> Option<()> {
+        let (declaration, key) = self.generated_registration_key(instance)?;
+        let variant = self.stored_variant_at(&declaration, &key)?;
+        let record: GeneratedRegistration = self.decode_record(&variant.payload)?;
+        if record.declaration.path() != &declaration
+            || !self.valid_generated_registration(instance, &record)
+        {
+            return None;
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (record.instance, QueryKind::GeneratedRegistration),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        let site = self.snapshot(&declaration).ok()?.item.name_span;
+        let (registered, _) = self
+            .register_generated_instance(
+                &declaration,
+                &hirsel_types::Actuals {
+                    arguments: record.arguments,
+                },
+                site,
+            )
+            .ok()?;
+        if registered != *instance {
+            return None;
+        }
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(())
     }
 
     pub(crate) fn lower_requires_execution(&self, path: &DefPath, reads: &Reads) -> bool {
@@ -1944,6 +2111,73 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn generated_registrations_validate_before_installation_and_comparison() {
+        use hirsel_types::{GenericArgument, Size};
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..7 {
+                let (mut engine, syntax) =
+                    fixture_source("fn main[T,n:size]()->u32 uses {}=comptime ignored()");
+                engine.adapters.lexer = Some(Arc::new(crate::adapters::LexerAdapter));
+                engine.adapters.parser = Some(Arc::new(crate::adapters::ParserAdapter));
+                let declaration = syntax.item.definition.clone();
+                let arguments = vec![
+                    GenericArgument::Type(engine.types.intern(hirsel_types::Type::unit())),
+                    GenericArgument::Size(Size::Constant(2)),
+                ];
+                let canonical = hirsel_tir::InstanceBodies::key(&engine.types, &arguments).unwrap();
+                let instance = generation::instance_path(&declaration, canonical);
+                let mut record = GeneratedRegistration {
+                    declaration: DefId::intern(&declaration),
+                    instance: DefId::intern(&instance),
+                    arguments,
+                };
+                match fault {
+                    0 => (),
+                    1 => record.declaration = DefId::intern(&DefPath::core("foreign")),
+                    2 => record.instance = DefId::intern(&DefPath::core("foreign")),
+                    3 => {
+                        record.arguments.pop();
+                    }
+                    4 => record.arguments[0] = GenericArgument::Size(Size::Constant(2)),
+                    5 => {
+                        record.arguments[1] = GenericArgument::Size(Size::Parameter(
+                            hirsel_types::SizeParameterRef::bound(hirsel_types::SizeParamId(0)),
+                        ))
+                    }
+                    6 => record.arguments[1] = GenericArgument::Size(Size::Constant(3)),
+                    _ => unreachable!(),
+                }
+                let (_, key) = engine.generated_registration_key(&instance).unwrap();
+                let payload = engine.encode_record(&record).unwrap();
+                let store = engine.result_store.as_ref().unwrap().clone();
+                let mut entry = StoredEntry::default();
+                entry.insert(VariantRef::publish(&*store, &key, Reads::empty(), &payload).unwrap());
+                store.put(&key, &entry.encode_for(&key));
+                engine.verify_store = verify;
+                let hit = engine.load_generated_registration(&instance);
+                let accepted = fault == 0 && verify == crate::store::VerifyStore::Off;
+                assert_eq!(hit.is_some(), accepted, "fault={fault} verify={verify:?}");
+                assert_eq!(engine.items.contains_key(&instance), accepted);
+                assert_eq!(
+                    engine.instance_bodies.instances.len(),
+                    usize::from(accepted)
+                );
+                assert!(
+                    engine.generated_source(&instance).is_none(),
+                    "registration never executes or publishes generator text"
+                );
+                if fault != 0 {
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn malformed_generation_records_miss_before_source_publication() {
