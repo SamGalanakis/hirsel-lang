@@ -72,7 +72,7 @@ mismatch. Every other typing failure uses the rule that defines the form; LANG-7
 incompatibility without a narrower rule. Independent failures at the same stage use the
 source and rule ordering above.
 
-### CAP-1: Explicit typed capability arguments
+### Diagnostics for CAP-1
 
 An omitted capability and a supplied value of the wrong capability type keep the
 operation's capability-provision owner and the whole call as primary. Use the
