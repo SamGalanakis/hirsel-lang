@@ -956,6 +956,11 @@ conformance/DROP/DROP-1-plain-copy.hir
 conformance/DROP/DROP-1-user-drop-bad.hir
 conformance/DROP/DROP-1-user-drop-ok.hir
 conformance/DROP/DROP-2-closure-zero-sized-destructure-run.hir
+conformance/DROP/DROP-2-cursor-retirement-copy-twin-run.hir
+conformance/DROP/DROP-2-cursor-retirement-no-cursor-twin-run.hir
+conformance/DROP/DROP-2-cursor-retirement-order-run.hir
+conformance/DROP/DROP-2-cursor-retirement-owner-run.hir
+conformance/DROP/DROP-2-cursor-retirement-parameter-twin-run.hir
 conformance/DROP/DROP-2-destructure-branch-run.hir
 conformance/DROP/DROP-2-destructure-empty-call-run.hir
 conformance/DROP/DROP-2-destructure-empty-run.hir

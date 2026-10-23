@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "cleanup_retirement",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "DROP-2-cursor-retirement-owner-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

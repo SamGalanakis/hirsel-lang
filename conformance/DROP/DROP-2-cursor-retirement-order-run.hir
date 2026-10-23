@@ -1,0 +1,44 @@
+// rule: DROP-2
+// expect: run
+// stdout: inner normal
+// stdout: outer
+// stdout: inner return
+// stdout: outer
+// stdout: inner propagate
+// stdout: outer
+// Newly initialized owners and older names preserve DROP-2 on every exit.
+resource type Trace {
+  output: Stdout,
+  value: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.value)
+}
+
+fn finish(early: bool) -> Result[(), String] uses {} {
+  if early {
+    Error("stop")
+  } else {
+    Ok(())
+  }
+}
+
+fn observe(output: Stdout, s: String, exit: u64) -> Result[(), String] {
+  let outer = Trace(output: output, value: "outer\n")
+  let row = s
+  for c in string.scalars(row) {}
+  let inner = Trace(output: output, value: unique row)
+  if exit == 1 {
+    return Error("stop")
+  }
+  finish(exit == 2)?
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let _ = observe(output, "inner normal\n", 0)
+  let _ = observe(output, "inner return\n", 1)
+  let _ = observe(output, "inner propagate\n", 2)
+  Ok(())
+}

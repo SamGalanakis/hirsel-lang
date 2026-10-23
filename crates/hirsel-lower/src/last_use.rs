@@ -317,9 +317,14 @@ impl Builder<'_, '_> {
                         _ => {}
                     }
                 }
-                let (span, on_failure) = (instruction.span, instruction.on_failure);
-                output.push(instruction);
                 let ended: Vec<u32> = before.difference(&needed).copied().collect();
+                let span = instruction.span;
+                let on_failure = if ended.is_empty() {
+                    instruction.on_failure
+                } else {
+                    self.retirement_cleanup(&instruction)
+                };
+                output.push(instruction);
                 for loan in ended.iter().rev() {
                     self.retire_cursors(
                         &mut output,
@@ -341,6 +346,51 @@ impl Builder<'_, '_> {
             }
             self.body.blocks[block].instructions = output;
         }
+    }
+    /// Retirement runs after the instruction succeeds. Its failure edge must
+    /// include newly initialized owners, which the instruction's own failure
+    /// edge deliberately excludes. Old taken/dropped roots remain conditional.
+    fn retirement_cleanup(&mut self, instruction: &Instruction) -> CleanupId {
+        let initialized = match instruction.kind {
+            InstructionKind::Assign { destination, .. } => [Some(destination), None],
+            InstructionKind::Replace {
+                destination,
+                displaced,
+                ..
+            } => [Some(destination), Some(displaced)],
+            _ => return instruction.on_failure,
+        };
+        let mut slots: BTreeSet<_> = initialized
+            .into_iter()
+            .flatten()
+            .filter(|place| {
+                self.owned[self.root(*place).0 as usize] && !self.plain(self.ty(*place))
+            })
+            .map(|place| self.root(place).0)
+            .collect();
+        if slots.is_empty() {
+            return instruction.on_failure;
+        }
+        let mut loans = vec![];
+        let mut added = slots.clone();
+        // Construction emits only whole-root drops and loan ends. Reuse its
+        // DROP-2 ordering rather than appending an inner owner to an outer tail.
+        for action in self.body.cleanup_actions(instruction.on_failure) {
+            match *action {
+                CleanupAction::Drop { place, .. } => {
+                    let root = self.root(place).0;
+                    added.remove(&root);
+                    slots.insert(root);
+                }
+                CleanupAction::EndLoan { loan, .. } => loans.push((loan, ScopeId(0))),
+                _ => unreachable!("lowering cleanup contains an unsupported action"),
+            }
+        }
+        if added.is_empty() {
+            return instruction.on_failure;
+        }
+        loans.reverse(); // cleanup_for prepends ends in creation order.
+        self.cleanup_for(&slots, &loans)
     }
     fn defer_live_view_loans(&mut self, cleanup: CleanupId, needed: &BTreeSet<u32>) -> CleanupId {
         let actions: Vec<_> = self.body.cleanup_actions(cleanup).cloned().collect();

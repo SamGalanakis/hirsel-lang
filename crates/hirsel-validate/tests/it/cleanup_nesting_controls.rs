@@ -48,3 +48,14 @@ fn control_an_inner_name_releases_before_an_outer_temporary() {
             .any(|kind| matches!(kind, ViolationKind::CleanupOrder(_))),
     );
 }
+
+#[test]
+fn an_exact_exit_cannot_omit_the_newest_live_inner_owner() {
+    let f = nested(|x, t, _inner| vec![t, x]);
+    assert!(f.kinds().iter().any(|kind| matches!(
+        kind,
+        ViolationKind::CleanupMismatch { expected, actual, .. }
+            if expected.len() == 3 && actual.len() == 2
+                && expected.iter().any(|root| !actual.contains(root))
+    )));
+}

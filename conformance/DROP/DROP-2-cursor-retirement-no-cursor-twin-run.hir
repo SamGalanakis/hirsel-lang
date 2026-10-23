@@ -1,0 +1,17 @@
+// rule: DROP-2
+// expect: run
+// stdout: ab
+// Retiring a cursor after initialization must clean the newly created owner
+// if retirement fails. A borrowed alias carries the source permission.
+fn render(s: String) -> unique String uses {} {
+  let row = s
+  let items = unique row
+  take items
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let value = render("ab")
+  let _ = out.print(output, f"{value}\n")
+  Ok(())
+}
