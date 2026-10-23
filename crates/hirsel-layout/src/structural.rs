@@ -9,6 +9,22 @@ pub fn derive(
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<ShapeGraph>, QueryError> {
+    Ok(derive_typed(types, root, lookup)?.map(|derived| derived.graph))
+}
+
+/// Transient correspondence for this derivation's interner. Numeric TypeIds
+/// are never durable identities and must not be reused in another session.
+pub struct DerivedShape<'a> {
+    pub graph: ShapeGraph,
+    pub node_types: Vec<TypeId>,
+    pub types: &'a TypeInterner,
+}
+
+pub fn derive_typed<'a>(
+    types: &'a TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Option<DerivedShape<'a>>, QueryError> {
     let memo = TypeMemo::new();
     let mut graph = ShapeGraph {
         root: 0,
@@ -170,7 +186,15 @@ pub fn derive(
     if graph.check().is_err() {
         return Ok(None);
     }
-    Ok(Some(graph))
+    let mut node_types = vec![root; graph.nodes.len()];
+    for (ty, node) in known {
+        node_types[node as usize] = ty;
+    }
+    Ok(Some(DerivedShape {
+        graph,
+        node_types,
+        types,
+    }))
 }
 
 /// Producer shape equality is checked against declarations, not against a

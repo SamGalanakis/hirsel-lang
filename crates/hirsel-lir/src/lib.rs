@@ -34,8 +34,8 @@ pub mod rt_program;
 pub mod runtime_abi;
 pub mod snapshot;
 pub mod stage;
-pub mod structural;
 pub mod statics;
+pub mod structural;
 pub mod validate;
 
 pub use abi_types::{FnAbi, FnAbiId};

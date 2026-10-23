@@ -804,6 +804,7 @@ dependencies = [
  "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
 ]
 

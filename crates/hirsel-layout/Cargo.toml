@@ -12,6 +12,7 @@ hirsel-types = { path = "../hirsel-types" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-codec = { path = "../hirsel-codec" }
 
 [dev-dependencies]

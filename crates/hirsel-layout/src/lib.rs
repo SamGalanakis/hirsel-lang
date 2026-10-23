@@ -8,4 +8,5 @@ pub mod instance;
 pub mod layout;
 pub mod operation;
 
+pub mod logical_storage;
 pub mod structural;

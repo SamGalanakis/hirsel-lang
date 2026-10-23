@@ -2,7 +2,80 @@
 //! once with a frozen layout table; no charge site scans the table again.
 use crate::layout::{logical_size, sequence_elements_offset};
 use crate::layout_types::*;
+use hirsel_codec::{snapshot_enum, snapshot_struct};
 use std::collections::BTreeMap;
+
+/// Exact MEM-6 size; overflow is larger than every representable capacity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum LogicalBytes {
+    Bytes(u64),
+    Overflow,
+}
+
+/// Storage facts supplement the shared declaration-derived logical graph.
+/// They never replace its edges or identify a physical layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum StorageClass {
+    Inline,
+    InlineSequence {
+        count: u64,
+    },
+    Block,
+    Bytes,
+    /// Independent MEM-11 root: storage walks stop here, even though the
+    /// structural-operation view transparently reaches its value.
+    Shared,
+    Transparent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct StorageFact {
+    pub bytes: LogicalBytes,
+    pub class: StorageClass,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct LogicalStorageGraph {
+    pub shape: crate::structural::ShapeGraph,
+    /// One independently derived fact per shape node, in the same order.
+    pub facts: Vec<StorageFact>,
+}
+
+impl LogicalStorageGraph {
+    pub fn check(&self) -> Result<(), &'static str> {
+        use crate::structural::Shape;
+        self.shape.check()?;
+        if self.facts.len() != self.shape.nodes.len() {
+            return Err("logical storage facts do not cover the shared shape graph");
+        }
+        for (shape, fact) in self.shape.nodes.iter().zip(&self.facts) {
+            let compatible = match fact.class {
+                StorageClass::Inline => {
+                    matches!(shape, Shape::Leaf | Shape::Fields(_) | Shape::Variant(_))
+                }
+                StorageClass::InlineSequence { .. } => matches!(shape, Shape::Sequence(_)),
+                StorageClass::Block => matches!(
+                    shape,
+                    Shape::Box(_) | Shape::Sequence(_) | Shape::Map { .. } | Shape::Set(_)
+                ),
+                StorageClass::Bytes => matches!(shape, Shape::Leaf),
+                StorageClass::Shared => matches!(shape, Shape::Transparent(_)),
+                StorageClass::Transparent => {
+                    matches!(shape, Shape::Transparent(_) | Shape::Distinct(_))
+                }
+            };
+            if !compatible {
+                return Err("logical storage classification disagrees with shared shape");
+            }
+        }
+        Ok(())
+    }
+}
+
+snapshot_enum!(LogicalBytes { Bytes(bytes), Overflow });
+snapshot_enum!(StorageClass { Inline, InlineSequence { count }, Block, Bytes, Shared, Transparent });
+snapshot_struct!(StorageFact { bytes, class });
+snapshot_struct!(LogicalStorageGraph { shape, facts });
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LiveEntries {
