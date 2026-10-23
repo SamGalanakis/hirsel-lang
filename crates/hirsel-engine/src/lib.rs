@@ -157,6 +157,7 @@ pub enum QueryKind {
     Generate,
     GeneratedRegistration,
     SourceAudit,
+    SemanticBody,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -177,6 +178,7 @@ impl QueryKind {
             Self::Generate => "generated source evaluation",
             Self::GeneratedRegistration => "generated instance registration",
             Self::SourceAudit => "source allocation audit",
+            Self::SemanticBody => "semantic source body",
         }
     }
 }
@@ -218,6 +220,7 @@ impl DefinitionKey {
             QueryKind::Generate => 13,
             QueryKind::GeneratedRegistration => 14,
             QueryKind::SourceAudit => 15,
+            QueryKind::SemanticBody => 16,
             QueryKind::Lex => 4,
             QueryKind::Resolve => 5,
             QueryKind::Modes => 6,
