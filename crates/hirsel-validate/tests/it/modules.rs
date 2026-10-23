@@ -16,3 +16,4 @@ mod nominal_authority_22;
 mod match_coverage_22;
 mod authority_call_22;
 mod mode_proof_mutations_21;
+mod closure_effect_joins_26;
