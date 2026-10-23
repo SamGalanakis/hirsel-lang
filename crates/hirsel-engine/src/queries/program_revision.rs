@@ -137,10 +137,85 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Result<(Vec<Vec<u8>>, BTreeSet<DefPath>), QueryError> {
+        let (content, mut dependencies) = if let Some(node) = self.load_semantic_body(path) {
+            node
+        } else {
+            self.s1.begin_requests();
+            self.begin_evaluation_validation();
+            self.execution_stack.push(ReadsBuilder::new());
+            let result = self.semantic_body_node(path);
+            let reads = self
+                .execution_stack
+                .pop()
+                .expect("semantic body read frame")
+                .finish();
+            let depth = self.s1.finish_requests(self.depth_limit());
+            let (_, _, selections) = self.end_evaluation_validation();
+            let node = result?;
+            let reads = reads.map_err(|_| QueryError::NotImplemented)?;
+            self.store_semantic_body(path, &node, &reads, depth, selections)?;
+            node
+        };
+        let signature = self.item_signature(path)?;
+        for ((constant, _), value) in &self.staged_values {
+            if self
+                .staged_constants
+                .get(constant)
+                .is_some_and(|c| c.owner == *path)
+            {
+                dependencies.extend(executed_definitions(&value.executed));
+            }
+        }
+        // A copied dictionary field can reach a lifted literal without naming
+        // its helper in source. Its callable graph is part of the executable
+        // closure, including for replay and checked interpretation.
+        if matches!(&signature.value.kind, SignatureKind::Const { generics, .. } if generics.is_empty())
+        {
+            let value = self.materialize_value(path)?;
+            let mut pending = vec![&value.root];
+            while let Some(node) = pending.pop() {
+                match &node.kind {
+                    hirsel_tir::ValueKind::FunctionReference { definition, .. } => {
+                        dependencies.insert(definition.clone());
+                    }
+                    hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields),
+                    _ => (),
+                }
+            }
+        }
+        if let SignatureKind::Type(declaration) = &signature.value.kind {
+            dependencies.extend(declaration.drop.iter().cloned());
+            // FACT-2: construction runs the fact's helper, which closes over
+            // what its predicate calls.
+            if declaration.fact.is_some() {
+                dependencies.insert(hirsel_check_protocol::fact::fact_path(path));
+            }
+            // SER-1: decoding a checked opaque type calls its check.
+            if let Some(check) = &declaration.serializable_check {
+                dependencies.insert(check.function.clone());
+            }
+        }
+        Ok((content, dependencies))
+    }
+
+    /// This product excludes the currently selected staged-value closure. The
+    /// caller appends that context after every hit, as it does after a miss.
+    fn semantic_body_node(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<(Vec<Vec<u8>>, BTreeSet<DefPath>), QueryError> {
         let signature = self.item_signature(path)?;
         if has_errors(&signature.diagnostics) {
             return Err(QueryError::Diagnostics(signature.diagnostics));
         }
+        self.read_execution_signatures(&signature.dependencies);
+        self.merge_execution(
+            &Reads::from_vec(vec![(
+                ReadKey::Signature(DefId::intern(path)),
+                signature.value.fingerprint,
+            )])
+            .expect("one source signature"),
+        );
         let mut dependencies: BTreeSet<_> = signature
             .dependencies
             .iter()
@@ -183,6 +258,9 @@ impl QueryEngine {
                 QueryKind::Modes,
                 QueryKind::Lower,
             ] {
+                if let Some(reads) = self.shared_memo_reads(path, kind) {
+                    self.merge_execution(&reads);
+                }
                 if let Some(reads) = self.dependency_reads(path, kind) {
                     dependencies
                         .extend(reads.signatures.iter().map(|d| d.definition.path().clone()));
@@ -217,44 +295,6 @@ impl QueryEngine {
             ];
             for reads in reads.into_iter().flatten() {
                 dependencies.extend(executed_definitions(&reads));
-            }
-        }
-        for ((constant, _), value) in &self.staged_values {
-            if self
-                .staged_constants
-                .get(constant)
-                .is_some_and(|c| c.owner == *path)
-            {
-                dependencies.extend(executed_definitions(&value.executed));
-            }
-        }
-        // A copied dictionary field can reach a lifted literal without naming
-        // its helper in source. Its callable graph is part of the executable
-        // closure, including for replay and checked interpretation.
-        if matches!(&signature.value.kind, SignatureKind::Const { generics, .. } if generics.is_empty())
-        {
-            let value = self.materialize_value(path)?;
-            let mut pending = vec![&value.root];
-            while let Some(node) = pending.pop() {
-                match &node.kind {
-                    hirsel_tir::ValueKind::FunctionReference { definition, .. } => {
-                        dependencies.insert(definition.clone());
-                    }
-                    hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields),
-                    _ => (),
-                }
-            }
-        }
-        if let SignatureKind::Type(declaration) = &signature.value.kind {
-            dependencies.extend(declaration.drop.iter().cloned());
-            // FACT-2: construction runs the fact's helper, which closes over
-            // what its predicate calls.
-            if declaration.fact.is_some() {
-                dependencies.insert(hirsel_check_protocol::fact::fact_path(path));
-            }
-            // SER-1: decoding a checked opaque type calls its check.
-            if let Some(check) = &declaration.serializable_check {
-                dependencies.insert(check.function.clone());
             }
         }
         Ok((content, dependencies))

@@ -444,6 +444,14 @@ struct LowerRecord {
     detail: DependencyReads,
 }
 #[derive(Serialize, Deserialize)]
+struct SemanticBodyRecord {
+    owner: DefId,
+    content: Vec<Vec<u8>>,
+    dependencies: BTreeSet<DefPath>,
+    selections: Vec<crate::comptime::Selection>,
+    depth: crate::memo::DepthEvidence<Span>,
+}
+#[derive(Serialize, Deserialize)]
 struct AuditRecord {
     products: crate::native_audit::SourceAuditProducts,
     selections: Vec<crate::comptime::Selection>,
@@ -1011,6 +1019,7 @@ impl QueryEngine {
                         | QueryKind::Lower
                         | QueryKind::Generate
                         | QueryKind::SourceAudit
+                        | QueryKind::SemanticBody
                 ) && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
                     && id.path().0.name.starts_with("$comptime:")
                     && !self.staged_constants.contains_key(id.path())
@@ -1025,6 +1034,7 @@ impl QueryEngine {
                         | QueryKind::Lower
                         | QueryKind::Generate
                         | QueryKind::SourceAudit
+                        | QueryKind::SemanticBody
                 ) && let Some(id) = read.definition()
                     && id.path().0.name.contains("$instance$")
                     && !self.items.contains_key(id.path())
@@ -1717,6 +1727,74 @@ impl QueryEngine {
         }
         .write(&reads, payload)
     }
+    pub(super) fn load_semantic_body(
+        &mut self,
+        path: &DefPath,
+    ) -> Option<(Vec<Vec<u8>>, BTreeSet<DefPath>)> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let variant = self.stored_variant(path, QueryKind::SemanticBody)?;
+        let record: SemanticBodyRecord = self.decode_record(&variant.payload)?;
+        if record.owner != DefId::intern(path)
+            || record.content.is_empty()
+            || !self.portable_lower_reads(path, &variant.reads, &record.selections)
+            || record.depth.first.len() != self.depth_limit() as usize + 1
+            || record
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+        {
+            return None;
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (record.owner, QueryKind::SemanticBody),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        self.replay_selections(&record.selections)?;
+        self.depth_replay_requests(&record.depth).ok()?;
+        self.merge_execution(&variant.reads);
+        self.record_selections(&record.selections);
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some((record.content, record.dependencies))
+    }
+    pub(super) fn store_semantic_body(
+        &mut self,
+        path: &DefPath,
+        node: &(Vec<Vec<u8>>, BTreeSet<DefPath>),
+        reads: &Reads,
+        depth: crate::memo::DepthEvidence<Span>,
+        selections: Vec<crate::comptime::Selection>,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none()
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+            || !self.portable_lower_reads(path, reads, &selections)
+            || !self.store_selections(&selections)?
+        {
+            return Ok(());
+        }
+        // A semantic identity is a producer product, not a source/private V
+        // verdict. It carries no acceptance authority into native admission.
+        self.write_record(
+            path,
+            QueryKind::SemanticBody,
+            reads,
+            &SemanticBodyRecord {
+                owner: DefId::intern(path),
+                content: node.0.clone(),
+                dependencies: node.1.clone(),
+                depth,
+                selections,
+            },
+        )
+    }
     pub(crate) fn load_source_audit(
         &mut self,
         path: &DefPath,
@@ -2310,6 +2388,47 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn malformed_semantic_bodies_miss_before_adoption_or_comparison() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..4 {
+                let (mut engine, syntax) = fixture();
+                let path = &syntax.item.definition;
+                let mut record = SemanticBodyRecord {
+                    owner: DefId::intern(path),
+                    content: vec![vec![1]],
+                    dependencies: BTreeSet::new(),
+                    selections: vec![],
+                    depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                };
+                match fault {
+                    0 => record.owner = DefId::intern(&DefPath::core("foreign")),
+                    1 => record.content.clear(),
+                    2 => record.depth.first = Box::new([]),
+                    3 => record
+                        .selections
+                        .push(crate::comptime::Selection::Generated(DefId::intern(
+                            &DefPath::core("absent-generator"),
+                        ))),
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::SemanticBody, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                assert!(
+                    engine.load_semantic_body(path).is_none(),
+                    "fault={fault} verify={verify:?}"
+                );
+                assert_eq!(engine.store_adoptions(), 0);
+                assert!(engine.pending_store_checks.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn malformed_source_audits_miss_before_signature_demand_or_comparison() {

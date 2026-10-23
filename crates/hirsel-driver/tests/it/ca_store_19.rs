@@ -1105,3 +1105,29 @@ fn ordinary_source_audits_reuse_compact_products_and_keep_private_completion() {
         assert!(on.source_audit(&definition("staged")).is_err());
     });
 }
+
+#[test]
+fn semantic_body_products_reuse_body_free_nodes_and_keep_execution_dependencies() {
+    with_compiler_stack(|| {
+        let source = "fn helper()->u32{7u32}\nfn root()->u32{helper()}\nfn staged()->u32{comptime helper()}\n";
+        let roots = [definition("root"), definition("staged")];
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let expected: Vec<_> = roots.iter().map(|root| seed.semantic_program_revision(root).unwrap()).collect();
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None; fresh.adapters.lowering = None;
+        for (root, expected) in roots.iter().zip(&expected) {
+            assert_eq!(&fresh.semantic_program_revision(root).unwrap(), expected);
+            assert_eq!(fresh.recompute_count(root, QueryKind::Modes), 0);
+            assert_eq!(fresh.lower_adapter_calls(root), 0);
+        }
+        let mut oracle = signature_session(store.clone(), source, true).with_verify_store(store::VerifyStore::Recompute);
+        for (root, expected) in roots.iter().zip(&expected) { assert_eq!(&oracle.semantic_program_revision(root).unwrap(), expected); }
+        let changed_source = source.replace("7u32", "9u32");
+        let mut changed = signature_session(store.clone(), &changed_source, false);
+        changed.adapters.modes = None; changed.adapters.lowering = None;
+        assert!(changed.semantic_program_revision(&definition("staged")).is_err());
+        let mut reference = signature_session(Arc::new(store::MemStore::default()), &changed_source, true);
+        assert_ne!(reference.semantic_program_revision(&definition("root")).unwrap(), expected[0], "equal callable summaries do not cut off executed source content");
+    });
+}
