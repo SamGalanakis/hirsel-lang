@@ -1276,3 +1276,183 @@ fn shadow_binding_sites_imported_heads_and_values_remain_allowed() {
         &mut fake,
     ));
 }
+
+/// The driver oracle covers source manifests; these vectors exercise the
+/// resolver's provider fallback and the immutable importer-view boundary.
+#[test]
+fn package_head_22_ambiguity_does_not_read_provider_signatures() {
+    let mut t = Tree::new("vendor.value\nfn example() {}\n");
+    let value = t.value("vendor.value", 1);
+    let body = t.block(vec![], Some(value), 2);
+    let item = t.function(
+        "example",
+        FunctionSyntax::default(),
+        body,
+        Visibility::Public,
+        2,
+    );
+    let target = definition(package("dep", "1"), &["api"], "value");
+    let absent = definition(package("dep", "2"), &["api"], "value");
+    let mut fixture =
+        ManifestFixture::from_files(package("test", "1"), [&t.file], ContentHash::default());
+    fixture
+        .definitions
+        .push(entry(target.clone(), Namespace::Value, Visibility::Public));
+    fixture.exposures = [&absent, &target, &target]
+        .map(|d| DependencyExposure {
+            head: "vendor".into(),
+            package: d.0.package.clone(),
+            modules: d.0.modules.clone(),
+        })
+        .into();
+    for reversed in [false, true] {
+        if reversed {
+            fixture.definitions.reverse();
+            fixture.exposures.reverse();
+        }
+        let (index, diagnostics) = ManifestIndex::new(fixture.clone());
+        assert!(diagnostics.is_empty());
+        let mut provider = Fake::new(&index);
+        let output = resolve_item(
+            &t.file,
+            &t.file.items[item],
+            &index,
+            session(),
+            &mut provider,
+        );
+        error_at(&output, "LANG-4", t.origin(1).span);
+        assert_eq!(output.query.diagnostics.len(), 1);
+        assert!(
+            output.query.diagnostics[0]
+                .message
+                .contains("dep@1/api/value, dep@2/api/value")
+        );
+        assert_eq!(provider.lookups, 0);
+        assert!(provider.reads.is_empty());
+        assert!(output.query.value.dependencies.is_empty());
+    }
+}
+
+#[test]
+fn package_head_22_importer_views_keep_aliases_and_versions_separate() {
+    let first = definition(package("dep", "1"), &["api", "nested"], "value");
+    let second = definition(package("dep", "2"), &["api", "nested"], "value");
+    let (index, diagnostics) = ManifestIndex::new(fixture(vec![
+        entry(first.clone(), Namespace::Value, Visibility::Public),
+        entry(second.clone(), Namespace::Value, Visibility::Public),
+    ]));
+    assert!(diagnostics.is_empty());
+    let exposure = |target: &DefPath| DependencyExposure {
+        head: "vendor".into(),
+        package: target.0.package.clone(),
+        modules: vec!["api".into()],
+    };
+    let left = index.with_exposures(&[exposure(&first), exposure(&first)]);
+    let right = index
+        .for_package(package("wrapper", "1"))
+        .with_exposures(&[exposure(&second)]);
+    let spelling = ["vendor".into(), "nested".into(), "value".into()];
+    // Interleave views: neither selecting an importer nor replacing its exposure
+    // set mutates the shared rows or another importer's aliases.
+    for selected in [&left, &right, &left, &index, &right] {
+        let context = FileContext {
+            package: selected.package.clone(),
+            modules: vec![],
+        };
+        let expected = if std::ptr::eq(selected, &left) {
+            Ok(first.clone())
+        } else if std::ptr::eq(selected, &right) {
+            Ok(second.clone())
+        } else {
+            Err(LookupError::Missing)
+        };
+        assert_eq!(
+            selected.lookup_spelling(&context, None, &spelling),
+            expected
+        );
+        for target in [&first, &second] {
+            assert_eq!(
+                selected.lookup_spelling(
+                    &context,
+                    Some(&target.0.package),
+                    &["api".into(), "nested".into(), "value".into()]
+                ),
+                Ok(target.clone())
+            );
+        }
+        assert_eq!(
+            selected.lookup_spelling(
+                &context,
+                Some(&package("dep", "3")),
+                &["api".into(), "nested".into(), "value".into()]
+            ),
+            Err(LookupError::Missing)
+        );
+    }
+}
+
+#[test]
+fn package_head_22_core_std_merge_requires_matching_module_targets() {
+    let core = definition(package("core", "1"), &["string"], "byte_len");
+    let std = definition(package("std", "1"), &["string"], "find");
+    let (index, diagnostics) = ManifestIndex::new(fixture(vec![
+        entry(core.clone(), Namespace::Value, Visibility::Public),
+        entry(std.clone(), Namespace::Value, Visibility::Public),
+    ]));
+    assert!(diagnostics.is_empty());
+    let context = FileContext {
+        package: package("test", "1"),
+        modules: vec![],
+    };
+    let expose = |p, module: &str| DependencyExposure {
+        head: "string".into(),
+        package: p,
+        modules: vec![module.into()],
+    };
+    let defaults = [
+        expose(package("core", "1"), "string"),
+        expose(package("std", "1"), "string"),
+    ];
+    for reversed in [false, true] {
+        let mut exposures = defaults.to_vec();
+        if reversed {
+            exposures.reverse();
+        }
+        let merged = index.with_exposures(&exposures);
+        for target in [&core, &std] {
+            assert_eq!(
+                merged.lookup_spelling(&context, None, &["string".into(), target.0.name.clone()]),
+                Ok(target.clone())
+            );
+        }
+        assert_eq!(
+            merged.lookup_spelling(&context, None, &["string".into(), "absent".into()]),
+            Err(LookupError::MissingMember(vec![
+                definition(package("core", "1"), &["string"], "absent"),
+                definition(package("std", "1"), &["string"], "absent"),
+            ]))
+        );
+        // A mismatched module and a second std version are distinct targets,
+        // even though only core declares byte_len.
+        for extra in [
+            expose(package("std", "1"), "other"),
+            expose(package("std", "2"), "string"),
+        ] {
+            let mut exposures = vec![defaults[0].clone()];
+            if extra.package.version == "2" {
+                exposures.push(defaults[1].clone());
+            }
+            exposures.push(extra.clone());
+            let selected = index.with_exposures(&exposures);
+            assert_eq!(
+                selected.lookup_spelling(&context, None, &["string".into(), "byte_len".into()]),
+                Err(LookupError::Ambiguous(
+                    exposures
+                        .iter()
+                        .map(|e| definition(e.package.clone(), &[&e.modules[0]], "byte_len"))
+                        .collect()
+                ))
+            );
+        }
+    }
+}
