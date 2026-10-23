@@ -34,6 +34,7 @@ impl Entry<hirsel_tir::DefinitionRef> {
             products: self.products.clone(),
             covered: self.covered.clone(),
             depth: self.depth.clone(),
+            acceptance: self.acceptance.clone(),
             consistent: self.consistent,
         }
     }
@@ -212,6 +213,7 @@ impl QueryEngine {
                     products: Default::default(),
                     covered: vec![],
                     depth: outcome.depth.clone(),
+                    acceptance: None,
                     consistent: true,
                 },
                 verdict: None,

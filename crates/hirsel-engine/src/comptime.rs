@@ -682,28 +682,73 @@ impl QueryEngine {
             }
         }
     }
-    fn begin_evaluation_validation(&mut self) {
+    pub(crate) fn begin_evaluation_validation(&mut self) {
         self.evaluation_validation
             .push((self.verify == Verify::On).then(Default::default));
         self.evaluation_acceptance
             .push((self.verify == Verify::On).then(Vec::new));
     }
-    fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
+    pub(crate) fn end_evaluation_validation(
+        &mut self,
+    ) -> (
+        Option<Arc<[(hirsel_syntax::PackageId, ContentHash)]>>,
+        Option<hirsel_validate::ExecutionReceipt>,
+    ) {
         let validation = self
             .evaluation_validation
             .pop()
-            .expect("scalar validation frame");
+            .expect("scalar validation frame")
+            .map(|rows| Arc::from(rows.into_iter().collect::<Vec<_>>()));
         let acceptance = self
             .evaluation_acceptance
             .pop()
             .expect("scalar acceptance frame");
-        if let Ok(value) = result {
-            value.validation = validation.map(|rows| rows.into_iter().collect::<Vec<_>>().into());
-            value.acceptance = value.validation.as_ref().zip(acceptance.as_ref()).and_then(
-                |(contexts, artifacts)| {
+        let receipt =
+            validation
+                .as_deref()
+                .zip(acceptance.as_deref())
+                .and_then(|(contexts, artifacts)| {
                     hirsel_validate::ExecutionReceipt::compose(contexts, artifacts)
-                },
-            );
+                });
+        (validation, receipt)
+    }
+    fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
+        let (validation, acceptance) = self.end_evaluation_validation();
+        if let Ok(value) = result {
+            value.validation = validation;
+            value.acceptance = acceptance;
+        }
+    }
+    pub(crate) fn lower_acceptance_holds(
+        &mut self,
+        receipt: Option<&hirsel_validate::ExecutionReceipt>,
+    ) -> bool {
+        if self.verify == Verify::Off {
+            return true;
+        }
+        receipt.is_none_or(|receipt| {
+            let snapshot = self.signature_snapshot();
+            receipt
+                .contexts()
+                .iter()
+                .all(|(package, digest)| snapshot.validation_input_digest(package) == *digest)
+        })
+    }
+    pub(crate) fn merge_lower_acceptance(
+        &mut self,
+        receipt: Option<&hirsel_validate::ExecutionReceipt>,
+        required: bool,
+    ) {
+        if let Some(receipt) = receipt {
+            for artifact in receipt.artifacts() {
+                self.record_evaluation_acceptance(Some(artifact.clone()));
+            }
+            for (package, digest) in receipt.contexts() {
+                self.record_evaluation_validation(package.clone(), *digest);
+            }
+        } else if required {
+            self.evaluation_acceptance.fill(None);
+            self.evaluation_validation.fill(None);
         }
     }
     pub(crate) fn evaluation_validation_holds(&mut self, value: &EvaluatedConstant) -> bool {

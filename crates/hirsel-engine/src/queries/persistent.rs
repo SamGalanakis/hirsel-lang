@@ -972,6 +972,7 @@ impl QueryEngine {
             detail,
             covered: vec![],
             depth: None,
+            acceptance: None,
             consistent: true,
             products: Default::default(),
         })
@@ -1159,6 +1160,33 @@ impl QueryEngine {
         self.write_record(path, QueryKind::Registration, entry.reads(), &record)
     }
 
+    pub(crate) fn lower_requires_execution(&self, path: &DefPath, reads: &Reads) -> bool {
+        reads.iter().any(|(read, _)| {
+            matches!(
+                read,
+                ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
+            )
+        }) || self
+            .items
+            .get(path)
+            .and_then(|items| items.first())
+            .is_some_and(|syntax| {
+                matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. })
+                    || syntax.tree.expressions.iter().any(|expression| {
+                        matches!(expression.kind, hirsel_syntax::ExprKind::Comptime(_))
+                    })
+            })
+    }
+    fn portable_execution_reads(&self, reads: &Reads) -> bool {
+        !reads.iter().any(|(read, _)| {
+            read.definition().is_some_and(|id| {
+                let path = id.path();
+                path.0.name.starts_with('$')
+                    || self.generated.contains_key(path)
+                    || self.staged_constants.contains_key(path)
+            })
+        })
+    }
     pub(super) fn load_lower(
         &mut self,
         path: &DefPath,
@@ -1167,14 +1195,8 @@ impl QueryEngine {
             return None;
         }
         let variant = self.stored_variant(path, QueryKind::Lower)?;
-        // Such results also own depth requests/registrations. Until those
-        // products have a portable replay record, use their ordinary S1 path.
-        if variant.reads.iter().any(|(read, _)| {
-            matches!(
-                read,
-                ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
-            )
-        }) {
+        // Declaration transactions still require portable ordered replay.
+        if !self.portable_execution_reads(&variant.reads) {
             return None;
         }
         let record: LowerRecord = self.decode_record(&variant.payload)?;
@@ -1192,6 +1214,19 @@ impl QueryEngine {
         if crate::comptime::has_staged_reads(&record.output.value) {
             return None;
         }
+        let acceptance =
+            if self.verify == Verify::On && self.lower_requires_execution(path, &variant.reads) {
+                let key = self.store_key(path, QueryKind::Lower)?;
+                let cache = self.result_store.as_ref()?.verifier()?;
+                let snapshot = self.signature_snapshot();
+                Some(
+                    cache.execution(evaluation_subject(&key, &variant.payload), |package| {
+                        snapshot.validation_input_digest(package)
+                    })?,
+                )
+            } else {
+                None
+            };
         if self.verify_store == crate::store::VerifyStore::Recompute {
             self.pending_store_checks.insert(
                 (DefId::intern(path), QueryKind::Lower),
@@ -1211,9 +1246,9 @@ impl QueryEngine {
             Ok(record.output),
             record.detail,
         );
-        Arc::get_mut(&mut entry)
-            .expect("unpublished lower record")
-            .depth = Some(record.depth);
+        let unpublished = Arc::get_mut(&mut entry).expect("unpublished lower record");
+        unpublished.depth = Some(record.depth);
+        unpublished.acceptance = acceptance;
         Some(entry)
     }
     pub(crate) fn load_evaluation(
@@ -1274,16 +1309,7 @@ impl QueryEngine {
         if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
             return Ok(());
         }
-        // Staged/generated declaration transactions need their own replay
-        // products before their values can be admitted in a fresh session.
-        if value.executed.iter().any(|(read, _)| {
-            read.definition().is_some_and(|id| {
-                let definition = id.path();
-                definition.0.name.starts_with('$')
-                    || self.generated.contains_key(definition)
-                    || self.staged_constants.contains_key(definition)
-            })
-        }) {
+        if !self.portable_execution_reads(&value.executed) {
             return Ok(());
         }
         let Some(key) = self.store_key(path, QueryKind::Evaluate) else {
@@ -1432,12 +1458,7 @@ impl QueryEngine {
         {
             return Ok(());
         }
-        if entry.reads().iter().any(|(read, _)| {
-            matches!(
-                read,
-                ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
-            )
-        }) {
+        if !self.portable_execution_reads(entry.reads()) {
             return Ok(());
         }
         let Ok(output) = entry.output() else {
@@ -1449,16 +1470,37 @@ impl QueryEngine {
         if crate::comptime::has_staged_reads(&output.value) {
             return Ok(());
         }
-        self.write_record(
-            path,
-            QueryKind::Lower,
-            entry.reads(),
-            &LowerRecord {
-                depth,
-                output,
-                detail: canonical_detail(entry.detail.clone()),
-            },
-        )
+        let Some(key) = self.store_key(path, QueryKind::Lower) else {
+            return Ok(());
+        };
+        let Some(payload) = self.encode_record(&LowerRecord {
+            depth,
+            output,
+            detail: canonical_detail(entry.detail.clone()),
+        }) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled lower store")
+            .clone();
+        if let Some(receipt) = &entry.acceptance
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        EncodedWriter {
+            types: self.type_records().expect("enabled lower types"),
+            store,
+            key,
+            path: path.clone(),
+            kind: QueryKind::Lower,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(path), QueryKind::Lower)),
+        }
+        .write(entry.reads(), payload)
     }
 }
 

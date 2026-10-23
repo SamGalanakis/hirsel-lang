@@ -277,6 +277,7 @@ impl QueryEngine {
                 products,
                 covered: vec![],
                 depth: None,
+                acceptance: None,
                 consistent: true,
             }),
         );
@@ -372,6 +373,7 @@ impl QueryEngine {
                 products: Default::default(),
                 covered: vec![],
                 depth: None,
+                acceptance: None,
                 consistent: true,
             }),
         );

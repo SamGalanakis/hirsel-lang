@@ -1971,6 +1971,7 @@ impl QueryEngine {
                 .as_ref()
                 .is_none_or(|depth| depth.limit() == self.depth_limit())
             && self.memo_valid(definition, &entry, text)
+            && self.lower_acceptance_holds(entry.acceptance.as_ref())
         {
             // Staged declarations still need their registration product. Ordinary
             // immutable lower hits do not demand the checked/Modes bodies.
@@ -1988,6 +1989,8 @@ impl QueryEngine {
             if let Some(depth) = &entry.depth {
                 self.depth_replay_requests(depth)?;
             }
+            let required = self.lower_requires_execution(definition, entry.reads());
+            self.merge_lower_acceptance(entry.acceptance.as_ref(), required);
             self.merge_execution(entry.reads());
             return entry.output();
         }
@@ -1995,6 +1998,8 @@ impl QueryEngine {
             .demand_evicted(&MemoKey::new(QueryKind::Lower, id));
         if let Some(entry) = self.load_lower(definition) {
             self.depth_replay_requests(entry.depth.as_ref().expect("stored depth receipt"))?;
+            let required = self.lower_requires_execution(definition, entry.reads());
+            self.merge_lower_acceptance(entry.acceptance.as_ref(), required);
             self.merge_execution(entry.reads());
             self.lowered.insert(id, entry.clone());
             return entry.output();
@@ -2002,6 +2007,7 @@ impl QueryEngine {
         // Include generator requests made while obtaining the analyzed body.
         // A Lower hit must replay the same trace as computing it from source.
         self.s1.begin_requests();
+        self.begin_evaluation_validation();
         let front = (|| {
             let modes = self.mode_query(definition)?;
             self.register_staged(&modes.value)?;
@@ -2016,6 +2022,7 @@ impl QueryEngine {
             Ok(front) => front,
             Err(error) => {
                 self.s1.finish_requests(self.depth_limit());
+                self.end_evaluation_validation();
                 return Err(error);
             }
         };
@@ -2060,9 +2067,11 @@ impl QueryEngine {
             .expect("lowering execution frame");
         observed.merged.extend(executed);
         let depth = self.s1.finish_requests(self.depth_limit());
+        let (_, acceptance) = self.end_evaluation_validation();
         let key = MemoKey::new(QueryKind::Lower, id);
         let mut entry = self.finish(key, text, reads, result, observed);
         entry.depth = entry.result().is_ok().then_some(depth);
+        entry.acceptance = entry.result().is_ok().then_some(acceptance).flatten();
         let entry = Arc::new(entry);
         if self.verify == Verify::On
             && let Ok(output) = entry.result()
