@@ -1,0 +1,537 @@
+//! Full six-module entry with public simulation and checked host-replay adapters.
+use hirsel_engine::*;
+use serde_json::{Value, json};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+fn package(root: &Path) -> PathBuf {
+    for (name, source) in [
+        ("main", include_str!("../../../../examples/pubsub/main.hir")),
+        ("wire", include_str!("../../../../examples/pubsub/wire.hir")),
+        ("hub", include_str!("../../../../examples/pubsub/hub.hir")),
+        (
+            "client",
+            include_str!("../../../../examples/pubsub/client.hir"),
+        ),
+        ("flow", include_str!("../../../../examples/pubsub/flow.hir")),
+        (
+            "shutdown",
+            include_str!("../../../../examples/pubsub/shutdown.hir"),
+        ),
+    ] {
+        fs::write(root.join(format!("{name}.hir")), source).unwrap();
+    }
+    let mut manifest: Value =
+        serde_json::from_str(include_str!("../../../../examples/pubsub/hirsel.json")).unwrap();
+    manifest["dependencies"][0]["manifest"] = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .as_ref()
+        .into();
+    let path = root.join("hirsel.json");
+    fs::write(&path, manifest.to_string()).unwrap();
+    path
+}
+fn evidence() -> PathBuf {
+    let path = std::env::var_os("PUBSUB_30_EVIDENCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+fn selected_cases(boundaries: bool) -> Vec<Value> {
+    let input = if boundaries {
+        include_str!("../support/pubsub_relay_30/boundaries.json")
+    } else {
+        include_str!("../support/pubsub_relay_30/cases.json")
+    };
+    let mut cases: Vec<Value> = serde_json::from_str(input).unwrap();
+    if let Ok(filter) = std::env::var("PUBSUB_30_CASE") {
+        cases.retain(|c| filter.split(',').any(|s| c["id"] == s));
+    }
+    assert!(!cases.is_empty(), "zero-test selection");
+    cases
+}
+fn net(case: &Value) -> Value {
+    let clients: Vec<_> = case["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| json!({"address":"0.0.0.0","port":0,"tls":"plain","steps":s}))
+        .collect();
+    json!({"provider":"net.script@2","rules":if case["id"]=="denied" {json!([])} else {json!([{"address":"/fixture/pubsub.sock","service":"0","operation":"unix_listen"}])},"peers":[],"listeners":[{"address":"/fixture/pubsub.sock","port":0,"clients":clients}]})
+}
+fn validate(case: &Value, output: &[u8], exit: Option<i32>) {
+    assert_eq!(
+        exit,
+        case["exit"].as_i64().map(|v| v as i32),
+        "{}: {}",
+        case["id"],
+        String::from_utf8_lossy(output)
+    );
+    let rows: Vec<Value> = String::from_utf8(output.to_vec())
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    if exit == Some(2) {
+        assert_eq!(rows, vec![json!({"error":"usage_or_limit"})]);
+        return;
+    }
+    if exit == Some(3) {
+        assert_eq!(rows, vec![json!({"error":"io"})]);
+        return;
+    }
+    assert_eq!(rows.first().unwrap(), &json!({"listening":true}));
+    let report = rows.last().unwrap();
+    assert_eq!(report["joined"], true, "{rows:?}");
+    assert_eq!(report["admitted"], case["admitted"], "{rows:?}");
+    assert_eq!(report["queued"], case["queued"], "{rows:?}");
+    assert_eq!(report["written"], case["queued"], "{rows:?}");
+    assert_eq!(report["disconnected"], 0, "{rows:?}");
+    assert_eq!(report["credits_held"], 0);
+    assert_eq!(report["reserved"], report["returned"]);
+    assert!(report["peak_queue"].as_u64().unwrap() <= 4);
+    assert_eq!(report["reason"], case["reason"]);
+}
+#[test]
+fn pubsub_relay_30_reference_checked_full_app() {
+    scripted(false)
+}
+
+#[test]
+fn pubsub_relay_30_boundaries_reference_checked() {
+    scripted(true)
+}
+
+fn scripted(boundaries: bool) {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new()
+            .prefix("pubsub-script-")
+            .tempdir_in(evidence())
+            .unwrap();
+        let root = scratch.keep();
+        let manifest = package(&root);
+        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        for case in selected_cases(boundaries) {
+            let id = case["id"].as_str().unwrap();
+            let mut simulation = SimulationConfig {
+                args: serde_json::from_value(case["args"].clone()).unwrap(),
+                net: Some(serde_json::from_value(net(&case)).unwrap()),
+                ..Default::default()
+            };
+            simulation.grants.insert("MonotonicClock".into());
+            simulation.projections.insert("monotonic_clock".into());
+            for engine in ["reference", "checked-h"] {
+                if std::env::var("PUBSUB_30_ENGINE").is_ok_and(|s| s != engine) {
+                    continue;
+                }
+                eprintln!("PUBSUB_30_STARTED {id}/{engine}");
+                // Fixed before execution; default corpus budget remains 1M.
+                const STEPS: u64 = 10_000_000;
+                let result = if engine == "reference" {
+                    run_observed_snapshot_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        simulation.clone(),
+                        STEPS,
+                    )
+                } else {
+                    run_observed_checked_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        simulation.clone(),
+                        STEPS,
+                    )
+                }
+                .unwrap();
+                fs::write(
+                    root.join(format!("{id}-{engine}.receipt")),
+                    format!("{result:#?}"),
+                )
+                .unwrap();
+                let observed = result
+                    .observation
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{id}/{engine}: {result:?}"));
+                assert!(observed.failures.is_empty(), "{id}/{engine}: {observed:?}");
+                assert!(observed.blocked.is_none(), "{id}/{engine}: {observed:?}");
+                validate(&case, &observed.output, observed.exit_code);
+                let state = observed.final_state.as_ref().unwrap();
+                assert!(state.stderr.is_empty(), "{state:?}");
+                assert!(
+                    state.handles.values().all(|grant| !matches!(
+                        grant,
+                        hirsel_interp::library::simulation::ObservedGrant::Stream { .. }
+                            | hirsel_interp::library::simulation::ObservedGrant::Half { .. }
+                            | hirsel_interp::library::simulation::ObservedGrant::Listener { .. }
+                    )),
+                    "live sockets after joined report: {state:?}"
+                );
+                eprintln!("PUBSUB_30_PASS {id}/{engine} {:?}", result.step_usage);
+            }
+        }
+    });
+}
+#[test]
+#[ignore = "INCOMPLETE: native import instance36 block4 has no incoming state; owner native-import-state-30, examples/pubsub/FRICTION.md"]
+fn pubsub_relay_30_native_and_real_unix() {
+    let scratch = tempfile::Builder::new()
+        .prefix("pubsub-native-")
+        .tempdir_in(evidence())
+        .unwrap();
+    let manifest = package(scratch.path());
+    fs::write(
+        scratch.path().join("cases.json"),
+        serde_json::to_vec(&selected_cases(false)).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        scratch.path().join("verify.py"),
+        include_str!("../support/pubsub_relay_30/verify.py"),
+    )
+    .unwrap();
+    for (name, source) in [
+        (
+            "host.py",
+            include_str!("../support/pubsub_relay_30/host.py"),
+        ),
+        (
+            "model.py",
+            include_str!("../support/pubsub_relay_30/model.py"),
+        ),
+        ("capped", include_str!("../../../../tools/capped")),
+    ] {
+        fs::write(scratch.path().join(name), source).unwrap();
+    }
+    let output = Command::new("python3")
+        .arg(scratch.path().join("verify.py"))
+        .arg(env!("CARGO_BIN_EXE_hirsel"))
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    fs::write(scratch.path().join("stdout"), &output.stdout).unwrap();
+    fs::write(scratch.path().join("stderr"), &output.stderr).unwrap();
+    let retained = scratch.keep();
+    eprintln!(
+        "native evidence {}: {}\n{}",
+        retained.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut errors = Vec::new();
+    // Every immutable native tape is consumed again by both public host adapters.
+    with_compiler_stack(|| {
+        for item in fs::read_dir(&retained).unwrap() {
+            let path = item.unwrap().path();
+            if path.extension().is_some_and(|s| s == "tape") {
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                let live_stdout = fs::read(retained.join(format!("{stem}.stdout")))
+                    .or_else(|_| fs::read(retained.join(stem.as_ref()).join("stdout")));
+                let live_status = fs::read_to_string(retained.join(format!("{stem}.status")))
+                    .or_else(|_| fs::read_to_string(retained.join(stem.as_ref()).join("status")));
+                if !live_status
+                    .as_ref()
+                    .is_ok_and(|s| ["0", "2", "3"].contains(&s.trim()))
+                {
+                    continue;
+                }
+                let before = fs::read(&path).unwrap();
+                for checked in [false, true] {
+                    let name = if checked { "checked-h" } else { "reference" };
+                    eprintln!("PUBSUB_30_STARTED {stem}/replay/{name}");
+                    let result = if checked {
+                        hirsel_driver::replay_observations_checked(
+                            &manifest,
+                            &path,
+                            Some(10_000_000),
+                        )
+                    } else {
+                        hirsel_driver::replay_observations(&manifest, &path, Some(10_000_000))
+                    };
+                    let receipt = match result {
+                        Ok(observed) => {
+                            let expected_exit =
+                                live_status.as_ref().unwrap().trim().parse::<i32>().unwrap();
+                            if observed.output != *live_stdout.as_ref().unwrap()
+                                || observed.exit_code != Some(expected_exit)
+                            {
+                                errors.push(format!("{stem}/{name}: output/exit mismatch"));
+                            }
+                            format!("{observed:#?}")
+                        }
+                        Err(error) => {
+                            errors.push(format!("{stem}/{name}: {error}"));
+                            format!("INCOMPLETE: {error}")
+                        }
+                    };
+                    fs::write(path.with_extension(format!("{name}-replay")), receipt).unwrap();
+                }
+                assert_eq!(before, fs::read(&path).unwrap());
+            }
+        }
+    });
+    assert!(
+        output.status.success() && errors.is_empty(),
+        "native/replay INCOMPLETE at {}: {errors:?}",
+        retained.display()
+    );
+}
+
+#[test]
+fn pubsub_relay_30_real_unix_interpreter_and_replay() {
+    let scratch = tempfile::Builder::new()
+        .prefix("pubsub-host-")
+        .tempdir_in(evidence())
+        .unwrap();
+    let root = scratch.keep();
+    let manifest = package(&root);
+    for (name, source) in [
+        (
+            "real.py",
+            include_str!("../support/pubsub_relay_30/real.py"),
+        ),
+        (
+            "host.py",
+            include_str!("../support/pubsub_relay_30/host.py"),
+        ),
+        ("capped", include_str!("../../../../tools/capped")),
+    ] {
+        fs::write(root.join(name), source).unwrap();
+    }
+    let selection = std::env::var_os("PUBSUB_30_REPLAY_DIR").map(PathBuf::from);
+    let path = if let Some(existing) = selection {
+        existing
+    } else {
+        let destination = root.join("live");
+        let output = Command::new("python3")
+            .arg(root.join("real.py"))
+            .arg(env!("CARGO_BIN_EXE_hirsel"))
+            .arg(&manifest)
+            .arg(&destination)
+            .output()
+            .unwrap();
+        fs::write(root.join("host.stdout"), &output.stdout).unwrap();
+        fs::write(root.join("host.stderr"), &output.stderr).unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}\n{}",
+            root.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        destination
+    };
+    let replay_manifest = path.join("../hirsel.json");
+    with_compiler_stack(|| {
+        let mut failures = Vec::new();
+        for case in ["success", "domain", "cancel"] {
+            let tape = path.join(format!("{case}.tape"));
+            let bytes = fs::read(&tape).unwrap();
+            let expected = fs::read(path.join(case).join("stdout")).unwrap();
+            for checked in [false, true] {
+                let name = if checked { "checked-h" } else { "reference" };
+                let result = if checked {
+                    hirsel_driver::replay_observations_checked(
+                        &replay_manifest,
+                        &tape,
+                        Some(10_000_000),
+                    )
+                } else {
+                    hirsel_driver::replay_observations(&replay_manifest, &tape, Some(10_000_000))
+                };
+                fs::write(
+                    path.join(format!("{case}-{name}.replay")),
+                    format!("{result:#?}"),
+                )
+                .unwrap();
+                match result {
+                    Ok(observed) => {
+                        if observed.output != expected
+                            || observed.exit_code != Some(0)
+                            || !observed.failures.is_empty()
+                        {
+                            failures.push(format!("{case}/{name}: output/exit/failure mismatch"));
+                        } else {
+                            eprintln!("PUBSUB_30_REPLAY_PASS {case}/{name}");
+                        }
+                    }
+                    Err(error) => failures.push(format!("{case}/{name}: {error}")),
+                }
+            }
+            assert_eq!(fs::read(&tape).unwrap(), bytes);
+        }
+        // Mutations target a copy; all original tapes stay immutable.
+        let original = path.join("success.tape");
+        let parsed = hirsel_rt::host_launch::read_recording(&original).unwrap();
+        let mut changed = parsed.clone();
+        let written = changed
+            .events
+            .iter_mut()
+            .find_map(|event| match &mut event.request {
+                hirsel_rt::io::Request::Print { bytes, .. } => Some(bytes),
+                _ => None,
+            })
+            .unwrap();
+        written.push(b'!');
+        let changed_input = path.join("changed-input.tape");
+        fs::write(
+            &changed_input,
+            hirsel_rt::launch::render_recording(&changed).unwrap(),
+        )
+        .unwrap();
+        let mut changed = parsed.clone();
+        let binding = changed.binding.as_mut().unwrap();
+        let mut config: Value = serde_json::from_slice(&binding.canonical).unwrap();
+        config["args"][0] = "altered".into();
+        binding.canonical = serde_json::to_vec(&config).unwrap();
+        let changed_config = path.join("changed-config.tape");
+        fs::write(
+            &changed_config,
+            hirsel_rt::launch::render_recording(&changed).unwrap(),
+        )
+        .unwrap();
+        let mut changed = parsed.clone();
+        changed.events.push(parsed.events[0].clone());
+        let changed_tape = path.join("changed-tape.tape");
+        fs::write(
+            &changed_tape,
+            hirsel_rt::launch::render_recording(&changed).unwrap(),
+        )
+        .unwrap();
+        for bad in [&changed_input, &changed_config, &changed_tape] {
+            for checked in [false, true] {
+                let result = if checked {
+                    hirsel_driver::replay_observations_checked(
+                        &replay_manifest,
+                        bad,
+                        Some(10_000_000),
+                    )
+                } else {
+                    hirsel_driver::replay_observations(&replay_manifest, bad, Some(10_000_000))
+                };
+                let error = result
+                    .expect_err("mutated recording must refuse")
+                    .to_string();
+                fs::write(
+                    bad.with_extension(if checked {
+                        "checked-refusal"
+                    } else {
+                        "reference-refusal"
+                    }),
+                    &error,
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(
+            parsed,
+            hirsel_rt::host_launch::read_recording(&original).unwrap()
+        );
+        assert!(failures.is_empty(), "{}: {failures:?}", path.display());
+    });
+}
+
+#[test]
+fn pubsub_relay_30_permit_drop_and_binding_controls() {
+    with_compiler_stack(|| {
+        let root = tempfile::Builder::new()
+            .prefix("pubsub-credit-")
+            .tempdir_in(evidence())
+            .unwrap()
+            .keep();
+        let manifest = package(&root);
+        let mut config: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        config["entry"]["name"] = "credits".into();
+        config["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"credits.hir","module":[]}));
+        fs::write(
+            root.join("credits.hir"),
+            include_str!("../support/pubsub_relay_30/credits.hir"),
+        )
+        .unwrap();
+        fs::write(&manifest, config.to_string()).unwrap();
+        let mut loaded = hirsel_driver::load_program(&manifest).unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        for checked in [false, true] {
+            let result = if checked {
+                run_observed_checked_bounded(
+                    &mut loaded.engine,
+                    &run,
+                    SimulationConfig::default(),
+                    1_000_000,
+                )
+            } else {
+                run_observed_snapshot_bounded(
+                    &mut loaded.engine,
+                    &run,
+                    SimulationConfig::default(),
+                    1_000_000,
+                )
+            }
+            .unwrap();
+            fs::write(
+                root.join(format!("credits-{checked}.receipt")),
+                format!("{result:#?}"),
+            )
+            .unwrap();
+            let observation = result.observation.expect("completed credit fixture");
+            assert_eq!(observation.exit_code, Some(0));
+            assert!(observation.failures.is_empty());
+        }
+        if let Some(path) = std::env::var_os("PUBSUB_30_REPLAY_DIR").map(PathBuf::from) {
+            let original = path.join("success.tape");
+            let mut changed = hirsel_rt::host_launch::read_recording(&original).unwrap();
+            let canonical = &mut changed.binding.as_mut().unwrap().canonical;
+            let text = String::from_utf8(canonical.clone()).unwrap();
+            assert!(text.contains("\"args\":[\"serve\""));
+            *canonical = text
+                .replacen("\"args\":[\"serve\"", "\"args\":[\"altered\"", 1)
+                .into_bytes();
+            let bad = path.join("changed-args-canonical.tape");
+            fs::write(&bad, hirsel_rt::launch::render_recording(&changed).unwrap()).unwrap();
+            for checked in [false, true] {
+                let result = if checked {
+                    hirsel_driver::replay_observations_checked(
+                        &path.join("../hirsel.json"),
+                        &bad,
+                        Some(10_000_000),
+                    )
+                } else {
+                    hirsel_driver::replay_observations(
+                        &path.join("../hirsel.json"),
+                        &bad,
+                        Some(10_000_000),
+                    )
+                };
+                let reason = result
+                    .expect_err("canonical Args mutation must refuse")
+                    .to_string();
+                assert!(!reason.contains("noncanonical"), "{reason}");
+                fs::write(path.join(format!("changed-args-{checked}.refusal")), reason).unwrap();
+            }
+        }
+    });
+}

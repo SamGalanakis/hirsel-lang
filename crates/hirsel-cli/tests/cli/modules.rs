@@ -99,3 +99,4 @@ mod read_dir_stream;
 mod man_render_30;
 mod pnm_tiles_30;
 mod schema_etl_30;
+mod pubsub_relay_30;

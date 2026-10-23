@@ -1,0 +1,34 @@
+pub fn credits(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let log = flow.ledger(tasks)
+  {
+    let Some(first) = flow.reserve(tasks, log, 0, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let Some(second) = flow.reserve(tasks, log, 0, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let Some(third) = flow.reserve(tasks, log, 0, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let Some(fourth) = flow.reserve(tasks, log, 0, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let overflow = flow.reserve(tasks, log, 0, 4)
+    failure.check(match overflow { None() => true, _ => false }, Arithmetic())
+    flow.discard(take first)
+    let Some(replacement) = flow.reserve(tasks, log, 0, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    // A meaningful command envelope and a delivery/control envelope use the
+    // same owned-credit finalizer. Dropping them returns unused permits.
+    let command: unique wire.Command = Subscribe("a")
+    let message: unique wire.Message = Stopping()
+    flow.discard(flow.wrap(take second, take command))
+    flow.discard(flow.wrap(take third, take message))
+    flow.discard(take fourth)
+    flow.discard(take replacement)
+  }
+  let state = flow.snapshot(tasks, log)
+  failure.check(state.held[0] == 0 && state.reserved == 5 && state.returned == 5 && state.peaks[0] == 4, Arithmetic())
+  {
+    let Some(owned) = flow.reserve(tasks, log, 1, 4) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let mut permit = take owned
+    flow.commit(mut permit)
+    // Cancel/disconnect after queue commit: explicit loss, not a successful write.
+    flow.discard(take permit)
+  }
+  let end = flow.snapshot(tasks, log)
+  failure.check(end.queued == 1 && end.written == 0 && end.lost == 1 && end.reserved == end.returned, Arithmetic())
+  Ok(())
+}

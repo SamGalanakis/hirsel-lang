@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "pubsub",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "wire.hir",
+      "module": [
+        "wire"
+      ]
+    },
+    {
+      "path": "hub.hir",
+      "module": [
+        "hub"
+      ]
+    },
+    {
+      "path": "client.hir",
+      "module": [
+        "client"
+      ]
+    },
+    {
+      "path": "flow.hir",
+      "module": [
+        "flow"
+      ]
+    },
+    {
+      "path": "shutdown.hir",
+      "module": [
+        "shutdown"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+pub type Error = Grant(GrantError) | Arguments(ArgError) | Number(scalar.ParseError) | Hub(
+  hub.Error
+) | Wire(wire.Error) | Timing(shutdown.Error) | Usage
+
+const HELP: String = "usage: pubsub serve SOCKET ADMISSIONS MILLISECONDS JOBS\n       pubsub publish SOCKET TOPIC DATA\n       pubsub subscribe SOCKET TOPIC DELIVERIES\n       pubsub stop SOCKET\nBounds: 8 lifetime clients, 8 topics, 4 pending publishes, 4 deliveries/subscriber, 2048-byte frames, 64 admissions, 1..4 jobs, 1..10000ms sessions.\nQueued and written do not mean remote application consumption.\n"
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[(), Error] {
+  if arg.len(args) == 1 && arg.text(args, 0)? == "--help" {
+    let _ = out.print(output, HELP)
+    return Ok(())
+  }
+  if arg.len(args) < 2 || arg.len(args) > 5 {
+    return Error(Usage())
+  }
+  let mode = arg.text(args, 0)?
+  let socket = arg.path(args, 1)?
+  if mode == "serve" && arg.len(args) == 5 {
+    let maximum = u64.parse(arg.text(args, 2)?)?
+    let milliseconds = u64.parse(arg.text(args, 3)?)?
+    let jobs = u64.parse(arg.text(args, 4)?)?
+    if maximum == 0 || maximum > 64 || milliseconds == 0 || milliseconds > 10000 || jobs == 0 || jobs > 4 {
+      return Error(Usage())
+    }
+    let tasks = io.tasks(rt)?
+    let n = io.net(rt)?
+    let clock = io.monotonic_clock(rt)?
+    hub.serve(tasks, n, clock, socket, maximum, milliseconds, jobs, output)?
+    return Ok(())
+  }
+  let mut request: wire.Command = Stop()
+  let mut count = 1u64
+  if mode == "publish" && arg.len(args) == 4 {
+    request = Publish(arg.text(args, 2)?, arg.text(args, 3)?)
+  } else if mode == "subscribe" && arg.len(args) == 4 {
+    let deliveries = u64.parse(arg.text(args, 3)?)?
+    if deliveries > 64 {
+      return Error(Usage())
+    }
+    count += deliveries
+    request = Subscribe(arg.text(args, 2)?)
+  } else if mode != "stop" || arg.len(args) != 2 {
+    return Error(Usage())
+  }
+  let mut payload: List[u8] = []
+  match request {
+    Publish(topic, data) => {
+      if !wire.topic_valid(topic) || string.byte_len(data) > 192 {
+        return Error(Usage())
+      }
+      text.append(mut payload, "{\"op\":\"publish\",\"topic\":")
+      json.write_text_into(topic, mut payload)
+      text.append(mut payload, ",\"data\":")
+      json.write_text_into(data, mut payload)
+      text.append(mut payload, "}")
+    },
+    Subscribe(topic) => {
+      if !wire.topic_valid(topic) {
+        return Error(Usage())
+      }
+      text.append(mut payload, "{\"op\":\"subscribe\",\"topic\":")
+      json.write_text_into(topic, mut payload)
+      text.append(mut payload, "}")
+    },
+    _ => text.append(mut payload, "{\"op\":\"stop\"}"),
+  }
+  let n = io.net(rt)?
+  let tasks = io.tasks(rt)?
+  let clock = io.monotonic_clock(rt)?
+  match task.scope_until(
+    tasks,
+    shutdown.deadline(clock, 2000)?,
+    fn(scope: Scope) -> Result[(), wire.Error] {
+      client.call(n, clock, tasks, socket, bytes.from_list(take payload), count, output)
+    }
+  ) {
+    Finished(value) => {
+      take value?
+      Ok(())
+    },
+    Expired(_) => Error(Usage()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  match execute(rt, args, output) {
+    Ok(()) => process.SUCCESS,
+    Error(Usage()) | Error(Number(_)) | Error(Arguments(_)) => {
+      let _ = out.print(output, "{\"error\":\"usage_or_limit\"}\n")
+      process.exit_code(2u8)
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      process.exit_code(3u8)
+    },
+  }
+}

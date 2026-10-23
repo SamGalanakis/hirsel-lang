@@ -1,0 +1,73 @@
+pub type Error = Clock(ClockError) | Invalid
+
+pub type Reason = Eof | Protocol | ReadTimeout | SlowReader | Network | Canceled | Shutdown
+
+pub fn name(cause: Reason) -> String uses {} {
+  match cause {
+    Eof() => "eof",
+    Protocol() => "protocol",
+    ReadTimeout() => "read_timeout",
+    SlowReader() => "slow_reader",
+    Network() => "network",
+    Canceled() => "canceled",
+    Shutdown() => "shutdown",
+  }
+}
+
+pub fn read_reason(problem: wire.Error) -> Reason uses {} {
+  match problem {
+    Input(_) => Protocol(),
+    Network(TimedOut()) => ReadTimeout(),
+    Network(Canceled(_)) => Canceled(),
+    _ => Network(),
+  }
+}
+
+pub fn write_reason(problem: wire.Error) -> Reason uses {} {
+  match problem {
+    Network(TimedOut()) => SlowReader(),
+    Network(Canceled(_)) => Canceled(),
+    _ => Network(),
+  }
+}
+
+pub fn deadline(clock: MonotonicClock, milliseconds: u64) -> Result[Deadline, Error] {
+  if milliseconds == 0 || milliseconds > 10000 {
+    return Error(Invalid())
+  }
+  let start = clock.monotonic(clock)?
+  let Some(at) = instant.checked_add(clock, start, milliseconds * 1000000) else {
+    return Error(Invalid())
+  }
+  Ok(Deadline(clock: clock, at: at))
+}
+
+pub fn ticks(clock: MonotonicClock) -> Result[u64, Error] {
+  Ok(instant.ticks(clock.monotonic(clock)?))
+}
+
+// Every producer stops at a cancellation point. The scope owns and joins all
+// accept/client/timer tasks before the caller reads this conservation report.
+pub fn report(
+  tasks: Tasks,
+  log: Mutex[flow.Ledger],
+  output: Stdout,
+  admitted: u64,
+  reason: String
+) -> Result[(), OutputError] {
+  let final = flow.snapshot(tasks, log)
+  let mut held = 0u64
+  let mut peak = 0u64
+  for key in 0u64..24u64 {
+    held += final.held[key]
+    if key < 8 && final.peaks[key] > peak {
+      peak = final.peaks[key]
+    }
+  }
+  failure.check(held == 0 && final.reserved == final.returned, Arithmetic())
+  failure.check(final.queued == final.written + final.lost && peak <= 4, Arithmetic())
+  out.print(
+    output,
+    f"{{\"joined\":true,\"admitted\":{admitted},\"queued\":{final.queued},\"written\":{final.written},\"disconnected\":{final.lost},\"credits_held\":{held},\"reserved\":{final.reserved},\"returned\":{final.returned},\"peak_queue\":{peak},\"reason\":\"{reason}\"}}\n"
+  )
+}

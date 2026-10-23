@@ -1,0 +1,167 @@
+// Tokio ce685ee6916549ed7e52dbfd5430858bbdc734d3:
+// sync/mpsc/bounded.rs:760-830, tests/sync_mpsc.rs:48-130 (MIT; LICENSE-TOKIO).
+// A credit survives dequeue. Dropping a partial reservation or a failed send
+// returns it through exactly the same finalizer as a completed delivery.
+pub type Ledger {
+  held: List[u64],
+  peaks: List[u64],
+  reserved: u64,
+  returned: u64,
+  queued: u64,
+  written: u64,
+  lost: u64,
+  admissions: u64,
+}
+
+pub resource type Credit {
+  tasks: Tasks,
+  ledger: Mutex[Ledger],
+  key: u64,
+  delivery: bool,
+  completed: bool,
+}
+drop(self) {
+  let key = self.key
+  let lost = self.delivery && !self.completed
+  mutex.with(
+    self.tasks,
+    self.ledger,
+    fn(mut state: unique Ledger) uses {} {
+      failure.check(state.held[key] > 0, Arithmetic())
+      state.held[key] -= 1
+      state.returned += 1
+      if lost {
+        state.lost += 1
+      }
+    }
+  )
+}
+
+// Two real instantiations: framed incoming Commands and outgoing Messages.
+// Both carry frozen payload roots and move-only, uniquely owned credits.
+pub type Envelope[T] {
+  credit: unique Credit,
+  payload: Shared[T],
+}
+
+pub fn wrap[T: copyable + inert](take permit: unique Credit, take value: unique T) -> Envelope[
+  T
+] {
+  Envelope(credit: take permit, payload: shared.freeze(take value))
+}
+
+pub fn unpack[T](take packet: Envelope[T]) -> (Credit, Shared[T]) {
+  let Envelope(credit: permit, payload: value) = take packet
+  (take permit, take value)
+}
+
+pub fn ledger(tasks: Tasks) -> Mutex[Ledger] {
+  let mut slots: List[u64] = []
+  let mut peaks: List[u64] = []
+  for i in 0u64..25u64 {
+    list.push(mut slots, 0u64)
+    list.push(mut peaks, 0u64)
+  }
+  mutex.create(
+    tasks,
+    Ledger(
+      held: take slots,
+      peaks: take peaks,
+      reserved: 0,
+      returned: 0,
+      queued: 0,
+      written: 0,
+      lost: 0,
+      admissions: 0
+    )
+  )
+}
+
+pub fn reserve(tasks: Tasks, log: Mutex[Ledger], key: u64, cap: u64) -> Option[
+  unique Credit
+] {
+  failure.check(key < 25 && cap > 0 && cap <= 4, Arithmetic())
+  let accepted = mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) -> bool uses {} {
+      if state.held[key] == cap {
+        return false
+      }
+      state.held[key] += 1
+      state.reserved += 1
+      if state.held[key] > state.peaks[key] {
+        state.peaks[key] = state.held[key]
+      }
+      true
+    }
+  )
+  if accepted {
+    Some(Credit(tasks: tasks, ledger: log, key: key, delivery: false, completed: false))
+  } else {
+    None()
+  }
+}
+
+pub fn commit(mut permit: unique Credit) {
+  failure.check(!permit.delivery, Arithmetic())
+  permit.delivery = true
+  mutex.with(
+    permit.tasks,
+    permit.ledger,
+    fn(mut state: unique Ledger) uses {} {
+      state.queued += 1
+    }
+  )
+}
+
+pub fn written(mut permit: Credit) {
+  failure.check(permit.delivery && !permit.completed, Arithmetic())
+  permit.completed = true
+  mutex.with(
+    permit.tasks,
+    permit.ledger,
+    fn(mut state: unique Ledger) uses {} {
+      state.written += 1
+    }
+  )
+}
+
+pub fn snapshot(tasks: Tasks, log: Mutex[Ledger]) -> unique Ledger {
+  mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) -> unique Ledger uses {} {
+      unique state
+    }
+  )
+}
+
+pub fn discard[T](take value: T) uses {value} {}
+
+pub fn admitted(tasks: Tasks, log: Mutex[Ledger]) {
+  mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) uses {} {
+      state.admissions += 1
+    }
+  )
+}
+
+pub fn drained(tasks: Tasks, log: Mutex[Ledger]) -> bool {
+  mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) -> bool uses {} {
+      for key in 0u64..24u64 {
+        if key < 8 || key >= 16 {
+          if state.held[key] != 0 {
+            return false
+          }
+        }
+      }
+      true
+    }
+  )
+}
