@@ -93,6 +93,7 @@ mod memcheck;
 pub mod multicore_policy;
 pub mod ordered;
 pub mod region;
+pub mod sealed_region;
 pub mod release;
 mod remote;
 mod remote_sync;
