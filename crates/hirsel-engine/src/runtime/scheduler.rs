@@ -1,0 +1,753 @@
+//! One claim and completion latch per query, adapted from rustc 1.90
+//! query/job.rs:183-269. Waiters here are continuations, never sleeping workers.
+//! Ready ordering follows Go ebe2feef compile.go:139-184 (longest first).
+//! Worker-owned task state follows tsgo 89d5d5b checkerpool.go:305,469.
+//! Persistent idle stacks remain charged; unlike the former native semaphore,
+//! an oversized singleton cannot exceed the budget. S0 owns semantic validity.
+use super::*;
+use hirsel_intern::jobs::{COMPILER_STACK_BYTES, Jobs};
+use hirsel_syntax::ContentHash;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
+use std::time::Instant;
+
+type Key = (u32, ContentHash);
+type Outcome = Result<ProductRef, Reference>;
+fn key(id: QueryId) -> Key {
+    (id.kind, id.address.0)
+}
+fn id(key: Key) -> QueryId {
+    QueryId {
+        kind: key.0,
+        address: Address(key.1),
+    }
+}
+
+/// Engine-owned immutable diagnostic records, never synthesized as successes.
+#[derive(Clone, Copy)]
+pub struct RuntimeErrors {
+    pub resource: Reference,
+    pub cycle: Reference,
+    pub cancelled: Reference,
+    pub protocol: Reference,
+    pub panicked: Reference,
+}
+
+/// Disjoint poll costs and actual edges; wall intervals are not dependency guesses.
+#[derive(Clone, Debug)]
+pub enum RuntimeEvent {
+    Claim(QueryId),
+    Read {
+        query: QueryId,
+        dependency: QueryId,
+    },
+    Admit {
+        query: QueryId,
+        worker: usize,
+        elapsed_ns: u64,
+        charged: u64,
+    },
+    Release {
+        query: QueryId,
+        worker: usize,
+        elapsed_ns: u64,
+        cpu_ns: u64,
+        charged: u64,
+    },
+    Waiting(QueryId),
+    Wake(QueryId),
+    Settled {
+        query: QueryId,
+        result: Outcome,
+    },
+    Request {
+        request: RequestId,
+        roots: Vec<QueryId>,
+    },
+    Completed(RequestId),
+    Cancelled(RequestId),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeStats {
+    pub claims: u64,
+    pub polls: u64,
+    pub waits: u64,
+    pub wakes: u64,
+    pub edges: u64,
+    pub peak_bytes: u64,
+    pub charged_bytes: u64,
+    pub active: usize,
+    pub settled: u64,
+}
+
+enum Status {
+    Ready,
+    Running,
+    Waiting,
+    Settled(Outcome),
+}
+struct Node {
+    task: Option<Box<dyn QueryTask>>,
+    weight: MemoryWeight,
+    status: Status,
+    dependencies: BTreeSet<Key>,
+    waiters: BTreeSet<Key>,
+    live: bool,
+    // A cancelled in-flight poll is drained before a new claim can replace it.
+    discard: bool,
+}
+struct State {
+    factories: BTreeMap<u32, Arc<dyn QueryFactory>>,
+    nodes: BTreeMap<Key, Node>,
+    ready: BTreeSet<(Reverse<u64>, Key)>,
+    costs: BTreeMap<Key, u64>,
+    requests: BTreeMap<u64, Vec<Key>>,
+    next_request: u64,
+    retained: u64,
+    scratch: u64,
+    stacks: u64,
+    budget: u64,
+    errors: RuntimeErrors,
+    stopped: bool,
+    started: bool,
+    stats: RuntimeStats,
+    events: Option<Vec<RuntimeEvent>>,
+    origin: Instant,
+}
+struct Shared {
+    state: Mutex<State>,
+    changed: Condvar,
+}
+
+/// Runtime for one immutable engine input snapshot. Factories validate S0 reads
+/// before returning a hit. Revisions are selected by the engine, not RequestId.
+/// Poll is nonblocking; wait is an optional host completion wait, never a query
+/// dependency wait. Every query poll must return at a bounded cancellation point.
+/// Producers own ordered registration/fuel/diagnostic commit tasks; speculative
+/// task completion does not authorize publication outside that ledger.
+pub struct AdmittedRuntime {
+    shared: Arc<Shared>,
+    workers: Vec<JoinHandle<()>>,
+    reservation: Option<MemoryReservation>,
+}
+
+impl AdmittedRuntime {
+    pub fn new(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> std::io::Result<Self> {
+        Self::with_reservation(jobs, reservation, errors, COMPILER_STACK_BYTES)
+    }
+    #[cfg(test)]
+    fn with_stack(
+        jobs: Jobs,
+        budget: u64,
+        errors: RuntimeErrors,
+        stack: usize,
+    ) -> std::io::Result<Self> {
+        Self::with_reservation(
+            jobs,
+            ProcessBudget::new(budget).reserve(budget)?,
+            errors,
+            stack,
+        )
+    }
+    fn with_reservation(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+        stack: usize,
+    ) -> std::io::Result<Self> {
+        let budget = reservation.bytes();
+        if budget < stack as u64 {
+            return Err(std::io::Error::other(
+                "query budget cannot reserve one compiler stack",
+            ));
+        }
+        // Same policy as Jobs::worker_count_with_cap, also exercised with
+        // smaller test stacks so requested parallel controls really run in parallel.
+        let count = jobs
+            .get()
+            .min((budget / (2 * stack as u64)).max(1) as usize);
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                factories: BTreeMap::new(),
+                nodes: BTreeMap::new(),
+                ready: BTreeSet::new(),
+                costs: BTreeMap::new(),
+                requests: BTreeMap::new(),
+                next_request: 0,
+                retained: 0,
+                scratch: 0,
+                stacks: count as u64 * stack as u64,
+                budget,
+                errors,
+                stopped: false,
+                started: false,
+                stats: RuntimeStats::default(),
+                events: None,
+                origin: Instant::now(),
+            }),
+            changed: Condvar::new(),
+        });
+        let mut runtime = Self {
+            shared,
+            workers: Vec::new(),
+            reservation: Some(reservation),
+        };
+        for worker in 0..count {
+            let shared = runtime.shared.clone();
+            match std::thread::Builder::new()
+                .name("hirsel-query".into())
+                .stack_size(stack)
+                .spawn(move || run_worker(shared, worker, stack as u64))
+            {
+                Ok(handle) => runtime.workers.push(handle),
+                Err(error) => {
+                    let mut state = runtime.shared.lock();
+                    state.stacks = runtime.workers.len() as u64 * stack as u64;
+                    if runtime.workers.is_empty() {
+                        return Err(error);
+                    }
+                    break;
+                }
+            }
+        }
+        runtime.shared.lock().account();
+        Ok(runtime)
+    }
+    /// Register each producer kind exactly once before any request starts.
+    pub fn register(
+        &mut self,
+        kind: u32,
+        factory: Arc<dyn QueryFactory>,
+    ) -> Result<(), &'static str> {
+        let mut state = self.shared.lock();
+        if state.started {
+            return Err("query dispatch is frozen after first request");
+        }
+        if state.factories.contains_key(&kind) {
+            return Err("query kind already registered");
+        }
+        state.factories.insert(kind, factory);
+        Ok(())
+    }
+    /// Measured disjoint CPU cost from a prior comparable query, used only for
+    /// ready priority. Neither identity nor semantic accounting depends on it.
+    pub fn set_cost(&mut self, query: QueryId, cpu_ns: u64) {
+        let mut state = self.shared.lock();
+        let query = key(query);
+        state.unqueue(query);
+        state.costs.insert(query, cpu_ns.max(1));
+        if state
+            .nodes
+            .get(&query)
+            .is_some_and(|n| matches!(n.status, Status::Ready))
+        {
+            state.queue(query);
+        }
+    }
+    /// Optional exact event capture for bounded diagnostics, disabled by default.
+    pub fn record_events(&mut self) {
+        self.shared.lock().events = Some(Vec::new());
+    }
+    pub fn take_events(&mut self) -> Vec<RuntimeEvent> {
+        self.shared
+            .lock()
+            .events
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+    pub fn stats(&self) -> RuntimeStats {
+        self.shared.lock().stats
+    }
+    pub fn wait(&mut self, request: RequestId) -> OutcomeList {
+        loop {
+            if let Poll::Ready(result) = self.poll(request) {
+                return result;
+            }
+            let mut state = self.shared.lock();
+            while !state.request_complete(request.0) && !state.stopped {
+                state = self
+                    .shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
+        }
+    }
+    pub fn shutdown(&mut self) {
+        {
+            let mut state = self.shared.lock();
+            state.stopped = true;
+            state.requests.clear();
+            state.prune();
+            self.shared.changed.notify_all();
+        }
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+        let mut state = self.shared.lock();
+        state.nodes.clear();
+        state.ready.clear();
+        state.retained = 0;
+        state.stacks = 0;
+        state.account();
+        self.reservation.take();
+    }
+}
+type OutcomeList = Result<Vec<ProductRef>, Reference>;
+impl Drop for AdmittedRuntime {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl QueryRuntime for AdmittedRuntime {
+    fn request(&mut self, roots: &[QueryId]) -> RequestId {
+        let mut state = self.shared.lock();
+        let request = RequestId(state.next_request);
+        state.next_request = state
+            .next_request
+            .checked_add(1)
+            .expect("request token exhausted");
+        state.started = true;
+        let roots: Vec<_> = roots.iter().copied().map(key).collect();
+        state.event(RuntimeEvent::Request {
+            request,
+            roots: roots.iter().copied().map(id).collect(),
+        });
+        if !state.stopped {
+            state.requests.insert(request.0, roots.clone());
+            for root in roots {
+                state.ensure(root);
+            }
+            state.mark_live();
+        }
+        self.shared.changed.notify_all();
+        request
+    }
+    fn poll(&mut self, request: RequestId) -> Poll<OutcomeList> {
+        let mut state = self.shared.lock();
+        let Some(roots) = state.requests.get(&request.0) else {
+            return Poll::Ready(Err(state.errors.cancelled));
+        };
+        // A failed early root does not suppress legally required diagnostic roots.
+        let results: Option<Vec<Outcome>> = roots.iter().map(|root| state.result(*root)).collect();
+        let Some(results) = results else {
+            return Poll::Pending;
+        };
+        state.requests.remove(&request.0);
+        state.event(RuntimeEvent::Completed(request));
+        state.prune();
+        self.shared.changed.notify_all();
+        Poll::Ready(results.into_iter().collect())
+    }
+    fn cancel(&mut self, request: RequestId) {
+        let mut state = self.shared.lock();
+        if state.requests.remove(&request.0).is_some() {
+            state.event(RuntimeEvent::Cancelled(request));
+            state.prune();
+            self.shared.changed.notify_all();
+        }
+    }
+    fn evict_to(&mut self, retained_bytes: u64) {
+        let mut state = self.shared.lock();
+        let idle: Vec<_> = state
+            .nodes
+            .iter()
+            .filter_map(|(&key, node)| {
+                (!node.live && matches!(node.status, Status::Settled(_))).then_some(key)
+            })
+            .collect();
+        for key in idle {
+            if state.retained <= retained_bytes {
+                break;
+            }
+            state.remove(key);
+        }
+        state.account();
+        self.shared.changed.notify_all();
+    }
+}
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+impl State {
+    fn event(&mut self, event: RuntimeEvent) {
+        if let Some(events) = &mut self.events {
+            events.push(event);
+        }
+    }
+    fn elapsed(&self) -> u64 {
+        self.origin.elapsed().as_nanos().min(u64::MAX as u128) as u64
+    }
+    fn account(&mut self) {
+        let bytes = self.stacks + self.retained + self.scratch;
+        self.stats.charged_bytes = bytes;
+        self.stats.peak_bytes = self.stats.peak_bytes.max(bytes);
+        debug_assert!(bytes <= self.budget);
+    }
+    fn result(&self, key: Key) -> Option<Outcome> {
+        match &self.nodes.get(&key)?.status {
+            Status::Settled(result) => Some(*result),
+            _ => None,
+        }
+    }
+    fn request_complete(&self, request: u64) -> bool {
+        self.requests
+            .get(&request)
+            .is_none_or(|roots| roots.iter().all(|k| self.result(*k).is_some()))
+    }
+    fn queue(&mut self, key: Key) {
+        self.ready
+            .insert((Reverse(self.costs.get(&key).copied().unwrap_or(1)), key));
+    }
+    fn unqueue(&mut self, key: Key) {
+        self.ready
+            .remove(&(Reverse(self.costs.get(&key).copied().unwrap_or(1)), key));
+    }
+    fn ensure(&mut self, query: Key) {
+        if let Some(node) = self.nodes.get_mut(&query) {
+            node.live = true;
+            return;
+        }
+        self.stats.claims += 1;
+        self.event(RuntimeEvent::Claim(id(query)));
+        let created = self
+            .factories
+            .get(&query.0)
+            .ok_or(self.errors.protocol)
+            .and_then(|f| f.create(id(query)));
+        let (task, weight, status) = match created {
+            Ok(task) if task.id() == id(query) => {
+                let weight = task.weight();
+                let sum = weight
+                    .scratch
+                    .checked_add(weight.retained)
+                    .and_then(|n| n.checked_add(weight.stack));
+                if sum.is_none_or(|n| n > self.budget.saturating_sub(self.stacks))
+                    || weight.retained
+                        > self
+                            .budget
+                            .saturating_sub(self.stacks + self.retained + self.scratch)
+                {
+                    (
+                        None,
+                        MemoryWeight::default(),
+                        Status::Settled(Err(self.errors.resource)),
+                    )
+                } else {
+                    (Some(task), weight, Status::Ready)
+                }
+            }
+            Ok(_) => (
+                None,
+                MemoryWeight::default(),
+                Status::Settled(Err(self.errors.protocol)),
+            ),
+            Err(error) => (None, MemoryWeight::default(), Status::Settled(Err(error))),
+        };
+        self.retained += weight.retained;
+        let ready = matches!(status, Status::Ready);
+        self.nodes.insert(
+            query,
+            Node {
+                task,
+                weight,
+                status,
+                dependencies: BTreeSet::new(),
+                waiters: BTreeSet::new(),
+                live: true,
+                discard: false,
+            },
+        );
+        if ready {
+            self.queue(query);
+        }
+        self.account();
+    }
+    fn mark_live(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.live = false;
+        }
+        let mut pending: Vec<_> = self.requests.values().flatten().copied().collect();
+        while let Some(key) = pending.pop() {
+            if let Some(node) = self.nodes.get_mut(&key)
+                && !node.live
+            {
+                node.live = true;
+                pending.extend(node.dependencies.iter().copied());
+            }
+        }
+    }
+    fn remove(&mut self, query: Key) {
+        self.unqueue(query);
+        if let Some(node) = self.nodes.remove(&query) {
+            self.retained -= node.weight.retained;
+            for dependency in node.dependencies {
+                if let Some(node) = self.nodes.get_mut(&dependency) {
+                    node.waiters.remove(&query);
+                }
+            }
+        }
+    }
+    fn prune(&mut self) {
+        self.mark_live();
+        let mut remove = Vec::new();
+        for (&key, node) in &mut self.nodes {
+            if !node.live {
+                match node.status {
+                    Status::Ready | Status::Waiting => remove.push(key),
+                    Status::Running => node.discard = true,
+                    Status::Settled(_) => (),
+                }
+            }
+        }
+        for key in remove {
+            self.remove(key);
+        }
+        self.account();
+    }
+    fn reaches(&self, from: Key, target: Key) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![from];
+        while let Some(key) = pending.pop() {
+            if key == target {
+                return true;
+            }
+            if seen.insert(key)
+                && let Some(node) = self.nodes.get(&key)
+            {
+                pending.extend(node.dependencies.iter().copied());
+            }
+        }
+        false
+    }
+    fn settle(&mut self, query: Key, result: Outcome) {
+        let node = self.nodes.get_mut(&query).expect("claimed query");
+        node.task = None;
+        node.status = Status::Settled(result);
+        let waiters = std::mem::take(&mut node.waiters);
+        self.stats.settled += 1;
+        self.event(RuntimeEvent::Settled {
+            query: id(query),
+            result,
+        });
+        for waiter in waiters {
+            if self.nodes.get(&waiter).is_some_and(|node| {
+                matches!(node.status, Status::Waiting)
+                    && node.dependencies.iter().all(|k| self.result(*k).is_some())
+            }) {
+                self.nodes.get_mut(&waiter).unwrap().status = Status::Ready;
+                self.queue(waiter);
+                self.stats.wakes += 1;
+                self.event(RuntimeEvent::Wake(id(waiter)));
+            }
+        }
+    }
+}
+
+struct Context<'a> {
+    shared: &'a Shared,
+    query: Key,
+    pending: BTreeSet<Key>,
+}
+impl QueryContext for Context<'_> {
+    fn read(&mut self, dependency: QueryId) -> Poll<Outcome> {
+        let mut state = self.shared.lock();
+        if state.stopped
+            || state
+                .nodes
+                .get(&self.query)
+                .is_none_or(|n| !n.live || n.discard)
+        {
+            return Poll::Ready(Err(state.errors.cancelled));
+        }
+        let dependency = key(dependency);
+        if state.reaches(dependency, self.query) {
+            return Poll::Ready(Err(state.errors.cycle));
+        }
+        let new = state
+            .nodes
+            .get_mut(&self.query)
+            .unwrap()
+            .dependencies
+            .insert(dependency);
+        if new {
+            state.stats.edges += 1;
+            state.event(RuntimeEvent::Read {
+                query: id(self.query),
+                dependency: id(dependency),
+            });
+        }
+        state.ensure(dependency);
+        if let Some(result) = state.result(dependency) {
+            return Poll::Ready(result);
+        }
+        state
+            .nodes
+            .get_mut(&dependency)
+            .unwrap()
+            .waiters
+            .insert(self.query);
+        self.pending.insert(dependency);
+        self.shared.changed.notify_all();
+        Poll::Pending
+    }
+}
+
+fn thread_cpu_ns() -> u64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: valid writable timespec, thread CPU clock has no external state.
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    if ok == 0 {
+        (time.tv_sec as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(time.tv_nsec as u64)
+    } else {
+        0
+    }
+}
+fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
+    loop {
+        let (query, mut task, weight) = {
+            let mut state = shared.lock();
+            loop {
+                if state.stopped {
+                    return;
+                }
+                let first = state.ready.first().copied();
+                if let Some((_, query)) = first {
+                    let weight = state.nodes[&query].weight;
+                    if weight.stack > stack {
+                        state.unqueue(query);
+                        let error = state.errors.resource;
+                        state.settle(query, Err(error));
+                        shared.changed.notify_all();
+                        continue;
+                    }
+                    if weight.scratch
+                        <= state
+                            .budget
+                            .saturating_sub(state.stacks + state.retained + state.scratch)
+                    {
+                        state.unqueue(query);
+                        let node = state.nodes.get_mut(&query).unwrap();
+                        let task = node.task.take().expect("ready continuation");
+                        node.status = Status::Running;
+                        state.scratch += weight.scratch;
+                        state.stats.active += 1;
+                        state.stats.polls += 1;
+                        state.account();
+                        let elapsed_ns = state.elapsed();
+                        let charged = state.stats.charged_bytes;
+                        state.event(RuntimeEvent::Admit {
+                            query: id(query),
+                            worker,
+                            elapsed_ns,
+                            charged,
+                        });
+                        break (query, task, weight);
+                    }
+                    // No running task can free memory: retained continuations
+                    // have exhausted the bounded working set. Refuse; never
+                    // wait forever or admit an oversized singleton.
+                    if state.stats.active == 0 {
+                        state.unqueue(query);
+                        let error = state.errors.resource;
+                        state.settle(query, Err(error));
+                        shared.changed.notify_all();
+                        continue;
+                    }
+                }
+                state = shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
+        };
+        let start = thread_cpu_ns();
+        let mut cx = Context {
+            shared: &shared,
+            query,
+            pending: BTreeSet::new(),
+        };
+        let outcome = catch_unwind(AssertUnwindSafe(|| task.poll(&mut cx)));
+        let cpu_ns = thread_cpu_ns().saturating_sub(start);
+        let mut state = shared.lock();
+        state.scratch -= weight.scratch;
+        state.stats.active -= 1;
+        state.account();
+        let elapsed_ns = state.elapsed();
+        let charged = state.stats.charged_bytes;
+        state.event(RuntimeEvent::Release {
+            query: id(query),
+            worker,
+            elapsed_ns,
+            cpu_ns,
+            charged,
+        });
+        let discard = state.nodes[&query].discard;
+        let live = state.nodes[&query].live;
+        if discard || state.stopped {
+            state.remove(query);
+            if live && !state.stopped {
+                state.ensure(query);
+            }
+        } else {
+            match outcome {
+                Ok(QueryPoll::Complete(product))
+                    if cx.pending.is_empty() && product.address == Address(query.1) =>
+                {
+                    state.settle(query, Ok(product))
+                }
+                Ok(QueryPoll::Failed(error)) => state.settle(query, Err(error)),
+                Ok(QueryPoll::Waiting(waits))
+                    if !cx.pending.is_empty()
+                        && waits.iter().copied().map(key).collect::<BTreeSet<_>>()
+                            == cx.pending =>
+                {
+                    let ready = cx.pending.iter().all(|k| state.result(*k).is_some());
+                    let node = state.nodes.get_mut(&query).unwrap();
+                    node.task = Some(task);
+                    node.status = if ready {
+                        Status::Ready
+                    } else {
+                        Status::Waiting
+                    };
+                    state.stats.waits += 1;
+                    state.event(RuntimeEvent::Waiting(id(query)));
+                    if ready {
+                        state.queue(query);
+                        state.stats.wakes += 1;
+                        state.event(RuntimeEvent::Wake(id(query)));
+                    }
+                }
+                Err(_) => {
+                    let error = state.errors.panicked;
+                    state.settle(query, Err(error));
+                }
+                _ => {
+                    let error = state.errors.protocol;
+                    state.settle(query, Err(error));
+                }
+            }
+        }
+        shared.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests;
