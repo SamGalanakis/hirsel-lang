@@ -61,10 +61,11 @@ malformed. `ValidatedSignatures` keeps per-view verdicts (`check_view`) keyed by
 digest and reuses one while its reads hold, taking reusable verdicts from the
 previous revision's store (`verdict_from`). `SignatureMap` is an owned
 universe for tools and tests. `work::read(Counter::ValidateSignatureRows)`
-counts actual signature checks for scaling regressions. `successful` exports
-successful view receipts for images/stores; `seed_success` restores candidates,
-which `verdict_from` accepts only under the independently computed current view
-digest and while every recorded read still holds.
+counts actual signature checks for scaling regressions. `successful` inspects
+locally checked reads. `with_cache` attaches verifier-owned durable per-view
+receipts: only V publishes successful checks, and reuse requires the current
+independent view digest, policy and every contextual read to agree. Ordinary
+product bytes cannot import successful verdicts.
 
 `Violation` identifies an optional body, block and instruction; a block with no
 instruction identifies its terminator. `ViolationKind` contains compiler-invariant
