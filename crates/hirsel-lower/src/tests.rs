@@ -630,3 +630,114 @@ fn assert_no_new_rows(f: &Fixture, definition: &Definition) {
         assert!(known.contains(t), "lowering introduced {t:?}");
     }
 }
+
+/// Static companion to the four-engine result_propagation_runtime_26 histories:
+/// source and destination role order vary independently, with V checking each
+/// lowered body. The existing adapter control separately preserves producer tags.
+#[test]
+fn propagation_role_orders_lower_once_26() {
+    use hirsel_types::{Allocation, AuthoritySummary, Signature, SignatureKind, TypeDefinition};
+    for source_error in [0, 1] {
+        for target_error in [0, 1] {
+            let mut f = Fixture::new(P::U8);
+            let mut carrier = |name: &str, error: usize| {
+                let representation = f.type_(TypeKind::Variant(
+                    (0..2)
+                        .map(|index| hirsel_types::Variant {
+                            name: if index == error { "Bad" } else { "Good" }.into(),
+                            fields: vec![(None, f.scalar)].into(),
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                ));
+                f.register(Signature {
+                    definition: DefId::intern(&path(name)),
+                    metadata: Default::default(),
+                    fingerprint: ContentHash::default(),
+                    kind: SignatureKind::Type(TypeDefinition {
+                        loop_source: None,
+                        format: None,
+                        destructor_allocation: Allocation::NoAlloc,
+                        generics: vec![],
+                        representation: Some(representation),
+                        bounds: vec![],
+                        authority: AuthoritySummary::inert(),
+                        capability: None,
+                        implementation_authority: None,
+                        serializable: false,
+                        serializable_check: None,
+                        layout: Default::default(),
+                        distinct: false,
+                        resource: false,
+                        drop: None,
+                        fact: None,
+                        captures: None,
+                    }),
+                });
+                f.type_(TypeKind::Named {
+                    definition: DefId::intern(&path(name)),
+                    arguments: vec![].into(),
+                })
+            };
+            let source = carrier("Source", source_error);
+            let target = carrier("Target", target_error);
+            let operand = f.named_call("operand", vec![], vec![], source, 1);
+            let propagation = f.expr(
+                ExprKind::Try {
+                    value: operand,
+                    map_error: None,
+                },
+                f.scalar,
+                U::Take,
+                2,
+            );
+            f.plans.propagation.push((
+                propagation,
+                TryPlan {
+                    success_variant: 1 - source_error as u32,
+                    error_variant: source_error as u32,
+                    success_type: f.scalar,
+                    error_type: f.scalar,
+                    result_constructor: Constructor::Variant {
+                        definition: path("Target"),
+                        variant: target_error as u32,
+                    },
+                    mapper: None,
+                },
+            ));
+            let statement = f.stmt(StmtKind::Expr(propagation), 2);
+            let finish = f.named_call("finish", vec![], vec![], target, 3);
+            let body = f.block(vec![statement], finish);
+            let definition = f.lower(body, "main", target).unwrap();
+            let body = &definition.bodies[0];
+            let operands = body
+                .blocks
+                .iter()
+                .filter(|block| {
+                    matches!(
+                        &block.terminator,
+                        Terminator::Call { callee: Callee::Definition { path: callee, .. }, .. }
+                            if *callee == path("operand")
+                    )
+                })
+                .count();
+            assert_eq!(operands, 1);
+            let switch = body
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator {
+                    Terminator::Switch { arms, .. } => Some(arms),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                switch.iter().map(|(tag, _)| *tag).collect::<Vec<_>>(),
+                [1 - source_error as u32, source_error as u32]
+            );
+            assert!(body.rvalues.iter().any(|value| matches!(value,
+                Rvalue::Construct { constructor: Constructor::Variant { definition, variant }, .. }
+                    if *definition == path("Target") && *variant == target_error as u32
+            )));
+        }
+    }
+}
