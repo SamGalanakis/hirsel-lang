@@ -6674,7 +6674,7 @@ mod nominal_limit_tests {
             let declarations = vec![GenericDeclarations::default()];
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
-            let reader = crate::input::Reader::new(&f.signatures);
+            let reader = crate::input::Reader::new(interner(), &f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 t: interner(),
@@ -6790,7 +6790,7 @@ mod header_name_tests {
             let declarations = vec![GenericDeclarations::default(); 2];
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
-            let reader = crate::input::Reader::new(&f.signatures);
+            let reader = crate::input::Reader::new(interner(), &f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 t: interner(),
@@ -6887,7 +6887,7 @@ mod header_name_tests {
             let declarations = vec![GenericDeclarations::default(); 2];
             let scratch = scratch::Scratch::new(f.definition.bodies.len());
             let memo = TypeMemo::new();
-            let reader = crate::input::Reader::new(&f.signatures);
+            let reader = crate::input::Reader::new(interner(), &f.signatures);
             let mut checker = Checker {
                 definition: &f.definition,
                 t: interner(),

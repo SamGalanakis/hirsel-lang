@@ -134,7 +134,7 @@ impl SignatureSnapshot {
     fn validation_state(&self) -> &ValidationState {
         self.validation.get_or_init(|| {
             let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
-            let t = &*self.types;
+            let t = &self.types;
             let ValidationCandidates { previous } = self
                 .validation_inputs
                 .lock()
@@ -194,35 +194,30 @@ impl SignatureSnapshot {
         self.verifier_policy = policy;
         self
     }
+    pub(crate) fn source_verification_policy(&self) -> ContentHash {
+        ContentHash::of_parts(
+            "hirsel.validate.frozen-source.v2",
+            [self.verifier_policy.0.as_slice()],
+        )
+    }
     pub(crate) fn validate_source_artifact(
         &self,
-        definition: &hirsel_tir::Definition,
+        definition: &hirsel_tir::DefinitionRef,
         owner: impl FnMut(hirsel_span::Anchor) -> Option<(DefPath, u32)>,
     ) -> (
         hirsel_validate::Validation,
         bool,
         Option<hirsel_validate::AcceptedArtifact>,
+        Option<hirsel_validate::VerifiedDefinition>,
     ) {
-        let views = self.validation(&definition.path.path().0.package);
-        if let Some(cache) = &self.verifier {
-            let artifact = hirsel_validate::Artifact::new(definition, self.types.clone(), owner);
-            hirsel_validate::validate_with_receipt(
-                &artifact,
-                views,
-                ContentHash::of_parts(
-                    "hirsel.validate.frozen-source.v1",
-                    [self.verifier_policy.0.as_slice()],
-                ),
-                Some(cache),
-                &mut vec![],
-            )
-        } else {
-            (
-                hirsel_validate::validate(definition, &self.types, views, &mut vec![]),
-                true,
-                None,
-            )
-        }
+        hirsel_validate::validate_definition(
+            definition,
+            self.types.clone(),
+            owner,
+            self.validation(&definition.path.path().0.package),
+            self.source_verification_policy(),
+            self.verifier.as_deref(),
+        )
     }
     pub(crate) fn validate_private_artifact(
         &self,
@@ -338,11 +333,11 @@ impl SignatureSnapshot {
                 .get(&d.path().0.package)
                 .and_then(|p| p.replacement(d))
             {
-                return Some(Ok((&view.signature, view.digest)));
+                return Some(Ok((view.signature(), view.digest())));
             }
             let view = state.views.get(d);
             return match self.signatures.get(&d)? {
-                Ok(_) => view.map(|v| Ok((&v.signature, v.digest))),
+                Ok(_) => view.map(|v| Ok((v.signature(), v.digest()))),
                 Err(error) => Some(Err(error)),
             };
         }
@@ -384,7 +379,7 @@ impl SignatureSnapshot {
     /// `package`'s universe with `signature` in place of its declared view:
     /// compile-time evaluation validates a materialized owner against it.
     pub fn validation_with(&self, package: &PackageId, signature: SignatureRef) -> PackageViews {
-        let t = &*self.types;
+        let t = &self.types;
         let state = self.validation_state();
         let mut store =
             ValidatedSignatures::with_cache(self.verifier.clone(), self.verifier_policy);
@@ -574,27 +569,6 @@ impl QueryEngine {
     /// Signatures changed outside a source revision (a staged constant).
     pub(crate) fn retire_snapshot(&mut self) {
         self.snapshot_inputs_revision += 1;
-    }
-    /// V's report from `validate` against `package`'s universe, or no
-    /// violations under `Verify::Off`. Every V run of a session goes through here.
-    pub(crate) fn run_v(
-        &mut self,
-        package: &PackageId,
-        validate: impl FnOnce(&TypeInterner, &dyn SignatureLookup) -> hirsel_validate::Validation,
-    ) -> hirsel_validate::Validation {
-        match self.verify {
-            Verify::On => {
-                let snapshot = self.signature_snapshot();
-                if !self.evaluation_validation.is_empty() {
-                    self.record_evaluation_validation(
-                        package.clone(),
-                        snapshot.validation_input_digest(package),
-                    );
-                }
-                validate(snapshot.types(), snapshot.validation(package))
-            }
-            Verify::Off => hirsel_validate::Validation::default(),
-        }
     }
 }
 

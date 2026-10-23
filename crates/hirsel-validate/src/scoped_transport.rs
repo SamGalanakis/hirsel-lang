@@ -573,7 +573,11 @@ mod tests {
             place: PlaceId(made),
             if_live: false,
         });
-        check(&f.definition, interner(), &Reader::new(&f.signatures))
+        check(
+            &f.definition,
+            interner(),
+            &Reader::new(interner(), &f.signatures),
+        )
     }
     #[test]
     fn dropped_owning_capture_is_checked_at_construction() {

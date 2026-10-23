@@ -98,8 +98,6 @@ pub(crate) struct ImageLowering {
     pub execution: crate::memo::Reads,
     /// Requests made by lowering, replayed without an additional S1 frame.
     pub depth: crate::memo::DepthEvidence<hirsel_span::Span>,
-    /// Present only after V accepted these exact immutable TIR bytes.
-    pub verdict: Option<Vec<hirsel_validate::VRead>>,
 }
 
 /// One definition's checked products, decoded lazily and shared by every

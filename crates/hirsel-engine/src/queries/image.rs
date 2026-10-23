@@ -45,22 +45,28 @@ mod tests {
             dependencies: vec![],
             execution: Reads::empty(),
             depth: crate::memo::DepthEvidence::leaf(32),
-            verdict: None,
         }
+    }
+
+    #[test]
+    fn serialized_empty_claimed_verdict_cannot_certify_invalid_tir() {
+        crate::with_compiler_stack(|| {
+            let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+            let bytes = bincode::serialize(&invalid_lowering()).unwrap();
+            let decoded: ImageLowering = bincode::deserialize(&bytes).unwrap();
+            assert!(
+                engine.admit_image_lowering(&decoded).is_err(),
+                "unauthenticated image bytes cannot certify invalid TIR"
+            );
+        });
     }
 
     #[test]
     fn absent_or_stale_image_verdict_requires_v() {
         crate::with_compiler_stack(|| {
             let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
-            let mut lowering = invalid_lowering();
+            let lowering = invalid_lowering();
             assert!(engine.admit_image_lowering(&lowering).is_err());
-            lowering.verdict = Some(vec![hirsel_validate::VRead::View(
-                lowering.definition.path,
-                hirsel_validate::ValidationDigest(ContentHash::of_bytes(b"obsolete view")),
-            )]);
-            assert!(engine.admit_image_lowering(&lowering).is_err());
-            assert!(!engine.lowered_verdict_holds(&lowering.definition));
         });
     }
 
@@ -71,11 +77,6 @@ mod tests {
             let lowering = invalid_lowering();
             engine.verify = Verify::Off;
             assert!(engine.admit_image_lowering(&lowering).is_ok());
-            assert!(
-                !engine
-                    .lower_verdicts
-                    .contains_key(&lowering.definition.path)
-            );
             engine.verify = Verify::On;
             assert!(engine.admit_image_lowering(&lowering).is_err());
         });
@@ -354,11 +355,6 @@ impl QueryEngine {
         lowering: &ImageLowering,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         if self.verify == Verify::On {
-            if !self.lowered_verdict_holds(&lowering.definition)
-                && let Some(reads) = &lowering.verdict
-            {
-                self.remember_lowered_verdict(lowering.definition.clone(), reads.clone());
-            }
             // The image key binds its producer and sources, but acceptance also
             // depends on the importing snapshot's independently checked views.
             self.ensure_lowered_verdict(&lowering.definition)?;
@@ -412,15 +408,11 @@ impl QueryEngine {
             if !lowered.diagnostics.is_empty() {
                 return Ok(None);
             }
-            let verdict = self
-                .lowered_verdict_holds(&lowered.value)
-                .then(|| self.lower_verdicts[&lowered.value.path].1.clone());
             Some(ImageLowering {
                 definition: lowered.value,
                 dependencies: lowered.dependencies,
                 execution,
                 depth,
-                verdict,
             })
         } else {
             None

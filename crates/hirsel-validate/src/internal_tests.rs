@@ -20,11 +20,11 @@ fn weakening_a_captured_generic_uses_its_outer_sendability_bound() {
     let declarations = typing::declaration_tables(
         interner(),
         &f.definition,
-        &crate::input::Reader::new(&f.signatures),
+        &crate::input::Reader::new(interner(), &f.signatures),
     )
     .unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
-    let reader = crate::input::Reader::new(&f.signatures);
+    let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
@@ -77,11 +77,11 @@ fn substituted_call_rows_normalize_with_the_actual_declaring_binder() {
     let declarations = typing::declaration_tables(
         interner(),
         &f.definition,
-        &crate::input::Reader::new(&f.signatures),
+        &crate::input::Reader::new(interner(), &f.signatures),
     )
     .unwrap();
     let scratch = scratch::Scratch::new(f.definition.bodies.len());
-    let reader = crate::input::Reader::new(&f.signatures);
+    let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
@@ -173,11 +173,11 @@ fn sorted_map_equality_and_key_validation_accounts_for_the_order_dictionary() {
         let declarations = typing::declaration_tables(
             interner(),
             &f.definition,
-            &crate::input::Reader::new(&f.signatures),
+            &crate::input::Reader::new(interner(), &f.signatures),
         )
         .unwrap();
         let scratch = scratch::Scratch::new(f.definition.bodies.len());
-        let reader = crate::input::Reader::new(&f.signatures);
+        let reader = crate::input::Reader::new(interner(), &f.signatures);
         let memo = TypeMemo::new();
         let checker = Checker {
             definition: &f.definition,
@@ -325,7 +325,7 @@ fn capability_authority_is_nominal_even_with_an_incomplete_snapshot() {
         f.signatures.insert(id("Gate"), signature);
         owner_sig(&mut f, &[PassingMode::Borrow]);
         let body = &f.definition.bodies[0];
-        let reader = crate::input::Reader::new(&f.signatures);
+        let reader = crate::input::Reader::new(interner(), &f.signatures);
         let memo = TypeMemo::new();
         let checker = Checker {
             definition: &f.definition,
@@ -416,7 +416,7 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
     }));
     let declarations = vec![GenericDeclarations::default()];
     let scratch = scratch::Scratch::new(1);
-    let reader = crate::input::Reader::new(&f.signatures);
+    let reader = crate::input::Reader::new(interner(), &f.signatures);
     let memo = TypeMemo::new();
     let checker = Checker {
         definition: &f.definition,
@@ -508,7 +508,7 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
             }
             let declarations = vec![GenericDeclarations::default()];
             let scratch = scratch::Scratch::new(1);
-            let reader = crate::input::Reader::new(&f.signatures);
+            let reader = crate::input::Reader::new(interner(), &f.signatures);
             let memo = TypeMemo::new();
             let mut checker = Checker {
                 definition: &f.definition,
