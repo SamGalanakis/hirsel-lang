@@ -10,6 +10,7 @@ pub mod declarations;
 pub mod graph;
 pub mod instance;
 pub mod ready;
+pub mod recipes;
 pub mod source;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;

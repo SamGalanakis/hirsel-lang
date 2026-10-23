@@ -304,6 +304,85 @@ impl Instances {
         )
     }
 
+    /// Register a source finalizer from its compact self-parameter contract.
+    /// This is the same construction used by nominal discovery, without a TIR
+    /// body or native Value. Only a miss attaches the independently checked body.
+    pub fn register_finalizer(
+        &mut self,
+        program: &Program,
+        source: &SourceDeclaration,
+        actuals: Actuals,
+        layouts: &mut dyn crate::library::builder::Layouts,
+    ) -> Result<(InstanceId, bool), InstanceError> {
+        if !Arc::ptr_eq(&self.types, &program.types)
+            || source.entry.0 >= source.declaration.body_count
+        {
+            return Err(InstanceError::Malformed(
+                "foreign finalizer declaration".into(),
+            ));
+        }
+        let finalizer = &source.declaration.definition;
+        let key = key_of(
+            &program.types,
+            finalizer,
+            source.entry,
+            &actuals,
+            None,
+            None,
+        )?;
+        if let Some(id) = self.get(&key) {
+            return Ok((id, false));
+        }
+        // The independently supplied source contract gives the finalizer's
+        // self parameter without demanding that implementation body.
+        let types = &*program.types;
+        let parameter = source
+            .entry_parameters
+            .first()
+            .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
+        let self_ty = substitute(types, &program.memo, *parameter, &actuals, false)
+            .map_err(|e| InstanceError::Substitution(finalizer.clone(), e))?;
+        let unit = types.intern(Type::unit());
+        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: Vec::new().into(),
+            parameters: vec![hirsel_types::Parameter {
+                name: None,
+                label: None,
+                passing: hirsel_syntax::PassingMode::Borrow,
+                ty: self_ty,
+            }]
+            .into(),
+            result: unit,
+            error: None,
+            allocation: hirsel_types::Allocation::MayAllocate,
+            authority: AuthoritySummary::Unknown,
+            uses: hirsel_types::Uses::Unrestricted,
+            contracts: Vec::new().into(),
+            incomplete: false,
+            foreign: None,
+        })));
+        let view = InstanceView::from_declaration(
+            key,
+            source.declaration.clone(),
+            source.entry,
+            CallableShape::Definition,
+            actuals.substitution(finalizer)?,
+            parameter_views(types, callable),
+            Vec::new(),
+            false,
+        );
+        self.push(
+            layouts,
+            view,
+            InstanceRole::Finalizer,
+            callable,
+            actuals,
+            CallableShape::Definition,
+            None,
+        )
+    }
+
     /// Attach one demanded implementation and index its lexical producers once
     /// per source owner. Other source bodies are neither traversed nor retained.
     pub fn attach_definition(
@@ -454,7 +533,7 @@ impl Instances {
 /// ordinal order. A generic nested function's instance (LIR schema revision 9)
 /// also binds its enclosing functions' generics, which its body names: `outer`
 /// lists each enclosing binder's arguments, innermost first.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Actuals {
     pub binder: Option<SiteRef>,
     pub arguments: Vec<GenericArgument>,
@@ -1011,64 +1090,8 @@ impl Expander<'_, '_, '_> {
         let Some(source) = self.context.sources.get(finalizer) else {
             return Ok(());
         };
-        let key = key_of(
-            &program.types,
-            finalizer,
-            source.entry,
-            &actuals,
-            None,
-            None,
-        )?;
-        if self.out.by_key.contains_key(&key) {
-            return Ok(());
-        }
-        // The independently supplied source contract gives the finalizer's
-        // self parameter without demanding that implementation body.
-        let types = &*program.types;
-        let parameter = source
-            .entry_parameters
-            .first()
-            .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
-        let self_ty = substitute(types, &program.memo, *parameter, &actuals, false)
-            .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let unit = types.intern(Type::unit());
-        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
-            state_promises: Default::default(),
-            generics: Vec::new().into(),
-            parameters: vec![hirsel_types::Parameter {
-                name: None,
-                label: None,
-                passing: hirsel_syntax::PassingMode::Borrow,
-                ty: self_ty,
-            }]
-            .into(),
-            result: unit,
-            error: None,
-            allocation: hirsel_types::Allocation::MayAllocate,
-            authority: AuthoritySummary::Unknown,
-            uses: hirsel_types::Uses::Unrestricted,
-            contracts: Vec::new().into(),
-            incomplete: false,
-            foreign: None,
-        })));
-        let view = InstanceView::from_declaration(
-            key,
-            source.declaration.clone(),
-            source.entry,
-            CallableShape::Definition,
-            actuals.substitution(finalizer)?,
-            parameter_views(types, callable),
-            Vec::new(),
-            false,
-        );
-        self.insert(
-            view,
-            InstanceRole::Finalizer,
-            callable,
-            actuals,
-            CallableShape::Definition,
-            None,
-        )?;
+        self.out
+            .register_finalizer(program, source, actuals, self.layouts)?;
         Ok(())
     }
 
