@@ -943,6 +943,15 @@ impl QueryEngine {
             .retain(|variant| variant.inputs == key.1 && variant.valid(key));
         let hit = entry
             .hit(|read| {
+                if key.2 == QueryKind::Evaluate
+                    && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
+                    && id.path().0.name.starts_with("$comptime:")
+                    && !self.staged_constants.contains_key(id.path())
+                {
+                    let declaration_owner = self.staged_declaration_owner(id.path())?;
+                    self.load_registrations(&declaration_owner)?;
+                    self.staged_constants.get(id.path())?;
+                }
                 // A Lower's own hidden declarations are a separate ordinary
                 // query. Demand that product before observing its signature,
                 // without restoring the enclosing analyzed body.
@@ -1237,15 +1246,72 @@ impl QueryEngine {
                     })
             })
     }
-    fn portable_execution_reads(&self, reads: &Reads) -> bool {
-        !reads.iter().any(|(read, _)| {
-            read.definition().is_some_and(|id| {
-                let path = id.path();
-                path.0.name.starts_with('$')
-                    || self.generated.contains_key(path)
-                    || self.staged_constants.contains_key(path)
-            })
+    fn staged_declaration_owner(&self, path: &DefPath) -> Option<DefPath> {
+        if let Some(constant) = self.staged_constants.get(path) {
+            return Some(constant.owner.clone());
+        }
+        let (name, ordinal) = path.0.name.strip_prefix("$comptime:")?.rsplit_once(':')?;
+        if ordinal.parse::<u32>().ok()?.to_string() != ordinal {
+            return None;
+        }
+        let mut owner = path.clone();
+        owner.0.name = name.into();
+        self.items.contains_key(&owner).then_some(owner)
+    }
+    fn portable_evaluation_reads(&self, value: &crate::comptime::EvaluatedConstant) -> bool {
+        value.executed.iter().all(|(read, _)| {
+            let Some(id) = read.definition() else { return true };
+            if matches!(read, ReadKey::Signature(_) | ReadKey::ExecutedSignature(_))
+                && self.staged_constants.contains_key(id.path())
+                && value.staged.iter().any(|(selected, _)| *selected == id)
+            { return true }
+            !id.path().0.name.starts_with('$') && !self.generated.contains_key(id.path())
+                && !self.staged_constants.contains_key(id.path())
+        }) && value.staged.iter().all(|(id, arguments)| {
+            self.staged_constants.get(id.path()).is_some_and(|c| c.inputs.len() == arguments.len())
+                && value.executed.iter().any(|(read, _)| matches!(read, ReadKey::Signature(observed) | ReadKey::ExecutedSignature(observed) if observed == id))
         })
+    }
+    fn replay_evaluation_selections(
+        &mut self,
+        value: &crate::comptime::EvaluatedConstant,
+    ) -> Option<()> {
+        if !self.portable_evaluation_reads(value) {
+            return None;
+        }
+        for (id, arguments) in &value.staged {
+            let key = (id.path().clone(), arguments.clone());
+            let memory = self.staged_values.get(&key).cloned().filter(|old| {
+                self.evaluation_validation_holds(old)
+                    && self.execution_valid(id.path(), &old.executed)
+            });
+            let selected = memory.or_else(|| self.load_staged_evaluation(id.path(), arguments))?;
+            self.staged_values.insert(key, selected);
+        }
+        Some(())
+    }
+    fn store_evaluation_selections(
+        &mut self,
+        value: &crate::comptime::EvaluatedConstant,
+    ) -> Result<bool, QueryError> {
+        if !self.portable_evaluation_reads(value) {
+            return Ok(false);
+        }
+        for (id, arguments) in &value.staged {
+            let Some(selected) = self
+                .staged_values
+                .get(&(id.path().clone(), arguments.clone()))
+                .cloned()
+            else {
+                return Ok(false);
+            };
+            let Some(owner) = self.staged_declaration_owner(id.path()) else {
+                return Ok(false);
+            };
+            self.store_registrations(&owner)?;
+            self.store_staged_evaluation(id.path(), arguments, &selected)?;
+        }
+        Ok(true)
     }
     fn portable_lower_reads(&self, owner: &DefPath, reads: &Reads) -> bool {
         reads.iter().all(|(read, _)| {
@@ -1368,6 +1434,7 @@ impl QueryEngine {
         if record.owner != syntax.owner().def
             || !matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. })
             || value.executed != variant.reads
+            || !self.portable_evaluation_reads(&value)
             || value.depth.first.len() != self.depth_limit() as usize + 1
             || value
                 .depth
@@ -1399,6 +1466,7 @@ impl QueryEngine {
             );
             return None;
         }
+        self.replay_evaluation_selections(&value)?;
         timings::count(Count::StoreHits);
         self.store_adoptions += 1;
         Some(value)
@@ -1414,7 +1482,7 @@ impl QueryEngine {
         let Some(value) = persisted_evaluation(value) else {
             return Ok(());
         };
-        if !self.portable_execution_reads(&value.executed) {
+        if !self.store_evaluation_selections(&value)? {
             return Ok(());
         }
         let Some(key) = self.store_key(path, QueryKind::Evaluate) else {
@@ -1479,6 +1547,20 @@ impl QueryEngine {
         path: &DefPath,
         arguments: &[u64],
     ) -> Option<crate::comptime::EvaluatedConstant> {
+        let instance = hirsel_tir::constant_instance_path(path, arguments);
+        let active = (instance, QueryKind::Evaluate);
+        if !self.active.insert(active.clone()) {
+            return None;
+        }
+        let result = self.load_staged_evaluation_inner(path, arguments);
+        self.active.remove(&active);
+        result
+    }
+    fn load_staged_evaluation_inner(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Option<crate::comptime::EvaluatedConstant> {
         if !self.s1.is_empty() {
             return None;
         }
@@ -1491,7 +1573,7 @@ impl QueryEngine {
         if record.declaration != DefId::intern(path)
             || record.arguments != arguments
             || value.executed != variant.reads
-            || !self.portable_execution_reads(&value.executed)
+            || !self.portable_evaluation_reads(&value)
             || value.depth.first.len() != self.depth_limit() as usize + 1
             || value
                 .depth
@@ -1524,6 +1606,7 @@ impl QueryEngine {
             );
             return None;
         }
+        self.replay_evaluation_selections(&value)?;
         timings::count(Count::StoreHits);
         self.store_adoptions += 1;
         Some(value)
@@ -1534,16 +1617,15 @@ impl QueryEngine {
         arguments: &[u64],
         value: &crate::comptime::EvaluatedConstant,
     ) -> Result<(), QueryError> {
-        if self.result_store.is_none()
-            || !self.s1.is_empty()
-            || !self.s1.failure_is_own()
-            || !self.portable_execution_reads(&value.executed)
-        {
+        if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
             return Ok(());
         }
         let Some(value) = persisted_evaluation(value) else {
             return Ok(());
         };
+        if !self.store_evaluation_selections(&value)? {
+            return Ok(());
+        }
         let Some(key) = self.staged_evaluation_key(path, arguments) else {
             return Ok(());
         };
@@ -1848,6 +1930,7 @@ mod malformed_tests {
             substitutions: vec![],
             executed: Reads::from_vec(rows).unwrap(),
             depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+            staged: vec![],
             validation: None,
             acceptance: Some(
                 hirsel_validate::ExecutionReceipt::compose(
@@ -1951,6 +2034,7 @@ mod malformed_tests {
                         substitutions: vec![],
                         executed: Reads::empty(),
                         depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                        staged: vec![],
                         validation: None,
                         acceptance: None,
                     },
@@ -2016,6 +2100,7 @@ mod malformed_tests {
             executed: Reads::empty(),
             depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
             acceptance: None,
+            staged: vec![],
             validation: Some(
                 vec![(crate::default_context().package, ContentHash::default())].into(),
             ),
@@ -2034,7 +2119,7 @@ mod malformed_tests {
             crate::store::VerifyStore::Off,
             crate::store::VerifyStore::Recompute,
         ] {
-            for fault in 0..5 {
+            for fault in 0..6 {
                 let (mut engine, syntax) = fixture_source("const VALUE:u8=7u8");
                 engine.verify = Verify::Off;
                 let path = &syntax.item.definition;
@@ -2050,6 +2135,7 @@ mod malformed_tests {
                         substitutions: vec![],
                         executed: Reads::empty(),
                         depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                        staged: vec![],
                         validation: None,
                         acceptance: None,
                     },
@@ -2069,6 +2155,10 @@ mod malformed_tests {
                         )])
                         .unwrap()
                     }
+                    5 => record
+                        .constant
+                        .staged
+                        .push((DefId::intern(&DefPath::core("absent-stage")), vec![2])),
                     _ => unreachable!(),
                 }
                 engine

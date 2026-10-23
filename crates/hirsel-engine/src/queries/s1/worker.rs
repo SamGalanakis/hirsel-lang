@@ -504,6 +504,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions: vec![],
                 executed: Reads::empty(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             });
@@ -613,10 +614,14 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions,
                 executed: product.reads,
                 depth,
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             });
         self.finish_acceptance(&mut result);
+        if let Ok(value) = &mut result {
+            value.staged = self.staged_requests_since(selection_start);
+        }
         if self.pending.len() == pending_start
             && let Ok(value) = &result
         {
@@ -819,10 +824,14 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions,
                 executed: product.reads,
                 depth,
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             });
         self.finish_acceptance(&mut result);
+        if let Ok(value) = &mut result {
+            value.staged = self.staged_requests_since(selection_start);
+        }
         if self.pending.len() == pending_start
             && let Ok(value) = &result
         {
